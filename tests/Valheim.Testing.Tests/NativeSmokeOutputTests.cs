@@ -76,4 +76,35 @@ public sealed class NativeSmokeOutputTests
         SmokeOutput.RefuseInside(Path.Combine(root, "runs", "new-run"), game, steam);
         SmokeOutput.RefuseInside(Path.Combine(root, "game-sibling"), game, steam);
     }
+
+    [Fact]
+    public void ResolvedActorsAndLoaderAreProtectedByTheSameOutputCheck()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "native-smoke-resolved-path-test");
+        var chosen = new EnvironmentRecipe { Install = Path.Combine(root, "chosen-game") };
+        var inventory = new EnvironmentInventory();
+        string cli = Path.Combine(root, "cli"), loader = Path.Combine(root, "loader");
+        foreach (string protectedRoot in new[] { chosen.Install, cli, loader })
+            Assert.Throws<ArgumentException>(() => SmokeOutput.RefuseResolved(
+                Path.Combine(protectedRoot, "run"), cli, inventory, [chosen], loader));
+        SmokeOutput.RefuseResolved(Path.Combine(root, "safe-run"), cli, inventory, [chosen], loader);
+    }
+
+    [Theory]
+    [InlineData("start")]
+    [InlineData("server-load")]
+    [InlineData("server-load-ab")]
+    public void EveryOneShotCommandWritesTheSameRefusalMarker(string command)
+    {
+        string output = Directory.CreateTempSubdirectory("smoke-refusal-").FullName;
+        try
+        {
+            SmokeOutput.MarkRefused(output, command, ["a selected input is missing"]);
+            string text = File.ReadAllText(Path.Combine(output, "REFUSED.txt"));
+            Assert.Contains("refused " + command, text);
+            Assert.Contains("a selected input is missing", text);
+            Assert.Contains("env status", text);
+        }
+        finally { Directory.Delete(output, recursive: true); }
+    }
 }

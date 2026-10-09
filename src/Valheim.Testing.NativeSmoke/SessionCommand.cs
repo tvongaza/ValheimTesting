@@ -27,7 +27,7 @@ internal static class SessionCommand
         try
         {
             report = hosts
-                ? await HostedCampaignPreparation.InspectAsync(rest[0], TimeSpan.FromSeconds(60)).ConfigureAwait(false)
+                ? await HostedCampaignPreparation.InspectAsync(rest[0], HostedTimeouts.Quick).ConfigureAwait(false)
                 : HostedCampaignPreparation.Inspect(rest[0]);
         }
         catch (Exception failure) when (failure is ArgumentException or IOException or UnauthorizedAccessException or HostOperationException)

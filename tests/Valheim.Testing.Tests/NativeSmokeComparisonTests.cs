@@ -94,6 +94,21 @@ public sealed class NativeSmokeComparisonTests : IDisposable
         Assert.True(File.Exists(Path.Combine(output, "after-dependencies.lock.json")));
     }
 
+    [Fact] public async Task RefusedFirstArmMarksTheIncompleteComparison()
+    {
+        string companion = _rig.Write("companion/Companion.dll", RegressionRig.Assembly("Companion", new("example.companion")));
+        string output = Path.Combine(_rig.Root, "refused-arm-comparison");
+        int calls = 0;
+        int result = await ServerLoadComparison.RunAsync(Arguments(output, _rig.Parent, companion), _ =>
+        {
+            calls++;
+            return Task.FromResult(3);
+        });
+        Assert.Equal(3, result);
+        Assert.Equal(1, calls);
+        Assert.Contains("first arm refused", File.ReadAllText(Path.Combine(output, "REFUSED.txt")), StringComparison.OrdinalIgnoreCase);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

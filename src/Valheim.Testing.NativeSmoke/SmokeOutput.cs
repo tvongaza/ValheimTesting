@@ -1,15 +1,37 @@
+using Valheim.Testing.Game;
+
 internal static class SmokeOutput
 {
+    // Check the actual selected actors, not every inventory entry or a separately guessed default.
+    public static void RefuseResolved(string output, string cliFiles, EnvironmentInventory? inventory,
+        IEnumerable<EnvironmentRecipe?> actors, params string?[] otherProtected)
+    {
+        RefuseInside(output, actors.OfType<EnvironmentRecipe>().Select(actor => actor.Install)
+            .Concat(new[] { cliFiles, inventory?.SteamUserData }.OfType<string>())
+            .Concat(otherProtected.OfType<string>()).ToArray());
+    }
+
+    // The same marker means every one-shot command stopped without a passing result. Keep the refusal and any
+    // staged inputs for review; recovery is still governed by the run journal, not by this file.
+    public static void MarkRefused(string? output, string command, IEnumerable<string> reasons)
+    {
+        if (output == null || !Directory.Exists(output)) return;
+        try
+        {
+            File.WriteAllText(Path.Combine(output, "REFUSED.txt"),
+                $"This folder belongs to a refused {command}; no passing result was established. Check valheim-test env status before reusing this environment.\n" +
+                string.Concat(reasons.Select(reason => "- " + reason + "\n")));
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { } // refusal already printed
+    }
+
     // Keep disposable copies and evidence outside installs and account data, before creating any output directory.
     public static void RefuseInside(string output, params string[] sources)
     {
-        output = Path.TrimEndingDirectorySeparator(Path.GetFullPath(output));
-        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
         foreach (string source in sources)
         {
-            string root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(source));
-            if (output.Equals(root, comparison) || output.StartsWith(root + Path.DirectorySeparatorChar, comparison))
-                throw new ArgumentException($"--output must be outside the prepared install and account directories: {root}");
+            if (ProtectedPaths.Contains(source, output))
+                throw new ArgumentException($"--output must be outside the prepared install and account directories: {Path.GetFullPath(source)}");
         }
     }
 

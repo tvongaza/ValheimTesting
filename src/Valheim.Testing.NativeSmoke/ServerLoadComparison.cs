@@ -18,6 +18,8 @@ internal static class ServerLoadComparison
         resolve ??= NativeDependencyResolver.Resolve;
         buildAdapter ??= SmokeAdapter.BuildAsync;
         using var cancel = new CancellationTokenSource();
+        string? output = null;
+        bool outputChecked = false;
         ConsoleCancelEventHandler onCancel = (_, press) => { press.Cancel = true; cancel.Cancel(); };
         Console.CancelKeyPress += onCancel;
         try
@@ -28,7 +30,7 @@ internal static class ServerLoadComparison
             read.Options.Remove("--remove-mod");
             var parsed = ServerLoad.FromParsed(read);
             var options = parsed!.Options;
-            string output = SmokeCommandOptions.Output(options);
+            output = SmokeCommandOptions.Output(options);
             var pathComparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
             var mods = parsed.Mods.Select(Path.GetFullPath).ToList();
             if (mods.Count < 2 || mods.Count(mod => mod.Equals(removed, pathComparison)) != 1)
@@ -49,9 +51,11 @@ internal static class ServerLoadComparison
             var clientLoader = options.TryGetValue("--client-loader-package", out string? clientLoaderFile)
                 ? BepInExLoaderPackage.Read(clientLoaderFile) : null;
             var (cliManifest, cliFiles) = SmokeInputs.Cli(options);
-            string[] protectedRoots = new[] { server, cliFiles, options.TryGetValue("--client", out string? client) ? Path.GetFullPath(client) : null,
-                serverLoader?.Root, clientLoader?.Root }.OfType<string>().ToArray();
-            SmokeOutput.RefuseInside(output, protectedRoots);
+            var clientRecipe = selected?.Client ?? (options.TryGetValue("--client", out string? client)
+                ? new EnvironmentRecipe { Install = Path.GetFullPath(client) } : null);
+            SmokeOutput.RefuseResolved(output, cliFiles, selected?.Inventory, [serverRecipe, clientRecipe],
+                serverLoader?.Root, clientLoader?.Root);
+            outputChecked = true;
             var roots = parsed.Roots.Select(Path.GetFullPath).ToList();
             var optional = parsed.Optional.ToList();
             var capabilities = parsed.ServerOnly ? ["valheim.session/state"]
@@ -129,7 +133,11 @@ internal static class ServerLoadComparison
             int beforeResult = await runArm(Arm("before", omit: false));
             // A native failure is precisely the case where removing one mod can be informative. An input refusal
             // cannot establish a mod interaction, so do not launch another arm after one.
-            if (beforeResult != 0 && beforeResult != 1) return beforeResult;
+            if (beforeResult != 0 && beforeResult != 1)
+            {
+                SmokeOutput.MarkRefused(output, "server-load-ab", ["The first arm refused; the comparison did not complete."]);
+                return beforeResult;
+            }
             NativeDependencyLock.ReadReady(Path.Combine(output, "before-dependencies.lock.json"));
             NativeDependencyLock.ReadReady(Path.Combine(output, "after-dependencies.lock.json"));
             foreach (var (path, manifest) in directoryInputs) WorldFixture.Verify(path, manifest);
@@ -145,6 +153,7 @@ internal static class ServerLoadComparison
         catch (Exception failure) when (failure is ArgumentException or IOException or InvalidDataException or InvalidOperationException or UnauthorizedAccessException or OperationCanceledException or System.Text.Json.JsonException or FormatException)
         {
             Console.Error.WriteLine("REFUSED: " + failure.Message);
+            if (outputChecked) SmokeOutput.MarkRefused(output, "server-load-ab", [failure.Message]);
             return 3;
         }
         finally { Console.CancelKeyPress -= onCancel; }

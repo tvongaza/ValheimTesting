@@ -26,43 +26,43 @@ public sealed class MacAppBundleTests : IDisposable
         Assert.Equal(0, await Run("codesign", "--sign", "-", "--force", app));
         var host = new LocalGameHost("local-mac", HostShell.Bash);
         var timeout = TimeSpan.FromSeconds(60);
-        Assert.NotEqual(MacBundleState.Fixable, (await MacAppBundle.InspectAsync(host, _root, timeout)).State);
+        Assert.NotEqual(MacBundleInspection.State.Fixable, (await MacAppBundle.InspectAsync(host, _root, timeout)).State);
 
         string added = Path.Combine(app, "Contents", "MacOS", "preloader_1.log");
         File.WriteAllText(added, "left by a launch");
         Assert.Equal(0, await Run("xattr", "-w", "com.apple.quarantine", "0081;00000000;test;", app));
         var inspected = await MacAppBundle.InspectAsync(host, _root, timeout);
-        Assert.Equal(MacBundleState.Fixable, inspected.State);
+        Assert.Equal(MacBundleInspection.State.Fixable, inspected.State);
         Assert.Equal(1, inspected.Count);
         Assert.Contains("Contents/MacOS/preloader_1.log", inspected.Detail);
-        Assert.Null(MacAppBundle.SourceRefusal(inspected));
+        Assert.Null(MacBundleInspection.SourceRefusal(inspected));
         Assert.True(File.Exists(added)); // inspecting never changes the bundle
-        var localInspection = MacBundleInspection.Inspect(_root); // the one-shot runner uses the same script
+        var localInspection = MacBundleInspection.Inspect(_root, timeout); // the one-shot runner uses the same script
         Assert.Equal(MacBundleInspection.State.Fixable, localInspection.State);
         Assert.Equal(1, localInspection.Count);
         Assert.True(File.Exists(added));
 
         // An ad-hoc signature satisfies codesign; Gatekeeper rejects it unless assessments are disabled (CI runners may be).
         var repaired = await MacAppBundle.RepairAsync(host, _root, timeout);
-        Assert.Contains(repaired.State, new[] { MacBundleState.Accepted, MacBundleState.Rejected });
+        Assert.Contains(repaired.State, new[] { MacBundleInspection.State.Accepted, MacBundleInspection.State.Rejected });
         Assert.Equal(1, repaired.Count);
         Assert.False(File.Exists(added));
         Assert.Equal(0, await Run("codesign", "--verify", "--deep", "--strict", app));
         Assert.NotEqual(0, await Run("xattr", "-p", "com.apple.quarantine", app));
 
         File.WriteAllText(added, "left by a second launch");
-        var localRepair = MacBundleInspection.Repair(_root);
+        var localRepair = MacBundleInspection.Repair(_root, timeout);
         Assert.Contains(localRepair.State, new[] { MacBundleInspection.State.Accepted, MacBundleInspection.State.Rejected });
         Assert.Equal(1, localRepair.Count);
         Assert.False(File.Exists(added));
 
         File.WriteAllText(Path.Combine(app, "Contents", "Resources", "data.txt"), "changed");
         var broken = await MacAppBundle.InspectAsync(host, _root, timeout);
-        Assert.Equal(MacBundleState.Broken, broken.State);
+        Assert.Equal(MacBundleInspection.State.Broken, broken.State);
         Assert.Contains("data.txt", broken.Detail);
-        Assert.Contains("Verify the game's files in Steam", MacAppBundle.SourceRefusal(broken));
-        Assert.Equal(MacBundleState.Broken, (await MacAppBundle.RepairAsync(host, _root, timeout)).State);
-        Assert.Equal(MacBundleInspection.State.Broken, MacBundleInspection.Inspect(_root).State);
+        Assert.Contains("Verify the game's files in Steam", MacBundleInspection.SourceRefusal(broken));
+        Assert.Equal(MacBundleInspection.State.Broken, (await MacAppBundle.RepairAsync(host, _root, timeout)).State);
+        Assert.Equal(MacBundleInspection.State.Broken, MacBundleInspection.Inspect(_root, timeout).State);
         Assert.Equal("changed", File.ReadAllText(Path.Combine(app, "Contents", "Resources", "data.txt")));
     }
 
@@ -70,20 +70,46 @@ public sealed class MacAppBundleTests : IDisposable
     {
         if (OperatingSystem.IsWindows()) return;
         var host = new LocalGameHost("local", HostShell.Bash);
-        Assert.Equal(MacBundleState.None, (await MacAppBundle.InspectAsync(host, _root, TimeSpan.FromSeconds(30))).State);
+        var verdict = await MacAppBundle.InspectAsync(host, _root, TimeSpan.FromSeconds(30));
+        Assert.Equal(MacBundleInspection.State.Unknown, verdict.State);
+        Assert.NotNull(MacBundleInspection.SourceRefusal(verdict));
+    }
+
+    [Theory]
+    [InlineData("VT-BUNDLE none", "did not find")]
+    [InlineData("VT-BUNDLE unexpected", "unknown bundle verdict")]
+    [InlineData("VT-BUNDLE accepted", "malformed bundle verdict")]
+    [InlineData("VT-BUNDLE accepted -1", "malformed bundle verdict")]
+    [InlineData(null, "no verdict")]
+    public void MissingAndUnknownBundleVerdictsRefuse(string? reply, string reason)
+    {
+        var verdict = MacBundleInspection.Parse(reply);
+        Assert.Equal(MacBundleInspection.State.Unknown, verdict.State);
+        Assert.Contains(reason, MacBundleInspection.SourceRefusal(verdict), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData("VT-BUNDLE none", "did not find")]
+    [InlineData("VT-BUNDLE unexpected", "unknown bundle verdict")]
+    public async Task HostedBundleCheckUsesTheSameRefusalVerdict(string reply, string reason)
+    {
+        var host = new FakeServerHost("mac", _root) { MacBundleInspect = reply };
+        var verdict = await MacAppBundle.InspectAsync(host, _root, TimeSpan.FromSeconds(3));
+        Assert.Equal(MacBundleInspection.State.Unknown, verdict.State);
+        Assert.Contains(reason, MacBundleInspection.SourceRefusal(verdict), StringComparison.OrdinalIgnoreCase);
     }
 
     // Each refusal names the fix that works: Steam's verify restores changed or missing files, but cannot help a bundle macOS
     // rejects as signed, or a host whose verdict cannot be read.
     [Fact] public void EachSourceRefusalNamesItsOwnFix()
     {
-        Assert.Null(MacAppBundle.SourceRefusal(new(MacBundleState.Fixable, 2, "Contents/MacOS/preloader_1.log")));
-        Assert.Null(MacAppBundle.SourceRefusal(new(MacBundleState.Accepted, 0, "")));
-        Assert.Contains("Verify the game's files in Steam", MacAppBundle.SourceRefusal(new(MacBundleState.Broken, 1, "file missing: x")));
-        string rejected = MacAppBundle.SourceRefusal(new(MacBundleState.Rejected, 0, "Valheim.app: rejected"))!;
+        Assert.Null(MacBundleInspection.SourceRefusal(new(MacBundleInspection.State.Fixable, 2, "Contents/MacOS/preloader_1.log")));
+        Assert.Null(MacBundleInspection.SourceRefusal(new(MacBundleInspection.State.Accepted, 0, "")));
+        Assert.Contains("Verify the game's files in Steam", MacBundleInspection.SourceRefusal(new(MacBundleInspection.State.Broken, 1, "file missing: x")));
+        string rejected = MacBundleInspection.SourceRefusal(new(MacBundleInspection.State.Rejected, 0, "Valheim.app: rejected"))!;
         Assert.DoesNotContain("Verify the game's files", rejected);
         Assert.Contains("notarized", rejected);
-        Assert.Contains("/usr/bin", MacAppBundle.SourceRefusal(new(MacBundleState.Unknown, 0, "codesign or spctl is not available")));
+        Assert.Contains("/usr/bin", MacBundleInspection.SourceRefusal(new(MacBundleInspection.State.Unknown, 0, "codesign or spctl is not available")));
     }
 
     private static async Task<int> Run(string file, params string[] args)

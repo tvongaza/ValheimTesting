@@ -11,18 +11,63 @@ internal static class MacBundleInspection
 
     // The one-shot runner does not use IGameHost. Run the same bounded assessment that hosted preparation sends
     // to a Mac host; pass paths through the environment, never through shell interpolation.
-    internal static Verdict Inspect(string install) => Run(install, repair: false);
-    internal static Verdict Repair(string install) => Run(install, repair: true);
+    internal static Verdict Inspect(string install, TimeSpan timeout) => Run(install, repair: false, timeout);
+    internal static Verdict Repair(string install, TimeSpan timeout) => Run(install, repair: true, timeout);
 
     internal static string? SourceRefusal(Verdict verdict) => verdict.State switch
     {
         State.Accepted or State.Fixable => null,
-        State.Broken => "The source Valheim.app has changed or missing signed files. Verify the game in Steam before running a copied client. " + verdict.Detail,
-        State.Rejected => "Gatekeeper rejects the source Valheim.app. Use a Steam-installed, signed copy. " + verdict.Detail,
-        _ => "The source Valheim.app could not be assessed by codesign and Gatekeeper; refusing before copying or launching. " + verdict.Detail,
+        State.Broken => $"a copy of this {GameLaunch.ClientMacBundle} would not launch without a macOS dialog ({Describe(verdict)}). " +
+            "Verify the game's files in Steam (Properties, Installed Files), which restores changed or missing files; the run never repairs the source install.",
+        State.Rejected => $"macOS rejects this {GameLaunch.ClientMacBundle} even with nothing added to it ({Describe(verdict)}), so no copy of it " +
+            "launches without a dialog. Use Steam's own signed and notarized build; the run never re-signs or repairs the source install.",
+        _ => $"macOS's verdict on this {GameLaunch.ClientMacBundle} cannot be read ({Describe(verdict)}), so the run cannot show that a copy " +
+            "launches without a dialog. codesign and spctl ship with macOS in /usr/bin; check that the host's shell finds them.",
     };
 
-    private static Verdict Run(string install, bool repair)
+    internal static string Describe(Verdict verdict) => verdict.State switch
+    {
+        State.Broken => $"{verdict.Count} sealed file(s) changed or missing: {Shorten(verdict.Detail)}",
+        State.Rejected => "codesign or Gatekeeper rejects it: " + Shorten(verdict.Detail),
+        State.Unknown or State.None => "macOS's verdict cannot be read: " + verdict.Detail,
+        State.Fixable => $"{verdict.Count} file(s) added inside the bundle",
+        _ => verdict.State.ToString(),
+    };
+
+    private static string Shorten(string text)
+    {
+        string line = string.Join("; ", text.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Take(3));
+        return line.Length > 300 ? line[..300] + "..." : line;
+    }
+
+    // Both local and remote callers parse exactly one report shape. A missing bundle or unknown word is a refusal.
+    internal static Verdict Parse(string? line)
+    {
+        if (line == null) return new(State.Unknown, 0, "the bundle check returned no verdict");
+        if (line.StartsWith("VT-BUNDLE ", StringComparison.Ordinal)) line = line["VT-BUNDLE ".Length..];
+        string[] parts = line.Trim().Split(' ', 3);
+        int parsed = 0;
+        bool validCount = parts.Length > 1 && int.TryParse(parts[1], out parsed) && parsed >= 0;
+        int count = validCount ? parsed : 0;
+        string detail = "";
+        if (parts.Length > 2)
+        {
+            try { detail = Encoding.UTF8.GetString(Convert.FromBase64String(parts[2])); }
+            catch (FormatException) { detail = parts[2]; }
+        }
+        var state = parts[0] switch
+        {
+            "accepted" => State.Accepted, "fixable" => State.Fixable, "broken" => State.Broken,
+            "rejected" => State.Rejected, _ => State.Unknown,
+        };
+        if (!validCount && state != State.Unknown) { state = State.Unknown; detail = "malformed bundle verdict: " + line; }
+        if (parts[0] == "tools") detail = "codesign or spctl is not available";
+        if (parts[0] == "none") detail = "the host did not find a Valheim.app bundle";
+        if (state == State.Unknown && detail.Length == 0) detail = "unknown bundle verdict: " + parts[0];
+        return new(state, count, detail.Trim());
+    }
+
+    private static Verdict Run(string install, bool repair, TimeSpan timeout)
     {
         if (!OperatingSystem.IsMacOS()) return new(State.None, 0, "not macOS");
         string app = Path.Combine(install, GameLaunch.ClientMacBundle);
@@ -37,34 +82,20 @@ internal static class MacBundleInspection
         process.StartInfo.Environment["app"] = app;
         process.StartInfo.Environment["repair"] = repair ? "1" : "";
         process.Start();
-        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+        using var deadline = new CancellationTokenSource(timeout);
         Task<string> outputTask = process.StandardOutput.ReadToEndAsync(deadline.Token);
         Task<string> errorTask = process.StandardError.ReadToEndAsync(deadline.Token);
         try { process.WaitForExitAsync(deadline.Token).GetAwaiter().GetResult(); }
         catch (OperationCanceledException)
         {
             if (!process.HasExited) process.Kill(entireProcessTree: true);
-            throw new TimeoutException("macOS did not assess Valheim.app within 60 seconds; no client was launched.");
+            throw new TimeoutException($"macOS did not assess Valheim.app within {timeout.TotalSeconds:g} seconds; no client was launched.");
         }
         string output = outputTask.GetAwaiter().GetResult();
         string error = errorTask.GetAwaiter().GetResult();
         if (process.ExitCode != 0) throw new IOException($"macOS bundle assessment failed before launch: {error.Trim()}");
-        string line = output.Split('\n', StringSplitOptions.RemoveEmptyEntries).LastOrDefault(text => text.StartsWith("VT-BUNDLE ", StringComparison.Ordinal))
-            ?? throw new IOException("macOS bundle assessment returned no verdict before launch.");
-        string[] parts = line["VT-BUNDLE ".Length..].Trim().Split(' ', 3);
-        int count = parts.Length > 1 && int.TryParse(parts[1], out int parsed) ? parsed : 0;
-        string detail = "";
-        if (parts.Length > 2)
-        {
-            try { detail = Encoding.UTF8.GetString(Convert.FromBase64String(parts[2])); }
-            catch (FormatException) { detail = parts[2]; }
-        }
-        var state = parts[0] switch
-        {
-            "accepted" => State.Accepted, "fixable" => State.Fixable, "broken" => State.Broken,
-            "rejected" => State.Rejected, "tools" => State.Unknown, _ => State.Unknown,
-        };
-        return new(state, count, detail.Trim());
+        string? line = output.Split('\n', StringSplitOptions.RemoveEmptyEntries).LastOrDefault(text => text.StartsWith("VT-BUNDLE ", StringComparison.Ordinal));
+        return Parse(line);
     }
 
     internal static readonly string Bash = """

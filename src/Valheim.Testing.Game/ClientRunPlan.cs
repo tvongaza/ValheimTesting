@@ -133,7 +133,7 @@ public sealed class ClientRunPlan
     private JsonElement? RemovedFastTestTeleports { get => null; set => throw Removed("fastTestTeleports", 299, "no runner could use it; arrival uses the game's ordinary teleport timing"); }
     /// <summary>The environment variable, in the client's process, that holds the join password.</summary>
     public string? PasswordVariable { get; set; }
-    public int StartSeconds { get; set; } = 300;
+    public int StartSeconds { get; set; } = ClientTimeouts.DefaultStartSeconds;
     /// <summary>
     /// Owned only: how long after the launch BepInEx may take to write its first line to this launch's
     /// <c>BepInEx/LogOutput.log</c>, 5 to 1800 seconds (default 60; never more than <see cref="StartSeconds"/>). Doorstop starts
@@ -141,7 +141,7 @@ public sealed class ClientRunPlan
     /// ends then instead of at the start deadline.
     /// </summary>
     public int BepInExSeconds { get; set; } = 60;
-    public int JoinSeconds { get; set; } = 180;
+    public int JoinSeconds { get; set; } = ClientTimeouts.DefaultJoinSeconds;
     public int ArrivalSeconds { get; set; } = 120;
     // Removed (#295): patcher names beside the installPins patchers hash described one folder twice.
     [JsonInclude, JsonPropertyName("patchers"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
@@ -254,7 +254,8 @@ public sealed class ClientRunPlan
             throw new ArgumentException("A crossplay client joins the server's PlayFab lobby, not an address, and the crossplay join command would carry a password as text: leave out join and passwordVariable, and run the crossplay fixture server private without a password.");
         foreach (string? token in new[] { HostWorld == null && !Crossplay && !JoinsHost ? Join : null, Character, PasswordVariable })
             if (token != null && (token.Length == 0 || token.Any(char.IsWhiteSpace))) throw new ArgumentException("Join address, character and password variable must be single tokens.");
-        if (StartSeconds is < 10 or > 1800 || JoinSeconds is < 10 or > 900 || ArrivalSeconds is < 10 or > 600 || BepInExSeconds is < 5 or > 1800) throw new ArgumentException("Client timeouts are out of range.");
+        ClientTimeouts.RequireStartAndJoin(StartSeconds, JoinSeconds);
+        if (ArrivalSeconds is < 10 or > 600 || BepInExSeconds is < 5 or > 1800) throw new ArgumentException("Client timeouts are out of range.");
         HostWorld?.Validate(pinned);
         if (Capabilities == null || Capabilities.Any(path => path == null || path.Split('/') is not [{ Length: > 0 }, { Length: > 0 }] || path.Any(char.IsWhiteSpace)) || Capabilities.Distinct(StringComparer.Ordinal).Count() != Capabilities.Length)
             throw new ArgumentException("Name each of the client's capabilities once, as owner/command.");

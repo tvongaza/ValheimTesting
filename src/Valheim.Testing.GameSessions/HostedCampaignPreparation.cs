@@ -519,7 +519,7 @@ public static class HostedCampaignPreparation
                         try
                         {
                             var bundle = await MacAppBundle.InspectAsync(host, item.Role.Install, timeout, cancellation).ConfigureAwait(false);
-                            if (MacAppBundle.SourceRefusal(bundle) is { } refusal) failures.Add(new(item.Name, "macOS app bundle", refusal));
+                            if (MacBundleInspection.SourceRefusal(bundle) is { } refusal) failures.Add(new(item.Name, "macOS app bundle", refusal));
                         }
                         catch (Exception error) when (HostCheckRefusal(error))
                         { failures.Add(new(item.Name, "macOS app bundle", error.Message)); }

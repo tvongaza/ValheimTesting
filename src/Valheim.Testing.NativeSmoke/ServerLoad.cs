@@ -82,28 +82,10 @@ internal static class ServerLoad
         {
             Console.Error.WriteLine("REFUSED: " + failure.Message);
             // Only before anything was copied or launched, and never into a folder that was itself refused as protected.
-            if (state.OutputChecked && !state.Started) MarkRefused(output, [failure.Message]);
+            if (state.OutputChecked && !state.Started) SmokeOutput.MarkRefused(output, "server-load", [failure.Message]);
             return 3;
         }
         finally { Console.CancelKeyPress -= onCancel; }
-    }
-
-    /// <summary>
-    /// A refused run's output is marked as such (REFUSED.txt with the reasons), so the inputs a preflight wrote there
-    /// (campaign.json, locks, adapter, world and character sources) never look like a prepared run. Nothing was copied to a
-    /// host or launched.
-    /// </summary>
-    internal static void MarkRefused(string? output, IEnumerable<string> reasons)
-    {
-        if (output == null || !Directory.Exists(output)) return;
-        try
-        {
-            File.WriteAllText(Path.Combine(output, "REFUSED.txt"),
-                "This folder is a refused server-load, not a prepared run: nothing was copied to a host or launched. The inputs it wrote are kept for review.\n" +
-                string.Concat(reasons.Select(reason => "- " + reason + "\n")));
-        }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { } // the refusal itself was printed
-
     }
 
     /// <summary>Where a run is: its output checked against the installs it must stay out of, and whether anything was copied or started.</summary>
@@ -236,7 +218,8 @@ internal static class ServerLoad
         if (local.Count != 0)
             throw new InvalidOperationException(string.Join("; ", local.Select(problem =>
                 $"{problem.Actor} {problem.Input}: {problem.Message}")));
-        string core = Path.Combine(serverLoader == null ? serverInstall : BepInExLoaderPackage.Read(serverLoader).Root, InstallPins.CoreDirectory);
+        var serverPackage = serverLoader == null ? null : BepInExLoaderPackage.Read(serverLoader);
+        string core = Path.Combine(serverPackage?.Root ?? serverInstall, InstallPins.CoreDirectory);
         if (!Directory.Exists(core))
             throw new DirectoryNotFoundException($"The server install {serverInstall} has no BepInEx ({InstallPins.CoreDirectory}). Install BepInExPack_Valheim into it, " +
                 "or give --loader-package with a reviewed loader package; the mod is resolved against that core.");
@@ -244,7 +227,9 @@ internal static class ServerLoad
         string? adapter = parsed.Options.TryGetValue("--adapter", out string? adapterFile) ? Path.GetFullPath(adapterFile) : null;
         foreach (string path in new[] { adapter, cliManifest }.OfType<string>().Concat(parsed.Mods.Select(Path.GetFullPath)))
             if (!File.Exists(path)) throw new FileNotFoundException("A selected file is missing: " + path, path);
-        SmokeOutput.RefuseInside(output, new[] { serverInstall, cliFiles, choice.Client?.Install }.OfType<string>().ToArray());
+        var clientPackage = clientLoader == null ? null : BepInExLoaderPackage.Read(clientLoader);
+        SmokeOutput.RefuseResolved(output, cliFiles, choice.Inventory, [server, choice.Client],
+            serverPackage?.Root, clientPackage?.Root);
         state.OutputChecked = true;
         // The later campaign reads this exact chosen set, even if an inventory file or
         // Steam detection changes before its preflight. It cannot choose another actor.
@@ -368,7 +353,7 @@ internal static class ServerLoad
 
         // The read-only host checks, before anything is copied: a client that cannot run is refused with the reason, never dropped.
         var report = await (seams.Inspect ?? (file => HostedCampaignPreparation.InspectAfterLocalPreflightAsync(file,
-            TimeSpan.FromSeconds(60), cancellation)))(campaignFile).ConfigureAwait(false);
+            HostedTimeouts.Quick, cancellation)))(campaignFile).ConfigureAwait(false);
         foreach (var actor in report.Actors.Where(actor => actor.CharactersDirectory != null))
             Console.WriteLine($"{actor.Name}: characters_local {actor.CharactersDirectory}; Steam userdata {actor.SteamUserDataDirectory}");
         if (!report.Ready)
@@ -376,7 +361,7 @@ internal static class ServerLoad
             var lines = report.Problems.Select(problem => $"{problem.Actor} {problem.Input}: {problem.Message}" + LoaderHint(problem, serverLoader, clientLoader) +
                 (problem.Actor is "client" or "clients" ? " (--server-only skips the client)" : "")).ToList();
             foreach (string line in lines) Console.Error.WriteLine("REFUSED " + line);
-            MarkRefused(output, lines);
+            SmokeOutput.MarkRefused(output, "server-load", lines);
             return 3;
         }
         // Only once the preflight passed: the unbound plans beside campaign.json, for an editable consumer (`valheim-test init server`) to run the same campaign.

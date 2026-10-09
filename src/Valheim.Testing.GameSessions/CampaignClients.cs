@@ -14,7 +14,6 @@ namespace Valheim.Testing.GameSessions;
 /// </summary>
 internal sealed class CampaignClients
 {
-    private static readonly TimeSpan Quick = TimeSpan.FromSeconds(60), Long = TimeSpan.FromMinutes(15);
     private readonly IHostedRunHooks _hooks;
     private readonly object _clientState = new();
     private readonly SemaphoreSlim _clientLockGate = new(1, 1);
@@ -107,7 +106,7 @@ internal sealed class CampaignClients
             IGameHost leaseHost;
             lock (_clientState)
                 leaseHost = _leaseHost ??= HostNamed(section.LeaseHost);
-            var hold = await _hooks.LeaseAsync(Profile, name, _owner + " client " + name, RunId, leaseHost, Quick, cancellation).ConfigureAwait(false);
+            var hold = await _hooks.LeaseAsync(Profile, name, _owner + " client " + name, RunId, leaseHost, HostedTimeouts.Quick, cancellation).ConfigureAwait(false);
             lock (_clientState)
             {
                 _accounts.Add(held = new ClientAccount(name, hold, leaseHost, section.LeaseHost));
@@ -147,30 +146,30 @@ internal sealed class CampaignClients
         int n = Interlocked.Increment(ref _clients);
         string runDirectory = HostPath.Join(role.Runtime, RunId), launchDirectory = HostPath.Join(runDirectory, "client-" + n);
         string log = HostPath.Join(role.Install, HostedServerRun.BepInExLog);
-        var listing = await HostInstall.ListAsync(host, role.Install, Long, HostInstall.PinPaths, cancellation).ConfigureAwait(false);
+        var listing = await HostInstall.ListAsync(host, role.Install, HostedTimeouts.Long, HostInstall.PinPaths, cancellation).ConfigureAwait(false);
         if (plan.Pinned)
             HostInstall.CheckPins(plan.InstallPins ?? throw new ArgumentException("Pin the owned client's game build, loader and patchers in installPins, or opt out explicitly with \"pinning\": \"none\"."), listing, "client install");
-        await HostClientPreflight.CheckAsync(host, role.Install, platform, plan, Quick, cancellation).ConfigureAwait(false);
-        await HostInstall.RequirePortFreeAsync(host, role.CliPort, Quick, cancellation).ConfigureAwait(false);
+        await HostClientPreflight.CheckAsync(host, role.Install, platform, plan, HostedTimeouts.Quick, cancellation).ConfigureAwait(false);
+        await HostInstall.RequirePortFreeAsync(host, role.CliPort, HostedTimeouts.Quick, cancellation).ConfigureAwait(false);
         // BepInEx rewrites its log at each start; an earlier one moves aside so the wait from offset 0 sees this start's lines only.
         var moved = (await host.RunAsync(HostedClientScripts.MoveAside(host.Shell.Kind), new Dictionary<string, string>
-            { ["log"] = log, ["to"] = HostPath.Join(runDirectory, $"client-{n}.previous-LogOutput.log") }, Quick, cancellation).ConfigureAwait(false))
+            { ["log"] = log, ["to"] = HostPath.Join(runDirectory, $"client-{n}.previous-LogOutput.log") }, HostedTimeouts.Quick, cancellation).ConfigureAwait(false))
             .EnsureSuccess($"Moving the client's previous BepInEx log aside on {host.Name}");
         if (InteractiveClient.Line(moved.Stdout, "VT-MOVED") == null && InteractiveClient.Line(moved.Stdout, "VT-NONE") == null)
             throw new HostOperationException($"Unexpected reply while moving the client's previous log on {host.Name}", moved);
         // #257: Steam's connection_log from here on. "Logged In Elsewhere" in it means the account plays on another computer.
-        var steamLog = await SteamSessionLogOnHost.MarkAsync(host, Quick, cancellation).ConfigureAwait(false);
+        var steamLog = await SteamSessionLogOnHost.MarkAsync(host, HostedTimeouts.Quick, cancellation).ConfigureAwait(false);
         string SteamMessage() => SteamSessionLog.Message(account?.Hold.Account, role.Host);
         // A failed start looks once: the readiness guard and the exit's reason share the answer.
         Task<bool>? looked = null;
         Task<bool> FinalLook() => LazyInitializer.EnsureInitialized(ref looked, () => steamLog is { } watched
             ? SteamSessionLogOnHost.SeenAsync(host, watched, SteamSessionLogOnHost.FinalLook, CancellationToken.None) : Task.FromResult(false));
-        var tunnel = await host.OpenCliTunnelAsync(role.CliPort, Quick, role.LocalCliPort, cancellation).ConfigureAwait(false);
+        var tunnel = await host.OpenCliTunnelAsync(role.CliPort, HostedTimeouts.Quick, role.LocalCliPort, cancellation).ConfigureAwait(false);
         try
         {
             string local = Path.Combine(output, "client-" + n);
             var display = platform != ClientPlatform.Linux ? null : new LinuxDisplay();
-            var start = TimeSpan.FromSeconds(Math.Max(30, plan.StartSeconds));
+            var start = HostedTimeouts.ClientStart(plan);
             var session = ClientSession.Launch(plan, output,
                 () =>
                 {
@@ -180,7 +179,7 @@ internal sealed class CampaignClients
                     var started = account == null ? InteractiveClient.StartAsync(host, launch, launchDirectory, start, display, cancellation)
                         : InteractiveClient.StartAsync(account.Hold, host, launch, launchDirectory, start, display, cancellation);
                     var client = started.GetAwaiter().GetResult();
-                    string commandLine = HostProcessProbe.CommandLineAsync(host, client.Id, client.StartIdentity, Quick).GetAwaiter().GetResult() ?? "";
+                    string commandLine = HostProcessProbe.CommandLineAsync(host, client.Id, client.StartIdentity, HostedTimeouts.Quick).GetAwaiter().GetResult() ?? "";
                     HostedServerRun.WarnUnexpectedCommandLine(host, client.Id, expected, commandLine);
                     NoteAsync(host, role.Host, name, JournalEntry.Of(JournalEntry.ProcessStarted, ("pid", client.Id.ToString(CultureInfo.InvariantCulture)),
                         ("startIdentity", client.StartIdentity), ("commandLineSha256", commandLine), ("launchDirectory", launchDirectory))).GetAwaiter().GetResult();
@@ -266,7 +265,7 @@ internal sealed class CampaignClients
         {
             bool held; lock (_clientState) held = _clientLocks.Any(item => item.Host == hostName);
             if (held) return;
-            var taken = await host.AcquireLockAsync(hostProfile.Lock, _owner, Quick, cancellation).ConfigureAwait(false);
+            var taken = await host.AcquireLockAsync(hostProfile.Lock, _owner, HostedTimeouts.Quick, cancellation).ConfigureAwait(false);
             lock (_clientState) _clientLocks.Add((hostName, taken));
             await NoteLockAsync(host, hostName, taken, JournalEntry.LockHeld).ConfigureAwait(false);
         }
@@ -282,7 +281,7 @@ internal sealed class CampaignClients
         if (!Profile.Clients.TryGetValue(client, out var role)) throw new ArgumentException($"No client '{client}' in the environment.", nameof(client));
         var host = ClientHost(role);
         await LockHostAsync(role.Host, host, Profile.Hosts[role.Host], cancellation).ConfigureAwait(false);
-        await HostedRuntimeStage.RequireStoppedAsync(host, Quick, cancellation, clientSession: true).ConfigureAwait(false);
+        await HostedRuntimeStage.RequireStoppedAsync(host, HostedTimeouts.Quick, cancellation, clientSession: true).ConfigureAwait(false);
     }
 
     /// <summary>

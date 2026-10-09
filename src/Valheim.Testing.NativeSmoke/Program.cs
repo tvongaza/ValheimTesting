@@ -50,9 +50,11 @@ bool copyJournalled = false;
 bool copyClaimed = false;
 bool copyDone = false;
 bool characterPending = false;
+string? output = null;
+bool outputChecked = false;
 try
 {
-    string output = SmokeCommandOptions.Output(options!);
+    output = SmokeCommandOptions.Output(options!);
     var modSelection = SmokeModInput.Select(mods!, Environment.CurrentDirectory);
     var selectedMods = modSelection.Mods.ToList();
     Console.WriteLine("mod selection: " + modSelection.Reason);
@@ -74,13 +76,14 @@ try
     string? loader = client.LoaderPackage;
     foreach (var (name, path) in new[] { ("game", game), ("--cli-files", cliFiles) })
         if (!Directory.Exists(path)) throw new DirectoryNotFoundException(name + " directory does not exist: " + path);
-    SmokeOutput.RefuseInside(output, new[] { game, cliFiles, inventory.SteamUserData }.OfType<string>().ToArray());
+    if (loader != null && !File.Exists(loader)) throw new FileNotFoundException("--client-loader-package file does not exist: " + loader, loader);
+    var loaderPackage = loader == null ? null : BepInExLoaderPackage.Read(loader);
+    SmokeOutput.RefuseResolved(output, cliFiles, inventory, [client], loaderPackage?.Root);
+    outputChecked = true;
     SmokeInputs.RecordClient(inventory, client, output);
     foreach (var (name, path) in selectedMods.Select(path => ("--mod", path)).Append(("--cli-manifest", cliManifest)))
         if (!File.Exists(path)) throw new FileNotFoundException(name + " file does not exist: " + path, path);
-    if (loader != null && !File.Exists(loader)) throw new FileNotFoundException("--client-loader-package file does not exist: " + loader, loader);
-    string core = loader == null ? Path.Combine(game, InstallPins.CoreDirectory)
-        : Path.Combine(BepInExLoaderPackage.Read(loader).Root, InstallPins.CoreDirectory);
+    string core = Path.Combine(loaderPackage?.Root ?? game, InstallPins.CoreDirectory);
     var request = SmokeDependencyInputs.Request(selectedMods, game, core, cliManifest, cliFiles,
         roots!, optionalReferences!, CliCapabilities.HostedRounds);
     var dependencies = NativeDependencyResolver.Resolve(request);
@@ -209,6 +212,7 @@ try
 catch (Exception failure) when (failure is ArgumentException or IOException or InvalidDataException or InvalidOperationException or UnauthorizedAccessException or FormatException or OperationCanceledException)
 {
     Console.Error.WriteLine("REFUSED: " + failure.Message);
+    if (outputChecked) SmokeOutput.MarkRefused(output, "start", [failure.Message]);
 }
 finally
 {

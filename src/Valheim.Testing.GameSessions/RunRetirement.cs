@@ -15,8 +15,7 @@ namespace Valheim.Testing.GameSessions;
 /// </summary>
 internal sealed class RunRetirement(ScenarioReport? report, string output)
 {
-    private static readonly TimeSpan Quick = TimeSpan.FromSeconds(60), Long = TimeSpan.FromMinutes(15);
-    private readonly HashSet<string> _done = new(StringComparer.Ordinal);
+        private readonly HashSet<string> _done = new(StringComparer.Ordinal);
     private readonly HashSet<string> _kept = new(StringComparer.Ordinal);
 
     /// <summary>Whether a person asked to keep every runtime copy (<see cref="PinnedServerRun.KeepRuntimeVariable"/>=1).</summary>
@@ -125,7 +124,7 @@ internal sealed class RunRetirement(ScenarioReport? report, string output)
         try
         {
             var listed = before.Files;
-            var after = launched ? (await HostInstall.ListAsync(host, runtime, Long, cancellation: cancellation).ConfigureAwait(false)).Files : listed;
+            var after = launched ? (await HostInstall.ListAsync(host, runtime, HostedTimeouts.Long, cancellation: cancellation).ConfigureAwait(false)).Files : listed;
             var added = after.Keys.Where(name => !listed.ContainsKey(name)).Order(StringComparer.Ordinal).ToList();
             var changed = after.Where(file => listed.TryGetValue(file.Key, out var hash) && !hash.Equals(file.Value, StringComparison.OrdinalIgnoreCase))
                 .Select(file => file.Key).Order(StringComparer.Ordinal).ToList();
@@ -139,7 +138,7 @@ internal sealed class RunRetirement(ScenarioReport? report, string output)
                 ["runtime"] = runtime, ["keep"] = keepDirectory, ["run"] = copyName,
                 ["files"] = string.Join('\n', added.Concat(changed).Select(name => Convert.ToBase64String(Encoding.UTF8.GetBytes(name)))),
                 ["perfile"] = perFile.ToString(CultureInfo.InvariantCulture), ["total"] = total.ToString(CultureInfo.InvariantCulture),
-            }, Long, cancellation).ConfigureAwait(false)).EnsureSuccess($"Removing the runtime copy {where}");
+            }, HostedTimeouts.Long, cancellation).ConfigureAwait(false)).EnsureSuccess($"Removing the runtime copy {where}");
             var done = InteractiveClient.Line(result.Stdout, "VT-RETIRED ")?.Split(' ');
             if (done is not [var freed, var kept]) throw new HostOperationException($"Unexpected reply while removing the runtime copy {where}", result);
             // "VT-NOTKEPT <base64 path> <bytes>", with -1 bytes for anything but a regular file inside the copy.
@@ -154,7 +153,7 @@ internal sealed class RunRetirement(ScenarioReport? report, string output)
             }
             async Task DropKeptAsync(string why) =>
                 (await host.RunAsync(windows ? HostedRunScripts.WindowsDropKept : HostedRunScripts.DropKept,
-                    new Dictionary<string, string> { ["keep"] = keepDirectory, ["run"] = copyName }, Quick, cancellation).ConfigureAwait(false))
+                    new Dictionary<string, string> { ["keep"] = keepDirectory, ["run"] = copyName }, HostedTimeouts.Quick, cancellation).ConfigureAwait(false))
                     .EnsureSuccess($"Removing {host.Name}:{keepDirectory}{why}");
             if (!launched)
             {
@@ -164,7 +163,7 @@ internal sealed class RunRetirement(ScenarioReport? report, string output)
                 return;
             }
             string local = Path.Combine(output, "runtime-changes");
-            await host.FetchDirectoryAsync(keepDirectory, local, Long, cancellation).ConfigureAwait(false);
+            await host.FetchDirectoryAsync(keepDirectory, local, HostedTimeouts.Long, cancellation).ConfigureAwait(false);
             // Fetched: the host's copy of the changes is not needed twice.
             await DropKeptAsync(" after fetching it").ConfigureAwait(false);
             var retired = new RetiredCopy(where, local, added, changed, missing, notKept, long.Parse(kept, CultureInfo.InvariantCulture), long.Parse(freed, CultureInfo.InvariantCulture));

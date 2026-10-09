@@ -17,8 +17,7 @@ namespace Valheim.Testing.GameSessions;
 internal sealed class HostedServerRun : IServerPlacement
 {
     internal const string BepInExLog = "BepInEx/LogOutput.log", UnityLog = "toolkit-unity.log";
-    private static readonly TimeSpan Quick = TimeSpan.FromSeconds(60), Long = TimeSpan.FromMinutes(15);
-    private readonly IHostedRunHooks _hooks;
+        private readonly IHostedRunHooks _hooks;
     private readonly string _owner;
     // The campaign's clients, their leases and their hosts' locks: owned by CampaignClients, as in a campaign without a server.
     private readonly CampaignClients _clientActors;
@@ -52,7 +51,7 @@ internal sealed class HostedServerRun : IServerPlacement
     private readonly RunJournal _journal;
     private async Task JournalAsync(IGameHost host, string hostName, string actor, JournalEntry entry, CancellationToken cancellation)
     {
-        await _journal.AppendAsync(host, RunJournal.DirectoryFor(Profile.Hosts[hostName]), actor, entry, Quick, cancellation).ConfigureAwait(false);
+        await _journal.AppendAsync(host, RunJournal.DirectoryFor(Profile.Hosts[hostName]), actor, entry, HostedTimeouts.Quick, cancellation).ConfigureAwait(false);
         if (hostName == Role.Host) _serverJournalled = true;
     }
     private bool _serverJournalled;
@@ -147,8 +146,8 @@ internal sealed class HostedServerRun : IServerPlacement
     {
         // A Windows host that can register no server task is refused before the copy (a campaign's preflight asked already).
         if (Host.Shell.Kind == HostShellKind.PowerShell)
-            await report.StepAsync(StepPhase.Setup, "the server host can start a server task", () => HostServer.RequireTaskLogonAsync(Host, Quick, cancellation)).ConfigureAwait(false);
-        await report.StepAsync(StepPhase.Setup, "take the server host's lock", async () => _lock = await Host.AcquireLockAsync(HostProfile.Lock, _owner, Quick, cancellation).ConfigureAwait(false)).ConfigureAwait(false);
+            await report.StepAsync(StepPhase.Setup, "the server host can start a server task", () => HostServer.RequireTaskLogonAsync(Host, HostedTimeouts.Quick, cancellation)).ConfigureAwait(false);
+        await report.StepAsync(StepPhase.Setup, "take the server host's lock", async () => _lock = await Host.AcquireLockAsync(HostProfile.Lock, _owner, HostedTimeouts.Quick, cancellation).ConfigureAwait(false)).ConfigureAwait(false);
         await NoteLockAsync(Host, Role.Host, _lock!, JournalEntry.LockHeld).ConfigureAwait(false);
         if (LocalMac)
             await report.StepAsync(StepPhase.Setup, "preserve the Mac server's user-level access lists", async () =>
@@ -164,7 +163,7 @@ internal sealed class HostedServerRun : IServerPlacement
             // The campaign's preparation made the one copy; it must still be exactly what the preparation listed and bound.
             await report.StepAsync(StepPhase.Setup, verified ? "verify the prepared runtime on the server host" : "list the prepared runtime on the server host as found", async () =>
             {
-                _runtime = await HostInstall.ListAsync(Host, RuntimeDirectory, Long, null, cancellation).ConfigureAwait(false);
+                _runtime = await HostInstall.ListAsync(Host, RuntimeDirectory, HostedTimeouts.Long, null, cancellation).ConfigureAwait(false);
                 if (verified) HostInstall.RequireSame(plan.Runtime.Sha256, _runtime, "prepared runtime");
             }).ConfigureAwait(false);
             return;
@@ -176,8 +175,8 @@ internal sealed class HostedServerRun : IServerPlacement
             await JournalAsync(Host, Role.Host, "server", CopyIntended(RuntimeDirectory, "runtime"), cancellation).ConfigureAwait(false);
             _runtimeIntended = true;
             // Steam's own runtime output in the install (logs/) is not the runtime's: the copy leaves it out, and the pins never count it.
-            await HostInstall.CopyAsync(Host, Role.Install, RuntimeDirectory, Long, HostInstall.ServerRuntimeSkips, cancellation).ConfigureAwait(false);
-            _runtime = await HostInstall.ListAsync(Host, RuntimeDirectory, Long, null, cancellation).ConfigureAwait(false);
+            await HostInstall.CopyAsync(Host, Role.Install, RuntimeDirectory, HostedTimeouts.Long, HostInstall.ServerRuntimeSkips, cancellation).ConfigureAwait(false);
+            _runtime = await HostInstall.ListAsync(Host, RuntimeDirectory, HostedTimeouts.Long, null, cancellation).ConfigureAwait(false);
             if (verified) HostInstall.RequireSame(HostInstall.WithoutSkipped(plan.Runtime.Sha256, HostInstall.ServerRuntimeSkips, _runtime.Names), _runtime, "runtime copy");
             await JournalAsync(Host, Role.Host, "server", CopyDone(RuntimeDirectory, _runtime), cancellation).ConfigureAwait(false);
         }).ConfigureAwait(false);
@@ -199,7 +198,7 @@ internal sealed class HostedServerRun : IServerPlacement
             return Task.CompletedTask;
         }
         return report.StepAsync(StepPhase.Setup, "the server host can load crossplay's libraries", async () =>
-            report.Provenance["crossplayLibraries"] = await CrossplayLibraries.RequireAsync(Host, RuntimeDirectory, Quick, cancellation).ConfigureAwait(false) + " loads on " + Host.Name);
+            report.Provenance["crossplayLibraries"] = await CrossplayLibraries.RequireAsync(Host, RuntimeDirectory, HostedTimeouts.Quick, cancellation).ConfigureAwait(false) + " loads on " + Host.Name);
     }
 
     /// <summary>Ships the verified local world copy to the host and verifies every file there.</summary>
@@ -229,9 +228,9 @@ internal sealed class HostedServerRun : IServerPlacement
             // Journalled before the ship, like the runtime copy: no journal line, no world copy on the host.
             await JournalAsync(Host, Role.Host, "server", CopyIntended(WorldDirectory, "world"), cancellation).ConfigureAwait(false);
             _world = WorldCopy.Intended;
-            await Host.ShipFilesAsync(localWorld, WorldDirectory, Long, cancellation).ConfigureAwait(false);
+            await Host.ShipFilesAsync(localWorld, WorldDirectory, HostedTimeouts.Long, cancellation).ConfigureAwait(false);
             _world = WorldCopy.Shipped;
-            var listing = await HostInstall.ListAsync(Host, WorldDirectory, Long, null, cancellation).ConfigureAwait(false);
+            var listing = await HostInstall.ListAsync(Host, WorldDirectory, HostedTimeouts.Long, null, cancellation).ConfigureAwait(false);
             HostInstall.RequireSame(manifest, listing, "world copy", ["SOURCE.txt"]);
             // Only a verified copy is journalled done: env recover hands a done world over as the run's save, and removes any other.
             await JournalAsync(Host, Role.Host, "server", CopyDone(WorldDirectory, listing), cancellation).ConfigureAwait(false);
@@ -268,16 +267,16 @@ internal sealed class HostedServerRun : IServerPlacement
     public Task CheckWindowsLoaderAsync(ScenarioReport report, CancellationToken cancellation) => Host.Shell.Kind != HostShellKind.PowerShell
         ? Task.CompletedTask
         : report.StepAsync(StepPhase.Setup, "copied Windows runtime has a coherent Doorstop loader", () =>
-            HostClientPreflight.RequireWindowsLoaderAsync(Host, RuntimeDirectory, "server runtime", Quick, cancellation));
+            HostClientPreflight.RequireWindowsLoaderAsync(Host, RuntimeDirectory, "server runtime", HostedTimeouts.Quick, cancellation));
 
     /// <summary>Refuses a busy CLI port on the host, then opens the loopback tunnel to it.</summary>
     public async Task OpenAsync(ScenarioReport report, CancellationToken cancellation)
     {
         // Catch an occupied port without issuing even a read to an unrelated server.
-        await report.StepAsync(StepPhase.Setup, "CLI port is free on the server host", () => HostInstall.RequirePortFreeAsync(Host, Role.CliPort, Quick, cancellation)).ConfigureAwait(false);
+        await report.StepAsync(StepPhase.Setup, "CLI port is free on the server host", () => HostInstall.RequirePortFreeAsync(Host, Role.CliPort, HostedTimeouts.Quick, cancellation)).ConfigureAwait(false);
         await report.StepAsync(StepPhase.Setup, "open the loopback CLI tunnel to the server host", async () =>
         {
-            _tunnel = await Host.OpenCliTunnelAsync(Role.CliPort, Quick, Role.LocalCliPort, cancellation).ConfigureAwait(false);
+            _tunnel = await Host.OpenCliTunnelAsync(Role.CliPort, HostedTimeouts.Quick, Role.LocalCliPort, cancellation).ConfigureAwait(false);
             report.Provenance["cliTunnel"] = $"{_tunnel.Address}:{_tunnel.LocalPort} -> {Role.Host} 127.0.0.1:{_tunnel.HostPort}" + (_tunnel.Forwarded ? " (ssh forward)" : "");
         }).ConfigureAwait(false);
     }
@@ -296,7 +295,7 @@ internal sealed class HostedServerRun : IServerPlacement
         string expected = launch.CommandLineSha256();
         JournalAsync(Host, Role.Host, "server", JournalEntry.Of(JournalEntry.ProcessIntended, ("bootDirectory", bootDirectory),
             ("expectedCommandLineSha256", expected)), cancellation).GetAwaiter().GetResult();
-        try { process = HostServer.StartAsync(Host, launch, bootDirectory, Quick, [BepInExLog, UnityLog], local, cancellation).GetAwaiter().GetResult(); }
+        try { process = HostServer.StartAsync(Host, launch, bootDirectory, HostedTimeouts.Quick, [BepInExLog, UnityLog], local, cancellation).GetAwaiter().GetResult(); }
         catch (Exception error) when (UnknownOutcome(error) != null)
         {
             // The start's reply was lost: a server may be running there that no session knows. The lock stays.
@@ -315,7 +314,7 @@ internal sealed class HostedServerRun : IServerPlacement
             () =>
             {
                 // The command line's hash is the third fact env recover requires before it stops the process (#257 Q2).
-                string commandLine = HostProcessProbe.CommandLineAsync(Host, process.Id, process.StartIdentity, Quick).GetAwaiter().GetResult() ?? "";
+                string commandLine = HostProcessProbe.CommandLineAsync(Host, process.Id, process.StartIdentity, HostedTimeouts.Quick).GetAwaiter().GetResult() ?? "";
                 WarnUnexpectedCommandLine(Host, process.Id, expected, commandLine);
                 NoteAsync(Host, Role.Host, "server", JournalEntry.Of(JournalEntry.ProcessStarted, ("pid", process.Id.ToString(CultureInfo.InvariantCulture)),
                     ("startIdentity", process.StartIdentity), ("commandLineSha256", commandLine), ("bootDirectory", bootDirectory),
@@ -343,7 +342,7 @@ internal sealed class HostedServerRun : IServerPlacement
         {
             process = new DirectServerProcess(launch.ToStartInfo(), prefix,
                 Path.Combine(RuntimeDirectory, BepInExLog), Path.Combine(RuntimeDirectory, UnityLog));
-            var found = HostProcessProbe.ProbeAsync(Host, [(process.Id, "")], Quick, cancellation, settle: true).GetAwaiter().GetResult()[(process.Id, "")];
+            var found = HostProcessProbe.ProbeAsync(Host, [(process.Id, "")], HostedTimeouts.Quick, cancellation, settle: true).GetAwaiter().GetResult()[(process.Id, "")];
             if (found.State != ProbedState.Same || found.StartIdentity == null || found.CommandLineSha256 == null)
                 throw new IOException($"The Mac server process {process.Id} could not be identified for recovery ({found.State}).");
             File.WriteAllText(Path.Combine(bootDirectory, "pid"), $"{process.Id} {found.StartIdentity}\n");
@@ -443,7 +442,7 @@ internal sealed class HostedServerRun : IServerPlacement
         if (launched && _world >= WorldCopy.Shipped && serverStopped)
         {
             int before = failures.Count;
-            await Try("fetch the server host's world copy", () => Host.FetchDirectoryAsync(WorldDirectory, Path.Combine(output, "host-world"), Long, cleanup)).ConfigureAwait(false);
+            await Try("fetch the server host's world copy", () => Host.FetchDirectoryAsync(WorldDirectory, Path.Combine(output, "host-world"), HostedTimeouts.Long, cleanup)).ConfigureAwait(false);
             worldFetched = failures.Count == before;
         }
         // A copy whose copy began is retired even when it never finished (its reply was lost): nothing ran from it, so all of it goes.
@@ -467,7 +466,7 @@ internal sealed class HostedServerRun : IServerPlacement
                 // A ship that failed or was interrupted left a partial world copy, which is nobody's evidence: it goes.
                 await Try("remove the partial world copy on the server host", async () =>
                 {
-                    await HostedRuntimeStage.RetireAsync(Host, WorldDirectory, "", Quick, cleanup, RunId).ConfigureAwait(false);
+                    await HostedRuntimeStage.RetireAsync(Host, WorldDirectory, "", HostedTimeouts.Quick, cleanup, RunId).ConfigureAwait(false);
                     await NoteAsync(Host, Role.Host, "server", JournalEntry.Of(JournalEntry.CopyRetired, ("runtime", WorldDirectory))).ConfigureAwait(false);
                 }).ConfigureAwait(false);
             else if (!serverStopped)

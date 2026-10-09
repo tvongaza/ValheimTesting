@@ -330,7 +330,7 @@ public sealed class ServerLoadOneOffTests : IDisposable
         Assert.Equal(3, result);
         Assert.False(ran);
         string refusal = File.ReadAllText(Path.Combine(checkedOutput, "REFUSED.txt"));
-        Assert.Contains("not a prepared run", refusal);
+        Assert.Contains("no passing result", refusal);
         Assert.Contains("--client-loader-package FILE", refusal);
         Assert.Contains("No Steam account is signed in", refusal);
         Assert.False(File.Exists(Path.Combine(checkedOutput, "plan.json"))); // the password is written only once the preflight passed
