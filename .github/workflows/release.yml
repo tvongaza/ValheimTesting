@@ -58,6 +58,8 @@ jobs:
           dotnet run scripts/tool-pack.cs -- verify release
           cp .packages/Valheim.Testing.Cli.*.nupkg release/
           (cd release && sha256sum *.nupkg)
+      - name: Audit package contents before publication
+        run: dotnet run scripts/package-audit.cs -- --directory release --source-commit "$GITHUB_SHA"
       # Before the push, so "new" means this run publishes it. A version already on NuGet.org is skipped by the
       # push, and its package here is a rebuild with different bytes, so it is not attached to the GitHub
       # release. The exact package URL answers at once; the search index is not consulted.

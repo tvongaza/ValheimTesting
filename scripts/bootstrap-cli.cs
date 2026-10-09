@@ -73,6 +73,13 @@ try
         Property("RepositoryType", "git"),
         Property("RepositoryCommit", commit),
         Property("PackageTags", "valheim modding testing valheimcli"));
+    // A local feed survives re-pins. Keep only this just-packed transport so the
+    // package audit sees one coherent nine-package set on a developer's second run.
+    string currentPackage = packageId + "." + packageVersion + ".nupkg";
+    if (!File.Exists(Path.Combine(feed, currentPackage)))
+        throw new InvalidOperationException("The pinned CLI transport was not packed: " + currentPackage);
+    foreach (string older in Directory.GetFiles(feed, packageId + ".*.nupkg"))
+        if (!Path.GetFileName(older).Equals(currentPackage, StringComparison.OrdinalIgnoreCase)) File.Delete(older);
 }
 finally
 {
