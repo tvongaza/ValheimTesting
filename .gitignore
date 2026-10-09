@@ -6,6 +6,7 @@ obj/
 artifacts/
 docs/reference/api/
 docs/reference/_site/
+docs/reference/packages/
 .DS_Store
 *.user
 # A native GameSession fixture's private environment (examples/FullLifecycle/ExampleMod.Tests/ExampleSession.cs,

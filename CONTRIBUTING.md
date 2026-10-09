@@ -93,6 +93,8 @@ public class TerraceExample
 
 For stateful examples, start with [SharedWorld](examples/SharedWorld/README.md) and [SharedWorldTests](tests/Valheim.Testing.Tests/SharedWorldTests.cs). For captured inputs, use [ObserveCheck `capture`](examples/ObserveCheck/README.md#capture-record-a-bounded-grid-for-exact-replay) and its [import tests](tests/Valheim.Testing.Tests/TerrainCaptureTests.cs). Replay is exact lookup today; interpolation would be an explicit new policy with its own tests, not a silent fallback for a missing sample.
 
+For a consumer that calls production mod code, see [ProceduralRoads' migrated `SharedZoneWriterTests`](https://github.com/tvongaza/ProceduralRoads/blob/3354558/ProceduralRoads.Tests/SharedZoneWriterTests.cs). They use the doubles' zone state and `TerrainSnapshot` rather than a second world-state model. Keep mod-specific assertions with the mod; propose only the reusable missing contract here.
+
 Keep seeded models repeatable. State whether an input is immutable, test-owned mutable state, or safe for concurrent readers. Avoid shared mutable global fixtures, wall-clock-dependent outputs and accidental sharing of buffers. Do not add automatic seam repair or other helpers that hide the defect a consuming test should detect.
 
 ## Other useful contributions

@@ -1,5 +1,7 @@
 # Valheim.Testing
 
+[Current preview API reference](https://tvongaza.github.io/ValheimTesting/). The package's README is this guide; use its versioned source commit from the package metadata when checking an older preview.
+
 *Assistant-written (Claude).*
 
 `Valheim.Testing` is the pure library: declared terrain, exact replay of captured samples, pinned world-dump fixtures, terrain rendering and parity checks, and `StaticOverride` for scoped changes to statics and environment variables. It targets netstandard2.0, so it runs in a net48 (Mono) test leg as well as on modern .NET, and has no Unity, Valheim or ValheimCLI dependency. Use it in a mod's unit tests to feed declared inputs into the mod's real decisions; use [`Valheim.Testing.Doubles`](Valheim.Testing.Doubles.md) when those decisions call game types, and [`Valheim.Testing.Game`](Valheim.Testing.Game.md) for what only the running game shows.

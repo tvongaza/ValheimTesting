@@ -81,6 +81,8 @@ The output is a PNG written without a compression library: its image data uses u
 
 Keep adapters, expected outcomes and mod-specific assertions in the mod repository. [SharedWorld](../examples/SharedWorld/README.md) shows the shape: a stand-in writer applied to two zones, checked at the seam, with the failure a one-sided write causes and the fix.
 
+For a mod-side example, [ProceduralRoads' `SharedZoneWriterTests`](https://github.com/tvongaza/ProceduralRoads/blob/3354558/ProceduralRoads.Tests/SharedZoneWriterTests.cs) calls its real terrain writer, snapshots the doubles' per-zone `TerrainComp` state and checks the seam. The link is pinned to the migrated test revision; keep the implementation and its expectations in the Roads repository.
+
 The library does not call a mod or duplicate its grading, smoothing, terrain compiler, persistence ledger or paint rules. Derive expected outcomes independently. Compare complete sample sets where completeness matters; do not turn missing input into zero.
 
 ## Evidence limits and next layers

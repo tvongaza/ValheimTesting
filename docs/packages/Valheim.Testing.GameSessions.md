@@ -1,5 +1,7 @@
 # Valheim.Testing.GameSessions
 
+[Current preview API reference](https://tvongaza.github.io/ValheimTesting/). The package's README is this guide; use its versioned source commit from the package metadata when checking an older preview.
+
 *Assistant-written (Claude).*
 
 `Valheim.Testing.GameSessions` (net10.0) runs game sessions for mod tests: one or more real game processes in roles (a dedicated server, clients, a client that hosts its own world) on this machine or on others reached over SSH or a container, prepared, started, joined and torn down as one run. It is built on [`Valheim.Testing.Game`](Valheim.Testing.Game.md), which drives one game process; this package adds what a run of several processes, or a run on another machine, needs. Unofficial community tooling; not affiliated with or endorsed by Iron Gate or Coffee Stain. Valheim is a trademark of Iron Gate AB.
@@ -10,7 +12,7 @@ Topic pages: [pinned world dumps](../world-dump-contract.md) (`WorldDump`) and [
 
 ## What it holds
 
-- **The session:** `GameSession` (its server, clients by name, a hosting client, the scenario's `GameActor` handles, named barriers), the role actors `ServerActor`, `ClientActor` and `HostingClientActor`, and `ModDeclaration`. The xUnit fixture, `GameSessionFixture`, is source a mod copies from the [FullLifecycle example](../../examples/FullLifecycle/README.md).
+- **The session:** `GameSession` (its server, clients by name, a hosting client, the scenario's `GameActor` handles, named barriers), the role actors `ServerActor`, `ClientActor` and `HostingClientActor`, and `ModDeclaration`. For xUnit, copy both the [GameSessionFixture adapter](../../examples/FullLifecycle/ExampleMod.Tests/GameSessionFixture.cs) and the native-test skip pattern in [ExampleSession](../../examples/FullLifecycle/ExampleMod.Tests/ExampleSession.cs). In that example, `Available=false` leaves `Session` unset when no private session manifest is present, so a plain `[Fact]` would fail offline; `SessionFactAttribute` skips that test. The [FullLifecycle guide](../../examples/FullLifecycle/README.md) shows the complete setup.
 - **The pinned runner:** `PinnedServerRun` (`validate`, `run`, and `--inventory` for a server on another host) and `RunCampaignAsync` for a session manifest.
 - **Hosts:** `IGameHost` with `LocalGameHost`, `SshGameHost` and `ContainerGameHost`, the host lock, CLI tunnels, installs, server and interactive-client starts on a host, macOS app-bundle checks.
 - **Where actors run:** `EnvironmentRuns` places a session's actors on an `EnvironmentInventory` (the inventory itself, the description of the machines, is `Valheim.Testing.Game`'s) and reports, recovers and tears down what earlier runs left on its hosts (`valheim-test env status|recover|teardown`).

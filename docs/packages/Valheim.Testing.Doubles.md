@@ -1,5 +1,7 @@
 # Valheim.Testing.Doubles
 
+[Current preview API reference](https://tvongaza.github.io/ValheimTesting/). The package's README is this guide; use its versioned source commit from the package metadata when checking an older preview.
+
 *Assistant-written (Claude).*
 
 `Valheim.Testing.Doubles` lets a unit-test project compile and run a mod's pure-logic source files without Unity, Valheim, BepInEx or Jotunn. It is a source package: its files compile into your test project and stand in for the game's types under their real names, so the mod's own source, linked unchanged, calls them as it would call the game. Use it for decisions, persistence formats, RPC handlers, registrations and anything else a mod computes from game types. Use `Valheim.Testing.Game` against a real server for what only the game shows: rendering, physics, timing, real networking, and the game's behaviour beyond what is listed here.

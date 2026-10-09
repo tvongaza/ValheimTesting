@@ -489,6 +489,11 @@ List<Problem> DocsProblems()
                 if (path.Contains('?')) (path, anchor) = (path[..path.IndexOf('?')], ""); // ?plain=1#L5 names a line, not a heading
                 path = Uri.UnescapeDataString(path);
                 string resolved = path == "" ? file : Path.GetRelativePath(root, Path.GetFullPath(Path.Combine(root, from, path))).Replace('\\', '/');
+                // DocFX copies each package guide into reference/packages during the site build. The docs-only CI job
+                // runs before that build, so check its link against the canonical source guide instead.
+                const string generatedGuides = "docs/reference/packages/";
+                if (resolved.StartsWith(generatedGuides, StringComparison.Ordinal))
+                    resolved = "docs/packages/" + resolved[generatedGuides.Length..];
                 string full = Path.Combine(root, resolved);
                 if (!File.Exists(full) && !Directory.Exists(full)) { problems.Add(new(file, line, $"{url}: {resolved} does not exist.")); continue; }
                 if (anchor == "" || !resolved.EndsWith(".md", StringComparison.OrdinalIgnoreCase) || !File.Exists(full)) continue;
