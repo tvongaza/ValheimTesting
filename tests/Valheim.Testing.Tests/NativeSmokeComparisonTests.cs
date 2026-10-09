@@ -149,7 +149,7 @@ public sealed class NativeSmokeComparisonTests : IDisposable
         var explicitChoice = Package("explicit-loader");
         var shipped = Package("shipped-loader");
         var selected = explicitPackage ? explicitChoice : environmentPackage ? environment : shipped;
-        string inventory = Path.Combine(_rig.Root, environmentPackage ? "environment-loader.json" : "shipped-loader.json");
+        string inventory = Path.Combine(_rig.Root, environmentPackage ? "inventory-with-loader.json" : "inventory-without-loader.json");
         File.WriteAllText(inventory, JsonSerializer.Serialize(new
         {
             environments = new[] { new { name = "local-server", roles = new[] { "server" }, install = _rig.Game,
