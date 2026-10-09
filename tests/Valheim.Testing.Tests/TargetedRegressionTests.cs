@@ -78,8 +78,9 @@ public sealed class TargetedRegressionTests : IDisposable
     [Fact] public void ARejectedMacSourceStopsBeforeTheDisposableCopy()
     {
         if (!OperatingSystem.IsMacOS()) return;
-        var runner = _rig.Regression(_rig.Manifest())
+        var runner = new TargetedRegression(_rig.Manifest(), inventory: _rig.Inventory())
         {
+            SaveDirectory = _rig.Save,
             BundleInspection = (_, _) => new(MacBundleInspection.State.Broken, 1, "changed signed game file"),
         };
         Assert.Contains("Verify the game in Steam", Assert.Throws<InvalidOperationException>(() => runner.Stage("parent")).Message);
@@ -89,8 +90,9 @@ public sealed class TargetedRegressionTests : IDisposable
     [Fact] public void ARejectedMacCopyIsRemovedBeforeAnyClientLaunch()
     {
         if (!OperatingSystem.IsMacOS()) return;
-        var runner = _rig.Regression(_rig.Manifest())
+        var runner = new TargetedRegression(_rig.Manifest(), inventory: _rig.Inventory())
         {
+            SaveDirectory = _rig.Save,
             BundleInspection = (_, repair) => repair
                 ? new(MacBundleInspection.State.Rejected, 0, "Gatekeeper refused the copy")
                 : new(MacBundleInspection.State.Fixable, 1, "old preloader log"),
@@ -104,8 +106,9 @@ public sealed class TargetedRegressionTests : IDisposable
     {
         if (!OperatingSystem.IsMacOS()) return;
         int repairs = 0;
-        var runner = _rig.Regression(_rig.Manifest())
+        var runner = new TargetedRegression(_rig.Manifest(), inventory: _rig.Inventory())
         {
+            SaveDirectory = _rig.Save,
             BundleInspection = (_, repair) => !repair || ++repairs == 1
                 ? new(MacBundleInspection.State.Accepted, 0, "")
                 : new(MacBundleInspection.State.Rejected, 0, "copy changed after first arm"),
