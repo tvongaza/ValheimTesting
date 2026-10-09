@@ -1,23 +1,83 @@
 using System.Globalization;
-using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Valheim.Testing.Game;
 
 /// <summary>One-phase fixture input and export for an owned, server-only smoke run.</summary>
 internal static class FixtureBake
 {
     internal sealed record Input(string Source, string Origin, WorldIdentity Identity, IReadOnlyDictionary<string, string> Files);
+    internal sealed record SelectedMod(string Path, string Name, string Sha256);
+    internal sealed record BuildInputs(IReadOnlyList<SelectedMod> Mods, string DependencyLock, string DependencyLockSha256);
+
+    // Capture the build the game is about to load, not whatever happens to be on disk after it stops.
+    internal static BuildInputs CaptureBuild(IReadOnlyList<string> mods, string dependencyLock, NativeDependencyLock? resolved = null)
+    {
+        var selected = new List<SelectedMod>();
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        foreach (string mod in mods)
+        {
+            string name = Path.GetFileName(mod);
+            if (!names.Add(name))
+                throw new InvalidDataException("Two selected mods have the same file name; the fixture manifest cannot distinguish them: " + name);
+            selected.Add(new SelectedMod(Path.GetFullPath(mod), name, Sha256(mod)));
+        }
+        if (resolved != null && (selected.Count != resolved.Mods.Count || selected.Where((mod, index) =>
+                !mod.Path.Equals(Path.GetFullPath(resolved.Mods[index].File), OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal) ||
+                !mod.Sha256.Equals(resolved.Mods[index].Sha256, StringComparison.OrdinalIgnoreCase)).Any()))
+            throw new InvalidDataException("A selected mod changed after the dependency lock was resolved.");
+        return new BuildInputs(selected, Path.GetFullPath(dependencyLock), Sha256(dependencyLock));
+    }
+
+    private static void VerifyBuild(BuildInputs build)
+    {
+        foreach (var mod in build.Mods)
+            if (!Sha256(mod.Path).Equals(mod.Sha256, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException("A selected mod changed during the game run: " + mod.Name);
+        if (!Sha256(build.DependencyLock).Equals(build.DependencyLockSha256, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("The dependency lock changed during the game run.");
+    }
 
     internal static void RefuseOutput(string destination, params string[] protectedPaths)
     {
-        destination = Path.GetFullPath(destination);
+        destination = PhysicalPath(destination);
         if (Path.Exists(destination)) throw new IOException("The baked fixture output must be new: " + destination);
         foreach (string path in protectedPaths)
         {
-            string source = Path.GetFullPath(path);
+            string source = PhysicalPath(path);
             if (Contains(source, destination) || Contains(destination, source))
                 throw new IOException("The baked fixture output must be separate from the run output, world source and game install: " + destination);
         }
+    }
+
+    // Resolve every existing ancestor, including /tmp -> /private/tmp and Windows junctions.
+    // The final destination need not exist yet.
+    internal static string PhysicalPath(string path)
+    {
+        string full = Path.GetFullPath(path);
+        // A link can point through another link (on macOS, /var -> /private/var).
+        for (int i = 0; i < 16; i++)
+        {
+            string resolved = ResolveExistingLinks(full);
+            if (resolved == full) return resolved;
+            full = resolved;
+        }
+        throw new IOException("The output path has too many symlink levels: " + path);
+    }
+
+    private static string ResolveExistingLinks(string full)
+    {
+        string current = Path.GetPathRoot(full)!;
+        foreach (string part in full[current.Length..].Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries))
+        {
+            current = Path.Combine(current, part);
+            if (Path.Exists(current))
+            {
+                FileSystemInfo info = Directory.Exists(current) ? new DirectoryInfo(current) : new FileInfo(current);
+                current = info.ResolveLinkTarget(returnFinalTarget: true)?.FullName ?? current;
+            }
+        }
+        return Path.GetFullPath(current);
     }
 
     private static bool Contains(string parent, string child)
@@ -36,11 +96,13 @@ internal static class FixtureBake
             return new Input(target, "packaged VTDefaultSmoke", WorldIdentity.Read(target), WorldFixture.Manifest(target));
         }
         source = Path.GetFullPath(source);
+        string manifestFile = Path.Combine(Path.GetFileName(source) == "worlds_local" ? Path.GetDirectoryName(source)! : source, "fixture-manifest.json");
         if (Directory.Exists(Path.Combine(source, "worlds_local"))) source = Path.Combine(source, "worlds_local");
-        if (Contains(source, target) || Contains(target, source))
+        if (Contains(PhysicalPath(source), PhysicalPath(target)) || Contains(PhysicalPath(target), PhysicalPath(source)))
             throw new IOException("The world fixture source and disposable run copy must be separate.");
         var identity = WorldIdentity.Read(source);
         var manifest = WorldFixture.Manifest(source);
+        if (File.Exists(manifestFile)) VerifyBakedManifest(manifestFile, identity, manifest);
         Directory.CreateDirectory(target);
         try
         {
@@ -61,10 +123,33 @@ internal static class FixtureBake
         }
     }
 
-    internal static void Export(string evidence, string destination, Input input, IReadOnlyList<string> mods, string dependencyLock)
+    private static void VerifyBakedManifest(string path, WorldIdentity identity, IReadOnlyDictionary<string, string> actual)
     {
-        destination = Path.GetFullPath(destination);
-        RefuseOutput(destination, input.Source, evidence);
+        try
+        {
+            using var document = JsonDocument.Parse(File.ReadAllText(path));
+            var root = document.RootElement;
+            if (root.GetProperty("schemaVersion").GetInt32() != 1 ||
+                root.GetProperty("world").GetProperty("Uid").GetInt64() != identity.Uid ||
+                root.GetProperty("world").GetProperty("Name").GetString() != identity.Name)
+                throw new InvalidDataException("The baked fixture manifest names another world or schema: " + path);
+            var pinned = root.GetProperty("filesSha256").EnumerateObject()
+                .ToDictionary(file => file.Name, file => file.Value.GetString() ??
+                    throw new InvalidDataException("The baked fixture manifest has a null file hash."), StringComparer.Ordinal);
+            if (pinned.Count != actual.Count || actual.Any(file => !pinned.TryGetValue(file.Key, out string? hash) ||
+                    !hash.Equals(file.Value, StringComparison.OrdinalIgnoreCase)))
+                throw new InvalidDataException("The baked fixture's world files differ from its manifest: " + path);
+        }
+        catch (Exception error) when (error is JsonException or KeyNotFoundException or InvalidOperationException or FormatException or ArgumentException)
+        {
+            throw new InvalidDataException("The baked fixture manifest is malformed: " + path, error);
+        }
+    }
+
+    internal static void Export(string evidence, string destination, Input input, BuildInputs build, params string[] protectedPaths)
+    {
+        destination = PhysicalPath(destination);
+        RefuseOutput(destination, new[] { input.Source, evidence }.Concat(protectedPaths).ToArray());
         using var result = JsonDocument.Parse(File.ReadAllText(Path.Combine(evidence, "result.json")));
         var root = result.RootElement;
         if (!root.GetProperty("Passed").GetBoolean() || !root.GetProperty("CleanupVerified").GetBoolean())
@@ -76,6 +161,7 @@ internal static class FixtureBake
         if (!provenance.TryGetProperty("serverStopsClean", out var stopped) || stopped.GetString() != "true")
             throw new InvalidOperationException("The server did not stop cleanly; no baked fixture was exported.");
         WorldFixture.Verify(input.Source, input.Files);
+        VerifyBuild(build);
 
         string ordinary = Path.Combine(evidence, "host-world");
         string mac = Path.Combine(evidence, "mac-world-input", "host-world");
@@ -86,6 +172,11 @@ internal static class FixtureBake
         var identity = WorldIdentity.Read(world);
         if (identity.Uid != input.Identity.Uid || identity.Name != input.Identity.Name)
             throw new InvalidDataException("The saved world does not match the source fixture's name and UID.");
+        var finalSave = Regex.Match(identity.File.Replace('\\', '/'), @"/_main\.(\d+)\.fwl2$", RegexOptions.CultureInvariant);
+        if (!finalSave.Success || !uint.TryParse(finalSave.Groups[1].Value, NumberStyles.None, CultureInfo.InvariantCulture, out uint exportedSaveNumber))
+            throw new InvalidDataException("The exported world has no numbered chunked save; its final save cannot be identified.");
+        if (exportedSaveNumber < saveNumber)
+            throw new InvalidDataException($"The fetched world is save {exportedSaveNumber}, older than the confirmed save {saveNumber}.");
         var files = WorldFixture.Manifest(world);
         if (files.Count == input.Files.Count && files.All(file => input.Files.TryGetValue(file.Key, out var hash) &&
                 hash.Equals(file.Value, StringComparison.OrdinalIgnoreCase)))
@@ -103,25 +194,20 @@ internal static class FixtureBake
             WorldFixture.Verify(copy, files);
             var outputIdentity = WorldIdentity.Read(copy);
             if (outputIdentity.Uid != identity.Uid) throw new InvalidDataException("The exported world UID changed during copying.");
-            var selected = new SortedDictionary<string, string>(StringComparer.Ordinal);
-            foreach (string mod in mods)
-            {
-                string name = Path.GetFileName(mod);
-                if (!selected.TryAdd(name, Sha256(mod)))
-                    throw new InvalidDataException("Two selected mods have the same file name; the fixture manifest cannot distinguish them: " + name);
-            }
+            VerifyBuild(build);
+            var selected = new SortedDictionary<string, string>(build.Mods.ToDictionary(mod => mod.Name, mod => mod.Sha256), StringComparer.Ordinal);
             var manifest = new
             {
                 schemaVersion = 1,
                 world = new { outputIdentity.Name, outputIdentity.SeedName, outputIdentity.Seed, outputIdentity.Uid, outputIdentity.WorldVersion },
                 source = new { input.Origin, input.Identity.Uid, sha256 = Sorted(input.Files) },
-                build = new { selectedModsSha256 = selected, dependencyLockSha256 = Sha256(dependencyLock),
-                    runId = provenance.GetProperty("runId").GetString(), saveNumber },
+                build = new { selectedModsSha256 = selected, dependencyLockSha256 = build.DependencyLockSha256,
+                    runId = provenance.GetProperty("runId").GetString(), confirmedSaveNumber = saveNumber, saveNumber = exportedSaveNumber },
                 filesSha256 = Sorted(files),
             };
             File.WriteAllText(Path.Combine(temporary, "fixture-manifest.json"),
                 JsonSerializer.Serialize(manifest, new JsonSerializerOptions { WriteIndented = true }) + "\n");
-            RefuseOutput(destination, input.Source, evidence);
+            RefuseOutput(destination, new[] { input.Source, evidence }.Concat(protectedPaths).ToArray());
             Directory.Move(temporary, destination); // same parent: a complete fixture appears at once
         }
         catch
@@ -135,10 +221,7 @@ internal static class FixtureBake
         new(files.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal), StringComparer.Ordinal);
 
     private static string Sha256(string file)
-    {
-        using var input = File.OpenRead(file);
-        return Convert.ToHexString(SHA256.HashData(input)).ToLowerInvariant();
-    }
+        => FileHash.Sha256(file);
 
     private static void CopyFiles(string source, string target, IReadOnlyDictionary<string, string> expected)
     {

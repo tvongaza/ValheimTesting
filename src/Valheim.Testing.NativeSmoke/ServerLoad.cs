@@ -245,10 +245,10 @@ internal static class ServerLoad
 
         var required = choice.Client == null ? new List<string> { "valheim.session/state" } : [.. Session];
         if (bakeDestination != null) required.Add("valheim.session/save");
-        // A user-supplied command can be a legacy command (such as cli_zdos_at) that the
-        // capability manifest cannot name. Stage both pinned observation packs for scripted
-        // server commands so the one-shot run does not fail after launch for a missing pack.
-        if (parsed.Options.ContainsKey("--before-save-command") || parsed.Options.ContainsKey("--assert-command"))
+        // These legacy read-only console commands use World Tools/Observe, though the extension
+        // capability manifest cannot name their cli_* aliases. A mod's own command needs neither pack.
+        if (new[] { "--before-save-command", "--assert-command" }.Any(option =>
+                parsed.Options.TryGetValue(option, out string? command) && NeedsObservationPacks(command)))
         {
             required.Add("valheim.world/terrain");
             required.Add("valheim.observe/zones");
@@ -261,6 +261,9 @@ internal static class ServerLoad
         dependencies.Write(serverLock);
         if (!dependencies.Ready)
             throw new InvalidDataException("Dependency choices remain: " + SmokeDependencyInputs.Gaps(dependencies));
+        var bakedBuild = bakeDestination != null ? FixtureBake.CaptureBuild(parsed.Mods, serverLock, dependencies) : null;
+        // Reject a bad or changed world before building an adapter or staging either game actor.
+        var fixture = FixtureBake.Prepare(fixtureSource, output);
         adapter ??= await SmokeAdapter.BuildAsync(serverInstall, dependencies, output, cancellation, core).ConfigureAwait(false);
 
         // The server's own files beside its lock: the session adapter, explicit configs and plugin sidecars.
@@ -295,7 +298,6 @@ internal static class ServerLoad
         if (selectedGuids.Any(guid => guid.Contains(';'))) throw new InvalidDataException("A selected server plugin GUID contains the session list separator.");
 
         // A pinned copy of the chosen world; only the copy can be changed by this run.
-        var fixture = FixtureBake.Prepare(fixtureSource, output);
         string worldUid = fixture.Identity.UidText, worldName = fixture.Identity.Name;
         var campaign = new HostedCampaignManifest
         {
@@ -339,7 +341,7 @@ internal static class ServerLoad
                 "-world", worldName, "-password", password, "-public", "0", "-savedir", "{world}", "-logFile", "{runtime}/toolkit-unity.log"],
             Environment = new Dictionary<string, string> { [SmokeSessionContract.SelectedGuidsVariable] = string.Join(";", selectedGuids) },
             Port = server.CliPort,
-            QuitSeconds = 20, // a disposable load smoke: no save-on-quit or crossplay retirement is asserted
+            QuitSeconds = bakeDestination == null ? 20 : 300, // A bake must let the final world save at quit finish.
         };
         if (parsed.Options.TryGetValue("--expected-log-error", out string? expectedError))
             plan.LogScan[LogScanner.UnknownError] = new LogClassification { Expected = [expectedError], Reason = parsed.Options["--expected-log-reason"] };
@@ -406,10 +408,11 @@ internal static class ServerLoad
         {
             try
             {
-                FixtureBake.Export(Path.Combine(output, "evidence"), bakeDestination, fixture, parsed.Mods, serverLock);
+                FixtureBake.Export(Path.Combine(output, "evidence"), bakeDestination, fixture, bakedBuild!,
+                    output, serverInstall, choice.Client?.Install ?? output);
                 Console.WriteLine("Baked fixture: " + bakeDestination);
             }
-            catch (Exception error) when (error is IOException or InvalidDataException or InvalidOperationException or UnauthorizedAccessException or JsonException)
+            catch (Exception error)
             {
                 Console.Error.WriteLine("Fixture export failed after the game run: " + error.Message);
                 // The game report is already final: keep the post-run export failure beside it.
@@ -421,6 +424,12 @@ internal static class ServerLoad
         }
         Finish(result, parsed.Mods.Count, clientPlan != null, clock, output);
         return result;
+    }
+
+    private static bool NeedsObservationPacks(string command)
+    {
+        string name = command.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries)[0];
+        return name is "cli_zdos_at" or "cli_containers_at" or "cli_prefabs_at" or "cli_piece_support";
     }
 
     // Loaded with the packaged world, joinable, and (with a client) a clean client reading that world.

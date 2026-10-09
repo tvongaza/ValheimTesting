@@ -147,6 +147,81 @@ public sealed class ServerLoadOneOffTests : IDisposable
     }
 
     [Fact]
+    public async Task BakeAllowsTheFinalWorldSaveToFinishAtQuit()
+    {
+        string output = Path.Combine(_rig.Root, "bake-quit-budget");
+        string[] args = Arguments(output, "--server-only", "--bake-fixture", Path.Combine(_rig.Root, "baked"),
+            "--assert-command", "cli_zdos_at 1 2 8", "--assert-line", "ZDO");
+        AddObservationCapabilities(args);
+        Assert.Equal(1, await ServerLoad.RunAsync(args, new ServerLoad.Seams(Inspect: _ => Task.FromResult(Ready),
+            Campaign: (_, plan, _, _, _) => { Assert.Equal(300, plan.QuitSeconds); return Task.FromResult(1); })));
+        Assert.Equal(300, ServerRunPlan.Read<ServerRunPlan>(Path.Combine(output, "plan.json")).QuitSeconds);
+    }
+
+    [Fact]
+    public async Task PostRunExportExceptionIsAFailedRunWithEvidenceNotAPrelaunchRefusal()
+    {
+        string output = Path.Combine(_rig.Root, "bake-export-failure");
+        string[] args = Arguments(output, "--server-only", "--bake-fixture", Path.Combine(_rig.Root, "baked"),
+            "--assert-command", "cli_zdos_at 1 2 8", "--assert-line", "ZDO");
+        AddObservationCapabilities(args);
+        int result = await ServerLoad.RunAsync(args, new ServerLoad.Seams(Inspect: _ => Task.FromResult(Ready),
+            Campaign: (_, _, _, evidence, _) =>
+            {
+                string world = Path.Combine(evidence, "host-world");
+                DefaultSmokeWorld.PrepareServerSaveRoot(world);
+                string save = Path.Combine(world, "worlds_local", DefaultSmokeWorld.Name);
+                File.Copy(Path.Combine(save, "_main.1.fwl2"), Path.Combine(save, "_main.2.fwl2"));
+                // The missing runId used to throw KeyNotFoundException after the game had finished.
+                File.WriteAllText(Path.Combine(evidence, "result.json"), JsonSerializer.Serialize(new
+                {
+                    Passed = true, CleanupVerified = true,
+                    Provenance = new Dictionary<string, string> { ["bakeSaveNumber"] = "2", ["serverStopsClean"] = "true" },
+                }));
+                return Task.FromResult(0);
+            }));
+        Assert.Equal(1, result);
+        Assert.True(File.Exists(Path.Combine(output, "evidence", "fixture-export-failed.txt")));
+        Assert.False(File.Exists(Path.Combine(output, "REFUSED.txt")));
+        Assert.False(Directory.Exists(Path.Combine(_rig.Root, "baked")));
+    }
+
+    [Fact]
+    public async Task ModOwnedScriptedCommandDoesNotRequireUnrelatedObservationPacks()
+    {
+        string output = Path.Combine(_rig.Root, "mod-command");
+        bool ran = false;
+        int result = await ServerLoad.RunAsync(Arguments(output, "--server-only",
+            "--assert-command", "mymod_status", "--assert-line", "READY"),
+            new ServerLoad.Seams(Inspect: _ => Task.FromResult(Ready),
+                Campaign: (_, _, _, _, _) => { ran = true; return Task.FromResult(1); }));
+        Assert.Equal(1, result);
+        Assert.True(ran);
+        Assert.False(File.Exists(Path.Combine(output, "REFUSED.txt")));
+    }
+
+    [Fact]
+    public async Task BadWorldFixtureIsRefusedBeforeBuildingTheAdapter()
+    {
+        string output = Path.Combine(_rig.Root, "bad-world");
+        var args = Arguments(output, "--server-only", "--world-fixture", Path.Combine(_rig.Root, "missing-world")).ToList();
+        args.RemoveAt(args.IndexOf("--adapter") + 1);
+        args.Remove("--adapter");
+        Assert.Equal(3, await ServerLoad.RunAsync(args.ToArray(), new ServerLoad.Seams(Inspect: _ => Task.FromResult(Ready))));
+        Assert.False(Directory.Exists(Path.Combine(output, "adapter")));
+    }
+
+    private static void AddObservationCapabilities(string[] args)
+    {
+        string manifestFile = args[Array.IndexOf(args, "--cli-manifest") + 1];
+        var manifest = CliCapabilityManifest.Read(manifestFile);
+        var pack = manifest.Files.Single(file => file.File == "Valheim.Cli.Standard.dll");
+        pack.Extensions["valheim.world"] = new(StringComparer.Ordinal) { ["terrain"] = 1 };
+        pack.Extensions["valheim.observe"] = new(StringComparer.Ordinal) { ["zones"] = 1 };
+        manifest.Write(manifestFile);
+    }
+
+    [Fact]
     public async Task ScriptedServerObservationRequiresThePinnedObservationPacksBeforeLaunch()
     {
         string output = Path.Combine(_rig.Root, "missing-observation-pack");
