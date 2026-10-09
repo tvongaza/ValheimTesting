@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
+using System.Runtime.InteropServices;
 
 namespace Valheim.Testing.Game;
 
@@ -17,8 +18,8 @@ public sealed class EnvironmentRecipe
     public int LocalCliPort { get; set; }
     public int GamePort { get; set; }
     public string? LoaderPackage { get; set; }
-    /// <summary>Client slice: x64 (default) or arm64 on macOS. A command-line choice may override it.</summary>
-    public string Architecture { get; set; } = "x64";
+    /// <summary>Client slice. When omitted, inventory resolution selects arm64 on a local Apple Silicon Mac and x64 elsewhere; x64 can be selected for Rosetta.</summary>
+    public string Architecture { get; set; } = "";
 
     internal GameRole Role() => new()
     {
@@ -124,6 +125,9 @@ public sealed class EnvironmentInventory
     private const int FirstCliPort = 5688, FirstGamePort = 2486;
     private readonly Dictionary<string, string> _noInstall = new(StringComparer.Ordinal);
 
+    internal static string DefaultClientArchitecture(string platform, Architecture osArchitecture) =>
+        platform == "macos" && osArchitecture == Architecture.Arm64 ? "arm64" : "x64";
+
     // Fills this machine's host and the left-out fields of its environments, saying what it detected and assumed. With no
     // file it also lists the detected environments; a file's list is kept as written.
     private void AddThisMachine(ISteamLocator machine, bool fromFile)
@@ -180,6 +184,13 @@ public sealed class EnvironmentInventory
         foreach (var recipe in Environments.Where(recipe => recipe.Host == name))
         {
             bool serves = recipe.Roles.Contains("server");
+            var assumed = new List<string>();
+            if (string.IsNullOrEmpty(recipe.Architecture))
+            {
+                recipe.Architecture = recipe.Roles.Contains("client")
+                    ? DefaultClientArchitecture(machine.Platform, machine.OsArchitecture) : "x64";
+                if (recipe.Roles.Contains("client")) assumed.Add("client architecture " + recipe.Architecture);
+            }
             if (string.IsNullOrEmpty(recipe.Install))
             {
                 recipe.Install = (serves ? server : recipe.Roles.Contains("client") ? game : null) ?? "";
@@ -189,7 +200,6 @@ public sealed class EnvironmentInventory
                     _missing.Add($"Environment {recipe.Name} has no install: {_noInstall[recipe.Name ?? ""]}");
                 }
             }
-            var assumed = new List<string>();
             if (string.IsNullOrEmpty(recipe.Runtime)) assumed.Add("runtime " + (recipe.Runtime = HostPath.Join(machine.DataRoot, "runs", recipe.Name ?? "")));
             if (recipe.CliPort == 0)
             {
@@ -251,6 +261,9 @@ public sealed class EnvironmentInventory
             if (!NamePattern.IsMatch(recipe.Name ?? "")) errors.Add("Invalid environment name: " + recipe.Name);
             if (recipe.Host == null || !Hosts.TryGetValue(recipe.Host, out var host))
             { errors.Add($"Environment {recipe.Name} names unknown host {recipe.Host}."); continue; }
+            if (string.IsNullOrEmpty(recipe.Architecture))
+                recipe.Architecture = host.Kind == "local" && recipe.Roles.Contains("client")
+                    ? DefaultClientArchitecture(host.Platform, RuntimeInformation.OSArchitecture) : "x64";
             if (recipe.Roles is not (["server"] or ["client"]))
                 errors.Add($"Environment {recipe.Name} needs roles [\"server\"] or [\"client\"]: a dedicated server recipe cannot also be a client process.");
             if (!host.IsAbsolutePath(recipe.Install) || !host.IsAbsolutePath(recipe.Runtime))

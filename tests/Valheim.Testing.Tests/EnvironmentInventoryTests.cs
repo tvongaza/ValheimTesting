@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Runtime.InteropServices;
 using Valheim.Testing.Game;
 using Xunit;
 using Valheim.Testing.GameSessions;
@@ -39,6 +40,15 @@ public sealed class EnvironmentInventoryTests : IDisposable
         Server = new(),
         Clients = new() { ["client-a"] = new(), ["client-b"] = new() },
     };
+
+    [Fact]
+    public void AppleSiliconDefaultsToNativeAndOtherClientsDefaultToX64()
+    {
+        Assert.Equal("arm64", EnvironmentInventory.DefaultClientArchitecture("macos", Architecture.Arm64));
+        Assert.Equal("x64", EnvironmentInventory.DefaultClientArchitecture("macos", Architecture.X64));
+        Assert.Equal("x64", EnvironmentInventory.DefaultClientArchitecture("windows", Architecture.Arm64));
+        Assert.Equal("x64", EnvironmentInventory.DefaultClientArchitecture("linux", Architecture.Arm64));
+    }
 
     [Fact]
     public void InventoryAllowsArm64OnlyForAMacClient()
