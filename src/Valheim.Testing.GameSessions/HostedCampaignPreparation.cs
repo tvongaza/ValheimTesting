@@ -300,11 +300,11 @@ public static class HostedCampaignPreparation
     /// </summary>
     public static async Task<CampaignPreflightReport> InspectAsync(string manifestFile, TimeSpan timeout,
         Func<string, IGameHost>? hostFactory = null, CancellationToken cancellation = default)
-        => await InspectAsync(manifestFile, timeout, hostFactory, copyGame: false, cancellation).ConfigureAwait(false);
+        => await InspectAsync(manifestFile, timeout, copyGame: false, hostFactory, cancellation).ConfigureAwait(false);
 
     /// <summary>Inspect the hosts for the chosen profile or full-copy preparation mode before staging.</summary>
     public static async Task<CampaignPreflightReport> InspectAsync(string manifestFile, TimeSpan timeout,
-        Func<string, IGameHost>? hostFactory, bool copyGame, CancellationToken cancellation = default)
+        bool copyGame, Func<string, IGameHost>? hostFactory = null, CancellationToken cancellation = default)
     {
         var inspection = InspectInputs(manifestFile);
         // Real hosts get the real shipped-loader rule; a caller's own hosts (tests) are read as they are.
@@ -847,7 +847,7 @@ public static class HostedCampaignPreparation
 
     /// <summary>Prepare a hosted campaign, optionally making full disposable game copies for every actor.</summary>
     public static Task<PreparedHostedCampaign> PrepareAsync(string manifestFile, string outputDirectory, TimeSpan timeout,
-        Func<string, IGameHost>? hostFactory, bool copyGame, CancellationToken cancellation = default) =>
+        bool copyGame, Func<string, IGameHost>? hostFactory = null, CancellationToken cancellation = default) =>
         PrepareAsync(InspectInputs(manifestFile), outputDirectory, timeout, hostFactory, cancellation, copyGame: copyGame);
 
     // A preparation that failed ends its run in the journal of every host it was to touch, best effort: the entry is a record,
