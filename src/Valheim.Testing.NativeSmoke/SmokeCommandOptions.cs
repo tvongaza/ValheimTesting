@@ -121,14 +121,26 @@ internal static class SmokeCommandOptions
         return true;
     }
 
-    internal static string Output(IReadOnlyDictionary<string, string> options)
+    internal static string Output(IReadOnlyDictionary<string, string> options, Func<string, bool>? containsProject = null)
     {
-        string output = options.TryGetValue("--output", out string? given) ? Path.GetFullPath(given)
+        containsProject ??= parent => Directory.EnumerateFiles(parent, "*.csproj", SearchOption.TopDirectoryOnly).Any();
+        bool explicitOutput = options.TryGetValue("--output", out string? given);
+        string output = explicitOutput ? Path.GetFullPath(given!)
             : Path.GetFullPath(Path.Combine(EnvironmentInventory.ThisMachine.DataRoot, "valheim-test-runs", DateTime.UtcNow.ToString("yyyyMMdd-HHmmss-fff", CultureInfo.InvariantCulture) +
                 "Z-" + Guid.NewGuid().ToString("N")[..8]));
         for (string? parent = Path.GetDirectoryName(output); parent != null; parent = Path.GetDirectoryName(parent))
         {
-            if (Directory.Exists(parent) && Directory.EnumerateFiles(parent, "*.csproj", SearchOption.TopDirectoryOnly).Any())
+            if (!Directory.Exists(parent)) continue;
+            bool insideProject;
+            try { insideProject = containsProject(parent); }
+            catch (Exception error) when (error is UnauthorizedAccessException or IOException or System.Security.SecurityException)
+            {
+                string workaround = explicitOutput
+                    ? "Choose a new directory outside that tree, or omit --output to use the ValheimTesting data folder."
+                    : "Choose a writable ValheimTesting data folder outside that tree.";
+                throw new IOException($"Cannot inspect output ancestor {parent} for a mod project: {error.Message} {workaround}", error);
+            }
+            if (insideProject)
                 throw new ArgumentException("--output must be outside the mod project; generated adapter .cs files would be compiled into the mod: " + output);
         }
         if (Path.Exists(output)) throw new IOException("--output must be new; existing evidence will not be overwritten: " + output);
