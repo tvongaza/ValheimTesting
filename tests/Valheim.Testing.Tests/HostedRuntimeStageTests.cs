@@ -260,6 +260,69 @@ public sealed class HostedRuntimeStageTests : IDisposable
         Assert.False(Directory.Exists(parent));
     }
 
+    [Fact] public async Task AClientProfileRefusesADamagedMacBundleBeforeWritingAnyProfileFiles()
+    {
+        var host = new FakeServerHost("mac-profile", Path.Combine(_root, "fake-mac"));
+        const string source = "/games/valheim", parent = "/runs/vt-prep-mac-client";
+        string app = GameLaunch.ClientMacBundle;
+        void Source(string relative, string text)
+        {
+            string path = host.Local(source + "/" + relative);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, text);
+        }
+        Source(app + "/Contents/MacOS/Valheim", "game executable");
+        Source(app + "/Contents/Resources/Data/Managed/" + InstallPins.GameAssemblyName, "game assembly");
+        Source("BepInEx/core/BepInEx.dll", "core");
+        Source("BepInEx/core/BepInEx.Preloader.dll", "preloader");
+        Source("doorstop_libs/libdoorstop_x64.dylib", "doorstop");
+        host.MacBundleInspect = "VT-BUNDLE broken 1 " + Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes("invalid signature"));
+        string selected = Path.Combine(_root, "selected.dll");
+        File.WriteAllText(selected, "selected");
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => HostedRuntimeStage.PrepareProfileAsync(host,
+            HostedRuntimeKind.Client, source, parent + "/runtime", parent + "/staging",
+            [new HostedRuntimeFile(selected, "BepInEx/plugins/selected.dll")], TimeSpan.FromSeconds(30)));
+
+        Assert.Contains("source Valheim.app", error.Message);
+        Assert.DoesNotContain("ship", host.Scripts);
+        Assert.False(Directory.Exists(host.Local(parent)));
+    }
+
+    [Fact] public async Task AnExistingProfileDestinationIsNeverDeletedAfterSeedRefusal()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        var host = new LocalGameHost("profile-collision", HostShell.Bash);
+        string source = Path.Combine(_root, "collision-source");
+        string executable = Path.Combine(source, "valheim_server", "Valheim");
+        string assembly = Path.Combine(source, "valheim_server", "Data", "Managed", InstallPins.GameAssemblyName);
+        string core = Path.Combine(source, "BepInEx", "core");
+        Directory.CreateDirectory(Path.GetDirectoryName(executable)!);
+        Directory.CreateDirectory(Path.GetDirectoryName(assembly)!);
+        Directory.CreateDirectory(core);
+        File.WriteAllText(executable, "server");
+        File.SetUnixFileMode(executable, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+        File.WriteAllText(assembly, "game");
+        File.WriteAllText(Path.Combine(core, "BepInEx.dll"), "core");
+        File.WriteAllText(Path.Combine(core, "BepInEx.Preloader.dll"), "preloader");
+        FakeInstalls.MacLoader(source);
+        string parent = Path.Combine(_root, "vt-prep-collision");
+        string runtime = Path.Combine(parent, "runtime");
+        Directory.CreateDirectory(runtime);
+        string marker = Path.Combine(runtime, "other-run.txt");
+        File.WriteAllText(marker, "keep");
+        string selected = Path.Combine(_root, "collision-mod.dll");
+        File.WriteAllText(selected, "selected");
+
+        var error = await Assert.ThrowsAsync<IOException>(() => HostedRuntimeStage.PrepareProfileAsync(host,
+            HostedRuntimeKind.Server, source, runtime, Path.Combine(parent, "staging"),
+            [new HostedRuntimeFile(selected, "BepInEx/plugins/selected.dll")], TimeSpan.FromSeconds(30)));
+
+        Assert.Contains("already exists", error.Message);
+        Assert.Equal("keep", File.ReadAllText(marker));
+        Assert.False(Directory.Exists(Path.Combine(parent, "staging")));
+    }
+
     [Fact] public async Task MacProfileRefusesAChangedSourceAndRemovesItsOwnedFiles()
     {
         if (!OperatingSystem.IsMacOS()) return;

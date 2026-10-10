@@ -29,6 +29,12 @@ internal static partial class HostedRuntimeStage
         if (inspectedSource != null && (inspectedSource.HostName != host.Name || inspectedSource.Root != source))
             throw new ArgumentException("The inspected source belongs to a different host or install.", nameof(inspectedSource));
         var game = inspectedSource ?? await InspectSourceAsync(host, kind, source, loaderPackage, timeout, cancellation).ConfigureAwait(false);
+        if (kind == HostedRuntimeKind.Client && MacAppBundle.IsMacClient(game))
+        {
+            var bundle = await MacAppBundle.InspectAsync(host, source, HostedTimeouts.MacBundleAssessment(timeout), cancellation).ConfigureAwait(false);
+            if (MacBundleInspection.SourceRefusal(bundle) is { } refusal)
+                throw new InvalidOperationException($"The source Valheim.app on {host.Name} cannot launch: {refusal}");
+        }
         const string settings = BepInExSettings.RelativePath;
         bool preserveSourceSettings = BepInExSettings.Choose(
             game.Files.ContainsKey(settings), loaderPackage?.Files.ContainsKey(settings) == true,
@@ -83,6 +89,13 @@ internal static partial class HostedRuntimeStage
                     ["files"] = string.Join('\n', sourceLoader.Select(Encode)),
                     ["gameFiles"] = string.Join('\n', gameLinks.Select(Encode)),
                 }, timeout, cancellation).ConfigureAwait(false);
+            if (InteractiveClient.Line(seed.Stdout, "VT-PROFILE-EXISTS") != null)
+            {
+                // The host explicitly proved this invocation did not create the destination.
+                // Retire staging only; an existing profile may belong to another run.
+                created = false;
+                throw new IOException($"The profile destination {destination} already exists on {host.Name}; no existing files were removed.");
+            }
             seed.EnsureSuccess($"Seeding the profile loader on {host.Name}");
             if (InteractiveClient.Line(seed.Stdout, "VT-PROFILE-SEEDED") == null)
                 throw new HostOperationException($"No profile-seed verdict from {host.Name}", seed);
@@ -153,7 +166,7 @@ internal static partial class HostedRuntimeStage
 
     internal static readonly string BashProfileSeed = """
         set -eu
-        if [ -e "$runtime" ]; then echo 'Profile destination already exists' >&2; exit 3; fi
+        if [ -e "$runtime" ]; then echo 'VT-PROFILE-EXISTS'; exit 0; fi
         mkdir -p -- "$runtime"
         while IFS= read -r line; do
           [ -n "$line" ] || continue
@@ -166,7 +179,7 @@ internal static partial class HostedRuntimeStage
 
     internal static readonly string WindowsProfileSeed = """
         $utf8 = New-Object Text.UTF8Encoding $false
-        if ([IO.Directory]::Exists($runtime) -or [IO.File]::Exists($runtime)) { throw 'Profile destination already exists' }
+        if ([IO.Directory]::Exists($runtime) -or [IO.File]::Exists($runtime)) { 'VT-PROFILE-EXISTS'; exit 0 }
         [void][IO.Directory]::CreateDirectory($runtime)
         foreach ($line in ($gameFiles -split "`n")) {
             if (-not $line) { continue }
