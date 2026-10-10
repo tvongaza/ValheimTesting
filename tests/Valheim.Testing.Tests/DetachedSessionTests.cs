@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using System.Text.Json;
-using System.Xml.Linq;
 using Xunit;
 
 public sealed class DetachedSessionTests : IDisposable
@@ -72,24 +71,10 @@ public sealed class DetachedSessionTests : IDisposable
     }
 
     [Fact]
-    public void LaunchdJobRunsOnceAndEscapesArguments()
-    {
-        var launch = new DetachedSession.Launch("abcd", "tv.valheimtesting.detached.abcd", _root,
-            "ready", "out", "err", "tool", "inputs", "job.plist", "gui/501");
-        string xml = DetachedSession.Plist(launch, ["/usr/bin/env", "MOD=alpha&beta", "/path with space/dotnet"]);
-        var document = XDocument.Parse(xml);
-        var entries = document.Root!.Element("dict")!.Elements().ToArray();
-        Assert.Contains(entries, element => element.Name.LocalName == "false");
-        Assert.Contains(entries, element => element.Name.LocalName == "true");
-        Assert.Contains("MOD=alpha&beta", entries.Single(element => element.Name.LocalName == "array").Value);
-        Assert.DoesNotContain("KeepAlive</key>\n    <true", xml);
-    }
-
-    [Fact]
     public void WindowsTaskUsesOneDesktopTokenAndQuotesTheRunnerArguments()
     {
         var launch = new DetachedSession.Launch("abcd", "ValheimTesting-detached-abcd", _root,
-            "ready", "out", "err", "tool", "inputs", @"C:\run's folder\launcher.ps1", "windows/task");
+            "ready", "out", "err", "tool", "inputs", @"C:\run's folder\launcher.ps1");
         string runner = DetachedSession.WindowsLauncher(launch, ["VALHEIM_TEST_DETACH_READY=C:\\ready's file"],
             [@"C:\Program Files\dotnet\dotnet.exe", @"C:\run's folder\test.dll", "--hold"]);
         Assert.Contains("$env:VALHEIM_TEST_DETACH_READY = 'C:\\ready''s file'", runner);
@@ -108,7 +93,7 @@ public sealed class DetachedSessionTests : IDisposable
     {
         if (!OperatingSystem.IsWindows()) return;
         var launch = new DetachedSession.Launch("abcd", "ValheimTesting-detached-abcd", _root,
-            "ready", "out", "err", "tool", "inputs", Path.Combine(_root, "launcher.ps1"), "windows/task");
+            "ready", "out", "err", "tool", "inputs", Path.Combine(_root, "launcher.ps1"));
         string[] scripts = [DetachedSession.WindowsRegistration(launch),
             DetachedSession.WindowsLauncher(launch, ["VALHEIM_TEST_DETACH_READY=ready"], ["dotnet.exe", "runner.dll"])];
         foreach (string script in scripts)

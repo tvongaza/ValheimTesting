@@ -1,13 +1,11 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.Reflection;
-using System.Runtime.InteropServices;
 using System.Text.Json;
-using System.Xml.Linq;
 using Valheim.Testing.Game;
 using Valheim.Testing.GameSessions;
 
-/// <summary>An OS-owned server hold that survives the command which started it.</summary>
+/// <summary>A Windows Task Scheduler-owned server hold that survives the command which started it.</summary>
 internal static class DetachedSession
 {
     internal const string Usage = "valheim-test detach server-load --server DIR --mod DLL --server-only --output NEW_DIR [assertion and timing options] | " +
@@ -17,16 +15,15 @@ internal static class DetachedSession
     private sealed record Ready(string Run, string Evidence, int Pid, string Started);
     private sealed record StartedRun(string Run, int Pid, string Started);
     internal sealed record Launch(string Token, string Label, string Output, string ReadyFile, string StandardOut,
-        string StandardError, string ToolDirectory, string InputDirectory, string Plist, string Domain, string? Run = null,
+        string StandardError, string ToolDirectory, string InputDirectory, string LauncherPath, string? Run = null,
         int StarterPid = 0, string StarterStarted = "");
     private static string Root => Path.Combine(CliBundle.DataRoot, "runs", "detached");
-    [DllImport("libc")] private static extern uint geteuid();
 
     internal static async Task<int> RunAsync(string[] args, TextWriter? output = null, TextWriter? error = null)
     {
         output ??= Console.Out; error ??= Console.Error;
-        if (!OperatingSystem.IsMacOS() && !OperatingSystem.IsWindows())
-        { error.WriteLine("REFUSED: detached sessions currently require a local macOS launchd or Windows Task Scheduler owner; foreground --hold works on other hosts."); return 3; }
+        if (!OperatingSystem.IsWindows())
+        { error.WriteLine("REFUSED: detached sessions currently require a local Windows Task Scheduler owner; foreground --hold works on other hosts."); return 3; }
         if (args is ["status"]) return Status(output, error);
         if (args is ["finish", "--run", var run]) return await FinishAsync(run, output, error).ConfigureAwait(false);
         if (args is ["recover", "--token", var recoveryToken]) return await RecoverAsync(recoveryToken, output, error).ConfigureAwait(false);
@@ -38,17 +35,15 @@ internal static class DetachedSession
         {
             // The runner itself needs the desktop token on Windows. Otherwise its nested owned
             // server task would be created from a non-elevated session-0 S4U token and refused.
-            if (OperatingSystem.IsWindows())
-                await InteractiveClient.RequireWindowsDesktopSessionAsync(new LocalGameHost("this machine", HostShell.WindowsPowerShell))
-                    .ConfigureAwait(false);
+            await InteractiveClient.RequireWindowsDesktopSessionAsync(new LocalGameHost("this machine", HostShell.WindowsPowerShell))
+                .ConfigureAwait(false);
             Directory.CreateDirectory(Root);
             string token = Guid.NewGuid().ToString("N");
-            string label = OperatingSystem.IsWindows() ? WindowsTaskPrefix + token : "tv.valheimtesting.detached." + token;
+            string label = WindowsTaskPrefix + token;
             string prefix = Path.Combine(Root, token);
             using var starter = Process.GetCurrentProcess();
             var launch = new Launch(token, label, selectedOutput, prefix + ".ready.json", prefix + ".out.log", prefix + ".err.log",
-                prefix + ".tool", prefix + ".inputs", prefix + (OperatingSystem.IsWindows() ? ".ps1" : ".plist"),
-                OperatingSystem.IsWindows() ? "windows/task" : "gui/" + geteuid().ToString(CultureInfo.InvariantCulture),
+                prefix + ".tool", prefix + ".inputs", prefix + ".ps1",
                 StarterPid: starter.Id, StarterStarted: starter.StartTime.ToFileTimeUtc().ToString(CultureInfo.InvariantCulture));
             string record = prefix + ".launch.json";
             // This intent precedes even the tool snapshot: an interrupted copy is visible and
@@ -68,24 +63,20 @@ internal static class DetachedSession
                 foreach (string key in new[] { "DOTNET_ROOT", "NUGET_PACKAGES", "NUGET_HTTP_CACHE_PATH" })
                     if (Environment.GetEnvironmentVariable(key) is { } value) childEnvironment.Add(key + "=" + value);
                 string[] program = [command.Program, .. command.Prefix, "server-load", .. stagedArgs, "--hold"];
-                if (OperatingSystem.IsWindows())
-                    File.WriteAllText(launch.Plist, WindowsLauncher(launch, childEnvironment, program), new System.Text.UTF8Encoding(true));
-                else File.WriteAllText(launch.Plist, Plist(launch, ["/usr/bin/env", .. childEnvironment, .. program]));
+                File.WriteAllText(launch.LauncherPath, WindowsLauncher(launch, childEnvironment, program), new System.Text.UTF8Encoding(true));
             }
             catch
             {
                 // Nothing was submitted to the OS yet; these are exclusively this token's files.
                 if (Directory.Exists(launch.ToolDirectory)) Directory.Delete(launch.ToolDirectory, recursive: true);
                 if (Directory.Exists(launch.InputDirectory)) Directory.Delete(launch.InputDirectory, recursive: true);
-                File.Delete(launch.Plist); File.Delete(record);
+                File.Delete(launch.LauncherPath); File.Delete(record);
                 throw;
             }
             int submitted;
             try
             {
-                submitted = OperatingSystem.IsWindows()
-                    ? await RegisterWindowsTaskAsync(launch).ConfigureAwait(false)
-                    : await RegisterMacJobAsync(launch).ConfigureAwait(false);
+                submitted = await RegisterWindowsTaskAsync(launch).ConfigureAwait(false);
             }
             catch (Exception failure) when (failure is IOException or InvalidOperationException or System.ComponentModel.Win32Exception)
             {
@@ -121,7 +112,7 @@ internal static class DetachedSession
         { error.WriteLine("REFUSED: " + failure.Message); return 3; }
     }
 
-    // The launchd job has no caller working directory. Refuse relative paths and implicit mod discovery before it starts.
+    // A scheduled task has no caller working directory. Refuse relative paths and implicit mod discovery before it starts.
     internal static bool TryServerArgs(string[] args, out string output, out string error)
     {
         output = ""; error = "";
@@ -145,8 +136,8 @@ internal static class DetachedSession
         return true;
     }
 
-    // A launchd service cannot rely on macOS granting access to a user's Documents checkout. Copy
-    // each selected mod's directory so its adjacent managed dependencies resolve from the same snapshot.
+    // The task can outlive a source checkout. Copy each selected mod directory so its adjacent
+    // managed dependencies resolve from the same snapshot.
     internal static string[] StageMods(string[] args, string target)
     {
         var staged = (string[])args.Clone();
@@ -264,13 +255,6 @@ internal static class DetachedSession
         return process.ExitCode;
     }
 
-    private static async Task<int> RegisterMacJobAsync(Launch launch)
-    {
-        var bootstrap = new ProcessStartInfo("launchctl") { UseShellExecute = false };
-        bootstrap.ArgumentList.Add("bootstrap"); bootstrap.ArgumentList.Add(launch.Domain); bootstrap.ArgumentList.Add(launch.Plist);
-        return await RunCommand(bootstrap).ConfigureAwait(false);
-    }
-
     private static string Ps(string value) => "'" + value.Replace("'", "''", StringComparison.Ordinal) + "'";
 
     // The scheduled task owns the PowerShell wrapper, which waits for the runner. It has no clock trigger:
@@ -312,7 +296,7 @@ internal static class DetachedSession
         $definition.Settings.ExecutionTimeLimit = 'PT0S'
         $action = $definition.Actions.Create(0)
         $action.Path = Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell\v1.0\powershell.exe'
-        $action.Arguments = '-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + {{Ps(launch.Plist)}} + '"'
+        $action.Arguments = '-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + {{Ps(launch.LauncherPath)}} + '"'
         $action.WorkingDirectory = {{Ps(launch.ToolDirectory)}}
         $task = $folder.RegisterTaskDefinition({{Ps(launch.Label)}}, $definition, 2, $identity.Name, $null, $logonType) # TASK_CREATE; 1 only validates
         [void]$task.Run($null)
@@ -376,20 +360,6 @@ internal static class DetachedSession
         return await RunCommand(start).ConfigureAwait(false);
     }
 
-    internal static string Plist(Launch launch, string[] program)
-    {
-        var plist = new XDocument(new XDeclaration("1.0", "UTF-8", null),
-            new XDocumentType("plist", "-//Apple//DTD PLIST 1.0//EN", "http://www.apple.com/DTDs/PropertyList-1.0.dtd", null),
-            new XElement("plist", new XAttribute("version", "1.0"), new XElement("dict",
-                new XElement("key", "Label"), new XElement("string", launch.Label),
-                new XElement("key", "ProgramArguments"), new XElement("array", program.Select(arg => new XElement("string", arg))),
-                new XElement("key", "RunAtLoad"), new XElement("true"),
-                new XElement("key", "KeepAlive"), new XElement("false"),
-                new XElement("key", "StandardOutPath"), new XElement("string", launch.StandardOut),
-                new XElement("key", "StandardErrorPath"), new XElement("string", launch.StandardError))));
-        return plist.ToString() + "\n";
-    }
-
     private static async Task<Ready> WaitReadyAsync(Launch launch)
     {
         using var watcher = new FileSystemWatcher(Root, Path.GetFileName(launch.ReadyFile))
@@ -416,25 +386,11 @@ internal static class DetachedSession
                         throw new InvalidDataException("The detached held owner differs from the runner that started the run.");
                     return ready;
                 }
-                if (OperatingSystem.IsWindows())
-                {
-                    string state = await WindowsTaskStateAsync(launch).ConfigureAwait(false);
-                    if (state == "not-started" && DateTime.UtcNow - started > TimeSpan.FromSeconds(30))
-                        throw new IOException("The Windows detached task did not start within thirty seconds.");
-                    if (state.StartsWith("stopped", StringComparison.Ordinal))
-                        throw new IOException("The Windows detached task ended before the game entered its held state (" + state + ").");
-                }
-                else
-                {
-                    var probe = new ProcessStartInfo("launchctl") { UseShellExecute = false, RedirectStandardOutput = true };
-                    probe.ArgumentList.Add("list"); probe.ArgumentList.Add(launch.Label);
-                    using var process = Process.Start(probe) ?? throw new IOException("Could not inspect the launchd job.");
-                    string listing = await process.StandardOutput.ReadToEndAsync().ConfigureAwait(false);
-                    await process.WaitForExitAsync().ConfigureAwait(false);
-                    if (process.ExitCode != 0 || listing.Contains("\"LastExitStatus\"", StringComparison.Ordinal) &&
-                        !listing.Contains("\"PID\"", StringComparison.Ordinal))
-                        throw new IOException("The launchd runner ended before the game entered its held state.");
-                }
+                string state = await WindowsTaskStateAsync(launch).ConfigureAwait(false);
+                if (state == "not-started" && DateTime.UtcNow - started > TimeSpan.FromSeconds(30))
+                    throw new IOException("The Windows detached task did not start within thirty seconds.");
+                if (state.StartsWith("stopped", StringComparison.Ordinal))
+                    throw new IOException("The Windows detached task ended before the game entered its held state (" + state + ").");
                 await Task.WhenAny(changed.Task, Task.Delay(TimeSpan.FromSeconds(2))).ConfigureAwait(false);
                 if (changed.Task.IsCompleted) changed = new(TaskCreationOptions.RunContinuationsAsynchronously);
             }
@@ -466,12 +422,11 @@ internal static class DetachedSession
             if (record.Token is not { Length: 32 } || !record.Token.All(Uri.IsHexDigit))
                 throw new InvalidDataException("The detached record has an invalid token: " + file);
             string prefix = Path.Combine(Root, record.Token);
-            if (record.Label != (OperatingSystem.IsWindows() ? WindowsTaskPrefix : "tv.valheimtesting.detached.") + record.Token ||
+            if (record.Label != WindowsTaskPrefix + record.Token ||
                 file != prefix + ".launch.json" || record.ReadyFile != prefix + ".ready.json" ||
                 record.StandardOut != prefix + ".out.log" || record.StandardError != prefix + ".err.log" ||
                 record.ToolDirectory != prefix + ".tool" || record.InputDirectory != prefix + ".inputs" ||
-                record.Plist != prefix + (OperatingSystem.IsWindows() ? ".ps1" : ".plist") ||
-                record.Domain != (OperatingSystem.IsWindows() ? "windows/task" : "gui/" + geteuid().ToString(CultureInfo.InvariantCulture)) ||
+                record.LauncherPath != prefix + ".ps1" ||
                 record.Output is null || !Path.IsPathFullyQualified(record.Output) ||
                 record.StarterPid <= 0 || record.StarterStarted.Length == 0)
                 throw new InvalidDataException("The detached record is not one this machine created: " + file);
@@ -547,16 +502,14 @@ internal static class DetachedSession
                 CopyLog(record.StandardOut, Path.Combine(record.Output, "detached-stdout.log"));
                 CopyLog(record.StandardError, Path.Combine(record.Output, "detached-stderr.log"));
             }
-            bool ownerMissing = OperatingSystem.IsWindows()
-                ? await WindowsTaskStateAsync(record).ConfigureAwait(false) == "missing"
-                : await MacJobMissingAsync(record).ConfigureAwait(false);
+            bool ownerMissing = await WindowsTaskStateAsync(record).ConfigureAwait(false) == "missing";
             if (!ownerMissing && await RemoveOwnerAsync(record).ConfigureAwait(false) != 0)
                 throw new IOException("Could not remove the completed detached owner " + record.Label);
             if (Directory.Exists(record.ToolDirectory)) Directory.Delete(record.ToolDirectory, recursive: true);
             if (Directory.Exists(record.InputDirectory)) Directory.Delete(record.InputDirectory, recursive: true);
             File.Delete(record.ReadyFile);
             if (copiedLogs) { File.Delete(record.StandardOut); File.Delete(record.StandardError); }
-            File.Delete(RunFile(record)); File.Delete(RunFile(record) + ".new"); File.Delete(record.Plist); File.Delete(file);
+            File.Delete(RunFile(record)); File.Delete(RunFile(record) + ".new"); File.Delete(record.LauncherPath); File.Delete(file);
             if (!copiedLogs) output.WriteLine("Private startup logs kept at " + record.StandardOut + " and " + record.StandardError);
             output.WriteLine((ownerExit == 0 ? "DETACHED FINISHED run " : "DETACHED RECOVERED FAILED run ") +
                 run + "; owned state verified clear.");
@@ -568,13 +521,7 @@ internal static class DetachedSession
 
     private static string RunFile(Launch record) => Path.Combine(Root, record.Token + ".run.json");
 
-    private static async Task<int> RemoveOwnerAsync(Launch record)
-    {
-        if (OperatingSystem.IsWindows()) return await RemoveWindowsTaskAsync(record).ConfigureAwait(false);
-        var remove = new ProcessStartInfo("launchctl") { UseShellExecute = false };
-        remove.ArgumentList.Add("bootout"); remove.ArgumentList.Add(record.Domain + "/" + record.Label);
-        return await RunCommand(remove).ConfigureAwait(false);
-    }
+    private static Task<int> RemoveOwnerAsync(Launch record) => RemoveWindowsTaskAsync(record);
 
     private static async Task<int> RecoverAsync(string token, TextWriter output, TextWriter error)
     {
@@ -591,50 +538,20 @@ internal static class DetachedSession
                 throw new InvalidOperationException("The detached starter is still staging or registering this task; retry after it exits.");
             // A run ID is recorded before its journal or game can start. A missing ID is safe to
             // retire only after the OS task has stopped; never kill a task merely to clean files.
-            if (OperatingSystem.IsWindows())
-            {
-                if (await WindowsTaskStateAsync(record).ConfigureAwait(false) == "running")
-                    throw new InvalidOperationException("The Windows detached task is still running; inspect its private logs first.");
-            }
-            else
-            {
-                var probe = new ProcessStartInfo("launchctl") { UseShellExecute = false, RedirectStandardOutput = true };
-                probe.ArgumentList.Add("list"); probe.ArgumentList.Add(record.Label);
-                using var process = Process.Start(probe) ?? throw new IOException("Could not inspect the launchd job.");
-                string listing = await process.StandardOutput.ReadToEndAsync().ConfigureAwait(false);
-                await process.WaitForExitAsync().ConfigureAwait(false);
-                if (process.ExitCode == 0 && listing.Contains("\"PID\"", StringComparison.Ordinal))
-                    throw new InvalidOperationException("The launchd owner is running or cannot be inspected; inspect its private logs first.");
-            }
-            bool ownerMissing = OperatingSystem.IsWindows()
-                ? await WindowsTaskStateAsync(record).ConfigureAwait(false) == "missing"
-                : await MacJobMissingAsync(record).ConfigureAwait(false);
+            if (await WindowsTaskStateAsync(record).ConfigureAwait(false) == "running")
+                throw new InvalidOperationException("The Windows detached task is still running; inspect its private logs first.");
+            bool ownerMissing = await WindowsTaskStateAsync(record).ConfigureAwait(false) == "missing";
             if (!ownerMissing && await RemoveOwnerAsync(record).ConfigureAwait(false) != 0)
                 throw new IOException("Could not remove the stopped detached owner " + record.Label);
             if (Directory.Exists(record.ToolDirectory)) Directory.Delete(record.ToolDirectory, recursive: true);
             if (Directory.Exists(record.InputDirectory)) Directory.Delete(record.InputDirectory, recursive: true);
-            File.Delete(RunFile(record) + ".new"); File.Delete(record.Plist); File.Delete(file);
+            File.Delete(RunFile(record) + ".new"); File.Delete(record.LauncherPath); File.Delete(file);
             output.WriteLine("DETACHED RECOVERED token " + token + "; no run or game had been journalled. Private startup logs kept at " +
                 record.StandardOut + " and " + record.StandardError);
             return 0;
         }
         catch (Exception failure) when (failure is ArgumentException or IOException or InvalidDataException or InvalidOperationException or UnauthorizedAccessException or JsonException or System.ComponentModel.Win32Exception)
         { error.WriteLine("REFUSED: " + failure.Message); return 3; }
-    }
-
-    private static async Task<bool> MacJobMissingAsync(Launch record)
-    {
-        var probe = new ProcessStartInfo("launchctl") { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true };
-        probe.ArgumentList.Add("print"); probe.ArgumentList.Add(record.Domain + "/" + record.Label);
-        using var process = Process.Start(probe) ?? throw new IOException("Could not inspect the launchd job.");
-        Task<string> stdout = process.StandardOutput.ReadToEndAsync();
-        Task<string> stderr = process.StandardError.ReadToEndAsync();
-        await stdout.ConfigureAwait(false);
-        string diagnostic = await stderr.ConfigureAwait(false);
-        await process.WaitForExitAsync().ConfigureAwait(false);
-        if (process.ExitCode == 0) return false;
-        if (diagnostic.Contains("Could not find service \"" + record.Label + "\"", StringComparison.Ordinal)) return true;
-        throw new IOException("The launchd job could not be inspected: " + diagnostic.Trim());
     }
 
     private static void CopyLog(string source, string target)

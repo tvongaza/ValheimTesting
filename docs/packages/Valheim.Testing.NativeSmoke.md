@@ -73,21 +73,14 @@ valheim-test env status
 
 On Windows, inspect the held client through `valheim-test cli --evidence /path/to/new/private-run/evidence/smoke --phase world --command "cli_screenshot inspection"`; that command still checks strict pins and records its use in private evidence. `server-load --hold` keeps both the dedicated server and its clean joined client running; `--server-only --hold` keeps only the server. If any owned game exits unexpectedly during the hold, the run records a failed step and tears down instead of waiting for a finish request. Ctrl+C on the foreground runner also initiates its teardown. A killed terminal is not a successful finish: `env status` shows its journalled copies and exact process, and `env recover --run ID` is the recovery path once the owner is proven gone. Successful recovery also removes that dead run's hold marker. This is an interactive inspection mode, not a detached session or a replacement for a mod's assertions.
 
-The experimental `detach server-load` starts a **server-only** held run under launchd on macOS or Task Scheduler on Windows, so the invoking terminal or SSH session can exit. Windows requires one signed-in desktop session for the runner's task, but the Steam client is not required for a dedicated server. Supply absolute server, mod and output paths; the output must be new. It returns only after the exact pinned server has reached the held state:
+The experimental Windows `detach server-load` starts a **server-only** held run under Task Scheduler, so the invoking terminal or SSH session can exit. It requires one signed-in desktop session for the runner's task, but the Steam client is not required for a dedicated server. Supply absolute server, mod and output paths; the output must be new. It returns only after the exact pinned server has reached the held state:
 
-```sh
-valheim-test detach server-load --server /absolute/path/to/server --mod /absolute/path/to/MyMod.dll --server-only --output /absolute/path/to/new-run
+```powershell
+valheim-test detach server-load --server 'C:\Games\Valheim dedicated server' --mod 'C:\Mods\MyMod.dll' --server-only --output 'C:\ValheimTesting\runs\inspection-1'
 valheim-test detach status
 valheim-test detach finish --run RUN_ID
 # If setup failed before a run ID appeared, inspect env status, then:
 valheim-test detach recover --token TOKEN
-```
-
-From a Windows PowerShell terminal or SSH session, use Windows absolute paths instead:
-
-```powershell
-valheim-test detach server-load --server 'C:\Games\Valheim dedicated server' --mod 'C:\Mods\MyMod.dll' --server-only --output 'C:\ValheimTesting\runs\inspection-1'
-valheim-test detach finish --run RUN_ID
 ```
 
 The command snapshots the runner and selected mod directory (including adjacent managed dependencies) into ValheimTesting's private data folder before launch. It refuses a mod directory over 512 MiB or 10,000 files. Additional explicit input paths, such as a custom world or loader package, are not staged in this first mode; use foreground `--hold` for them. `detach finish` asks the exact live owner to stop, waits for its exit, runs the usual journal recovery check, removes the OS job and keeps its logs in the private output. If the owner died after recording the run ID, finish uses exact journal recovery to stop its surviving owned game and exits with failure; it never reports that interrupted run as passed. `detach recover --token` covers a failure before the run ID was recorded and refuses while its OS task may still be running. `env status` remains the authoritative view of owned state. This first detached mode does not restart a session, swap a build, attach a client or send ad-hoc commands; use a scripted scenario for those checks.

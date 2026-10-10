@@ -10,7 +10,7 @@ if (args is ["help" or "--help"])
     Console.WriteLine("valheim-test init [server] --output NEW_DIR (editable NuGet.org-only consumer)");
     Console.WriteLine(EnvCommand.Usage + " (list, preflight and status read only; recover and teardown clear what a run left)");
     Console.WriteLine(ForegroundHold.FinishUsage + " (asks the live owner of a held run to finish and clean up)");
-    Console.WriteLine(DetachedSession.Usage + " (experimental local detached dedicated server; launchd on macOS, Task Scheduler on Windows)");
+    Console.WriteLine(DetachedSession.Usage + " (experimental local detached dedicated server; Task Scheduler on Windows)");
     Console.WriteLine(OwnedCliCommand.Usage + " (one strictly pinned command to a running owned Windows client)");
     Console.WriteLine(SessionCommand.Usage + " (read only; --hosts adds the host checks)");
     return 0;
