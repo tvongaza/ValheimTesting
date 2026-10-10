@@ -522,7 +522,9 @@ internal static class DetachedSession
                 ? JsonSerializer.Deserialize<StartedRun>(File.ReadAllText(RunFile(record))) : null;
             if (ready?.Run != run && started?.Run != run) throw new InvalidDataException("The detached run identity changed.");
             bool live = ready != null ? ExactOwner(ready) : started != null && ExactOwner(started.Pid, started.Started);
-            int ownerExit = 0;
+            // A dead runner may have left its exact journalled game alive. Recovery can stop
+            // that game, but it cannot turn an interrupted run into a successful finish.
+            int ownerExit = live ? 0 : 1;
             if (live)
             {
                 if (ready == null) throw new InvalidOperationException("The detached runner is still setting up; it has no held marker to finish yet.");
@@ -533,7 +535,7 @@ internal static class DetachedSession
                 ownerExit = owner.ExitCode;
             }
             // An owner that died unexpectedly still goes through the existing exact-process recovery.
-            // If its game lives on, recovery refuses and the launchd record remains for inspection.
+            // It stops only processes proved to belong to this run and retains its recovered game logs.
             if (Directory.Exists(Path.Combine(RunJournal.LocalDirectory, run)))
             {
                 int clean = await EnvCommand.RunAsync(["recover", "--run", run], output, error).ConfigureAwait(false);
@@ -556,7 +558,8 @@ internal static class DetachedSession
             if (copiedLogs) { File.Delete(record.StandardOut); File.Delete(record.StandardError); }
             File.Delete(RunFile(record)); File.Delete(RunFile(record) + ".new"); File.Delete(record.Plist); File.Delete(file);
             if (!copiedLogs) output.WriteLine("Private startup logs kept at " + record.StandardOut + " and " + record.StandardError);
-            output.WriteLine("DETACHED FINISHED run " + run + "; owned state verified clear.");
+            output.WriteLine((ownerExit == 0 ? "DETACHED FINISHED run " : "DETACHED RECOVERED FAILED run ") +
+                run + "; owned state verified clear.");
             return ownerExit == 0 ? 0 : 1;
         }
         catch (Exception failure) when (failure is ArgumentException or IOException or InvalidDataException or InvalidOperationException or UnauthorizedAccessException or OperationCanceledException or JsonException or System.ComponentModel.Win32Exception)
