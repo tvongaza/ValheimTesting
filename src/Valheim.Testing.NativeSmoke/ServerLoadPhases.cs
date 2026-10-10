@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using Valheim.Testing.Game;
 
 /// <summary>Runs ordered server-only fixture bakes through the existing owned server-load lifecycle.</summary>
 internal static class ServerLoadPhases
@@ -46,9 +47,14 @@ internal static class ServerLoadPhases
             var plan = JsonSerializer.Deserialize<Plan>(File.ReadAllText(planFile), new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
                 ?? throw new InvalidDataException("The phase plan is empty.");
             Validate(plan);
-            string fixture = Path.GetFullPath(plan.WorldFixture);
-            if (!Directory.Exists(fixture)) throw new DirectoryNotFoundException("The source world fixture is missing: " + fixture);
-            FixtureBake.RefuseOutput(output, fixture);
+            bool packaged = plan.WorldFixture == "packaged";
+            string? generatedSource = packaged ? Path.Combine(output, "source") : null;
+            string fixture = packaged ? Path.Combine(generatedSource!, "worlds_local") : Path.GetFullPath(plan.WorldFixture);
+            if (!packaged)
+            {
+                if (!Directory.Exists(fixture)) throw new DirectoryNotFoundException("The source world fixture is missing: " + fixture);
+                FixtureBake.RefuseOutput(output, fixture);
+            }
             var phases = plan.Phases.Select((phase, index) =>
             {
                 string name = (index + 1).ToString("D2", System.Globalization.CultureInfo.InvariantCulture) + "-" + phase.Name;
@@ -59,6 +65,7 @@ internal static class ServerLoadPhases
                 BuildArgs(plan.CommonArgs, phase.Args, fixture, evidence, checkpoint);
             Directory.CreateDirectory(output);
             File.Copy(planFile, Path.Combine(output, "phase-plan.json"));
+            if (generatedSource != null) DefaultSmokeWorld.PrepareServerSaveRoot(generatedSource);
             runPhase ??= phaseArgs => ServerLoad.RunAsync(phaseArgs);
             int completed = 0;
             foreach (var (phase, name, evidence, checkpoint) in phases)
@@ -90,7 +97,8 @@ internal static class ServerLoadPhases
                 fixture = checkpoint;
             }
             if (!plan.KeepFinal) Directory.Delete(fixture, recursive: true);
-            WriteState(output, phases[^1].name, "finished", Path.GetFullPath(plan.WorldFixture),
+            if (generatedSource != null) Directory.Delete(generatedSource, recursive: true);
+            WriteState(output, phases[^1].name, "finished", plan.WorldFixture,
                 plan.KeepFinal ? fixture : "removed by plan");
             Console.WriteLine("PHASES PASS: " + phases.Length + " saved server phases; " +
                 (plan.KeepFinal ? "final fixture " + fixture : "all checkpoints removed") + "; evidence in " + output);
@@ -107,7 +115,8 @@ internal static class ServerLoadPhases
     {
         if (plan.Schema != 1 || plan.Phases is not { Length: >= 2 and <= 10 })
             throw new InvalidDataException("A phase plan needs schema 1 and 2-10 ordered phases.");
-        if (!Path.IsPathFullyQualified(plan.WorldFixture)) throw new InvalidDataException("worldFixture must be an absolute path.");
+        if (plan.WorldFixture != "packaged" && !Path.IsPathFullyQualified(plan.WorldFixture))
+            throw new InvalidDataException("worldFixture must be an absolute path or 'packaged'.");
         if (plan.CommonArgs == null || plan.Phases.Any(phase => phase == null || phase.Args == null))
             throw new InvalidDataException("commonArgs and every phase's args must be arrays.");
         if (plan.Phases.Any(phase => !PhaseName.IsMatch(phase.Name ?? "")) ||

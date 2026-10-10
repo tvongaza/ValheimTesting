@@ -98,4 +98,25 @@ public sealed class ServerLoadPhasesTests : IDisposable
         Assert.Contains("failed", File.ReadAllText(Path.Combine(output, "phase-state.json")));
         Assert.True(File.Exists(Path.Combine(_root, "source-fixture", "world.fwl")));
     }
+
+    [Fact]
+    public async Task PackagedSourceIsVerifiedAndRetiredAfterTheLastBake()
+    {
+        string plan = Plan(), output = Path.Combine(_root, "packaged-run");
+        File.WriteAllText(plan, File.ReadAllText(plan).Replace(Path.Combine(_root, "source-fixture"), "packaged", StringComparison.Ordinal));
+        string? firstInput = null;
+        int result = await ServerLoadPhases.RunAsync(["--plan", plan, "--output", output], args =>
+        {
+            string source = args[Array.IndexOf(args, "--world-fixture") + 1];
+            firstInput ??= source;
+            string checkpoint = args[Array.IndexOf(args, "--bake-fixture") + 1];
+            Directory.CreateDirectory(checkpoint);
+            File.WriteAllText(Path.Combine(checkpoint, "world.fwl"), "saved");
+            return Task.FromResult(0);
+        });
+        Assert.Equal(0, result);
+        Assert.Equal(Path.Combine(output, "source", "worlds_local"), firstInput);
+        Assert.False(Directory.Exists(Path.Combine(output, "source")));
+        Assert.True(Directory.Exists(Path.Combine(output, "checkpoints", "02-second")));
+    }
 }
