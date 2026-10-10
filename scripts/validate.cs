@@ -162,7 +162,10 @@ void CheckMacPowerShell()
     {
         UseShellExecute = false, WorkingDirectory = Path.GetTempPath(), RedirectStandardOutput = true, RedirectStandardError = true,
     };
-    foreach (string argument in new[] { "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "'VT-PWSH ready'" }) start.ArgumentList.Add(argument);
+    // Keep the same JIT-profile guard as GameHosts: the upstream PowerShell/.NET startup race can otherwise
+    // corrupt the user's startup profile before the guarded shell tests even begin (issue #145).
+    start.Environment["DOTNET_MultiCoreJitMinNumCpus"] = "FFFF";
+    foreach (string argument in new[] { "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "'VT-PWSH ready ' + $env:DOTNET_MultiCoreJitMinNumCpus" }) start.ArgumentList.Add(argument);
     Process launched;
     try { launched = Process.Start(start) ?? throw new InvalidOperationException("pwsh returned no process."); }
     catch (System.ComponentModel.Win32Exception startupError)
@@ -179,7 +182,7 @@ void CheckMacPowerShell()
     }
     string output = process.StandardOutput.ReadToEnd();
     string error = process.StandardError.ReadToEnd();
-    if (process.ExitCode != 0 || !output.Contains("VT-PWSH ready", StringComparison.Ordinal))
+    if (process.ExitCode != 0 || !output.Contains("VT-PWSH ready FFFF", StringComparison.Ordinal))
         throw new InvalidOperationException($"macOS PowerShell preflight: pwsh exited {process.ExitCode} before shell tests. Check DOTNET_ROOT and the installed .NET runtime; {error.Trim()}");
     Note("macOS PowerShell preflight passed from a temporary working directory.");
 }
