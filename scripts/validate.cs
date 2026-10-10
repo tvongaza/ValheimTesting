@@ -3,8 +3,9 @@
 //   dotnet run scripts/validate.cs
 //   dotnet run scripts/validate.cs -- --skip-ci-shell   CI only: shell integration runs in its own job
 //   dotnet run scripts/validate.cs -- --only-ci-shell   CI only: run that shard with the same data-root guard
-//   dotnet run scripts/validate.cs -- --ci-main        CI only: Windows main job, excluding measured slow methods
+//   dotnet run scripts/validate.cs -- --ci-main-tests  CI only: Windows toolkit tests excluding measured slow methods
 //   dotnet run scripts/validate.cs -- --ci-timed 1|2   CI only: one balanced slow-method shard
+//   dotnet run scripts/validate.cs -- --ci-build-only  CI only: Windows packaging and other test layers
 //
 // Runs the library tests, compiles the adapter source package against reference stubs, builds every example, tool and script, runs
 // the FullLifecycle example's and the native acceptance suite's tests against scripted fakes,
@@ -26,10 +27,11 @@ using System.Xml.Linq;
 string root = FindRoot();
 bool skipCiShell = args.SequenceEqual(["--skip-ci-shell"]);
 bool onlyCiShell = args.SequenceEqual(["--only-ci-shell"]);
-bool ciMain = args.SequenceEqual(["--ci-main"]);
+bool ciMainTests = args.SequenceEqual(["--ci-main-tests"]);
+bool ciBuildOnly = args.SequenceEqual(["--ci-build-only"]);
 int ciTimed = args is ["--ci-timed", "1"] ? 1 : args is ["--ci-timed", "2"] ? 2 : 0;
-if (args.Length != 0 && !skipCiShell && !onlyCiShell && !ciMain && ciTimed == 0)
-    throw new ArgumentException("usage: dotnet run scripts/validate.cs [--skip-ci-shell|--only-ci-shell|--ci-main|--ci-timed 1|2]");
+if (args.Length != 0 && !skipCiShell && !onlyCiShell && !ciMainTests && !ciBuildOnly && ciTimed == 0)
+    throw new ArgumentException("usage: dotnet run scripts/validate.cs [--skip-ci-shell|--only-ci-shell|--ci-main-tests|--ci-timed 1|2|--ci-build-only]");
 string results = Path.Combine(root, "artifacts", "validate");
 Directory.CreateDirectory(results);
 string transcript = Path.Combine(results, "validate.log");
@@ -46,7 +48,7 @@ if (onlyCiShell)
 }
 
 // The timing manifest is an optimisation, not an allowlist. A newly added test stays in ci-main until its measured
-// method is added here. Every listed method appears in exactly one timed shard, and ci-main excludes exactly that list.
+// method is added here. Every listed method appears in exactly one timed shard, and ci-main-tests excludes that list.
 using var timingDocument = JsonDocument.Parse(File.ReadAllText(Path.Combine(root, "scripts", "ci-test-timings.json")));
 var timedMethods = timingDocument.RootElement.EnumerateArray()
     .Select(item => new TimedMethod(item.GetProperty("Name").GetString() ?? "", item.GetProperty("Seconds").GetDouble())).ToArray();
@@ -78,10 +80,19 @@ if (ciTimed != 0)
 }
 
 // CI runs the slower local-shell integration tests in their own three-OS job. Plain local validation still runs all tests.
-if (ciMain) Test("tests/Valheim.Testing.Tests/Valheim.Testing.Tests.csproj", "--filter",
-    "Category!=CiShell&" + string.Join('&', timedMethods.Select(method => "FullyQualifiedName!=" + method.Name)));
-else if (skipCiShell) Test("tests/Valheim.Testing.Tests/Valheim.Testing.Tests.csproj", "--filter", "Category!=CiShell");
-else Test("tests/Valheim.Testing.Tests/Valheim.Testing.Tests.csproj");
+if (ciMainTests)
+{
+    Test("tests/Valheim.Testing.Tests/Valheim.Testing.Tests.csproj", "--filter",
+        "Category!=CiShell&" + string.Join('&', timedMethods.Select(method => "FullyQualifiedName!=" + method.Name)),
+        "--", "RunConfiguration.TreatNoTestsAsError=true");
+    Note("CI main toolkit tests passed; the data-root guard found no changes.");
+    return 0;
+}
+if (!ciBuildOnly)
+{
+    if (skipCiShell) Test("tests/Valheim.Testing.Tests/Valheim.Testing.Tests.csproj", "--filter", "Category!=CiShell");
+    else Test("tests/Valheim.Testing.Tests/Valheim.Testing.Tests.csproj");
+}
 Test("tests/Valheim.Testing.Doubles.Tests/Valheim.Testing.Doubles.Tests.csproj");
 Test("tests/Valheim.Testing.Bindings.Tests/Valheim.Testing.Bindings.Tests.csproj");
 // The adapter source is compiled into a mod's game-side adapter against the game; here, against declared signatures
@@ -132,7 +143,7 @@ Run("dotnet", "run", "scripts/package-audit.cs", "--", "--directory", feed, "--c
 // A mod's view of what was just packed: outside this checkout, the candidate packages only from .packages and byte-identical
 // to it, the Cli from .packages too (its pin may not be published yet), every other package from NuGet.org.
 Run("dotnet", "run", "scripts/consumer.cs", "--", "--feed", "local", "--candidate", candidate);
-Note(skipCiShell || ciMain ? "CI validation passed; shell and timed integration tests run in separate jobs." : "Local validation passed.");
+Note(skipCiShell || ciBuildOnly ? "CI validation passed; toolkit shards run in separate jobs." : "Local validation passed.");
 return 0;
 
 static string ScriptPath([CallerFilePath] string path = "") => path;
