@@ -252,10 +252,13 @@ internal static class RunRecovery
                         // only regression copies with an exact registered hash may be retired.
                         if (character.Fields.GetValueOrDefault("staged") != "true")
                         {
-                            HostListing? listing;
-                            try { listing = await HostInstall.ListAsync(host, character.Fields["characters"], timeout, cancellation: cancellation).ConfigureAwait(false); }
-                            catch (DirectoryNotFoundException) { listing = null; }
                             string fileName = character.Fields["fileName"];
+                            HostListing? listing;
+                            // Before CharacterDone, only CreateNew of the registered .fch could have occurred.
+                            // Do not hash unrelated personal saves (or links) in characters_local.
+                            try { listing = await HostInstall.ListAsync(host, character.Fields["characters"], timeout,
+                                paths: [DisposableCharacterStore.SaveFile(fileName)], cancellation: cancellation).ConfigureAwait(false); }
+                            catch (DirectoryNotFoundException) { listing = null; }
                             var owned = listing?.Files.Where(file => DisposableCharacterStore.IsCharacterFile(Path.GetFileName(file.Key), fileName)).ToArray() ?? [];
                             if (owned.Length == 0)
                             {

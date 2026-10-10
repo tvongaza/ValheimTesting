@@ -344,13 +344,15 @@ public sealed class TargetedRegression
     /// <summary>
     /// The same run with an owned-client placement supplied by the host layer. A Windows SSH runner can use a desktop task
     /// while retaining the same staging, rounds, evidence, log scan and teardown. The opener must add its kept logs to
-    /// the log collection it receives even when startup fails after the process exists.
+    /// the log collection it receives even when startup fails after the process exists. With
+    /// <paramref name="deferReportWrite"/>, the caller must write the returned report after its own cleanup verdict.
     /// </summary>
     internal ScenarioReport Run(string arm, string output, string scenario, IReadOnlyList<string> rounds, Action<ClientRound> measure,
         CancellationToken cancellation, Action<ScenarioReport>? afterPinnedClientOpened,
         Func<ClientRunPlan, string, ICollection<RunLog>, CancellationToken, ClientSession>? openClient,
         Action? afterStaged,
-        Action<CharacterStageEvent, string, string, string, string>? characterJournal = null)
+        Action<CharacterStageEvent, string, string, string, string>? characterJournal = null,
+        bool deferReportWrite = false)
     {
         ArgumentNullException.ThrowIfNull(measure);
         if (openClient == null) RequireDirectClientDesktop();
@@ -425,7 +427,9 @@ public sealed class TargetedRegression
             if (logs.Count != 0) report.ScanLogs(logs, Inputs.LogScan);
             // A failed preflight can already have retired its copy. Whoever removes a successful arm records that later.
             report.Provenance["disposableInstall"] = _prepared ? "kept after this arm" : "no copy left after this arm";
-            report.Write(output);
+            // The one-shot command adds its process-journal and final copy-cleanup verdict before writing.
+            // Direct API callers retain the usual report-on-every-outcome behavior.
+            if (!deferReportWrite) report.Write(output);
         }
         return report;
     }

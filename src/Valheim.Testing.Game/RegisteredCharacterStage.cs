@@ -8,25 +8,26 @@ internal sealed class RegisteredCharacterStage : IDisposable
 {
     private readonly string _localDirectory, _character;
     private readonly Action<CharacterStageEvent, string, string, string, string>? _journal;
+    private readonly Action<string> _delete;
     private bool _disposed;
 
     private RegisteredCharacterStage(string localDirectory, string character,
-        Action<CharacterStageEvent, string, string, string, string>? journal)
-    { _localDirectory = localDirectory; _character = character; _journal = journal; }
+        Action<CharacterStageEvent, string, string, string, string>? journal, Action<string> delete)
+    { _localDirectory = localDirectory; _character = character; _journal = journal; _delete = delete; }
 
     // Hosted smoke starts at the game's ordinary spawn. A registered, game-created character is copied only for the
     // lifetime of the owned client; this path never edits its position or takes a personal save by filename.
     internal static RegisteredCharacterStage InstallRegistered(string storeDirectory, string registeredName, string localDirectory,
         string steamUserDataDirectory, string character,
-        Action<CharacterStageEvent, string, string, string, string>? journal = null)
+        Action<CharacterStageEvent, string, string, string, string>? journal = null, Action<string>? delete = null)
     {
         var store = DisposableCharacterStore.Open(storeDirectory);
         byte[] bytes = store.Read(store.Get(registeredName));
-        return InstallBytes(bytes, localDirectory, steamUserDataDirectory, character, journal);
+        return InstallBytes(bytes, localDirectory, steamUserDataDirectory, character, journal, delete ?? File.Delete);
     }
 
     private static RegisteredCharacterStage InstallBytes(byte[] bytes, string local, string steam, string character,
-        Action<CharacterStageEvent, string, string, string, string>? journal)
+        Action<CharacterStageEvent, string, string, string, string>? journal, Action<string> delete)
     {
         if (string.IsNullOrWhiteSpace(character) || character is "." or ".." || character != Path.GetFileName(character) ||
             character.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 || character.EndsWith(".fch", StringComparison.OrdinalIgnoreCase))
@@ -63,7 +64,7 @@ internal sealed class RegisteredCharacterStage : IDisposable
             journal?.Invoke(CharacterStageEvent.Retired, local, steam, character, expectedSha256);
             throw;
         }
-        return new RegisteredCharacterStage(local, character, journal);
+        return new RegisteredCharacterStage(local, character, journal, delete);
     }
 
     private static void RefuseCollisions(string directory, string character)
@@ -77,12 +78,12 @@ internal sealed class RegisteredCharacterStage : IDisposable
     public void Dispose()
     {
         if (_disposed) return;
-        _disposed = true;
         // ClientRounds stops its owned client before this scope ends. RefuseCollisions ensured that every matching
         // filename was absent beforehand, so these files belong to this run (including game-made backup files).
         foreach (string file in Directory.EnumerateFiles(_localDirectory))
-            if (DisposableCharacterStore.IsCharacterFile(Path.GetFileName(file), _character)) File.Delete(file);
+            if (DisposableCharacterStore.IsCharacterFile(Path.GetFileName(file), _character)) _delete(file);
         _journal?.Invoke(CharacterStageEvent.Retired, _localDirectory, "", _character, "");
+        _disposed = true;
     }
 }
 

@@ -111,10 +111,9 @@ public sealed class NativeSmokeLoaderTests : IDisposable
         Assert.Equal(1, exit);
         var report = System.Text.Json.JsonDocument.Parse(File.ReadAllText(Path.Combine(output, "evidence", "smoke", "result.json")));
         string runId = report.RootElement.GetProperty("Provenance").GetProperty("runId").GetString()!;
-        // The registered character refusal precedes both the game and fixture copies. No copy intent is journalled.
-        Assert.False(File.Exists(Path.Combine(_rig.Root, "journal", runId, WorldFixture.Actor + ".jsonl")));
-        Assert.Empty(Directory.GetFiles(Path.Combine(_rig.Root, "journal", runId), "regression-*.jsonl"));
-        Assert.Contains(JournalEntry.RunEnded, File.ReadAllText(Path.Combine(_rig.Root, "journal", runId, "run.jsonl")));
+        // The registered character refusal precedes ownership of a character, game or fixture copy.
+        // No empty run journal is needed for a refusal before any owned resource exists.
+        Assert.False(Directory.Exists(Path.Combine(_rig.Root, "journal", runId)));
         var steps = report.RootElement.GetProperty("Steps").EnumerateArray().ToList();
         Assert.Equal("stage only the registered disposable character", steps[0].GetProperty("Name").GetString());
         Assert.Contains("userdata", steps[0].GetProperty("Error").GetString());

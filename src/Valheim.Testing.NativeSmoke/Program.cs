@@ -47,6 +47,7 @@ int exitCode = 3;
 string? outcome = null;
 bool journalClean = true;
 bool characterPending = false;
+bool ownershipStarted = false;
 string? output = null;
 bool outputChecked = false;
 try
@@ -133,6 +134,7 @@ try
     Console.WriteLine($"disposable install: {runner.Install}");
     Console.WriteLine("run ID: " + runId);
     bool passed = true;
+    string finalArm = inputs.Mod.Arms.Keys.Last();
     foreach (string arm in inputs.Mod.Arms.Keys)
     {
         string armOutput = Path.Combine(output, "evidence", arm);
@@ -163,21 +165,20 @@ try
                 }, afterStaged: null, characterJournal: (point, characters, userData, name, expectedSha256) =>
                 {
                     RunJournal.ThisProcess.AppendLocal("client", TargetedRegression.CharacterEntry(point, characters, userData, name, expectedSha256));
-                    if (point == CharacterStageEvent.Intended) characterPending = true;
+                    if (point == CharacterStageEvent.Intended) { characterPending = true; ownershipStarted = true; }
                     if (point == CharacterStageEvent.Retired) characterPending = false;
-                });
+                }, deferReportWrite: true);
         if (processJournal != null)
             try { processJournal.Complete(); }
             catch (Exception failure)
             {
                 journalClean = false;
                 report.RecordFailure(StepPhase.Cleanup, "owned client process was not proved stopped", failure);
-                report.Write(armOutput);
             }
-        // Even a setup failure before the client opens has a journalled run ID in its result.
+        // Final-arm evidence is written once after the copy-cleanup verdict in finally.
         report.Provenance["runId"] = runId;
-        report.Write(armOutput);
-        lastArm = report; lastArmOutput = armOutput; // Only an arm whose report was written records the removal.
+        lastArm = report; lastArmOutput = armOutput;
+        if (arm != finalArm && report.Passed) report.Write(armOutput);
         passed &= report.Passed;
         // A failed arm's evidence is enough to diagnose it; do not silently call an A/B comparison complete.
         if (!report.Passed) break;
@@ -217,7 +218,7 @@ finally
             Console.Error.WriteLine("CLEANUP REFUSED: " + cleanup.Message + "; inspect the disposable install at " + runner.Install);
             if (exitCode == 0) exitCode = 1;
         }
-    if (journalClean)
+    if (journalClean && ownershipStarted)
         try
         {
             RunJournal.ThisProcess.AppendLocal("run", JournalEntry.Of(JournalEntry.RunEnded,

@@ -62,6 +62,43 @@ public sealed class RunRecoveryTests : IDisposable
     }
 
     [Fact]
+    public async Task RegressionIntentIgnoresUnrelatedLinkedPersonalCharacters()
+    {
+        if (OperatingSystem.IsWindows()) return; // local Bash host and symlink creation need no Windows privilege here
+        const string run = "run-character-unrelated-link";
+        string data = Path.Combine(_root, "local-data");
+        string characters = Path.Combine(data, "characters_local");
+        string userData = Path.Combine(data, "userdata");
+        Directory.CreateDirectory(characters);
+        Directory.CreateDirectory(userData);
+        string personal = Path.Combine(data, "personal.fch");
+        File.WriteAllText(personal, "personal save");
+        File.CreateSymbolicLink(Path.Combine(characters, "personal-link.fch"), personal);
+        string journal = Path.Combine(data, "journal", run, "client.jsonl");
+        Directory.CreateDirectory(Path.GetDirectoryName(journal)!);
+        File.WriteAllText(journal, System.Text.Json.JsonSerializer.Serialize(new Dictionary<string, object>
+        {
+            ["utc"] = DateTime.UtcNow.AddMinutes(-1).ToString("O"), ["run"] = run, ["actor"] = "client",
+            ["kind"] = JournalEntry.CharacterIntended,
+            ["fields"] = new Dictionary<string, string>
+            {
+                ["characters"] = characters, ["userData"] = userData, ["fileName"] = "vt01",
+                ["characterKind"] = "regression", ["local"] = "true",
+                ["expectedSha256"] = FileHash.Sha256(System.Text.Encoding.UTF8.GetBytes("registered save")),
+            },
+            ["runner"] = new { machine = Gone.Machine, pid = Gone.Pid, startedUtc = Gone.StartedUtc.ToString("O") },
+        }) + "\n");
+        var hosts = new Dictionary<string, HostProfile> { ["local"] = new() { Kind = "local", Lock = Path.Combine(data, "lock") } };
+        var host = new LocalGameHost("local", HostShell.Bash);
+
+        var recovered = await RunRecovery.RecoverAsync(hosts, _ => host, run, false, TimeSpan.FromSeconds(10));
+
+        Assert.True(recovered.Recovered, string.Join("\n", recovered.Steps));
+        Assert.Equal("personal save", File.ReadAllText(personal));
+        Assert.True(File.Exists(Path.Combine(characters, "personal-link.fch")));
+    }
+
+    [Fact]
     public async Task HostedCharacterIntentCannotDeleteAPersonalSaveWithTheSameName()
     {
         const string run = "run-hosted-character-intent";
