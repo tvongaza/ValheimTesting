@@ -291,8 +291,7 @@ public sealed class ClientSession : IDisposable
         Func<TimeSpan, CancellationToken, Task> ready, CancellationToken cancellation, Func<string?>? exitHint, IReadOnlyList<RunLog>? logs, ILeasedSteamAccount? account = null,
         Action<IOwnedProcess, GameActor?, string>? failureEvidence = null)
     {
-        if (plan.PasswordVariable is { } variable && Environment.GetEnvironmentVariable(variable) == null)
-            throw new InvalidOperationException($"Set {variable} in this runner's environment; the launched client inherits it for the join.");
+        plan.RequirePasswordSource();
         account?.RequireReady(null);
         var architecture = plan.LaunchArchitecture;
         var clock = Stopwatch.StartNew();

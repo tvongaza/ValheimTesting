@@ -389,6 +389,30 @@ public sealed class ClientSessionTests : IDisposable
         Assert.False(started);
     }
 
+    [Fact] public void JoinPasswordComesFromTheRunnerEnvironmentWithoutEnteringPlanData()
+    {
+        string variable = "VT_JOIN_PASSWORD_" + Guid.NewGuid().ToString("N");
+        const string secret = "private-test-password";
+        try
+        {
+            Environment.SetEnvironmentVariable(variable, secret);
+            var plan = Plan(); plan.PasswordVariable = variable;
+            using var install = PreflightInstall.Create();
+            plan.Install = install.Root;
+            plan.Architecture = "x64";
+            plan.RequirePasswordSource();
+            var launch = ClientSession.StartInfo(plan, GameLaunch.CurrentClientHost);
+            Assert.Equal(secret, launch.Environment[variable]);
+            Assert.DoesNotContain(secret, System.Text.Json.JsonSerializer.Serialize(plan));
+
+            plan.Environment[variable] = secret;
+            var error = Assert.Throws<InvalidOperationException>(plan.RequirePasswordSource);
+            Assert.Contains("serialized plan data", error.Message);
+            Assert.DoesNotContain(secret, error.Message);
+        }
+        finally { Environment.SetEnvironmentVariable(variable, null); }
+    }
+
     [Fact] public void AnExitBeforeBepInExWroteItsLogSaysWhereToLook()
     {
         var error = Assert.Throws<WaitFailedException>(() => ClientSession.Launch(Plan(), _output, () => FakeOwnedProcess.Exited(1, 99), () => new ScriptedTransport(),

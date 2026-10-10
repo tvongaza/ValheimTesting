@@ -133,6 +133,24 @@ public sealed class ClientRunPlan
     private JsonElement? RemovedFastTestTeleports { get => null; set => throw Removed("fastTestTeleports", 299, "no runner could use it; arrival uses the game's ordinary teleport timing"); }
     /// <summary>The environment variable, in the client's process, that holds the join password.</summary>
     public string? PasswordVariable { get; set; }
+
+    /// <summary>
+    /// Refuses an owned joined client whose password variable is missing from this runner's process before any game or
+    /// fixture is copied. The value must not be put in <see cref="Environment"/>, which is ordinary serialized plan data;
+    /// the launched local client inherits the runner's variable, and a remote client receives it as a secret variable.
+    /// Attached clients keep their operator's environment.
+    /// </summary>
+    public void RequirePasswordSource()
+    {
+        if (!Owned || PasswordVariable == null) return;
+        if (Environment.Keys.Any(name => string.Equals(name, PasswordVariable,
+                OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal)))
+            throw new InvalidOperationException($"Remove {PasswordVariable} from client.environment: it is serialized plan data. " +
+                $"Set {PasswordVariable} in this runner's environment instead; its value is passed privately to the owned client.");
+        if (string.IsNullOrEmpty(System.Environment.GetEnvironmentVariable(PasswordVariable)))
+            throw new InvalidOperationException($"Set {PasswordVariable} in this runner's environment before preparing the server or client; " +
+                "the launched client inherits it for the join.");
+    }
     public int StartSeconds { get; set; } = ClientTimeouts.DefaultStartSeconds;
     /// <summary>
     /// Owned only: how long after the launch BepInEx may take to write its first line to this launch's

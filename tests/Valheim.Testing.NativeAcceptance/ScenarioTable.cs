@@ -58,6 +58,7 @@ public static class ScenarioTable
         // The session capability and token variable AcceptanceMod's test adapter serves, and its Harmony patches, which the session
         // checks on the server before any scenario step.
         Mod = AcceptancePlan.Mod,
+        ClientPlans = plan => new[] { plan.Client, plan.RefusedClient, plan.SecondClient }.OfType<ClientRunPlan>(),
         CheckPlan = plan =>
         {
             if (plan.Client == null && !plan.ServerOnly)

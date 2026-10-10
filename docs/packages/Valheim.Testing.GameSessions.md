@@ -55,6 +55,8 @@ Limits: a hosted world has no password and is never public, because the start co
 
 The plan may also list `logScan` (per-run severities, named expected lines and the run's own patterns for the [log scan](Valheim.Testing.Game.md#log-scan-at-teardown), each with a reason).
 
+For a runner with an owned joined client, set `PinnedServerRunOptions.ClientPlans` to return that plan's client sections (for one optional client: `ClientPlans = plan => plan.Client is null ? [] : [plan.Client]`). The runner checks each `passwordVariable` before creating evidence, copying either game, or starting the server. Set the named variable in the runner process (for example, `VT_JOIN_PASSWORD`); do not put its value in `client.environment`, which is serialized plan data. Local clients inherit the runner's variable; remote clients receive it through the host's secret-variable channel. An attached client keeps its operator's environment. Campaigns use their declared clients for this check automatically.
+
 The runner then:
 1. refuses an existing output directory, and checks the host before copying. It also refuses, before copying, when the output's drive lacks room for the runtime and world copies plus headroom (2 GB, or a tenth of the copies when that is larger; `freeBytesBeforeCopies` records what it saw). A full drive part-way through a copy would leave a broken runtime behind;
 2. copies and verifies the runtime and world, recording plan, runner and toolkit hashes, mode, platform and input hashes, refuses a copy whose game build, loader or patchers differ from `runtimePins` (a patchers difference names what `BepInEx/patchers` holds) (the values found are recorded as `runtimeGameSha256`, `runtimeLoaderSha256` and `runtimePatchersSha256`);
