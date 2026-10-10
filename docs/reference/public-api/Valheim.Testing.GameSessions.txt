@@ -337,6 +337,13 @@ interface Valheim.Testing.GameSessions.IGameHost
   property System.String Name { get; }
   property Valheim.Testing.GameSessions.GameHostKind Kind { get; }
   property Valheim.Testing.GameSessions.HostShell Shell { get; }
+interface Valheim.Testing.GameSessions.IOneShotHostedScenario
+  method System.Void Run(Valheim.Testing.Game.ClientRound round)
+  property System.String Name { get; }
+interface Valheim.Testing.GameSessions.IOneShotServerScenario
+  method System.Threading.Tasks.Task RunAsync(Valheim.Testing.GameSessions.GameSession session, Valheim.Testing.GameSessions.OneShotServerContext context)
+  property System.Boolean RequiresClient { get; }
+  property System.String Name { get; }
 static class Valheim.Testing.GameSessions.InteractiveClient
   method static System.Threading.Tasks.Task`1<Valheim.Testing.GameSessions.InteractiveClientProcess> StartAsync(Valheim.Testing.GameSessions.IGameHost host, Valheim.Testing.Game.GameLaunch launch, System.String launchDirectory, System.TimeSpan timeout, Valheim.Testing.GameSessions.LinuxDisplay display = null, System.Threading.CancellationToken cancellation = null)
   method static System.Threading.Tasks.Task`1<Valheim.Testing.GameSessions.InteractiveClientProcess> StartAsync(Valheim.Testing.GameSessions.SteamAccountHold account, Valheim.Testing.GameSessions.IGameHost host, Valheim.Testing.Game.GameLaunch launch, System.String launchDirectory, System.TimeSpan timeout, Valheim.Testing.GameSessions.LinuxDisplay display = null, System.Threading.CancellationToken cancellation = null)
@@ -395,6 +402,11 @@ sealed class Valheim.Testing.GameSessions.ModDeclaration : System.IEquatable`1<V
   property System.String Plugin { get; init; }
   property System.String SessionCapability { get; init; }
   property System.String SessionTokenVariable { get; init; }
+sealed class Valheim.Testing.GameSessions.OneShotServerContext
+  method System.Void .ctor()
+  property System.String WorldUid { get; init; }
+  property Valheim.Testing.Game.ClientRunPlan ClientPlan { get; init; }
+  property Valheim.Testing.Game.ServerRunPlan ServerPlan { get; init; }
 static class Valheim.Testing.GameSessions.OwnedCopies
   method static System.Collections.Generic.IReadOnlyList`1<Valheim.Testing.GameSessions.OwnedCopy> Find(System.String root)
   method static Valheim.Testing.Game.RetiredCopy Remove(System.String path, System.Boolean allowWorld = false)

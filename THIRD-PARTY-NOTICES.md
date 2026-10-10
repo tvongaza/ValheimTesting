@@ -49,6 +49,10 @@ Adapted from the ProceduralRoads test projects, as proposed in [jneb802/Procedur
 - `src/Valheim.Testing.GameSessions/PinnedServerRun.cs` and `src/Valheim.Testing.Game/ServerRunPlan.cs`: from `ProceduralRoads.SystemTests/Program.cs` and `RunPlan.cs`.
 - `TransformMatch` in `src/Valheim.Testing.Game/Matching.cs`: from the system tests' `PieceComparison`.
 
+## BepInEx AssemblyPublicizer
+
+`Valheim.Testing.NativeSmoke` uses the unmodified [BepInEx.AssemblyPublicizer 0.4.3](https://github.com/BepInEx/BepInEx.AssemblyPublicizer) NuGet library to create private compile references from a user's own Valheim installation. The tool package carries that library and its [AsmResolver 5.5.1](https://github.com/Washi1337/AsmResolver) dependencies; no game assembly or publicized output is included. Both libraries are MIT-licensed. Preserve the upstream license notices when redistributing them: copyright 2022 BepInEx for AssemblyPublicizer and copyright 2016-2026 Washi for AsmResolver. Their license texts are at the linked upstream repositories.
+
 ## Mono.Cecil
 
 `Valheim.Testing.Bindings` depends on the [Mono.Cecil](https://github.com/jbevain/cecil) NuGet package, pinned to 0.11.6. The `Valheim.Testing.Bindings.Tool` package ships `Mono.Cecil.dll` 0.11.6 unchanged, because a .NET tool carries its dependencies. No Cecil source is copied into this repository. Its license:

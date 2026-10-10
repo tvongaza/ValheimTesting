@@ -99,7 +99,10 @@ foreach (string file in packageFiles)
             path.Contains("valheim_Data/", StringComparison.OrdinalIgnoreCase) ||
             (IsBinary(name) && (name.StartsWith("assembly_valheim", StringComparison.OrdinalIgnoreCase) ||
                 name.StartsWith("UnityEngine", StringComparison.OrdinalIgnoreCase) ||
-                name.StartsWith("BepInEx", StringComparison.OrdinalIgnoreCase) ||
+                // The publicizer is a build tool, not a game/runtime assembly. Keep this exception to one exact file.
+                (name.StartsWith("BepInEx", StringComparison.OrdinalIgnoreCase) &&
+                    !(id == "Valheim.Testing.NativeSmoke" &&
+                      path == "tools/net10.0/any/BepInEx.AssemblyPublicizer.dll")) ||
                 name.StartsWith("steamclient", StringComparison.OrdinalIgnoreCase))) ||
             name.Equals("Player.log", StringComparison.OrdinalIgnoreCase) ||
             name.Equals("LogOutput.log", StringComparison.OrdinalIgnoreCase) ||

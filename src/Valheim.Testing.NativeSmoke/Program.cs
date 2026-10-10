@@ -9,6 +9,7 @@ if (args is ["help" or "--help"])
     Console.WriteLine(ServerLoadPhases.Usage + " (ordered disposable server-only saves)");
     Console.WriteLine("valheim-test server-load-ab --mod DLL --mod DLL --remove-mod DLL --output NEW_DIR [server-load options except --hold and --preflight-only]");
     Console.WriteLine("valheim-test init [server] --output NEW_DIR (editable NuGet.org-only consumer)");
+    Console.WriteLine(ModBuild.Usage + " (private references and a mod build, with no live-game deployment)");
     Console.WriteLine(EnvCommand.Usage + " (list, preflight and status read only; recover and teardown clear what a run left)");
     Console.WriteLine(ForegroundHold.FinishUsage + " (asks the live owner of a held run to finish and clean up)");
     Console.WriteLine(DetachedSession.Usage + " (experimental local detached dedicated server; Task Scheduler on Windows)");
@@ -17,6 +18,7 @@ if (args is ["help" or "--help"])
     return 0;
 }
 if (args.Length != 0 && args[0] == "init") return await SmokeProject.InitAsync(args[1..]);
+if (args.Length != 0 && args[0] == "build") return await ModBuild.RunAsync(args[1..]);
 if (args.Length != 0 && args[0] == "env") return await EnvCommand.RunAsync(args[1..]);
 if (args.Length != 0 && args[0] == "finish") return ForegroundHold.FinishCommand(args[1..]);
 if (args.Length != 0 && args[0] == "detach") return await DetachedSession.RunAsync(args[1..]);
@@ -32,10 +34,10 @@ if (args.Length != 0 && args[0] is "server-load" or "server-load-ab")
 }
 
 // The default path hosts a world in an owned client; server-load uses an owned dedicated server.
-if (!StartArguments.TryRead(args, out var options, out var mods, out var roots, out var optionalReferences, out var error, allowImplicitMod: true))
+if (!StartArguments.TryRead(args, out var options, out var mods, out var roots, out var optionalReferences, out var buildDependencies, out var error, allowImplicitMod: true))
 {
     Console.Error.WriteLine(error);
-    Console.Error.WriteLine("Usage: valheim-test start [--mod DLL ...] [--output NEW_DIR] [--inventory FILE | --game DIR] [--client-env NAME] [--client-architecture x64|arm64] [--join-seconds 10..900] [--hold] [--source COMMIT] [--cli-manifest FILE --cli-files DIR] [--compare-mod DLL --compare-source COMMIT] [--search-root DIR ...] [--optional-reference ASSEMBLY ...] [--client-loader-package FILE] [--expected-log-error EXACT_HEADER --expected-log-reason REASON]");
+    Console.Error.WriteLine("Usage: valheim-test start [--mod DLL ... | --project MOD.csproj] [--scenario TEST.dll | --scenario-project TEST.csproj] [--dependency NAME=DLL ...] [--build-inputs FILE] [--output NEW_DIR] [--inventory FILE | --game DIR] [--client-env NAME] [--client-architecture x64|arm64] [--join-seconds 10..900] [--hold] [--source COMMIT] [--cli-manifest FILE --cli-files DIR] [--compare-mod DLL --compare-source COMMIT] [--search-root DIR|DLL ...] [--optional-reference ASSEMBLY ...] [--client-loader-package FILE] [--expected-log-error EXACT_HEADER --expected-log-reason REASON]");
     return 2;
 }
 
@@ -57,9 +59,6 @@ bool outputChecked = false;
 try
 {
     output = SmokeCommandOptions.Output(options!);
-    var modSelection = SmokeModInput.Select(mods!, Environment.CurrentDirectory);
-    var selectedMods = modSelection.Mods.ToList();
-    Console.WriteLine("mod selection: " + modSelection.Reason);
     // The client: the inventory's (this machine's Valheim with no --inventory); --game overrides the install and --client-loader-package the loader.
     var (inventory, client, shippedLoader) = SmokeInputs.Client(options, output, ShippedLoader.Instead,
         recordSelection: false);
@@ -73,26 +72,63 @@ try
     foreach (string line in inventory.Detected) Console.WriteLine("detected: " + line);
     Console.WriteLine($"client: {client.Name} on {client.Host}: install {client.Install}; ValheimCLI port {client.CliPort}; architecture {architecture}");
     string game = client.Install;
-    string mod = selectedMods[0];
+    // Resolve every selected source before a --project or --scenario-project build writes under --output.
     var (cliManifest, cliFiles) = SmokeInputs.Cli(options);
     string? loader = client.LoaderPackage;
-    foreach (var (name, path) in new[] { ("game", game), ("--cli-files", cliFiles) })
-        if (!Directory.Exists(path)) throw new DirectoryNotFoundException(name + " directory does not exist: " + path);
     if (loader != null && !File.Exists(loader)) throw new FileNotFoundException("--client-loader-package file does not exist: " + loader, loader);
     var loaderPackage = loader == null ? null : BepInExLoaderPackage.Read(loader);
     SmokeOutput.RefuseResolved(output, cliFiles, inventory, [client], loaderPackage?.Root);
     outputChecked = true;
+    if (options.TryGetValue("--project", out string? project))
+    {
+        var given = ModBuild.ParseDependencies(buildDependencies!);
+        string? loaderRoot = client.LoaderPackage == null ? null : BepInExLoaderPackage.Read(client.LoaderPackage).Root;
+        var build = ModBuild.Plan(project, game, given, Path.Combine(output, "build"), loaderRoot);
+        var record = await ModBuild.BuildAsync(build, cancel.Token).ConfigureAwait(false);
+        mods!.Add(record.Mod);
+        options["--build-inputs"] = Path.Combine(build.Output, "build-inputs.json");
+        Console.WriteLine("built mod: " + record.Mod);
+        outputChecked = true;
+    }
+    var modSelection = SmokeModInput.Select(mods!, Environment.CurrentDirectory);
+    var selectedMods = modSelection.Mods.ToList();
+    string modSelectionReason = options.TryGetValue("--project", out string? builtProject)
+        ? "built from --project " + Path.GetFullPath(builtProject)
+        : modSelection.Reason;
+    Console.WriteLine("mod selection: " + modSelectionReason);
+    if (options.TryGetValue("--scenario-project", out string? scenarioProject))
+    {
+        options["--scenario"] = await OneShotScenario.BuildAsync(scenarioProject,
+            Path.Combine(output, "scenario-build"), cancel.Token).ConfigureAwait(false);
+        outputChecked = true;
+    }
+    ModBuild.BuildRecord? verifiedBuild = null;
+    if (options.TryGetValue("--build-inputs", out string? buildInputs))
+    {
+        if (selectedMods.Count != 1) throw new ArgumentException("--build-inputs requires exactly one --mod DLL.");
+        verifiedBuild = ModBuild.Verify(buildInputs, game, selectedMods[0]);
+        roots!.AddRange(ModBuild.ThirdPartyRoots(verifiedBuild));
+        Console.WriteLine("build inputs verified: " + buildInputs);
+    }
+    string mod = selectedMods[0];
+    foreach (var (name, path) in new[] { ("game", game), ("--cli-files", cliFiles) })
+        if (!Directory.Exists(path)) throw new DirectoryNotFoundException(name + " directory does not exist: " + path);
+    var custom = options.TryGetValue("--scenario", out string? scenarioFile)
+        ? OneShotScenario.LoadHosted(scenarioFile, output) : null;
     SmokeInputs.RecordClient(inventory, client, output);
     foreach (var (name, path) in selectedMods.Select(path => ("--mod", path)).Append(("--cli-manifest", cliManifest)))
         if (!File.Exists(path)) throw new FileNotFoundException(name + " file does not exist: " + path, path);
     string core = Path.Combine(loaderPackage?.Root ?? game, InstallPins.CoreDirectory);
+    if (verifiedBuild != null) ModBuild.RequireLoaderMatches(verifiedBuild, core);
     var request = SmokeDependencyInputs.Request(selectedMods, game, core, cliManifest, cliFiles,
         roots!, optionalReferences!, CliCapabilities.HostedRounds);
     var dependencies = NativeDependencyResolver.Resolve(request);
     Directory.CreateDirectory(output);
+    if (buildInputs != null) File.Copy(buildInputs, Path.Combine(output, "build-inputs.json"));
     dependencies.Write(Path.Combine(output, "dependencies.lock.json"));
     if (!dependencies.Ready)
         throw new InvalidDataException("Dependency choices remain: " + SmokeDependencyInputs.Gaps(dependencies));
+    if (verifiedBuild != null) ModBuild.RequireResolvedDependencies(verifiedBuild, dependencies);
     NativeDependencyLock? comparison = null;
     string? compareMod = null;
     if (options.TryGetValue("--compare-mod", out string? compareFile))
@@ -143,9 +179,10 @@ try
     {
         string armOutput = Path.Combine(output, "evidence", arm);
         LocalClientJournal? processJournal = null;
-        var report = runner.Run(arm, armOutput, "selected plugin loads in a hosted fixture",
+        var report = runner.Run(arm, armOutput, custom?.Runner.Name ?? "selected plugin loads in a hosted fixture",
             ["first"], round =>
             {
+                custom?.Runner.Run(round);
                 if (holdRequested && arm == inputs.Mod.Arms.Keys.Last())
                     round.Step("keep the owned client running until finish", () =>
                         ForegroundHold.HoldAsync(runId, armOutput, cancel.Token,
@@ -156,7 +193,12 @@ try
                 ready.Provenance["runId"] = runId;
                 ready.Provenance["firstModLoadedSecondsFromCommand"] =
                     elapsed.Elapsed.TotalSeconds.ToString("F3", System.Globalization.CultureInfo.InvariantCulture);
-                ready.Provenance["modSelection"] = modSelection.Reason;
+                ready.Provenance["modSelection"] = modSelectionReason;
+                if (custom != null)
+                {
+                    ready.Provenance["oneShotScenario"] = custom.Runner.Name;
+                    ready.Provenance["oneShotScenarioSha256"] = custom.Sha256;
+                }
                 SmokeInputResolver.RecordLoader(ready.Provenance, "client", loader, shippedLoader);
             }, openClient: (plan, directory, logs, token) =>
                 {
@@ -245,8 +287,13 @@ internal static class StartArguments
 {
     public static bool TryRead(string[] args, out Dictionary<string, string>? result, out List<string>? mods,
         out List<string>? roots, out List<string>? optionalReferences, out string error, bool allowImplicitMod = false)
+        => TryRead(args, out result, out mods, out roots, out optionalReferences, out _, out error, allowImplicitMod);
+
+    public static bool TryRead(string[] args, out Dictionary<string, string>? result, out List<string>? mods,
+        out List<string>? roots, out List<string>? optionalReferences, out List<string>? buildDependencies,
+        out string error, bool allowImplicitMod = false)
     {
-        result = null; mods = null; roots = null; optionalReferences = null;
+        result = null; mods = null; roots = null; optionalReferences = null; buildDependencies = null;
         if (!SmokeCommandOptions.TryRead(args, SmokeCommandOptions.Command.Start, allowImplicitMod, out var parsed, out error))
             return false;
         result = parsed!.Options;
@@ -254,6 +301,7 @@ internal static class StartArguments
         mods = parsed.List("--mod");
         roots = parsed.List("--search-root");
         optionalReferences = parsed.List("--optional-reference");
+        buildDependencies = parsed.List("--dependency");
         return true;
     }
 }

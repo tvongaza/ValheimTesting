@@ -5,9 +5,10 @@ using Valheim.Testing.Game;
 using Valheim.Testing.GameSessions;
 
 /// <summary>
-/// <c>valheim-test init</c>: an editable native scenario, the only thing this tool builds. Prove it builds from NuGet.org
+/// <c>valheim-test init</c>: an editable native consumer. Prove it builds from NuGet.org
 /// (or CI's exact local candidate feed) before copying it into the output: a stale global NuGet cache cannot stand in.
-/// <c>start</c> and <c>server-load</c> never build it; they run from this tool's own assemblies, offline.
+/// <c>start</c> and <c>server-load</c> run their built-in scenarios from this tool's assemblies;
+/// their optional <c>--project</c> and <c>--scenario-project</c> inputs are built separately.
 /// </summary>
 internal static class SmokeProject
 {
