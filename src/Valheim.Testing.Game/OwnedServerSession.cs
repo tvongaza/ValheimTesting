@@ -77,12 +77,12 @@ public sealed class StartupEvents
     internal static readonly IReadOnlyList<Regex> ClientStartupFailures = [.. StartupFailures,
         new(@"(?:\[Steamworks\.NET\] SteamAPI_Init\(\) failed|\[S_API FAIL\] SteamAPI_Init\(\) failed; connect to global user failed)", RegexOptions.CultureInvariant)];
     /// <summary>A pattern that cannot match a log line; use it to watch only for startup failures while awaiting the menu.</summary>
-    public static readonly Regex Never = new(@"(?!)", RegexOptions.CultureInvariant);
+    internal static readonly Regex Never = new(@"(?!)", RegexOptions.CultureInvariant);
     /// <summary>
     /// Wait for the client's menu and keep its startup-failure log watcher active until that state is confirmed.
     /// The watcher and state wait share cancellation, so neither remains after the other decides startup.
     /// </summary>
-    public static async Task WaitForClientMenuAsync(Func<CancellationToken, Task> menu,
+    internal static async Task WaitForClientMenuAsync(Func<CancellationToken, Task> menu,
         Func<CancellationToken, Task> failureWatch, CancellationToken cancellation = default)
     {
         using var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
