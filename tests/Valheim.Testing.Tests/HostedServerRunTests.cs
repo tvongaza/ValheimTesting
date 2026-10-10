@@ -60,6 +60,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         environment.Server!.Install = owned; // the campaign retires only this owned profile
         environment.Server.PreparedGameRoot = Install;
         environment.Server.PreparedLoaderRoot = owned;
+        environment.Server.PreparedSourceRoot = Install;
         var hosted = HostedServerRun.Create(environment, plan, "test", new FakeRunHooks { Host = _ => host, RunId = RunId }, prepared: true);
         Assert.Equal(Install, hosted.GameDirectory);
         Assert.Equal(owned, hosted.LoaderDirectory);
@@ -70,6 +71,28 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.Contains("game", error.Message, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("start", host.Scripts);
         Assert.False(Directory.Exists(Path.Combine(Output, "boot-1")));
+    }
+
+    [Fact] public async Task APreparedWindowsProfileRefusesAReplacedSourceGameBeforeBoot()
+    {
+        var host = new FakeServerHost("windows-server", Mirror, windows: true);
+        var (planPath, profilePath) = Write(host, hostPlatform: "windows", hostShell: "powershell");
+        var plan = ServerRunPlan.Read<ServerRunPlan>(planPath);
+        var environment = TestEnvironment.Read(profilePath);
+        const string source = @"C:\valheim\server", owned = @"C:\vt\runs\vt-prep-profile\runtime";
+        await HostInstall.CopyAsync(host, source, owned, TimeSpan.FromSeconds(30));
+        environment.Server!.Install = owned;
+        environment.Server.PreparedGameRoot = owned;
+        environment.Server.PreparedLoaderRoot = owned;
+        environment.Server.PreparedSourceRoot = source;
+        var hosted = HostedServerRun.Create(environment, plan, "test", new FakeRunHooks { Host = _ => host, RunId = RunId }, prepared: true);
+        await hosted.LockAndCopyRuntimeAsync(new ScenarioReport("prepared profile"), plan, pinned: true, CancellationToken.None);
+        File.AppendAllText(Directory.EnumerateFiles(host.Local(source), "assembly_valheim.dll", SearchOption.AllDirectories).Single(), "steam update");
+
+        var launch = GameLaunch.ForServerWithLoader(owned, owned, ["-batchmode"], null, ServerPlatform.Windows);
+        var error = Assert.ThrowsAny<Exception>(() => ((IServerPlacement)hosted).Start(1, launch, Output, CancellationToken.None));
+        Assert.Contains("source game changed", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("start", host.Scripts);
     }
 
     [Fact] public async Task WindowsPowerShellProfileRunsTheWholeServerLifecycleAndKeepsOnlyItsEvidence()

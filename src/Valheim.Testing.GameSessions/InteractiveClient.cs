@@ -805,15 +805,18 @@ internal static class InteractiveScripts
         if [ -n "$runtime" ] && [ -S "$runtime/bus" ]; then export DBUS_SESSION_BUS_ADDRESS="unix:path=$runtime/bus"; fi
         # The launch's own variables (the loader's among them) reach only the game, through env as it execs the game: LD_PRELOAD
         # must not load Doorstop into the shells in between. They are evidence, not secrets.
-        unsets=(); sets=(); args=()
+        unsets=(); removed=(); sets=(); args=()
         while IFS=' ' read -r kind value; do
             [ -n "$kind" ] || continue
             text=$(decode "$value") || exit 3
             text=${text%x}
             case "$kind" in
-                unset) unsets+=(-u "$text") ;;
+                unset) unsets+=(-u "$text"); removed+=("$text") ;;
                 env) sets+=("$text") ;;
                 prepend) name=${text%%=*}; entry=${text#*=}; current=${!name:-}
+                    for dropped in ${removed[@]+"${removed[@]}"}; do
+                        if [ "$dropped" = "$name" ]; then current=; fi
+                    done
                     for pair in ${sets[@]+"${sets[@]}"}; do case "$pair" in "$name="*) current=${pair#*=} ;; esac; done
                     if [ -n "$current" ]; then sets+=("$name=$entry:$current"); else sets+=("$name=$entry"); fi ;;
                 arg) args+=("$text") ;;

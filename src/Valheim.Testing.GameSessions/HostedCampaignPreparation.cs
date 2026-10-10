@@ -925,6 +925,7 @@ public static class HostedCampaignPreparation
                             loader, readiness.SourceListings[name]).ConfigureAwait(false);
                         listings[name] = prepared.Game;
                         loaderListings[name] = prepared.Loader;
+                        role.PreparedSourceRoot = prepared.Source.Root;
                         if (prepared.GameRoot != prepared.LoaderRoot)
                         {
                             role.PreparedGameRoot = prepared.GameRoot;

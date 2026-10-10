@@ -144,13 +144,13 @@ internal sealed class HostedServerRun : IServerPlacement
         provenance["serverHost"] = Role.Host;
         provenance["serverHostKind"] = Host.Kind.ToString();
         provenance["hostRunDirectory"] = RunDirectory;
-        provenance["runtimeSource"] = Role.Host + ":" + (Role.PreparedGameRoot ?? Role.Install);
+        provenance["runtimeSource"] = Role.Host + ":" + (Role.PreparedSourceRoot ?? Role.Install);
     }
 
     /// <summary>Takes the server host's lock, then copies the host's install into this run's runtime and verifies every file there.</summary>
     public async Task LockAndCopyRuntimeAsync(ScenarioReport report, ServerRunPlan plan, bool pinned, CancellationToken cancellation)
     {
-        _preparedPins = pinned ? plan.RuntimePins : null;
+        _preparedPins = Role.PreparedSourceRoot != null ? plan.RuntimePins : null;
         // A Windows host that can register no server task is refused before the copy (a campaign's preflight asked already).
         if (Host.Shell.Kind == HostShellKind.PowerShell)
             await report.StepAsync(StepPhase.Setup, "the server host can start a server task", () => HostServer.RequireTaskLogonAsync(Host, HostedTimeouts.Quick, cancellation)).ConfigureAwait(false);
@@ -297,13 +297,10 @@ internal sealed class HostedServerRun : IServerPlacement
 
     ServerBoot IServerPlacement.Start(int n, GameLaunch launch, string output, CancellationToken cancellation)
     {
-        if (Role.PreparedGameRoot != null && _preparedPins != null)
+        if (Role.PreparedSourceRoot is { } source && _preparedPins != null)
         {
-            // Steam may update the source after campaign preparation. Re-read its game assemblies and
-            // the owned loader immediately before each boot; a changed build never starts with old pins.
-            var game = HostInstall.ListAsync(Host, GameDirectory, HostedTimeouts.Long, HostInstall.PinPaths, cancellation).GetAwaiter().GetResult();
-            var loader = HostInstall.ListAsync(Host, LoaderDirectory, HostedTimeouts.Long, HostInstall.PinPaths, cancellation).GetAwaiter().GetResult();
-            HostInstall.CheckPins(_preparedPins, game, loader, "prepared profile before launch");
+            HostInstall.CheckProfilePinsAsync(Host, _preparedPins, GameDirectory, LoaderDirectory, source,
+                "prepared server profile before launch", HostedTimeouts.Long, cancellation).GetAwaiter().GetResult();
         }
         string local = Path.Combine(output, "boot-" + n), bootDirectory = HostPath.Join(RunDirectory, "boot-" + n);
         if (LocalMac) return StartLocalMac(launch, local, bootDirectory, cancellation);

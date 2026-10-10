@@ -77,6 +77,9 @@ internal sealed class GameRole
     // executable remains in the read-only source; these paths never come from inventory JSON.
     internal string? PreparedGameRoot { get; set; }
     internal string? PreparedLoaderRoot { get; set; }
+    // The original install for every profile, including a Windows hard-linked launch folder.
+    // Never use this as a retirement target.
+    internal string? PreparedSourceRoot { get; set; }
     /// <summary>The directory on the host under which each run makes its own disposable runtime copy, logs and evidence.</summary>
     public string Runtime { get; set; } = "";
     /// <summary>The ValheimCLI port on the host's loopback.</summary>

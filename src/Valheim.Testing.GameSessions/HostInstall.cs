@@ -204,6 +204,21 @@ public static class HostInstall
     internal static InstallPins CheckPins(InstallPins pinned, HostListing game, HostListing profile, string kind) =>
         CheckPins(pinned, Combined(game, profile), kind);
 
+    // Hard links can retain old bytes after Steam atomically replaces a source file. Re-read
+    // both the launch folder and original game immediately before a profile process starts.
+    internal static async Task CheckProfilePinsAsync(IGameHost host, InstallPins pinned, string gameRoot,
+        string loaderRoot, string sourceRoot, string kind, TimeSpan timeout, CancellationToken cancellation)
+    {
+        var game = await ListAsync(host, gameRoot, timeout, PinPaths, cancellation).ConfigureAwait(false);
+        var loader = loaderRoot == gameRoot ? game :
+            await ListAsync(host, loaderRoot, timeout, PinPaths, cancellation).ConfigureAwait(false);
+        var source = sourceRoot == gameRoot ? game :
+            await ListAsync(host, sourceRoot, timeout, PinPaths, cancellation).ConfigureAwait(false);
+        if (!Pins(source, loader).Game.Equals(pinned.Game, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException($"The source game changed after its loader profile was staged for {kind}; refuse this launch and prepare a new profile.");
+        CheckPins(pinned, game, loader, kind);
+    }
+
     private static HostListing Combined(HostListing game, HostListing profile)
     {
         if (game.HostName != profile.HostName || game.Shell != profile.Shell)

@@ -177,13 +177,10 @@ internal sealed class CampaignClients
             var session = ClientSession.Launch(plan, output,
                 () =>
                 {
-                    if (role.PreparedGameRoot != null && plan.Pinned)
+                    if (role.PreparedSourceRoot is { } source && plan.InstallPins is { } pinned)
                     {
-                        var currentGame = HostInstall.ListAsync(host, gameRoot, HostedTimeouts.Long, HostInstall.PinPaths,
-                            cancellation).GetAwaiter().GetResult();
-                        var currentLoader = HostInstall.ListAsync(host, loaderRoot, HostedTimeouts.Long, HostInstall.PinPaths,
-                            cancellation).GetAwaiter().GetResult();
-                        HostInstall.CheckPins(plan.InstallPins!, currentGame, currentLoader, "prepared client profile before launch");
+                        HostInstall.CheckProfilePinsAsync(host, pinned, gameRoot, loaderRoot, source,
+                            "prepared client profile before launch", HostedTimeouts.Long, cancellation).GetAwaiter().GetResult();
                     }
                     string expected = launch.CommandLineSha256();
                     JournalAsync(host, role.Host, name, JournalEntry.Of(JournalEntry.ProcessIntended, ("launchDirectory", launchDirectory),

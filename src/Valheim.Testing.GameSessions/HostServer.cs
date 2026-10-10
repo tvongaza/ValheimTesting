@@ -484,15 +484,21 @@ internal static class HostServerScripts
             i=$((i + 1))
         done <<< "$logs"
         decode() { printf '%s' "$1" | base64 -d && printf x; }
-        unsets=(); sets=(); args=()
+        unsets=(); removed=(); sets=(); args=()
         while IFS=' ' read -r kind value; do
             [ -n "$kind" ] || continue
             text=$(decode "$value") || exit 3
             text=${text%x}
             case "$kind" in
-                unset) unsets+=(-u "$text") ;;
+                unset) unsets+=(-u "$text"); removed+=("$text") ;;
                 env) sets+=("$text") ;;
                 prepend) name=${text%%=*}; entry=${text#*=}; current=${!name:-}
+                    for dropped in ${removed[@]+"${removed[@]}"}; do
+                        if [ "$dropped" = "$name" ]; then current=; fi
+                    done
+                    for pair in ${sets[@]+"${sets[@]}"}; do
+                        case "$pair" in "$name="*) current=${pair#*=} ;; esac
+                    done
                     if [ -n "$current" ]; then sets+=("$name=$entry:$current"); else sets+=("$name=$entry"); fi ;;
                 arg) args+=("$text") ;;
             esac
