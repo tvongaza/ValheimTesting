@@ -66,6 +66,7 @@ public sealed class PinnedServerRunTests : IDisposable
             return plan;
         },
         Mod = new("test.mod/session", "TEST_SESSION_TOKEN"),
+        ClientPlans = plan => plan.Client == null ? [] : [plan.Client],
         Scenario = (_, _) => Task.CompletedTask,
         SessionOverride = server == null ? null : _ => server.Session(TimeSpan.FromSeconds(60)),
     };
@@ -125,6 +126,27 @@ public sealed class PinnedServerRunTests : IDisposable
         string nativePlan = WritePlan(linux: HostRunsLinux, client: MacClient(native.Root, "arm64"));
         Assert.Equal(ClientArchitecture.Arm64, ClientOptions().ReadPlan(nativePlan).Client!.LaunchArchitecture);
         Assert.Equal(0, await PinnedServerRun.MainAsync(["validate", nativePlan, Output], ClientOptions()));
+    }
+
+    [Fact] public async Task AMissingClientJoinPasswordIsRefusedBeforeTheServerOrAnyCopyStarts()
+    {
+        using var install = PreflightInstall.Create();
+        const string variable = "VT_EARLY_JOIN_PASSWORD_TEST";
+        string? previous = Environment.GetEnvironmentVariable(variable);
+        Environment.SetEnvironmentVariable(variable, null);
+        try
+        {
+            string plan = WritePlan(linux: HostRunsLinux, client: new
+            {
+                mode = "owned", install = install.Root, architecture = "x64", port = 5556,
+                join = "127.0.0.1:2456", character = "Tester", pinning = "none", passwordVariable = variable,
+            });
+            var server = new FakeOwnedServer("test.mod");
+            Assert.Equal(1, await PinnedServerRun.MainAsync(["run", plan, Output], ClientOptions(server)));
+            Assert.Empty(server.Events);
+            Assert.False(Directory.Exists(Output));
+        }
+        finally { Environment.SetEnvironmentVariable(variable, previous); }
     }
     // #256 amendment C: a restarted server process has neither cheat gate, so the session establishes test access on every
     // boot it starts, the scenario's restarts included; a server that never acknowledges fails its start, asked once.

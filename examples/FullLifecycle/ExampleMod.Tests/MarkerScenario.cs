@@ -36,6 +36,7 @@ public static class MarkerScenario
         ReadPlan = path => MarkerPlan.Validated(ServerRunPlan.Read<MarkerPlan>(path)),
         Mod = MarkerPlan.Mod,
         CheckPlan = plan => MarkerPlan.Validated(plan), // A session's plan is bound to its prepared actors in memory.
+        ClientPlans = plan => plan.Client is null ? [] : [plan.Client],
         Scenario = scenario,
     };
 

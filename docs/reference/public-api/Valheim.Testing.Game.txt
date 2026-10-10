@@ -259,6 +259,7 @@ sealed class Valheim.Testing.Game.ClientRunPlan
   method System.Void CheckInstallPins()
   method System.Void Preflight()
   method System.Void Preflight(System.Collections.Generic.IEnumerable`1<System.String> capabilities)
+  method System.Void RequirePasswordSource()
   method System.Void Validate(params System.String[] absentPlugins)
   method Valheim.Testing.Game.CliManifestCheck CheckCliManifest(System.Collections.Generic.IEnumerable`1<System.String> capabilities = null)
   property System.Boolean Crossplay { get; set; }

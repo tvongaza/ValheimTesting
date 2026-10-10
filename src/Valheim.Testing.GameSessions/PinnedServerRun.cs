@@ -24,6 +24,11 @@ public sealed class PinnedServerRunOptions<TPlan> where TPlan : ServerRunPlan
     /// plan, or a campaign's plan once bound to its prepared actors (<see cref="PinnedServerRun.RunCampaignAsync{TPlan}"/>).
     /// </summary>
     public Action<TPlan>? CheckPlan { get; init; }
+    /// <summary>
+    /// Owned clients this plan's scenario may open. Declare them so their password-variable sources are checked before
+    /// the dedicated server or any disposable copy starts; a campaign supplies its own declared clients instead.
+    /// </summary>
+    public Func<TPlan, IEnumerable<ClientRunPlan>>? ClientPlans { get; init; }
     /// <summary>Adds the mod's provenance (scenario details) to the report, before anything is copied: it is recorded even when the game never starts.</summary>
     public Action<TPlan, IDictionary<string, string>>? Provenance { get; init; }
     /// <summary>
@@ -417,6 +422,8 @@ public static class PinnedServerRun
         {
             options.Mod.Validate();
             if (Path.Exists(full)) throw new IOException("Use a new output directory; existing evidence is never overwritten.");
+            named = clients(plan);
+            foreach (var client in named.Values) client.RequirePasswordSource();
             Directory.CreateDirectory(full); ownOutput = true;
             report.Provenance["campaignSha256"] = FileHash.Sha256(manifestFile);
             // One run id for the whole campaign: its prepared installs, its journal, its clients' launch directories.
@@ -426,7 +433,6 @@ public static class PinnedServerRun
             var inspection = InspectCampaign(report, manifestFile);
             report.Step(StepPhase.Preflight, "the plan agrees with the campaign", () =>
             {
-                named = clients(plan);
                 HostedCampaignPreparation.CheckHostedPlan(inspection, named);
                 // A local host's world goes to this machine's client data directory, which must be that host's.
                 var profile = inspection.Inputs!.Profile;
@@ -587,6 +593,9 @@ public static class PinnedServerRun
             if (Path.Exists(output)) throw new IOException("Use a new output directory; existing evidence is never overwritten.");
             var plan = readPlan(); plan.CheckLogScan(); plan.CheckCrossplay();
             if (campaign == null) plan.CheckOutput(output); // A campaign's sources are its prepared copies, bound below.
+            IReadOnlyDictionary<string, ClientRunPlan>? campaignPlans = campaign is { } declared ? declared.Clients(plan) : null;
+            foreach (var client in campaignPlans?.Values ?? options.ClientPlans?.Invoke(plan) ?? [])
+                client.RequirePasswordSource();
             pinned = plan.Pinned;
             if (!pinned)
             {
@@ -606,14 +615,14 @@ public static class PinnedServerRun
                 report.Provenance["runId"] = campaignRunId;
                 journalRun = RunJournal.UseRun(campaignRunId);
                 var inspection = InspectCampaign(report, manifestFile);
-                report.Step(StepPhase.Preflight, "the plan agrees with the campaign", () => HostedCampaignPreparation.CheckPlan(inspection, plan, bind(plan)));
+                report.Step(StepPhase.Preflight, "the plan agrees with the campaign", () => HostedCampaignPreparation.CheckPlan(inspection, plan, campaignPlans!));
                 phase = StepPhase.Setup; // From here the hosts are written to.
                 await report.StepAsync(StepPhase.Setup, "check the hosts and prepare every actor's disposable install", async () =>
                     prepared = await HostedCampaignPreparation.PrepareAsync(inspection, Path.Combine(output, "prepared"), CampaignTimeout,
                         name => options.Hooks.CreateHost(inspection.Inputs!.Profile, name), cancellation.Token, campaignRunId, PreparationCleanup(report), options.Hooks.ShippedLoaderAsync, ShippedLoaderChosen(report)).ConfigureAwait(false)).ConfigureAwait(false);
                 report.Step(StepPhase.Setup, "bind the prepared actors to the plan", () =>
                 {
-                    prepared!.ApplyTo(plan, prepared.Manifest, bind(plan), Path.Combine(output, "prepared"));
+                    prepared!.ApplyTo(plan, prepared.Manifest, campaignPlans!, Path.Combine(output, "prepared"));
                     plan.CheckOutput(output);
                     File.WriteAllText(Path.Combine(output, "prepared", "plan.json"), JsonSerializer.Serialize(plan, plan.GetType(), BoundPlanJson) + "\n");
                 });
