@@ -6,6 +6,7 @@ using System.Text.RegularExpressions;
 using System.Xml.Linq;
 
 using Valheim.Testing.Game;
+using Valheim.Testing.GameSessions;
 
 namespace Valheim.Testing.Bundles;
 
@@ -110,11 +111,14 @@ public sealed class BundleProbe
 /// <summary>How the bundled runner gets the toolkit: a published <see cref="Package"/> version, or an exact source <see cref="Commit"/>.</summary>
 public sealed class BundleToolkit
 {
+    /// <summary>Package that contains the runner API: Game for earlier runs, GameSessions for current TargetedRegression.</summary>
+    public string PackageId { get; set; } = RegressionBundle.Package;
     public string? Package { get; set; }
     public string? Commit { get; set; }
     public string Repository { get; set; } = "https://github.com/tvongaza/ValheimTesting";
     public void Validate()
     {
+        if (PackageId is not (RegressionBundle.Package or "Valheim.Testing.GameSessions")) throw new ArgumentException("toolkit.packageId: use Valheim.Testing.Game or Valheim.Testing.GameSessions.");
         if ((Package == null) == (Commit == null)) throw new ArgumentException("toolkit: pin either a published package version or an exact source commit, not both.");
         if (Package != null && !Regex.IsMatch(Package, @"^\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?\z", RegexOptions.CultureInvariant)) throw new ArgumentException($"toolkit.package: \"{Package}\" is not a package version.");
         if (Commit != null && !Regex.IsMatch(Commit, "^[0-9a-f]{40}\\z", RegexOptions.CultureInvariant)) throw new ArgumentException("toolkit.commit: give the full 40-character commit.");
@@ -306,7 +310,7 @@ public static class RegressionBundle
             if (spec.Probe != null) files.AddRange(CopyProbe(spec.Probe, staging));
             string project = spec.Runner + ".csproj";
             File.WriteAllText(Path.Combine(staging, project), RunnerProject(spec));
-            files.Add(new(project, "", spec.Toolkit.Package != null ? $"generated: {Package} {spec.Toolkit.Package} from NuGet.org" : $"generated: {Package} from source commit {spec.Toolkit.Commit}"));
+            files.Add(new(project, "", spec.Toolkit.Package != null ? $"generated: {spec.Toolkit.PackageId} {spec.Toolkit.Package} from NuGet.org" : $"generated: {spec.Toolkit.PackageId} from source commit {spec.Toolkit.Commit}"));
             if (environment != null)
             {
                 File.WriteAllText(Path.Combine(staging, TemplateFile), JsonSerializer.Serialize(template, TemplateJson) + "\n");
@@ -485,9 +489,9 @@ public static class RegressionBundle
 
     private sealed record ResultFile(string Name, Dictionary<string, string> Provenance, List<StepResult> Steps, bool Passed, string? Pinning, ResultToolkit? Toolkit = null)
     {
-        // The Game version the run used: result.json's Toolkit (schema 3), or the provenance entry older results wrote.
-        public string? GameVersion => Toolkit?.Packages?.FirstOrDefault(package => package.Id == "Valheim.Testing.Game") is { Version: { } version }
-            ? "Valheim.Testing.Game " + version : Provenance.GetValueOrDefault("toolkit");
+        // The selected package's version from result.json (schema 3). Only older Game runs used a bare provenance entry.
+        public string? PackageVersion(string id) => Toolkit?.Packages?.FirstOrDefault(package => package.Id == id) is { Version: { } version }
+            ? id + " " + version : id == RegressionBundle.Package ? Provenance.GetValueOrDefault("toolkit") : null;
     }
     private sealed record ResultToolkit(List<ResultPackage>? Packages);
     private sealed record ResultPackage(string Id, string? Version);
@@ -626,7 +630,7 @@ public static class RegressionBundle
         string check = $"arm {name}: result.json agrees with junit.xml ({result.Steps.Count} steps, strict pinning) and with the declared {arm.Expect}" +
             (arm.FailingStep != null ? $" at \"{arm.FailingStep}\"" : "") + $"; {pins.ModPins} strict pins of {plugin} in the command trace, all {md5}" + (run != null ? "; run-manifest.json agrees" : "");
         return new(new(name, commit, md5, sha256, sha256Source, arm.Expect, failed == null, result.Steps.Count(step => step.Passed), result.Steps.Count,
-            failed == null ? null : $"{failed.Name}: {failed.Error}"), pins, files, check, result.GameVersion, privateNames, guids);
+            failed == null ? null : $"{failed.Name}: {failed.Error}"), pins, files, check, result.PackageVersion(spec.Toolkit.PackageId), privateNames, guids);
     }
 
     private static bool LooksLikePath(string value) => Regex.IsMatch(value, @"^([A-Za-z]:[\\/]|\\\\|/)", RegexOptions.CultureInvariant);
@@ -665,9 +669,9 @@ public static class RegressionBundle
         var toolkit = spec.Toolkit;
         if (toolkit.Package is { } version)
         {
-            var published = sources.PackageVersions(Package);
+            var published = sources.PackageVersions(toolkit.PackageId);
             if (published == null || !published.Contains(version, StringComparer.OrdinalIgnoreCase))
-                throw new InvalidOperationException($"toolkit.package: {Package} {version} is not published on NuGet.org" +
+                throw new InvalidOperationException($"toolkit.package: {toolkit.PackageId} {version} is not published on NuGet.org" +
                     (published == null ? "" : $" (newest {published.LastOrDefault()})") + ": pin a published version, or the exact source commit the run used.");
             foreach (string ran in native)
             {
@@ -676,7 +680,7 @@ public static class RegressionBundle
                     throw new InvalidOperationException($"toolkit.package: {version} is older than the {ranVersion} the native run used, so it may lack what the runner calls. " +
                         $"Pin {ranVersion} or newer once published, or the exact source commit the run used.");
             }
-            return $"toolkit: {Package} {version} is published on NuGet.org" + (native.Count == 0 ? "; the native run recorded no toolkit version" : $" and not older than the native run's {string.Join(", ", native)}");
+            return $"toolkit: {toolkit.PackageId} {version} is published on NuGet.org" + (native.Count == 0 ? "; the native run recorded no toolkit version" : $" and not older than the native run's {string.Join(", ", native)}");
         }
         if (!sources.HasCommit(toolkit.Repository, toolkit.Commit!))
             throw new InvalidOperationException($"toolkit.commit: {toolkit.Repository} has no commit {toolkit.Commit}: push it, or pin a commit or package version that exists.");
@@ -756,12 +760,12 @@ public static class RegressionBundle
         text.Append("  <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework><RollForward>Major</RollForward><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable></PropertyGroup>\n");
         if (spec.Probe != null) text.Append($"  <ItemGroup><Compile Remove=\"{ProbeDirectory}/**\" /></ItemGroup>\n");
         if (spec.Toolkit.Package != null)
-            text.Append($"  <ItemGroup><PackageReference Include=\"{Package}\" Version=\"[{spec.Toolkit.Package}]\" /></ItemGroup>\n");
+            text.Append($"  <ItemGroup><PackageReference Include=\"{spec.Toolkit.PackageId}\" Version=\"[{spec.Toolkit.Package}]\" /></ItemGroup>\n");
         else
         {
             text.Append($"  <!-- The toolkit from source: pass -p:ValheimTestingRoot=<a checkout of {spec.Toolkit.Repository} at {spec.Toolkit.Commit}>. -->\n");
             text.Append($"  <PropertyGroup><ValheimTestingCommit>{spec.Toolkit.Commit}</ValheimTestingCommit></PropertyGroup>\n");
-            text.Append("  <ItemGroup><ProjectReference Include=\"$(ValheimTestingRoot)/src/Valheim.Testing.Game/Valheim.Testing.Game.csproj\" /></ItemGroup>\n");
+            text.Append($"  <ItemGroup><ProjectReference Include=\"$(ValheimTestingRoot)/src/{spec.Toolkit.PackageId}/{spec.Toolkit.PackageId}.csproj\" /></ItemGroup>\n");
             text.Append("  <Target Name=\"CheckValheimTestingCommit\" BeforeTargets=\"Restore;CollectPackageReferences;Build\">\n");
             text.Append("    <Error Condition=\"'$(ValheimTestingRoot)' == ''\" Text=\"Pass -p:ValheimTestingRoot=&lt;a ValheimTesting checkout at $(ValheimTestingCommit)&gt;.\" />\n");
             text.Append("    <Exec Command=\"git -C &quot;$(ValheimTestingRoot)&quot; rev-parse HEAD\" ConsoleToMSBuild=\"true\" StandardOutputImportance=\"low\"><Output TaskParameter=\"ConsoleOutput\" PropertyName=\"ValheimTestingHead\" /></Exec>\n");
@@ -893,7 +897,7 @@ public static class RegressionBundle
         text.Append($"- the mod under test as `{template.Mod.InstallAs}`, one arm at a time\n\n");
         text.Append($"Plugin IDs relevant to this issue: {string.Join(", ", spec.Plugins.Select(id => $"`{id}`"))}.\n\n");
         text.Append("## Build and run\n\n");
-        string toolkit = spec.Toolkit.Package != null ? $"`{Package}` `{spec.Toolkit.Package}` from NuGet.org" : $"{spec.Toolkit.Repository} at commit `{spec.Toolkit.Commit}`";
+        string toolkit = spec.Toolkit.Package != null ? $"`{spec.Toolkit.PackageId}` `{spec.Toolkit.Package}` from NuGet.org" : $"{spec.Toolkit.Repository} at commit `{spec.Toolkit.Commit}`";
         text.Append($"Toolkit: {toolkit}. Requires the .NET 10 SDK, a Valheim install with BepInEx in a desktop session with Steam, a disposable fixture world and a disposable **local** character.\n\n```sh\n");
         if (spec.Toolkit.Commit != null)
             text.Append($"git clone {spec.Toolkit.Repository}.git ValheimTesting\ngit -C ValheimTesting checkout {spec.Toolkit.Commit}\n");

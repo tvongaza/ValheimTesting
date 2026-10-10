@@ -1756,14 +1756,6 @@ static class Valheim.Testing.Game.SiteSearch
 static class Valheim.Testing.Game.StableHash
   method static System.Int32 Of(System.String text)
   method static System.String Name(System.Int32 hash, System.Collections.Generic.IEnumerable`1<System.String> names)
-sealed class Valheim.Testing.Game.StagedArm
-  method System.Collections.Generic.IEnumerable`1<System.String> Describe()
-  method System.Void Record(System.Collections.Generic.IDictionary`2<System.String,System.String> provenance)
-  method System.Void Verify()
-  property System.Collections.Generic.IReadOnlyDictionary`2<System.String,System.String> Tree { get; }
-  property System.String Arm { get; }
-  property Valheim.Testing.Game.ClientRunPlan Plan { get; }
-  property Valheim.Testing.Game.RunManifest Manifest { get; }
 [result shape] sealed class Valheim.Testing.Game.StagedFile : System.IEquatable`1<Valheim.Testing.Game.StagedFile>
   method System.Boolean Equals(Valheim.Testing.Game.StagedFile other)
   method System.Void .ctor(System.String Role, System.String Path, System.String Sha256, System.String Md5, System.String Assembly, System.Collections.Generic.IReadOnlyList`1<System.String> Plugins)
@@ -1877,27 +1869,6 @@ static class Valheim.Testing.Game.SyncedConfig
   method static System.Void RequireSame(Valheim.Testing.Game.ConfigValue server, Valheim.Testing.Game.ConfigValue client)
   method static Valheim.Testing.Game.ConfigValue Parse(System.Text.Json.JsonElement data)
   method static Valheim.Testing.Game.ConfigValue Read(Valheim.Testing.Game.GameActor actor, System.String capabilityPath, System.String guid, System.String section, System.String key)
-sealed class Valheim.Testing.Game.TargetedRegression
-  field const System.String ArtifactsDirectory = "valheim-testing-artifacts"
-  field const System.String MarkerFile = "valheim-testing-install.json"
-  method System.Collections.Generic.IReadOnlyList`1<Valheim.Testing.Game.StagedArm> Preflight()
-  method System.Void .ctor(Valheim.Testing.Game.RegressionInputs inputs, System.Collections.Generic.IEnumerable`1<System.String> scenarioCapabilities = null, Valheim.Testing.Game.EnvironmentInventory inventory = null, System.String clientEnvironment = null)
-  method System.Void Remove()
-  method System.Void Remove(Valheim.Testing.Game.ScenarioReport lastArm, System.String lastArmOutput)
-  method Valheim.Testing.Game.ScenarioReport Run(System.String arm, System.String output, System.String scenario, System.Collections.Generic.IReadOnlyList`1<System.String> rounds, System.Action`1<Valheim.Testing.Game.ClientRound> measure, System.Threading.CancellationToken cancellation = null, System.Action`1<Valheim.Testing.Game.ScenarioReport> afterPinnedClientOpened = null)
-  method Valheim.Testing.Game.StagedArm Stage(System.String arm)
-  method static Valheim.Testing.Game.TargetedRegression Read(System.String inputsFile, System.Collections.Generic.IEnumerable`1<System.String> scenarioCapabilities = null)
-  property System.Collections.Generic.IReadOnlyList`1<System.String> Capabilities { get; }
-  property System.Collections.Generic.IReadOnlyList`1<System.String> Detected { get; }
-  property System.Collections.Generic.IReadOnlyList`1<System.String> LiveOnlyCapabilities { get; }
-  property System.Int32 Port { get; }
-  property System.String Architecture { get; }
-  property System.String ClientEnvironment { get; }
-  property System.String Game { get; }
-  property System.String Install { get; }
-  property System.String LoaderPackage { get; }
-  property System.String SteamUserData { get; }
-  property Valheim.Testing.Game.RegressionInputs Inputs { get; }
 sealed class Valheim.Testing.Game.TeleportTrace : System.IEquatable`1<Valheim.Testing.Game.TeleportTrace>
   method System.Boolean Equals(Valheim.Testing.Game.TeleportTrace other)
   method System.Void .ctor(System.Int32 Id, System.Boolean Distant, System.Int64 RequestedMs, System.Int64 MovedMs, System.Int64 AreaReadyMs, System.Int64 FloorReadyMs, System.Int64 DoneMs, System.Boolean FloorAtDone, System.Single FinalX, System.Single FinalY, System.Single FinalZ, System.String Raw)

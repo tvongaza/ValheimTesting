@@ -1,4 +1,5 @@
 using Valheim.Testing.Game;
+using Valheim.Testing.GameSessions;
 using Xunit;
 
 public sealed class BepInExLoaderPackageTests : IDisposable
@@ -17,15 +18,15 @@ public sealed class BepInExLoaderPackageTests : IDisposable
 
         var environment = _rig.Manifest();
         _rig.LoaderPackage = manifest;
-        var staged = _rig.Regression(environment).Stage("parent");
+        var regression = _rig.Regression(environment);
+        var staged = regression.Stage("parent");
         Assert.Equal(package.Files["BepInEx/core/BepInEx.dll"], FileHash.Sha256(Path.Combine(_rig.Install, "BepInEx", "core", "BepInEx.dll")));
         Assert.Equal(changed, FileHash.Sha256(sourceCore));
-        Assert.Contains(package.Identity, File.ReadAllText(Path.Combine(_rig.Install, TargetedRegression.MarkerFile)));
         // One loader identity: the install the package was applied to has the package's loader pin, which its identity names.
         Assert.Equal(package.Loader, InstallPins.Of(_rig.Install).Loader);
         Assert.EndsWith("(" + package.Loader + ")", package.Identity);
         staged.Verify();
-        _rig.Regression(environment).Stage("candidate").Verify(); // The package remains selected across arms.
+        regression.Stage("candidate").Verify(); // The package remains selected across arms.
     }
 
     [Fact] public void ChangedPackageBytesAreRejectedBeforeTheDisposableInstallIsCreated()
@@ -49,7 +50,8 @@ public sealed class BepInExLoaderPackageTests : IDisposable
         Directory.Delete(Path.Combine(_rig.Game, "BepInEx", "core"), recursive: true);
         var environment = _rig.Manifest();
         _rig.LoaderPackage = manifest;
-        _rig.Regression(environment).Stage("parent").Verify();
+        var regression = _rig.Regression(environment);
+        regression.Stage("parent").Verify();
         Assert.False(Directory.Exists(Path.Combine(_rig.Game, "BepInEx", "core")));
         Assert.Equal(package.Files["BepInEx/core/BepInEx.dll"], FileHash.Sha256(Path.Combine(_rig.Install, "BepInEx", "core", "BepInEx.dll")));
     }
@@ -83,16 +85,16 @@ public sealed class BepInExLoaderPackageTests : IDisposable
         package.Write(manifest);
         var environment = _rig.Manifest();
         _rig.LoaderPackage = manifest;
-        _rig.Regression(environment).Stage("parent").Verify();
+        var regression = _rig.Regression(environment);
+        regression.Stage("parent").Verify();
 
         string core = Path.Combine(package.Root, "BepInEx", "core", "BepInEx.dll");
         File.AppendAllText(core, "new reviewed loader version");
         package = BepInExLoaderPackage.Capture(package.Root, package.Name, "5.4.2203");
         package.Write(manifest);
-        _rig.Regression(environment).Stage("parent").Verify();
+        regression.Stage("parent").Verify();
 
         Assert.Equal(package.Files["BepInEx/core/BepInEx.dll"], FileHash.Sha256(Path.Combine(_rig.Install, "BepInEx", "core", "BepInEx.dll")));
-        Assert.Contains(package.Identity, File.ReadAllText(Path.Combine(_rig.Install, TargetedRegression.MarkerFile)));
     }
 
     [Fact] public void GamePinsNameThePackagesLoaderWhenOneIsSelected()

@@ -13,16 +13,16 @@ internal static class SmokeProject
 {
     // The consumer pins the Valheim.Testing.Game this tool was built with and runs in process, so the regression.json or
     // plan.json the tool writes and the consumer's reader are one version by construction (one source: the Game assembly).
-    internal static readonly string GameVersion = VersionOf(typeof(TargetedRegression));
+    internal static readonly string GameVersion = VersionOf(typeof(ClientSession));
     // The server consumer runs a session (PinnedServerRun), from the Valheim.Testing.GameSessions this tool was built with; that
     // package depends on exactly the Game above.
     internal static readonly string GameSessionsVersion = VersionOf(typeof(PinnedServerRun));
     private static string VersionOf(Type type) => type.Assembly
         .GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), false)
         .OfType<System.Reflection.AssemblyInformationalVersionAttribute>().FirstOrDefault()?.InformationalVersion.Split('+')[0] ?? "unknown";
-    // What a consumer restores from NuGet.org: Game, and for a server consumer GameSessions too.
+    // Both generated consumers run sessions; each restores the exact Game and GameSessions assemblies used by this tool.
     private static IEnumerable<(string Package, string Version)> Restored(bool server) =>
-        server ? [("Valheim.Testing.Game", GameVersion), ("Valheim.Testing.GameSessions", GameSessionsVersion)] : [("Valheim.Testing.Game", GameVersion)];
+        [("Valheim.Testing.Game", GameVersion), ("Valheim.Testing.GameSessions", GameSessionsVersion)];
     private static string? Refusal(bool server) => Restored(server).Select(item => Unpublishable(item.Version, item.Package)).FirstOrDefault(refusal => refusal != null);
     private const string Feed = "https://api.nuget.org/v3/index.json";
 
@@ -120,7 +120,7 @@ internal static class SmokeProject
         File.WriteAllText(Path.Combine(directory, "SmokeCheck.csproj"), $$"""
             <Project Sdk="Microsoft.NET.Sdk">
               <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework><Nullable>enable</Nullable><ImplicitUsings>enable</ImplicitUsings></PropertyGroup>
-              <ItemGroup><PackageReference Include="Valheim.Testing.Game" Version="[{{GameVersion}}]" />{{(server ? $"<PackageReference Include=\"Valheim.Testing.GameSessions\" Version=\"[{GameSessionsVersion}]\" />" : "")}}</ItemGroup>
+              <ItemGroup><PackageReference Include="Valheim.Testing.Game" Version="[{{GameVersion}}]" /><PackageReference Include="Valheim.Testing.GameSessions" Version="[{{GameSessionsVersion}}]" /></ItemGroup>
             </Project>
             """);
         File.WriteAllText(Path.Combine(directory, "NuGet.Config"), candidateFeed == null
@@ -179,6 +179,7 @@ internal static class SmokeProject
             return await PinnedServerRun.RunCampaignAsync(runFile, serverPlan, _ => clients, resultDirectory, options);
             """ : """
             using Valheim.Testing.Game;
+            using Valheim.Testing.GameSessions;
 
             // Run this with the regression.json a `valheim-test start` run wrote beside its evidence (and its environments.json,
             // when --game overrode this machine's Valheim). Supply a fresh result directory for each run; the selected DLLs remain pinned.

@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Valheim.Testing.Bundles;
 using Valheim.Testing.Game;
+using Valheim.Testing.GameSessions;
 using Xunit;
 
 // Public bundles of targeted native regressions (#126): each way a hand-made public copy diverged from the run or disclosed
@@ -39,6 +40,21 @@ public sealed class RegressionBundleTests : IDisposable
         Assert.Contains(manifest.Checks, check => check.StartsWith("the arms' command traces pin the same world", StringComparison.Ordinal));
         RegressionBundle.Verify(output, _rig.Spec());
         Assert.Empty(Directory.EnumerateDirectories(Path.GetDirectoryName(output)!, Path.GetFileName(output) + ".incomplete-*"));
+    }
+
+    [Fact] public void ACurrentBundlePinsThePackageContainingTargetedRegression()
+    {
+        var spec = _rig.Spec();
+        spec.Toolkit.PackageId = "Valheim.Testing.GameSessions";
+        spec.Toolkit.Package = "0.1.0-preview.14";
+        string output = _rig.Output();
+
+        RegressionBundle.Create(spec, output, _rig.Sources);
+
+        Assert.Contains("<PackageReference Include=\"Valheim.Testing.GameSessions\" Version=\"[0.1.0-preview.14]\" />",
+            File.ReadAllText(Path.Combine(output, "ExampleRegression.csproj")));
+        Assert.Contains("Valheim.Testing.GameSessions", File.ReadAllText(Path.Combine(output, "README.md")));
+        RegressionBundle.Verify(output, spec);
     }
 
     [Fact] public void AnExistingIncompleteDirectoryIsNeverDeleted()
@@ -318,6 +334,7 @@ internal sealed class BundleRig : IDisposable
     public string EnvironmentPath => Path.Combine(Root, "regression.json");
     public string TemplatePath => Path.Combine(Root, "retained", "regression.template.json");
     public FakeSources Sources { get; } = new();
+    private readonly TargetedRegression _regression;
     private int _outputs;
 
     public BundleRig()
@@ -330,6 +347,7 @@ internal sealed class BundleRig : IDisposable
         }));
         Directory.CreateDirectory(Path.Combine(Root, "runner"));
         File.WriteAllText(Path.Combine(Root, "runner", "Program.cs"), "using Valheim.Testing.Game;\n\n// The runner's entry point.\nConsole.WriteLine(new ScenarioReport(Scenario.Name).Passed ? \"PASS\" : \"FAIL\");\n");
+        _regression = Rig.Regression(Rig.Manifest());
         Scenario("");
         Evidence("parent", pass: false);
         Evidence("candidate", pass: true);
@@ -344,7 +362,7 @@ internal sealed class BundleRig : IDisposable
     /// <summary>One arm's evidence as a template run writes it, its trace pinning <paramref name="md5"/> for the mod (the arm's own by default).</summary>
     public void Evidence(string arm, bool pass, string? md5 = null, string extraPins = "", string toolkit = "Valheim.Testing.Game 0.1.0-preview.17", string error = "2 markers stand there; expected 1.")
     {
-        var staged = Rig.Regression(Rig.Manifest()).Stage(arm);
+        var staged = _regression.Stage(arm);
         string directory = Path.Combine(Root, "evidence", arm);
         if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
         Directory.CreateDirectory(directory);
@@ -456,12 +474,17 @@ internal sealed class BundleRig : IDisposable
 
     public string Output() => Path.Combine(Root, "bundle-" + ++_outputs);
 
-    public void Dispose() => Rig.Dispose();
+    public void Dispose() { _regression.Remove(); Rig.Dispose(); }
 
     /// <summary>A feed with preview.16 and preview.17 published and one known commit.</summary>
     internal sealed class FakeSources : IBundleSources
     {
-        public IReadOnlyList<string>? PackageVersions(string id) => id == RegressionBundle.Package ? ["0.1.0-preview.16", "0.1.0-preview.17"] : null;
+        public IReadOnlyList<string>? PackageVersions(string id) => id switch
+        {
+            RegressionBundle.Package => ["0.1.0-preview.16", "0.1.0-preview.17"],
+            "Valheim.Testing.GameSessions" => ["0.1.0-preview.14"],
+            _ => null,
+        };
         public bool HasCommit(string repository, string commit) => commit == Commit;
     }
 }

@@ -56,14 +56,14 @@ public sealed class NativeSmokeConsumerTests : IDisposable
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public void EditableConsumerUsesOnlyThePublishedGamePackage(bool server)
+    public void EditableConsumerUsesOnlyThePublishedGameAndSessionPackages(bool server)
     {
         SmokeProject.Write(_root, server);
         string project = File.ReadAllText(Path.Combine(_root, "SmokeCheck.csproj"));
         Assert.Contains("Valheim.Testing.Game", project);
         Assert.Contains(SmokeProject.GameVersion, project);
-        // A server consumer runs a session (PinnedServerRun), which is Valheim.Testing.GameSessions'.
-        Assert.Equal(server, project.Contains($"Include=\"Valheim.Testing.GameSessions\" Version=\"[{SmokeProject.GameSessionsVersion}]\"", StringComparison.Ordinal));
+        // Both consumers run sessions: TargetedRegression and PinnedServerRun live in GameSessions.
+        Assert.Contains($"Include=\"Valheim.Testing.GameSessions\" Version=\"[{SmokeProject.GameSessionsVersion}]\"", project);
         Assert.DoesNotContain("ProjectReference", project);
         string config = File.ReadAllText(Path.Combine(_root, "NuGet.Config"));
         Assert.Contains("<clear/>", config);
@@ -83,7 +83,7 @@ public sealed class NativeSmokeConsumerTests : IDisposable
         SmokeProject.Write(_root, server);
         string source = File.ReadAllText(Path.Combine(_root, "Program.cs"));
         string[] platform = ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!).Split(Path.PathSeparator);
-        string[] packages = [typeof(TargetedRegression).Assembly.Location, typeof(PinnedServerRun).Assembly.Location,
+        string[] packages = [typeof(ClientSession).Assembly.Location, typeof(TargetedRegression).Assembly.Location,
             System.Reflection.Assembly.Load("Valheim.Cli.Testing").Location];
         var references = platform.Concat(packages).Distinct(StringComparer.OrdinalIgnoreCase)
             .Select(path => MetadataReference.CreateFromFile(path));

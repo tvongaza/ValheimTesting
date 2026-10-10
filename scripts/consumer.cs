@@ -23,8 +23,8 @@
 // its init as well: that consumer restores its own pinned Game package). Every Valheim.Testing* package restored must come
 // from the feed at exactly the manifest version.
 //
-// TargetedRegression pins a published Game package of its own, so it is built at that pin, from NuGet.org only, into
-// caches of its own, with either feed.
+// TargetedRegression builds from the current candidate or released GameSessions package outside this checkout.
+// The source example uses a project reference for local editing; the consumer swaps only that reference for the exact package.
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Security;
@@ -254,7 +254,7 @@ try
     }
     if (wrong > 0) return 1;
 
-    await TargetedRegression();
+    TargetedRegression(config, cache, env);
     Console.WriteLine($"A fresh consumer restored, built and ran this checkout's packages from {(local ? "the local feed" : "NuGet.org")} only.");
     return 0;
 }
@@ -269,32 +269,30 @@ int Usage(string problem)
     return 2;
 }
 
-// TargetedRegression at its own pin: NuGet.org only, owned caches, outside the checkout.
-async Task TargetedRegression()
+// Build the source example from this checkout's GameSessions package, outside the checkout.
+void TargetedRegression(string config, string cache, Dictionary<string, string> env)
 {
     string source = Path.Combine(root, "examples", "TargetedRegression");
-    string xml = File.ReadAllText(Path.Combine(source, "TargetedRegression.csproj"));
-    var pin = Regex.Match(xml, @"<ToolkitPackageVersion[^>]*>([^<]+)</ToolkitPackageVersion>");
-    if (!pin.Success || xml.Contains("ProjectReference", StringComparison.Ordinal))
-        throw new InvalidOperationException("TargetedRegression must pin a published Game package without a source-project fallback.");
-    string version = pin.Groups[1].Value;
-    using (var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) })
-        if (!await Exists(http, $"{FlatContainer}/valheim.testing.game/{version.ToLowerInvariant()}/valheim.testing.game.{version.ToLowerInvariant()}.nupkg", "Valheim.Testing.Game " + version))
-            throw new InvalidOperationException($"TargetedRegression pins Valheim.Testing.Game {version}, which NuGet.org does not serve; pin a published version.");
+    // Git may check this project out with CRLF on Windows; compare its structure with one newline convention.
+    string xml = File.ReadAllText(Path.Combine(source, "TargetedRegression.csproj")).Replace("\r\n", "\n", StringComparison.Ordinal);
+    const string sourceReference = "  <ItemGroup Condition=\"'$(GameSessionsPackageVersion)' == ''\"><ProjectReference Include=\"../../src/Valheim.Testing.GameSessions/Valheim.Testing.GameSessions.csproj\" /></ItemGroup>\n" +
+        "  <ItemGroup Condition=\"'$(GameSessionsPackageVersion)' != ''\"><PackageReference Include=\"Valheim.Testing.GameSessions\" Version=\"[$(GameSessionsPackageVersion)]\" /></ItemGroup>";
+    if (!xml.Contains(sourceReference, StringComparison.Ordinal))
+        throw new InvalidOperationException("TargetedRegression's source project no longer has the expected GameSessions reference; update this consumer check with the example.");
+    string version = manifest["Valheim.Testing.GameSessions"];
+    xml = xml.Replace(sourceReference, $"  <ItemGroup><PackageReference Include=\"Valheim.Testing.GameSessions\" Version=\"[{version}]\" /></ItemGroup>", StringComparison.Ordinal);
     string directory = Path.Combine(work, "targeted");
     Directory.CreateDirectory(directory);
-    foreach (string name in new[] { "TargetedRegression.csproj", "Program.cs", "Scenario.cs" })
+    File.WriteAllText(Path.Combine(directory, "TargetedRegression.csproj"), xml);
+    foreach (string name in new[] { "Program.cs", "Scenario.cs" })
         File.Copy(Path.Combine(source, name), Path.Combine(directory, name));
-    string configFile = Path.Combine(directory, "NuGet.Config");
-    File.WriteAllText(configFile, NuGetOnly());
-    string packages = Path.Combine(directory, "packages");
-    var targetedEnv = ConsumerEnvironment(packages, Path.Combine(directory, "http-cache"));
-    Run(targetedEnv, directory, "dotnet", "restore", "TargetedRegression.csproj", "--configfile", configFile);
-    string metadata = Path.Combine(packages, "valheim.testing.game", version.ToLowerInvariant());
-    if (Metadata(metadata, "source") != NuGetOrg)
-        throw new InvalidOperationException($"TargetedRegression did not restore Valheim.Testing.Game {version} from NuGet.org ({metadata}).");
-    Run(targetedEnv, directory, "dotnet", "build", "TargetedRegression.csproj", "-c", "Release", "--no-restore");
-    Console.WriteLine($"ok   TargetedRegression builds outside the checkout from Valheim.Testing.Game {version} on NuGet.org only.");
+    Run(env, directory, "dotnet", "restore", "TargetedRegression.csproj", "--configfile", config);
+    string metadata = Path.Combine(cache, "valheim.testing.gamesessions", version.ToLowerInvariant());
+    string expected = local ? Path.GetFullPath(localFeed) : NuGetOrg;
+    if (!string.Equals(Metadata(metadata, "source"), expected, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+        throw new InvalidOperationException($"TargetedRegression did not restore Valheim.Testing.GameSessions {version} from {expected} ({metadata}).");
+    Run(env, directory, "dotnet", "build", "TargetedRegression.csproj", "-c", "Release", "--no-restore");
+    Console.WriteLine($"ok   TargetedRegression builds outside the checkout from Valheim.Testing.GameSessions {version} on {(local ? "the local candidate feed" : "NuGet.org")}.");
 }
 
 async Task<bool> WaitUntilServed()

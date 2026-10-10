@@ -11,6 +11,7 @@ internal static class LocalHostPreflight
 {
     private static readonly AsyncLocal<Probes?> TestDefaults = new();
     internal static Probes DefaultProbes => TestDefaults.Value ?? new Probes();
+    internal static void RequireMacDesktop() => (DefaultProbes.MacDesktop ?? MacGuiSession.Require)();
 
     internal sealed record Actor(string Name, EnvironmentRecipe Recipe);
 

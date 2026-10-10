@@ -182,29 +182,6 @@ internal static class RunRecovery
             try
             {
                 string path = copy.What;
-                if (copy.Fields.GetValueOrDefault("copyKind") == "regression")
-                {
-                    if (!copy.Fields.TryGetValue("evidenceRoot", out string? evidence))
-                        throw new InvalidDataException("its journal names no evidence folder for game logs");
-                    // A new plain start always claims its path before copying. Check an existing
-                    // claim before either the complete-marker or partial-copy removal path.
-                    if (File.Exists(RegressionCopyClaim.PathFor(path))) RegressionCopyClaim.Require(path, runId);
-                    int logs = 0;
-                    if (Directory.Exists(path) && !File.Exists(Path.Combine(path, TargetedRegression.MarkerFile)))
-                    {
-                        RegressionCopyClaim.Require(path, runId);
-                        WorldFixture.DeleteTree(path);
-                        Step(copy.Host, what, "removed the claimed partial regression copy (no game was launched)");
-                    }
-                    else
-                    {
-                        logs = TargetedRegression.RecoverJournalledInstall(path, evidence);
-                        Step(copy.Host, what, $"removed the journalled regression install; kept {logs} game log(s) in its evidence");
-                    }
-                    if (File.Exists(RegressionCopyClaim.PathFor(path))) RegressionCopyClaim.Retire(path, runId);
-                    await Note(copy.Host, JournalEntry.Of(JournalEntry.CopyRetired, ("runtime", path), ("local", "true"))).ConfigureAwait(false);
-                    continue;
-                }
                 if (!Directory.Exists(path)) { Step(copy.Host, what, "already gone"); await Note(copy.Host, JournalEntry.Of(JournalEntry.CopyRetired, ("runtime", path), ("local", "true"))).ConfigureAwait(false); continue; }
                 if (!OwnedCopies.IsCopyName(path)) throw new InvalidDataException("not a valheim-test-<32 hex> copy directory");
                 var found = OwnedCopies.Find(path);

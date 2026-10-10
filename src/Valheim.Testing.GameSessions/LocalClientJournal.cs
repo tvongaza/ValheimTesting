@@ -1,8 +1,9 @@
 using System.Globalization;
 using Valheim.Testing.Game;
-using Valheim.Testing.GameSessions;
 
-/// <summary>The one-shot client's exact process joins the same run journal as its disposable world.</summary>
+namespace Valheim.Testing.GameSessions;
+
+/// <summary>The exact local client process joins the same run journal as its disposable world.</summary>
 internal sealed class LocalClientJournal(ClientRunPlan plan, string evidence, bool desktopTask, string? expectedCommandLineForTest = null,
     Func<int, ProbedProcess>? processProbeForTest = null)
 {
@@ -62,8 +63,7 @@ internal sealed class LocalClientJournal(ClientRunPlan plan, string evidence, bo
                 _journal.AppendLocal("client", JournalEntry.Of(JournalEntry.LaunchSettled,
                     ("actor", "client"), ("directory", _launchDirectory)));
         }
-        // A launch that failed before Started has no process handle here. Do not claim it is gone:
-        // env status/recover must inspect its pid file, or report that the interrupted launch needs attention.
+        // A failed launch with no process handle is ambiguous: recovery must inspect the pid file.
         if (_intended && _process == null)
             throw new InvalidOperationException("The client launch did not return a process after its intent was journalled; inspect env status before reusing this host.");
     }
