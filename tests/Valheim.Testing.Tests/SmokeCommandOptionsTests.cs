@@ -72,8 +72,13 @@ public sealed class SmokeCommandOptionsTests
         Assert.False(StartArguments.TryRead(["--mod", "mod.dll", "--server-startup-seconds", "900"],
             out _, out _, out _, out _, out error));
         Assert.Contains("--server-startup-seconds", error);
-        Assert.False(ServerLoad.TryRead(["--mod", "mod.dll", "--server-startup-seconds", "1801"], out _, out error));
-        Assert.Contains("1 to 1800", error);
+        Assert.True(ServerLoad.TryRead(["--mod", "mod.dll", "--server-startup-seconds", "3600"], out _, out error), error);
+        Assert.False(ServerLoad.TryRead(["--mod", "mod.dll", "--server-startup-seconds", "3601"], out _, out error));
+        Assert.Contains("1 to 3600", error);
+        Assert.True(ServerLoad.TryRead(["--mod", "mod.dll", "--world-fixture", "fixture"], out _, out error), error);
+        Assert.False(ServerLoad.TryRead(["--mod", "mod.dll", "--bake-fixture", "new-fixture",
+            "--assert-command", "cli_world", "--assert-line", "WORLD"], out _, out error));
+        Assert.Contains("--server-only", error);
     }
 
     [Fact]

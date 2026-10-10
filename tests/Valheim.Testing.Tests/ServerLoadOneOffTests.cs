@@ -186,6 +186,27 @@ public sealed class ServerLoadOneOffTests : IDisposable
     }
 
     [Fact]
+    public async Task JoinedClientCanPrepareACustomPinnedWorldWithAnUnvisitedDisposableCharacter()
+    {
+        string source = Path.Combine(_rig.Root, "joined-world");
+        DefaultSmokeWorld.PrepareServerSaveRoot(source);
+        var hashes = WorldFixture.Manifest(Path.Combine(source, "worlds_local"));
+        string output = Path.Combine(_rig.Root, "joined-custom-world-run");
+        using (EnvironmentInventory.UseMachine(WithValheim(out _)))
+            Assert.Equal(0, await ServerLoad.RunAsync(Arguments(output, "--world-fixture", source,
+                "--server-startup-seconds", "3600", "--preflight-only"),
+                new ServerLoad.Seams(Inspect: _ => Task.FromResult(Ready),
+                    ClientArchitecture: (_, _, _, _) => { })));
+        var campaign = JsonDocument.Parse(File.ReadAllText(Path.Combine(output, "campaign.json"))).RootElement;
+        Assert.Equal(DefaultSmokeWorld.Uid, campaign.GetProperty("worldUid").GetString());
+        Assert.Equal(DefaultSmokeCharacter.Name,
+            campaign.GetProperty("clients").GetProperty("client").GetProperty("character").GetProperty("registeredName").GetString());
+        Assert.Equal(3600, JsonSerializer.Deserialize<ServerRunPlan>(File.ReadAllText(Path.Combine(output, "plan.json")))!.StartupSeconds);
+        WorldFixture.Verify(Path.Combine(source, "worlds_local"), hashes);
+        WorldFixture.Verify(Path.Combine(output, "world-source", "worlds_local"), hashes);
+    }
+
+    [Fact]
     public async Task BakeRefusesAnExistingTargetBeforeItPreparesAnything()
     {
         string output = Path.Combine(_rig.Root, "bake-refusal-run");

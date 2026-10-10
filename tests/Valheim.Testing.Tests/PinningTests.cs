@@ -308,6 +308,15 @@ public sealed class PinningTests : IDisposable
         Assert.Throws<ArgumentException>(() => plan.CheckRuntimePins(_root));
     }
 
+    [Fact] public void ASlowNetworkGenerationHasOneBoundedServerStartupBudget()
+    {
+        var plan = Plan(); Pin(plan);
+        plan.StartupSeconds = 3600;
+        plan.ValidateServerPlan(["my.mod"], "TOKEN");
+        plan.StartupSeconds = 3601;
+        Assert.Contains("time budget", Assert.Throws<ArgumentException>(() => plan.ValidateServerPlan(["my.mod"], "TOKEN")).Message);
+    }
+
     [Fact] public void AnUnpinnedPlanNeedsNoPinsAndMayListNone()
     {
         var plan = Plan("none");

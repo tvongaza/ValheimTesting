@@ -30,6 +30,8 @@ public sealed class PinnedDirectory
 /// </summary>
 public partial class ServerRunPlan
 {
+    /// <summary>Largest bounded server-start budget, in seconds, including mods that generate a network on first load.</summary>
+    public const int MaximumStartupSeconds = 3600;
     public string Scenario { get; set; } = "";
     public PinnedDirectory Runtime { get; set; } = new();
     public PinnedDirectory World { get; set; } = new();
@@ -92,7 +94,7 @@ public partial class ServerRunPlan
         bool pinned = Pinned;
         Runtime.Validate(pinned); World.Validate(pinned);
         CheckLogScan();
-        if (Port < 1024 || Port > 65535 || StartupSeconds < 1 || StartupSeconds > 1800 || CommandSeconds < 1 || CommandSeconds > 120 || QuitSeconds < 0 || QuitSeconds > 1800)
+        if (Port < 1024 || Port > 65535 || StartupSeconds < 1 || StartupSeconds > MaximumStartupSeconds || CommandSeconds < 1 || CommandSeconds > 120 || QuitSeconds < 0 || QuitSeconds > 1800)
             throw new ArgumentException("Invalid port or time budget.");
         if (!string.IsNullOrEmpty(Executable) && Executable != GameLaunch.ServerWindowsExecutable && Executable != GameLaunch.ServerLinuxExecutable && Executable != GameLaunch.ServerMacExecutable)
             throw new ArgumentException($"Executable must be omitted, {GameLaunch.ServerWindowsExecutable}, {GameLaunch.ServerLinuxExecutable} or {GameLaunch.ServerMacExecutable} (relative to the copied runtime's root).");

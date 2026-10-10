@@ -1651,6 +1651,7 @@ sealed class Valheim.Testing.Game.ScenarioReport
   field const Valheim.Testing.Game.ServerPlatform MacOS = 2
   field const Valheim.Testing.Game.ServerPlatform Windows = 0
 class Valheim.Testing.Game.ServerRunPlan
+  field const System.Int32 MaximumStartupSeconds = 3600
   method System.String Expand(System.String value, System.String runtime, System.String world)
   method System.String GameLogFile(System.String runtime, System.String world)
   method System.String[] LaunchArguments(System.String runtime, System.String world)

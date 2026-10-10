@@ -124,17 +124,17 @@ internal static class SmokeCommandOptions
             (!int.TryParse(joinSeconds, NumberStyles.None, CultureInfo.InvariantCulture, out int seconds) || seconds is < 10 or > 900))
         { error = "--join-seconds must be a whole number from 10 to 900."; return false; }
         if (result.Options.TryGetValue("--server-startup-seconds", out string? startupSeconds) &&
-            (!int.TryParse(startupSeconds, NumberStyles.None, CultureInfo.InvariantCulture, out int startup) || startup is < 1 or > 1800))
-        { error = "--server-startup-seconds must be a whole number from 1 to 1800."; return false; }
+            (!int.TryParse(startupSeconds, NumberStyles.None, CultureInfo.InvariantCulture, out int startup) ||
+                startup < 1 || startup > ServerRunPlan.MaximumStartupSeconds))
+        { error = $"--server-startup-seconds must be a whole number from 1 to {ServerRunPlan.MaximumStartupSeconds}."; return false; }
         if (result.Options.TryGetValue("--client-architecture", out string? architecture) && architecture is not ("x64" or "arm64"))
         { error = "--client-architecture must be x64 or arm64."; return false; }
         if (result.Switches.Contains("--server-only") &&
             new[] { "--client", "--client-env", "--client-loader-package", "--client-architecture", "--join", "--join-seconds" }
                 .Any(result.Options.ContainsKey))
         { error = "--server-only runs no client: leave out --client, --client-env, --client-loader-package, --client-architecture, --join and --join-seconds."; return false; }
-        if ((result.Options.ContainsKey("--world-fixture") || result.Options.ContainsKey("--bake-fixture")) &&
-            !result.Switches.Contains("--server-only"))
-        { error = "--world-fixture and --bake-fixture currently require --server-only; a joined client needs a character prepared for that world's UID."; return false; }
+        if (result.Options.ContainsKey("--bake-fixture") && !result.Switches.Contains("--server-only"))
+        { error = "--bake-fixture currently requires --server-only; a joined-client bake has not been verified."; return false; }
         if (result.Options.ContainsKey("--bake-fixture") &&
             (result.Switches.Contains("--hold") || result.Switches.Contains("--preflight-only")))
         { error = "--bake-fixture needs a completed server run and clean stop; leave out --hold and --preflight-only."; return false; }
