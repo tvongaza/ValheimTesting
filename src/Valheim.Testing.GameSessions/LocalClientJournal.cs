@@ -5,7 +5,7 @@ namespace Valheim.Testing.GameSessions;
 
 /// <summary>The exact local client process joins the same run journal as its disposable world.</summary>
 internal sealed class LocalClientJournal(ClientRunPlan plan, string evidence, bool desktopTask, string? expectedCommandLineForTest = null,
-    Func<int, ProbedProcess>? processProbeForTest = null)
+    Func<int, ProbedProcess>? processProbeForTest = null, ClientPlatform? hostPlatformForTest = null)
 {
     private readonly string _launchDirectory = desktopTask ? Path.Combine(evidence, "desktop-launch") : evidence;
     private readonly RunJournal _journal = RunJournal.ThisProcess;
@@ -18,9 +18,15 @@ internal sealed class LocalClientJournal(ClientRunPlan plan, string evidence, bo
 
     internal void Begin()
     {
-        string expected = expectedCommandLineForTest ?? GameLaunch.ForClient(plan.Install, plan.LaunchArguments, plan.Environment,
-            hostPlatform: desktopTask ? ClientPlatform.Windows : null, architecture: plan.LaunchArchitecture,
-            secretVariables: desktopTask && plan.PasswordVariable is { } password ? [password] : null).CommandLineSha256();
+        // Match ClientSession.StartInfo: on Unix the executable lives in the source install while
+        // BepInEx and Doorstop live in the owned profile. Windows desktop tasks carry a secret
+        // variable into their own session, so keep that host launch path there.
+        string expected = expectedCommandLineForTest ?? (desktopTask
+            ? GameLaunch.ForClient(plan.Install, plan.LaunchArguments, plan.Environment,
+                hostPlatform: ClientPlatform.Windows, architecture: plan.LaunchArchitecture,
+                secretVariables: plan.PasswordVariable is { } password ? [password] : null)
+            : GameLaunch.LocalClient(plan.Install, plan.LaunchArguments, plan.Environment, plan.LaunchArchitecture,
+                console: true, builtOn: hostPlatformForTest ?? GameLaunch.CurrentClientHost, loaderDirectory: plan.LoaderRoot)).CommandLineSha256();
         _journal.AppendLocal("client", JournalEntry.Of(JournalEntry.ProcessIntended,
             ("launchDirectory", _launchDirectory), ("expectedCommandLineSha256", expected)));
         _intended = true;

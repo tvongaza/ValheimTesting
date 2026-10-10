@@ -63,6 +63,9 @@ public sealed class ClientRunPlan
     [JsonIgnore] internal string LoaderRoot => PreparedLoaderRoot ?? Install;
     /// <summary>The owned staging choice recorded in run evidence. Never read from a plan file.</summary>
     [JsonIgnore] internal string? PreparedLaunchMode { get; set; }
+    /// <summary>The immutable source game of an owned profile; checked again immediately before launch.</summary>
+    [JsonIgnore] internal string? PreparedSourceGameRoot { get; set; }
+    [JsonIgnore] internal string? PreparedSourceGameHash { get; set; }
     /// <summary>The install a local disposable copy was made from, once <see cref="Prepared"/> by it; for the report.</summary>
     [JsonIgnore] internal string? CopiedFrom { get; set; }
     /// <summary>
@@ -410,12 +413,18 @@ public sealed class ClientRunPlan
         return CliCapabilityManifest.Read(CliManifest).Check(LoaderRoot, wanted);
     }
 
-    /// <summary>Owned and pinned: refuses an install whose game build, loader or patchers are not <see cref="InstallPins"/>.</summary>
+    /// <summary>Checks owned pinned files and always refuses a profile if its source game changed after staging.</summary>
     public void CheckInstallPins()
     {
-        if (!Owned || !Pinned) return;
-        (InstallPins ?? throw new ArgumentException("Pin the owned client's game build, loader and patchers in installPins, or opt out explicitly with \"pinning\": \"none\"."))
-            .Check(Install, LoaderRoot, "client install");
+        if (!Owned) return;
+        if (Pinned)
+        {
+            var pins = InstallPins ?? throw new ArgumentException("Pin the owned client's game build, loader and patchers in installPins, or opt out explicitly with \"pinning\": \"none\".");
+            pins.Check(Install, LoaderRoot, "client install");
+        }
+        if (PreparedSourceGameRoot is { } source && PreparedSourceGameHash is { } expected &&
+            !Valheim.Testing.Game.InstallPins.GameHash(source).Equals(expected, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("The source game changed after its loader profile was staged. Refuse this launch and prepare a new profile against the current game build.");
     }
     private static string Expect(IEnumerable<string> lines)
     {

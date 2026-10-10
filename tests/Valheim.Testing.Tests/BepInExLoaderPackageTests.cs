@@ -19,6 +19,7 @@ public sealed class BepInExLoaderPackageTests : IDisposable
         var environment = _rig.Manifest();
         _rig.LoaderPackage = manifest;
         var regression = _rig.Regression(environment);
+        regression.CopyGame = true;
         var staged = regression.Stage("parent");
         Assert.Equal(package.Files["BepInEx/core/BepInEx.dll"], FileHash.Sha256(Path.Combine(_rig.Install, "BepInEx", "core", "BepInEx.dll")));
         Assert.Equal(changed, FileHash.Sha256(sourceCore));

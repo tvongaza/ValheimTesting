@@ -12,7 +12,7 @@ A copyable template for a small A/B regression in the real game: **one owned cli
 
 The sample scenario tests FullLifecycle's ExampleMod with its test adapter as the probe: its Harmony patch is applied, and `examplemod_mark` marks the ground where the host stands with exactly one pole in the host's saved objects. Keep paths, ports and names out of `Scenario.cs`, so the source you ran is the source you can share.
 
-**The machine is not in the file.** The game install (only read), the folder the disposable install is made in and the client's ValheimCLI port come from the client environment: this machine's detected Valheim with no option, or the one `--client-env NAME` names in `--inventory environments.json` (see [the environment inventory](../../docs/packages/Valheim.Testing.Game.md#this-machines-environment-inventory)). Without `--inventory`, an `environments.json` beside `regression.json` is used when there is one. `valheim-test start` writes the same `regression.json`. An older manifest with `game`, `install`, `client.port`, `client.saveDirectory` or `client.steamUserDataDirectory` is refused, naming where each now comes from.
+**The machine is not in the file.** The game install (only read), the folder for the disposable loader profile and the client's ValheimCLI port come from the client environment: this machine's detected Valheim with no option, or the one `--client-env NAME` names in `--inventory environments.json` (see [the environment inventory](../../docs/packages/Valheim.Testing.Game.md#this-machines-environment-inventory)). Without `--inventory`, an `environments.json` beside `regression.json` is used when there is one. `valheim-test start` writes the same `regression.json`. An older manifest with `game`, `install`, `client.port`, `client.saveDirectory` or `client.steamUserDataDirectory` is refused, naming where each now comes from.
 
 In this checkout, the example builds against the GameSessions source project while the change is in preview. `scripts/consumer.cs` copies it outside the checkout, replaces that project reference with the exact GameSessions candidate or released package, and restores it from the corresponding feed. This tests the package a mod author will install, including its exact Game dependency. Once the package is published, a copied runner can replace the project reference with an exact `Valheim.Testing.GameSessions` package reference. The normal `dotnet run --project` commands below use your .NET environment; `valheim-test start` owns its caches.
 
@@ -23,7 +23,7 @@ For a mod with several dependencies, use the [native dependency resolver](../../
 | Source | Files | In `regression.json` |
 |---|---|---|
 | Valheim | The game install, run by Steam in your desktop session | Not in the file: the client environment's install (only read) |
-| BepInEx (BepInExPack_Valheim) | `BepInEx/core`, the Doorstop loader (`winhttp.dll` and `doorstop_config.ini` on Windows), `BepInEx/config/BepInEx.cfg` | Installed in the game; copied as found |
+| BepInEx (BepInExPack_Valheim) | `BepInEx/core`, the Doorstop loader (`winhttp.dll` and `doorstop_config.ini` on Windows), `BepInEx/config/BepInEx.cfg` | A reviewed package or the source install's loader, staged into the owned profile |
 | ValheimCLI | The core `valheimCLI.dll` and only the packs the scenario uses (`Valheim.Cli.Standard.dll` for the hosted session; `Valheim.Cli.WorldTools.dll` for world observations), all from one build, and that build's [capability manifest](../../docs/packages/Valheim.Testing.Game.md#valheimcli-capability-manifest) | `cli.core`, `cli.packs`, `cli.manifest` |
 | The mod under test | Its parent and candidate builds, each with its source commit | `mod.arms` |
 | The mod's dependencies | Every DLL the mod needs to load: the plugin each hard `[BepInDependency]` names, and libraries it references (for example JsonDotNET's detector plugin and `Newtonsoft.Json.dll`) | `plugins` |
@@ -35,7 +35,7 @@ Every DLL is pinned by SHA256; leave a `sha256` empty and the preflight tells yo
 
 ## 1. Fill in regression.json
 
-Copy `regression.sample.json` somewhere outside the repository and replace every `<...>`. Relative paths are relative to the file. The disposable install is `vt-prep-regression-<name>-<run-id>/runtime` in the client environment's runtime folder. It is prepared and journalled by the same hosted-runtime stage used for other owned clients; a different run's existing copy is refused. For a basic smoke, use the pinned, game-created Valheim 1.0.16 world and character:
+Copy `regression.sample.json` somewhere outside the repository and replace every `<...>`. Relative paths are relative to the file. The owned profile is `vt-prep-regression-<name>-<run-id>/runtime` in the client environment's runtime folder. On Windows it contains hard links to the game's files and an independent loader; on macOS and Linux it contains only the loader and selected files and launches the source game. The shared stage journals it, and refuses a different run's existing folder. A direct API consumer can set `TargetedRegression.CopyGame = true` before staging to use the full-copy mode. For a basic smoke, use the pinned, game-created Valheim 1.0.16 world and character:
 
 ```csharp
 var world = DefaultSmokeWorld.Prepare(Path.Combine(runRoot, "world-source"));
@@ -64,7 +64,7 @@ For a custom hosted character, register a **game-created** local save once in a 
 dotnet run --project examples/TargetedRegression -c Release -- preflight /absolute/path/to/regression.json
 ```
 
-For each arm in turn it stages the disposable install and checks, before anything launches:
+For each arm in turn it stages the owned profile and checks, before anything launches:
 
 1. The fixture root holds one world with the file's UID. A world folder passed as the root, a `worlds_local` wrapper or several worlds are each named, with the tree above and the tree found.
 2. Every file is its pinned SHA256. The manifest records each arm under its own artifact label (`parent-ExampleMod.dll`, `candidate-ExampleMod.dll`), and only the chosen one is installed as `mod.installAs`.
@@ -84,7 +84,7 @@ dotnet run --project examples/TargetedRegression -c Release -- run /absolute/pat
 
 `run` stages the arm again and repeats every check, refuses any file that appeared in the staged folders since (a plugin outside the allowlist loads even when the test never calls it), then hands the plan to the hosted `ClientRounds`: it places the fixture, launches the owned client, requires the hosted-session capabilities and the scenario's `Capabilities` live, hosts the world with the character protected and runs `Scenario.Measure`. Every command is checked against strict pins: each staged plugin's GUID with its MD5 and the world's UID. No other plugin is pinned `absent`: the clean install loads nothing else, and strict pins refuse anything unlisted. The client is stopped and the world moved into the evidence in every outcome.
 
-Each evidence directory holds `result.json`, `junit.xml`, `run-manifest.json` (the arm, every arm's commit and hash, the allowlist with SHA256 and MD5, the install pins, the world and capabilities; no machine path), the command trace `client-commands.jsonl`, the scenario's own JSON files and `host-world/`. `result.json` records the arm, the mod build and the cleanup steps in its provenance. Each arm gets a fresh verified copy; the example retires it before exiting. An interrupted run leaves a journal for `valheim-test env recover`. The setup step records the copy time.
+Each evidence directory holds `result.json`, `junit.xml`, `run-manifest.json` (the arm, every arm's commit and hash, the allowlist with SHA256 and MD5, the install pins, the world and capabilities; no machine path), the command trace `client-commands.jsonl`, the scenario's own JSON files and `host-world/`. `result.json` records the arm, the mod build, `launchMode` and `disposableStageSeconds` in its provenance. Each arm gets a fresh verified profile; the example retires it before exiting. An interrupted run leaves a journal for `valheim-test env recover`.
 
 ## Review the result
 
@@ -97,6 +97,6 @@ From a checkout of this repository, make a public copy with the maintainer tool 
 ## Limits
 
 - One owned client hosting one world. A dedicated server and restarts of a server process are FullLifecycle's; a second client is the native acceptance suite's.
-- The disposable install is a full copy of the game the first time (a few GB); it is reused while the game build, BepInEx core and the files at the game's root (its Doorstop loader) stay the same, and copied again when one changes.
+- The default profile does not copy the game on macOS or Linux. On Windows it needs hard links on the same volume as the source install; if the filesystem refuses them, use the full-copy path. `valheim-test start --copy-game` selects it, and direct API consumers can set `TargetedRegression.CopyGame = true` before staging.
 - The optional registered-character path stages and removes one owned test character. Without it, stage your disposable local character yourself. The tool does not reserve a machine or publish anything.
 - The metadata checks read what BepInEx reads; a dependency a mod finds by reflection at run time, or a config value it needs, is caught only by the live run.
