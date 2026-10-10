@@ -76,6 +76,8 @@ internal static class ServerLoadPhases
                 throw new InvalidDataException("Invalid first server-load phase: " + parseError);
             var choice = ServerLoad.Choose(parsed!, output);
             string? loader = parsed!.Options.GetValueOrDefault("--loader-package") ?? choice.Server.LoaderPackage;
+            var (_, cliFiles) = SmokeInputs.Cli(parsed.Options);
+            SmokeOutput.RefuseResolved(output, cliFiles, choice.Inventory, [choice.Server, choice.Client]);
             FixtureBake.RefuseOutput(output, loader == null ? [choice.Server.Install]
                 : [choice.Server.Install, BepInExLoaderPackage.Read(loader).Root]);
             var inputs = CaptureInputs(planFile, plan);

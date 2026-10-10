@@ -131,6 +131,33 @@ public sealed class ServerLoadPhasesTests : IDisposable
     }
 
     [Fact]
+    public async Task ImplicitCliFilesDirectoryIsProtectedBeforeAnyWrite()
+    {
+        string plan = Plan(), bundle = Path.Combine(_root, "cli-bundle");
+        Directory.CreateDirectory(bundle);
+        string manifest = Path.Combine(bundle, "cli-manifest.json");
+        File.WriteAllText(manifest, "{\"schema\":1,\"build\":\"fixture\",\"files\":[{\"file\":\"valheimCLI.dll\",\"sha256\":\"" +
+            new string('a', 64) + "\",\"plugins\":[\"valheimCLI.valheimCLI\"],\"extensions\":{}}]}");
+        var parsed = JsonSerializer.Deserialize<ServerLoadPhases.Plan>(File.ReadAllText(plan),
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true })!;
+        parsed.CommonArgs = [.. parsed.CommonArgs, "--cli-manifest", manifest];
+        File.WriteAllText(plan, JsonSerializer.Serialize(parsed));
+        string output = Path.Combine(bundle, "phase-run");
+        int calls = 0;
+
+        int result = await ServerLoadPhases.RunAsync(["--plan", plan, "--output", output], _ =>
+        {
+            calls++;
+            return Task.FromResult(0);
+        });
+
+        Assert.Equal(3, result);
+        Assert.Equal(0, calls);
+        Assert.False(Directory.Exists(output));
+        Assert.True(File.Exists(manifest));
+    }
+
+    [Fact]
     public async Task AReportedSuccessWithoutAConfirmedFixtureStopsBeforeTheNextPhase()
     {
         string output = Path.Combine(_root, "unconfirmed-run");
