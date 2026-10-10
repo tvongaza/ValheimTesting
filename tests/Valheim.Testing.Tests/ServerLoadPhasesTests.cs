@@ -119,4 +119,20 @@ public sealed class ServerLoadPhasesTests : IDisposable
         Assert.False(Directory.Exists(Path.Combine(output, "source")));
         Assert.True(Directory.Exists(Path.Combine(output, "checkpoints", "02-second")));
     }
+
+    [Fact]
+    public async Task ARefusedPinStopsBeforeTheNextPhaseAndPublishesNoCheckpoint()
+    {
+        string output = Path.Combine(_root, "pin-refused");
+        int calls = 0;
+        int result = await ServerLoadPhases.RunAsync(["--plan", Plan(), "--output", output], _ =>
+        {
+            calls++;
+            return Task.FromResult(3); // the underlying server-load refused an exact plugin pin
+        });
+        Assert.Equal(3, result);
+        Assert.Equal(1, calls);
+        Assert.False(Directory.Exists(Path.Combine(output, "checkpoints", "01-first")));
+        Assert.Contains("failed", File.ReadAllText(Path.Combine(output, "phase-state.json")));
+    }
 }
