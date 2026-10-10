@@ -134,7 +134,7 @@ public sealed class PreparedHostedCampaign : IAsyncDisposable
             : new[] { (Name: "server", Host: _profile.Server.Host) }.Concat(_profile.Clients.Select(pair => (Name: pair.Key, Host: pair.Value.Host)));
         return string.Join(", ", actors.OrderBy(actor => actor.Name, StringComparer.Ordinal)
             .Select(actor => actor.Name + ":" +
-                (HostedCampaignPreparation.UseLocalProfile(_profile.Hosts[actor.Host], copyGame) ? "profile" : "copy")));
+                (HostedCampaignPreparation.UseProfile(_profile.Hosts[actor.Host], copyGame) ? "profile" : "copy")));
     }
     public IReadOnlyDictionary<string, HostListing> Listings { get; }
     internal IReadOnlyDictionary<string, HostListing> LoaderListings { get; }
@@ -282,9 +282,11 @@ public sealed class PreparedHostedCampaign : IAsyncDisposable
 public static class HostedCampaignPreparation
 {
     // Windows needs an owned launch folder for its proxy; Unix launches the source executable
-    // against the separate owned profile. Remote hosts retain full copies until #602.
-    internal static bool UseLocalProfile(HostProfile host, bool copyGame) =>
-        !copyGame && host.Kind == "local" && host.Platform is "windows" or "macos" or "linux";
+    // against the separate owned profile. The same stage owner handles local and remote hosts.
+    // A remote Mac desktop client/server needs its own launch support before taking this path.
+    internal static bool UseProfile(HostProfile host, bool copyGame) =>
+        !copyGame && (host.Kind is "local" or "ssh" or "container") &&
+        (host.Platform is "windows" or "linux" || host.Kind == "local" && host.Platform == "macos");
     internal sealed record Inputs(HostedCampaignManifest Manifest, ResolvedEnvironment Profile,
         List<(string Name, GameRole Role, HostedCampaignRole Input)> Roles,
         Dictionary<string, HostedRuntimeFile[]> Selections, Dictionary<string, HostedCharacterSelection> Characters);
@@ -298,20 +300,26 @@ public static class HostedCampaignPreparation
     /// </summary>
     public static async Task<CampaignPreflightReport> InspectAsync(string manifestFile, TimeSpan timeout,
         Func<string, IGameHost>? hostFactory = null, CancellationToken cancellation = default)
+        => await InspectAsync(manifestFile, timeout, hostFactory, copyGame: false, cancellation).ConfigureAwait(false);
+
+    /// <summary>Inspect the hosts for the chosen profile or full-copy preparation mode before staging.</summary>
+    public static async Task<CampaignPreflightReport> InspectAsync(string manifestFile, TimeSpan timeout,
+        Func<string, IGameHost>? hostFactory, bool copyGame, CancellationToken cancellation = default)
     {
         var inspection = InspectInputs(manifestFile);
         // Real hosts get the real shipped-loader rule; a caller's own hosts (tests) are read as they are.
-        return (await InspectHostsAsync(inspection, timeout, hostFactory, cancellation, hostFactory == null ? ShippedLoader.OnHostAsync : null).ConfigureAwait(false)).Report;
+        return (await InspectHostsAsync(inspection, timeout, hostFactory, cancellation,
+            hostFactory == null ? ShippedLoader.OnHostAsync : null, copyGame: copyGame).ConfigureAwait(false)).Report;
     }
 
     // The one-shot checked its local host before writing an adapter or fixture. Inspect remote actors here; preparation
     // rechecks local conditions immediately before staging. This avoids a third local process/port/desktop probe.
     internal static async Task<CampaignPreflightReport> InspectAfterLocalPreflightAsync(string manifestFile, TimeSpan timeout,
-        CancellationToken cancellation = default)
+        CancellationToken cancellation = default, bool copyGame = false)
     {
         var inspection = InspectInputs(manifestFile);
         return (await InspectHostsAsync(inspection, timeout, null, cancellation, ShippedLoader.OnHostAsync,
-            skipLocalChecks: true).ConfigureAwait(false)).Report;
+            skipLocalChecks: true, copyGame: copyGame).ConfigureAwait(false)).Report;
     }
 
     private sealed record HostInspection(CampaignPreflightReport Report,
@@ -506,7 +514,7 @@ public static class HostedCampaignPreparation
                     }
                     catch (Exception error) when (HostCheckRefusal(error))
                     { failures.Add(new(item.Name, "ValheimCLI port", error.Message)); }
-                if (!UseLocalProfile(inputs.Profile.Hosts[group.Key], copyGame))
+                if (!UseProfile(inputs.Profile.Hosts[group.Key], copyGame))
                     try
                     {
                         capacities.Add((item.Name, await HostCopyCapacityProbe.InspectAsync(host, item.Role.Install,
@@ -832,9 +840,15 @@ public static class HostedCampaignPreparation
         profile.Validate();
     }
 
+    /// <summary>Prepare a hosted campaign using loader profiles on supported hosts.</summary>
     public static Task<PreparedHostedCampaign> PrepareAsync(string manifestFile, string outputDirectory, TimeSpan timeout,
         Func<string, IGameHost>? hostFactory = null, CancellationToken cancellation = default) =>
         PrepareAsync(InspectInputs(manifestFile), outputDirectory, timeout, hostFactory, cancellation);
+
+    /// <summary>Prepare a hosted campaign, optionally making full disposable game copies for every actor.</summary>
+    public static Task<PreparedHostedCampaign> PrepareAsync(string manifestFile, string outputDirectory, TimeSpan timeout,
+        Func<string, IGameHost>? hostFactory, bool copyGame, CancellationToken cancellation = default) =>
+        PrepareAsync(InspectInputs(manifestFile), outputDirectory, timeout, hostFactory, cancellation, copyGame: copyGame);
 
     // A preparation that failed ends its run in the journal of every host it was to touch, best effort: the entry is a record,
     // and the preparation's own failure is the one to report.
@@ -899,7 +913,7 @@ public static class HostedCampaignPreparation
                 await using var claim = await host.AcquireLockAsync(profile.Hosts[hostName].Lock,
                     "campaign-prepare " + id + " " + hostName, timeout, cancellation).ConfigureAwait(false);
                 await HostedRuntimeStage.RequireStoppedAsync(host, timeout, cancellation, clientSession: group.Any(item => item.Name != "server")).ConfigureAwait(false);
-                var capacities = await Task.WhenAll(group.Where(item => !UseLocalProfile(profile.Hosts[hostName], copyGame)).Select(async item =>
+                var capacities = await Task.WhenAll(group.Where(item => !UseProfile(profile.Hosts[hostName], copyGame)).Select(async item =>
                     (item.Name, Capacity: await HostCopyCapacityProbe.InspectAsync(host, item.Role.Install,
                         item.Role.Runtime, timeout, cancellation).ConfigureAwait(false)))).ConfigureAwait(false);
                 HostCopyCapacityProbe.RequireCombined(hostName, capacities.Select(item => (Actor: item.Name, item.Capacity)));
@@ -910,7 +924,7 @@ public static class HostedCampaignPreparation
                     string parent = HostPath.Join(role.Runtime, "vt-prep-" + id + "-" + name);
                     string runtime = HostPath.Join(parent, "runtime"), stage = HostPath.Join(parent, "staging");
                     var kind = name == "server" ? HostedRuntimeKind.Server : HostedRuntimeKind.Client;
-                    bool profileLaunch = UseLocalProfile(profile.Hosts[hostName], copyGame);
+                    bool profileLaunch = UseProfile(profile.Hosts[hostName], copyGame);
                     // Journalled before the copy: an interrupted preparation leaves a record of every path it may own.
                     await journal.AppendAsync(host, journalDirectory, name, JournalEntry.Of(JournalEntry.CopyIntended,
                         ("runtime", runtime), ("stage", stage), ("parent", parent),
