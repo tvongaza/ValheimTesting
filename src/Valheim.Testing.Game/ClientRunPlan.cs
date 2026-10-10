@@ -30,6 +30,12 @@ public sealed class ClientRunPlan
     /// (<see cref="CliPreflight"/>). Running Valheim, the run journal, leases and local-only test characters are checked as for a copy.
     /// </summary>
     public bool InPlace { get => _inPlace ?? (_inPlaceRun && Owned); set => _inPlace = value; }
+    /// <summary>
+    /// Owned clients only: make a full disposable game copy instead of the default loader profile. Use this when
+    /// the client cannot launch from a profile, for example when the Windows game and profile folders must be on
+    /// different volumes. The source install is still read only. Attached clients and in-place runs refuse this option.
+    /// </summary>
+    public bool CopyGame { get; set; }
     private bool? _inPlace;
     // --in-place, as it stood when this plan was made: it applies to owned clients only (an attached one is its operator's).
     private readonly bool _inPlaceRun = s_inPlaceRun.Value;
@@ -253,8 +259,9 @@ public sealed class ClientRunPlan
         if (Owned && !(Path.IsPathFullyQualified(Install) || IsFullPathOnAnyHost(Install))) throw new ArgumentException("An owned client needs the full path of its install.");
         if (Environment == null) throw new ArgumentException("client.environment must be an object of variable names and values.");
         var architecture = LaunchArchitecture;
-        if (!Owned && (Install.Length != 0 || LaunchArguments.Length != 0 || Environment.Count != 0 || InstallPins != null || Architecture.Length != 0 || InPlace))
-            throw new ArgumentException("An attached client is launched by its operator; leave out install, installPins, launch arguments, architecture and inPlace. Leave out environment too.");
+        if (!Owned && (Install.Length != 0 || LaunchArguments.Length != 0 || Environment.Count != 0 || InstallPins != null || Architecture.Length != 0 || InPlace || CopyGame))
+            throw new ArgumentException("An attached client is launched by its operator; leave out install, installPins, launch arguments, architecture and inPlace. Leave out environment and copyGame too.");
+        if (InPlace && CopyGame) throw new ArgumentException("Choose inPlace or copyGame for this client, not both.");
         if (Owned) GameLaunch.ValidateClientEnvironment(Environment, LaunchArguments);
         var platform = Owned ? InstallPlatform() : null;
         if (architecture == ClientArchitecture.Arm64 && platform is { } other && other != ClientPlatform.MacOS)

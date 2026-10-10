@@ -443,6 +443,17 @@ public sealed class ClientSessionTests : IDisposable
         finally { Environment.SetEnvironmentVariable(variable, null); }
     }
 
+    [Fact] public void AFullCopyFallbackIsOnlyForOwnedClientsThatAreNotInPlace()
+    {
+        var owned = Plan(); owned.CopyGame = true;
+        Assert.True(owned.CopySource);
+        owned.InPlace = true;
+        Assert.Contains("inPlace or copyGame", Assert.Throws<ArgumentException>(() => owned.Validate()).Message);
+
+        var attached = Plan(); attached.Mode = "attach"; attached.CopyGame = true;
+        Assert.Contains("copyGame", Assert.Throws<ArgumentException>(() => attached.Validate()).Message);
+    }
+
     [Fact] public void AnExitBeforeBepInExWroteItsLogSaysWhereToLook()
     {
         var error = Assert.Throws<WaitFailedException>(() => ClientSession.Launch(Plan(), _output, () => FakeOwnedProcess.Exited(1, 99), () => new ScriptedTransport(),

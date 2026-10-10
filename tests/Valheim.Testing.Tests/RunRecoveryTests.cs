@@ -536,6 +536,24 @@ public sealed class RunRecoveryTests : IDisposable
         Assert.True(Directory.Exists(_host.Local(Prep + "/runtime")));
     }
 
+    [Fact] public async Task InterruptedClientProfileKeepsItsFilesWhileTheSourceClientStillRuns()
+    {
+        const string run = "run-profile-client", source = "/opt/valheim/client";
+        Directory.CreateDirectory(_host.Local(Prep + "/runtime"));
+        Line(_host, run, "client-a", Gone, JournalEntry.CopyIntended,
+            ("runtime", Prep + "/runtime"), ("stage", Prep + "/staging"), ("parent", Prep),
+            ("launchMode", "profile"), ("launchRoot", source));
+        _host.GameActive = true;
+
+        var report = await RecoverAsync(run);
+
+        Assert.False(report.Recovered);
+        Assert.True(Directory.Exists(_host.Local(Prep + "/runtime")));
+        var check = Assert.Single(_host.Runs.Where(item => item.Script == "game-process"));
+        Assert.Equal("true", check.Variables["clientSession"]);
+        Assert.Equal(source, check.Variables["runtime"]);
+    }
+
     [Fact] public async Task AHostThatCannotBeReadRefusesTheRecovery()
     {
         InterruptedRun();
