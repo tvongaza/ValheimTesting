@@ -14,8 +14,8 @@ namespace Valheim.Testing.NativeAcceptance;
 /// Prepares a <c>dry-site-server</c> plan on a world the game creates now, so the server scenario can run where nobody
 /// prepared a fixture by hand, such as a scheduled CI job: <c>prepare-server &lt;server-runtime&gt; &lt;new-output-directory&gt;</c>.
 /// <list type="number">
-/// <item>Pins the runtime by the SHA256 of every file, and exactly five plugins in its <c>BepInEx/plugins</c> by the MD5 of
-/// their files: ValheimCLI with its Standard and WorldTools packs, the mod and its adapter.</item>
+/// <item>Pins the runtime by the SHA256 of every file, and each required plugin in its <c>BepInEx/plugins</c> by the MD5 of
+/// their files: ValheimCLI with its Standard, WorldTools and Observe packs, the mod and its adapter.</item>
 /// <item>Starts one owned server on a copy of the runtime (the source is never launched), and the game creates a new world
 /// in <c>world/</c>. Its uid is not known yet, so this one boot pins the plugins strictly and accepts any world.</item>
 /// <item>Reads the world's uid (<c>cli_world</c>) and picks the sites from the world generator's heights, read through
@@ -41,6 +41,7 @@ public static class ServerFixture
     public static readonly IReadOnlyList<(string Guid, string File)> Plugins =
     [
         ("valheimCLI.valheimCLI", "valheimCLI.dll"), ("valheimCLI.standard", "Valheim.Cli.Standard.dll"), ("valheimCLI.worldtools", "Valheim.Cli.WorldTools.dll"),
+        ("valheimCLI.observe", "Valheim.Cli.Observe.dll"),
         (LifecyclePlan.ModPlugin, "AcceptanceMod.dll"), (LifecyclePlan.AdapterPlugin, "AcceptanceMod.Adapter.dll"),
     ];
     /// <summary>Generator grids of 16 by 16 samples (centre and spacing in metres), read in order until both sites are found.</summary>
@@ -88,7 +89,7 @@ public static class ServerFixture
 
             IReadOnlyDictionary<string, string> runtimeHashes = null!;
             Dictionary<string, string> pins = [];
-            report.Step(StepPhase.Preflight, "pin the runtime and its five plugins", () => { runtimeHashes = WorldFixture.Manifest(runtime); pins = PluginPins(runtime); });
+            report.Step(StepPhase.Preflight, $"pin the runtime and its {Plugins.Count} plugins", () => { runtimeHashes = WorldFixture.Manifest(runtime); pins = PluginPins(runtime); });
             report.Provenance["pins"] = string.Join(" ", pins.Select(pin => pin.Key + "=" + pin.Value));
             report.Step(StepPhase.Setup, "copy the runtime; the source is never launched", () =>
             {
@@ -100,7 +101,7 @@ public static class ServerFixture
             string password = Convert.ToHexString(RandomNumberGenerator.GetBytes(8)).ToLowerInvariant();
             string[] arguments = ["-batchmode", "-nographics", "-name", WorldName, "-port", "2456", "-world", WorldName, "-password", password,
                 "-public", "0", "-savedir", "{world}", "-logFile", "{runtime}/toolkit-unity.log"];
-            // Strict: every loaded plugin must be one of the five pinned builds. The world is the one the game is creating now.
+            // Strict: every loaded plugin must be one of the pinned builds. The world is the one the game is creating now.
             var plan = new LifecyclePlan
             {
                 Scenario = LifecyclePlan.ServerScenario, Arguments = arguments, Port = CliPort, StartupSeconds = StartupSeconds, CommandSeconds = CommandSeconds,
@@ -152,7 +153,7 @@ public static class ServerFixture
         if (!Directory.Exists(directory)) throw new DirectoryNotFoundException("The runtime has no BepInEx/plugins directory.");
         string[] files = Directory.GetFiles(directory, "*.dll", SearchOption.AllDirectories);
         var unknown = files.Where(file => !Plugins.Any(plugin => Path.GetFileName(file) == plugin.File)).Select(file => Path.GetRelativePath(runtime, file)).ToArray();
-        if (unknown.Length != 0) throw new InvalidOperationException("Unexpected plugin files; the plan pins exactly five plugins: " + string.Join(", ", unknown));
+        if (unknown.Length != 0) throw new InvalidOperationException($"Unexpected plugin files; the plan pins exactly {Plugins.Count} plugins: " + string.Join(", ", unknown));
         var pins = new Dictionary<string, string>();
         foreach (var (guid, name) in Plugins)
         {
