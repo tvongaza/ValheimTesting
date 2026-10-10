@@ -49,7 +49,7 @@ public sealed class ServerLoadOneOffTests : IDisposable
         {
             "windows" => ServerPlatform.Windows, "macos" => ServerPlatform.MacOS, _ => ServerPlatform.Linux,
         }), Encoding.UTF8.GetBytes("fake dedicated executable"));
-        return ["--server", _rig.Game, "--mod", _rig.Parent, "--cli-manifest", _rig.CliManifest(save: true), "--cli-files", Path.Combine(_rig.Root, "cli"),
+        return ["--server", _rig.Game, "--mod", _rig.Parent, "--cli-manifest", _rig.CliManifest(save: true, full: true), "--cli-files", Path.Combine(_rig.Root, "cli"),
             "--search-root", Path.Combine(_rig.Root, "deps"), "--adapter", Adapter(), "--output", output, .. more];
     }
 
@@ -158,7 +158,6 @@ public sealed class ServerLoadOneOffTests : IDisposable
         string output = Path.Combine(_rig.Root, "bake-quit-budget");
         string[] args = Arguments(output, "--server-only", "--bake-fixture", Path.Combine(_rig.Root, "baked"),
             "--assert-command", "cli_zdos_at 1 2 8", "--assert-line", "ZDO");
-        AddObservationCapabilities(args);
         Assert.Equal(1, await ServerLoad.RunAsync(args, new ServerLoad.Seams(Inspect: _ => Task.FromResult(Ready),
             Campaign: (_, plan, _, _, options) =>
             {
@@ -175,7 +174,6 @@ public sealed class ServerLoadOneOffTests : IDisposable
         string output = Path.Combine(_rig.Root, "bake-export-failure");
         string[] args = Arguments(output, "--server-only", "--bake-fixture", Path.Combine(_rig.Root, "baked"),
             "--assert-command", "cli_zdos_at 1 2 8", "--assert-line", "ZDO");
-        AddObservationCapabilities(args);
         int result = await ServerLoad.RunAsync(args, new ServerLoad.Seams(Inspect: _ => Task.FromResult(Ready),
             Campaign: (_, _, _, evidence, _) =>
             {
@@ -198,7 +196,7 @@ public sealed class ServerLoadOneOffTests : IDisposable
     }
 
     [Fact]
-    public async Task ModOwnedScriptedCommandDoesNotRequireUnrelatedObservationPacks()
+    public async Task ModOwnedScriptedCommandStagesTheWholePinnedBundle()
     {
         string output = Path.Combine(_rig.Root, "mod-command");
         bool ran = false;
@@ -209,6 +207,8 @@ public sealed class ServerLoadOneOffTests : IDisposable
         Assert.Equal(1, result);
         Assert.True(ran);
         Assert.False(File.Exists(Path.Combine(output, "REFUSED.txt")));
+        var locked = NativeDependencyLock.ReadReady(Path.Combine(output, "dependencies.lock.json"));
+        Assert.Equal(locked.CliManifest.Files.Select(file => file.File), locked.CliFiles.Select(file => Path.GetFileName(file.File)));
     }
 
     [Fact]
@@ -235,30 +235,40 @@ public sealed class ServerLoadOneOffTests : IDisposable
         Assert.False(Directory.Exists(Path.Combine(output, "adapter")));
     }
 
-    private static void AddObservationCapabilities(string[] args)
-    {
-        string manifestFile = args[Array.IndexOf(args, "--cli-manifest") + 1];
-        var manifest = CliCapabilityManifest.Read(manifestFile);
-        var pack = manifest.Files.Single(file => file.File == "Valheim.Cli.Standard.dll");
-        pack.Extensions["valheim.world"] = new(StringComparer.Ordinal) { ["terrain"] = 1 };
-        pack.Extensions["valheim.observe"] = new(StringComparer.Ordinal) { ["zones"] = 1 };
-        manifest.Write(manifestFile);
-    }
-
     [Fact]
-    public async Task ScriptedServerObservationRequiresThePinnedObservationPacksBeforeLaunch()
+    public async Task MissingPinnedObservationPackRefusesBeforeAnyCommandOrLaunch()
     {
         string output = Path.Combine(_rig.Root, "missing-observation-pack");
         bool launched = false;
-        int result = await ServerLoad.RunAsync(Arguments(output, "--server-only",
-            "--assert-command", "cli_zdos_at 1 2 8", "--assert-line", "ZDO wood_pole2"),
+        string[] args = Arguments(output, "--server-only", "--assert-command", "mymod_new_alias", "--assert-line", "READY");
+        string manifestFile = args[Array.IndexOf(args, "--cli-manifest") + 1];
+        var manifest = CliCapabilityManifest.Read(manifestFile);
+        manifest.Files.RemoveAll(file => file.File == "Valheim.Cli.Observe.dll");
+        manifest.Write(manifestFile);
+        int result = await ServerLoad.RunAsync(args,
             new ServerLoad.Seams(Inspect: _ => Task.FromResult(Ready),
                 Campaign: (_, _, _, _, _) => { launched = true; return Task.FromResult(0); }));
         Assert.Equal(3, result);
         Assert.False(launched);
         string refusal = File.ReadAllText(Path.Combine(output, "REFUSED.txt"));
-        Assert.Contains("valheim.world/terrain", refusal);
         Assert.Contains("valheim.observe/zones", refusal);
+        Assert.Contains("Observe", refusal);
+    }
+
+    [Fact]
+    public async Task ChangedUnusedPackRefusesBeforeLaunchWithItsName()
+    {
+        string output = Path.Combine(_rig.Root, "changed-unused-pack");
+        string[] args = Arguments(output, "--server-only", "--assert-command", "mymod_new_alias", "--assert-line", "READY");
+        File.AppendAllText(Path.Combine(_rig.Root, "cli", "Valheim.Cli.Reflection.dll"), "changed");
+        bool launched = false;
+        int result = await ServerLoad.RunAsync(args, new ServerLoad.Seams(Inspect: _ => Task.FromResult(Ready),
+            Campaign: (_, _, _, _, _) => { launched = true; return Task.FromResult(0); }));
+        Assert.Equal(3, result);
+        Assert.False(launched);
+        string refusal = File.ReadAllText(Path.Combine(output, "REFUSED.txt"));
+        Assert.Contains("Valheim.Cli.Reflection.dll", refusal);
+        Assert.Contains("another build", refusal);
     }
 
     [Fact] public async Task TheDefaultIsAServerAndOneCleanClientAsADerivedCampaign()

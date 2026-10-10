@@ -126,7 +126,9 @@ public sealed class CliCapabilityManifest
         var providers = Files.SelectMany(file => file.Commands().Select(command => (File: file, command.Path, command.Version)))
             .ToDictionary(entry => entry.Path, entry => (entry.File, entry.Version), StringComparer.Ordinal);
         var missing = wanted.Where(path => !providers.ContainsKey(path)).ToList();
-        if (missing.Count != 0) throw new InvalidOperationException($"The ValheimCLI build {Build} lacks {string.Join(", ", missing)}. Supply one coherent core and pack set that provides those commands.");
+        if (missing.Count != 0) throw new InvalidOperationException($"The ValheimCLI build {Build} lacks {string.Join(", ", missing)}. " +
+            string.Join(" ", missing.Select(path => path.Split('/')[0]).Distinct(StringComparer.Ordinal).Select(CliCapabilities.Provider)) +
+            " Supply one coherent core and pack set that provides those commands.");
         var wrongSchema = wanted.Where(path => providers[path].Version != 1).ToList();
         if (wrongSchema.Count != 0) throw new InvalidOperationException($"The ValheimCLI build {Build} provides {string.Join(", ", wrongSchema.Select(path => path + " with result version " + providers[path].Version))}; the runner needs result version 1.");
         var selected = new HashSet<CliManifestFile>(core);
