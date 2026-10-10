@@ -36,6 +36,30 @@ public class ServerLaunchTests
         Assert.Equal(ServerPlatform.Linux, GameLaunch.DetectServer(runtime.Root));
         Assert.Equal(Path.Combine(runtime.Root, "valheim_server.x86_64"), GameLaunch.RequireServerExecutable(runtime.Root, LinuxLaunchHost));
     }
+
+    [Fact] public void LinuxServerProfileKeepsGameLibrariesBesideTheExecutableAndDoorstopInTheProfile()
+    {
+        using var game = Runtime.Linux("game");
+        using var profile = Runtime.Linux("profile");
+        var launch = GameLaunch.LocalServer(game.Root, [], null, LinuxLaunchHost, ClientArchitecture.X64, profile.Root);
+        var start = launch.ToStartInfo();
+        Assert.Equal(Path.Combine(game.Root, "valheim_server.x86_64"), start.FileName);
+        Assert.Equal(Path.Combine(profile.Root, "BepInEx", "core", "BepInEx.Preloader.dll"), start.Environment["DOORSTOP_TARGET_ASSEMBLY"]);
+        Assert.StartsWith(Path.Combine(game.Root, "linux64") + ":" + Path.Combine(profile.Root, "doorstop_libs"), start.Environment["LD_LIBRARY_PATH"]);
+        Assert.Contains(Path.Combine(profile.Root, "doorstop_libs", "libdoorstop_x64.so"), launch.RequiredFiles);
+    }
+
+    [Fact] public void MacServerProfileInsertsItsDoorstopWithoutChangingTheGameRoot()
+    {
+        using var game = Runtime.Mac("game");
+        using var profile = Runtime.Mac("profile");
+        var launch = GameLaunch.LocalServer(game.Root, [], null, ServerHost.MacOS, GameLaunch.MacServerArchitecture, profile.Root);
+        var start = launch.ToStartInfo();
+        Assert.Equal(game.Root, start.WorkingDirectory);
+        Assert.Contains(Path.Combine(game.Root, "valheim_server", "Valheim"), start.ArgumentList);
+        Assert.Equal(Path.Combine(profile.Root, "BepInEx", "core", "BepInEx.Preloader.dll"), start.Environment["DOORSTOP_TARGET_ASSEMBLY"]);
+        Assert.Contains(start.ArgumentList, argument => argument == "DYLD_INSERT_LIBRARIES=" + Path.Combine(profile.Root, "libdoorstop.dylib"));
+    }
     [Fact] public void RuntimeWithBothExecutablesIsRefused()
     {
         using var runtime = Runtime.Linux(); runtime.Add("valheim_server.exe");
