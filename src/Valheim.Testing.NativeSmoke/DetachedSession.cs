@@ -314,7 +314,7 @@ internal static class DetachedSession
         $action.Path = Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell\v1.0\powershell.exe'
         $action.Arguments = '-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + {{Ps(launch.Plist)}} + '"'
         $action.WorkingDirectory = {{Ps(launch.ToolDirectory)}}
-        $task = $folder.RegisterTaskDefinition({{Ps(launch.Label)}}, $definition, 1, $identity.Name, $null, $logonType)
+        $task = $folder.RegisterTaskDefinition({{Ps(launch.Label)}}, $definition, 2, $identity.Name, $null, $logonType) # TASK_CREATE; 1 only validates
         [void]$task.Run($null)
         """;
 

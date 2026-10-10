@@ -97,6 +97,7 @@ public sealed class DetachedSessionTests : IDisposable
         Assert.Contains("1>> 'out' 2>> 'err'", runner);
         string registration = DetachedSession.WindowsRegistration(launch);
         Assert.Contains("$logonType = 3", registration);
+        Assert.Contains("$definition, 2, $identity.Name", registration); // TASK_CREATE; 1 would never register it.
         Assert.Contains("$definition.Settings.ExecutionTimeLimit = 'PT0S'", registration);
         Assert.Contains("C:\\run''s folder\\launcher.ps1", registration);
         Assert.DoesNotContain("S4U", registration);
