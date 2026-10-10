@@ -49,6 +49,29 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.DoesNotContain("start", host.Scripts);
     }
 
+    [Fact] public async Task APreparedUnixProfileRefusesASteamGameUpdateImmediatelyBeforeBoot()
+    {
+        var host = NewHost();
+        var (planPath, profilePath) = Write(host);
+        var plan = ServerRunPlan.Read<ServerRunPlan>(planPath);
+        var environment = TestEnvironment.Read(profilePath);
+        const string owned = Runs + "/vt-prep-profile/runtime";
+        await HostInstall.CopyAsync(host, Install, owned, TimeSpan.FromSeconds(30));
+        environment.Server!.Install = owned; // the campaign retires only this owned profile
+        environment.Server.PreparedGameRoot = Install;
+        environment.Server.PreparedLoaderRoot = owned;
+        var hosted = HostedServerRun.Create(environment, plan, "test", new FakeRunHooks { Host = _ => host, RunId = RunId }, prepared: true);
+        Assert.Equal(Install, hosted.GameDirectory);
+        Assert.Equal(owned, hosted.LoaderDirectory);
+        await hosted.LockAndCopyRuntimeAsync(new ScenarioReport("prepared profile"), plan, pinned: true, CancellationToken.None);
+        File.AppendAllText(Directory.EnumerateFiles(host.Local(Install), "assembly_valheim.dll", SearchOption.AllDirectories).Single(), "steam update");
+        var launch = GameLaunch.ForServerWithLoader(Install, owned, ["-batchmode"], null, ServerPlatform.Linux);
+        var error = Assert.ThrowsAny<Exception>(() => ((IServerPlacement)hosted).Start(1, launch, Output, CancellationToken.None));
+        Assert.Contains("game", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("start", host.Scripts);
+        Assert.False(Directory.Exists(Path.Combine(Output, "boot-1")));
+    }
+
     [Fact] public async Task WindowsPowerShellProfileRunsTheWholeServerLifecycleAndKeepsOnlyItsEvidence()
     {
         const string windowsRuns = @"C:\vt\runs";

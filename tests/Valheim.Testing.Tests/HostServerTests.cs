@@ -306,6 +306,20 @@ public sealed class HostServerTests : IDisposable
         Assert.False(process.HasExited);
     }
 
+    [Fact] public async Task AProfileServerStartsFromTheSourceButKeepsLogsFromItsOwnedProfile()
+    {
+        var host = new QueueHost();
+        host.Replies.Enqueue(Reply("VT-SERVER started 4321 998877\n"));
+        var launch = GameLaunch.ForServerWithLoader("/game/valheim", "/owned/profile", ["-batchmode"], null, ServerPlatform.Linux);
+        var process = await HostServer.StartAsync(host, launch, "/owned/boot-1", TimeSpan.FromSeconds(60),
+            ["BepInEx/LogOutput.log"], null, logonSeams: null, cancellation: CancellationToken.None, logRoot: "/owned/profile");
+        Assert.Equal("/game/valheim", host.Runs[0].Variables["runtime"]);
+        Assert.Equal("/owned/profile", host.Runs[0].Variables["logroot"]);
+        Assert.Contains("/owned/profile/BepInEx/core/BepInEx.Preloader.dll", host.Runs[0].Variables["files"]);
+        Assert.Equal("/game/valheim", process.Runtime);
+        Assert.Equal("/owned/profile", process.LogRoot);
+    }
+
     [Fact] public async Task EachRefusalIsItsOwnErrorAndALostReplyIsUnknown()
     {
         var launch = GameLaunch.ForServer("/srv/rt", [], hostPlatform: ServerPlatform.Linux);

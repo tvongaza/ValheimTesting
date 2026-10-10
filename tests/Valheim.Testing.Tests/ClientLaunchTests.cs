@@ -16,6 +16,15 @@ public class ClientLaunchTests
         var expected = OperatingSystem.IsWindows() ? ClientPlatform.Windows : OperatingSystem.IsMacOS() ? ClientPlatform.MacOS : ClientPlatform.Linux;
         Assert.Equal(expected, GameLaunch.CurrentClientHost);
     }
+    [Fact] public void LinuxHostClientUsesItsSourceGameAndOwnedLoaderProfile()
+    {
+        var launch = GameLaunch.ForClientWithLoader("/game/valheim", "/owned/profile", [], null,
+            ClientPlatform.Linux, ClientArchitecture.X64);
+        Assert.Equal("/game/valheim/valheim.x86_64", launch.Executable);
+        Assert.Equal("/owned/profile/BepInEx/core/BepInEx.Preloader.dll", launch.Environment["DOORSTOP_TARGET_ASSEMBLY"]);
+        Assert.Equal("/owned/profile/doorstop_libs", launch.Prepended["LD_LIBRARY_PATH"]);
+        Assert.Contains("/owned/profile/doorstop_libs/libdoorstop_x64.so", launch.RequiredFiles);
+    }
     [Theory] [InlineData(ClientPlatform.Windows)] [InlineData(ClientPlatform.Linux)] [InlineData(ClientPlatform.MacOS)]
     public void EachClientIsDetectedFromItsInstall(ClientPlatform platform)
     {

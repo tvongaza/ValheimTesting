@@ -39,7 +39,7 @@ public sealed class ServerActor : IOwnedServer, IDisposable
             // The launch adds SteamAppId and, for Linux, the Doorstop loader variables BepInEx needs; the working directory is the runtime.
             var environment = plan.Environment.ToDictionary(entry => entry.Key, entry => plan.Expand(entry.Value, runtime, world));
             environment[sessionTokenVariable] = token;
-            var launch = GameLaunch.ForServerWithLoader(runtime, placement.LoaderDirectory,
+            var launch = GameLaunch.ForServerWithLoader(placement.GameDirectory, placement.LoaderDirectory,
                 plan.LaunchArguments(runtime, world), environment, placement.Platform);
             int n = ++boot;
             var started = placement.Start(n, launch, output, cancellation);
@@ -182,6 +182,7 @@ public sealed class ServerActor : IOwnedServer, IDisposable
 internal interface IServerPlacement
 {
     string RuntimeDirectory { get; }
+    string GameDirectory => RuntimeDirectory;
     string LoaderDirectory => RuntimeDirectory;
     string WorldDirectory { get; }
     /// <summary>The host the boots run on, or null for this machine.</summary>

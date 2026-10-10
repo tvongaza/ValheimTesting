@@ -762,7 +762,10 @@ internal static class InteractiveScripts
     public static readonly string LinuxStart = ("set -u\nsecrets=${VT_SECRETS:-}\nunset VT_SECRETS\n" + LinuxStarted + "\n" + """
         if [ "$(uname -s)" != Linux ]; then echo "VT-INTERACTIVE unsupported this host runs $(uname -s); a Linux client needs a Linux host"; exit 0; fi
         while IFS= read -r f; do
-            if [ -n "$f" ] && [ ! -f "$install/$f" ]; then echo "VT-INTERACTIVE missing $f"; exit 0; fi
+            if [ -n "$f" ]; then
+                case "$f" in /*) needed="$f" ;; *) needed="$install/$f" ;; esac
+                if [ ! -f "$needed" ]; then echo "VT-INTERACTIVE missing $f"; exit 0; fi
+            fi
         done <<< "$files"
         if [ ! -x "$install/$exe" ]; then echo "VT-INTERACTIVE missing $exe is not executable"; exit 0; fi
         if [ -e "$dir" ]; then echo "VT-INTERACTIVE exists"; exit 0; fi

@@ -73,6 +73,10 @@ internal sealed class GameRole
     public string Host { get; set; } = "";
     /// <summary>The prepared game install (with BepInEx) on the host. Runs copy from it and never change it.</summary>
     public string Install { get; set; } = "";
+    // A prepared Unix profile keeps Install as its owned, retireable loader directory. The game
+    // executable remains in the read-only source; these paths never come from inventory JSON.
+    internal string? PreparedGameRoot { get; set; }
+    internal string? PreparedLoaderRoot { get; set; }
     /// <summary>The directory on the host under which each run makes its own disposable runtime copy, logs and evidence.</summary>
     public string Runtime { get; set; } = "";
     /// <summary>The ValheimCLI port on the host's loopback.</summary>

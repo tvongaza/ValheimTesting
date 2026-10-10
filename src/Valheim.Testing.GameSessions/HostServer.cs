@@ -43,7 +43,8 @@ public static class HostServer
 
     // logonSeams: the test seams of Get-VtServerLogon (elevated, session, desktops), so a test forces the interactive-token task.
     internal static async Task<HostServerProcess> StartAsync(IGameHost host, GameLaunch launch, string bootDirectory, TimeSpan timeout,
-        IReadOnlyList<string>? logs, string? evidence, IReadOnlyDictionary<string, string>? logonSeams, CancellationToken cancellation)
+        IReadOnlyList<string>? logs, string? evidence, IReadOnlyDictionary<string, string>? logonSeams, CancellationToken cancellation,
+        string? logRoot = null)
     {
         ArgumentNullException.ThrowIfNull(host);
         ArgumentNullException.ThrowIfNull(launch);
@@ -64,7 +65,8 @@ public static class HostServer
 
         var variables = new Dictionary<string, string>
         {
-            ["runtime"] = launch.WorkingDirectory, ["exe"] = windows ? GameLaunch.ServerWindowsExecutable : GameLaunch.ServerLinuxExecutable, ["files"] = string.Join('\n', launch.RequiredFiles), ["dir"] = directory,
+            ["runtime"] = launch.WorkingDirectory, ["logroot"] = logRoot ?? launch.WorkingDirectory,
+            ["exe"] = windows ? GameLaunch.ServerWindowsExecutable : GameLaunch.ServerLinuxExecutable, ["files"] = string.Join('\n', launch.RequiredFiles), ["dir"] = directory,
             ["spec"] = launch.Spec(), ["logs"] = string.Join('\n', kept),
             ["crossplay"] = launch.Crossplay ? "1" : "", ["libraries"] = string.Join('\n', CrossplayLibraries.PartyLibraries),
             ["seconds"] = Math.Max(5, (int)Math.Floor(timeout.TotalSeconds) - 10).ToString(CultureInfo.InvariantCulture),
@@ -84,7 +86,8 @@ public static class HostServer
             var parts = detail.Split(' ');
             if (parts.Length != 2 || !int.TryParse(parts[0], NumberStyles.None, CultureInfo.InvariantCulture, out int id) || parts[1].Length == 0 || !parts[1].All(char.IsAsciiDigit))
                 throw new HostOperationException($"Unexpected process identity from {host.Name}; see {directory}/pid", result);
-            return new HostServerProcess(host, id, parts[1], directory, launch.WorkingDirectory, kept, evidence)
+            return new HostServerProcess(host, id, parts[1], directory, launch.WorkingDirectory, kept, evidence,
+                logRoot ?? launch.WorkingDirectory)
                 { TaskLogon = InteractiveClient.Line(result.Stdout, "VT-LOGON ") };
         }
         throw word switch
@@ -125,9 +128,11 @@ public sealed class HostServerProcess : IOwnedProcess, IAsyncDisposable
     /// <summary>On Windows, how the task that started this server logged on: <c>s4u</c> (session 0) or <c>interactive</c> (the user's desktop session).</summary>
     public string? TaskLogon { get; internal init; }
 
-    internal HostServerProcess(IGameHost host, int id, string start, string bootDirectory, string runtime, IReadOnlyList<string> logs, string? evidence)
+    internal HostServerProcess(IGameHost host, int id, string start, string bootDirectory, string runtime, IReadOnlyList<string> logs, string? evidence,
+        string? logRoot = null)
     {
-        _host = host; Id = id; StartIdentity = start; BootDirectory = bootDirectory; Runtime = runtime; _logs = logs; EvidenceDirectory = evidence;
+        _host = host; Id = id; StartIdentity = start; BootDirectory = bootDirectory; Runtime = runtime;
+        LogRoot = logRoot ?? runtime; _logs = logs; EvidenceDirectory = evidence;
     }
 
     public string HostName => _host.Name;
@@ -138,6 +143,7 @@ public sealed class HostServerProcess : IOwnedProcess, IAsyncDisposable
     /// <summary>This boot's evidence directory on the host.</summary>
     public string BootDirectory { get; }
     public string Runtime { get; }
+    internal string LogRoot { get; }
     /// <summary>Where stopping fetches the boot directory, or null.</summary>
     public string? EvidenceDirectory { get; }
     /// <summary>How long fetching the evidence may take.</summary>
@@ -206,7 +212,7 @@ public sealed class HostServerProcess : IOwnedProcess, IAsyncDisposable
             if (!_kept)
             {
                 var kept = (await _host.RunAsync(_host.Shell.Kind == HostShellKind.PowerShell ? HostServerScripts.WindowsKeep : HostServerScripts.Keep,
-                    new Dictionary<string, string> { ["runtime"] = Runtime, ["dir"] = BootDirectory, ["logs"] = string.Join('\n', _logs) },
+                    new Dictionary<string, string> { ["runtime"] = LogRoot, ["dir"] = BootDirectory, ["logs"] = string.Join('\n', _logs) },
                     TimeSpan.FromSeconds(60), cancellation).ConfigureAwait(false)).EnsureSuccess($"Keeping the logs of server process {Id} on {HostName}");
                 if (InteractiveClient.Line(kept.Stdout, "VT-KEPT") == null) throw new HostOperationException($"Unexpected reply while keeping the logs of server process {Id} on {HostName}", kept);
                 if (EvidenceDirectory != null) await _host.FetchDirectoryAsync(BootDirectory, EvidenceDirectory, EvidenceTimeout, cancellation).ConfigureAwait(false);
@@ -303,7 +309,7 @@ internal static class HostServerScripts
 
     // A task starts the server independent of the session that asked (Get-VtServerLogon decides its logon). The task and
     // launch specification are removed after the child reports its PID. No Steam client is required.
-    // Variables: runtime, files, dir, spec, logs, seconds, task, launcher.
+    // Variables: runtime, logroot, files, dir, spec, logs, seconds, task, launcher.
     public static readonly string WindowsStart = (WindowsServerLogon + "\n" + """
         $utf8 = New-Object Text.UTF8Encoding $false
         foreach ($file in ($files -split "`n")) {
@@ -319,7 +325,7 @@ internal static class HostServerScripts
         $index = 0
         foreach ($log in ($logs -split "`n")) {
             if ($log) {
-                $old = Join-Path $runtime $log
+                $old = Join-Path $logroot $log
                 if ([IO.File]::Exists($old)) { [IO.File]::Move($old, (Join-Path $dir ('previous-' + $index + '.log'))) }
             }
             $index++
@@ -458,7 +464,10 @@ internal static class HostServerScripts
     public static readonly string Start = ("set -u\n" + Started + "\n" + CrossplayLibraryScripts.Body + "\n" + """
         if [ "$(uname -s)" != Linux ]; then echo "VT-SERVER unsupported this host runs $(uname -s); the Linux dedicated server needs a Linux host"; exit 0; fi
         while IFS= read -r f; do
-            if [ -n "$f" ] && [ ! -f "$runtime/$f" ]; then echo "VT-SERVER missing $f"; exit 0; fi
+            if [ -n "$f" ]; then
+                case "$f" in /*) needed="$f" ;; *) needed="$runtime/$f" ;; esac
+                if [ ! -f "$needed" ]; then echo "VT-SERVER missing $f"; exit 0; fi
+            fi
         done <<< "$files"
         if [ ! -x "$runtime/$exe" ]; then echo "VT-SERVER missing $exe is not executable"; exit 0; fi
         if [ -n "$crossplay" ]; then
@@ -471,7 +480,7 @@ internal static class HostServerScripts
         mkdir -p -- "$(dirname -- "$dir")" && mkdir -- "$dir" || exit 3
         i=0
         while IFS= read -r log; do
-            if [ -n "$log" ] && [ -e "$runtime/$log" ]; then mv -f -- "$runtime/$log" "$dir/previous-$i.log" || exit 3; fi
+            if [ -n "$log" ] && [ -e "$logroot/$log" ]; then mv -f -- "$logroot/$log" "$dir/previous-$i.log" || exit 3; fi
             i=$((i + 1))
         done <<< "$logs"
         decode() { printf '%s' "$1" | base64 -d && printf x; }

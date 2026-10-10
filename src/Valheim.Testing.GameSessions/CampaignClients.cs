@@ -137,19 +137,23 @@ internal sealed class CampaignClients
         if (plan.LaunchArchitecture != ClientArchitecture.X64)
             throw new ArgumentException($"Profile client '{name}' starts in a remote host's desktop session, where only x64 Windows and Linux clients run; " +
                 "architecture arm64 is for a macOS client launched locally in this runner's GUI session. Leave architecture out.");
-        var launch = GameLaunch.ForClient(role.Install, plan.LaunchArguments, plan.Environment, hostPlatform: platform,
-            secretVariables: plan.PasswordVariable is { } password ? new[] { password } : null);
+        string gameRoot = role.PreparedGameRoot ?? role.Install;
+        string loaderRoot = role.PreparedLoaderRoot ?? role.Install;
+        var launch = GameLaunch.ForClientWithLoader(gameRoot, loaderRoot, plan.LaunchArguments, plan.Environment,
+            platform, plan.LaunchArchitecture, plan.PasswordVariable is { } password ? new[] { password } : null);
         var host = ClientHost(role);
         var account = await HoldAccountAsync(report, name, () => host, cancellation).ConfigureAwait(false);
         // A dedicated server's lock covers its own host; another client host is locked for the rest of the run.
         await LockHostAsync(role.Host, host, hostProfile, cancellation).ConfigureAwait(false);
         int n = Interlocked.Increment(ref _clients);
         string runDirectory = HostPath.Join(role.Runtime, RunId), launchDirectory = HostPath.Join(runDirectory, "client-" + n);
-        string log = HostPath.Join(role.Install, HostedServerRun.BepInExLog);
-        var listing = await HostInstall.ListAsync(host, role.Install, HostedTimeouts.Long, HostInstall.PinPaths, cancellation).ConfigureAwait(false);
+        string log = HostPath.Join(loaderRoot, HostedServerRun.BepInExLog);
+        var listing = await HostInstall.ListAsync(host, gameRoot, HostedTimeouts.Long, HostInstall.PinPaths, cancellation).ConfigureAwait(false);
+        var loader = loaderRoot == gameRoot ? listing :
+            await HostInstall.ListAsync(host, loaderRoot, HostedTimeouts.Long, HostInstall.PinPaths, cancellation).ConfigureAwait(false);
         if (plan.Pinned)
-            HostInstall.CheckPins(plan.InstallPins ?? throw new ArgumentException("Pin the owned client's game build, loader and patchers in installPins, or opt out explicitly with \"pinning\": \"none\"."), listing, "client install");
-        await HostClientPreflight.CheckAsync(host, role.Install, platform, plan, HostedTimeouts.Quick, cancellation).ConfigureAwait(false);
+            HostInstall.CheckPins(plan.InstallPins ?? throw new ArgumentException("Pin the owned client's game build, loader and patchers in installPins, or opt out explicitly with \"pinning\": \"none\"."), listing, loader, "client install");
+        await HostClientPreflight.CheckAsync(host, loaderRoot, platform, plan, HostedTimeouts.Quick, cancellation).ConfigureAwait(false);
         await HostInstall.RequirePortFreeAsync(host, role.CliPort, HostedTimeouts.Quick, cancellation).ConfigureAwait(false);
         // BepInEx rewrites its log at each start; an earlier one moves aside so the wait from offset 0 sees this start's lines only.
         var moved = (await host.RunAsync(HostedClientScripts.MoveAside(host.Shell.Kind), new Dictionary<string, string>
@@ -173,6 +177,14 @@ internal sealed class CampaignClients
             var session = ClientSession.Launch(plan, output,
                 () =>
                 {
+                    if (role.PreparedGameRoot != null && plan.Pinned)
+                    {
+                        var currentGame = HostInstall.ListAsync(host, gameRoot, HostedTimeouts.Long, HostInstall.PinPaths,
+                            cancellation).GetAwaiter().GetResult();
+                        var currentLoader = HostInstall.ListAsync(host, loaderRoot, HostedTimeouts.Long, HostInstall.PinPaths,
+                            cancellation).GetAwaiter().GetResult();
+                        HostInstall.CheckPins(plan.InstallPins!, currentGame, currentLoader, "prepared client profile before launch");
+                    }
                     string expected = launch.CommandLineSha256();
                     JournalAsync(host, role.Host, name, JournalEntry.Of(JournalEntry.ProcessIntended, ("launchDirectory", launchDirectory),
                         ("expectedCommandLineSha256", expected)), cancellation).GetAwaiter().GetResult();
@@ -183,7 +195,7 @@ internal sealed class CampaignClients
                     HostedServerRun.WarnUnexpectedCommandLine(host, client.Id, expected, commandLine);
                     NoteAsync(host, role.Host, name, JournalEntry.Of(JournalEntry.ProcessStarted, ("pid", client.Id.ToString(CultureInfo.InvariantCulture)),
                         ("startIdentity", client.StartIdentity), ("commandLineSha256", commandLine), ("launchDirectory", launchDirectory))).GetAwaiter().GetResult();
-                    var process = new HostedClientProcess(client, host, role.Install, tunnel, local);
+                    var process = new HostedClientProcess(client, host, loaderRoot, tunnel, local);
                     if (account != null) account.Process = process; // Its lease is released only once this process is gone.
                     return process;
                 },
@@ -201,7 +213,7 @@ internal sealed class CampaignClients
                     catch (WaitTimeoutException error)
                     {
                         // A preloader crash log this launch wrote says why (#254); an older one is not this launch's and says nothing.
-                        var preloader = await HostedClientScripts.ReadPreloaderAsync(host, role.Install, launchDirectory).ConfigureAwait(false);
+                        var preloader = await HostedClientScripts.ReadPreloaderAsync(host, loaderRoot, launchDirectory).ConfigureAwait(false);
                         string why = PreloaderLogs.Explain(preloader, "game-2.preloader-*.log",
                             "The game may have reached its menu without BepInEx; check winhttp.dll, doorstop_config.ini and BepInEx/core as one pack. ");
                         throw new InvalidOperationException($"BepInEx wrote no fresh log line on {host.Name} within {plan.BepInExSeconds}s. {why}" +
@@ -235,7 +247,7 @@ internal sealed class CampaignClients
         if (hostProfile.Kind != "local" || !_hooks.LocalMacClients)
             throw new PlatformNotSupportedException($"Profile client '{name}' needs a local macOS host in this runner's logged-in GUI session; SSH cannot launch it there.");
         if (!plan.Owned) throw new ArgumentException($"Profile client '{name}' must be an owned client for local macOS launch.");
-        if (Path.GetFullPath(plan.Install) != Path.GetFullPath(role.Install) || plan.Port != role.CliPort ||
+        if (Path.GetFullPath(plan.Install) != Path.GetFullPath(role.PreparedGameRoot ?? role.Install) || plan.Port != role.CliPort ||
             plan.Host is not ("127.0.0.1" or "localhost" or "::1"))
             throw new ArgumentException($"Profile client '{name}' must pin the local role's exact install and CLI port on loopback.");
         _hooks.RequireMacGui();

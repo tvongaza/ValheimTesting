@@ -223,6 +223,11 @@ public sealed partial class GameLaunch
         return LocalClient(install, arguments, environment, selected, console, CurrentClientHost);
     }
 
+    internal static GameLaunch ForClientWithLoader(string install, string loader, IEnumerable<string> arguments,
+        IReadOnlyDictionary<string, string>? environment, ClientPlatform hostPlatform, ClientArchitecture architecture,
+        IEnumerable<string>? secretVariables = null) =>
+        ClientOnHost(hostPlatform, install, arguments, environment, architecture, true, secretVariables, loader);
+
     // A launch for this machine, built as if on builtOn (so every machine's branches are tested on any OS).
     internal static GameLaunch LocalClient(string installDirectory, IEnumerable<string> arguments, IReadOnlyDictionary<string, string>? environment,
         ClientArchitecture architecture, bool console, ClientPlatform builtOn, string? loaderDirectory = null)
@@ -260,7 +265,7 @@ public sealed partial class GameLaunch
     }
 
     private static GameLaunch ClientOnHost(ClientPlatform platform, string install, IEnumerable<string> arguments, IReadOnlyDictionary<string, string>? environment,
-        ClientArchitecture architecture, bool console, IEnumerable<string>? secretVariables)
+        ClientArchitecture architecture, bool console, IEnumerable<string>? secretVariables, string? loaderDirectory = null)
     {
         ArgumentNullException.ThrowIfNull(arguments);
         if (platform == ClientPlatform.MacOS)
@@ -269,6 +274,10 @@ public sealed partial class GameLaunch
         RequireX64(platform, architecture);
         bool windows = platform == ClientPlatform.Windows;
         string root = HostRoot(windows, install, nameof(install), "install", server: false);
+        string loader = loaderDirectory == null ? root : HostRoot(windows, loaderDirectory, nameof(loaderDirectory), "loader", server: false);
+        bool separateRoots = !loader.Equals(root, windows ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+        if (windows && separateRoots)
+            throw new ArgumentException("A Windows Doorstop proxy must be beside the client executable; use an owned launch folder for both.", nameof(loaderDirectory));
         var names = windows ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
         var passed = WithConsole(BepInExLoader.RefuseOverrides(environment ?? new Dictionary<string, string>(), arguments, names, nameof(GameLaunch)), console);
         // A Windows client's arguments travel as one quoted command line, which can hold a line break.
@@ -277,8 +286,10 @@ public sealed partial class GameLaunch
         RequireHostEnvironment(environment, refuseLoaderPaths: false);
         string executable = windows ? ClientWindowsExecutable : ClientLinuxExecutable;
         var join = (string relative) => HostJoin(root, windows, relative);
-        var (set, prepended, required) = Loader(server: false, platform, environment, names, join, join, false, executable, null);
-        return new GameLaunch(server: false, platform, forHost: true, root, HostJoin(root, windows, executable), passed, set, prepended, required, secretVariables: secretVariables);
+        var loaderJoin = (string relative) => HostJoin(loader, windows, relative);
+        var (set, prepended, required) = Loader(server: false, platform, environment, names, join, loaderJoin, separateRoots, executable, null);
+        return new GameLaunch(server: false, platform, forHost: true, root, HostJoin(root, windows, executable), passed, set, prepended, required,
+            secretVariables: secretVariables, isolatedLoader: separateRoots);
     }
 
     // The loader's part of every launch, one rule set for both roles, here and on a host: the caller's variables first, then
