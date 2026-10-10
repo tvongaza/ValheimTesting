@@ -443,7 +443,7 @@ internal static class ServerLoad
 
         // The read-only host checks, before anything is copied: a client that cannot run is refused with the reason, never dropped.
         var report = await (seams.Inspect ?? (file => HostedCampaignPreparation.InspectAfterLocalPreflightAsync(file,
-            HostedTimeouts.Quick, cancellation)))(campaignFile).ConfigureAwait(false);
+            HostedTimeouts.Quick, cancellation, copyGame: parsed.Switches.Contains("--copy-game"))))(campaignFile).ConfigureAwait(false);
         foreach (var actor in report.Actors.Where(actor => actor.CharactersDirectory != null))
             Console.WriteLine($"{actor.Name}: characters_local {actor.CharactersDirectory}; Steam userdata {actor.SteamUserDataDirectory}");
         if (!report.Ready)
