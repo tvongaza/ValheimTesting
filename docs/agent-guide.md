@@ -39,7 +39,7 @@ For reusable synthetic ground and multi-zone height/paint state, read [Shared-wo
 3. For framework development, bootstrap the exact ValheimCLI dependency, then run local validation:
 
    ```sh
-   dotnet run scripts/bootstrap-cli.cs
+   sh scripts/bootstrap-cli.sh  # macOS/Linux; on Windows: powershell -NoProfile -File scripts/bootstrap-cli.ps1
    dotnet run scripts/validate.cs
    ```
 
@@ -49,7 +49,7 @@ For reusable synthetic ground and multi-zone height/paint state, read [Shared-wo
    A new public Game type is an operation, an operation's input, or a result shape marked `[ResultShape]` (any data type
    an operation returns; versioned with any JSON it is written to); the check refuses anything else ([CONTRIBUTING.md](../CONTRIBUTING.md)).
 
-   The same commands work in any shell on any OS (a blocked sandbox: see [AGENTS.md](../AGENTS.md)). This needs no game, Steam or test machine. For a mod checkout, use released packages directly, or restore candidates from a local feed. The [first mod test](../examples/ModWithTests/README.md) restores its pure packages from NuGet.org and needs no ValheimCLI bootstrap; it includes a GitHub Actions workflow for a mod repository. Package versions differ deliberately; follow the setup table rather than setting all packages to the same preview.
+   The platform bootstrap entrypoint checks both NuGet caches before the SDK restores the C# script, and prints the locations it uses. It moves an unwritable cache to an owned folder under `artifacts/nuget-bootstrap/`; `--check-caches` checks this without building or downloading anything. A blocked SDK file-based app directory is separate (see [AGENTS.md](../AGENTS.md)). This needs no game, Steam or test machine. For a mod checkout, use released packages directly, or restore candidates from a local feed. The [first mod test](../examples/ModWithTests/README.md) restores its pure packages from NuGet.org and needs no ValheimCLI bootstrap; it includes a GitHub Actions workflow for a mod repository. Package versions differ deliberately; follow the setup table rather than setting all packages to the same preview.
 4. If the task is satisfied by local tests, stop there. Otherwise prepare a bounded native test plan with explicit independent expectations and a negative control where useful. Do not invent a whole new runner for a check an example already performs.
 
 ## Before an authorized native run
@@ -57,7 +57,7 @@ For reusable synthetic ground and multi-zone height/paint state, read [Shared-wo
 - Go through the [runtime hygiene checklist](runtime-hygiene.md): clean runtime, load order, local test characters, join/teleport timing and evidence rules.
 - Confirm which machine/process/world the user intended and whether another operator owns it. Check the machines first with `valheim-test env preflight` (one machine) or `valheim-test session check SESSION --hosts` (a session); afterwards `valheim-test env status` must list nothing your run left, and `env recover --run ID` clears what an interrupted run left ([the tool's page](packages/Valheim.Testing.NativeSmoke.md#what-runs-left-env-status-recover-and-teardown)). Where an operator also has a reservation procedure, follow it; this public library contains no private machine credentials or deployment scripts.
 - Use disposable copies, free ports, exact candidate DLLs and a dedicated character where a client is needed. Verify backups and character protection before movement. Do not copy production saves or change admin membership unless the task actually authorizes it.
-- Install one core in plugins and each required pack in plugins **or** scripts, never both. Standard supplies save/join/protection; World Tools supplies observations; Reflection is needed only for `cli_call`. ScriptEngine reload affects all scripts in its directory. See [pack installation](https://github.com/tvongaza/valheimCLI/blob/9e8ca679298e559e995ab5b04ef84b782b15a0ad/docs/command-packs.md).
+- A `valheim-test` one-shot run stages the pinned ValheimCLI core and **every pack in its bundle**, including packs the particular command does not use. Its dependency lock pins each file and refuses a missing or changed pack before copying the game. For manually prepared runs, install one core and each selected pack in plugins **or** scripts, never both. Standard supplies save/join/protection; World Tools supplies observations; Reflection supplies `cli_call`. ScriptEngine reload affects all scripts in its directory. See [pack installation](https://github.com/tvongaza/valheimCLI/blob/9e8ca679298e559e995ab5b04ef84b782b15a0ad/docs/command-packs.md).
 - Read `cli_manifest`, `cli_world` and `cli_extensions`. Pin actual plugin MD5s and world UID using the [strict pins format](packages/Valheim.Testing.Game.md#what-a-test-runtime-holds). Pins enforce identity, not authorization. Pin the tested mod `absent` on a ValheimCLI-only replication client, and list every other loaded plugin.
 - Require full session readiness and the necessary loaded zones. An audit may hold world load while ValheimCLI answers. Arrange arrival separately and verify client-reported position/support rather than trusting a teleport request.
 

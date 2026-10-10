@@ -239,15 +239,6 @@ internal static class ServerLoad
         choice = choice with { InventoryFile = selectedInventory };
 
         var required = choice.Client == null ? new List<string> { "valheim.session/state" } : [.. Session];
-        if (bakeDestination != null) required.Add("valheim.session/save");
-        // These legacy read-only console commands use World Tools/Observe, though the extension
-        // capability manifest cannot name their cli_* aliases. A mod's own command needs neither pack.
-        if (new[] { "--before-save-command", "--assert-command" }.Any(option =>
-                parsed.Options.TryGetValue(option, out string? command) && NeedsObservationPacks(command)))
-        {
-            required.Add("valheim.world/terrain");
-            required.Add("valheim.observe/zones");
-        }
         var dependencies = NativeDependencyResolver.Resolve(SmokeDependencyInputs.Request(parsed.Mods, serverInstall, core,
             cliManifest, cliFiles, parsed.Roots, parsed.Optional,
             required));
@@ -427,12 +418,6 @@ internal static class ServerLoad
         }
         Finish(result, parsed.Mods.Count, clientPlan != null, clock, output);
         return result;
-    }
-
-    private static bool NeedsObservationPacks(string command)
-    {
-        string name = command.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries)[0];
-        return name is "cli_zdos_at" or "cli_containers_at" or "cli_prefabs_at" or "cli_piece_support";
     }
 
     // Loaded with the packaged world, joinable, and (with a client) a clean client reading that world.

@@ -1126,6 +1126,7 @@ sealed class Valheim.Testing.Game.NativeDependencyLock
 sealed class Valheim.Testing.Game.NativeDependencyRequest
   method System.Void .ctor()
   method static Valheim.Testing.Game.NativeDependencyRequest Read(System.String path)
+  property System.Boolean StageAllCliPacks { get; set; }
   property System.Collections.Generic.List`1<System.String> Capabilities { get; set; }
   property System.Collections.Generic.List`1<System.String> Mods { get; set; }
   property System.Collections.Generic.List`1<System.String> OptionalReferences { get; set; }

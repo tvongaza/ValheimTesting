@@ -62,6 +62,43 @@ public sealed class RunRecoveryTests : IDisposable
     }
 
     [Fact]
+    public async Task RegressionIntentIgnoresUnrelatedLinkedPersonalCharacters()
+    {
+        if (OperatingSystem.IsWindows()) return; // local Bash host and symlink creation need no Windows privilege here
+        const string run = "run-character-unrelated-link";
+        string data = Path.Combine(_root, "local-data");
+        string characters = Path.Combine(data, "characters_local");
+        string userData = Path.Combine(data, "userdata");
+        Directory.CreateDirectory(characters);
+        Directory.CreateDirectory(userData);
+        string personal = Path.Combine(data, "personal.fch");
+        File.WriteAllText(personal, "personal save");
+        File.CreateSymbolicLink(Path.Combine(characters, "personal-link.fch"), personal);
+        string journal = Path.Combine(data, "journal", run, "client.jsonl");
+        Directory.CreateDirectory(Path.GetDirectoryName(journal)!);
+        File.WriteAllText(journal, System.Text.Json.JsonSerializer.Serialize(new Dictionary<string, object>
+        {
+            ["utc"] = DateTime.UtcNow.AddMinutes(-1).ToString("O"), ["run"] = run, ["actor"] = "client",
+            ["kind"] = JournalEntry.CharacterIntended,
+            ["fields"] = new Dictionary<string, string>
+            {
+                ["characters"] = characters, ["userData"] = userData, ["fileName"] = "vt01",
+                ["characterKind"] = "regression", ["local"] = "true",
+                ["expectedSha256"] = FileHash.Sha256(System.Text.Encoding.UTF8.GetBytes("registered save")),
+            },
+            ["runner"] = new { machine = Gone.Machine, pid = Gone.Pid, startedUtc = Gone.StartedUtc.ToString("O") },
+        }) + "\n");
+        var hosts = new Dictionary<string, HostProfile> { ["local"] = new() { Kind = "local", Lock = Path.Combine(data, "lock") } };
+        var host = new LocalGameHost("local", HostShell.Bash);
+
+        var recovered = await RunRecovery.RecoverAsync(hosts, _ => host, run, false, TimeSpan.FromSeconds(10));
+
+        Assert.True(recovered.Recovered, string.Join("\n", recovered.Steps));
+        Assert.Equal("personal save", File.ReadAllText(personal));
+        Assert.True(File.Exists(Path.Combine(characters, "personal-link.fch")));
+    }
+
+    [Fact]
     public async Task HostedCharacterIntentCannotDeleteAPersonalSaveWithTheSameName()
     {
         const string run = "run-hosted-character-intent";
@@ -138,15 +175,18 @@ public sealed class RunRecoveryTests : IDisposable
         Assert.DoesNotContain(_host.Runs, call => call.Script == "character-retire");
     }
 
-    [Fact]
-    public async Task RegressionCharacterIntentRefusesAnUnexpectedBackupEvenWhenTheMainFileMatches()
+    [Theory]
+    [InlineData("vt01.fch.old")]
+    [InlineData("VT01.FCH.OLD")]
+    [InlineData("vt01_backup_auto-2026")]
+    public async Task RegressionCharacterIntentRefusesAnUnexpectedBackupEvenWhenTheMainFileMatches(string backupName)
     {
         const string run = "run-character-intent-extra";
         byte[] source = System.Text.Encoding.UTF8.GetBytes("registered save");
         string local = _host.Local(Characters);
         Directory.CreateDirectory(local);
         File.WriteAllBytes(Path.Combine(local, "vt01.fch"), source);
-        File.WriteAllText(Path.Combine(local, "vt01.fch.old"), "personal backup");
+        File.WriteAllText(Path.Combine(local, backupName), "personal backup");
         Line(_host, run, "client", Gone, JournalEntry.CharacterIntended,
             ("characters", Characters), ("userData", UserData), ("fileName", "vt01"),
             ("characterKind", "regression"), ("local", "true"), ("expectedSha256", FileHash.Sha256(source)));
@@ -156,7 +196,29 @@ public sealed class RunRecoveryTests : IDisposable
         Assert.False(report.Recovered);
         Assert.DoesNotContain(_host.Runs, call => call.Script == "character-retire");
         Assert.True(File.Exists(Path.Combine(local, "vt01.fch")));
-        Assert.Equal("personal backup", File.ReadAllText(Path.Combine(local, "vt01.fch.old")));
+        Assert.Equal("personal backup", File.ReadAllText(Path.Combine(local, backupName)));
+    }
+
+    [Theory]
+    [InlineData("VT01.FCH.OLD")]
+    [InlineData("VT01_backup_auto-2026")]
+    public async Task RealHostListingFindsCaseVariantBackupsWithoutReadingUnrelatedCharacters(string backupName)
+    {
+        string local = Path.Combine(_root, "listing", "characters_local");
+        Directory.CreateDirectory(local);
+        File.WriteAllText(Path.Combine(local, "vt01.fch"), "registered");
+        File.WriteAllText(Path.Combine(local, backupName), "unexpected backup");
+        if (!OperatingSystem.IsWindows())
+            File.CreateSymbolicLink(Path.Combine(local, "personal.fch"), Path.Combine(local, "missing-personal.fch"));
+        else File.WriteAllText(Path.Combine(local, "personal.fch"), "personal");
+        var host = new LocalGameHost("this machine", OperatingSystem.IsWindows() ? HostShell.WindowsPowerShell : HostShell.Bash);
+
+        var listing = await HostInstall.ListCaseInsensitiveAsync(host, local, TimeSpan.FromSeconds(10),
+            DisposableCharacterStore.OwnedFilePatterns("vt01"));
+
+        Assert.Equal(2, listing.Files.Count);
+        Assert.Contains(listing.Files.Keys, name => name.Equals("vt01.fch", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(listing.Files.Keys, name => name.Equals(backupName, StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]

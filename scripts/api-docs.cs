@@ -3,7 +3,7 @@
 // No game process or game assemblies are needed.
 //
 //   dotnet tool restore
-//   dotnet run scripts/bootstrap-cli.cs
+//   sh scripts/bootstrap-cli.sh                  (macOS/Linux)
 //   dotnet run scripts/validate.cs
 //   dotnet run scripts/api-docs.cs                       the DocFX reference (docs/reference/_site, not committed)
 //   dotnet run scripts/api-docs.cs -- surface            write docs/reference/public-api/<Package>.txt from the release builds

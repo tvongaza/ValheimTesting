@@ -13,6 +13,9 @@ public sealed class NativeDependencyRequest
     public string CliManifest { get; set; } = "";
     public string CliFiles { get; set; } = "";
     public List<string> Capabilities { get; set; } = [];
+    /// <summary>Require every <see cref="CliCapabilities.Toolkit"/> command and stage every file in the pinned ValheimCLI
+    /// manifest, including packs this scenario does not use. One-shot runners set this; general requests may select by capability.</summary>
+    public bool StageAllCliPacks { get; set; }
     /// <summary>Assembly names the developer explicitly confirms are only used behind an absent soft integration.</summary>
     public List<string> OptionalReferences { get; set; } = [];
 
@@ -196,7 +199,14 @@ public static class NativeDependencyResolver
             if (!Path.IsPathFullyQualified(file) || !File.Exists(file)) throw new FileNotFoundException($"Dependency input {file} does not exist; supply an absolute local file.", file);
 
         var result = new NativeDependencyLock { OptionalReferences = request.OptionalReferences.Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase).ToList() };
-        var cli = CliCapabilityManifest.Read(request.CliManifest).ForCapabilities(request.Capabilities);
+        var bundle = CliCapabilityManifest.Read(request.CliManifest);
+        // The one-shot contract needs every toolkit command in the bundle, then stages every declared file.
+        // General resolver callers can still request a smaller set explicitly.
+        var requiredCli = request.StageAllCliPacks
+            ? request.Capabilities.Concat(CliCapabilities.Toolkit)
+            : request.Capabilities;
+        var needed = bundle.ForCapabilities(requiredCli);
+        var cli = request.StageAllCliPacks ? bundle : needed;
         result.CliManifest = cli;
         var inventory = request.SearchRoots.Concat(request.Mods.Select(path => Path.GetDirectoryName(path)!)).Distinct(StringComparer.Ordinal)
             .SelectMany(root => Directory.EnumerateFiles(root, "*.dll", SearchOption.AllDirectories))
@@ -255,7 +265,8 @@ public static class NativeDependencyResolver
         foreach (var (file, path) in location.Located)
         {
             var actual = PluginMetadata.Read(path);
-            result.CliFiles.Add(Pinned(path, file.Plugins.Contains("valheimCLI.valheimCLI", StringComparer.Ordinal) ? "ValheimCLI core" : "provides " + string.Join(", ", request.Capabilities.Where(capability => file.Commands().Any(command => command.Path == capability)))));
+            result.CliFiles.Add(Pinned(path, file.Plugins.Contains("valheimCLI.valheimCLI", StringComparer.Ordinal) ? "ValheimCLI core" :
+                request.StageAllCliPacks ? "pinned ValheimCLI bundle pack" : "provides " + string.Join(", ", request.Capabilities.Where(capability => file.Commands().Any(command => command.Path == capability)))));
             known[path] = actual;
             Add(path, "ValheimCLI selected build");
         }

@@ -93,6 +93,24 @@ public sealed class SmokeCommandOptionsTests
     }
 
     [Fact]
+    public void UnreadableOutputAncestorIsNamedBeforeAnyOutputIsCreated()
+    {
+        string root = Directory.CreateTempSubdirectory("smoke-output-unreadable-").FullName;
+        try
+        {
+            string output = Path.Combine(root, "new", "run");
+            var error = Assert.Throws<IOException>(() => SmokeCommandOptions.Output(
+                new Dictionary<string, string> { ["--output"] = output },
+                parent => parent == root ? throw new UnauthorizedAccessException("listing denied") : false));
+            Assert.Contains(root, error.Message);
+            Assert.Contains("omit --output", error.Message);
+            Assert.IsType<UnauthorizedAccessException>(error.InnerException);
+            Assert.False(Path.Exists(Path.Combine(root, "new")));
+        }
+        finally { Directory.Delete(root); }
+    }
+
+    [Fact]
     public void StartNamesTheRenamedClientLoaderOption()
     {
         Assert.False(StartArguments.TryRead(["--mod", "mod.dll", "--loader-package", "loader.json"],

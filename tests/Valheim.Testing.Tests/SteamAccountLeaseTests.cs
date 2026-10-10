@@ -197,24 +197,40 @@ internal static class LeaseChecks
         Accounts = Enumerable.Range(1, accounts).Select(i => new SteamPoolAccount { Name = "vt_client_" + i }).ToList(),
     };
 
-    private static async Task<(SteamAccountLease? Lease, SteamAccountLeaseException? Error)> TryAcquireAsync(SteamAccountPool pool, IGameHost host, string owner)
+    private static async Task<(SteamAccountLease? Lease, SteamAccountLeaseException? Error)> TryAcquireAsync(SteamAccountPool pool, IGameHost host, string owner, TimeSpan deadline)
     {
-        try { return (await pool.AcquireAsync(host, owner, await GameHostChecks.ShellDeadlineAsync(host)), null); }
+        try { return (await pool.AcquireAsync(host, owner, deadline), null); }
         catch (SteamAccountLeaseException error) { return (null, error); }
     }
 
     public static Task TwoRunsNeverHoldOneAccount(IGameHost host, string parent) => GameHostChecks.WithRootAsync(host, parent, async root =>
     {
         var pool = Pool(root, 3);
-        var attempts = await Task.WhenAll(Enumerable.Range(0, 10).Select(i => TryAcquireAsync(pool, host, "run-" + i)));
+        // Calibrate before contention. Calibrating inside every attempt launched ten more SSH/PowerShell sessions at once,
+        // so the test sometimes measured SSH startup failure instead of whether claims are exclusive (#583).
+        TimeSpan deadline = await GameHostChecks.ShellDeadlineAsync(host);
+        var attempts = new List<(SteamAccountLease? Lease, SteamAccountLeaseException? Error)>();
+        // Four simultaneous callers still race for three accounts. Keep all ten attempts, but bound the number of SSH and
+        // PowerShell startups competing for the CI runner at once; later waves must all see the first wave's held claims.
+        for (int first = 0; first < 10; first += 4)
+            attempts.AddRange(await Task.WhenAll(Enumerable.Range(first, Math.Min(4, 10 - first))
+                .Select(i => TryAcquireAsync(pool, host, "run-" + i, deadline))));
         var leases = attempts.Where(attempt => attempt.Lease != null).Select(attempt => attempt.Lease!).ToList();
-        Assert.Equal(3, leases.Count);
-        Assert.Equal(3, leases.Select(lease => lease.Account).Distinct().Count());
-        Assert.All(attempts.Where(attempt => attempt.Lease == null), attempt => Assert.Equal(SteamAccountLeaseState.NoneFree, attempt.Error!.State));
-        var held = await pool.ListAsync(host, GameHostChecks.Generous);
-        Assert.All(held, status => Assert.Equal(SteamAccountState.Held, status.State));
-        Assert.Equal(leases.Select(lease => lease.Owner).Order(), held.Select(status => status.Holder!).Order());
-        foreach (var lease in leases) Assert.Equal(SteamAccountLeaseState.Released, (await lease.ReleaseAsync()).State);
+        try
+        {
+            Assert.Equal(3, leases.Count);
+            Assert.Equal(3, leases.Select(lease => lease.Account).Distinct().Count());
+            Assert.All(attempts.Where(attempt => attempt.Lease == null), attempt => Assert.Equal(SteamAccountLeaseState.NoneFree, attempt.Error!.State));
+            var held = await pool.ListAsync(host, GameHostChecks.Generous);
+            Assert.All(held, status => Assert.Equal(SteamAccountState.Held, status.State));
+            Assert.Equal(leases.Select(lease => lease.Owner).Order(), held.Select(status => status.Holder!).Order());
+        }
+        finally
+        {
+            // A failed assertion must not leave proven claims live while the scratch root is removed. Unknown claims remain
+            // a failure above; the scratch root is the test's escape hatch for any claim whose reply was lost.
+            foreach (var lease in leases) await lease.ReleaseAsync();
+        }
         Assert.All(await pool.ListAsync(host, GameHostChecks.Generous), status => Assert.Equal(SteamAccountState.Free, status.State));
     });
 

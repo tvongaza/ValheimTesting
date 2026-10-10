@@ -30,7 +30,7 @@ For a fork, transport-package or command-pack update, follow the [ValheimCLI rel
 Fork the repository, clone your fork, and make a focused branch from current `main`. Check existing edits before starting. The [setup guide](docs/getting-started.md) covers prerequisites and package consumption. From the repository root:
 
 ```sh
-dotnet run scripts/bootstrap-cli.cs
+sh scripts/bootstrap-cli.sh  # macOS/Linux; on Windows: powershell -NoProfile -File scripts/bootstrap-cli.ps1
 dotnet run scripts/validate.cs
 
 # For a public API or documentation change, build the candidate reference too:

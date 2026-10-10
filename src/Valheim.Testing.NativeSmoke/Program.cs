@@ -6,6 +6,7 @@ if (args is ["help" or "--help"])
 {
     Console.WriteLine("valheim-test start [--mod DLL ...] [--output NEW_DIR] [--inventory FILE | --game DIR] [--client-env NAME] [--client-architecture x64|arm64] [setup options] (with no --mod, the current project's one built plugin)");
     Console.WriteLine(ServerLoad.Usage + " (a server and one clean client from the inventory; this machine when no --inventory)");
+    Console.WriteLine(ServerLoadPhases.Usage + " (ordered disposable server-only saves)");
     Console.WriteLine("valheim-test server-load-ab --mod DLL --mod DLL --remove-mod DLL --output NEW_DIR [server-load options except --hold and --preflight-only]");
     Console.WriteLine("valheim-test init [server] --output NEW_DIR (editable NuGet.org-only consumer)");
     Console.WriteLine(EnvCommand.Usage + " (list, preflight and status read only; recover and teardown clear what a run left)");
@@ -21,6 +22,7 @@ if (args.Length != 0 && args[0] == "finish") return ForegroundHold.FinishCommand
 if (args.Length != 0 && args[0] == "detach") return await DetachedSession.RunAsync(args[1..]);
 if (args.Length != 0 && args[0] == "cli") return OwnedCliCommand.Run(args[1..]);
 if (args.Length != 0 && args[0] == "session") return await SessionCommand.RunAsync(args[1..]);
+if (args.Length != 0 && args[0] == "server-load-phases") return await ServerLoadPhases.RunAsync(args[1..]);
 if (args.Length != 0 && args[0] == "start") args = args[1..];
 if (args.Length != 0 && args[0] is "server-load" or "server-load-ab")
 {
@@ -49,6 +51,7 @@ int exitCode = 3;
 string? outcome = null;
 bool journalClean = true;
 bool characterPending = false;
+bool ownershipStarted = false;
 string? output = null;
 bool outputChecked = false;
 try
@@ -135,6 +138,7 @@ try
     Console.WriteLine($"disposable install: {runner.Install}");
     Console.WriteLine("run ID: " + runId);
     bool passed = true;
+    string finalArm = inputs.Mod.Arms.Keys.Last();
     foreach (string arm in inputs.Mod.Arms.Keys)
     {
         string armOutput = Path.Combine(output, "evidence", arm);
@@ -165,21 +169,20 @@ try
                 }, afterStaged: null, characterJournal: (point, characters, userData, name, expectedSha256) =>
                 {
                     RunJournal.ThisProcess.AppendLocal("client", TargetedRegression.CharacterEntry(point, characters, userData, name, expectedSha256));
-                    if (point == CharacterStageEvent.Intended) characterPending = true;
+                    if (point == CharacterStageEvent.Intended) { characterPending = true; ownershipStarted = true; }
                     if (point == CharacterStageEvent.Retired) characterPending = false;
-                });
+                }, deferReportWrite: true);
         if (processJournal != null)
             try { processJournal.Complete(); }
             catch (Exception failure)
             {
                 journalClean = false;
                 report.RecordFailure(StepPhase.Cleanup, "owned client process was not proved stopped", failure);
-                report.Write(armOutput);
             }
-        // Even a setup failure before the client opens has a journalled run ID in its result.
+        // Final-arm evidence is written once after the copy-cleanup verdict in finally.
         report.Provenance["runId"] = runId;
-        report.Write(armOutput);
-        lastArm = report; lastArmOutput = armOutput; // Only an arm whose report was written records the removal.
+        lastArm = report; lastArmOutput = armOutput;
+        if (arm != finalArm && report.Passed) report.Write(armOutput);
         passed &= report.Passed;
         // A failed arm's evidence is enough to diagnose it; do not silently call an A/B comparison complete.
         if (!report.Passed) break;
@@ -219,7 +222,7 @@ finally
             Console.Error.WriteLine("CLEANUP REFUSED: " + cleanup.Message + "; inspect the disposable install at " + runner.Install);
             if (exitCode == 0) exitCode = 1;
         }
-    if (journalClean)
+    if (journalClean && ownershipStarted)
         try
         {
             RunJournal.ThisProcess.AppendLocal("run", JournalEntry.Of(JournalEntry.RunEnded,

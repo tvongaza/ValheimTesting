@@ -14,6 +14,61 @@ public sealed class NativeSmokeLoaderTests : IDisposable
     public void Dispose() { _preflight.Dispose(); _rig.Dispose(); }
 
     [Fact]
+    public async Task EveryOneShotCommandLocksTheSameCompleteCliBundle()
+    {
+        using var journal = RunJournal.UseLocalDirectory(Path.Combine(_rig.Root, "all-packs-journal"));
+        _rig.Write("game/" + ServerRunPlan.ExecutableFor(HostProfile.CurrentPlatform switch
+        {
+            "windows" => ServerPlatform.Windows, "macos" => ServerPlatform.MacOS, _ => ServerPlatform.Linux,
+        }), Encoding.UTF8.GetBytes("fake dedicated executable"));
+        string adapter = _rig.Write("adapter/NativeSmoke.SessionAdapter.dll",
+            RegressionRig.Assembly("NativeSmoke.SessionAdapter", new(SmokeSessionContract.SessionAdapterPluginGuid)));
+        string manifest = _rig.CliManifest(save: true, full: true);
+        string files = Path.Combine(_rig.Root, "cli");
+        string[] shared = ["--mod", _rig.Parent, "--cli-manifest", manifest, "--cli-files", files,
+            "--search-root", Path.Combine(_rig.Root, "deps")];
+        string start = Path.Combine(_rig.Root, "all-packs-start");
+        string[] startArgs = ["start", "--game", _rig.Game, "--client-architecture", "x64", "--output", start, .. shared];
+        object? started = typeof(SmokeProject).Assembly.EntryPoint!.Invoke(null, [startArgs]);
+        Assert.Equal(1, started); // The rig has no registered Steam character; resolution already wrote its lock.
+
+        string server = Path.Combine(_rig.Root, "all-packs-server");
+        string[] serverArgs = ["--server", _rig.Game, "--adapter", adapter, "--server-only", "--preflight-only",
+            "--output", server, .. shared];
+        var ready = new CampaignPreflightReport([]);
+        Assert.Equal(0, await ServerLoad.RunAsync(serverArgs,
+            new ServerLoad.Seams(Inspect: _ => Task.FromResult(ready))));
+
+        string baked = Path.Combine(_rig.Root, "all-packs-bake");
+        var bakeArgs = serverArgs.Where(arg => arg != "--preflight-only").ToList();
+        bakeArgs[bakeArgs.IndexOf(server)] = baked;
+        Assert.Equal(1, await ServerLoad.RunAsync([.. bakeArgs, "--bake-fixture", Path.Combine(_rig.Root, "baked"),
+            "--assert-command", "mymod_new_alias", "--assert-line", "READY"],
+            new ServerLoad.Seams(Inspect: _ => Task.FromResult(ready),
+                Campaign: (_, _, _, _, _) => Task.FromResult(1))));
+
+        string companion = _rig.Write("companion/Companion.dll", RegressionRig.Assembly("Companion", new("example.companion")));
+        string comparison = Path.Combine(_rig.Root, "all-packs-ab");
+        Assert.Equal(0, await ServerLoadComparison.RunAsync(["--server", _rig.Game, "--adapter", adapter,
+            "--server-only", "--output", comparison, "--mod", _rig.Parent, "--mod", companion,
+            "--remove-mod", companion, "--cli-manifest", manifest, "--cli-files", files,
+            "--search-root", Path.Combine(_rig.Root, "deps")], _ => Task.FromResult(0)));
+
+        static (string File, string Hash)[] Pins(string path)
+        {
+            var resolved = NativeDependencyLock.ReadReady(path);
+            Assert.Equal(resolved.CliManifest.Files.Count, resolved.CliFiles.Count);
+            return resolved.CliFiles.Select(file => (Path.GetFileName(file.File), file.Sha256)).ToArray();
+        }
+        var expected = Pins(Path.Combine(start, "dependencies.lock.json"));
+        Assert.Equal(5, expected.Length); // Core, Standard, World Tools, Observe, and otherwise-unused Reflection.
+        foreach (string path in new[] { Path.Combine(server, "dependencies.lock.json"),
+            Path.Combine(baked, "dependencies.lock.json"), Path.Combine(comparison, "before-dependencies.lock.json"),
+            Path.Combine(comparison, "after-dependencies.lock.json") })
+            Assert.Equal(expected, Pins(path));
+    }
+
+    [Fact]
     public async Task RemovingOneModKeepsTheSameLoaderPackagesInBothArms()
     {
         _rig.Write("game/valheim_server.exe", Encoding.UTF8.GetBytes("fake dedicated executable"));
@@ -29,7 +84,7 @@ public sealed class NativeSmokeLoaderTests : IDisposable
         int result = await ServerLoadComparison.RunAsync(
             ["--server", _rig.Game, "--mod", _rig.Parent, "--mod", partner,
                 "--remove-mod", partner, "--loader-package", manifest,
-                "--cli-manifest", _rig.CliManifest(save: true), "--cli-files", Path.Combine(_rig.Root, "cli"),
+                "--cli-manifest", _rig.CliManifest(save: true, full: true), "--cli-files", Path.Combine(_rig.Root, "cli"),
                 "--search-root", Path.Combine(_rig.Root, "deps"), "--adapter", adapter,
                 "--output", Path.Combine(_rig.Root, "ab-run")],
             arguments => { arms.Add(arguments); return Task.FromResult(0); });
@@ -57,7 +112,7 @@ public sealed class NativeSmokeLoaderTests : IDisposable
         // The campaign path needs no generated consumer even when a reviewed loader package is selected.
         int result = await ServerLoad.RunAsync(
             ["--server", _rig.Game, "--mod", _rig.Parent, "--loader-package", manifest, "--server-only",
-                "--cli-manifest", _rig.CliManifest(save: true), "--cli-files", Path.Combine(_rig.Root, "cli"),
+                "--cli-manifest", _rig.CliManifest(save: true, full: true), "--cli-files", Path.Combine(_rig.Root, "cli"),
                 "--search-root", Path.Combine(_rig.Root, "deps"), "--adapter", adapter, "--output", output],
             new ServerLoad.Seams(Inspect: _ => Task.FromResult(new CampaignPreflightReport([])),
                 Campaign: (campaign, _, _, _, _) =>
@@ -85,7 +140,7 @@ public sealed class NativeSmokeLoaderTests : IDisposable
         object? exit = typeof(SmokeProject).Assembly.EntryPoint!.Invoke(null, [new[]
         {
             "start", "--game", _rig.Game, "--mod", _rig.Parent, "--client-architecture", "x64",
-            "--cli-manifest", _rig.CliManifest(save: true), "--cli-files", Path.Combine(_rig.Root, "cli"),
+            "--cli-manifest", _rig.CliManifest(save: true, full: true), "--cli-files", Path.Combine(_rig.Root, "cli"),
             "--search-root", Path.Combine(_rig.Root, "deps"), "--output", output,
         }]);
         Assert.Equal(3, exit);
@@ -105,16 +160,15 @@ public sealed class NativeSmokeLoaderTests : IDisposable
         object? exit = typeof(SmokeProject).Assembly.EntryPoint!.Invoke(null, [new[]
         {
             "start", "--game", _rig.Game, "--mod", _rig.Parent, "--client-architecture", "x64", // Synthetic Mac loader is x64-only.
-            "--cli-manifest", _rig.CliManifest(save: true),
+            "--cli-manifest", _rig.CliManifest(save: true, full: true),
             "--cli-files", Path.Combine(_rig.Root, "cli"), "--search-root", Path.Combine(_rig.Root, "deps"), "--output", output,
         }]);
         Assert.Equal(1, exit);
         var report = System.Text.Json.JsonDocument.Parse(File.ReadAllText(Path.Combine(output, "evidence", "smoke", "result.json")));
         string runId = report.RootElement.GetProperty("Provenance").GetProperty("runId").GetString()!;
-        // The registered character refusal precedes both the game and fixture copies. No copy intent is journalled.
-        Assert.False(File.Exists(Path.Combine(_rig.Root, "journal", runId, WorldFixture.Actor + ".jsonl")));
-        Assert.Empty(Directory.GetFiles(Path.Combine(_rig.Root, "journal", runId), "regression-*.jsonl"));
-        Assert.Contains(JournalEntry.RunEnded, File.ReadAllText(Path.Combine(_rig.Root, "journal", runId, "run.jsonl")));
+        // The registered character refusal precedes ownership of a character, game or fixture copy.
+        // No empty run journal is needed for a refusal before any owned resource exists.
+        Assert.False(Directory.Exists(Path.Combine(_rig.Root, "journal", runId)));
         var steps = report.RootElement.GetProperty("Steps").EnumerateArray().ToList();
         Assert.Equal("stage only the registered disposable character", steps[0].GetProperty("Name").GetString());
         Assert.Contains("userdata", steps[0].GetProperty("Error").GetString());

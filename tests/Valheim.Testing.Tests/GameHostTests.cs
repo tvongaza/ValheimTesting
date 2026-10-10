@@ -33,6 +33,8 @@ public class GameHostTests
         await Host("local", fake, HostShell.Pwsh).RunAsync("'hi'", null, Timeout);
         Assert.Equal("pwsh", fake.Calls[1].Executable);
         Assert.Equal(new[] { "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", ScriptedGameHost.EncodedPowerShellWrapper }, fake.Calls[1].Arguments);
+        Assert.Equal(OperatingSystem.IsMacOS() ? Path.GetTempPath() : null, fake.Calls[1].WorkingDirectory);
+        Assert.Null(fake.Calls[0].WorkingDirectory);
     }
 
     [Fact] public async Task AnSshHostSetsItsFixedOptionsFirstAndTheCommandAfterTheDestination()

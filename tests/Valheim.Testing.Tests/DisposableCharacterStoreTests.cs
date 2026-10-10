@@ -83,6 +83,29 @@ public sealed class DisposableCharacterStoreTests : IDisposable
     }
 
     [Fact]
+    public void FailedStagedCharacterDeletionStaysUnretiredAndCanBeRetried()
+    {
+        var store = DisposableCharacterStore.Create(StoreDirectory);
+        store.Register("tester", Local("seed", 11));
+        var events = new List<CharacterStageEvent>();
+        bool refuseDelete = true;
+        using var stage = RegisteredCharacterStage.InstallRegistered(StoreDirectory, "tester", _local, _steam, "smoke-only",
+            (point, _, _, _, _) => events.Add(point),
+            file => { if (refuseDelete) throw new IOException("character file is locked"); File.Delete(file); });
+        var report = new ScenarioReport("cleanup");
+        Assert.Contains("locked", Assert.Throws<IOException>(() => report.Step(StepPhase.Cleanup,
+            "remove only the staged test character", stage.Dispose)).Message);
+        Assert.False(report.CleanupVerified);
+        Assert.True(File.Exists(Path.Combine(_local, "smoke-only.fch")));
+        Assert.DoesNotContain(CharacterStageEvent.Retired, events);
+
+        refuseDelete = false;
+        stage.Dispose();
+        Assert.False(File.Exists(Path.Combine(_local, "smoke-only.fch")));
+        Assert.Equal(CharacterStageEvent.Retired, events[^1]);
+    }
+
+    [Fact]
     public void HostedSmokeRefusesANameAlreadyPresentInSteamCloud()
     {
         var store = DisposableCharacterStore.Create(StoreDirectory);

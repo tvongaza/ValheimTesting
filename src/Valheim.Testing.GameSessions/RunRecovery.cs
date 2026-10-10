@@ -252,10 +252,13 @@ internal static class RunRecovery
                         // only regression copies with an exact registered hash may be retired.
                         if (character.Fields.GetValueOrDefault("staged") != "true")
                         {
-                            HostListing? listing;
-                            try { listing = await HostInstall.ListAsync(host, character.Fields["characters"], timeout, cancellation: cancellation).ConfigureAwait(false); }
-                            catch (DirectoryNotFoundException) { listing = null; }
                             string fileName = character.Fields["fileName"];
+                            HostListing? listing;
+                            // Hash only this character's possible files, including backups. Retirement
+                            // removes all of them, so an unexpected backup must block retirement.
+                            try { listing = await HostInstall.ListCaseInsensitiveAsync(host, character.Fields["characters"], timeout,
+                                DisposableCharacterStore.OwnedFilePatterns(fileName), cancellation).ConfigureAwait(false); }
+                            catch (DirectoryNotFoundException) { listing = null; }
                             var owned = listing?.Files.Where(file => DisposableCharacterStore.IsCharacterFile(Path.GetFileName(file.Key), fileName)).ToArray() ?? [];
                             if (owned.Length == 0)
                             {
