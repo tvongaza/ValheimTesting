@@ -195,7 +195,7 @@ internal sealed class CampaignClients
                     if (bepInEx > left) bepInEx = left;
                     try
                     {
-                        (await host.WaitForLogAsync(log, 0, new System.Text.RegularExpressions.Regex("^"), StartupEvents.StartupFailures,
+                        (await host.WaitForLogAsync(log, 0, new System.Text.RegularExpressions.Regex("^"), StartupEvents.ClientStartupFailures,
                             bepInEx, token).ConfigureAwait(false)).EnsureMatched();
                     }
                     catch (WaitTimeoutException error)
@@ -207,7 +207,7 @@ internal sealed class CampaignClients
                         throw new InvalidOperationException($"BepInEx wrote no fresh log line on {host.Name} within {plan.BepInExSeconds}s. {why}" +
                             $"The client's Player.log and boot output are kept in {local}.", error);
                     }
-                    (await host.WaitForLogAsync(log, 0, StartupEvents.CliListening, StartupEvents.StartupFailures, left - clock.Elapsed, token).ConfigureAwait(false)).EnsureMatched();
+                    (await host.WaitForLogAsync(log, 0, StartupEvents.CliListening, StartupEvents.ClientStartupFailures, left - clock.Elapsed, token).ConfigureAwait(false)).EnsureMatched();
                     if (!_hooks.StateWaits) return;
                     using var states = StateWait.Connect(tunnel.Address, tunnel.LocalPort);
                     await states.WaitAsync([StateWait.MainMenu], left - clock.Elapsed, cancellation: token).ConfigureAwait(false);

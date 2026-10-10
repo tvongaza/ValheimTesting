@@ -108,9 +108,9 @@ internal static class DesktopClientSession
                 {
                     var clock = Stopwatch.StartNew();
                     var bepInEx = TimeSpan.FromSeconds(plan.BepInExSeconds);
-                    (await host.WaitForLogAsync(log, 0, new Regex("^"), StartupEvents.StartupFailures,
+                    (await host.WaitForLogAsync(log, 0, new Regex("^"), StartupEvents.ClientStartupFailures,
                         bepInEx < left ? bepInEx : left, token).ConfigureAwait(false)).EnsureMatched();
-                    (await host.WaitForLogAsync(log, 0, StartupEvents.CliListening, StartupEvents.StartupFailures,
+                    (await host.WaitForLogAsync(log, 0, StartupEvents.CliListening, StartupEvents.ClientStartupFailures,
                         left - clock.Elapsed, token).ConfigureAwait(false)).EnsureMatched();
                     using var states = StateWait.Connect(tunnel.Address, tunnel.LocalPort);
                     await states.WaitAsync([StateWait.MainMenu], left - clock.Elapsed, cancellation: token).ConfigureAwait(false);
