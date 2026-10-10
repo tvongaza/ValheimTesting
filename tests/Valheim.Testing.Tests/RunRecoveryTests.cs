@@ -575,6 +575,25 @@ public sealed class RunRecoveryTests : IDisposable
         Assert.Equal(runtime, check.Variables["runtime"]);
     }
 
+    [Fact] public async Task AStoppedServerProfileDoesNotRequireAnUnrelatedDesktopClientToStop()
+    {
+        const string run = "run-server-profile";
+        string runtime = Prep + "/runtime";
+        Directory.CreateDirectory(_host.Local(runtime));
+        Line(_host, run, "server", Gone, JournalEntry.CopyIntended,
+            ("runtime", runtime), ("stage", Prep + "/staging"), ("parent", Prep),
+            ("launchMode", "profile"), ("runtimeKind", "server"), ("launchRoot", "/source/server"));
+        Line(_host, run, "server", Gone, JournalEntry.CopyDone,
+            ("runtime", runtime), ("launchMode", "profile"), ("runtimeKind", "server"), ("launchRoot", "/source/server"));
+
+        var report = await RecoverAsync(run);
+
+        Assert.True(report.Recovered);
+        var check = Assert.Single(_host.Runs.Where(item => item.Script == "game-process"));
+        Assert.Equal("false", check.Variables["clientSession"]);
+        Assert.Equal("/source/server", check.Variables["runtime"]);
+    }
+
     [Fact] public async Task AHostThatCannotBeReadRefusesTheRecovery()
     {
         InterruptedRun();

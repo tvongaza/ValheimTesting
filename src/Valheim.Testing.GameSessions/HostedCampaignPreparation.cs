@@ -909,16 +909,19 @@ public static class HostedCampaignPreparation
                     var (name, role, _) = item;
                     string parent = HostPath.Join(role.Runtime, "vt-prep-" + id + "-" + name);
                     string runtime = HostPath.Join(parent, "runtime"), stage = HostPath.Join(parent, "staging");
+                    var kind = name == "server" ? HostedRuntimeKind.Server : HostedRuntimeKind.Client;
+                    bool profileLaunch = UseLocalProfile(profile.Hosts[hostName], copyGame);
                     // Journalled before the copy: an interrupted preparation leaves a record of every path it may own.
                     await journal.AppendAsync(host, journalDirectory, name, JournalEntry.Of(JournalEntry.CopyIntended,
                         ("runtime", runtime), ("stage", stage), ("parent", parent),
-                        ("launchMode", UseLocalProfile(profile.Hosts[hostName], copyGame) ? "profile" : "copy")), timeout, cancellation).ConfigureAwait(false);
+                        ("launchMode", profileLaunch ? "profile" : "copy"),
+                        ("runtimeKind", kind == HostedRuntimeKind.Server ? "server" : "client"),
+                        ("launchRoot", profileLaunch ? role.Install : runtime)), timeout, cancellation).ConfigureAwait(false);
                     // Owned from here: a failed preparation retires a partial copy too (idempotent where nothing was made), so its
                     // run-ended entry says cleanup was verified only when no copy of it remains, not when the copy's own cleanup failed.
                     copies.Add((hostName, name, runtime, stage));
-                    var kind = name == "server" ? HostedRuntimeKind.Server : HostedRuntimeKind.Client;
                     var loader = item.Input.LoaderPackage == null ? null : BepInExLoaderPackage.Read(item.Input.LoaderPackage);
-                    if (UseLocalProfile(profile.Hosts[hostName], copyGame))
+                    if (profileLaunch)
                     {
                         var prepared = await HostedRuntimeStage.PrepareProfileAsync(host, kind,
                             role.Install, runtime, stage, selections[name], timeout, cancellation,
@@ -940,7 +943,9 @@ public static class HostedCampaignPreparation
                         loaderListings[name] = listings[name];
                     }
                     await journal.AppendAsync(host, journalDirectory, name, JournalEntry.Of(JournalEntry.CopyDone,
-                        ("runtime", runtime), ("files", listings[name].Files.Count.ToString(System.Globalization.CultureInfo.InvariantCulture))), timeout, cancellation).ConfigureAwait(false);
+                        ("runtime", runtime), ("files", listings[name].Files.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                        ("runtimeKind", kind == HostedRuntimeKind.Server ? "server" : "client"),
+                        ("launchRoot", role.PreparedGameRoot ?? runtime)), timeout, cancellation).ConfigureAwait(false);
                     if (characters.TryGetValue(name, out var selected))
                     {
                         // The folders the host check resolved, never the manifest's object.
