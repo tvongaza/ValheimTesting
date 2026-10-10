@@ -21,7 +21,8 @@ internal static partial class HostedRuntimeStage
     internal static async Task<PreparedProfile> PrepareProfileAsync(IGameHost host, HostedRuntimeKind kind,
         string source, string destination, string staging, IReadOnlyList<HostedRuntimeFile> files, TimeSpan timeout,
         CancellationToken cancellation = default, BepInExLoaderPackage? loaderPackage = null,
-        HostListing? inspectedSource = null)
+        HostListing? inspectedSource = null,
+        Func<IGameHost, string, TimeSpan, CancellationToken, Task<MacBundleInspection.Verdict>>? inspectMac = null)
     {
         RequireStagePaths(host, kind, source, destination, staging, files);
         bool windows = host.Shell.Kind == HostShellKind.PowerShell;
@@ -31,7 +32,7 @@ internal static partial class HostedRuntimeStage
         var game = inspectedSource ?? await InspectSourceAsync(host, kind, source, loaderPackage, timeout, cancellation).ConfigureAwait(false);
         if (kind == HostedRuntimeKind.Client && MacAppBundle.IsMacClient(game))
         {
-            var bundle = await MacAppBundle.InspectAsync(host, source, HostedTimeouts.MacBundleAssessment(timeout), cancellation).ConfigureAwait(false);
+            var bundle = await (inspectMac ?? MacAppBundle.InspectAsync)(host, source, HostedTimeouts.MacBundleAssessment(timeout), cancellation).ConfigureAwait(false);
             if (MacBundleInspection.SourceRefusal(bundle) is { } refusal)
                 throw new InvalidOperationException($"The source Valheim.app on {host.Name} cannot launch: {refusal}");
         }
