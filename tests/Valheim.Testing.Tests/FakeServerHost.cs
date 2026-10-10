@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.IO.Enumeration;
 using Valheim.Testing.Game;
 using Valheim.Testing.Game.Fakes;
 using Xunit;
@@ -386,9 +387,15 @@ internal sealed class FakeServerHost : IGameHost
                 string root = Local(v["root"]);
                 if (!Directory.Exists(root)) return Ok("VT-LIST missing\n");
                 var text = new StringBuilder();
-                // The real host listing accepts an empty directory; WorldFixture.Manifest is stricter.
-                if (Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories).Any())
-                    foreach (var (relative, sha) in WorldFixture.Manifest(root)) text.Append(sha).Append("  ./").Append(relative.Replace('\\', '/')).Append('\n');
+                string[] patterns = v["dirs"].Split('\n', StringSplitOptions.RemoveEmptyEntries);
+                foreach (string file in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
+                {
+                    string relative = Path.GetRelativePath(root, file).Replace('\\', '/');
+                    if (patterns.Length != 0 && !patterns.Any(pattern => MatchesListedPath(relative, pattern, Windows || v.GetValueOrDefault("nocase") == "1"))) continue;
+                    if ((File.GetAttributes(file) & FileAttributes.ReparsePoint) != 0)
+                        return Ok("VT-LIST links\n./" + relative + "\n");
+                    text.Append(FileHash.Sha256(file)).Append("  ./").Append(relative).Append('\n');
+                }
                 if (File.Exists(Path.Combine(root, GameLaunch.ServerLinuxExecutable))) text.Append("VT-EXEC ").Append(GameLaunch.ServerLinuxExecutable).Append('\n');
                 return Ok(text.Append("VT-LIST done\n").ToString());
             }
@@ -603,6 +610,15 @@ internal sealed class FakeServerHost : IGameHost
         var forward = new FakeForward(["-L", $"127.0.0.1:{TunnelPort}:127.0.0.1:{hostPort}"], listen: false);
         Tunnels.Add(forward);
         return Task.FromResult(new CliTunnel(forward, TunnelPort, hostPort));
+    }
+
+    private static bool MatchesListedPath(string relative, string pattern, bool windows)
+    {
+        string[] parts = relative.Split('/');
+        int count = pattern.Replace('\\', '/').Split('/').Length;
+        if (parts.Length < count) return false;
+        string prefix = string.Join('/', parts.Take(count));
+        return FileSystemName.MatchesSimpleExpression(pattern.Replace('\\', '/'), prefix, ignoreCase: windows);
     }
 
     private static void CopyDirectory(string source, string target)

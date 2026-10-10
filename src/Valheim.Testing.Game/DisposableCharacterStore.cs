@@ -267,6 +267,11 @@ public sealed class DisposableCharacterStore
     /// <summary>The character's save file name, <c>&lt;character&gt;.fch</c>.</summary>
     internal static string SaveFile(string character) => character + ".fch";
 
+    // A host listing hashes only this character's files. Include the same save, temporary,
+    // previous and automatic-backup names that retirement can remove.
+    internal static string[] OwnedFilePatterns(string character) =>
+        [.. OwnedNames(character), .. OwnedPrefixes(character).Select(prefix => prefix + "*")];
+
     /// <summary>
     /// Every folder on this machine that can hold a character named like a staged one: <paramref name="charactersLocal"/>, its
     /// sibling Steam Cloud <c>characters</c> folder and every <c>&lt;account&gt;/892970/remote/characters</c> under

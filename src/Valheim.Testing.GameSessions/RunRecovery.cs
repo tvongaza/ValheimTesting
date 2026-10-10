@@ -254,10 +254,10 @@ internal static class RunRecovery
                         {
                             string fileName = character.Fields["fileName"];
                             HostListing? listing;
-                            // Before CharacterDone, only CreateNew of the registered .fch could have occurred.
-                            // Do not hash unrelated personal saves (or links) in characters_local.
-                            try { listing = await HostInstall.ListAsync(host, character.Fields["characters"], timeout,
-                                paths: [DisposableCharacterStore.SaveFile(fileName)], cancellation: cancellation).ConfigureAwait(false); }
+                            // Hash only this character's possible files, including backups. Retirement
+                            // removes all of them, so an unexpected backup must block retirement.
+                            try { listing = await HostInstall.ListCaseInsensitiveAsync(host, character.Fields["characters"], timeout,
+                                DisposableCharacterStore.OwnedFilePatterns(fileName), cancellation).ConfigureAwait(false); }
                             catch (DirectoryNotFoundException) { listing = null; }
                             var owned = listing?.Files.Where(file => DisposableCharacterStore.IsCharacterFile(Path.GetFileName(file.Key), fileName)).ToArray() ?? [];
                             if (owned.Length == 0)

@@ -175,15 +175,18 @@ public sealed class RunRecoveryTests : IDisposable
         Assert.DoesNotContain(_host.Runs, call => call.Script == "character-retire");
     }
 
-    [Fact]
-    public async Task RegressionCharacterIntentRefusesAnUnexpectedBackupEvenWhenTheMainFileMatches()
+    [Theory]
+    [InlineData("vt01.fch.old")]
+    [InlineData("VT01.FCH.OLD")]
+    [InlineData("vt01_backup_auto-2026")]
+    public async Task RegressionCharacterIntentRefusesAnUnexpectedBackupEvenWhenTheMainFileMatches(string backupName)
     {
         const string run = "run-character-intent-extra";
         byte[] source = System.Text.Encoding.UTF8.GetBytes("registered save");
         string local = _host.Local(Characters);
         Directory.CreateDirectory(local);
         File.WriteAllBytes(Path.Combine(local, "vt01.fch"), source);
-        File.WriteAllText(Path.Combine(local, "vt01.fch.old"), "personal backup");
+        File.WriteAllText(Path.Combine(local, backupName), "personal backup");
         Line(_host, run, "client", Gone, JournalEntry.CharacterIntended,
             ("characters", Characters), ("userData", UserData), ("fileName", "vt01"),
             ("characterKind", "regression"), ("local", "true"), ("expectedSha256", FileHash.Sha256(source)));
@@ -193,7 +196,27 @@ public sealed class RunRecoveryTests : IDisposable
         Assert.False(report.Recovered);
         Assert.DoesNotContain(_host.Runs, call => call.Script == "character-retire");
         Assert.True(File.Exists(Path.Combine(local, "vt01.fch")));
-        Assert.Equal("personal backup", File.ReadAllText(Path.Combine(local, "vt01.fch.old")));
+        Assert.Equal("personal backup", File.ReadAllText(Path.Combine(local, backupName)));
+    }
+
+    [Fact]
+    public async Task RealHostListingFindsCaseVariantBackupsWithoutReadingUnrelatedCharacters()
+    {
+        string local = Path.Combine(_root, "listing", "characters_local");
+        Directory.CreateDirectory(local);
+        File.WriteAllText(Path.Combine(local, "vt01.fch"), "registered");
+        File.WriteAllText(Path.Combine(local, "VT01_backup_auto-2026"), "unexpected backup");
+        if (!OperatingSystem.IsWindows())
+            File.CreateSymbolicLink(Path.Combine(local, "personal.fch"), Path.Combine(local, "missing-personal.fch"));
+        else File.WriteAllText(Path.Combine(local, "personal.fch"), "personal");
+        var host = new LocalGameHost("this machine", OperatingSystem.IsWindows() ? HostShell.WindowsPowerShell : HostShell.Bash);
+
+        var listing = await HostInstall.ListCaseInsensitiveAsync(host, local, TimeSpan.FromSeconds(10),
+            DisposableCharacterStore.OwnedFilePatterns("vt01"));
+
+        Assert.Equal(2, listing.Files.Count);
+        Assert.Contains(listing.Files.Keys, name => name.Equals("vt01.fch", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(listing.Files.Keys, name => name.Equals("VT01_backup_auto-2026", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]

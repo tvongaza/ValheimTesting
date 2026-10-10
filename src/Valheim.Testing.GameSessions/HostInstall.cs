@@ -44,10 +44,18 @@ public static class HostInstall
     /// <summary>
     /// Hashes every regular file under <paramref name="root"/> on the host (links are refused, as <see cref="WorldFixture"/>
     /// refuses them). <paramref name="paths"/> limits the listing to those subdirectories and files (relative, <c>*</c> allowed
-    /// in a directory, for example <c>*_Data/Managed</c>; a file only by its exact name, for example <c>winhttp.dll</c>); null
+    /// in a directory, for example <c>*_Data/Managed</c>, or at the file name, for example <c>save_backup_auto-*</c>); null
     /// lists everything. The patcher entries and executables are always read.
     /// </summary>
-    public static async Task<HostListing> ListAsync(IGameHost host, string root, TimeSpan timeout, IReadOnlyList<string>? paths = null, CancellationToken cancellation = default)
+    public static Task<HostListing> ListAsync(IGameHost host, string root, TimeSpan timeout, IReadOnlyList<string>? paths = null,
+        CancellationToken cancellation = default) => ListCoreAsync(host, root, timeout, paths, cancellation, ignoreCase: false);
+
+    internal static Task<HostListing> ListCaseInsensitiveAsync(IGameHost host, string root, TimeSpan timeout,
+        IReadOnlyList<string> paths, CancellationToken cancellation = default) =>
+        ListCoreAsync(host, root, timeout, paths, cancellation, ignoreCase: true);
+
+    private static async Task<HostListing> ListCoreAsync(IGameHost host, string root, TimeSpan timeout, IReadOnlyList<string>? paths,
+        CancellationToken cancellation, bool ignoreCase)
     {
         ArgumentNullException.ThrowIfNull(host);
         RequireHostPath(host, root, nameof(root));
@@ -56,7 +64,7 @@ public static class HostInstall
                 throw new ArgumentException($"'{path}' is not a relative path inside the root.", nameof(paths));
         var result = (await host.RunAsync(HostInstallScripts.List(host.Shell.Kind), new Dictionary<string, string>
         {
-            ["root"] = root, ["dirs"] = string.Join('\n', paths ?? Array.Empty<string>()),
+            ["root"] = root, ["dirs"] = string.Join('\n', paths ?? Array.Empty<string>()), ["nocase"] = ignoreCase ? "1" : "0",
         }, timeout, cancellation).ConfigureAwait(false)).EnsureSuccess($"Listing {root} on {host.Name}");
         return ReadListing(host.Name, host.Shell.Kind, root, result);
     }
@@ -275,6 +283,7 @@ internal static class HostInstallScripts
         if [ ! -d "$root" ]; then echo "VT-LIST missing"; exit 0; fi
         cd -- "$root" || exit 3
         shopt -s nullglob dotglob
+        if [ "${nocase:-0}" = 1 ]; then shopt -s nocaseglob; fi
         if command -v sha256sum > /dev/null 2>&1; then hasher=(sha256sum); else hasher=(shasum -a 256); fi
         roots=()
         if [ -z "$dirs" ]; then roots=(.); else
@@ -313,7 +322,10 @@ internal static class HostInstallScripts
                     $segment = $segments[$i]
                     $next = @()
                     foreach ($dir in $current) {
-                        if ($segment.IndexOfAny([char[]]'*?') -ge 0) { $next += [IO.Directory]::GetDirectories($dir, $segment) }
+                        if ($segment.IndexOfAny([char[]]'*?') -ge 0) {
+                            $next += [IO.Directory]::GetDirectories($dir, $segment)
+                            if ($i -eq $segments.Count - 1) { $next += [IO.Directory]::GetFiles($dir, $segment) }
+                        }
                         elseif ([IO.Directory]::Exists((Join-Path $dir $segment))) { $next += (Join-Path $dir $segment) }
                         elseif ($i -eq $segments.Count - 1 -and [IO.File]::Exists((Join-Path $dir $segment))) { $next += (Join-Path $dir $segment) }
                     }
