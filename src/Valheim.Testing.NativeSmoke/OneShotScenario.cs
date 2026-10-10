@@ -21,7 +21,8 @@ internal static class OneShotScenario
             throw new ArgumentException("Test-project build output must be a new private folder outside its project: " + output);
         string packages = ModBuild.WritableCache("NUGET_PACKAGES", "packages");
         string http = ModBuild.WritableCache("NUGET_HTTP_CACHE_PATH", "http");
-        var arguments = new List<string> { project, "-p:Configuration=Release", "-p:OutputPath=" + Path.Combine(output, "bin"),
+        var arguments = new List<string> { project, "-p:Configuration=Release", "-p:CopyLocalLockFileAssemblies=true",
+            "-p:OutputPath=" + Path.Combine(output, "bin"),
             "-p:CopyOutputDLLPath=" + Path.Combine(output, "private-deployment"), "-p:CopyOutputDLLPath2=", "-p:CopyOutputDLLPath3=" };
         foreach (var property in properties ?? new Dictionary<string, string>())
         {
@@ -112,7 +113,7 @@ internal static class OneShotScenario
         Assembly assembly = AssemblyLoadContext.Default.Assemblies.FirstOrDefault(loaded =>
             !loaded.IsDynamic && string.Equals(loaded.Location, file,
                 OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
-            ?? new ScenarioLoadContext(copy).LoadFromAssemblyPath(copy);
+            ?? new ScenarioLoadContext(copy).Open();
         Type[] candidates;
         try { candidates = assembly.GetTypes().Where(type => type.IsClass && !type.IsAbstract &&
             typeof(T).IsAssignableFrom(type) && type.GetConstructor(Type.EmptyTypes) != null).ToArray(); }
@@ -138,12 +139,22 @@ internal static class OneShotScenario
     private sealed class ScenarioLoadContext(string source) : AssemblyLoadContext(isCollectible: false)
     {
         private readonly AssemblyDependencyResolver _resolver = new(source);
+        internal Assembly Open() => LoadPinned(source);
+
+        // Keep the private evidence deletable on Windows after a run. Loading by path can hold each DLL open
+        // until process exit, even after this scenario is no longer running.
+        private Assembly LoadPinned(string path)
+        {
+            using var contents = File.OpenRead(path);
+            return LoadFromStream(contents);
+        }
+
         protected override Assembly? Load(AssemblyName name)
         {
             // The scenario and the tool must agree on these public actor and report types.
-            if (name.Name is "Valheim.Testing.GameSessions" or "Valheim.Testing.Game" or "Valheim.Testing") return null;
+            if (name.Name is "Valheim.Testing.GameSessions" or "Valheim.Testing.Game" or "Valheim.Testing" or "Valheim.Cli.Testing") return null;
             string? path = _resolver.ResolveAssemblyToPath(name);
-            return path == null ? null : LoadFromAssemblyPath(path);
+            return path == null ? null : LoadPinned(path);
         }
     }
 }

@@ -37,7 +37,7 @@ if (args.Length != 0 && args[0] is "server-load" or "server-load-ab")
 if (!StartArguments.TryRead(args, out var options, out var mods, out var roots, out var optionalReferences, out var buildDependencies, out var error, allowImplicitMod: true))
 {
     Console.Error.WriteLine(error);
-    Console.Error.WriteLine("Usage: valheim-test start [--mod DLL ... | --project MOD.csproj] [--scenario TEST.dll | --scenario-project TEST.csproj] [--dependency NAME=DLL ...] [--build-inputs FILE] [--output NEW_DIR] [--inventory FILE | --game DIR] [--client-env NAME] [--client-architecture x64|arm64] [--join-seconds 10..900] [--hold] [--source COMMIT] [--cli-manifest FILE --cli-files DIR] [--compare-mod DLL --compare-source COMMIT] [--search-root DIR ...] [--optional-reference ASSEMBLY ...] [--client-loader-package FILE] [--expected-log-error EXACT_HEADER --expected-log-reason REASON]");
+    Console.Error.WriteLine("Usage: valheim-test start [--mod DLL ... | --project MOD.csproj] [--scenario TEST.dll | --scenario-project TEST.csproj] [--dependency NAME=DLL ...] [--build-inputs FILE] [--output NEW_DIR] [--inventory FILE | --game DIR] [--client-env NAME] [--client-architecture x64|arm64] [--join-seconds 10..900] [--hold] [--source COMMIT] [--cli-manifest FILE --cli-files DIR] [--compare-mod DLL --compare-source COMMIT] [--search-root DIR|DLL ...] [--optional-reference ASSEMBLY ...] [--client-loader-package FILE] [--expected-log-error EXACT_HEADER --expected-log-reason REASON]");
     return 2;
 }
 
@@ -72,7 +72,13 @@ try
     foreach (string line in inventory.Detected) Console.WriteLine("detected: " + line);
     Console.WriteLine($"client: {client.Name} on {client.Host}: install {client.Install}; ValheimCLI port {client.CliPort}; architecture {architecture}");
     string game = client.Install;
-    SmokeOutput.RefuseInside(output, new[] { game, inventory.SteamUserData }.OfType<string>().ToArray());
+    // Resolve every selected source before a --project or --scenario-project build writes under --output.
+    var (cliManifest, cliFiles) = SmokeInputs.Cli(options);
+    string? loader = client.LoaderPackage;
+    if (loader != null && !File.Exists(loader)) throw new FileNotFoundException("--client-loader-package file does not exist: " + loader, loader);
+    var loaderPackage = loader == null ? null : BepInExLoaderPackage.Read(loader);
+    SmokeOutput.RefuseResolved(output, cliFiles, inventory, [client], loaderPackage?.Root);
+    outputChecked = true;
     if (options.TryGetValue("--project", out string? project))
     {
         var given = ModBuild.ParseDependencies(buildDependencies!);
@@ -105,20 +111,15 @@ try
         Console.WriteLine("build inputs verified: " + buildInputs);
     }
     string mod = selectedMods[0];
-    var (cliManifest, cliFiles) = SmokeInputs.Cli(options);
-    string? loader = client.LoaderPackage;
     foreach (var (name, path) in new[] { ("game", game), ("--cli-files", cliFiles) })
         if (!Directory.Exists(path)) throw new DirectoryNotFoundException(name + " directory does not exist: " + path);
-    if (loader != null && !File.Exists(loader)) throw new FileNotFoundException("--client-loader-package file does not exist: " + loader, loader);
-    var loaderPackage = loader == null ? null : BepInExLoaderPackage.Read(loader);
-    SmokeOutput.RefuseResolved(output, cliFiles, inventory, [client], loaderPackage?.Root);
-    outputChecked = true;
     var custom = options.TryGetValue("--scenario", out string? scenarioFile)
         ? OneShotScenario.LoadHosted(scenarioFile, output) : null;
     SmokeInputs.RecordClient(inventory, client, output);
     foreach (var (name, path) in selectedMods.Select(path => ("--mod", path)).Append(("--cli-manifest", cliManifest)))
         if (!File.Exists(path)) throw new FileNotFoundException(name + " file does not exist: " + path, path);
     string core = Path.Combine(loaderPackage?.Root ?? game, InstallPins.CoreDirectory);
+    if (verifiedBuild != null) ModBuild.RequireLoaderMatches(verifiedBuild, core);
     var request = SmokeDependencyInputs.Request(selectedMods, game, core, cliManifest, cliFiles,
         roots!, optionalReferences!, CliCapabilities.HostedRounds);
     var dependencies = NativeDependencyResolver.Resolve(request);

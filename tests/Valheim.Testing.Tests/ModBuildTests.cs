@@ -138,6 +138,34 @@ public sealed class ModBuildTests : IDisposable
         File.AppendAllText(counterpart, "changed");
         Assert.Contains("game build differs", Assert.Throws<InvalidDataException>(() => ModBuild.Verify(manifest, server, mod)).Message);
     }
+    [Fact] public void NativeLoaderMustMatchTheCoreUsedForTheCompile()
+    {
+        Inputs();
+        string compiledCore = Path.Combine(_game.Root, "BepInEx", "core");
+        string otherCore = Path.Combine(_work, "other-loader", "BepInEx", "core");
+        Directory.CreateDirectory(otherCore);
+        foreach (string name in new[] { "BepInEx.dll", "0Harmony.dll" })
+            File.Copy(Path.Combine(compiledCore, name), Path.Combine(otherCore, name));
+        var pins = new[] { "BepInEx.dll", "0Harmony.dll" }.Select(name =>
+            new ModBuild.FilePin(Path.Combine(compiledCore, name), FileHash.Sha256(Path.Combine(compiledCore, name)))).ToArray();
+        var record = new ModBuild.BuildRecord(_game.Root, "game", "managed", "mod", "mod", "BepInEx.AssemblyPublicizer/0.4.3",
+            [], [], pins);
+        ModBuild.RequireLoaderMatches(record, otherCore);
+        File.AppendAllText(Path.Combine(otherCore, "BepInEx.dll"), "different loader build");
+        Assert.Contains("different BepInEx.dll", Assert.Throws<InvalidDataException>(() =>
+            ModBuild.RequireLoaderMatches(record, otherCore)).Message);
+        Assert.Contains("do not pin 0Harmony.dll", Assert.Throws<InvalidDataException>(() =>
+            ModBuild.RequireLoaderMatches(record with { Dependencies = pins[..1] }, compiledCore)).Message);
+    }
+    [Fact] public void ExplicitDependencyDoesNotReopenTheEntirePluginsTree()
+    {
+        Inputs();
+        string selected = _game.Add("BepInEx/plugins/Chosen/Jotunn.dll", "selected build");
+        _game.Add("BepInEx/plugins/Other/Jotunn.dll", "other build");
+        var record = new ModBuild.BuildRecord(_game.Root, "game", "managed", "mod", "mod", "BepInEx.AssemblyPublicizer/0.4.3",
+            [], [], [new(selected, FileHash.Sha256(selected))]);
+        Assert.Equal([selected], ModBuild.ThirdPartyRoots(record));
+    }
     [Fact] public void AChangedModGetsANewRunPinWithoutEditingThePreviousRun()
     {
         Inputs();

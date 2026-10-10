@@ -14,6 +14,57 @@ public sealed class NativeSmokeLoaderTests : IDisposable
     public void Dispose() { _preflight.Dispose(); _rig.Dispose(); }
 
     [Fact]
+    public async Task OneShotScenarioBuildCannotWriteInsideTheSelectedCliBundle()
+    {
+        using var journal = RunJournal.UseLocalDirectory(Path.Combine(_rig.Root, "source-guard-journal"));
+        _rig.Write("game/" + ServerRunPlan.ExecutableFor(HostProfile.CurrentPlatform switch
+        {
+            "windows" => ServerPlatform.Windows, "macos" => ServerPlatform.MacOS, _ => ServerPlatform.Linux,
+        }), Encoding.UTF8.GetBytes("fake dedicated executable"));
+        string manifest = _rig.CliManifest(save: true, full: true);
+        string cli = Path.Combine(_rig.Root, "cli");
+        string project = _rig.Write("source-guard-project/Scenario.csproj", Encoding.UTF8.GetBytes(
+            "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>"));
+        string serverOutput = Path.Combine(cli, "bad-server-build");
+        int server = await ServerLoad.RunAsync(
+            ["--server", _rig.Game, "--mod", _rig.Parent, "--server-only", "--scenario-project", project,
+                "--cli-manifest", manifest, "--cli-files", cli, "--output", serverOutput],
+            new ServerLoad.Seams(Inspect: _ => Task.FromResult(new CampaignPreflightReport([]))));
+        Assert.Equal(3, server);
+        Assert.False(Path.Exists(serverOutput));
+
+        string hostedOutput = Path.Combine(cli, "bad-hosted-build");
+        object? hosted = typeof(SmokeProject).Assembly.EntryPoint!.Invoke(null, [new[]
+        {
+            "start", "--game", _rig.Game, "--mod", _rig.Parent, "--scenario-project", project,
+            "--client-architecture", "x64", "--cli-manifest", manifest, "--cli-files", cli, "--output", hostedOutput,
+        }]);
+        Assert.Equal(3, hosted);
+        Assert.False(Path.Exists(hostedOutput));
+
+        var loader = Package("source-guard-loader");
+        string loaderManifest = Path.Combine(_rig.Root, "source-guard-loader.json");
+        loader.Write(loaderManifest);
+        string serverLoaderOutput = Path.Combine(loader.Root, "bad-server-build");
+        Assert.Equal(3, await ServerLoad.RunAsync(
+            ["--server", _rig.Game, "--mod", _rig.Parent, "--server-only", "--scenario-project", project,
+                "--loader-package", loaderManifest, "--cli-manifest", manifest, "--cli-files", cli,
+                "--output", serverLoaderOutput],
+            new ServerLoad.Seams(Inspect: _ => Task.FromResult(new CampaignPreflightReport([])))));
+        Assert.False(Path.Exists(serverLoaderOutput));
+
+        string hostedLoaderOutput = Path.Combine(loader.Root, "bad-hosted-build");
+        hosted = typeof(SmokeProject).Assembly.EntryPoint!.Invoke(null, [new[]
+        {
+            "start", "--game", _rig.Game, "--mod", _rig.Parent, "--scenario-project", project,
+            "--client-loader-package", loaderManifest, "--client-architecture", "x64",
+            "--cli-manifest", manifest, "--cli-files", cli, "--output", hostedLoaderOutput,
+        }]);
+        Assert.Equal(3, hosted);
+        Assert.False(Path.Exists(hostedLoaderOutput));
+    }
+
+    [Fact]
     public async Task EveryOneShotCommandLocksTheSameCompleteCliBundle()
     {
         using var journal = RunJournal.UseLocalDirectory(Path.Combine(_rig.Root, "all-packs-journal"));

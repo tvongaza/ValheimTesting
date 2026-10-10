@@ -3,10 +3,11 @@ using System.Text.Json.Serialization;
 
 namespace Valheim.Testing.Game;
 
-/// <summary>Inputs for discovering the files a native mod smoke needs. Search roots are explicit local directories; nothing is downloaded.</summary>
+/// <summary>Inputs for discovering the files a native mod smoke needs. Search inputs are explicit local directories or DLLs; nothing is downloaded.</summary>
 public sealed class NativeDependencyRequest
 {
     public List<string> Mods { get; set; } = [];
+    /// <summary>Local directories to inspect, or exact DLL paths that take precedence over other discovered builds of the same dependency.</summary>
     public List<string> SearchRoots { get; set; } = [];
     public string GameManaged { get; set; } = "";
     public string BepInExCore { get; set; } = "";
@@ -193,7 +194,11 @@ public static class NativeDependencyResolver
     {
         ArgumentNullException.ThrowIfNull(request);
         if (request.Mods.Count == 0) throw new ArgumentException("mods: give at least one plugin DLL.");
-        foreach (string folder in request.SearchRoots.Append(request.GameManaged).Append(request.BepInExCore).Append(request.CliFiles))
+        foreach (string source in request.SearchRoots)
+            if (!Path.IsPathFullyQualified(source) || !(Directory.Exists(source) || File.Exists(source) &&
+                Path.GetExtension(source).Equals(".dll", StringComparison.OrdinalIgnoreCase)))
+                throw new FileNotFoundException($"Dependency search input {source} must be an existing local directory or DLL.", source);
+        foreach (string folder in new[] { request.GameManaged, request.BepInExCore, request.CliFiles })
             if (!Path.IsPathFullyQualified(folder) || !Directory.Exists(folder)) throw new DirectoryNotFoundException($"Dependency search directory {folder} does not exist; supply an explicit local root.");
         foreach (string file in request.Mods.Append(request.CliManifest))
             if (!Path.IsPathFullyQualified(file) || !File.Exists(file)) throw new FileNotFoundException($"Dependency input {file} does not exist; supply an absolute local file.", file);
@@ -208,8 +213,9 @@ public static class NativeDependencyResolver
         var needed = bundle.ForCapabilities(requiredCli);
         var cli = request.StageAllCliPacks ? bundle : needed;
         result.CliManifest = cli;
+        var exactSources = request.SearchRoots.Where(File.Exists).ToHashSet(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
         var inventory = request.SearchRoots.Concat(request.Mods.Select(path => Path.GetDirectoryName(path)!)).Distinct(StringComparer.Ordinal)
-            .SelectMany(root => Directory.EnumerateFiles(root, "*.dll", SearchOption.AllDirectories))
+            .SelectMany(root => File.Exists(root) ? new[] { root } : Directory.EnumerateFiles(root, "*.dll", SearchOption.AllDirectories))
             .Concat(request.Mods).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).Select(path =>
             {
                 try { return (Path: path, Metadata: PluginMetadata.Read(path)); }
@@ -237,6 +243,15 @@ public static class NativeDependencyResolver
                     .ThenBy(source => source, StringComparer.Ordinal).First();
                 choices.Add(chosen);
                 equivalentSources[chosen] = sources;
+            }
+            // A file named explicitly in SearchRoots wins over directory-discovered builds.
+            // If two different explicit builds match, keep the ambiguity visible.
+            var named = choices.Where(choice => equivalentSources[choice].Any(exactSources.Contains)).ToArray();
+            if (named.Length == 1)
+            {
+                string exact = equivalentSources[named[0]].First(exactSources.Contains);
+                equivalentSources[exact] = equivalentSources[named[0]];
+                return [exact];
             }
             return choices;
         }
@@ -291,6 +306,22 @@ public static class NativeDependencyResolver
                     {
                         if (!already.Any(item => DependencyRule.AtLeast(item.p.Version, dependency.MinimumVersion)))
                             Gap("plugin", dependency.Guid, $"{Path.GetFileName(path)} needs {dependency.Guid} >= {dependency.MinimumVersion}, but the selected {Path.GetFileName(already[0].candidate)} declares {already[0].p.Version}; select a compatible build instead of staging both.", []);
+                        continue;
+                    }
+                    var exactMatches = DistinctCandidates(inventory.Where(item => exactSources.Contains(item.Path) &&
+                        item.Metadata.Plugins.Any(p => p.Guid == dependency.Guid)).Select(item => item.Path));
+                    if (exactMatches.Count == 1)
+                    {
+                        string exact = exactMatches[0];
+                        string version = known[exact].Plugins.First(p => p.Guid == dependency.Guid).Version;
+                        if (!DependencyRule.AtLeast(version, dependency.MinimumVersion))
+                            Gap("plugin", dependency.Guid, $"{Path.GetFileName(path)} requires {dependency.Guid} >= {dependency.MinimumVersion}, but the explicitly selected {Path.GetFileName(exact)} declares {version}; choose a compatible DLL.", AllSources(exactMatches));
+                        else Add(exact, $"hard [BepInDependency] {dependency.Guid} of {Path.GetFileName(path)}");
+                        continue;
+                    }
+                    if (exactMatches.Count > 1)
+                    {
+                        Gap("plugin", dependency.Guid, $"More than one explicitly selected DLL provides {dependency.Guid}; choose one build.", AllSources(exactMatches));
                         continue;
                     }
                     var matches = DistinctCandidates(inventory.Where(item => item.Metadata.Plugins.Any(p => p.Guid == dependency.Guid && DependencyRule.AtLeast(p.Version, dependency.MinimumVersion)))

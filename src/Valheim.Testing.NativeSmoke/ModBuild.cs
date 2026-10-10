@@ -258,17 +258,23 @@ internal static partial class ModBuild
     {
         var roots = new HashSet<string>(StringComparer.Ordinal);
         foreach (var pin in record.Dependencies.Where(pin => Path.GetFileName(pin.File) is not ("BepInEx.dll" or "0Harmony.dll")))
-        {
-            roots.Add(Path.GetDirectoryName(pin.File)!);
-            for (var directory = new DirectoryInfo(Path.GetDirectoryName(pin.File)!); directory != null; directory = directory.Parent)
-                if (directory.Name.Equals("BepInEx", StringComparison.OrdinalIgnoreCase))
-                {
-                    string plugins = Path.Combine(directory.FullName, "plugins");
-                    if (Directory.Exists(plugins)) roots.Add(plugins);
-                    break;
-                }
-        }
+            roots.Add(pin.File);
+        // A pinned file is an exact resolver choice. Scanning even its parent folder can rediscover
+        // another build of the same assembly. Other transitive dependencies use explicit roots.
         return roots.Order(StringComparer.Ordinal);
+    }
+
+    internal static void RequireLoaderMatches(BuildRecord record, string selectedCore)
+    {
+        foreach (string name in new[] { "BepInEx.dll", "0Harmony.dll" })
+        {
+            var compiled = record.Dependencies.SingleOrDefault(pin =>
+                Path.GetFileName(pin.File).Equals(name, StringComparison.OrdinalIgnoreCase))
+                ?? throw new InvalidDataException($"Build inputs do not pin {name}; rebuild the mod before launch.");
+            string selected = Path.Combine(selectedCore, name);
+            if (!File.Exists(selected) || FileHash.Sha256(selected) != compiled.Sha256)
+                throw new InvalidDataException($"The selected native loader has a different {name} from the mod's compile input; rebuild with this loader or select the loader used for the build.");
+        }
     }
 
     internal static void RequireResolvedDependencies(BuildRecord record, NativeDependencyLock resolved)

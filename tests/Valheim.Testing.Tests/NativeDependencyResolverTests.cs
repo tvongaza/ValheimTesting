@@ -1104,6 +1104,11 @@ public sealed class NativeDependencyResolverTests : IDisposable
         Assert.Equal("xunit.core", gap.Name);
         Assert.Equal(2, gap.Candidates.Count);
         Assert.Empty(ambiguous.Plugins);
+
+        request.SearchRoots.Add(library); // Exact file beats both directory scans.
+        var chosen = NativeDependencyResolver.Resolve(request);
+        Assert.True(chosen.Ready, string.Join("; ", chosen.Gaps.Select(item => item.Reason)));
+        Assert.Equal(library, Assert.Single(chosen.Plugins).File);
     }
 
     [Fact] public void IdenticalHardPluginCopiesAcrossModFolderAndSearchRootAreOneChoice()
@@ -1126,6 +1131,35 @@ public sealed class NativeDependencyResolverTests : IDisposable
         var gap = Assert.Single(different.Gaps);
         Assert.Equal("plugin", gap.Kind);
         Assert.Equal(2, gap.Candidates.Count);
+
+        var request = Request(_rig.Parent);
+        request.SearchRoots.Add(searchRoot); // Preserve the explicitly selected build despite the competing mod-folder copy.
+        var selected = NativeDependencyResolver.Resolve(request);
+        Assert.True(selected.Ready, string.Join("; ", selected.Gaps.Select(item => item.Reason)));
+        Assert.Equal(searchRoot, Assert.Single(selected.Plugins).File);
+    }
+
+    [Fact] public void AnExplicitOlderPluginIsRefusedInsteadOfSubstitutingANewerScannedBuild()
+    {
+        string mod = _rig.Write("versioned/Needs.dll", RegressionRig.Assembly("Needs",
+            new("example.needs") { Minimum = [("example.dependency", "2.0.0")] }));
+        string old = _rig.Write("old/Dependency.dll", RegressionRig.Assembly("Dependency", new("example.dependency", "1.0.0")));
+        string current = _rig.Write("current/Dependency.dll", RegressionRig.Assembly("Dependency", new("example.dependency", "3.0.0")));
+        var request = Request(mod);
+        request.SearchRoots = [Path.GetDirectoryName(current)!, old];
+
+        var refused = NativeDependencyResolver.Resolve(request);
+        Assert.False(refused.Ready);
+        var gap = Assert.Single(refused.Gaps);
+        Assert.Equal("plugin", gap.Kind);
+        Assert.Contains("explicitly selected", gap.Reason);
+        Assert.Contains(old, gap.Candidates);
+        Assert.Empty(refused.Plugins);
+
+        request.SearchRoots = [Path.GetDirectoryName(current)!, current];
+        var selected = NativeDependencyResolver.Resolve(request);
+        Assert.True(selected.Ready, string.Join("; ", selected.Gaps.Select(item => item.Reason)));
+        Assert.Equal(current, Assert.Single(selected.Plugins).File);
     }
 
     [Fact] public void IdenticalReferencedLibraryWithAnotherFilenameIsOneChoice()
