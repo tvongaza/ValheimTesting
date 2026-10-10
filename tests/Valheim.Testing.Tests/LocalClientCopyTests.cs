@@ -71,7 +71,9 @@ public sealed class LocalClientCopyTests : IDisposable
         Assert.True(File.Exists(Path.Combine(copy.Runtime, "BepInEx", "plugins", "Valheim.Cli.Standard.dll")));
         Assert.True(File.Exists(Path.Combine(copy.Runtime, "BepInEx", "plugins", "Unrelated.dll")));
         Assert.True(File.Exists(Path.Combine(copy.Runtime, "BepInEx", "config", "BepInEx.cfg")));
-        Assert.Contains("Port = 5556", File.ReadAllText(Path.Combine(copy.Runtime, "BepInEx", "config", "valheimCLI.valheimCLI.cfg")));
+        string cliConfig = File.ReadAllText(Path.Combine(copy.Runtime, "BepInEx", "config", "valheimCLI.valheimCLI.cfg"));
+        Assert.Contains("Port = 5556", cliConfig);
+        Assert.Contains("AllowOnServerClients = true", cliConfig);
         // The static check runs on the copy: exactly the staged set, by SHA256.
         Assert.Equal(2, plan.CheckCliManifest()!.Files.Count);
         // Nothing in the install changed.
@@ -88,6 +90,50 @@ public sealed class LocalClientCopyTests : IDisposable
         Assert.Equal(manifest, plan.CliManifest);
         Assert.Contains("\"copy-retired\"", string.Concat(Directory.EnumerateFiles(Path.Combine(data, "journal"), "client.jsonl", SearchOption.AllDirectories).Select(File.ReadAllText)));
         Assert.Equal(before, Tree(source));
+    }
+
+    [Theory]
+    [InlineData("[Server]\nEnabled = true\nPort = 5556\n")]
+    [InlineData("[Server]\nEnabled = true\nAllowOnServerClients = false\nPort = 5556\n")]
+    [InlineData("[Other]\nAllowOnServerClients = true\n[Server]\nEnabled = true\nPort = 5556\n")]
+    [InlineData("[server]\nAllowOnServerClients = true\nPort = 5556\n")]
+    [InlineData("[ Server ]\nAllowOnServerClients = true\nPort = 5556\n")]
+    [InlineData("[Server]\nallowonserverclients = true\nPort = 5556\n")]
+    [InlineData("[Server]\nAllowOnServerClients = true # test\nPort = 5556\n")]
+    [InlineData("[Server]\nAllowOnServerClients = true ; test\nPort = 5556\n")]
+    public async Task AnExplicitClientConfigWithoutMutationAccessIsRefusedBeforeTheCopy(string contents)
+    {
+        string config = Path.Combine(_rig.Game, "BepInEx", "config", "valheimCLI.valheimCLI.cfg");
+        Directory.CreateDirectory(Path.GetDirectoryName(config)!);
+        File.WriteAllText(config, contents);
+        var before = Tree(_rig.Game);
+        var plan = Plan(_rig.Game);
+        plan.CliManifest = CliSet();
+        string data = Path.Combine(_rig.Root, "data");
+        using var journalDirectory = RunJournal.UseLocalDirectory(Path.Combine(data, "journal"));
+
+        var failure = await Assert.ThrowsAsync<InvalidDataException>(() =>
+            LocalClientCopy.PrepareAsync("client", plan, default, data, ThisMachine(), loader: (_, _) => null));
+        Assert.Contains("AllowOnServerClients = true", failure.Message);
+        Assert.False(Directory.Exists(Path.Combine(data, "runs")));
+        Assert.Equal(before, Tree(_rig.Game));
+    }
+
+    [Fact] public async Task AnExplicitClientConfigWithMutationAccessIsStagedUnchanged()
+    {
+        string config = Path.Combine(_rig.Game, "BepInEx", "config", "valheimCLI.valheimCLI.cfg");
+        Directory.CreateDirectory(Path.GetDirectoryName(config)!);
+        const string chosen = "[Server]\nEnabled = true\nAllowOnServerClients = true\nPort = 5556\n[Extra]\nKeep = yes\n";
+        File.WriteAllText(config, chosen);
+        var before = Tree(_rig.Game);
+        var plan = Plan(_rig.Game);
+        plan.CliManifest = CliSet();
+        string data = Path.Combine(_rig.Root, "data");
+        using var journalDirectory = RunJournal.UseLocalDirectory(Path.Combine(data, "journal"));
+        var copy = await LocalClientCopy.PrepareAsync("client", plan, default, data, ThisMachine(), loader: (_, _) => null);
+        Assert.Equal(chosen, File.ReadAllText(Path.Combine(copy.Runtime, "BepInEx", "config", "valheimCLI.valheimCLI.cfg")));
+        Assert.Equal(before, Tree(_rig.Game));
+        await copy.RetireAsync();
     }
 
     // An install whose Doorstop pair does not match takes the shipped BepInExPack in its copy: the pack's own files (its

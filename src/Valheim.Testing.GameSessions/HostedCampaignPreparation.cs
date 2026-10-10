@@ -853,13 +853,9 @@ public static class HostedCampaignPreparation
             JsonSerializer.Serialize(readiness.Report.Actors, new JsonSerializerOptions { WriteIndented = true }) + "\n");
         foreach (var (name, role, _) in roles)
         {
-            const string configName = "BepInEx/config/valheimCLI.valheimCLI.cfg";
-            if (selections[name].Any(file => file.RelativePath.Equals(configName, StringComparison.OrdinalIgnoreCase))) continue;
             string config = Path.Combine(output, "inputs", name, "valheimCLI.valheimCLI.cfg");
-            Directory.CreateDirectory(Path.GetDirectoryName(config)!);
-            File.WriteAllText(config, "[Server]\nEnabled = true\nAllowOnServerClients = true\nPort = " +
-                role.CliPort.ToString(System.Globalization.CultureInfo.InvariantCulture) + "\n");
-            selections[name] = [.. selections[name], new HostedRuntimeFile(config, configName)];
+            selections[name] = CliServerConfig.Stage(selections[name], name, role.CliPort, config,
+                requireClientMutations: name != "server").ToArray();
         }
         var journal = new RunJournal(runId ?? RunJournal.NewRunId());
         string id = journal.RunId;

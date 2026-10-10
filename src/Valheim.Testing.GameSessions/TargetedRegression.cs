@@ -254,17 +254,12 @@ public sealed class TargetedRegression
         var selected = placements.Select(file => new HostedRuntimeFile(file.Source, file.Relative)).ToList();
         selected.AddRange(patchers.Select(file => new HostedRuntimeFile(file.File.File, "BepInEx/patchers/" + Path.GetFileName(file.File.File))));
         selected.AddRange(env.Configs.Select(file => new HostedRuntimeFile(file.Value, "BepInEx/config/" + file.Key)));
-        string? generatedConfig = null;
-        if (!env.Configs.ContainsKey(CliConfig))
-        {
-            generatedConfig = Path.Combine(Path.GetTempPath(), "vt-regression-" + Guid.NewGuid().ToString("N") + ".cfg");
-            File.WriteAllText(generatedConfig, $"[Server]\nEnabled = true\nPort = {Port.ToString(System.Globalization.CultureInfo.InvariantCulture)}\n");
-            selected.Add(new HostedRuntimeFile(generatedConfig, "BepInEx/config/" + CliConfig));
-        }
+        string generatedConfig = Path.Combine(Path.GetTempPath(), "vt-regression-" + Guid.NewGuid().ToString("N") + ".cfg");
+        selected = CliServerConfig.Stage(selected, "Regression client", Port, generatedConfig);
         try
         {
             try { PrepareCopy(selected); }
-            finally { if (generatedConfig != null) File.Delete(generatedConfig); }
+            finally { File.Delete(generatedConfig); }
             string install = Install;
             var staged = new List<(StagedFile File, PluginAssembly Metadata)>();
             foreach (var (role, source, sha256, relative, read) in placements)

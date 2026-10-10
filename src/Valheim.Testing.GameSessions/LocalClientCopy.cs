@@ -19,7 +19,6 @@ internal sealed class LocalClientCopy
 {
     /// <summary>The longest any one step may take; copying a 4 GB install takes minutes on a slow disk.</summary>
     internal static readonly TimeSpan StepTimeout = TimeSpan.FromMinutes(30);
-    private const string CliConfig = "BepInEx/config/valheimCLI.valheimCLI.cfg";
 
     private readonly IGameHost _host;
     private readonly string _actor, _runtime, _stage;
@@ -169,13 +168,8 @@ internal sealed class LocalClientCopy
         foreach (var found in location.Located)
             selection.Add(new HostedRuntimeFile(found.Path, "BepInEx/plugins/" + found.File.File));
         // ValheimCLI's port, as a session writes it, when the install has no config of its own for it.
-        if (!selection.Any(file => file.RelativePath.Equals(CliConfig, StringComparison.OrdinalIgnoreCase)))
-        {
-            config = Path.Combine(Path.GetTempPath(), "vt-local-client-" + Guid.NewGuid().ToString("N") + ".cfg");
-            File.WriteAllText(config, "[Server]\nEnabled = true\nPort = " + plan.Port.ToString(CultureInfo.InvariantCulture) + "\n");
-            selection.Add(new HostedRuntimeFile(config, CliConfig));
-        }
-        return selection;
+        config = Path.Combine(Path.GetTempPath(), "vt-local-client-" + Guid.NewGuid().ToString("N") + ".cfg");
+        return CliServerConfig.Stage(selection, "Client", plan.Port, config);
     }
 
     // The plan, bound to its copy: the copy's install and install pins, its plugin pins with the staged set's in place of any

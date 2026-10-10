@@ -176,6 +176,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
             Assert.DoesNotContain("BepInEx/plugins/Server.dll", campaign.Listings["client-a"].Files.Keys);
             Assert.Contains("BepInEx/plugins/Client.dll", campaign.Listings["client-b"].Files.Keys);
             Assert.Contains("BepInEx/config/valheimCLI.valheimCLI.cfg", campaign.Listings["client-a"].Files.Keys);
+            Assert.Contains("AllowOnServerClients = true", File.ReadAllText(Path.Combine(output, "inputs", "client-a", "valheimCLI.valheimCLI.cfg")));
             Assert.Contains("example.server", campaign.PluginPins("server").Keys);
             Assert.DoesNotContain("example.server", campaign.PluginPins("client-a").Keys);
             var clients = new Dictionary<string, ClientRunPlan>
