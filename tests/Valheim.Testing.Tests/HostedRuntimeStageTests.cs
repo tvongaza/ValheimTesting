@@ -3,6 +3,12 @@ using System.Diagnostics;
 using Xunit;
 using Valheim.Testing.GameSessions;
 
+// This class checks the real process table. Other test classes launch stand-ins named Valheim.exe and
+// valheim_server.exe; an idle check cannot race those launches and still have a deterministic verdict.
+[CollectionDefinition(nameof(WindowsGameProcessInventory), DisableParallelization = true)]
+public sealed class WindowsGameProcessInventory { }
+
+[Collection(nameof(WindowsGameProcessInventory))]
 public sealed class HostedRuntimeStageTests : IDisposable
 {
     private readonly string _root = Directory.CreateTempSubdirectory("host-stage-").FullName;
