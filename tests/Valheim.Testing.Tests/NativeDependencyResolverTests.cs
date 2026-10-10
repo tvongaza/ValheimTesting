@@ -545,12 +545,14 @@ public sealed class NativeDependencyResolverTests : IDisposable
         }));
         byte[] zip = ShippedLoaderTests.Pack();
         byte[]? copiedCore = null;
+        int runStarted = 0;
         host.AfterApply = runtime => copiedCore = File.ReadAllBytes(Path.Combine(runtime, "BepInEx", "core", "BepInEx.dll"));
         var options = new PinnedServerRunOptions<SitePlan>
         {
             Name = "loader-" + tag, ReadPlan = _ => throw new InvalidOperationException("A campaign plan is in memory."),
             Mod = new("test.mod/session", "TEST_SESSION_TOKEN"),
             Scenario = (_, _) => Task.CompletedTask,
+            RunStarted = run => { Assert.True(RunJournal.SafeName(run)); Assert.Null(copiedCore); runStarted++; },
             Hooks = new FakeRunHooks
             {
                 Host = _ => host, Connect = _ => server.Connect(), StateWaits = false, RunId = "run-test",
@@ -570,6 +572,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         Assert.True(exit == 0, result.ToString());
         var provenance = result.GetProperty("Provenance");
         Assert.NotNull(copiedCore);
+        Assert.Equal(1, runStarted);
         Assert.Equal(sourceCore, File.ReadAllBytes(Path.Combine(source, "BepInEx", "core", "BepInEx.dll"))); // the install is never changed
         if (rule)
         {

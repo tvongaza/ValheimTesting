@@ -33,7 +33,10 @@ internal sealed class ForegroundHold : IDisposable
         // A stale marker must be recovered deliberately; a second owner must never overwrite it.
         using (var file = new FileStream(marker, FileMode.CreateNew, FileAccess.Write, FileShare.None))
             JsonSerializer.Serialize(file, identity);
-        return new ForegroundHold(marker, request, identity);
+        var hold = new ForegroundHold(marker, request, identity);
+        try { DetachedSession.SignalHeld(run, evidence, identity.Pid, identity.Started); }
+        catch { hold.Dispose(); throw; }
+        return hold;
     }
 
     internal static async Task HoldAsync(string run, string evidence, CancellationToken cancellation,

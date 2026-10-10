@@ -47,6 +47,8 @@ public sealed class PinnedServerRunOptions<TPlan> where TPlan : ServerRunPlan
     internal Func<TPlan, OwnedServerSession>? SessionOverride { get; init; }
     /// <summary>What a run on other hosts reaches outside this process (<see cref="IHostedRunHooks"/>); tests pass fakes.</summary>
     internal IHostedRunHooks Hooks { get; init; } = HostedRunHooks.Production;
+    /// <summary>Internal detached-owner handshake, before this campaign journals or copies anything.</summary>
+    internal Action<string>? RunStarted { get; init; }
 }
 
 /// <summary>
@@ -600,6 +602,7 @@ public static class PinnedServerRun
                 report.Provenance["campaignSha256"] = FileHash.Sha256(manifestFile);
                 // One run id for the whole campaign: its prepared installs, its journal and the server run's directory.
                 string campaignRunId = RunJournal.NewRunId();
+                options.RunStarted?.Invoke(campaignRunId);
                 report.Provenance["runId"] = campaignRunId;
                 journalRun = RunJournal.UseRun(campaignRunId);
                 var inspection = InspectCampaign(report, manifestFile);
