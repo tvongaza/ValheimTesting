@@ -7,7 +7,7 @@ namespace Valheim.Testing.Game;
 /// The inputs of a targeted native regression: one owned client hosting one disposable world, one mod under test in two
 /// or more arms (conventionally <c>parent</c> and <c>candidate</c>), its runtime dependencies and an optional game-side
 /// probe. Where it runs is not here: the client's install, port, disposable copy, save folders and loader come from the
-/// environment inventory's client environment (<see cref="TargetedRegression"/>), this machine when there is no file.
+/// environment inventory's client environment (selected by <c>TargetedRegression</c> in GameSessions), this machine when there is no file.
 /// The scenario source (the rounds and their assertions) stays free of both, so the same source can be shared.
 /// <see cref="Read"/> resolves relative paths against the file's own directory and refuses unknown fields.
 /// </summary>
