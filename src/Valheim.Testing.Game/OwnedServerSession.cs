@@ -73,6 +73,9 @@ public sealed class StartupEvents
     ];
     /// <summary><see cref="BepInExPluginLoadFailures"/> and <see cref="RuntimeLoadFailures"/>: what the owned server and client startups fail on.</summary>
     public static readonly IReadOnlyList<Regex> StartupFailures = [.. BepInExPluginLoadFailures, .. RuntimeLoadFailures];
+    /// <summary>A client's Steamworks login failure ends startup immediately; dedicated servers keep their own startup rules.</summary>
+    internal static readonly IReadOnlyList<Regex> ClientStartupFailures = [.. StartupFailures,
+        new(@"(?:\[Steamworks\.NET\] SteamAPI_Init\(\) failed|\[S_API FAIL\] SteamAPI_Init\(\) failed; connect to global user failed)", RegexOptions.CultureInvariant)];
     /// <summary>The log ValheimCLI writes to, normally the runtime's BepInEx/LogOutput.log. No connection is tried before <see cref="Listening"/> appears in it.</summary>
     public string? CliLog { get; init; }
     public Regex Listening { get; init; } = CliListening;
@@ -103,7 +106,7 @@ public sealed class StartupEvents
     /// </summary>
     internal static async Task WaitForBepInExLog(LogWait log, TimeSpan within, string? playerLog, CancellationToken cancellation, Func<string, string>? preloader = null)
     {
-        try { await log.WaitAsync(AnyLine, within, StartupFailures, cancellation).ConfigureAwait(false); }
+        try { await log.WaitAsync(AnyLine, within, ClientStartupFailures, cancellation).ConfigureAwait(false); }
         catch (WaitTimeoutException timeout)
         {
             string doorstop = $"Doorstop did not start BepInEx. Check that {BepInExLoader.WindowsProxy} and {BepInExLoader.WindowsConfig} (the Doorstop library and run script on macOS and Linux) come from one BepInExPack. ";

@@ -190,6 +190,20 @@ public class SessionTests
     [Fact] public void StartupFailuresKeepThePluginLoadFailures() =>
         Assert.All(StartupEvents.BepInExPluginLoadFailures, failure => Assert.Contains(failure, StartupEvents.StartupFailures));
     [Theory]
+    [InlineData("[Error  : Unity Log] [Steamworks.NET] SteamAPI_Init() failed. Refer to Valve's documentation.")]
+    [InlineData("[S_API FAIL] SteamAPI_Init() failed; connect to global user failed")]
+    public async Task AClientSteamLoginFailureEndsStartupWithoutWaitingForTheMenu(string line)
+    {
+        Assert.Contains(StartupEvents.ClientStartupFailures, failure => failure.IsMatch(line));
+        Assert.DoesNotContain(StartupEvents.StartupFailures, failure => failure.IsMatch(line)); // a dedicated server has separate rules
+        using var log = new TempLog();
+        using var wait = new LogWait(log.Path);
+        log.Append("[Info   :   BepInEx] Loading plugins\n" + line + "\n");
+        var error = await Assert.ThrowsAsync<WaitFailedException>(() => wait.WaitAsync(
+            StartupEvents.CliListening, TimeSpan.FromSeconds(5), StartupEvents.ClientStartupFailures));
+        Assert.Equal(line, error.LastSeen);
+    }
+    [Theory]
     [InlineData("[Info   :   BepInEx] Loading [valheimCLI 1.1.0]")]
     [InlineData("[Message:   BepInEx] Chainloader startup complete")]
     [InlineData("[Info   :CLI Standard Commands] Standard commands ready; owner=3f2a")]
