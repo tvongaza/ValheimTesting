@@ -15,6 +15,7 @@ internal static class SmokeDependencyInputs
         SearchRoots = searchRoots.Select(Path.GetFullPath).ToList(),
         OptionalReferences = optionalReferences.ToList(),
         Capabilities = capabilities.ToList(),
+        StageAllCliPacks = true,
     };
 
     internal static string Gaps(NativeDependencyLock value) =>

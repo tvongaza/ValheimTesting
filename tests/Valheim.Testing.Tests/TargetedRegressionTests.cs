@@ -642,7 +642,7 @@ internal sealed class RegressionRig : IDisposable
     public string Uid => "-1320459616";
     public string Parent { get; }
     public string Candidate { get; }
-    private readonly string _core, _pack, _dependency, _probe;
+    private readonly string _core, _pack, _worldTools, _observe, _reflection, _dependency, _probe;
     private readonly IDisposable _journalScope;
 
     public RegressionRig()
@@ -663,6 +663,9 @@ internal sealed class RegressionRig : IDisposable
         Write("fixture/SealFixture/_main.1.db2", Encoding.UTF8.GetBytes("world"));
         _core = Write("cli/valheimCLI.dll", Assembly("valheimCLI", new("valheimCLI.valheimCLI", "0.4.0")));
         _pack = Write("cli/Valheim.Cli.Standard.dll", Assembly("Valheim.Cli.Standard", new("valheimCLI.standard", "0.4.0") { Hard = ["valheimCLI.valheimCLI"] }));
+        _worldTools = Write("cli/Valheim.Cli.WorldTools.dll", Assembly("Valheim.Cli.WorldTools", new("valheimCLI.worldtools", "0.4.0") { Hard = ["valheimCLI.valheimCLI"] }));
+        _observe = Write("cli/Valheim.Cli.Observe.dll", Assembly("Valheim.Cli.Observe", new("valheimCLI.observe", "0.4.0") { Hard = ["valheimCLI.valheimCLI"] }));
+        _reflection = Write("cli/Valheim.Cli.Reflection.dll", Assembly("Valheim.Cli.Reflection", new("valheimCLI.reflection", "0.4.0") { Hard = ["valheimCLI.valheimCLI"] }));
         _dependency = Write("deps/Dependency.dll", Assembly("Dependency", new("example.dependency", "1.3.0")));
         _probe = Write("probe/Probe.dll", Assembly("Probe", new("testing.probe") { Hard = ["valheimCLI.valheimCLI"], Soft = ["example.mod"] }));
         var mod = new Plugin("example.mod") { Minimum = [("example.dependency", "1.2.0")], Hard = ["valheimCLI.valheimCLI"], Soft = ["example.soft"] };
@@ -710,8 +713,9 @@ internal sealed class RegressionRig : IDisposable
         },
     };
 
-    /// <summary>A capability manifest of the rig's core and Standard pack, written to a new file; <paramref name="save"/> false leaves out valheim.session/save.</summary>
-    public string CliManifest(bool save)
+    /// <summary>A capability manifest of the rig's core and Standard pack, or its complete one-shot bundle. With
+    /// <paramref name="full"/> false, <paramref name="save"/> false leaves out valheim.session/save.</summary>
+    public string CliManifest(bool save, bool full = false)
     {
         var session = new SortedDictionary<string, int>(StringComparer.Ordinal) { ["state"] = 1, ["leave"] = 1, ["join"] = 1 };
         if (save) session["save"] = 1;
@@ -728,6 +732,34 @@ internal sealed class RegressionRig : IDisposable
                 },
             ],
         };
+        if (full)
+        {
+            // The one-shot fixture models the complete pinned bundle, including a pack no toolkit command requires.
+            var commands = CliCapabilities.Toolkit.Select(path => path.Split('/'))
+                .GroupBy(parts => parts[0], StringComparer.Ordinal);
+            foreach (var group in commands)
+            {
+                string file = group.Key switch
+                {
+                    "valheim.session" => "Valheim.Cli.Standard.dll",
+                    "valheim.world" => "Valheim.Cli.WorldTools.dll",
+                    "valheim.observe" => "Valheim.Cli.Observe.dll",
+                    _ => throw new InvalidOperationException("Unknown toolkit capability owner " + group.Key),
+                };
+                var entry = manifest.Files.FirstOrDefault(item => item.File == file);
+                if (entry == null)
+                {
+                    string source = file == "Valheim.Cli.WorldTools.dll" ? _worldTools : _observe;
+                    entry = new CliManifestFile { File = file, Sha256 = FileHash.Sha256(source),
+                        Plugins = [file == "Valheim.Cli.WorldTools.dll" ? "valheimCLI.worldtools" : "valheimCLI.observe"] };
+                    manifest.Files.Add(entry);
+                }
+                entry.Extensions[group.Key] = new SortedDictionary<string, int>(
+                    group.ToDictionary(parts => parts[1], _ => 1, StringComparer.Ordinal), StringComparer.Ordinal);
+            }
+            manifest.Files.Add(new CliManifestFile { File = "Valheim.Cli.Reflection.dll", Sha256 = FileHash.Sha256(_reflection),
+                Plugins = ["valheimCLI.reflection"] });
+        }
         string path = Path.Combine(Root, $"cli-manifest-{Guid.NewGuid():N}.json");
         manifest.Write(path);
         return path;

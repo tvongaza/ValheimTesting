@@ -317,7 +317,7 @@ public sealed class NativeSmokeComparisonTests : IDisposable
         var args = new List<string>
         {
             "--server", _rig.Game, "--mod", first, "--mod", second, "--remove-mod", second,
-            "--adapter", adapter, "--cli-manifest", _rig.CliManifest(save: true),
+            "--adapter", adapter, "--cli-manifest", _rig.CliManifest(save: true, full: true),
             "--cli-files", Path.Combine(_rig.Root, "cli"), "--output", output,
         };
         if (searchRoot) args.AddRange(["--search-root", Path.Combine(_rig.Root, "deps")]);
