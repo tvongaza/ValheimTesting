@@ -1,0 +1,81 @@
+name: Mirror plain Ubuntu base
+# Only an intentional mirror/ubuntu-base-* branch publishes a candidate. Native builds
+# trust the reviewed digest in Dockerfile, never this branch's movable tag.
+on:
+  push:
+    branches:
+      - 'mirror/ubuntu-base-*'
+    paths:
+      - '.github/workflows/mirror-ubuntu-base.yml'
+      - 'docker/linux-server/ubuntu-base.json'
+      - 'docker/linux-server/check-ubuntu-base.sh'
+      - 'docker/linux-server/Dockerfile'
+permissions:
+  contents: read
+jobs:
+  mirror:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Verify the reviewed source and Dockerfile pin
+        run: bash docker/linux-server/check-ubuntu-base.sh
+      - name: Check the plain Ubuntu manifest before publishing
+        id: source
+        run: |
+          set -euo pipefail
+          record=docker/linux-server/ubuntu-base.json
+          upstream=$(jq -r .upstream "$record")
+          digest=$(jq -r .digest "$record")
+          mirror=$(jq -r .mirror "$record")
+          source="$upstream@$digest"
+          tag="ubuntu-24.04-amd64-${digest#sha256:}"
+          docker buildx imagetools inspect --raw "$source" > "$RUNNER_TEMP/upstream.json"
+          test "sha256:$(sha256sum "$RUNNER_TEMP/upstream.json" | cut -d' ' -f1)" = "$digest"
+          jq -e --argjson bytes "$(jq -r .compressedLayerBytes "$record")" \
+            '.mediaType == "application/vnd.oci.image.manifest.v1+json" and
+             (.layers | length) == 1 and .layers[0].size == $bytes and
+             .layers[0].mediaType == "application/vnd.oci.image.layer.v1.tar+gzip"' \
+            "$RUNNER_TEMP/upstream.json"
+          # A dry run must preserve the exact upstream manifest. A changed manifest
+          # digest can only enter native builds through a reviewed Dockerfile edit.
+          docker buildx imagetools create --dry-run --prefer-index=false \
+            --tag "$mirror:$tag" "$source" > "$RUNNER_TEMP/candidate.json"
+          # The CLI prints one trailing newline after the manifest bytes.
+          test "$(tail -c 1 "$RUNNER_TEMP/candidate.json" | od -An -tu1 | tr -d ' ')" = 10
+          head -c -1 "$RUNNER_TEMP/candidate.json" > "$RUNNER_TEMP/candidate-raw.json"
+          cmp "$RUNNER_TEMP/upstream.json" "$RUNNER_TEMP/candidate-raw.json"
+          echo "source=$source" >> "$GITHUB_OUTPUT"
+          echo "mirror=$mirror" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+      - name: Authenticate to GHCR
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+        run: printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+      - name: Copy and verify the one plain Ubuntu manifest
+        env:
+          SOURCE: ${{ steps.source.outputs.source }}
+          MIRROR: ${{ steps.source.outputs.mirror }}
+          TAG: ${{ steps.source.outputs.tag }}
+        run: |
+          set -euo pipefail
+          expected="${SOURCE##*@}"
+          docker buildx imagetools create --prefer-index=false \
+            --tag "$MIRROR:$TAG" "$SOURCE"
+          docker buildx imagetools inspect --raw "$MIRROR:$TAG" > "$RUNNER_TEMP/mirror.json"
+          actual="sha256:$(sha256sum "$RUNNER_TEMP/mirror.json" | cut -d' ' -f1)"
+          test "$actual" = "$expected"
+          docker pull --platform linux/amd64 "$MIRROR@$expected"
+          test "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$MIRROR@$expected")" = linux/amd64
+          {
+            echo '## Ubuntu base mirror'
+            echo "- Upstream: \`$SOURCE\`"
+            echo "- GHCR: \`$MIRROR@$actual\`"
+            echo '- Contents: one 29,765,758-byte compressed layer from plain Ubuntu; no Valheim, BepInEx, credentials, or private assets.'
+            echo '- The private Valheim server image is not published or cached.'
+          } >> "$GITHUB_STEP_SUMMARY"

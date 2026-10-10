@@ -1,0 +1,8 @@
+{
+  "upstream": "public.ecr.aws/ubuntu/ubuntu",
+  "tag": "24.04",
+  "platform": "linux/amd64",
+  "digest": "sha256:a2d43bffc46670d7108bb3c0468c67c5557c4c92e83e1e34cbff1322ad1b94dc",
+  "mirror": "ghcr.io/tvongaza/valheimtesting-ubuntu-base",
+  "compressedLayerBytes": 29765758
+}

@@ -8,7 +8,7 @@ A local Ubuntu 24.04 image for owned native checks against the **Linux** Valheim
 - a non-root `valheim` user that owns `/opt/valheim`.
 - git, for `scripts/bootstrap-cli.cs`.
 
-No credentials are needed or accepted. SteamCMD logs in anonymously; the dedicated server is free.
+SteamCMD logs in anonymously; no Steam, game or registry credentials are needed. The plain Ubuntu base is public on GHCR.
 
 **Verified** on a Linux x86-64 Docker host on 28 September 2026 with dedicated-server build 25527701: the image built, [LinuxServerSmoke](smoke/README.md) passed all five steps (BepInEx chainloader after about 5 s, the new world loaded after about 51 s), and `scripts/validate.cs` passed inside the container. Only the Apple Silicon (emulated) path below remains experimental.
 
@@ -26,7 +26,20 @@ docker build -t valheimtesting-linux-server:local docker/linux-server
 
 The image is x86-64 only: the Dockerfile pins `FROM --platform=linux/amd64`, because the server, SteamCMD and Doorstop have no arm64 builds.
 
-The build context is this directory only; no repository source enters the image. Each build downloads the current public dedicated-server build, so record `server-buildid.txt` with any result. The base image is pinned by tag, SteamCMD and the .NET SDK are not pinned to exact builds; the BepInEx pack is pinned by version and hash, and its launch script is checked for the loader variables `GameLaunch.ForServer` reproduces.
+The build context is this directory only; no repository source enters the image. Each build downloads the current public dedicated-server build, so record `server-buildid.txt` with any result. The plain Ubuntu base is pinned by digest in the Dockerfile; SteamCMD and the .NET SDK are not pinned to exact builds. The BepInEx pack is pinned by version and hash, and its launch script is checked for the loader variables `GameLaunch.ForServer` reproduces.
+
+### Plain Ubuntu base mirror
+
+Only the **unmodified Ubuntu 24.04 amd64 base** is mirrored at `ghcr.io/tvongaza/valheimtesting-ubuntu-base`. The [source record](ubuntu-base.json) names Canonical's ECR Public manifest digest, its one compressed layer (29,765,758 bytes), and the GHCR package. The mirror workflow copies that exact OCI manifest without building a new layer and verifies the copied digest and architecture. It contains no Valheim, BepInEx, credentials or private assets. The private server image above is still built and discarded on each runner.
+
+The two native workflows pull this public digest from GHCR with a named error if it is unavailable, then build the private image. A fresh or repeated native run therefore fetches its **base image** only from GHCR, even with `docker build --pull`; neither run contacts ECR Public or Docker Hub for an image layer. The build's ordinary `RUN` steps still fetch Ubuntu packages, the .NET installer, BepInEx and the dedicated server from their own services.
+
+Refresh deliberately:
+
+1. Create a branch named `mirror/ubuntu-base-YYYYMMDD`. Inspect `public.ecr.aws/ubuntu/ubuntu:24.04` and select its **linux/amd64 image manifest** digest, not the multi-platform index digest. Inspect that manifest's compressed layer size.
+2. Update `ubuntu-base.json` and the Dockerfile's GHCR digest together. `check-ubuntu-base.sh` refuses a mismatch. The PR CI runs that check.
+3. Push the branch. [Mirror plain Ubuntu base](../../.github/workflows/mirror-ubuntu-base.yml) copies only that pinned manifest to a digest-specific GHCR tag and confirms the raw GHCR manifest has the upstream digest. The branch can publish a candidate tag, but it cannot change the digest that native builds trust without the Dockerfile change passing review.
+4. Inspect the mirror workflow's source, digest and size summary. Run `Native Linux server smoke` on the branch before merging the PR. If GHCR cannot serve the package to native CI, keep the PR open and repair access; do not fall back to ECR or Docker Hub in routine builds.
 
 ## Run a check inside the container
 

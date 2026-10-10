@@ -127,6 +127,8 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+      - name: Fetch the pinned Ubuntu base from GHCR
+        run: bash docker/linux-server/pull-ubuntu-base.sh
       # The transport package main pins (cli-dependency.json), built from its pinned ValheimCLI commit into the checkout's
       # local feed (.packages), as the test jobs in test.yml do. The containers copy the read-only checkout, feed included, so
       # their builds restore it from there: without it they could only find a version already released to NuGet.org, and
