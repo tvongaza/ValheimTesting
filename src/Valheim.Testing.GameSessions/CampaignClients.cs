@@ -210,7 +210,12 @@ internal sealed class CampaignClients
                     (await host.WaitForLogAsync(log, 0, StartupEvents.CliListening, StartupEvents.ClientStartupFailures, left - clock.Elapsed, token).ConfigureAwait(false)).EnsureMatched();
                     if (!_hooks.StateWaits) return;
                     using var states = StateWait.Connect(tunnel.Address, tunnel.LocalPort);
-                    await states.WaitAsync([StateWait.MainMenu], left - clock.Elapsed, cancellation: token).ConfigureAwait(false);
+                    var menuTime = left - clock.Elapsed;
+                    await StartupEvents.WaitForClientMenuAsync(
+                        next => states.WaitAsync([StateWait.MainMenu], menuTime, cancellation: next),
+                        async next => (await host.WaitForLogAsync(log, 0, StartupEvents.Never,
+                            StartupEvents.ClientStartupFailures, menuTime, next).ConfigureAwait(false)).EnsureMatched(),
+                        token).ConfigureAwait(false);
                 },
                 (left, token) => steamLog is { } watched ? SteamSessionLogOnHost.SeenAsync(host, watched, left, token) : Task.FromResult(false),
                 FinalLook, SteamMessage), cancellation,

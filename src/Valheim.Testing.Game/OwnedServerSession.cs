@@ -76,6 +76,36 @@ public sealed class StartupEvents
     /// <summary>A client's Steamworks login failure ends startup immediately; dedicated servers keep their own startup rules.</summary>
     internal static readonly IReadOnlyList<Regex> ClientStartupFailures = [.. StartupFailures,
         new(@"(?:\[Steamworks\.NET\] SteamAPI_Init\(\) failed|\[S_API FAIL\] SteamAPI_Init\(\) failed; connect to global user failed)", RegexOptions.CultureInvariant)];
+    /// <summary>A pattern that cannot match a log line; use it to watch only for startup failures while awaiting the menu.</summary>
+    internal static readonly Regex Never = new(@"(?!)", RegexOptions.CultureInvariant);
+    /// <summary>
+    /// Wait for the client's menu and keep its startup-failure log watcher active until that state is confirmed.
+    /// The watcher and state wait share cancellation, so neither remains after the other decides startup.
+    /// </summary>
+    internal static async Task WaitForClientMenuAsync(Func<CancellationToken, Task> menu,
+        Func<CancellationToken, Task> failureWatch, CancellationToken cancellation = default)
+    {
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
+        Task? state = null, failures = null;
+        try
+        {
+            failures = failureWatch(stop.Token);
+            state = menu(stop.Token);
+            Task first = await Task.WhenAny(state, failures).ConfigureAwait(false);
+            await first.ConfigureAwait(false);
+            // If both completed in the same turn, never let menu success hide a logged failure.
+            if (failures.IsFaulted) await failures.ConfigureAwait(false);
+            if (ReferenceEquals(first, failures))
+                throw new InvalidOperationException("The client startup-failure watcher ended before the menu without reporting a failure.");
+        }
+        finally
+        {
+            stop.Cancel();
+            if (state != null && failures != null)
+                try { await Task.WhenAll(state, failures).ConfigureAwait(false); }
+                catch { /* The deciding task's outcome was already propagated; observe the cancelled sibling. */ }
+        }
+    }
     /// <summary>The log ValheimCLI writes to, normally the runtime's BepInEx/LogOutput.log. No connection is tried before <see cref="Listening"/> appears in it.</summary>
     public string? CliLog { get; init; }
     public Regex Listening { get; init; } = CliListening;

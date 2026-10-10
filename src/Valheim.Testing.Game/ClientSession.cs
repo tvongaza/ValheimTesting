@@ -238,7 +238,11 @@ public sealed class ClientSession : IDisposable
                     await StartupEvents.WaitForBepInExLog(cliLog!, bepInEx < left ? bepInEx : left, playerLog, token, Preloader).ConfigureAwait(false);
                     await cliLog!.WaitAsync(StartupEvents.CliListening, left - clock.Elapsed, StartupEvents.ClientStartupFailures, token).ConfigureAwait(false);
                     using var states = StateWait.Connect(plan.Host, plan.Port);
-                    await states.WaitAsync([StateWait.MainMenu], left - clock.Elapsed, cancellation: token).ConfigureAwait(false);
+                    var menuTime = left - clock.Elapsed;
+                    await StartupEvents.WaitForClientMenuAsync(
+                        next => states.WaitAsync([StateWait.MainMenu], menuTime, cancellation: next),
+                        next => cliLog.WaitAsync(StartupEvents.Never, menuTime, StartupEvents.ClientStartupFailures, next),
+                        token).ConfigureAwait(false);
                 }, (left, token) => WatchLocalAsync(steamLog, left, token), () => Task.FromResult(SteamSeen()), SteamMessage), cancellation,
                 () => SteamSeen() ? SteamSessionLog.ExitHint(SteamMessage())
                     : cliLog != null && !cliLog.HasOutput() ? StartupEvents.NoBepInExLog(log, playerLog, Preloader("")) : null,

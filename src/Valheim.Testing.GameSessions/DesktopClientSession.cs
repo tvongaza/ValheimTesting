@@ -113,7 +113,12 @@ internal static class DesktopClientSession
                     (await host.WaitForLogAsync(log, 0, StartupEvents.CliListening, StartupEvents.ClientStartupFailures,
                         left - clock.Elapsed, token).ConfigureAwait(false)).EnsureMatched();
                     using var states = StateWait.Connect(tunnel.Address, tunnel.LocalPort);
-                    await states.WaitAsync([StateWait.MainMenu], left - clock.Elapsed, cancellation: token).ConfigureAwait(false);
+                    var menuTime = left - clock.Elapsed;
+                    await StartupEvents.WaitForClientMenuAsync(
+                        next => states.WaitAsync([StateWait.MainMenu], menuTime, cancellation: next),
+                        async next => (await host.WaitForLogAsync(log, 0, StartupEvents.Never,
+                            StartupEvents.ClientStartupFailures, menuTime, next).ConfigureAwait(false)).EnsureMatched(),
+                        token).ConfigureAwait(false);
                 }, cancellation, null, keptLogs, failureEvidence: (process, actor, directory) =>
                     ClientFailureEvidence.CaptureLocal(process, actor, plan, directory));
             foreach (var kept in session.Logs) logs.Add(kept);
