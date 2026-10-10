@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Security;
 using Valheim.Testing.Game;
+using Valheim.Testing.Game.Fakes;
 using Valheim.Testing.GameSessions;
 using Xunit;
 
@@ -12,6 +13,7 @@ public sealed class OneShotScenarioBuildTests : IDisposable
     [Fact]
     public async Task SeparateScenarioLoadsItsNuGetDependencyAndSharesToolkitTransportTypes()
     {
+        using var dataRoot = new FakeDataRoot(Path.Combine(_root, "machine"));
         string feed = Path.Combine(_root, "feed");
         string helper = Path.Combine(_root, "helper");
         string scenario = Path.Combine(_root, "scenario");
