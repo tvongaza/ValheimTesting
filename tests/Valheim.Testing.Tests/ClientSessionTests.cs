@@ -409,6 +409,11 @@ public sealed class ClientSessionTests : IDisposable
             var error = Assert.Throws<InvalidOperationException>(plan.RequirePasswordSource);
             Assert.Contains("serialized plan data", error.Message);
             Assert.DoesNotContain(secret, error.Message);
+
+            plan.Environment.Clear();
+            plan.Environment[variable.ToLowerInvariant()] = secret;
+            error = Assert.Throws<InvalidOperationException>(plan.RequirePasswordSource);
+            Assert.Contains("serialized plan data", error.Message);
         }
         finally { Environment.SetEnvironmentVariable(variable, null); }
     }

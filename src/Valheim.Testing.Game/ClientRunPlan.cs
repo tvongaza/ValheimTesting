@@ -143,8 +143,9 @@ public sealed class ClientRunPlan
     public void RequirePasswordSource()
     {
         if (!Owned || PasswordVariable == null) return;
-        if (Environment.Keys.Any(name => string.Equals(name, PasswordVariable,
-                OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal)))
+        // The target may be Windows even when this runner is on macOS or Linux. A serialized
+        // case-variant secret must never pass preflight and later reach that client's environment.
+        if (Environment.Keys.Any(name => string.Equals(name, PasswordVariable, StringComparison.OrdinalIgnoreCase)))
             throw new InvalidOperationException($"Remove {PasswordVariable} from client.environment: it is serialized plan data. " +
                 $"Set {PasswordVariable} in this runner's environment instead; its value is passed privately to the owned client.");
         if (string.IsNullOrEmpty(System.Environment.GetEnvironmentVariable(PasswordVariable)))
