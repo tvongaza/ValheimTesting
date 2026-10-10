@@ -17,6 +17,10 @@ internal static class ServerLoadPhases
         "--assert-command", "--assert-line", "--before-save-command", "--before-save-line",
         "--expected-log-error", "--expected-log-reason",
     };
+    private static readonly HashSet<string> FileInputs = new(StringComparer.Ordinal)
+    { "--inventory", "--adapter", "--cli-manifest", "--mod", "--config", "--plugin-file" };
+    private static readonly HashSet<string> DirectoryInputs = new(StringComparer.Ordinal)
+    { "--server", "--cli-files", "--plugin-dir", "--search-root" };
 
     internal sealed class Plan
     {
@@ -63,6 +67,7 @@ internal static class ServerLoadPhases
             // Validate every phase's exact server-load command before any copy or game process exists.
             foreach (var (phase, _, evidence, checkpoint) in phases)
                 BuildArgs(plan.CommonArgs, phase.Args, fixture, evidence, checkpoint);
+            var inputs = CaptureInputs(planFile, plan);
             Directory.CreateDirectory(output);
             File.Copy(planFile, Path.Combine(output, "phase-plan.json"));
             if (generatedSource != null) DefaultSmokeWorld.PrepareServerSaveRoot(generatedSource);
@@ -70,6 +75,12 @@ internal static class ServerLoadPhases
             int completed = 0;
             foreach (var (phase, name, evidence, checkpoint) in phases)
             {
+                try { VerifyInputs(inputs); } // A build or config changed between phases must not silently become the next pin.
+                catch
+                {
+                    if (started) WriteState(output, name, "failed", fixture, checkpoint);
+                    throw;
+                }
                 string[] phaseArgs = BuildArgs(plan.CommonArgs, phase.Args, fixture, evidence, checkpoint);
                 WriteState(output, name, "starting", fixture, checkpoint);
                 started = true;
@@ -146,6 +157,46 @@ internal static class ServerLoadPhases
         if (!ServerLoad.TryRead(args, out _, out string error, allowImplicitMod: false))
             throw new InvalidDataException("Invalid server-load phase: " + error);
         return args;
+    }
+
+    private sealed record InputPin(string Path, string? Sha256, IReadOnlyDictionary<string, string>? Files);
+
+    private static IReadOnlyList<InputPin> CaptureInputs(string planFile, Plan plan)
+    {
+        var paths = new Dictionary<string, bool>(StringComparer.Ordinal) { [Path.GetFullPath(planFile)] = false };
+        foreach (string[] args in new[] { plan.CommonArgs }.Concat(plan.Phases.Select(phase => phase.Args)))
+            for (int i = 0; i < args.Length; i += 2)
+            {
+                string option = args[i];
+                if (FileInputs.Contains(option) || DirectoryInputs.Contains(option))
+                    paths[Path.GetFullPath(args[i + 1])] = DirectoryInputs.Contains(option);
+                if (option == "--loader-package")
+                {
+                    string manifest = Path.GetFullPath(args[i + 1]);
+                    paths[manifest] = false;
+                    paths[BepInExLoaderPackage.Read(manifest).Root] = true;
+                }
+            }
+        return paths.OrderBy(pair => pair.Key, StringComparer.Ordinal).Select(pair => pair.Value
+            ? Directory.Exists(pair.Key) ? new InputPin(pair.Key, null, WorldFixture.Manifest(pair.Key))
+                : throw new DirectoryNotFoundException("A phased input directory is missing: " + pair.Key)
+            : File.Exists(pair.Key) ? new InputPin(pair.Key, FileHash.Sha256(pair.Key), null)
+                : throw new FileNotFoundException("A phased input file is missing: " + pair.Key)).ToArray();
+    }
+
+    private static void VerifyInputs(IReadOnlyList<InputPin> pins)
+    {
+        foreach (var pin in pins)
+        {
+            if (pin.Sha256 is { } sha)
+            {
+                if (!File.Exists(pin.Path) || !FileHash.Sha256(pin.Path).Equals(sha, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidDataException("A phased input file changed after the plan was accepted: " + pin.Path);
+            }
+            else if (!Directory.Exists(pin.Path))
+                throw new InvalidDataException("A phased input directory disappeared after the plan was accepted: " + pin.Path);
+            else WorldFixture.Verify(pin.Path, pin.Files!);
+        }
     }
 
     private static void WriteState(string output, string phase, string state, string input, string checkpoint)

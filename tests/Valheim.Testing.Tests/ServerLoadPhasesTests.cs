@@ -11,11 +11,17 @@ public sealed class ServerLoadPhasesTests : IDisposable
         string fixture = Path.Combine(_root, "source-fixture");
         Directory.CreateDirectory(fixture);
         File.WriteAllText(Path.Combine(fixture, "world.fwl"), "source world");
+        string server = Path.Combine(_root, "server");
+        Directory.CreateDirectory(server);
+        File.WriteAllText(Path.Combine(server, "server-marker"), "source server");
+        File.WriteAllText(Path.Combine(_root, "first.dll"), "first plugin");
+        File.WriteAllText(Path.Combine(_root, "second.dll"), "second plugin");
+        File.WriteAllText(Path.Combine(_root, "second.cfg"), "second config");
         string plan = Path.Combine(_root, "plan.json");
         File.WriteAllText(plan, JsonSerializer.Serialize(new
         {
             schema = 1, worldFixture = fixture, keepFinal,
-            commonArgs = new[] { "--server", Path.Combine(_root, "server") },
+            commonArgs = new[] { "--server", server },
             phases = new[]
             {
                 new { name = "first", args = new[] { "--mod", Path.Combine(_root, "first.dll"), "--assert-command", "first_ready", "--assert-line", "READY" } },
@@ -103,7 +109,10 @@ public sealed class ServerLoadPhasesTests : IDisposable
     public async Task PackagedSourceIsVerifiedAndRetiredAfterTheLastBake()
     {
         string plan = Plan(), output = Path.Combine(_root, "packaged-run");
-        File.WriteAllText(plan, File.ReadAllText(plan).Replace(Path.Combine(_root, "source-fixture"), "packaged", StringComparison.Ordinal));
+        var parsed = JsonSerializer.Deserialize<ServerLoadPhases.Plan>(File.ReadAllText(plan),
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true })!;
+        parsed.WorldFixture = "packaged";
+        File.WriteAllText(plan, JsonSerializer.Serialize(parsed));
         string? firstInput = null;
         int result = await ServerLoadPhases.RunAsync(["--plan", plan, "--output", output], args =>
         {
@@ -118,6 +127,26 @@ public sealed class ServerLoadPhasesTests : IDisposable
         Assert.Equal(Path.Combine(output, "source", "worlds_local"), firstInput);
         Assert.False(Directory.Exists(Path.Combine(output, "source")));
         Assert.True(Directory.Exists(Path.Combine(output, "checkpoints", "02-second")));
+    }
+
+    [Fact]
+    public async Task ChangedModBetweenPhasesRefusesBeforeSecondServerStarts()
+    {
+        string output = Path.Combine(_root, "changed-mod-run");
+        int calls = 0;
+        int result = await ServerLoadPhases.RunAsync(["--plan", Plan(), "--output", output], args =>
+        {
+            calls++;
+            string checkpoint = args[Array.IndexOf(args, "--bake-fixture") + 1];
+            Directory.CreateDirectory(checkpoint);
+            File.WriteAllText(Path.Combine(checkpoint, "world.fwl"), "saved first phase");
+            File.WriteAllText(Path.Combine(_root, "second.dll"), "changed plugin");
+            return Task.FromResult(0);
+        });
+        Assert.Equal(1, result);
+        Assert.Equal(1, calls);
+        Assert.True(Directory.Exists(Path.Combine(output, "checkpoints", "01-first")));
+        Assert.Contains("failed", File.ReadAllText(Path.Combine(output, "phase-state.json")));
     }
 
     [Fact]
