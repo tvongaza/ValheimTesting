@@ -42,11 +42,12 @@ internal static class CliServerConfig
                 section = value[1..^1].Trim();
                 continue;
             }
-            if (!section.Equals("Server", StringComparison.OrdinalIgnoreCase)) continue;
+            if (!section.Equals("Server", StringComparison.Ordinal)) continue;
             int equals = value.IndexOf('=');
-            if (equals < 0 || !value[..equals].Trim().Equals("AllowOnServerClients", StringComparison.OrdinalIgnoreCase)) continue;
-            string setting = value[(equals + 1)..].Split(['#', ';'], 2)[0].Trim();
-            allowed = setting.Equals("true", StringComparison.OrdinalIgnoreCase);
+            if (equals < 0 || !value[..equals].Trim().Equals("AllowOnServerClients", StringComparison.Ordinal)) continue;
+            // BepInEx keeps inline comment text as part of a value and matches ConfigDefinition names exactly.
+            // Accept only the value the loaded plugin can actually parse as true.
+            allowed = bool.TryParse(value[(equals + 1)..].Trim(), out bool parsed) && parsed;
         }
         if (!allowed)
             throw new InvalidDataException($"{actor}'s selected {RelativePath} does not set [Server] AllowOnServerClients = true. " +
