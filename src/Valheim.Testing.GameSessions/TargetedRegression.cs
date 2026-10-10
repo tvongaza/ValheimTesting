@@ -563,7 +563,8 @@ public sealed class TargetedRegression
             else
             {
                 var profile = HostedRuntimeStage.PrepareProfileAsync(_host, HostedRuntimeKind.Client, source, Install, _stage,
-                    selected, LocalClientCopy.StepTimeout, loaderPackage: package).GetAwaiter().GetResult();
+                    selected, LocalClientCopy.StepTimeout, loaderPackage: package,
+                    inspectMac: BundleInspection == null ? null : (_, install, timeout, _) => Task.FromResult(BundleInspection(install, false, timeout))).GetAwaiter().GetResult();
                 listing = profile.Loader;
                 _activeGameRoot = profile.GameRoot;
                 _activePins = profile.Pins;
