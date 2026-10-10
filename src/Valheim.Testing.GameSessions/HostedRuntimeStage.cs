@@ -13,14 +13,49 @@ public sealed record HostedRuntimeFile(string Source, string RelativePath);
 internal enum HostedRuntimeKind { Server, Client }
 
 /// <summary>
-/// Builds a disposable modded runtime on a remote game host. The source install is read only: the host makes a fresh
-/// copy, then replaces only that copy's BepInEx plugin, script, config and patcher content with explicitly selected
-/// files. The caller owns the host lock and the resulting copy's cleanup.
+/// Builds a disposable modded runtime on a game host. The source install is read only: copy mode makes a fresh
+/// game copy, while profile mode keeps the executable in place on Unix or uses an owned hard-link launch folder on
+/// Windows. Both modes select the same BepInEx plugin, script, config, patcher and loader content here. The caller
+/// owns the host lock and the resulting runtime's cleanup.
 /// </summary>
-internal static class HostedRuntimeStage
+internal static partial class HostedRuntimeStage
 {
     private static readonly StringComparer HostNames = StringComparer.OrdinalIgnoreCase;
     private static readonly Regex SafePath = new(@"^[A-Za-z0-9_. -]+(?:/[A-Za-z0-9_. -]+)*$", RegexOptions.CultureInvariant);
+
+    // The copy and profile modes share this exact selection and loader-package policy.
+    private static (Dictionary<string, (string Source, string Sha)> Files, bool ExplicitSettings) SelectPayload(
+        IReadOnlyList<HostedRuntimeFile> files, BepInExLoaderPackage? loaderPackage, HostShellKind shell)
+    {
+        var selected = new Dictionary<string, (string Source, string Sha)>(HostNames);
+        foreach (var file in files)
+        {
+            if (string.IsNullOrWhiteSpace(file.RelativePath) || !SafePath.IsMatch(file.RelativePath) ||
+                file.RelativePath.Split('/').Any(part => part is "." or "..") || file.RelativePath.StartsWith(' ') ||
+                !(file.RelativePath.StartsWith("BepInEx/plugins/", StringComparison.OrdinalIgnoreCase) ||
+                  file.RelativePath.StartsWith("BepInEx/scripts/", StringComparison.OrdinalIgnoreCase) ||
+                  file.RelativePath.StartsWith("BepInEx/config/", StringComparison.OrdinalIgnoreCase) ||
+                  file.RelativePath.StartsWith("BepInEx/patchers/", StringComparison.OrdinalIgnoreCase)))
+                throw new ArgumentException("Staged paths must be regular files under BepInEx/plugins, scripts, config or patchers. Use loaderPackage to replace the copied loader; never pass loader files as plugins.", nameof(files));
+            string local = Path.GetFullPath(file.Source);
+            if (!File.Exists(local) || (File.GetAttributes(local) & FileAttributes.ReparsePoint) != 0)
+                throw new FileNotFoundException("A selected runtime file is missing or linked: " + local, local);
+            if (!selected.TryAdd(file.RelativePath, (local, FileHash.Sha256(local))))
+                throw new ArgumentException("Two selected runtime files have the same target path: " + file.RelativePath, nameof(files));
+        }
+        bool explicitlySelectedSettings = selected.ContainsKey(BepInExSettings.RelativePath);
+        loaderPackage?.Validate();
+        if (loaderPackage != null)
+        {
+            bool windowsPackage = loaderPackage.Files.ContainsKey(BepInExLoader.WindowsProxy);
+            if (windowsPackage != (shell == HostShellKind.PowerShell))
+                throw new InvalidDataException("The reviewed loader package does not match the host platform.");
+            foreach (var (relative, sha) in loaderPackage.Files)
+                if (!selected.TryAdd(relative, (Path.Combine(loaderPackage.Root, relative.Replace('/', Path.DirectorySeparatorChar)), sha)))
+                    throw new InvalidDataException("A selected runtime file overrides a reviewed loader file: " + relative);
+        }
+        return (selected, explicitlySelectedSettings);
+    }
 
     /// <summary>
     /// Refuse conflicting client use or a process executing from any of the owned <paramref name="runtimes"/>; unrelated
@@ -159,59 +194,9 @@ internal static class HostedRuntimeStage
         CancellationToken cancellation, BepInExLoaderPackage? loaderPackage, HostListing? inspectedSource,
         Func<IGameHost, string, TimeSpan, CancellationToken, Task<MacBundleInspection.Verdict>>? repairMac = null)
     {
-        ArgumentNullException.ThrowIfNull(host);
-        ArgumentNullException.ThrowIfNull(files);
-        HostInstall.RequireHostPath(host, source, nameof(source));
-        HostInstall.RequireHostPath(host, destination, nameof(destination));
-        HostInstall.RequireHostPath(host, staging, nameof(staging));
-        foreach (string path in new[] { source, destination, staging })
-            if (path.Split('/', '\\').Any(part => part is "." or ".."))
-                throw new ArgumentException("Runtime paths cannot contain . or .. segments.");
-        if (!Enum.IsDefined(kind)) throw new ArgumentOutOfRangeException(nameof(kind));
-        if (host.Shell.Kind is not (HostShellKind.Bash or HostShellKind.PowerShell))
-            throw new PlatformNotSupportedException("Runtime preparation needs a bash or PowerShell host.");
-        if (files.Count == 0) throw new ArgumentException("Select at least one pinned plugin file.", nameof(files));
-        // The two paths must be distinct new siblings. Never stage into the source or an existing runtime.
-        string stageSuffix = host.Shell.Kind == HostShellKind.PowerShell ? @"\staging" : "/staging";
-        if (!staging.EndsWith(stageSuffix, StringComparison.OrdinalIgnoreCase) ||
-            !string.Equals(staging[..^stageSuffix.Length], destination[..destination.LastIndexOfAny(['/', '\\'])],
-                StringComparison.OrdinalIgnoreCase))
-            throw new ArgumentException("The staging directory must be a new sibling named staging beside the disposable runtime.", nameof(staging));
-        string Canonical(string path) => path.Replace('\\', '/').TrimEnd('/');
-        string from = Canonical(source), to = Canonical(destination), stage = Canonical(staging);
-        if (from.Equals(to, StringComparison.OrdinalIgnoreCase) || to.StartsWith(from + "/", StringComparison.OrdinalIgnoreCase) ||
-            from.StartsWith(to + "/", StringComparison.OrdinalIgnoreCase) ||
-            from.Equals(stage, StringComparison.OrdinalIgnoreCase) || stage.StartsWith(from + "/", StringComparison.OrdinalIgnoreCase))
-            throw new ArgumentException("The source install cannot be a staging or destination directory.");
+        RequireStagePaths(host, kind, source, destination, staging, files);
 
-        var selected = new Dictionary<string, (string Source, string Sha)>(HostNames);
-        foreach (var file in files)
-        {
-            if (string.IsNullOrWhiteSpace(file.RelativePath) || !SafePath.IsMatch(file.RelativePath) ||
-                file.RelativePath.Split('/').Any(part => part is "." or "..") || file.RelativePath.StartsWith(' ') ||
-                !(file.RelativePath.StartsWith("BepInEx/plugins/", StringComparison.OrdinalIgnoreCase) ||
-                  file.RelativePath.StartsWith("BepInEx/scripts/", StringComparison.OrdinalIgnoreCase) ||
-                  file.RelativePath.StartsWith("BepInEx/config/", StringComparison.OrdinalIgnoreCase) ||
-                  file.RelativePath.StartsWith("BepInEx/patchers/", StringComparison.OrdinalIgnoreCase)))
-                throw new ArgumentException("Staged paths must be regular files under BepInEx/plugins, scripts, config or patchers. Use loaderPackage to replace the copied loader; never pass loader files as plugins.", nameof(files));
-            string local = Path.GetFullPath(file.Source);
-            if (!File.Exists(local) || (File.GetAttributes(local) & FileAttributes.ReparsePoint) != 0)
-                throw new FileNotFoundException("A selected runtime file is missing or linked: " + local, local);
-            if (!selected.TryAdd(file.RelativePath, (local, FileHash.Sha256(local))))
-                throw new ArgumentException("Two selected runtime files have the same target path: " + file.RelativePath, nameof(files));
-        }
-        bool explicitlySelectedSettings = selected.ContainsKey(BepInExSettings.RelativePath);
-        // Use the existing reviewed package contract, not a hand-repaired source install.
-        loaderPackage?.Validate();
-        if (loaderPackage != null)
-        {
-            bool windowsPackage = loaderPackage.Files.ContainsKey(BepInExLoader.WindowsProxy);
-            if (windowsPackage != (host.Shell.Kind == HostShellKind.PowerShell))
-                throw new InvalidDataException("The reviewed loader package does not match the host platform.");
-            foreach (var (relative, sha) in loaderPackage.Files)
-                if (!selected.TryAdd(relative, (Path.Combine(loaderPackage.Root, relative.Replace('/', Path.DirectorySeparatorChar)), sha)))
-                    throw new InvalidDataException("A selected runtime file overrides a reviewed loader file: " + relative);
-        }
+        var (selected, explicitlySelectedSettings) = SelectPayload(files, loaderPackage, host.Shell.Kind);
         // Check this before shipping anything; a reviewed loader package fixes only the disposable copy.
         if (inspectedSource != null && (inspectedSource.HostName != host.Name || inspectedSource.Root != source))
             throw new ArgumentException("The inspected source belongs to a different host or install.", nameof(inspectedSource));
@@ -318,6 +303,34 @@ internal static class HostedRuntimeStage
         {
             Directory.Delete(payload, recursive: true);
         }
+    }
+
+    private static void RequireStagePaths(IGameHost host, HostedRuntimeKind kind, string source, string destination,
+        string staging, IReadOnlyList<HostedRuntimeFile> files)
+    {
+        ArgumentNullException.ThrowIfNull(host);
+        ArgumentNullException.ThrowIfNull(files);
+        HostInstall.RequireHostPath(host, source, nameof(source));
+        HostInstall.RequireHostPath(host, destination, nameof(destination));
+        HostInstall.RequireHostPath(host, staging, nameof(staging));
+        foreach (string path in new[] { source, destination, staging })
+            if (path.Split('/', '\\').Any(part => part is "." or ".."))
+                throw new ArgumentException("Runtime paths cannot contain . or .. segments.");
+        if (!Enum.IsDefined(kind)) throw new ArgumentOutOfRangeException(nameof(kind));
+        if (host.Shell.Kind is not (HostShellKind.Bash or HostShellKind.PowerShell))
+            throw new PlatformNotSupportedException("Runtime preparation needs a bash or PowerShell host.");
+        if (files.Count == 0) throw new ArgumentException("Select at least one pinned plugin file.", nameof(files));
+        string stageSuffix = host.Shell.Kind == HostShellKind.PowerShell ? @"\staging" : "/staging";
+        if (!staging.EndsWith(stageSuffix, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(staging[..^stageSuffix.Length], destination[..destination.LastIndexOfAny(['/', '\\'])],
+                StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("The staging directory must be a new sibling named staging beside the disposable runtime.", nameof(staging));
+        static string Canonical(string path) => path.Replace('\\', '/').TrimEnd('/');
+        string from = Canonical(source), to = Canonical(destination), stage = Canonical(staging);
+        if (from.Equals(to, StringComparison.OrdinalIgnoreCase) || to.StartsWith(from + "/", StringComparison.OrdinalIgnoreCase) ||
+            from.StartsWith(to + "/", StringComparison.OrdinalIgnoreCase) ||
+            from.Equals(stage, StringComparison.OrdinalIgnoreCase) || stage.StartsWith(from + "/", StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("The source install cannot be a staging or destination directory.");
     }
 
     // Only HostedCampaignPreparation calls this for a unique directory it created and retained in memory. Its caller

@@ -215,6 +215,179 @@ public sealed class HostedRuntimeStageTests : IDisposable
         Assert.False(Directory.Exists(Path.Combine(run, "staging")));
     }
 
+    [Fact] public async Task MacProfileStagesOnlyItsLoaderAndSelectedModWithoutCopyingTheGame()
+    {
+        if (!OperatingSystem.IsMacOS()) return;
+        var host = new LocalGameHost("mac-profile", HostShell.Bash);
+        string source = Path.Combine(_root, "profile-source");
+        string executable = Path.Combine(source, "valheim_server", "Valheim");
+        string assembly = Path.Combine(source, "valheim_server", "Data", "Managed", InstallPins.GameAssemblyName);
+        string core = Path.Combine(source, "BepInEx", "core");
+        Directory.CreateDirectory(Path.GetDirectoryName(executable)!);
+        Directory.CreateDirectory(Path.GetDirectoryName(assembly)!);
+        Directory.CreateDirectory(core);
+        File.WriteAllText(executable, "server");
+        File.SetUnixFileMode(executable, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+        File.WriteAllText(assembly, "game assembly");
+        File.WriteAllText(Path.Combine(core, "BepInEx.dll"), "core");
+        File.WriteAllText(Path.Combine(core, "BepInEx.Preloader.dll"), "preloader");
+        FakeInstalls.MacLoader(source);
+        string old = Path.Combine(source, "BepInEx", "plugins", "old.dll");
+        Directory.CreateDirectory(Path.GetDirectoryName(old)!);
+        File.WriteAllText(old, "unselected");
+        string config = Path.Combine(source, "BepInEx", "config", "BepInEx.cfg");
+        Directory.CreateDirectory(Path.GetDirectoryName(config)!);
+        File.WriteAllText(config, "[Preloader.Entrypoint]\nType = GameObject\n");
+        string selected = Path.Combine(_root, "profile-mod.dll");
+        File.WriteAllText(selected, "selected");
+        var before = WorldFixture.Manifest(source);
+        string parent = Path.Combine(_root, "vt-prep-profile");
+        var prepared = await HostedRuntimeStage.PrepareProfileAsync(host, HostedRuntimeKind.Server, source,
+            Path.Combine(parent, "runtime"), Path.Combine(parent, "staging"),
+            [new HostedRuntimeFile(selected, "BepInEx/plugins/profile-mod.dll")], TimeSpan.FromSeconds(30));
+
+        Assert.Equal(source, prepared.GameRoot);
+        Assert.Equal(Path.Combine(parent, "runtime"), prepared.LoaderRoot);
+        Assert.Equal(InstallPins.Of(source).Game, prepared.Pins.Game);
+        Assert.Equal(InstallPins.Of(source).Loader, prepared.Pins.Loader);
+        Assert.Equal(FileHash.Sha256(selected), prepared.Loader.Files["BepInEx/plugins/profile-mod.dll"]);
+        Assert.Equal(FileHash.Sha256(config), prepared.Loader.Files[BepInExSettings.RelativePath]);
+        Assert.False(prepared.Loader.Files.ContainsKey("BepInEx/plugins/old.dll"));
+        Assert.False(prepared.Loader.Files.ContainsKey("valheim_server/Data/Managed/assembly_valheim.dll"));
+        Assert.Equal(before, WorldFixture.Manifest(source));
+        Assert.False(Directory.Exists(Path.Combine(parent, "staging")));
+        await HostedRuntimeStage.RetireAsync(host, prepared.LoaderRoot, Path.Combine(parent, "staging"), TimeSpan.FromSeconds(30));
+        Assert.False(Directory.Exists(parent));
+    }
+
+    [Fact] public async Task AClientProfileRefusesADamagedMacBundleBeforeWritingAnyProfileFiles()
+    {
+        var host = new FakeServerHost("mac-profile", Path.Combine(_root, "fake-mac"));
+        const string source = "/games/valheim", parent = "/runs/vt-prep-mac-client";
+        string app = GameLaunch.ClientMacBundle;
+        void Source(string relative, string text)
+        {
+            string path = host.Local(source + "/" + relative);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, text);
+        }
+        Source(app + "/Contents/MacOS/Valheim", "game executable");
+        Source(app + "/Contents/Resources/Data/Managed/" + InstallPins.GameAssemblyName, "game assembly");
+        Source("BepInEx/core/BepInEx.dll", "core");
+        Source("BepInEx/core/BepInEx.Preloader.dll", "preloader");
+        Source("doorstop_libs/libdoorstop_x64.dylib", "doorstop");
+        host.MacBundleInspect = "VT-BUNDLE broken 1 " + Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes("invalid signature"));
+        string selected = Path.Combine(_root, "selected.dll");
+        File.WriteAllText(selected, "selected");
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => HostedRuntimeStage.PrepareProfileAsync(host,
+            HostedRuntimeKind.Client, source, parent + "/runtime", parent + "/staging",
+            [new HostedRuntimeFile(selected, "BepInEx/plugins/selected.dll")], TimeSpan.FromSeconds(30)));
+
+        Assert.Contains("source Valheim.app", error.Message);
+        Assert.DoesNotContain("ship", host.Scripts);
+        Assert.False(Directory.Exists(host.Local(parent)));
+    }
+
+    [Fact] public async Task AnExistingProfileDestinationIsNeverDeletedAfterSeedRefusal()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        var host = new LocalGameHost("profile-collision", HostShell.Bash);
+        string source = Path.Combine(_root, "collision-source");
+        string executable = Path.Combine(source, "valheim_server", "Valheim");
+        string assembly = Path.Combine(source, "valheim_server", "Data", "Managed", InstallPins.GameAssemblyName);
+        string core = Path.Combine(source, "BepInEx", "core");
+        Directory.CreateDirectory(Path.GetDirectoryName(executable)!);
+        Directory.CreateDirectory(Path.GetDirectoryName(assembly)!);
+        Directory.CreateDirectory(core);
+        File.WriteAllText(executable, "server");
+        File.SetUnixFileMode(executable, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+        File.WriteAllText(assembly, "game");
+        File.WriteAllText(Path.Combine(core, "BepInEx.dll"), "core");
+        File.WriteAllText(Path.Combine(core, "BepInEx.Preloader.dll"), "preloader");
+        FakeInstalls.MacLoader(source);
+        string parent = Path.Combine(_root, "vt-prep-collision");
+        string runtime = Path.Combine(parent, "runtime");
+        Directory.CreateDirectory(runtime);
+        string marker = Path.Combine(runtime, "other-run.txt");
+        File.WriteAllText(marker, "keep");
+        string selected = Path.Combine(_root, "collision-mod.dll");
+        File.WriteAllText(selected, "selected");
+
+        var error = await Assert.ThrowsAsync<IOException>(() => HostedRuntimeStage.PrepareProfileAsync(host,
+            HostedRuntimeKind.Server, source, runtime, Path.Combine(parent, "staging"),
+            [new HostedRuntimeFile(selected, "BepInEx/plugins/selected.dll")], TimeSpan.FromSeconds(30)));
+
+        Assert.Contains("already exists", error.Message);
+        Assert.Equal("keep", File.ReadAllText(marker));
+        Assert.False(Directory.Exists(Path.Combine(parent, "staging")));
+    }
+
+    [Fact] public async Task MacProfileRefusesAChangedSourceAndRemovesItsOwnedFiles()
+    {
+        if (!OperatingSystem.IsMacOS()) return;
+        var host = new LocalGameHost("mac-profile", HostShell.Bash);
+        string source = Path.Combine(_root, "changed-profile-source");
+        string executable = Path.Combine(source, "valheim_server", "Valheim");
+        string assembly = Path.Combine(source, "valheim_server", "Data", "Managed", InstallPins.GameAssemblyName);
+        string core = Path.Combine(source, "BepInEx", "core");
+        Directory.CreateDirectory(Path.GetDirectoryName(executable)!);
+        Directory.CreateDirectory(Path.GetDirectoryName(assembly)!);
+        Directory.CreateDirectory(core);
+        File.WriteAllText(executable, "server");
+        File.SetUnixFileMode(executable, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+        File.WriteAllText(assembly, "game");
+        File.WriteAllText(Path.Combine(core, "BepInEx.dll"), "core");
+        File.WriteAllText(Path.Combine(core, "BepInEx.Preloader.dll"), "preloader");
+        FakeInstalls.MacLoader(source);
+        var inspected = await HostedRuntimeStage.InspectSourceAsync(host, HostedRuntimeKind.Server, source, null, TimeSpan.FromSeconds(30));
+        File.AppendAllText(Path.Combine(core, "BepInEx.dll"), "changed");
+        string selected = Path.Combine(_root, "changed-profile-mod.dll");
+        File.WriteAllText(selected, "selected");
+        string parent = Path.Combine(_root, "vt-prep-changed");
+        var error = await Assert.ThrowsAsync<IOException>(() => HostedRuntimeStage.PrepareProfileAsync(host,
+            HostedRuntimeKind.Server, source, Path.Combine(parent, "runtime"), Path.Combine(parent, "staging"),
+            [new HostedRuntimeFile(selected, "BepInEx/plugins/selected.dll")], TimeSpan.FromSeconds(30),
+            inspectedSource: inspected));
+        Assert.Contains("changed while it was copied", error.Message);
+        Assert.False(Directory.Exists(parent));
+    }
+
+    [Fact] public async Task WindowsProfileLinksGameFilesButCopiesItsLoaderAndSelectedMod()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var host = new LocalGameHost("windows-profile", HostShell.WindowsPowerShell);
+        string source = Path.Combine(_root, "windows-profile-source");
+        FakeInstalls.Client(source);
+        File.WriteAllText(Path.Combine(source, GameLaunch.ClientWindowsExecutable), "game executable");
+        StageLoader(source);
+        File.WriteAllText(Path.Combine(source, "version.dll"), "another mod manager proxy");
+        string originalMod = Path.Combine(source, "BepInEx", "plugins", "original.dll");
+        Directory.CreateDirectory(Path.GetDirectoryName(originalMod)!);
+        File.WriteAllText(originalMod, "unselected");
+        string selected = Path.Combine(_root, "windows-profile-mod.dll");
+        File.WriteAllText(selected, "selected");
+        var before = WorldFixture.Manifest(source);
+        string parent = Path.Combine(_root, "vt-prep-windows-profile");
+        var prepared = await HostedRuntimeStage.PrepareProfileAsync(host, HostedRuntimeKind.Client, source,
+            Path.Combine(parent, "runtime"), Path.Combine(parent, "staging"),
+            [new HostedRuntimeFile(selected, "BepInEx/plugins/selected.dll")], TimeSpan.FromSeconds(45));
+
+        Assert.Equal(source, prepared.Source.Root);
+        Assert.Equal(prepared.GameRoot, prepared.LoaderRoot);
+        Assert.NotEqual(source, prepared.GameRoot);
+        Assert.Equal(InstallPins.Of(source).Game, prepared.Pins.Game);
+        Assert.Equal(InstallPins.Of(source).Loader, prepared.Pins.Loader);
+        Assert.Equal(FileHash.Sha256(selected), prepared.Loader.Files["BepInEx/plugins/selected.dll"]);
+        Assert.False(prepared.Loader.Files.ContainsKey("BepInEx/plugins/original.dll"));
+        Assert.False(prepared.Loader.Files.ContainsKey("version.dll"));
+        Assert.Equal(before, WorldFixture.Manifest(source));
+        Assert.False(Directory.Exists(Path.Combine(parent, "staging")));
+        await HostedRuntimeStage.RetireAsync(host, prepared.LoaderRoot, Path.Combine(parent, "staging"), TimeSpan.FromSeconds(45));
+        Assert.False(Directory.Exists(parent));
+        Assert.Equal(before, WorldFixture.Manifest(source));
+    }
+
     // One disposable install per actor, prepared on a fake host (HostedRuntimeStage.PrepareAsync): a copy, the selected files, the loader.
     private string Mirror => Path.Combine(_root, "host");
     private static void StageLoader(string root)
