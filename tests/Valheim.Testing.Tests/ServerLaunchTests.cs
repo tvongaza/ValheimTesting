@@ -49,6 +49,23 @@ public class ServerLaunchTests
         Assert.Contains(Path.Combine(profile.Root, "doorstop_libs", "libdoorstop_x64.so"), launch.RequiredFiles);
     }
 
+    [Fact] public void LinuxHostServerProfileKeepsTheGameAndDoorstopRootsSeparate()
+    {
+        var launch = GameLaunch.ForServerWithLoader("/game/valheim", "/owned/profile", ["-batchmode"], null, ServerPlatform.Linux);
+        Assert.Equal("/game/valheim/valheim_server.x86_64", launch.Executable);
+        Assert.Equal("/owned/profile/BepInEx/core/BepInEx.Preloader.dll", launch.Environment["DOORSTOP_TARGET_ASSEMBLY"]);
+        Assert.Equal("/game/valheim/linux64:/owned/profile/doorstop_libs", launch.Prepended["LD_LIBRARY_PATH"]);
+        Assert.Contains("/owned/profile/doorstop_libs/libdoorstop_x64.so", launch.RequiredFiles);
+        Assert.Contains("LD_PRELOAD", launch.Unset);
+    }
+
+    [Fact] public void WindowsHostServerProfileRequiresTheProxyBesideTheExecutable()
+    {
+        var error = Assert.Throws<ArgumentException>(() => GameLaunch.ForServerWithLoader(
+            @"C:\games\valheim", @"C:\profiles\test", [], null, ServerPlatform.Windows));
+        Assert.Contains("beside the server executable", error.Message);
+    }
+
     [Fact] public void MacServerProfileInsertsItsDoorstopWithoutChangingTheGameRoot()
     {
         using var game = Runtime.Mac("game");

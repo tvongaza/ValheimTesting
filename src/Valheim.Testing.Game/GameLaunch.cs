@@ -109,6 +109,12 @@ public sealed partial class GameLaunch
         ServerPlatform? hostPlatform = null) =>
         hostPlatform is { } platform ? ServerOnHost(platform, runtime, arguments, environment) : LocalServer(runtime, arguments, environment, CurrentServerHost, MacServerArchitecture);
 
+    /// <summary>Build a server launch whose reviewed loader lives in a separate disposable profile.</summary>
+    internal static GameLaunch ForServerWithLoader(string runtime, string loader, IEnumerable<string> arguments,
+        IReadOnlyDictionary<string, string>? environment, ServerPlatform? hostPlatform) =>
+        hostPlatform is { } platform ? ServerOnHost(platform, runtime, arguments, environment, loader)
+            : LocalServer(runtime, arguments, environment, CurrentServerHost, MacServerArchitecture, loader);
+
     // A launch for this machine, built as if on builtOn (so every machine's branches are tested on any OS).
     internal static GameLaunch LocalServer(string runtimeDirectory, IEnumerable<string> arguments, IReadOnlyDictionary<string, string>? environment, ServerHost builtOn,
         ClientArchitecture macArchitecture, string? loaderDirectory = null)
@@ -150,13 +156,18 @@ public sealed partial class GameLaunch
             macArchitecture, isolatedLoader: loader != runtime);
     }
 
-    private static GameLaunch ServerOnHost(ServerPlatform platform, string runtime, IEnumerable<string> arguments, IReadOnlyDictionary<string, string>? environment)
+    private static GameLaunch ServerOnHost(ServerPlatform platform, string runtime, IEnumerable<string> arguments,
+        IReadOnlyDictionary<string, string>? environment, string? loaderDirectory = null)
     {
         ArgumentNullException.ThrowIfNull(arguments);
         if (platform == ServerPlatform.MacOS)
             throw new PlatformNotSupportedException("A macOS dedicated server starts only on this machine: build its launch without a host platform.");
         bool windows = platform == ServerPlatform.Windows;
         string root = HostRoot(windows, runtime, nameof(runtime), "runtime", server: true);
+        string loader = loaderDirectory == null ? root : HostRoot(windows, loaderDirectory, nameof(loaderDirectory), "loader", server: true);
+        bool separateRoots = !loader.Equals(root, windows ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+        if (windows && separateRoots)
+            throw new ArgumentException("A Windows Doorstop proxy must be beside the server executable; use an owned launch folder for both.", nameof(loaderDirectory));
         var names = windows ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
         var passed = BepInExLoader.RefuseOverrides(environment ?? new Dictionary<string, string>(), arguments, names, nameof(GameLaunch));
         RequireHostArguments(passed, lineBreaks: false);
@@ -164,9 +175,11 @@ public sealed partial class GameLaunch
         RequireHostEnvironment(environment, refuseLoaderPaths: !windows);
         var os = windows ? ClientPlatform.Windows : ClientPlatform.Linux;
         string executable = windows ? ServerWindowsExecutable : ServerLinuxExecutable;
-        var join = (string relative) => HostJoin(root, windows, relative);
-        var (set, prepended, required) = Loader(server: true, os, environment, names, join, join, false, executable, null);
-        return new GameLaunch(server: true, os, forHost: true, root, HostJoin(root, windows, executable), passed, set, prepended, required);
+        var gameJoin = (string relative) => HostJoin(root, windows, relative);
+        var loaderJoin = (string relative) => HostJoin(loader, windows, relative);
+        var (set, prepended, required) = Loader(server: true, os, environment, names, gameJoin, loaderJoin, separateRoots, executable, null);
+        return new GameLaunch(server: true, os, forHost: true, root, HostJoin(root, windows, executable), passed, set, prepended, required,
+            isolatedLoader: separateRoots);
     }
 
     /// <summary>
