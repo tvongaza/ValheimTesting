@@ -34,8 +34,10 @@ internal sealed class LocalClientCopy
     private LocalClientCopy(IGameHost host, string actor, string runtime, string stage, string launchRoot, RunJournal journal, ClientRunPlan plan, Unbound unbound)
     { _host = host; _actor = actor; _runtime = runtime; _stage = stage; _launchRoot = launchRoot; _journal = journal; _plan = plan; _unbound = unbound; }
 
-    /// <summary>The disposable copy the client runs from.</summary>
+    /// <summary>The owned folder retired with this client's profile or copy.</summary>
     internal string Runtime => _runtime;
+    /// <summary>The game root used to prove the launched process has stopped before retiring the owned folder.</summary>
+    internal string LaunchRoot => _launchRoot;
 
     /// <summary>
     /// Makes <paramref name="plan"/>'s disposable copy and binds the plan to it. <paramref name="actor"/> names the client in the

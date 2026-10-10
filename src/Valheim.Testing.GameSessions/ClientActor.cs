@@ -160,7 +160,7 @@ internal sealed class LocalClientPlacement : IClientPlacement
                 try
                 {
                     HostedRuntimeStage.RequireStoppedAsync(new LocalGameHost("this machine", OperatingSystem.IsWindows() ? HostShell.WindowsPowerShell : HostShell.Bash),
-                        LocalClientCopy.StepTimeout, CancellationToken.None, runtimes: [entry.Value.Copy.Runtime], clientSession: false).GetAwaiter().GetResult();
+                        LocalClientCopy.StepTimeout, CancellationToken.None, runtimes: [entry.Value.Copy.LaunchRoot], clientSession: false).GetAwaiter().GetResult();
                     lock (_copies) entry.Value.Stopped[at] = () => true;
                 }
                 catch (Exception error) when (error is InvalidOperationException or HostOperationException or IOException) { }

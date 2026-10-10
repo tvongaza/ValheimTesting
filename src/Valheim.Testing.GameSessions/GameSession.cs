@@ -138,11 +138,22 @@ public sealed class GameSession : IAsyncDisposable
         return session;
     }
 
-    // Which install an owned client on this machine ran: a disposable copy (the default) or the install itself (inPlace).
+    // Which install and loader an owned client on this machine ran.
     private void RecordInstall(string actor, ClientRunPlan plan)
     {
-        string? used = !plan.Owned ? null : plan.CopiedFrom != null ? $"disposable copy of {plan.CopiedFrom} ({plan.Install})" : plan.InPlace ? $"in place: {plan.Install}" : null;
-        if (used != null) lock (Report.Provenance) Report.Provenance[actor == "client" ? "clientInstall" : actor + "Install"] = used;
+        string? mode = !plan.Owned ? null : plan.PreparedLaunchMode ?? (plan.InPlace ? "inPlace" : null);
+        if (mode == null) return;
+        lock (Report.Provenance)
+        {
+            string prefix = actor == "client" ? "client" : actor;
+            Report.Provenance[prefix + "LaunchMode"] = mode;
+            Report.Provenance[prefix + "Install"] = mode switch
+            {
+                "copy" => $"disposable copy of {plan.CopiedFrom} ({plan.Install})",
+                "profile" => $"source game: {plan.Install}; owned loader profile: {plan.PreparedLoaderRoot ?? plan.Install}",
+                _ => $"in place: {plan.Install}",
+            };
+        }
     }
     private readonly List<ClientActor> _opened = [];
     private readonly List<RunLog> _added = [];
