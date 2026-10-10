@@ -10,6 +10,7 @@
 |---|---|
 | `start [--mod DLL] [--output NEW_DIR]` | A client-side mod (or a selected pair) loads in an owned client hosting a disposable world; `--compare-mod` runs a second build of it against the same world |
 | `server-load --mod DLL` | A server-side mod loads on an owned dedicated server, and one clean client (the mod absent) joins it |
+| `build --project MOD.csproj` | Publicize the installed game's required compile references privately and build a mod without copying its DLL into the live game |
 | `server-load-ab ... --remove-mod DLL` | The same load with and without one mod, to isolate a load interaction |
 | `finish --run ID` | Ask the live owner of a foreground `--hold` run to finish and clean up |
 | `init [server] --output NEW_DIR` | An editable project that reruns a `start` or `server-load` run with your own assertions |
@@ -25,9 +26,58 @@
 dotnet tool install --global Valheim.Testing.NativeSmoke --prerelease
 ```
 
-`start` and `server-load` run from the tool's own assemblies, with no consumer project restored or built before the game starts: `start` needs no NuGet.org access, and `server-load` needs it only to build its adapter, which `--adapter` skips (below). On Homebrew macOS installs, a global .NET tool may need `DOTNET_ROOT` set to the directory reported by `dotnet --info` before its apphost launches.
+The built-in `start` and `server-load` scenarios run from the tool's assemblies; they do not restore an editable consumer. `start --mod DLL` needs no NuGet.org access, while `server-load` may restore packages to build its adapter unless you supply `--adapter DLL`. The new `--project`, `--scenario-project` and `--adapter-project` forms build local projects and may need their declared NuGet dependencies. On Homebrew macOS installs, a global .NET tool may need `DOTNET_ROOT` set to the directory reported by `dotnet --info` before its apphost launches.
 
-## One Windows PC
+## One machine: build and run
+
+### Build a mod against the installed game
+
+For a mod that needs publicized game assemblies, run `build` from the checkout before the native test. It detects the local Steam Valheim install unless you give `--game`. It reads the project's publicized reference names, writes those assemblies under a new private output folder, and passes their paths to MSBuild. `BepInEx.dll`, Harmony and declared third-party references such as Jotunn are copied to that private folder. The original Valheim install, including a signed macOS app bundle, is only read. No game assemblies or third-party DLLs belong in Git.
+
+```sh
+valheim-test build --role server --project /path/to/MyServerMod/MyServerMod.csproj --output /private/runs/mod-build
+# Omit --role server for a client mod. --game DIR selects a particular installed client or server.
+# If more than one different Jotunn.dll is installed, select the intended one:
+valheim-test build --project /path/to/MyMod/MyMod.csproj --dependency Jotunn=/path/to/Jotunn.dll
+```
+
+The command prints the built mod and `build-inputs.json`. Pass both to a native run using `--mod` and `--build-inputs`: the run refuses a changed mod, publicized reference, original game assembly or third-party compile reference before launch. Build a server mod against the dedicated server selected for its run; the client and dedicated-server assemblies can differ even at the same displayed game version. Each build makes fresh private references, so an older game's publicized copies cannot be silently reused. `build-inputs.json` records the full game-code SHA256, each reference hash and the publicizer version. It and the build log contain local paths and stay in private evidence. A missing third-party dependency is named and must be installed or selected explicitly; the tool does not download mod DLLs.
+
+The mod's project must accept command-line MSBuild properties for its game path, managed path, BepInEx core, publicized path and deployment destination. `build` sets `ValheimPath`, `ValheimManaged`, `BepInExCore`, `PUBLICIZED_PATH`, `BEPINEX_CORE` and `CopyOutputDLLPath` for existing project conventions; the deployment destination is a private folder. For projects importing the [game-reference source files](../../tools/game-references/README.md), a `ValheimReference` may point at a publicized file under the supplied `PUBLICIZED_PATH`. A project that hardcodes a live plugin copy outside these properties must remove or guard that copy before using this command.
+
+### Run a mod-owned scenario with the same preparation
+
+Put one public `IOneShotServerScenario` implementation in a .NET 10 test project. Its `RunAsync(GameSession, OneShotServerContext)` method receives the already prepared server and optional clean client, the exact fixture UID and the run report. For a server-only assertion, return `false` from `RequiresClient` and pass `--server-only`; for a client scenario, return `true`, omit `--server-only`, and open the prepared `context.ClientPlan` through `session.OpenClient`. The toolkit remains responsible for the actor processes, pins, private evidence and cleanup, including when the assertion throws. The [compiling example](../../examples/OneShotServerScenario/MetadataScenario.cs) shows the small server-only shape.
+
+After cloning a mod and its test project, one command can build the mod against the selected dedicated server, build the scenario project and run them together:
+
+```sh
+valheim-test server-load --server-only \
+  --project /path/to/MyMod/MyMod.csproj \
+  --scenario-project /path/to/MyMod.SystemTests/MyMod.SystemTests.csproj \
+  --adapter-project /path/to/MyMod.TestAdapter/MyMod.TestAdapter.csproj \
+  --adapter-property 'MyModDll={mod}' \
+  --session-capability mymod.testing/session \
+  --session-token-variable MYMOD_TEST_SESSION_TOKEN \
+  --dependency Jotunn=/path/to/Jotunn.dll \
+  --server-startup-seconds 900 \
+  --output /private/runs/my-mod-scenario
+```
+
+`--adapter-project` is optional for a scenario that needs no mod-specific game command. It builds the adapter privately against the pinned ValheimCLI core (`CliDll`) and mod (`ModDll`). If the adapter's project uses its own property for the mod reference, map it once with `--adapter-property 'MyModDll={mod}'`; `{cli}` also selects the pinned CLI file. Only those two pinned placeholders are accepted. Name the custom adapter's registered session capability and token variable; the one-shot preflight refuses to start a game without them, because the built-in adapter has a different identity. `--dependency` is needed only for a compile dependency the server installation does not already contain. No arbitrary mod DLL is downloaded. Use `--preflight-only` to resolve the same pins and validate the scenario without starting Valheim. If the mod and scenario DLLs are already built, use `--mod DLL --build-inputs FILE --scenario DLL` instead. The prepared `campaign.json`, `plan.json`, dependency locks, `build-inputs.json`, adapter inputs, scenario source hashes and native result remain under the private output. On another host, run the same one-shot command from the checkout with a new output folder; its own inventory and game build are selected and pinned there. Compare the two hosts' recorded plans and hashes before treating their results as the same test input. For an exact pinned campaign replay, copy its private inputs to the other host, verify that host's game and mod hashes, and use `valheim-test init server --output NEW_DIR` to create an editable consumer for `campaign.json`; adapt its scenario and environment binding there. A different game build requires a new local mod build; changing a hash by hand is not a valid rerun.
+
+For a mod tested in a world hosted by the client, implement `IOneShotHostedScenario` instead. Its `Run(ClientRound)` receives the joined hosting client, report, output and fixture UID; add assertions with `round.Step`. The [hosted example](../../examples/OneShotServerScenario/HostedWorldScenario.cs) compiles in the same sample project. Run it on a Windows or macOS client install with the desktop and Steam available:
+
+```sh
+valheim-test start \
+  --project /path/to/MyMod/MyMod.csproj \
+  --scenario-project /path/to/MyMod.SystemTests/MyMod.SystemTests.csproj \
+  --dependency Jotunn=/path/to/Jotunn.dll
+```
+
+`start` selects a client install and builds against that client's game assemblies. `server-load` selects a dedicated-server install and builds against its assemblies. Both commands use the same private build and scenario loader, and both pin the resulting DLL for that run. For the edit–test loop, keep the command and edit the mod or assertion project between invocations: each invocation compiles the current source, creates a fresh output folder by default, and writes a new hash. No standing mod pin has to be updated. An old result remains tied to its earlier build; an already built `--mod DLL --build-inputs FILE` run still refuses changed bytes until it is rebuilt.
+
+For a mod that generates a network on first world load, `--server-startup-seconds 900` gives the dedicated server a bounded 15 minutes to become ready (default 300 seconds; maximum 1800). Use a small mod for routine edit-loop checks, and reserve the longer budget for that mod's actual generation scenario.
 
 The usual setup is one Windows PC with Valheim and the free Valheim Dedicated Server installed through Steam, each with BepInExPack_Valheim, and the Steam client running and signed in. Nothing else is written by hand: the machine's installs, ports and folders are detected, and `valheim-test env list` prints what it found, what it assumed and every path it tried for anything missing ([this machine, with no file](https://github.com/tvongaza/ValheimTesting/blob/main/docs/packages/Valheim.Testing.Game.md#this-machine-with-no-file)). `valheim-test env preflight` checks the local actors before any copy: the run journal and host lock, conflicting game processes, ValheimCLI ports, the client desktop, and whether Steam is running for a client. `start` and `server-load` use the same local checks. A running Steam process or a remembered login does not prove an active sign-in, so preflight does not claim to verify one. After launch, a fresh `SteamAPI_Init() failed` line in the client's BepInEx log ends startup promptly and is kept with the run's evidence. Dedicated-server-only runs do not need Steam.
 
@@ -136,7 +186,7 @@ To isolate a load interaction, change `server-load` to `server-load-ab` and add 
 
 ## Your own assertions: init
 
-`valheim-test init --output NEW_DIR` creates the hosted consumer, for the `regression.json` a `start` run writes (with the `environments.json` beside it); `valheim-test init server --output NEW_DIR` creates the server consumer, for a `server-load` run's `campaign.json` (with the unbound `plan.json` and `client-plan.json` beside it). `init` is the only command that builds a project. It pins the `Valheim.Testing.Game` this tool runs, so the consumer reads the tool's files, and restores and builds it from NuGet.org alone. A tool built from a source checkout pins its unreleased Game version, which NuGet.org does not serve, so `init` refuses there; use a released tool.
+`valheim-test init --output NEW_DIR` creates the hosted consumer, for the `regression.json` a `start` run writes (with the `environments.json` beside it); `valheim-test init server --output NEW_DIR` creates the server consumer, for a `server-load` run's `campaign.json` (with the unbound `plan.json` and `client-plan.json` beside it). `init` builds a test consumer; `build` builds the mod itself using private references. `init` pins the `Valheim.Testing.Game` this tool runs, so the consumer reads the tool's files, and restores and builds it from NuGet.org alone. A tool built from a source checkout pins its unreleased Game version, which NuGet.org does not serve, so `init` refuses there; use a released tool.
 
 ## What runs left: env status, recover and teardown
 

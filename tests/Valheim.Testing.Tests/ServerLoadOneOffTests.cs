@@ -19,6 +19,64 @@ public sealed class ServerLoadOneOffTests : IDisposable
 
     private static readonly CampaignPreflightReport Ready = new([]);
     [Fact]
+    public async Task ModOwnedScenarioUsesThePreparedCampaignWithoutAnotherCopy()
+    {
+        string output = Path.Combine(_rig.Root, "mod-scenario");
+        PinnedServerRunOptions<ServerRunPlan>? given = null;
+        int result = await ServerLoad.RunAsync(Arguments(output, "--server-only", "--server-startup-seconds", "900",
+            "--scenario", typeof(SampleOneShotServerScenario).Assembly.Location),
+            new ServerLoad.Seams(Inspect: _ => Task.FromResult(Ready),
+                Campaign: (_, _, _, _, options) => { given = options; return Task.FromResult(0); }));
+        Assert.Equal(0, result);
+        Assert.NotNull(given);
+        Assert.True(File.Exists(Path.Combine(output, "scenario", "source.json")));
+        Assert.True(File.Exists(Path.Combine(output, "campaign.json")));
+        Assert.Equal(900, JsonSerializer.Deserialize<ServerRunPlan>(File.ReadAllText(Path.Combine(output, "plan.json")))!.StartupSeconds);
+        Assert.Equal("sample-one-shot", OneShotScenario.Load(typeof(SampleOneShotServerScenario).Assembly.Location,
+            Path.Combine(_rig.Root, "separate-selection")).Runner.Name);
+    }
+
+    [Fact]
+    public void HostedAndDedicatedScenariosSelectTheirOwnContract()
+    {
+        string file = typeof(SampleOneShotServerScenario).Assembly.Location;
+        Assert.Equal("sample-one-shot", OneShotScenario.Load(file,
+            Path.Combine(_rig.Root, "dedicated-selection")).Runner.Name);
+        Assert.Equal("sample-hosted-one-shot", OneShotScenario.LoadHosted(file,
+            Path.Combine(_rig.Root, "hosted-selection")).Runner.Name);
+        Assert.True(StartArguments.TryRead(["--project", "mod.csproj", "--scenario-project", "test.csproj",
+            "--dependency", "Jotunn=Jotunn.dll"], out _, out _, out _, out _, out var dependencies, out string error,
+            allowImplicitMod: true), error);
+        Assert.Equal(["Jotunn=Jotunn.dll"], dependencies);
+        Assert.True(ServerLoad.TryRead(["--project", "mod.csproj", "--scenario-project", "test.csproj",
+            "--adapter-project", "adapter.csproj", "--adapter-property", "RoadsDll={mod}",
+            "--session-capability", "roads.testing/session", "--session-token-variable", "ROADS_TEST_SESSION_TOKEN"], out var server, out error,
+            allowImplicitMod: true), error);
+        Assert.Equal(["RoadsDll={mod}"], server!.AdapterProperties);
+        Assert.False(ServerLoad.TryRead(["--mod", "mod.dll", "--adapter-project", "adapter.csproj"], out _, out error));
+        Assert.Contains("--session-capability", error);
+        Assert.False(ServerLoad.TryRead(["--mod", "mod.dll", "--adapter", "adapter.dll",
+            "--adapter-project", "adapter.csproj"], out _, out error));
+        Assert.Contains("Choose --adapter", error);
+    }
+
+    [Fact]
+    public async Task ScenarioWithTheWrongClientShapeRefusesBeforeCampaign()
+    {
+        string output = Path.Combine(_rig.Root, "wrong-client-shape");
+        bool launched = false;
+        using (EnvironmentInventory.UseMachine(WithValheim(out _)))
+        {
+            int result = await ServerLoad.RunAsync(Arguments(output, "--scenario", typeof(SampleOneShotServerScenario).Assembly.Location),
+                new ServerLoad.Seams(Inspect: _ => Task.FromResult(Ready),
+                    Campaign: (_, _, _, _, _) => { launched = true; return Task.FromResult(0); },
+                    ClientArchitecture: (_, _, _, _) => { }));
+            Assert.Equal(3, result);
+        }
+        Assert.False(launched);
+        Assert.Contains("--server-only", File.ReadAllText(Path.Combine(output, "REFUSED.txt")));
+    }
+    [Fact]
     public void JoinedClientArchitectureOverridesTheInventoryAndServerOnlyRejectsIt()
     {
         var recipe = new EnvironmentRecipe { Host = "local", Architecture = "x64" };
@@ -643,4 +701,27 @@ public sealed class ServerLoadOneOffTests : IDisposable
         SmokeInputs.RecordClient(inventory, client, safe);
         Assert.True(File.Exists(Path.Combine(safe, "environments.json")));
     }
+}
+
+public sealed class SampleOneShotServerScenario : IOneShotServerScenario
+{
+    public string Name => "sample-one-shot";
+    public bool RequiresClient => false;
+    public Task RunAsync(GameSession session, OneShotServerContext context)
+    {
+        session.Report.Step("sample fixture UID is pinned", () =>
+        {
+            if (string.IsNullOrWhiteSpace(context.WorldUid)) throw new InvalidDataException("Missing fixture world UID.");
+        });
+        return Task.CompletedTask;
+    }
+}
+
+public sealed class SampleOneShotHostedScenario : IOneShotHostedScenario
+{
+    public string Name => "sample-hosted-one-shot";
+    public void Run(ClientRound round) => round.Step("hosted fixture UID is pinned", () =>
+    {
+        if (string.IsNullOrWhiteSpace(round.WorldUid)) throw new InvalidDataException("Missing fixture world UID.");
+    });
 }

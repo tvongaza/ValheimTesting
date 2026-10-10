@@ -47,6 +47,19 @@ public sealed class SmokeCommandOptionsTests
     }
 
     [Fact]
+    public void LongGenerationBudgetBelongsToDedicatedServerRuns()
+    {
+        Assert.True(ServerLoad.TryRead(["--mod", "mod.dll", "--server-only", "--server-startup-seconds", "900"],
+            out var server, out string error), error);
+        Assert.Equal("900", server!.Options["--server-startup-seconds"]);
+        Assert.False(StartArguments.TryRead(["--mod", "mod.dll", "--server-startup-seconds", "900"],
+            out _, out _, out _, out _, out error));
+        Assert.Contains("--server-startup-seconds", error);
+        Assert.False(ServerLoad.TryRead(["--mod", "mod.dll", "--server-startup-seconds", "1801"], out _, out error));
+        Assert.Contains("1 to 1800", error);
+    }
+
+    [Fact]
     public void ImplicitModIsAcceptedOnlyByTheOneShotCommandPath()
     {
         Assert.True(StartArguments.TryRead(["--output", "new-run"], out _, out var startMods, out _, out _, out _, allowImplicitMod: true));

@@ -12,6 +12,16 @@ internal static class SmokeCommandOptions
     private static readonly Dictionary<string, Spec> Table = new(StringComparer.Ordinal)
     {
         ["--mod"] = new(Kind.Repeat), ["--output"] = new(Kind.Single),
+        ["--build-inputs"] = new(Kind.Single, ServerLoadAb: false),
+        ["--project"] = new(Kind.Single, ServerLoadAb: false),
+        ["--dependency"] = new(Kind.Repeat, ServerLoadAb: false),
+        ["--scenario"] = new(Kind.Single, ServerLoadAb: false),
+        ["--scenario-project"] = new(Kind.Single, ServerLoadAb: false),
+        ["--adapter-project"] = new(Kind.Single, Start: false, ServerLoadAb: false),
+        ["--adapter-property"] = new(Kind.Repeat, Start: false, ServerLoadAb: false),
+        ["--session-capability"] = new(Kind.Single, Start: false, ServerLoadAb: false),
+        ["--session-token-variable"] = new(Kind.Single, Start: false, ServerLoadAb: false),
+        ["--server-startup-seconds"] = new(Kind.Single, Start: false),
         ["--inventory"] = new(Kind.Single), ["--client-env"] = new(Kind.Single),
         ["--client-architecture"] = new(Kind.Single), ["--cli-manifest"] = new(Kind.Single),
         ["--cli-files"] = new(Kind.Single), ["--client-loader-package"] = new(Kind.Single),
@@ -80,6 +90,26 @@ internal static class SmokeCommandOptions
             { error = "Repeated option: " + key; return false; }
         }
         if (!allowImplicitMod && result.List("--mod").Count == 0) { error = "Missing: --mod"; return false; }
+        if (result.Options.ContainsKey("--project") && (result.List("--mod").Count != 0 || result.Options.ContainsKey("--build-inputs")))
+        { error = "--project builds the one selected mod and records its inputs; leave out --mod and --build-inputs."; return false; }
+        if (result.List("--dependency").Count != 0 && !result.Options.ContainsKey("--project"))
+        { error = "--dependency supplies a private compile reference for --project; use --search-root for an already built mod."; return false; }
+        if (result.Options.ContainsKey("--scenario") && result.Options.ContainsKey("--scenario-project"))
+        { error = "Choose --scenario DLL or --scenario-project TEST.csproj, not both."; return false; }
+        if (result.Options.ContainsKey("--adapter") && result.Options.ContainsKey("--adapter-project"))
+        { error = "Choose --adapter DLL or --adapter-project TEST.csproj, not both."; return false; }
+        if (result.List("--adapter-property").Count != 0 && !result.Options.ContainsKey("--adapter-project"))
+        { error = "--adapter-property requires --adapter-project."; return false; }
+        if (result.Options.ContainsKey("--session-capability") != result.Options.ContainsKey("--session-token-variable"))
+        { error = "--session-capability and --session-token-variable must be given together for a custom adapter."; return false; }
+        if (result.Options.ContainsKey("--adapter-project") && !result.Options.ContainsKey("--session-capability"))
+        { error = "--adapter-project needs its registered --session-capability OWNER/session and --session-token-variable NAME; the built-in adapter uses a different identity."; return false; }
+        if ((result.Options.ContainsKey("--scenario") || result.Options.ContainsKey("--scenario-project")) && (result.Switches.Contains("--hold") ||
+            result.Options.ContainsKey("--bake-fixture") || result.Options.ContainsKey("--assert-command")))
+        { error = "--scenario owns its assertions; leave out --hold, --bake-fixture and --assert-command."; return false; }
+        if (command == Command.Start && (result.Options.ContainsKey("--scenario") || result.Options.ContainsKey("--scenario-project")) &&
+            result.Options.ContainsKey("--compare-mod"))
+        { error = "Run a hosted scenario against one mod build; leave out --compare-mod."; return false; }
         if (command == Command.ServerLoadAb)
         {
             if (!result.Options.ContainsKey("--remove-mod")) { error = "Specify exactly one --remove-mod."; return false; }
@@ -92,6 +122,9 @@ internal static class SmokeCommandOptions
         if (result.Options.TryGetValue("--join-seconds", out string? joinSeconds) &&
             (!int.TryParse(joinSeconds, NumberStyles.None, CultureInfo.InvariantCulture, out int seconds) || seconds is < 10 or > 900))
         { error = "--join-seconds must be a whole number from 10 to 900."; return false; }
+        if (result.Options.TryGetValue("--server-startup-seconds", out string? startupSeconds) &&
+            (!int.TryParse(startupSeconds, NumberStyles.None, CultureInfo.InvariantCulture, out int startup) || startup is < 1 or > 1800))
+        { error = "--server-startup-seconds must be a whole number from 1 to 1800."; return false; }
         if (result.Options.TryGetValue("--client-architecture", out string? architecture) && architecture is not ("x64" or "arm64"))
         { error = "--client-architecture must be x64 or arm64."; return false; }
         if (result.Switches.Contains("--server-only") &&
