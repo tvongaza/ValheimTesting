@@ -31,6 +31,7 @@ jobs:
       # GitHub's Windows runners run the job in the signed-in console session, so the interactive client's scheduled-task
       # start is required to run there (with stand-ins for Steam and the game) rather than only its refusal.
       VALHEIM_TESTING_WINDOWS_DESKTOP: ${{ matrix.os == 'windows-latest' && '1' || '' }}
+      VT_CI_PROFILE: ${{ matrix.os == 'windows-latest' && '1' || '' }}
       # The NuGet package cache's paths (see "Restore the NuGet package cache"), shared by its restore and save.
       VT_NUGET_CACHE_PATHS: |
         ~/.nuget/packages
@@ -69,6 +70,14 @@ jobs:
       # step fails or is cancelled (#171), and a test run with no progress for five minutes names its unfinished tests.
       - run: dotnet run scripts/validate.cs -- --skip-ci-shell
         timeout-minutes: 20
+      - name: Keep Windows test timings for CI profiling
+        if: runner.os == 'Windows' && always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-test-timings
+          path: artifacts/validate/Valheim.Testing.Tests/timings.trx
+          if-no-files-found: ignore
+          retention-days: 2
       - name: Keep the validation transcript
         if: failure() || cancelled()
         uses: actions/upload-artifact@v7

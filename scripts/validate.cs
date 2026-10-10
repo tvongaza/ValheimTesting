@@ -127,8 +127,12 @@ void Test(string project, params string[] extra)
     string output = Path.Combine(results, Path.GetFileNameWithoutExtension(project));
     try
     {
-        Run("dotnet", ["test", project, "-c", "Release", "-m:1", "--blame-hang-timeout", "5m", "--blame-hang-dump-type", "none",
-            "--results-directory", output, .. extra]);
+        var arguments = new List<string> { "test", project, "-c", "Release", "-m:1", "--blame-hang-timeout", "5m",
+            "--blame-hang-dump-type", "none", "--results-directory", output };
+        if (Environment.GetEnvironmentVariable("VT_CI_PROFILE") == "1")
+            arguments.AddRange(["--logger", "trx;LogFileName=timings.trx"]);
+        arguments.AddRange(extra);
+        Run("dotnet", arguments.ToArray());
     }
     catch
     {
