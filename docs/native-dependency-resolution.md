@@ -20,7 +20,7 @@ From a ValheimTesting checkout, create a private request such as:
 Paths may be relative to the request file. Generate the ValheimCLI manifest for one known core-and-pack build with `CliCapabilityManifest.Generate(...)`, or use the manifest shipped with that build. The resolver selects the core and only packs providing the requested commands; it checks their hashes against that manifest. Include the commands your scenario needs as well as the runner's session commands.
 
 ```sh
-sh scripts/bootstrap-cli.sh  # macOS/Linux; on Windows: pwsh -File scripts/bootstrap-cli.ps1
+sh scripts/bootstrap-cli.sh  # macOS/Linux; on Windows: powershell -NoProfile -File scripts/bootstrap-cli.ps1
 dotnet run scripts/native-dependencies.cs -- resolve /private/test/request.json /private/test/dependency-lock.json
 dotnet run scripts/native-dependencies.cs -- check /private/test/dependency-lock.json
 ```

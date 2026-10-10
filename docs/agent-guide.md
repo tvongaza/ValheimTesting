@@ -39,7 +39,7 @@ For reusable synthetic ground and multi-zone height/paint state, read [Shared-wo
 3. For framework development, bootstrap the exact ValheimCLI dependency, then run local validation:
 
    ```sh
-   sh scripts/bootstrap-cli.sh  # macOS/Linux; on Windows: pwsh -File scripts/bootstrap-cli.ps1
+   sh scripts/bootstrap-cli.sh  # macOS/Linux; on Windows: powershell -NoProfile -File scripts/bootstrap-cli.ps1
    dotnet run scripts/validate.cs
    ```
 
