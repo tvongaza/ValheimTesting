@@ -41,7 +41,36 @@ valheim-test server-load --server-only \
   --assert-line 'EXTENSION_RESULT mymod.testing/bake-ready ready=true'
 ```
 
-The assertion is **one** strict, pinned server command after the world accepts connections. Choose an observation whose accepted reply means generation is complete, and make its expected line specific enough to exclude a partial or refused result. If the test needs to cause a one-time change before that observation, add `--before-save-command TEXT --before-save-line PREFIX`; it runs once, before the assertion. A mod whose generation needs several phases or a longer event wait should express that as a `PinnedServerRun` scenario; see [the server runner](packages/Valheim.Testing.GameSessions.md) and later [multi-phase builds](https://github.com/tvongaza/ValheimTesting/issues/509).
+The assertion is **one** strict, pinned server command after the world accepts connections. Choose an observation whose accepted reply means generation is complete, and make its expected line specific enough to exclude a partial or refused result. If the test needs to cause a one-time change before that observation, add `--before-save-command TEXT --before-save-line PREFIX`; it runs once, before the assertion. For a longer event wait, use a `PinnedServerRun` scenario; see [the server runner](packages/Valheim.Testing.GameSessions.md).
+
+### Ordered server-only phases
+
+`server-load-phases` runs several strict `server-load --server-only` bakes in sequence. Each phase gets a new owned server copy; its confirmed saved fixture becomes the next phase's input. The source fixture and source game install are left alone. Write a plan such as:
+
+```json
+{
+  "schema": 1,
+  "worldFixture": "/absolute/path/to/fixtures/base",
+  "keepFinal": true,
+  "commonArgs": ["--server", "/absolute/path/to/ValheimDedicatedServer"],
+  "phases": [
+    {
+      "name": "generate",
+      "args": ["--mod", "/absolute/path/to/Generator.dll", "--assert-command", "cli_extension generator.testing/ready", "--assert-line", "EXTENSION_RESULT generator.testing/ready ready=true"]
+    },
+    {
+      "name": "decorate",
+      "args": ["--mod", "/absolute/path/to/Decorator.dll", "--before-save-command", "cli_extension decorator.testing/place", "--before-save-line", "EXTENSION_RESULT decorator.testing/place placed=true", "--assert-command", "cli_extension decorator.testing/ready", "--assert-line", "EXTENSION_RESULT decorator.testing/ready ready=true"]
+    }
+  ]
+}
+```
+
+```sh
+valheim-test server-load-phases --plan /absolute/path/to/phases.json --output /absolute/path/to/new-private-run
+```
+
+Use absolute paths and a new output directory. To begin with the toolkit's pinned small world instead of an existing fixture, set `"worldFixture": "packaged"`; the generated source is verified and retired after a successful build. The plan accepts two to ten phases, each with at least one explicit mod and its own strict readiness assertion. `commonArgs` selects the server environment, loader, adapter and ValheimCLI bundle; each phase selects its own mods, configs, extra plugins and assertion. The runner hashes the plan and explicitly named input files and directories before phase one, and refuses a later phase if one changes. `phase-state.json` records the active phase and checkpoint, and `phases/` contains its private run evidence. A failed phase stops the sequence and leaves the last confirmed checkpoint for inspection. Once the next phase succeeds, its predecessor checkpoint is removed. The final checkpoint stays only with `keepFinal: true`. If the runner is interrupted, use `valheim-test env status` to find the active phase's run ID and `valheim-test env recover --run ID` before inspecting or cleaning its checkpoint. Keep the plan and evidence private: paths, logs and game data may identify your machine or world.
 
 Only after that assertion passes does the runner ask ValheimCLI for a save and require its save number to advance. It then gives the server time to save again at clean quit, fetches the actual saved world, checks its name and UID, and publishes `poi-baked/worlds_local/<name>/` with `fixture-manifest.json` only when the whole run and cleanup passed. The manifest records every output hash, the source hashes and UID, selected mod hashes, dependency-lock hash, run ID, confirmed save number and final exported save number. A later `--world-fixture poi-baked` run verifies that manifest before loading. The source fixture and install are never edited; the disposable runtime is retired as usual. A failed assertion, unconfirmed save, unclean stop or existing destination leaves no baked fixture. The run's private evidence remains for diagnosis.
 
