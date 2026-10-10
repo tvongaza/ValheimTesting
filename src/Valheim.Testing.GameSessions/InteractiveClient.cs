@@ -102,6 +102,21 @@ public static class InteractiveClient
         throw new HostOperationException($"Unexpected desktop check reply from {host.Name}", result);
     }
 
+    /// <summary>A desktop token for a detached server task, without requiring the Steam client.</summary>
+    internal static async Task RequireWindowsDesktopSessionAsync(IGameHost host, CancellationToken cancellation = default)
+    {
+        ArgumentNullException.ThrowIfNull(host);
+        if (host.Shell.Kind != HostShellKind.PowerShell)
+            throw new ArgumentException("The Windows desktop check needs a PowerShell host.", nameof(host));
+        var result = (await host.RunAsync(InteractiveScripts.WindowsDesktopSessionCheck, new Dictionary<string, string>(),
+            TimeSpan.FromSeconds(15), cancellation).ConfigureAwait(false)).EnsureSuccess($"Checking the desktop session on {host.Name}");
+        string? verdict = Line(result.Stdout, "VT-INTERACTIVE ");
+        if (verdict == "ready") return;
+        if (verdict?.StartsWith("no-session ", StringComparison.Ordinal) == true)
+            throw new InteractiveSessionException(InteractiveRefusal.NoSession, host.Name, verdict["no-session ".Length..]);
+        throw new HostOperationException($"Unexpected desktop check reply from {host.Name}", result);
+    }
+
     /// <summary>
     /// Starts <paramref name="launch"/> in <paramref name="host"/>'s desktop session and returns the game's process, identified by
     /// process ID and start time. <paramref name="launchDirectory"/> is a new absolute directory on the host for this launch's evidence:
@@ -458,13 +473,23 @@ internal static class InteractiveScripts
         """;
 
     // Shared by the read-only desktop check and the actual launch: the verdict cannot drift between them.
-    internal const string WindowsDesktopGuard = """
+    internal const string WindowsDesktopSessionGuard = """
         $desktops = Get-VtSessions ''
         if ($desktops.Count -eq 0) { 'VT-INTERACTIVE no-session ' + $me + ' has no desktop session here; sign in at the console or over Remote Desktop and leave the session running'; exit 0 }
         if ($desktops.Count -gt 1) { 'VT-INTERACTIVE no-session ' + $me + ' has ' + $desktops.Count + ' desktop sessions (' + ($desktops -join ', ') + ') and a task could start in any of them; sign out of all but one'; exit 0 }
+        """;
+
+    internal const string WindowsDesktopGuard = WindowsDesktopSessionGuard + "\n" + """
         $steam = Get-VtSessions 'steam.exe'
         if ($steam.Count -eq 0) { 'VT-INTERACTIVE no-steam no Steam client (steam.exe) runs in the desktop session ' + $desktops[0] + ' of ' + $me; exit 0 }
         """;
+
+    internal static readonly string WindowsDesktopSessionCheck = ("""
+        $me = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+        $system = [Environment]::SystemDirectory
+""" + "\n" + WindowsSessions + "\n" + WindowsDesktopSessionGuard + "\n" + """
+        'VT-INTERACTIVE ready'
+        """).ReplaceLineEndings("\n");
 
     // The read-only part of WindowsStart, available before a one-shot copies the game. Start performs the same checks again
     // so a desktop logout or Steam exit between preflight and launch is still refused.

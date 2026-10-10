@@ -57,6 +57,17 @@ public class InteractiveClientTests
         Assert.DoesNotContain("CreateDirectory", script);
     }
 
+    [Fact]
+    public async Task DetachedServerDesktopPreflightDoesNotRequireSteam()
+    {
+        var fake = new FakeLauncher().Exits(0, Reply("VT-INTERACTIVE ready"), FakeLauncher.Report(0));
+        await InteractiveClient.RequireWindowsDesktopSessionAsync(WindowsHost(fake));
+        string script = FakeLauncher.Script(Assert.Single(fake.Calls));
+        Assert.Contains(InteractiveScripts.WindowsDesktopSessionGuard.ReplaceLineEndings("\n"), script);
+        Assert.DoesNotContain("Get-VtSessions 'steam.exe'", script);
+        Assert.DoesNotContain("RegisterTaskDefinition", script);
+    }
+
     internal static List<(string Kind, string Value)> Decode(string spec) => spec.Split('\n', StringSplitOptions.RemoveEmptyEntries)
         .Select(line => line.Split(' ', 2)).Select(parts => (parts[0], Encoding.UTF8.GetString(Convert.FromBase64String(parts[1])))).ToList();
     internal static string Base64(string text) => Convert.ToBase64String(Encoding.UTF8.GetBytes(text));
