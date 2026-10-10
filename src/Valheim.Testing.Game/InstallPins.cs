@@ -113,6 +113,22 @@ public sealed class InstallPins
         };
     }
 
+    /// <summary>The game code at <paramref name="gameRoot"/> and the loader and patchers in an owned profile.</summary>
+    internal static InstallPins Of(string gameRoot, string loaderRoot)
+    {
+        if (Path.GetFullPath(gameRoot) == Path.GetFullPath(loaderRoot)) return Of(gameRoot);
+        gameRoot = Path.GetFullPath(gameRoot);
+        loaderRoot = Path.GetFullPath(loaderRoot);
+        string core = Path.Combine(loaderRoot, CoreDirectory);
+        if (!Directory.Exists(core)) throw new DirectoryNotFoundException("BepInEx is not installed in the profile: " + core);
+        return new()
+        {
+            Game = GameHash(gameRoot),
+            Loader = LoaderHash(loaderRoot),
+            Patchers = DirectoryHash(Path.Combine(loaderRoot, BepInExLoader.Patchers)),
+        };
+    }
+
     /// <summary>
     /// Plugin pins derived from the staged files instead of typed by hand (a plan's <c>pins</c>, not part of an
     /// <see cref="InstallPins"/> object): each value of <paramref name="files"/> is a path
@@ -151,11 +167,16 @@ public sealed class InstallPins
     /// Returns what it found.
     /// </summary>
     public InstallPins Check(string root, string kind)
+        => Check(root, root, kind);
+
+    /// <summary>Checks a game install against a separate owned loader profile.</summary>
+    internal InstallPins Check(string gameRoot, string loaderRoot, string kind)
     {
         Validate(kind);
-        root = Path.GetFullPath(root);
-        string patchers = Path.Combine(root, BepInExLoader.Patchers);
-        return Compare(Of(root), kind, Path.GetRelativePath(root, Path.GetDirectoryName(GameAssembly(root))!),
+        gameRoot = Path.GetFullPath(gameRoot);
+        loaderRoot = Path.GetFullPath(loaderRoot);
+        string patchers = Path.Combine(loaderRoot, BepInExLoader.Patchers);
+        return Compare(Of(gameRoot, loaderRoot), kind, Path.GetRelativePath(gameRoot, Path.GetDirectoryName(GameAssembly(gameRoot))!),
             () => Directory.Exists(patchers) ? Directory.EnumerateFileSystemEntries(patchers).Select(Path.GetFileName).OfType<string>().ToList() : []);
     }
 

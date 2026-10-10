@@ -93,6 +93,26 @@ public sealed class PinningTests : IDisposable
 
     // ---- install pins ----
 
+    [Fact] public void AProfilePinChecksGameCodeInTheSourceAndLoaderInTheProfile()
+    {
+        FakeInstalls.Client(Install);
+        string profile = Path.Combine(_root, "profile");
+        Directory.CreateDirectory(Path.Combine(profile, "BepInEx", "core"));
+        File.WriteAllText(Path.Combine(profile, "BepInEx", "core", "BepInEx.Preloader.dll"), "profile preloader");
+        File.WriteAllText(Path.Combine(profile, "libdoorstop.dylib"), "profile doorstop");
+        var expected = InstallPins.Of(Install, profile);
+        Assert.Equal(InstallPins.GameHash(Install), expected.Game);
+        Assert.Equal(InstallPins.LoaderHash(profile), expected.Loader);
+        expected.Check(Install, profile, "client profile");
+
+        // Neither a different game build nor a different profile loader can pass the same pin.
+        File.WriteAllText(Path.Combine(Install, "valheim_Data", "Managed", InstallPins.GameAssemblyName), "changed game");
+        Assert.Contains("game build differs", Assert.Throws<InvalidOperationException>(() => expected.Check(Install, profile, "client profile")).Message);
+        File.WriteAllText(Path.Combine(Install, "valheim_Data", "Managed", InstallPins.GameAssemblyName), "game build 1");
+        File.WriteAllText(Path.Combine(profile, "libdoorstop.dylib"), "changed doorstop");
+        Assert.Contains("loader differs", Assert.Throws<InvalidOperationException>(() => expected.Check(Install, profile, "client profile")).Message);
+    }
+
     [Fact] public void AFolderHashIsTheSha256OfItsSha256sumListing()
     {
         string core = Path.Combine(_root, "core");

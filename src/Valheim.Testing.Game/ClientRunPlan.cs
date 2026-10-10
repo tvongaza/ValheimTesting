@@ -30,6 +30,12 @@ public sealed class ClientRunPlan
     /// (<see cref="CliPreflight"/>). Running Valheim, the run journal, leases and local-only test characters are checked as for a copy.
     /// </summary>
     public bool InPlace { get => _inPlace ?? (_inPlaceRun && Owned); set => _inPlace = value; }
+    /// <summary>
+    /// Owned clients only: make a full disposable game copy instead of the default loader profile. Use this when
+    /// the client cannot launch from a profile, for example when the Windows game and profile folders must be on
+    /// different volumes. The source install is still read only. Attached clients and in-place runs refuse this option.
+    /// </summary>
+    public bool CopyGame { get; set; }
     private bool? _inPlace;
     // --in-place, as it stood when this plan was made: it applies to owned clients only (an attached one is its operator's).
     private readonly bool _inPlaceRun = s_inPlaceRun.Value;
@@ -52,6 +58,11 @@ public sealed class ClientRunPlan
     /// client, a targeted regression's staged install. Never read from a plan file.
     /// </summary>
     [JsonIgnore] internal bool Prepared { get; set; }
+    /// <summary>The owned profile's BepInEx and Doorstop root, when it differs from the game install. Never read from a plan file.</summary>
+    [JsonIgnore] internal string? PreparedLoaderRoot { get; set; }
+    [JsonIgnore] internal string LoaderRoot => PreparedLoaderRoot ?? Install;
+    /// <summary>The owned staging choice recorded in run evidence. Never read from a plan file.</summary>
+    [JsonIgnore] internal string? PreparedLaunchMode { get; set; }
     /// <summary>The install a local disposable copy was made from, once <see cref="Prepared"/> by it; for the report.</summary>
     [JsonIgnore] internal string? CopiedFrom { get; set; }
     /// <summary>
@@ -248,15 +259,16 @@ public sealed class ClientRunPlan
         if (Owned && !(Path.IsPathFullyQualified(Install) || IsFullPathOnAnyHost(Install))) throw new ArgumentException("An owned client needs the full path of its install.");
         if (Environment == null) throw new ArgumentException("client.environment must be an object of variable names and values.");
         var architecture = LaunchArchitecture;
-        if (!Owned && (Install.Length != 0 || LaunchArguments.Length != 0 || Environment.Count != 0 || InstallPins != null || Architecture.Length != 0 || InPlace))
-            throw new ArgumentException("An attached client is launched by its operator; leave out install, installPins, launch arguments, architecture and inPlace. Leave out environment too.");
+        if (!Owned && (Install.Length != 0 || LaunchArguments.Length != 0 || Environment.Count != 0 || InstallPins != null || Architecture.Length != 0 || InPlace || CopyGame))
+            throw new ArgumentException("An attached client is launched by its operator; leave out install, installPins, launch arguments, architecture and inPlace. Leave out environment and copyGame too.");
+        if (InPlace && CopyGame) throw new ArgumentException("Choose inPlace or copyGame for this client, not both.");
         if (Owned) GameLaunch.ValidateClientEnvironment(Environment, LaunchArguments);
         var platform = Owned ? InstallPlatform() : null;
         if (architecture == ClientArchitecture.Arm64 && platform is { } other && other != ClientPlatform.MacOS)
             throw new ArgumentException($"Architecture arm64 is for a macOS client (Valheim.app); this {other} client is x64 only. Leave architecture out.");
         // The launch's own slice and core check on an install on this machine, so validate and run refuse it before a server starts.
-        if (platform == ClientPlatform.MacOS)
-            try { GameLaunch.RequireMacArchitecture(Path.GetFullPath(Install), architecture); }
+        if (platform == ClientPlatform.MacOS && !CopySource)
+            try { GameLaunch.RequireMacArchitecture(Path.GetFullPath(Install), architecture, Path.GetFullPath(LoaderRoot)); }
             catch (Exception error) when (error is InvalidOperationException or IOException)
             {
                 throw new ArgumentException($"The client install cannot launch as {GameLaunch.PlanName(architecture)}: {error.Message}", error);
@@ -364,10 +376,10 @@ public sealed class ClientRunPlan
         }
         if (InPlace) OwnedClientPreflight.RequireInPlace(Install);
         var start = ClientSession.StartInfo(this, GameLaunch.CurrentClientHost); // The install's loader and slices.
-        var located = OwnedClientPreflight.Check(Install, Pins, Pinned, HostWorld, hostWorldName);
+        var located = OwnedClientPreflight.Check(LoaderRoot, Pins, Pinned, HostWorld, hostWorldName);
         var manifestCheck = CheckCliManifest(capabilities);
         if (manifestCheck != null)
-            OwnedClientPreflight.RequireManifestScriptsLoad(Install, Pins, located, manifestCheck.Files);
+            OwnedClientPreflight.RequireManifestScriptsLoad(LoaderRoot, Pins, located, manifestCheck.Files);
         return start;
     }
 
@@ -395,7 +407,7 @@ public sealed class ClientRunPlan
         }
         if (CliManifest == null)
             return InPlace ? null : throw new InvalidOperationException("This owned client's disposable copy names no staged ValheimCLI manifest; its copy owner binds one.");
-        return CliCapabilityManifest.Read(CliManifest).Check(Install, wanted);
+        return CliCapabilityManifest.Read(CliManifest).Check(LoaderRoot, wanted);
     }
 
     /// <summary>Owned and pinned: refuses an install whose game build, loader or patchers are not <see cref="InstallPins"/>.</summary>
@@ -403,7 +415,7 @@ public sealed class ClientRunPlan
     {
         if (!Owned || !Pinned) return;
         (InstallPins ?? throw new ArgumentException("Pin the owned client's game build, loader and patchers in installPins, or opt out explicitly with \"pinning\": \"none\"."))
-            .Check(Install, "client install");
+            .Check(Install, LoaderRoot, "client install");
     }
     private static string Expect(IEnumerable<string> lines)
     {

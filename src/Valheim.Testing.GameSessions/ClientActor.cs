@@ -135,7 +135,7 @@ internal sealed class LocalClientPlacement : IClientPlacement
                 LocalClientCopy.StepTimeout, cancellation, clientSession: true).GetAwaiter().GetResult();
         else if (plan.CopySource)
         {
-            var made = (PrepareCopy ?? ((actor, client, token) => LocalClientCopy.PrepareAsync(actor, client, token)))(name, plan, cancellation).GetAwaiter().GetResult();
+            var made = (PrepareCopy ?? ((actor, client, token) => LocalClientCopy.PrepareAsync(actor, client, token, copyGame: client.CopyGame)))(name, plan, cancellation).GetAwaiter().GetResult();
             bool closed;
             lock (_copies) { closed = _closed; if (!closed) _copies.Add((made, plan, [])); }
             if (closed)
@@ -160,7 +160,7 @@ internal sealed class LocalClientPlacement : IClientPlacement
                 try
                 {
                     HostedRuntimeStage.RequireStoppedAsync(new LocalGameHost("this machine", OperatingSystem.IsWindows() ? HostShell.WindowsPowerShell : HostShell.Bash),
-                        LocalClientCopy.StepTimeout, CancellationToken.None, runtimes: [entry.Value.Copy.Runtime], clientSession: false).GetAwaiter().GetResult();
+                        LocalClientCopy.StepTimeout, CancellationToken.None, runtimes: [entry.Value.Copy.LaunchRoot], clientSession: false).GetAwaiter().GetResult();
                     lock (_copies) entry.Value.Stopped[at] = () => true;
                 }
                 catch (Exception error) when (error is InvalidOperationException or HostOperationException or IOException) { }

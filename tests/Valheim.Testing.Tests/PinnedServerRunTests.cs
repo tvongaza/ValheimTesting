@@ -72,7 +72,7 @@ public sealed class PinnedServerRunTests : IDisposable
     };
     private static object MacClient(string install, string architecture) => new
     {
-        mode = "owned", install, architecture, port = 5556, join = "127.0.0.1:2456", character = "Tester", pinning = "none",
+        mode = "owned", install, architecture, inPlace = true, port = 5556, join = "127.0.0.1:2456", character = "Tester", pinning = "none",
     };
     private static bool HostRunsLinux => !OperatingSystem.IsWindows();
 
@@ -111,7 +111,7 @@ public sealed class PinnedServerRunTests : IDisposable
         Assert.Equal("strict", result.GetProperty("Pinning").GetString());
         Assert.True(File.Exists(Path.Combine(Output, "input-hashes.json"))); Assert.True(File.Exists(Path.Combine(Output, "junit.xml")));
     }
-    // The launch's architecture check runs when the plan is read: validate refuses the plan, and run refuses it before the server starts.
+    // An in-place launch's architecture check runs when the plan is read: validate refuses it, and run refuses it before the server starts.
     [Fact] public async Task AnArm64ClientWithoutTheNativeCoreIsRefusedAtValidateAndBeforeTheServerStarts()
     {
         using var legacy = ClientLaunchTests.Install.Mac(universalDoorstop: true, core: ClientLaunchTests.LegacyDetour);

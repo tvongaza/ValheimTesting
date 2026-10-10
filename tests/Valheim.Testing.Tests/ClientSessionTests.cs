@@ -229,6 +229,23 @@ public sealed class ClientSessionTests : IDisposable
         Assert.Equal(new[] { "-e", "DYLD_INSERT_LIBRARIES=" + doorstop }, ClientLaunchTests.ExportPair(arguments, "DYLD_INSERT_LIBRARIES"));
     }
 
+    [Fact] public void APreparedMacProfileRunsTheSourceGameWithItsOwnDoorstop()
+    {
+        using var game = ClientLaunchTests.Install.Mac(universalDoorstop: true, core: ClientLaunchTests.NativeDetour);
+        using var profile = ClientLaunchTests.Install.Mac(universalDoorstop: true, core: ClientLaunchTests.NativeDetour);
+        var plan = Owned(game.Root, "arm64");
+        plan.Prepared = true;
+        plan.PreparedLoaderRoot = profile.Root;
+        var launch = GameLaunch.LocalClient(game.Root, [], null, ClientArchitecture.Arm64, true, ClientPlatform.MacOS, profile.Root);
+        Assert.Contains("DYLD_INSERT_LIBRARIES", launch.Unset);
+        Assert.Contains("DYLD_LIBRARY_PATH", launch.Unset);
+        var start = ClientSession.StartInfo(plan, ClientPlatform.MacOS);
+        Assert.Equal("/usr/bin/arch", start.FileName);
+        Assert.Contains(game.Executable, start.ArgumentList);
+        Assert.Equal(new[] { "-e", "DYLD_INSERT_LIBRARIES=" + Path.Combine(profile.Root, "libdoorstop.dylib") },
+            ClientLaunchTests.ExportPair(start.ArgumentList.ToList(), "DYLD_INSERT_LIBRARIES"));
+    }
+
     [Fact] public void AnOmittedArchitectureUsesTheCurrentHostsDefaultMacSlice()
     {
         using var install = ClientLaunchTests.Install.Mac(universalDoorstop: true, core: ClientLaunchTests.NativeDetour);
@@ -271,26 +288,34 @@ public sealed class ClientSessionTests : IDisposable
         }
     }
 
-    // Validation runs the launch's own slice and core check on an install on this machine, so a runner's validate mode, and its
-    // run mode before it starts a server, refuse what the launch would.
+    // In-place validation checks the selected loader's slice before launch. An unprepared owned profile can replace
+    // the source loader with a reviewed package, so its source loader must not decide whether that profile can run.
     [Fact] public void PlanValidationRefusesAMacInstallThePlansArchitectureCannotLaunch()
     {
         using var pack = ClientLaunchTests.Install.Mac();
-        var error = Assert.Throws<ArgumentException>(() => Owned(pack.Root, "arm64").Validate());
+        var armPlan = Owned(pack.Root, "arm64");
+        armPlan.InPlace = true;
+        var error = Assert.Throws<ArgumentException>(() => armPlan.Validate());
         Assert.Contains("The client install cannot launch as arm64: No Doorstop library in the install has an arm64 slice", error.Message);
         Owned(pack.Root, "x64").Validate(); // The pack's own route remains available when explicitly requested.
         if (OperatingSystem.IsMacOS() && System.Runtime.InteropServices.RuntimeInformation.OSArchitecture == System.Runtime.InteropServices.Architecture.Arm64)
-            Assert.Contains("cannot launch as arm64", Assert.Throws<ArgumentException>(() => Owned(pack.Root).Validate()).Message);
+        {
+            var defaultPlan = Owned(pack.Root); defaultPlan.InPlace = true;
+            Assert.Contains("cannot launch as arm64", Assert.Throws<ArgumentException>(() => defaultPlan.Validate()).Message);
+        }
         using var legacy = ClientLaunchTests.Install.Mac(universalDoorstop: true, core: ClientLaunchTests.LegacyDetour);
-        Assert.Contains("MonoMod before 25", Assert.Throws<ArgumentException>(() => Owned(legacy.Root, "arm64").Validate()).Message);
+        var legacyPlan = Owned(legacy.Root, "arm64"); legacyPlan.InPlace = true;
+        Assert.Contains("MonoMod before 25", Assert.Throws<ArgumentException>(() => legacyPlan.Validate()).Message);
         using var nativeOnly = ClientLaunchTests.Install.Mac(packDoorstop: false, arm64Doorstop: true, core: ClientLaunchTests.NativeDetour);
         Owned(nativeOnly.Root, "arm64").Validate();
-        Assert.Contains("cannot launch as x64: No Doorstop library in the install has an x86_64 slice", Assert.Throws<ArgumentException>(() => Owned(nativeOnly.Root, "x64").Validate()).Message);
+        var x64Plan = Owned(nativeOnly.Root, "x64"); x64Plan.InPlace = true;
+        Assert.Contains("cannot launch as x64: No Doorstop library in the install has an x86_64 slice", Assert.Throws<ArgumentException>(() => x64Plan.Validate()).Message);
         if (OperatingSystem.IsMacOS() && System.Runtime.InteropServices.RuntimeInformation.OSArchitecture == System.Runtime.InteropServices.Architecture.Arm64)
             Owned(nativeOnly.Root).Validate();
         using var noGame = ClientLaunchTests.Install.Mac(core: ClientLaunchTests.NativeDetour);
         File.Delete(noGame.Executable);
-        Assert.Contains("has no executable", Assert.Throws<ArgumentException>(() => Owned(noGame.Root).Validate()).Message);
+        var noGamePlan = Owned(noGame.Root); noGamePlan.InPlace = true;
+        Assert.Contains("has no executable", Assert.Throws<ArgumentException>(() => noGamePlan.Validate()).Message);
     }
 
     // The process started, so its kept logs travel with the failure for the scan; a start that never happened keeps none.
@@ -416,6 +441,17 @@ public sealed class ClientSessionTests : IDisposable
             Assert.Contains("serialized plan data", error.Message);
         }
         finally { Environment.SetEnvironmentVariable(variable, null); }
+    }
+
+    [Fact] public void AFullCopyFallbackIsOnlyForOwnedClientsThatAreNotInPlace()
+    {
+        var owned = Plan(); owned.CopyGame = true;
+        Assert.True(owned.CopySource);
+        owned.InPlace = true;
+        Assert.Contains("inPlace or copyGame", Assert.Throws<ArgumentException>(() => owned.Validate()).Message);
+
+        var attached = Plan(); attached.Mode = "attach"; attached.CopyGame = true;
+        Assert.Contains("copyGame", Assert.Throws<ArgumentException>(() => attached.Validate()).Message);
     }
 
     [Fact] public void AnExitBeforeBepInExWroteItsLogSaysWhereToLook()
