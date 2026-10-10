@@ -81,10 +81,21 @@ public sealed class TargetedRegressionTests : IDisposable
         var runner = new TargetedRegression(_rig.Manifest(), inventory: _rig.Inventory())
         {
             SaveDirectory = _rig.Save,
-            BundleInspection = (_, _) => new(MacBundleInspection.State.Broken, 1, "changed signed game file"),
+            BundleInspection = (_, _, _) => new(MacBundleInspection.State.Broken, 1, "changed signed game file"),
         };
-        Assert.Contains("Verify the game in Steam", Assert.Throws<InvalidOperationException>(() => runner.Stage("parent")).Message);
+        Assert.Contains("Verify the game's files in Steam", Assert.Throws<InvalidOperationException>(() => runner.Stage("parent")).Message);
         Assert.False(Directory.Exists(runner.Install));
+    }
+
+    [Theory]
+    [InlineData(9, 180)]
+    [InlineData(300, 901)]
+    public void RegressionClientUsesTheSameStartAndJoinLimitsAsClientRunPlan(int start, int join)
+    {
+        var client = new RegressionClient { Character = "disposable", StartSeconds = start, JoinSeconds = join };
+        Assert.Throws<ArgumentException>(client.Validate);
+        Assert.Equal(ClientTimeouts.DefaultStartSeconds, new RegressionClient().StartSeconds);
+        Assert.Equal(ClientTimeouts.DefaultJoinSeconds, new RegressionClient().JoinSeconds);
     }
 
     [Fact] public void AnX64RegressionWithAnArm64OnlyLoaderStopsBeforeTheDisposableCopy()
@@ -106,7 +117,7 @@ public sealed class TargetedRegressionTests : IDisposable
         var runner = new TargetedRegression(_rig.Manifest(), inventory: _rig.Inventory())
         {
             SaveDirectory = _rig.Save,
-            BundleInspection = (_, repair) => repair
+            BundleInspection = (_, repair, _) => repair
                 ? new(MacBundleInspection.State.Rejected, 0, "Gatekeeper refused the copy")
                 : new(MacBundleInspection.State.Fixable, 1, "old preloader log"),
         };
@@ -122,7 +133,7 @@ public sealed class TargetedRegressionTests : IDisposable
         var runner = new TargetedRegression(_rig.Manifest(), inventory: _rig.Inventory())
         {
             SaveDirectory = _rig.Save,
-            BundleInspection = (_, repair) => !repair || ++repairs == 1
+            BundleInspection = (_, repair, _) => !repair || ++repairs == 1
                 ? new(MacBundleInspection.State.Accepted, 0, "")
                 : new(MacBundleInspection.State.Rejected, 0, "copy changed after first arm"),
         };
@@ -627,7 +638,7 @@ internal sealed class RegressionRig : IDisposable
             SaveDirectory = Save, SteamUserData = SteamUserData,
             // This rig stages fake files without a desktop. Tests of the SSH refusal override this explicitly.
             DirectClientSession = () => (OperatingSystem.IsWindows(), 1),
-            BundleInspection = (_, _) => new(MacBundleInspection.State.Accepted, 0, "synthetic test install"),
+            BundleInspection = (_, _, _) => new(MacBundleInspection.State.Accepted, 0, "synthetic test install"),
         };
 
     public RegressionInputs Manifest(string? fixture = null, string? worldUid = null) => new()

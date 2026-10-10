@@ -256,9 +256,9 @@ internal static class HostedRuntimeStage
             if (kind == HostedRuntimeKind.Client && MacAppBundle.IsMacClient(copy))
             {
                 var bundle = await MacAppBundle.RepairAsync(host, destination, timeout, cancellation).ConfigureAwait(false);
-                if (bundle.State != MacBundleState.Accepted)
+                if (bundle.State != MacBundleInspection.State.Accepted)
                     throw new IOException($"macOS would refuse the disposable copy of {GameLaunch.ClientMacBundle} at {destination} on {host.Name} " +
-                        $"({MacAppBundle.Describe(bundle)}), so it is not launched: a launch would make macOS call it damaged and kill it.");
+                        $"({MacBundleInspection.Describe(bundle)}), so it is not launched: a launch would make macOS call it damaged and kill it.");
                 if (bundle.Count != 0)
                     Console.WriteLine($"Removed {bundle.Count} file(s) added inside the copy's {GameLaunch.ClientMacBundle} on {host.Name}, so macOS accepts its signature (the source install is unchanged).");
             }

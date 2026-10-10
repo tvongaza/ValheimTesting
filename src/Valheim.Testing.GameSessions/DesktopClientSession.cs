@@ -89,7 +89,7 @@ internal static class DesktopClientSession
                 () =>
                 {
                     var process = InteractiveClient.StartAsync(host, launch, launchDirectory,
-                        TimeSpan.FromSeconds(Math.Max(30, plan.StartSeconds)), display: null, cancellation: cancellation,
+                        HostedTimeouts.ClientStart(plan), display: null, cancellation: cancellation,
                         beforeLaunch: processIntended).GetAwaiter().GetResult();
                     try
                     {

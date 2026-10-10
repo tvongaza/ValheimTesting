@@ -243,6 +243,18 @@ public sealed class FixtureBakeTests : IDisposable
     }
 
     [Fact]
+    public void CaseVariantOfSourceIsRefusedOnMacAndWindows()
+    {
+        if (!OperatingSystem.IsMacOS() && !OperatingSystem.IsWindows()) return;
+        string source = Path.Combine(root, "Fixtures");
+        Directory.CreateDirectory(source);
+        string output = Path.Combine(root, "fixtures", "out");
+
+        Assert.Throws<IOException>(() => FixtureBake.RefuseOutput(output, source));
+        Assert.False(Path.Exists(output));
+    }
+
+    [Fact]
     public void ChangedSourceAfterPreparationCannotBeExported()
     {
         var input = Source();

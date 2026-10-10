@@ -130,11 +130,7 @@ public sealed class RegressionInputs
     }
 
     internal static bool Inside(string path, string root)
-    {
-        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
-        path = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path)); root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
-        return path.Equals(root, comparison) || path.StartsWith(root + Path.DirectorySeparatorChar, comparison);
-    }
+        => ProtectedPaths.Contains(root, path);
 
     internal static void RequireToken(string value, string field)
     {
@@ -152,13 +148,14 @@ public sealed class RegressionClient
     public string Architecture { get; set; } = "";
     /// <summary>Non-secret variables set only in the disposable client's process. Loader overrides are refused.</summary>
     public Dictionary<string, string> Environment { get; set; } = new(StringComparer.Ordinal);
-    public int StartSeconds { get; set; } = 300;
-    public int JoinSeconds { get; set; } = 180;
+    public int StartSeconds { get; set; } = ClientTimeouts.DefaultStartSeconds;
+    public int JoinSeconds { get; set; } = ClientTimeouts.DefaultJoinSeconds;
     /// <summary>Optional registered, game-created disposable character to stage for the owned hosted run (checked against this machine's Steam userdata).</summary>
     public string? CharacterStore { get; set; }
 
     public void Validate()
     {
+        ClientTimeouts.RequireStartAndJoin(StartSeconds, JoinSeconds);
         if (Architecture is not ("" or "x64" or "arm64"))
             throw new ArgumentException("client.architecture: use x64 or arm64.");
         if (Character.Length == 0 || Character.Any(char.IsWhiteSpace) || Character.EndsWith(".fch", StringComparison.OrdinalIgnoreCase))
@@ -385,8 +382,8 @@ public sealed class TargetedRegression
     // The client's save root (worlds_local, characters_local): this user's by default; tests replace it.
     internal string? SaveDirectory { get; init; }
     // Synthetic test installs are not notarized Steam apps; production always uses the real macOS assessment.
-    internal Func<string, bool, MacBundleInspection.Verdict> BundleInspection { get; init; } =
-        (install, repair) => repair ? MacBundleInspection.Repair(install) : MacBundleInspection.Inspect(install);
+    internal Func<string, bool, TimeSpan, MacBundleInspection.Verdict> BundleInspection { get; init; } =
+        (install, repair, timeout) => repair ? MacBundleInspection.Repair(install, timeout) : MacBundleInspection.Inspect(install, timeout);
     /// <summary>
     /// The ValheimCLI capabilities the run uses: <see cref="CliCapabilities.HostedRounds"/> and the scenario's own whose owner is
     /// ValheimCLI's (<c>valheim.*</c> or <c>cli.*</c>). They are checked against <see cref="RegressionCli.Manifest"/> before
@@ -500,7 +497,7 @@ public sealed class TargetedRegression
         // otherwise an old preloader log inside the source bundle becomes a Gatekeeper "damaged" dialog at launch.
         if (OperatingSystem.IsMacOS() && Directory.Exists(Path.Combine(Game, GameLaunch.ClientMacBundle)))
         {
-            string? refusal = MacBundleInspection.SourceRefusal(BundleInspection(Game, false));
+            string? refusal = MacBundleInspection.SourceRefusal(BundleInspection(Game, false, TimeSpan.FromSeconds(Inputs.Client.StartSeconds)));
             if (refusal != null) throw new InvalidOperationException(refusal);
         }
         string install = PrepareInstall();
@@ -832,7 +829,7 @@ public sealed class TargetedRegression
     private void RequireLaunchableMacCopy(string install)
     {
         if (!OperatingSystem.IsMacOS() || !Directory.Exists(Path.Combine(install, GameLaunch.ClientMacBundle))) return;
-        var verdict = BundleInspection(install, true);
+        var verdict = BundleInspection(install, true, TimeSpan.FromSeconds(Inputs.Client.StartSeconds));
         if (verdict.State != MacBundleInspection.State.Accepted)
             throw new InvalidOperationException("macOS would reject the disposable Valheim.app before it reaches BepInEx (" +
                 verdict.State + ": " + verdict.Detail + "). No client was launched and the source install was not changed.");

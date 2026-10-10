@@ -45,7 +45,7 @@ internal static class FixtureBake
         foreach (string path in protectedPaths)
         {
             string source = PhysicalPath(path);
-            if (Contains(source, destination) || Contains(destination, source))
+            if (ProtectedPaths.Contains(source, destination) || ProtectedPaths.Contains(destination, source))
                 throw new IOException("The baked fixture output must be separate from the run output, world source and game install: " + destination);
         }
     }
@@ -80,13 +80,6 @@ internal static class FixtureBake
         return Path.GetFullPath(current);
     }
 
-    private static bool Contains(string parent, string child)
-    {
-        string relative = Path.GetRelativePath(parent, child);
-        return relative == "." || relative != ".." && !relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal)
-            && !Path.IsPathRooted(relative);
-    }
-
     internal static Input Prepare(string? source, string outputRoot)
     {
         string target = Path.Combine(outputRoot, "world-source", "worlds_local");
@@ -98,7 +91,7 @@ internal static class FixtureBake
         source = Path.GetFullPath(source);
         string manifestFile = Path.Combine(Path.GetFileName(source) == "worlds_local" ? Path.GetDirectoryName(source)! : source, "fixture-manifest.json");
         if (Directory.Exists(Path.Combine(source, "worlds_local"))) source = Path.Combine(source, "worlds_local");
-        if (Contains(PhysicalPath(source), PhysicalPath(target)) || Contains(PhysicalPath(target), PhysicalPath(source)))
+        if (ProtectedPaths.Contains(PhysicalPath(source), PhysicalPath(target)) || ProtectedPaths.Contains(PhysicalPath(target), PhysicalPath(source)))
             throw new IOException("The world fixture source and disposable run copy must be separate.");
         var identity = WorldIdentity.Read(source);
         var manifest = WorldFixture.Manifest(source);

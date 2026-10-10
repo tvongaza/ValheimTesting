@@ -15,7 +15,6 @@ namespace Valheim.Testing.GameSessions;
 internal static class HostedWorldOnHost
 {
     internal const string Holds = "hosted-world";
-    private static readonly TimeSpan Quick = TimeSpan.FromSeconds(60), Long = TimeSpan.FromMinutes(15);
 
     /// <summary>
     /// Where a placed world goes on its host (<paramref name="WorldsDirectory"/>), the run's folder it is shipped to first
@@ -65,13 +64,13 @@ internal static class HostedWorldOnHost
             site.Journal(JournalEntry.Of(JournalEntry.CopyIntended, ("runtime", world), ("stage", ""), ("parent", site.WorldsDirectory), ("holds", Holds),
                 ("world", name), ("keepIn", site.KeepIn)), cancellation).GetAwaiter().GetResult();
             // Shipped into the run's stage first (with the ship's own SOURCE.txt, which never reaches the user's worlds), verified there.
-            site.Host.ShipFilesAsync(copy.DirectoryPath, site.Stage, Long, cancellation).GetAwaiter().GetResult();
-            var listing = HostInstall.ListAsync(site.Host, site.Stage, Long, null, cancellation).GetAwaiter().GetResult();
+            site.Host.ShipFilesAsync(copy.DirectoryPath, site.Stage, HostedTimeouts.Long, cancellation).GetAwaiter().GetResult();
+            var listing = HostInstall.ListAsync(site.Host, site.Stage, HostedTimeouts.Long, null, cancellation).GetAwaiter().GetResult();
             HostInstall.RequireSame(copy.SourceHashes, listing, "hosted world", ["SOURCE.txt", WorldFixture.ProvenanceFile]);
             var expected = copy.SourceHashes.Keys.Select(path => path.Split('/', '\\')[0]).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList();
             try
             {
-                var moved = MoveOut(site.Host, site.Stage, name, site.WorldsDirectory, Long, cancellation).GetAwaiter().GetResult();
+                var moved = MoveOut(site.Host, site.Stage, name, site.WorldsDirectory, HostedTimeouts.Long, cancellation).GetAwaiter().GetResult();
                 if (!moved.Order(StringComparer.Ordinal).SequenceEqual(expected, StringComparer.Ordinal))
                     throw new IOException($"Moving the hosted world into the client's worlds on {site.HostName} moved {string.Join(", ", moved)}, not {string.Join(", ", expected)}.");
             }
@@ -80,7 +79,7 @@ internal static class HostedWorldOnHost
                 // Whatever reached the user's worlds goes out again into the run's folder, as at the end of a run; the failure is the one reported.
                 try
                 {
-                    MoveOut(site.Host, site.WorldsDirectory, name, site.KeepIn, Long, CancellationToken.None).GetAwaiter().GetResult();
+                    MoveOut(site.Host, site.WorldsDirectory, name, site.KeepIn, HostedTimeouts.Long, CancellationToken.None).GetAwaiter().GetResult();
                     site.Journal(JournalEntry.Of(JournalEntry.CopyRetired, ("runtime", world), ("handedOver", "true"), ("keptIn", site.KeepIn)), CancellationToken.None).GetAwaiter().GetResult();
                 }
                 catch (Exception cleanup) { Console.Error.WriteLine($"Warning: the hosted world may be left in {site.WorldsDirectory} on {site.HostName}: {cleanup.Message}; env recover --run moves it out."); }
@@ -98,16 +97,16 @@ internal static class HostedWorldOnHost
     private static string Collect(Site site, string name, string target)
     {
         string world = HostPath.Join(site.WorldsDirectory, name);
-        MoveOut(site.Host, site.WorldsDirectory, name, site.KeepIn, Long, CancellationToken.None).GetAwaiter().GetResult();
+        MoveOut(site.Host, site.WorldsDirectory, name, site.KeepIn, HostedTimeouts.Long, CancellationToken.None).GetAwaiter().GetResult();
         site.Journal(JournalEntry.Of(JournalEntry.CopyRetired, ("runtime", world), ("handedOver", "true"), ("keptIn", site.KeepIn)), CancellationToken.None).GetAwaiter().GetResult();
-        site.Host.FetchDirectoryAsync(site.KeepIn, target, Long).GetAwaiter().GetResult();
+        site.Host.FetchDirectoryAsync(site.KeepIn, target, HostedTimeouts.Long).GetAwaiter().GetResult();
         return target;
     }
 
     private static List<string> Entries(Site site, string name, CancellationToken cancellation)
     {
         var result = site.Host.RunAsync(site.Host.Shell.Kind == HostShellKind.PowerShell ? WindowsEntries : BashEntries,
-            new Dictionary<string, string> { ["worlds"] = site.WorldsDirectory, ["name"] = name }, Quick, cancellation).GetAwaiter().GetResult()
+            new Dictionary<string, string> { ["worlds"] = site.WorldsDirectory, ["name"] = name }, HostedTimeouts.Quick, cancellation).GetAwaiter().GetResult()
             .EnsureSuccess($"Listing the client's worlds on {site.HostName}");
         if (InteractiveClient.Line(result.Stdout, "VT-WORLD-ENTRIES") == null) throw new HostOperationException($"Unexpected reply while listing the client's worlds on {site.HostName}", result);
         return result.Stdout.Split('\n').Select(line => line.TrimEnd('\r')).Where(line => line.StartsWith("VT-WORLD-ENTRY ", StringComparison.Ordinal))
