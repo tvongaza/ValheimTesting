@@ -462,6 +462,31 @@ public sealed class TargetedRegressionTests : IDisposable
             TargetedRegression.CharacterEntry(CharacterStageEvent.Retired, characters, userdata, name, hash).Kind);
     }
 
+    [Fact]
+    public void OneShotCanDeferItsResultUntilAfterItsOwnCleanupVerdict()
+    {
+        string local = Path.Combine(_rig.Save, "characters_local");
+        string source = Path.Combine(local, "smoketest.fch");
+        File.WriteAllBytes(source, CharacterSaveReaderTests.Profile(playerId: 917).File);
+        string storePath = Path.Combine(_rig.Root, "registered-test-characters");
+        DisposableCharacterStore.Create(storePath).Register("smoketest", source);
+        var manifest = _rig.Manifest();
+        manifest.Client.CharacterStore = storePath;
+        var regression = _rig.Regression(manifest);
+        string output = Path.Combine(_rig.Root, "deferred-result");
+
+        var report = regression.Run("parent", output, "smoke", ["first"], _ => { }, default, null,
+            (_, _, _, _) => throw new Exception("client must not launch"), afterStaged: null,
+            deferReportWrite: true);
+
+        Assert.False(report.Passed); // missing Steam userdata stopped setup before any client launched
+        Assert.False(File.Exists(Path.Combine(output, "result.json")));
+        report.RecordFailure(StepPhase.Cleanup, "owned cleanup not verified", new IOException("still held"));
+        report.Write(output);
+        Assert.Contains("owned cleanup not verified", File.ReadAllText(Path.Combine(output, "result.json")));
+        Assert.False(report.CleanupVerified);
+    }
+
     // ---- the ValheimCLI set (#124's capability manifest) ----
 
     [Fact] public void AStaleOrIncompleteValheimCliSetIsRefusedByItsCapabilityManifest()
