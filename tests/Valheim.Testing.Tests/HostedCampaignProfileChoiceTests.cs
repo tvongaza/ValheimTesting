@@ -7,16 +7,21 @@ public sealed class HostedCampaignProfileChoiceTests
     [Theory]
     [InlineData("local", "windows", false, true)]
     [InlineData("local", "windows", true, false)]
-    [InlineData("ssh", "windows", false, false)]
+    [InlineData("ssh", "windows", false, true)]
+    [InlineData("ssh", "windows", true, false)]
     [InlineData("local", "macos", false, true)]
     [InlineData("local", "macos", true, false)]
     [InlineData("local", "linux", false, true)]
     [InlineData("local", "linux", true, false)]
-    [InlineData("ssh", "linux", false, false)]
-    public void ProfileAppliesOnlyToLocalActorsWithoutCopyOverride(
+    [InlineData("ssh", "macos", false, false)]
+    [InlineData("ssh", "linux", false, true)]
+    [InlineData("ssh", "linux", true, false)]
+    [InlineData("container", "linux", false, true)]
+    [InlineData("container", "linux", true, false)]
+    public void ProfileAppliesToSupportedActorsWithoutCopyOverride(
         string kind, string platform, bool copyGame, bool expected)
     {
-        Assert.Equal(expected, HostedCampaignPreparation.UseLocalProfile(
+        Assert.Equal(expected, HostedCampaignPreparation.UseProfile(
             new HostProfile { Kind = kind, Platform = platform }, copyGame));
     }
 

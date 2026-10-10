@@ -166,7 +166,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         foreach (var host in hosts.Values) host.BeforeShip = overlap.EnterAsync;
         string output = Path.Combine(_rig.Root, "prepared");
         string[] prepared;
-        await using (var campaign = await HostedCampaignPreparation.PrepareAsync(manifestFile, output, TimeSpan.FromSeconds(30), name => hosts[name]))
+        await using (var campaign = await HostedCampaignPreparation.PrepareAsync(manifestFile, output, TimeSpan.FromSeconds(30), copyGame: true, hostFactory: name => hosts[name]))
         {
             var profile = campaign.Environment;
             prepared = [profile.Server!.Install, profile.Clients["client-a"].Install,
@@ -217,6 +217,30 @@ public sealed class NativeDependencyResolverTests : IDisposable
         Assert.False(File.Exists(hosts["client-c"].Local(@"C:\Users\tester\AppData\LocalLow\IronGate\Valheim\characters_local\vt-three.fch")));
         Assert.False(File.Exists(Path.Combine(output, "profile.json"))); // The prepared environment, with the observed Steam IDs, stays in memory.
 
+        // The same SSH hosts now take the profile path by default. It ships only selected loader files,
+        // leaves every source-game byte alone, and retires all four owned profiles.
+        static string SourceSnapshot(FakeServerHost host)
+        {
+            string source = host.Local(@"C:\game\source");
+            return string.Join("\n", Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories)
+                .Select(file => Path.GetRelativePath(source, file).Replace('\\', '/') + " " + FileHash.Sha256(file))
+                .OrderBy(line => line, StringComparer.Ordinal));
+        }
+        var originalSources = hosts.ToDictionary(pair => pair.Key, pair => SourceSnapshot(pair.Value));
+        int copiesBeforeProfiles = hosts.Values.Sum(host => host.Scripts.Count(script => script == "copy"));
+        string profileOutput = Path.Combine(_rig.Root, "remote-profile-prepared");
+        string[] profileRuntimes;
+        await using (var campaign = await HostedCampaignPreparation.PrepareAsync(manifestFile, profileOutput, TimeSpan.FromSeconds(30), name => hosts[name]))
+        {
+            profileRuntimes = [campaign.Environment.Server!.Install, .. campaign.Environment.Clients.Values.Select(role => role.Install)];
+            Assert.All(new[] { "server", "client-a", "client-b", "client-c" }, name =>
+                Assert.Contains(name + ":profile", campaign.LaunchModes(copyGame: false)));
+            Assert.Equal(copiesBeforeProfiles, hosts.Values.Sum(host => host.Scripts.Count(script => script == "copy")));
+            Assert.Equal(4, hosts.Values.Sum(host => host.Scripts.Count(script => script == "profile-seed")));
+        }
+        Assert.All(hosts, pair => Assert.Equal(originalSources[pair.Key], SourceSnapshot(pair.Value)));
+        Assert.All(profileRuntimes, runtime => Assert.DoesNotContain(hosts.Values, host => Directory.Exists(host.Local(runtime))));
+
         // A dedicated server and one client may share a machine. Their installs are separate, but setup should
         // still overlap under one host claim rather than serialising two full game copies.
         var sharedHost = hosts["server"];
@@ -239,7 +263,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         sharedHost.BeforeShip = sharedOverlap.EnterAsync;
         int claimsBefore = sharedHost.Claims.Count, checksBefore = 0;
         await using (var campaign = await HostedCampaignPreparation.PrepareAsync(sameHostManifestFile,
-            Path.Combine(_rig.Root, "shared-host-prepared"), TimeSpan.FromSeconds(30), name => hosts[name]))
+            Path.Combine(_rig.Root, "shared-host-prepared"), TimeSpan.FromSeconds(30), copyGame: true, hostFactory: name => hosts[name]))
         {
             Assert.Equal(claimsBefore + 1, sharedHost.Claims.Count);
             Assert.True(sharedOverlap.Seen, "Server and client setup on one host should overlap under its single claim.");
@@ -256,7 +280,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         // VALHEIM_TESTING_KEEP_RUNTIME=1 keeps every actor's install (the disposable characters still go), and a second retire
         // by the same owner touches nothing, not even what the first one kept.
         var keptCampaign = await HostedCampaignPreparation.PrepareAsync(sameHostManifestFile, Path.Combine(_rig.Root, "kept-prepared"),
-            TimeSpan.FromSeconds(30), name => hosts[name]);
+            TimeSpan.FromSeconds(30), copyGame: true, hostFactory: name => hosts[name]);
         var retirement = new RunRetirement(null, "");
         RunRetirement.KeepOverride.Value = true;
         try { Assert.Empty(await retirement.CampaignAsync(keptCampaign, [])); }
@@ -340,7 +364,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         // A copy macOS still rejects after repair: preparation fails, the copy is retired, nothing launches.
         mac.MacBundleRepair = "VT-BUNDLE rejected 2 " + Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes("Valheim.app: rejected\nsource=no usable signature"));
         var rejected = await Assert.ThrowsAnyAsync<Exception>(() => HostedCampaignPreparation.PrepareAsync(manifestFile, Path.Combine(_rig.Root, "mac-rejected"),
-            TimeSpan.FromSeconds(30), name => hosts[name]));
+            TimeSpan.FromSeconds(30), copyGame: true, hostFactory: name => hosts[name]));
         Assert.Contains("macOS would refuse the disposable copy of Valheim.app at /runs/", rejected.ToString());
         Assert.Single(mac.Runs, run => run.Script == "mac-bundle" && run.Variables["repair"] == "1");
         Assert.DoesNotContain(mac.Scripts, script => script is "client-start" or "start");
@@ -349,7 +373,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
 
         // Accepted after repair: prepared, the repair ran on the copy (never the source), and the source is unchanged.
         mac.MacBundleRepair = "VT-BUNDLE accepted 2 -";
-        await using (var campaign = await HostedCampaignPreparation.PrepareAsync(manifestFile, Path.Combine(_rig.Root, "mac-accepted"), TimeSpan.FromSeconds(30), name => hosts[name]))
+        await using (var campaign = await HostedCampaignPreparation.PrepareAsync(manifestFile, Path.Combine(_rig.Root, "mac-accepted"), TimeSpan.FromSeconds(30), copyGame: true, hostFactory: name => hosts[name]))
         {
             var repair = mac.Runs.Last(run => run.Script == "mac-bundle" && run.Variables["repair"] == "1");
             Assert.StartsWith("/runs/", repair.Variables["app"]);
@@ -624,7 +648,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         bool scenarioRan = false;
         var options = new PinnedServerRunOptions<SitePlan>
         {
-            Name = "campaign-smoke", ReadPlan = _ => throw new InvalidOperationException("A campaign plan is in memory."),
+            Name = "campaign-smoke", CopyGame = true, ReadPlan = _ => throw new InvalidOperationException("A campaign plan is in memory."),
             Mod = new("test.mod/session", "TEST_SESSION_TOKEN"),
             Scenario = (session, _) => { scenarioRan = true; Assert.NotNull(session.Server!.Host); return Task.CompletedTask; },
             Hooks = new FakeRunHooks { Host = _ => host, Connect = _ => server.Connect(), StateWaits = false, RunId = "run-test" },
@@ -871,7 +895,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         };
         var options = new PinnedServerRunOptions<SitePlan>
         {
-            Name = "cut-campaign", ReadPlan = _ => throw new InvalidOperationException("A campaign plan is in memory."),
+            Name = "cut-campaign", CopyGame = true, ReadPlan = _ => throw new InvalidOperationException("A campaign plan is in memory."),
             Mod = new("test.mod/session", "TEST_SESSION_TOKEN"),
             Scenario = (_, _) => throw new InvalidOperationException("The scenario must not run after a cancelled preparation."),
             Hooks = new FakeRunHooks { Host = name => hosts[name], Connect = _ => server.Connect(), StateWaits = false, Cancellation = interrupt },
@@ -1456,7 +1480,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         bool scenarioRan = false;
         var options = new HostedRunOptions<Dictionary<string, ClientRunPlan>>
         {
-            Name = "hosted-campaign", ReadPlan = _ => throw new InvalidOperationException("A campaign plan is in memory."), Host = plan => plan["host"],
+            Name = "hosted-campaign", CopyGame = true, ReadPlan = _ => throw new InvalidOperationException("A campaign plan is in memory."), Host = plan => plan["host"],
             Mod = new("test.mod/session", "TEST_SESSION_TOKEN"),
             Scenario = async (session, _) =>
             {
