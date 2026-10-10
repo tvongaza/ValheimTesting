@@ -427,8 +427,9 @@ internal sealed class FakeServerHost : IGameHost
                 string boot = Local(v["dir"]);
                 Directory.CreateDirectory(boot);
                 File.WriteAllText(Path.Combine(boot, "stdout.log"), "server stdout\n");
-                _runtime = v["runtime"];
-                string log = Path.Combine(Local(v["runtime"]), "BepInEx", "LogOutput.log");
+                // Profile launches keep loader output under the owned profile, not the game's install.
+                _runtime = v["logroot"];
+                string log = Path.Combine(Local(v["logroot"]), "BepInEx", "LogOutput.log");
                 File.WriteAllText(log, $"[Info   :   BepInEx] fake boot {process.Id}\n[Info   :valheimCLI] Command server listening on 127.0.0.1:5577\n");
                 // A crossplay server opens a lobby per boot, as the game logs it.
                 if (Spec(v["spec"]).Any(line => line.Kind == "arg" && line.Text == "-crossplay"))
