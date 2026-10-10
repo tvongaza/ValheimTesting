@@ -554,6 +554,27 @@ public sealed class RunRecoveryTests : IDisposable
         Assert.Equal(source, check.Variables["runtime"]);
     }
 
+    [Fact] public async Task AClientNamedServerStillKeepsItsWindowsProfileWhileItRuns()
+    {
+        const string run = "run-profile-misnamed-client";
+        string runtime = Prep + "/runtime";
+        Directory.CreateDirectory(_host.Local(runtime));
+        Line(_host, run, "server", Gone, JournalEntry.CopyIntended,
+            ("runtime", runtime), ("stage", Prep + "/staging"), ("parent", Prep),
+            ("launchMode", "profile"), ("runtimeKind", "client"), ("launchRoot", "/source/game"));
+        Line(_host, run, "server", Gone, JournalEntry.CopyDone,
+            ("runtime", runtime), ("launchMode", "profile"), ("runtimeKind", "client"), ("launchRoot", runtime));
+        _host.GameActive = true;
+
+        var report = await RecoverAsync(run);
+
+        Assert.False(report.Recovered);
+        Assert.True(Directory.Exists(_host.Local(runtime)));
+        var check = Assert.Single(_host.Runs.Where(item => item.Script == "game-process"));
+        Assert.Equal("true", check.Variables["clientSession"]);
+        Assert.Equal(runtime, check.Variables["runtime"]);
+    }
+
     [Fact] public async Task AHostThatCannotBeReadRefusesTheRecovery()
     {
         InterruptedRun();

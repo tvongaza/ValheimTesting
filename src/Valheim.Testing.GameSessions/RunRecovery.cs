@@ -232,7 +232,9 @@ internal static class RunRecovery
                 // to be idle before retiring their profile, even after the runner itself has died.
                 await HostedRuntimeStage.RequireStoppedAsync(host, timeout,
                     runtimes: copies.Select(copy => copy.Fields.GetValueOrDefault("launchRoot") ?? copy.What).ToList(),
-                    clientSession: characters.Count != 0 || copies.Any(copy => copy.Fields.GetValueOrDefault("launchMode") == "profile" && copy.Actor != "server"))
+                    // An actor's caller-chosen name is not its role. Older profile journals have no runtimeKind;
+                    // treat them conservatively so a live client cannot lose its owned loader on recovery.
+                    clientSession: characters.Count != 0 || copies.Any(copy => copy.Fields.GetValueOrDefault("launchMode") == "profile" && copy.Fields.GetValueOrDefault("runtimeKind") != "server"))
                     .ConfigureAwait(false);
                 foreach (var item in lists)
                 {

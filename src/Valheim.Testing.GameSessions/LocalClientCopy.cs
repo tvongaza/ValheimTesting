@@ -98,7 +98,8 @@ internal sealed class LocalClientCopy
                 Console.WriteLine($"{actor}: the copy stages ValheimCLI {manifest.Build} in place of the install's own {string.Join(", ", replaced)}.");
             // Journalled before the copy: an interrupted preparation leaves a record of every path it may own.
             journal.AppendLocal(actor, JournalEntry.Of(JournalEntry.CopyIntended, ("runtime", runtime), ("stage", stage), ("parent", parent),
-                ("launchMode", copyGame ? "copy" : "profile"), ("launchRoot", copyGame ? runtime : source)));
+                ("launchMode", copyGame ? "copy" : "profile"), ("runtimeKind", "client"),
+                ("launchRoot", copyGame ? runtime : source)));
             HostListing listing;
             InstallPins pins;
             string gameRoot, loaderRoot;
@@ -126,7 +127,7 @@ internal sealed class LocalClientCopy
             }
             journal.AppendLocal(actor, JournalEntry.Of(JournalEntry.CopyDone, ("runtime", runtime),
                 ("files", listing.Files.Count.ToString(CultureInfo.InvariantCulture)), ("source", source),
-                ("launchMode", copyGame ? "copy" : "profile")));
+                ("launchMode", copyGame ? "copy" : "profile"), ("runtimeKind", "client"), ("launchRoot", gameRoot)));
             var unbound = new Unbound(plan.Install, plan.InstallPins, plan.Pins, plan.CliManifest, plan.PreparedLoaderRoot, plan.PreparedLaunchMode);
             Bind(plan, source, gameRoot, loaderRoot, pins, manifest, manifestPath, setFolder, copyGame);
             return new LocalClientCopy(host, actor, runtime, stage, gameRoot, journal, plan, unbound);
