@@ -21,6 +21,8 @@ public sealed class LocalGameHost : ScriptedGameHost
     internal override IReadOnlyDictionary<string, string> WrapperEnvironment() => Shell.Kind == HostShellKind.PowerShell
         ? new Dictionary<string, string> { [NoStartupJitProfile.Key] = NoStartupJitProfile.Value }
         : base.WrapperEnvironment();
+    internal override string? WrapperWorkingDirectory() => OperatingSystem.IsMacOS() && Shell.Kind == HostShellKind.PowerShell
+        ? Path.GetTempPath() : null;
     internal override bool IsTransportFailure(ProcessExit exit) => false;
 
     /// <summary>The host's loopback is this machine's: nothing is started and the endpoint is the ValheimCLI port itself.</summary>

@@ -226,6 +226,20 @@ public class LocalGameHostShellTests
     private static bool OnPath(string name) =>
         (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries).Any(dir => File.Exists(Path.Combine(dir, name)));
 
+    [Fact] public async Task AMacPowerShellWrapperStartsFromATemporaryDirectory()
+    {
+        if (!OperatingSystem.IsMacOS() || !OnPath("pwsh")) return;
+        string probe = "vt-pwsh-cwd-" + Guid.NewGuid().ToString("N");
+        string marker = Path.Combine(Path.GetTempPath(), probe);
+        try
+        {
+            var result = await Host("pwsh").RunAsync($"[IO.File]::WriteAllText('{probe}', 'ready')", null, GameHostChecks.Generous);
+            Assert.True(result.Succeeded, result.Describe() + " " + result.Stderr);
+            Assert.Equal("ready", File.ReadAllText(marker));
+        }
+        finally { File.Delete(marker); }
+    }
+
     // #133, with the real pwsh: a local pwsh host neither reads nor writes pwsh's startup JIT profile. Its cache directory is a
     // fresh one (XDG_CACHE_HOME, Linux and macOS). The control, a pwsh started the same way without the guard, writes the profile
     // there, so the check can see it.
