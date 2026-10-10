@@ -17,6 +17,8 @@ internal sealed record ProcessCall(string Executable, IReadOnlyList<string> Argu
 {
     /// <summary>Variables set for this process on top of the inherited environment.</summary>
     public IReadOnlyDictionary<string, string> Environment { get; init; } = new Dictionary<string, string>();
+    /// <summary>An optional working directory for the wrapper process; never changes the game's working directory.</summary>
+    public string? WorkingDirectory { get; init; }
 }
 
 // The seam between a game host and the executables it drives (ssh, docker, a local shell, git). Tests replace it with fakes,
@@ -47,6 +49,7 @@ internal sealed class SystemProcessLauncher : IProcessLauncher
     {
         var start = StartInfo(call.Executable, call.Arguments);
         foreach (var (name, value) in call.Environment) start.Environment[name] = value;
+        if (call.WorkingDirectory != null) start.WorkingDirectory = call.WorkingDirectory;
         return ProcessRunner.RunAsync(start, call.Input, call.Upload, call.Output, call.Lines, call.Timeout, cancellation);
     }
     public IStartedProcess Start(string executable, IReadOnlyList<string> arguments) => new OwnedProcess(StartInfo(executable, arguments));

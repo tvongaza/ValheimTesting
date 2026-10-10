@@ -313,6 +313,8 @@ public abstract class ScriptedGameHost : IGameHost
     internal abstract (string Executable, IReadOnlyList<string> Arguments) WrapperCommand();
     /// <summary>Variables for the local process <see cref="WrapperCommand"/> starts; none unless a host sets the wrapper's own environment.</summary>
     internal virtual IReadOnlyDictionary<string, string> WrapperEnvironment() => new Dictionary<string, string>();
+    /// <summary>The local wrapper's working directory, when it must differ from the caller's.</summary>
+    internal virtual string? WrapperWorkingDirectory() => null;
     /// <summary>Whether a command that ended without the exit report failed in its transport rather than on the host.</summary>
     internal abstract bool IsTransportFailure(ProcessExit exit);
     public abstract Task<CliTunnel> OpenCliTunnelAsync(int hostPort, TimeSpan readyTimeout, int localPort = 0, CancellationToken cancellation = default);
@@ -322,7 +324,8 @@ public abstract class ScriptedGameHost : IGameHost
     /// any shell: bash <c>name='value'</c>, PowerShell <c>$name = 'value'</c>. A PowerShell script runs with
     /// <c>$ErrorActionPreference = 'Stop'</c>, from its own temporary .ps1 file, and ends with its <c>exit N</c>, 0 when it falls off
     /// its end, or 1 for an uncaught error. A bash script's CRLF line endings become LF; its exit status is bash's. Its standard
-    /// input is empty. The working directory is the ssh user's home, the container's working directory, or this process's.
+    /// input is empty. The working directory is the ssh user's home, the container's working directory, or this process's;
+    /// local macOS PowerShell starts from a temporary directory so Documents privacy checks cannot stall its startup.
     /// </summary>
     public Task<HostResult> RunAsync(string script, IReadOnlyDictionary<string, string>? variables, TimeSpan timeout, CancellationToken cancellation = default) =>
         RunCoreAsync(script, variables, null, null, timeout, cancellation);
@@ -590,7 +593,8 @@ public abstract class ScriptedGameHost : IGameHost
         string secrets = "")
     {
         var (executable, arguments) = WrapperCommand();
-        return new(executable, arguments, Payload(Compose(Shell.Kind, script, variables), secrets), upload, output, lines, timeout) { Environment = WrapperEnvironment() };
+        return new(executable, arguments, Payload(Compose(Shell.Kind, script, variables), secrets), upload, output, lines, timeout)
+        { Environment = WrapperEnvironment(), WorkingDirectory = WrapperWorkingDirectory() };
     }
 
     /// <summary>The full script the host runs: preferences (PowerShell), variables as literals, the script and (PowerShell) a final <c>exit 0</c>.</summary>
