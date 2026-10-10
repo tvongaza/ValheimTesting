@@ -203,6 +203,37 @@ public class SessionTests
             StartupEvents.CliListening, TimeSpan.FromSeconds(5), StartupEvents.ClientStartupFailures));
         Assert.Equal(line, error.LastSeen);
     }
+    [Fact] public async Task ASteamFailureAfterCliListeningStillEndsTheMenuWait()
+    {
+        using var log = new TempLog();
+        using var reader = new LogWait(log.Path);
+        log.Append(Listening);
+        await reader.WaitAsync(StartupEvents.CliListening, Generous, StartupEvents.ClientStartupFailures);
+        var menu = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var menuCancelled = new CancellationTokenSource();
+        var waiting = StartupEvents.WaitForClientMenuAsync(
+            token => menu.Task.WaitAsync(token),
+            token => reader.WaitAsync(StartupEvents.Never, Generous, StartupEvents.ClientStartupFailures, token),
+            menuCancelled.Token);
+        string line = "[Error  : Unity Log] [Steamworks.NET] SteamAPI_Init() failed. Refer to Valve's documentation.";
+        log.Append(line + "\n");
+        var error = await Assert.ThrowsAsync<WaitFailedException>(() => waiting.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Equal(line, error.LastSeen);
+        Assert.False(menu.Task.IsCompleted);
+    }
+    [Fact] public async Task AConfirmedMenuStopsItsStartupFailureWatcher()
+    {
+        using var log = new TempLog();
+        using var reader = new LogWait(log.Path);
+        var menu = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var waiting = StartupEvents.WaitForClientMenuAsync(
+            token => menu.Task.WaitAsync(token),
+            token => reader.WaitAsync(StartupEvents.Never, Generous, StartupEvents.ClientStartupFailures, token));
+        menu.SetResult();
+        await waiting.WaitAsync(TimeSpan.FromSeconds(5));
+        log.Append("[Error  : Unity Log] [Steamworks.NET] SteamAPI_Init() failed.\n");
+        await Assert.ThrowsAsync<WaitTimeoutException>(() => reader.WaitAsync(StartupEvents.CliListening, TimeSpan.FromMilliseconds(20)));
+    }
     [Theory]
     [InlineData("[Info   :   BepInEx] Loading [valheimCLI 1.1.0]")]
     [InlineData("[Message:   BepInEx] Chainloader startup complete")]
