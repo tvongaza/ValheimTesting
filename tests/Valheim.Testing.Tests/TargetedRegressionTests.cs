@@ -448,6 +448,20 @@ public sealed class TargetedRegressionTests : IDisposable
         Assert.Empty(Directory.EnumerateFiles(local)); // Preflight must not put a character into the game folder.
     }
 
+    [Fact] public void ADirectConsumersCharacterUsesTheSameRecoverableEntriesAsStart()
+    {
+        const string characters = "/characters", userdata = "/userdata", name = "smoketest", hash = "1234";
+        var intended = TargetedRegression.CharacterEntry(CharacterStageEvent.Intended, characters, userdata, name, hash);
+        Assert.Equal(JournalEntry.CharacterIntended, intended.Kind);
+        Assert.Equal("regression", intended.Fields["characterKind"]);
+        Assert.Equal("true", intended.Fields["local"]);
+        Assert.Equal(hash, intended.Fields["expectedSha256"]);
+        Assert.Equal(JournalEntry.CharacterDone,
+            TargetedRegression.CharacterEntry(CharacterStageEvent.Done, characters, userdata, name, hash).Kind);
+        Assert.Equal(JournalEntry.CharacterRetired,
+            TargetedRegression.CharacterEntry(CharacterStageEvent.Retired, characters, userdata, name, hash).Kind);
+    }
+
     // ---- the ValheimCLI set (#124's capability manifest) ----
 
     [Fact] public void AStaleOrIncompleteValheimCliSetIsRefusedByItsCapabilityManifest()

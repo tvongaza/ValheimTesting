@@ -162,16 +162,7 @@ try
                         : ClientSession.Open(plan, directory, logs, token, processJournal.Begin, processJournal.Started);
                 }, afterStaged: null, characterJournal: (point, characters, userData, name, expectedSha256) =>
                 {
-                    var entry = point switch
-                    {
-                        CharacterStageEvent.Intended => JournalEntry.Of(JournalEntry.CharacterIntended,
-                            ("characters", characters), ("userData", userData), ("fileName", name),
-                            ("characterKind", "regression"), ("local", "true"), ("expectedSha256", expectedSha256)),
-                        CharacterStageEvent.Done => JournalEntry.Of(JournalEntry.CharacterDone,
-                            ("fileName", name), ("staged", "true")),
-                        _ => JournalEntry.Of(JournalEntry.CharacterRetired, ("fileName", name)),
-                    };
-                    RunJournal.ThisProcess.AppendLocal("client", entry);
+                    RunJournal.ThisProcess.AppendLocal("client", TargetedRegression.CharacterEntry(point, characters, userData, name, expectedSha256));
                     if (point == CharacterStageEvent.Intended) characterPending = true;
                     if (point == CharacterStageEvent.Retired) characterPending = false;
                 });
