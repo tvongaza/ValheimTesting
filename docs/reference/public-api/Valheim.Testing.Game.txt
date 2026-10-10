@@ -262,6 +262,7 @@ sealed class Valheim.Testing.Game.ClientRunPlan
   method System.Void RequirePasswordSource()
   method System.Void Validate(params System.String[] absentPlugins)
   method Valheim.Testing.Game.CliManifestCheck CheckCliManifest(System.Collections.Generic.IEnumerable`1<System.String> capabilities = null)
+  property System.Boolean CopyGame { get; set; }
   property System.Boolean Crossplay { get; set; }
   property System.Boolean InPlace { get; set; }
   property System.Boolean JoinsHost { get; set; }
