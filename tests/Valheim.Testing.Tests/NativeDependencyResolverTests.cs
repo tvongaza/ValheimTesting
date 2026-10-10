@@ -166,7 +166,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         foreach (var host in hosts.Values) host.BeforeShip = overlap.EnterAsync;
         string output = Path.Combine(_rig.Root, "prepared");
         string[] prepared;
-        await using (var campaign = await HostedCampaignPreparation.PrepareAsync(manifestFile, output, TimeSpan.FromSeconds(30), name => hosts[name], copyGame: true))
+        await using (var campaign = await HostedCampaignPreparation.PrepareAsync(manifestFile, output, TimeSpan.FromSeconds(30), copyGame: true, hostFactory: name => hosts[name]))
         {
             var profile = campaign.Environment;
             prepared = [profile.Server!.Install, profile.Clients["client-a"].Install,
@@ -263,7 +263,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         sharedHost.BeforeShip = sharedOverlap.EnterAsync;
         int claimsBefore = sharedHost.Claims.Count, checksBefore = 0;
         await using (var campaign = await HostedCampaignPreparation.PrepareAsync(sameHostManifestFile,
-            Path.Combine(_rig.Root, "shared-host-prepared"), TimeSpan.FromSeconds(30), name => hosts[name], copyGame: true))
+            Path.Combine(_rig.Root, "shared-host-prepared"), TimeSpan.FromSeconds(30), copyGame: true, hostFactory: name => hosts[name]))
         {
             Assert.Equal(claimsBefore + 1, sharedHost.Claims.Count);
             Assert.True(sharedOverlap.Seen, "Server and client setup on one host should overlap under its single claim.");
@@ -280,7 +280,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         // VALHEIM_TESTING_KEEP_RUNTIME=1 keeps every actor's install (the disposable characters still go), and a second retire
         // by the same owner touches nothing, not even what the first one kept.
         var keptCampaign = await HostedCampaignPreparation.PrepareAsync(sameHostManifestFile, Path.Combine(_rig.Root, "kept-prepared"),
-            TimeSpan.FromSeconds(30), name => hosts[name], copyGame: true);
+            TimeSpan.FromSeconds(30), copyGame: true, hostFactory: name => hosts[name]);
         var retirement = new RunRetirement(null, "");
         RunRetirement.KeepOverride.Value = true;
         try { Assert.Empty(await retirement.CampaignAsync(keptCampaign, [])); }
@@ -364,7 +364,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         // A copy macOS still rejects after repair: preparation fails, the copy is retired, nothing launches.
         mac.MacBundleRepair = "VT-BUNDLE rejected 2 " + Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes("Valheim.app: rejected\nsource=no usable signature"));
         var rejected = await Assert.ThrowsAnyAsync<Exception>(() => HostedCampaignPreparation.PrepareAsync(manifestFile, Path.Combine(_rig.Root, "mac-rejected"),
-            TimeSpan.FromSeconds(30), name => hosts[name], copyGame: true));
+            TimeSpan.FromSeconds(30), copyGame: true, hostFactory: name => hosts[name]));
         Assert.Contains("macOS would refuse the disposable copy of Valheim.app at /runs/", rejected.ToString());
         Assert.Single(mac.Runs, run => run.Script == "mac-bundle" && run.Variables["repair"] == "1");
         Assert.DoesNotContain(mac.Scripts, script => script is "client-start" or "start");
@@ -373,7 +373,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
 
         // Accepted after repair: prepared, the repair ran on the copy (never the source), and the source is unchanged.
         mac.MacBundleRepair = "VT-BUNDLE accepted 2 -";
-        await using (var campaign = await HostedCampaignPreparation.PrepareAsync(manifestFile, Path.Combine(_rig.Root, "mac-accepted"), TimeSpan.FromSeconds(30), name => hosts[name], copyGame: true))
+        await using (var campaign = await HostedCampaignPreparation.PrepareAsync(manifestFile, Path.Combine(_rig.Root, "mac-accepted"), TimeSpan.FromSeconds(30), copyGame: true, hostFactory: name => hosts[name]))
         {
             var repair = mac.Runs.Last(run => run.Script == "mac-bundle" && run.Variables["repair"] == "1");
             Assert.StartsWith("/runs/", repair.Variables["app"]);

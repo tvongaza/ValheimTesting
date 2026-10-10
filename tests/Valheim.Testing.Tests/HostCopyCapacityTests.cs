@@ -49,7 +49,7 @@ public sealed class HostCopyCapacityTests : IDisposable
         { AvailableCopyBytes = 0 };
         var profile = await HostedCampaignPreparation.InspectAsync(manifest, TimeSpan.FromSeconds(2), _ => host);
         Assert.DoesNotContain(profile.Problems, problem => problem.Input == "copy space");
-        var report = await HostedCampaignPreparation.InspectAsync(manifest, TimeSpan.FromSeconds(2), _ => host, copyGame: true);
+        var report = await HostedCampaignPreparation.InspectAsync(manifest, TimeSpan.FromSeconds(2), copyGame: true, hostFactory: _ => host);
         Assert.Contains(report.Problems, problem => problem.Actor == "pc" && problem.Input == "copy space");
         Assert.Contains(report.Problems, problem => problem.Actor == "server" && problem.Input == "dependencies and CLI packs");
         Assert.DoesNotContain(host.Scripts, script => script is "copy" or "ship" or "start");
