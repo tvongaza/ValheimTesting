@@ -273,7 +273,8 @@ int Usage(string problem)
 void TargetedRegression(string config, string cache, Dictionary<string, string> env)
 {
     string source = Path.Combine(root, "examples", "TargetedRegression");
-    string xml = File.ReadAllText(Path.Combine(source, "TargetedRegression.csproj"));
+    // Git may check this project out with CRLF on Windows; compare its structure with one newline convention.
+    string xml = File.ReadAllText(Path.Combine(source, "TargetedRegression.csproj")).Replace("\r\n", "\n", StringComparison.Ordinal);
     const string sourceReference = "  <ItemGroup Condition=\"'$(GameSessionsPackageVersion)' == ''\"><ProjectReference Include=\"../../src/Valheim.Testing.GameSessions/Valheim.Testing.GameSessions.csproj\" /></ItemGroup>\n" +
         "  <ItemGroup Condition=\"'$(GameSessionsPackageVersion)' != ''\"><PackageReference Include=\"Valheim.Testing.GameSessions\" Version=\"[$(GameSessionsPackageVersion)]\" /></ItemGroup>";
     if (!xml.Contains(sourceReference, StringComparison.Ordinal))
