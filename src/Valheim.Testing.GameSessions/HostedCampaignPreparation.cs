@@ -126,6 +126,15 @@ public sealed class PreparedHostedCampaign : IAsyncDisposable
     internal HostedCampaignManifest Manifest { get; }
     /// <summary>The resolved environment the runner places the server and clients with; never written to a file.</summary>
     internal ResolvedEnvironment Environment => _profile;
+    internal string LaunchModes(bool copyGame)
+    {
+        var actors = _profile.Server == null
+            ? _profile.Clients.Select(pair => (Name: pair.Key, Host: pair.Value.Host))
+            : new[] { (Name: "server", Host: _profile.Server.Host) }.Concat(_profile.Clients.Select(pair => (Name: pair.Key, Host: pair.Value.Host)));
+        return string.Join(", ", actors.OrderBy(actor => actor.Name, StringComparer.Ordinal)
+            .Select(actor => actor.Name + ":" +
+                (HostedCampaignPreparation.UseLocalWindowsProfile(_profile.Hosts[actor.Host], copyGame) ? "profile" : "copy")));
+    }
     public IReadOnlyDictionary<string, HostListing> Listings { get; }
     /// <summary>Local reviewed files selected for each process, for deriving ValheimCLI MD5 pins and provenance.</summary>
     public IReadOnlyDictionary<string, HostedRuntimeFile[]> Selections { get; }
@@ -263,6 +272,10 @@ public sealed class PreparedHostedCampaign : IAsyncDisposable
 /// <summary>One command's setup half: reviewed inputs become pinned, separate disposable server/client installs.</summary>
 public static class HostedCampaignPreparation
 {
+    // Windows needs its Doorstop proxy beside the executable. A local profile supplies an owned
+    // hard-linked launch folder there; remote hosts keep their existing full-copy path until #602.
+    internal static bool UseLocalWindowsProfile(HostProfile host, bool copyGame) =>
+        !copyGame && host.Kind == "local" && host.Platform == "windows";
     internal sealed record Inputs(HostedCampaignManifest Manifest, ResolvedEnvironment Profile,
         List<(string Name, GameRole Role, HostedCampaignRole Input)> Roles,
         Dictionary<string, HostedRuntimeFile[]> Selections, Dictionary<string, HostedCharacterSelection> Characters);
@@ -415,7 +428,7 @@ public static class HostedCampaignPreparation
 
     private static async Task<HostInspection> InspectHostsAsync(Inspection inspection, TimeSpan timeout,
         Func<string, IGameHost>? hostFactory, CancellationToken cancellation, ShippedLoader.Rule? shippedLoader = null,
-        bool skipLocalChecks = false)
+        bool skipLocalChecks = false, bool copyGame = false)
     {
         if (inspection.Inputs == null) return new HostInspection(inspection.Report,
             new Dictionary<string, string>(), new Dictionary<string, HostListing>(), new Dictionary<string, CharacterDirectories>());
@@ -484,13 +497,14 @@ public static class HostedCampaignPreparation
                     }
                     catch (Exception error) when (HostCheckRefusal(error))
                     { failures.Add(new(item.Name, "ValheimCLI port", error.Message)); }
-                try
-                {
-                    capacities.Add((item.Name, await HostCopyCapacityProbe.InspectAsync(host, item.Role.Install,
-                        item.Role.Runtime, timeout, cancellation).ConfigureAwait(false)));
-                }
-                catch (Exception error) when (HostCheckRefusal(error))
-                { failures.Add(new(item.Name, "copy space", error.Message)); }
+                if (!UseLocalWindowsProfile(inputs.Profile.Hosts[group.Key], copyGame))
+                    try
+                    {
+                        capacities.Add((item.Name, await HostCopyCapacityProbe.InspectAsync(host, item.Role.Install,
+                            item.Role.Runtime, timeout, cancellation).ConfigureAwait(false)));
+                    }
+                    catch (Exception error) when (HostCheckRefusal(error))
+                    { failures.Add(new(item.Name, "copy space", error.Message)); }
                 if (!inspection.Report.Problems.Any(problem => problem.Actor == item.Name && problem.Input == "loader"))
                 {
                     try
@@ -836,10 +850,10 @@ public static class HostedCampaignPreparation
     /// Cleanup step) records that removal, so the result and the journal's <c>run-ended</c> judge the same cleanup (#424).</remarks>
     internal static async Task<PreparedHostedCampaign> PrepareAsync(Inspection inspection, string outputDirectory, TimeSpan timeout,
         Func<string, IGameHost>? hostFactory, CancellationToken cancellation, string? runId = null, Func<string, Func<Task>, Task>? cleanupStep = null,
-        ShippedLoader.Rule? shippedLoader = null, Action<string, string>? loaderChosen = null)
+        ShippedLoader.Rule? shippedLoader = null, Action<string, string>? loaderChosen = null, bool copyGame = false)
     {
         inspection.Report.RequireReady();
-        var readiness = await InspectHostsAsync(inspection, timeout, hostFactory, cancellation, shippedLoader).ConfigureAwait(false);
+        var readiness = await InspectHostsAsync(inspection, timeout, hostFactory, cancellation, shippedLoader, copyGame: copyGame).ConfigureAwait(false);
         foreach (var (actor, choice) in readiness.Loaders.OrderBy(pair => pair.Key, StringComparer.Ordinal)) loaderChosen?.Invoke(actor, choice.Reason);
         readiness.Report.RequireReady();
         var inputs = inspection.Inputs!;
@@ -875,7 +889,7 @@ public static class HostedCampaignPreparation
                 await using var claim = await host.AcquireLockAsync(profile.Hosts[hostName].Lock,
                     "campaign-prepare " + id + " " + hostName, timeout, cancellation).ConfigureAwait(false);
                 await HostedRuntimeStage.RequireStoppedAsync(host, timeout, cancellation, clientSession: group.Any(item => item.Name != "server")).ConfigureAwait(false);
-                var capacities = await Task.WhenAll(group.Select(async item =>
+                var capacities = await Task.WhenAll(group.Where(item => !UseLocalWindowsProfile(profile.Hosts[hostName], copyGame)).Select(async item =>
                     (item.Name, Capacity: await HostCopyCapacityProbe.InspectAsync(host, item.Role.Install,
                         item.Role.Runtime, timeout, cancellation).ConfigureAwait(false)))).ConfigureAwait(false);
                 HostCopyCapacityProbe.RequireCombined(hostName, capacities.Select(item => (Actor: item.Name, item.Capacity)));
@@ -887,14 +901,24 @@ public static class HostedCampaignPreparation
                     string runtime = HostPath.Join(parent, "runtime"), stage = HostPath.Join(parent, "staging");
                     // Journalled before the copy: an interrupted preparation leaves a record of every path it may own.
                     await journal.AppendAsync(host, journalDirectory, name, JournalEntry.Of(JournalEntry.CopyIntended,
-                        ("runtime", runtime), ("stage", stage), ("parent", parent)), timeout, cancellation).ConfigureAwait(false);
+                        ("runtime", runtime), ("stage", stage), ("parent", parent),
+                        ("launchMode", UseLocalWindowsProfile(profile.Hosts[hostName], copyGame) ? "profile" : "copy")), timeout, cancellation).ConfigureAwait(false);
                     // Owned from here: a failed preparation retires a partial copy too (idempotent where nothing was made), so its
                     // run-ended entry says cleanup was verified only when no copy of it remains, not when the copy's own cleanup failed.
                     copies.Add((hostName, name, runtime, stage));
-                    listings[name] = await HostedRuntimeStage.PrepareWithInspectedSourceAsync(host, name == "server" ? HostedRuntimeKind.Server : HostedRuntimeKind.Client,
-                        role.Install, runtime, stage, selections[name], timeout, cancellation,
-                        item.Input.LoaderPackage == null ? null : BepInExLoaderPackage.Read(item.Input.LoaderPackage),
-                        readiness.SourceListings[name]).ConfigureAwait(false);
+                    var kind = name == "server" ? HostedRuntimeKind.Server : HostedRuntimeKind.Client;
+                    var loader = item.Input.LoaderPackage == null ? null : BepInExLoaderPackage.Read(item.Input.LoaderPackage);
+                    if (UseLocalWindowsProfile(profile.Hosts[hostName], copyGame))
+                    {
+                        var prepared = await HostedRuntimeStage.PrepareProfileAsync(host, kind,
+                            role.Install, runtime, stage, selections[name], timeout, cancellation,
+                            loader, readiness.SourceListings[name]).ConfigureAwait(false);
+                        listings[name] = prepared.Game;
+                    }
+                    else
+                        listings[name] = await HostedRuntimeStage.PrepareWithInspectedSourceAsync(host, kind,
+                            role.Install, runtime, stage, selections[name], timeout, cancellation,
+                            loader, readiness.SourceListings[name]).ConfigureAwait(false);
                     await journal.AppendAsync(host, journalDirectory, name, JournalEntry.Of(JournalEntry.CopyDone,
                         ("runtime", runtime), ("files", listings[name].Files.Count.ToString(System.Globalization.CultureInfo.InvariantCulture))), timeout, cancellation).ConfigureAwait(false);
                     if (characters.TryGetValue(name, out var selected))

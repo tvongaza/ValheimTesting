@@ -10,6 +10,8 @@ namespace Valheim.Testing.GameSessions;
 /// <summary>What a mod's system-test runner supplies to <see cref="PinnedServerRun"/>.</summary>
 public sealed class PinnedServerRunOptions<TPlan> where TPlan : ServerRunPlan
 {
+    /// <summary>Copy the complete game for local Windows actors instead of preparing owned loader profiles.</summary>
+    public bool CopyGame { get; init; }
     /// <summary>The runner's name: the report's name and the usage line's program.</summary>
     public required string Name { get; init; }
     /// <summary>Reads and validates the plan (for example <c>ServerRunPlan.Read&lt;MyPlan&gt;</c> then the plan's own rules).</summary>
@@ -62,6 +64,8 @@ public sealed class PinnedServerRunOptions<TPlan> where TPlan : ServerRunPlan
 /// </summary>
 public sealed class HostedRunOptions<TPlan> where TPlan : class
 {
+    /// <summary>Copy the complete game for local Windows actors instead of preparing owned loader profiles.</summary>
+    public bool CopyGame { get; init; }
     /// <summary>The runner's name: the report's name and the usage line's program.</summary>
     public required string Name { get; init; }
     /// <summary>Reads and validates the plan, with the mod's own rules (throw <see cref="ArgumentException"/>).</summary>
@@ -445,7 +449,8 @@ public static class PinnedServerRun
             phase = StepPhase.Setup; // From here the hosts are written to.
             await report.StepAsync(StepPhase.Setup, "check the hosts and prepare every actor's disposable install", async () =>
                 prepared = await HostedCampaignPreparation.PrepareAsync(inspection, preparedDirectory, CampaignTimeout,
-                    name => options.Hooks.CreateHost(inspection.Inputs!.Profile, name), cancellation.Token, runId, PreparationCleanup(report), options.Hooks.ShippedLoaderAsync, ShippedLoaderChosen(report)).ConfigureAwait(false)).ConfigureAwait(false);
+                    name => options.Hooks.CreateHost(inspection.Inputs!.Profile, name), cancellation.Token, runId, PreparationCleanup(report), options.Hooks.ShippedLoaderAsync, ShippedLoaderChosen(report), options.CopyGame).ConfigureAwait(false)).ConfigureAwait(false);
+            report.Provenance["campaignLaunchModes"] = prepared!.LaunchModes(options.CopyGame);
             string hostName = null!;
             report.Step(StepPhase.Setup, "bind the prepared actors to the plan", () =>
             {
@@ -619,7 +624,8 @@ public static class PinnedServerRun
                 phase = StepPhase.Setup; // From here the hosts are written to.
                 await report.StepAsync(StepPhase.Setup, "check the hosts and prepare every actor's disposable install", async () =>
                     prepared = await HostedCampaignPreparation.PrepareAsync(inspection, Path.Combine(output, "prepared"), CampaignTimeout,
-                        name => options.Hooks.CreateHost(inspection.Inputs!.Profile, name), cancellation.Token, campaignRunId, PreparationCleanup(report), options.Hooks.ShippedLoaderAsync, ShippedLoaderChosen(report)).ConfigureAwait(false)).ConfigureAwait(false);
+                        name => options.Hooks.CreateHost(inspection.Inputs!.Profile, name), cancellation.Token, campaignRunId, PreparationCleanup(report), options.Hooks.ShippedLoaderAsync, ShippedLoaderChosen(report), options.CopyGame).ConfigureAwait(false)).ConfigureAwait(false);
+                report.Provenance["campaignLaunchModes"] = prepared!.LaunchModes(options.CopyGame);
                 report.Step(StepPhase.Setup, "bind the prepared actors to the plan", () =>
                 {
                     prepared!.ApplyTo(plan, prepared.Manifest, campaignPlans!, Path.Combine(output, "prepared"));

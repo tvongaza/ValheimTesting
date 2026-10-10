@@ -472,6 +472,7 @@ internal static class ServerLoad
                 new PinnedServerRunOptions<ServerRunPlan>
                 {
                     Name = "native-smoke-server-load",
+                    CopyGame = parsed.Switches.Contains("--copy-game"),
                     RunStarted = DetachedSession.SignalRun,
                     CleanupBudget = bakeDestination == null ? null : TimeSpan.FromMinutes(10),
                     ReadPlan = _ => throw new InvalidOperationException("The one-off's plan is in memory."),

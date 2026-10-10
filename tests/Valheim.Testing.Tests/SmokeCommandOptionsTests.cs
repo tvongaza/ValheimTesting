@@ -54,6 +54,13 @@ public sealed class SmokeCommandOptionsTests
         Assert.Equal("true", start!["--copy-game"]);
         Assert.False(StartArguments.TryRead(["--mod", "mod.dll", "--copy-game", "--copy-game"],
             out _, out _, out _, out _, out _));
+        Assert.True(ServerLoad.TryRead(["--mod", "mod.dll", "--copy-game"], out var server,
+            out string serverError), serverError);
+        Assert.Contains("--copy-game", server!.Switches);
+        Assert.True(SmokeCommandOptions.TryRead(["--mod", "mod.dll", "--mod", "other.dll",
+            "--remove-mod", "other.dll", "--output", "new-run", "--copy-game"], SmokeCommandOptions.Command.ServerLoadAb,
+            allowImplicitMod: false, out var comparison, out string comparisonError), comparisonError);
+        Assert.Contains("--copy-game", comparison!.Switches);
     }
 
     [Fact]
