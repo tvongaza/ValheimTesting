@@ -97,6 +97,7 @@ public sealed class LocalClientCopyTests : IDisposable
     [InlineData("[Server]\nEnabled = true\nAllowOnServerClients = false\nPort = 5556\n")]
     [InlineData("[Other]\nAllowOnServerClients = true\n[Server]\nEnabled = true\nPort = 5556\n")]
     [InlineData("[server]\nAllowOnServerClients = true\nPort = 5556\n")]
+    [InlineData("[ Server ]\nAllowOnServerClients = true\nPort = 5556\n")]
     [InlineData("[Server]\nallowonserverclients = true\nPort = 5556\n")]
     [InlineData("[Server]\nAllowOnServerClients = true # test\nPort = 5556\n")]
     [InlineData("[Server]\nAllowOnServerClients = true ; test\nPort = 5556\n")]

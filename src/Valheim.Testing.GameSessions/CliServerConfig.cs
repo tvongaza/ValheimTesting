@@ -39,7 +39,8 @@ internal static class CliServerConfig
             if (value.Length == 0 || value[0] is '#' or ';') continue;
             if (value[0] == '[' && value.EndsWith(']'))
             {
-                section = value[1..^1].Trim();
+                // BepInEx keeps whitespace inside section brackets; [ Server ] is not [Server].
+                section = value[1..^1];
                 continue;
             }
             if (!section.Equals("Server", StringComparison.Ordinal)) continue;
