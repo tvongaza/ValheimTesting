@@ -122,7 +122,10 @@ public sealed partial class GameLaunch
         {
             macDoorstop = MacDoorstop(loader, executable, macArchitecture, client: false);
             // DYLD_INSERT_LIBRARIES splits on ':', so such a path cannot be listed.
-            if (runtime.Contains(':') || loader.Contains(':')) throw new ArgumentException("A macOS runtime or loader path cannot contain ':'.", nameof(runtimeDirectory));
+            // Injected host types let cross-platform tests inspect a Mac launch on Windows. Only paths on an
+            // actual Mac can reach DYLD's colon-separated list; a Windows drive prefix in a fake cannot.
+            if (OperatingSystem.IsMacOS() && (runtime.Contains(':') || loader.Contains(':')))
+                throw new ArgumentException("A macOS runtime or loader path cannot contain ':'.", nameof(runtimeDirectory));
         }
         environment ??= new Dictionary<string, string>();
         var names = builtOn == ServerHost.Windows ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
