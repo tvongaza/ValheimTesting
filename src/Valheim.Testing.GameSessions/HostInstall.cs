@@ -194,6 +194,29 @@ public static class HostInstall
     /// <summary>The <see cref="InstallPins"/> of a listing that covers <see cref="PinPaths"/>.</summary>
     public static InstallPins Pins(HostListing listing) => Pins(listing, out _);
 
+    /// <summary>
+    /// The same install pins when Doorstop and BepInEx live in an owned profile beside an unchanged game install.
+    /// Game files come only from <paramref name="game"/>; loader and patcher files come only from
+    /// <paramref name="profile"/>. No copied game files are needed to establish their combined identity.
+    /// </summary>
+    internal static InstallPins Pins(HostListing game, HostListing profile)
+    {
+        if (game.HostName != profile.HostName || game.Shell != profile.Shell)
+            throw new ArgumentException("The game and profile listings must come from the same host.");
+        var files = new Dictionary<string, string>(game.Names);
+        foreach (var (path, hash) in game.Files)
+            if (!path.StartsWith("BepInEx/", StringComparison.OrdinalIgnoreCase) &&
+                !InstallPins.IsLoaderFile(path, game.Shell == HostShellKind.PowerShell
+                    ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+                files.Add(path, hash);
+        foreach (var (path, hash) in profile.Files)
+            if (path.StartsWith("BepInEx/patchers/", StringComparison.OrdinalIgnoreCase) ||
+                InstallPins.IsLoaderFile(path, game.Shell == HostShellKind.PowerShell
+                    ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+                files.Add(path, hash);
+        return Pins(new HostListing(game.HostName, game.Shell, game.Root, files, game.Executables));
+    }
+
     private static InstallPins Pins(HostListing listing, out string managed)
     {
         var assemblies = listing.Files.Keys.Select(key => GameAssembly.Match(key)).Where(match => match.Success).Select(match => match.Groups["managed"].Value).Order(StringComparer.Ordinal).ToList();
