@@ -762,7 +762,10 @@ internal static class InteractiveScripts
     public static readonly string LinuxStart = ("set -u\nsecrets=${VT_SECRETS:-}\nunset VT_SECRETS\n" + LinuxStarted + "\n" + """
         if [ "$(uname -s)" != Linux ]; then echo "VT-INTERACTIVE unsupported this host runs $(uname -s); a Linux client needs a Linux host"; exit 0; fi
         while IFS= read -r f; do
-            if [ -n "$f" ] && [ ! -f "$install/$f" ]; then echo "VT-INTERACTIVE missing $f"; exit 0; fi
+            if [ -n "$f" ]; then
+                case "$f" in /*) needed="$f" ;; *) needed="$install/$f" ;; esac
+                if [ ! -f "$needed" ]; then echo "VT-INTERACTIVE missing $f"; exit 0; fi
+            fi
         done <<< "$files"
         if [ ! -x "$install/$exe" ]; then echo "VT-INTERACTIVE missing $exe is not executable"; exit 0; fi
         if [ -e "$dir" ]; then echo "VT-INTERACTIVE exists"; exit 0; fi
@@ -802,15 +805,18 @@ internal static class InteractiveScripts
         if [ -n "$runtime" ] && [ -S "$runtime/bus" ]; then export DBUS_SESSION_BUS_ADDRESS="unix:path=$runtime/bus"; fi
         # The launch's own variables (the loader's among them) reach only the game, through env as it execs the game: LD_PRELOAD
         # must not load Doorstop into the shells in between. They are evidence, not secrets.
-        unsets=(); sets=(); args=()
+        unsets=(); removed=(); sets=(); args=()
         while IFS=' ' read -r kind value; do
             [ -n "$kind" ] || continue
             text=$(decode "$value") || exit 3
             text=${text%x}
             case "$kind" in
-                unset) unsets+=(-u "$text") ;;
+                unset) unsets+=(-u "$text"); removed+=("$text") ;;
                 env) sets+=("$text") ;;
                 prepend) name=${text%%=*}; entry=${text#*=}; current=${!name:-}
+                    for dropped in ${removed[@]+"${removed[@]}"}; do
+                        if [ "$dropped" = "$name" ]; then current=; fi
+                    done
                     for pair in ${sets[@]+"${sets[@]}"}; do case "$pair" in "$name="*) current=${pair#*=} ;; esac; done
                     if [ -n "$current" ]; then sets+=("$name=$entry:$current"); else sets+=("$name=$entry"); fi ;;
                 arg) args+=("$text") ;;

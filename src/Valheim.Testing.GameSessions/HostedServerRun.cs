@@ -24,6 +24,8 @@ internal sealed class HostedServerRun : IServerPlacement
     private HostLock? _lock;
     private CliTunnel? _tunnel;
     private HostListing? _runtime;
+    private HostListing? _loader;
+    private InstallPins? _preparedPins;
     private HostedWorld? _macWorld;
     private MacServerLists? _macLists;
     private bool _serverMayRun;
@@ -88,6 +90,10 @@ internal sealed class HostedServerRun : IServerPlacement
     /// </summary>
     public string RunDirectory { get; }
     public string RuntimeDirectory { get; }
+    // The owned runtime remains the log and retirement root. A Unix profile starts the executable
+    // from this read-only game root while Doorstop and BepInEx remain under RuntimeDirectory.
+    public string GameDirectory => Role.PreparedGameRoot ?? RuntimeDirectory;
+    public string LoaderDirectory => RuntimeDirectory;
     public string WorldDirectory { get; }
     /// <summary>The runtime copy's files on the host, once copied.</summary>
     public IReadOnlyDictionary<string, string> RuntimeHashes => _runtime?.Files ?? new Dictionary<string, string>();
@@ -138,12 +144,13 @@ internal sealed class HostedServerRun : IServerPlacement
         provenance["serverHost"] = Role.Host;
         provenance["serverHostKind"] = Host.Kind.ToString();
         provenance["hostRunDirectory"] = RunDirectory;
-        provenance["runtimeSource"] = Role.Host + ":" + Role.Install;
+        provenance["runtimeSource"] = Role.Host + ":" + (Role.PreparedSourceRoot ?? Role.Install);
     }
 
     /// <summary>Takes the server host's lock, then copies the host's install into this run's runtime and verifies every file there.</summary>
     public async Task LockAndCopyRuntimeAsync(ScenarioReport report, ServerRunPlan plan, bool pinned, CancellationToken cancellation)
     {
+        _preparedPins = Role.PreparedSourceRoot != null ? plan.RuntimePins : null;
         // A Windows host that can register no server task is refused before the copy (a campaign's preflight asked already).
         if (Host.Shell.Kind == HostShellKind.PowerShell)
             await report.StepAsync(StepPhase.Setup, "the server host can start a server task", () => HostServer.RequireTaskLogonAsync(Host, HostedTimeouts.Quick, cancellation)).ConfigureAwait(false);
@@ -163,8 +170,10 @@ internal sealed class HostedServerRun : IServerPlacement
             // The campaign's preparation made the one copy; it must still be exactly what the preparation listed and bound.
             await report.StepAsync(StepPhase.Setup, verified ? "verify the prepared runtime on the server host" : "list the prepared runtime on the server host as found", async () =>
             {
-                _runtime = await HostInstall.ListAsync(Host, RuntimeDirectory, HostedTimeouts.Long, null, cancellation).ConfigureAwait(false);
+                _runtime = await HostInstall.ListAsync(Host, GameDirectory, HostedTimeouts.Long, null, cancellation).ConfigureAwait(false);
                 if (verified) HostInstall.RequireSame(plan.Runtime.Sha256, _runtime, "prepared runtime");
+                _loader = GameDirectory == RuntimeDirectory ? _runtime :
+                    await HostInstall.ListAsync(Host, RuntimeDirectory, HostedTimeouts.Long, null, cancellation).ConfigureAwait(false);
             }).ConfigureAwait(false);
             return;
         }
@@ -177,6 +186,7 @@ internal sealed class HostedServerRun : IServerPlacement
             // Steam's own runtime output in the install (logs/) is not the runtime's: the copy leaves it out, and the pins never count it.
             await HostInstall.CopyAsync(Host, Role.Install, RuntimeDirectory, HostedTimeouts.Long, HostInstall.ServerRuntimeSkips, cancellation).ConfigureAwait(false);
             _runtime = await HostInstall.ListAsync(Host, RuntimeDirectory, HostedTimeouts.Long, null, cancellation).ConfigureAwait(false);
+            _loader = _runtime;
             if (verified) HostInstall.RequireSame(HostInstall.WithoutSkipped(plan.Runtime.Sha256, HostInstall.ServerRuntimeSkips, _runtime.Names), _runtime, "runtime copy");
             await JournalAsync(Host, Role.Host, "server", CopyDone(RuntimeDirectory, _runtime), cancellation).ConfigureAwait(false);
         }).ConfigureAwait(false);
@@ -198,7 +208,7 @@ internal sealed class HostedServerRun : IServerPlacement
             return Task.CompletedTask;
         }
         return report.StepAsync(StepPhase.Setup, "the server host can load crossplay's libraries", async () =>
-            report.Provenance["crossplayLibraries"] = await CrossplayLibraries.RequireAsync(Host, RuntimeDirectory, HostedTimeouts.Quick, cancellation).ConfigureAwait(false) + " loads on " + Host.Name);
+            report.Provenance["crossplayLibraries"] = await CrossplayLibraries.RequireAsync(Host, GameDirectory, HostedTimeouts.Quick, cancellation).ConfigureAwait(false) + " loads on " + Host.Name);
     }
 
     /// <summary>Ships the verified local world copy to the host and verifies every file there.</summary>
@@ -259,8 +269,8 @@ internal sealed class HostedServerRun : IServerPlacement
                 throw new InvalidOperationException($"{unixExecutable} is not executable in the runtime copy on {Host.Name}; restore its mode (chmod u+x) in the install {Role.Install}.");
         });
         report.Step(StepPhase.Setup, pinned ? "copied runtime is the pinned game build, loader and patchers" : "record the unpinned runtime's game build, loader and patchers", () =>
-            (pinned ? HostInstall.CheckPins(plan.RuntimePins ?? throw new ArgumentException("Pin the runtime's game build, loader and patchers in runtimePins, or opt out explicitly with \"pinning\": \"none\"."), runtime, "runtime")
-                : HostInstall.Pins(runtime)).Record(report.Provenance, "runtime"));
+            (pinned ? HostInstall.CheckPins(plan.RuntimePins ?? throw new ArgumentException("Pin the runtime's game build, loader and patchers in runtimePins, or opt out explicitly with \"pinning\": \"none\"."), runtime, _loader ?? runtime, "runtime")
+                : HostInstall.Pins(runtime, _loader ?? runtime)).Record(report.Provenance, "runtime"));
     }
 
     /// <summary>Refuses an incoherent Windows Doorstop pair in the copied runtime before its server can start.</summary>
@@ -287,6 +297,11 @@ internal sealed class HostedServerRun : IServerPlacement
 
     ServerBoot IServerPlacement.Start(int n, GameLaunch launch, string output, CancellationToken cancellation)
     {
+        if (Role.PreparedSourceRoot is { } source && _preparedPins != null)
+        {
+            HostInstall.CheckProfilePinsAsync(Host, _preparedPins, GameDirectory, LoaderDirectory, source,
+                "prepared server profile before launch", HostedTimeouts.Long, cancellation).GetAwaiter().GetResult();
+        }
         string local = Path.Combine(output, "boot-" + n), bootDirectory = HostPath.Join(RunDirectory, "boot-" + n);
         if (LocalMac) return StartLocalMac(launch, local, bootDirectory, cancellation);
         HostServerProcess process;
@@ -295,7 +310,8 @@ internal sealed class HostedServerRun : IServerPlacement
         string expected = launch.CommandLineSha256();
         JournalAsync(Host, Role.Host, "server", JournalEntry.Of(JournalEntry.ProcessIntended, ("bootDirectory", bootDirectory),
             ("expectedCommandLineSha256", expected)), cancellation).GetAwaiter().GetResult();
-        try { process = HostServer.StartAsync(Host, launch, bootDirectory, HostedTimeouts.Quick, [BepInExLog, UnityLog], local, cancellation).GetAwaiter().GetResult(); }
+        try { process = HostServer.StartAsync(Host, launch, bootDirectory, HostedTimeouts.Quick, [BepInExLog, UnityLog], local,
+            logonSeams: null, cancellation: cancellation, logRoot: LoaderDirectory).GetAwaiter().GetResult(); }
         catch (Exception error) when (UnknownOutcome(error) != null)
         {
             // The start's reply was lost: a server may be running there that no session knows. The lock stays.
@@ -449,7 +465,7 @@ internal sealed class HostedServerRun : IServerPlacement
         if (_runtime != null || _runtimeIntended)
             try
             {
-                await retirement.HostAsync(Role.Host, Host, _runtime ?? new HostListing(Host.Name, Host.Shell.Kind, RuntimeDirectory, new Dictionary<string, string>(), []),
+                await retirement.HostAsync(Role.Host, Host, _loader ?? _runtime ?? new HostListing(Host.Name, Host.Shell.Kind, RuntimeDirectory, new Dictionary<string, string>(), []),
                     RuntimeDirectory, launched, serverStopped, cleanup).ConfigureAwait(false);
                 // A campaign's prepared install is journalled by its preparation; a standalone run's own copy here. A failed retire
                 // journals nothing more: the copy stays open in the journal, for env recover.

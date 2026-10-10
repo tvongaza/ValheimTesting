@@ -119,6 +119,7 @@ internal sealed class FakeServerHost : IGameHost
         ("retire", [HostedRunScripts.Retire, HostedRunScripts.WindowsRetire]),
         ("drop-kept", [HostedRunScripts.DropKept, HostedRunScripts.WindowsDropKept]),
         ("apply-stage", [HostedRuntimeStage.WindowsApply, HostedRuntimeStage.BashApply]),
+        ("profile-seed", [HostedRuntimeStage.WindowsProfileSeed, HostedRuntimeStage.BashProfileSeed]),
         ("keep-logs", [RunRecovery.BashKeepLogs, RunRecovery.WindowsKeepLogs]),
         ("cleanup-stage", [HostedRuntimeStage.WindowsCleanup, HostedRuntimeStage.BashCleanup]),
         ("character-install", [HostedCharacterStage.WindowsInstall, HostedCharacterStage.BashInstall]),
@@ -196,6 +197,21 @@ internal sealed class FakeServerHost : IGameHost
                     if (Directory.Exists(Path.Combine(Local(v["dest"]), skipped))) Directory.Delete(Path.Combine(Local(v["dest"]), skipped), recursive: true);
                 AfterCopy?.Invoke(Local(v["dest"]));
                 return Ok("VT-COPY copied\n");
+            case "profile-seed":
+            {
+                string destination = Local(v["runtime"]);
+                if (Directory.Exists(destination)) return Ok("VT-PROFILE-EXISTS\n");
+                Directory.CreateDirectory(destination);
+                foreach (string encoded in v["gameFiles"].Split('\n', StringSplitOptions.RemoveEmptyEntries)
+                    .Concat(v["files"].Split('\n', StringSplitOptions.RemoveEmptyEntries)))
+                {
+                    string relative = Encoding.UTF8.GetString(Convert.FromBase64String(encoded));
+                    string target = Path.Combine(destination, relative);
+                    Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+                    File.Copy(Path.Combine(Local(v["source"]), relative), target);
+                }
+                return Ok("VT-PROFILE-SEEDED\n");
+            }
             case "apply-stage":
             {
                 string runtime = Local(v["runtime"]), stage = Local(v["stage"]);

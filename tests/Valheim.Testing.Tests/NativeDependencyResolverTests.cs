@@ -967,8 +967,11 @@ public sealed class NativeDependencyResolverTests : IDisposable
             Hooks = new FakeRunHooks { Host = _ => host, Connect = _ => server.Connect(), StateWaits = false, RunId = "run-test" },
         };
         string output = Path.Combine(_rig.Root, "this-machine-out");
+        int exit;
         using (EnvironmentInventory.UseMachine(machine))
-            Assert.Equal(0, await PinnedServerRun.RunCampaignAsync(manifest, plan, _ => new Dictionary<string, ClientRunPlan>(), output, options));
+            exit = await PinnedServerRun.RunCampaignAsync(manifest, plan, _ => new Dictionary<string, ClientRunPlan>(), output, options);
+        Assert.True(exit == 0, File.Exists(Path.Combine(output, "result.json"))
+            ? File.ReadAllText(Path.Combine(output, "result.json")) : "No result.json was written.");
         var result = JsonDocument.Parse(File.ReadAllText(Path.Combine(output, "result.json"))).RootElement;
         Assert.Equal("this machine", result.GetProperty("Provenance").GetProperty("inventory").GetString());
         string detected = result.GetProperty("Provenance").GetProperty("inventoryDetected").GetString()!;
