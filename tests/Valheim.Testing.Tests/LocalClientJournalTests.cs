@@ -50,6 +50,32 @@ public sealed class LocalClientJournalTests : IDisposable
         Assert.True(File.Exists(Path.Combine(journal, "run-desktop-intent", "client.jsonl")));
     }
 
+    [Fact]
+    public void UnixProfileIntentHashesTheSameLaunchAsThePreparedClient()
+    {
+        string game = Path.Combine(_root, "clean-game"), loader = Path.Combine(_root, "profile");
+        Directory.CreateDirectory(game);
+        string executable = Path.Combine(game, GameLaunch.ClientLinuxExecutable);
+        File.WriteAllText(executable, "fake game");
+        if (!OperatingSystem.IsWindows())
+            File.SetUnixFileMode(executable, File.GetUnixFileMode(executable) | UnixFileMode.UserExecute);
+        FakeInstalls.Client(loader);
+        FakeInstalls.LinuxLoader(loader);
+        var plan = new ClientRunPlan { Install = game, PreparedLoaderRoot = loader,
+            Architecture = "x64" };
+        string journal = Path.Combine(_root, "profile-journal"), evidence = Path.Combine(_root, "profile-evidence");
+        Directory.CreateDirectory(evidence);
+        using var directory = RunJournal.UseLocalDirectory(journal);
+        using var run = RunJournal.UseRun("run-unix-profile-intent");
+
+        new LocalClientJournal(plan, evidence, desktopTask: false, hostPlatformForTest: ClientPlatform.Linux).Begin();
+
+        string expected = GameLaunch.LocalClient(game, [], null, ClientArchitecture.X64, true, ClientPlatform.Linux, loader).CommandLineSha256();
+        var entry = Assert.Single(File.ReadAllLines(Path.Combine(journal, "run-unix-profile-intent", "client.jsonl"))
+            .Select(RunJournal.ParseLine)).Entry;
+        Assert.Equal(expected, entry.Fields["expectedCommandLineSha256"]);
+    }
+
     private sealed class ObservedProcess(int id) : IOwnedProcess
     {
         public int Id => id;
