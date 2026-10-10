@@ -289,6 +289,9 @@ internal static class HostInstallScripts
         if [ -z "$dirs" ]; then roots=(.); else
             while IFS= read -r pattern; do
                 [ -n "$pattern" ] || continue
+                # Bash leaves a literal name unchanged even with nocaseglob. Make every
+                # case-insensitive request a real glob before expanding it.
+                if [ "${nocase:-0}" = 1 ]; then pattern="[${pattern:0:1}]${pattern:1}"; fi
                 IFS=$'\n'
                 # A named path that is a link is kept, so the link check below refuses it rather than leave it out.
                 for d in $pattern; do if [ -e "$d" ] || [ -L "$d" ]; then roots+=("./$d"); fi; done

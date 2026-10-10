@@ -199,13 +199,15 @@ public sealed class RunRecoveryTests : IDisposable
         Assert.Equal("personal backup", File.ReadAllText(Path.Combine(local, backupName)));
     }
 
-    [Fact]
-    public async Task RealHostListingFindsCaseVariantBackupsWithoutReadingUnrelatedCharacters()
+    [Theory]
+    [InlineData("VT01.FCH.OLD")]
+    [InlineData("VT01_backup_auto-2026")]
+    public async Task RealHostListingFindsCaseVariantBackupsWithoutReadingUnrelatedCharacters(string backupName)
     {
         string local = Path.Combine(_root, "listing", "characters_local");
         Directory.CreateDirectory(local);
         File.WriteAllText(Path.Combine(local, "vt01.fch"), "registered");
-        File.WriteAllText(Path.Combine(local, "VT01_backup_auto-2026"), "unexpected backup");
+        File.WriteAllText(Path.Combine(local, backupName), "unexpected backup");
         if (!OperatingSystem.IsWindows())
             File.CreateSymbolicLink(Path.Combine(local, "personal.fch"), Path.Combine(local, "missing-personal.fch"));
         else File.WriteAllText(Path.Combine(local, "personal.fch"), "personal");
@@ -216,7 +218,7 @@ public sealed class RunRecoveryTests : IDisposable
 
         Assert.Equal(2, listing.Files.Count);
         Assert.Contains(listing.Files.Keys, name => name.Equals("vt01.fch", StringComparison.OrdinalIgnoreCase));
-        Assert.Contains(listing.Files.Keys, name => name.Equals("VT01_backup_auto-2026", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(listing.Files.Keys, name => name.Equals(backupName, StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
