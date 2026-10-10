@@ -1,0 +1,230 @@
+[
+  {
+    "Name": "RegressionBundleTests.ABundlePinnedToAPublishedPackageBuildsWithOnlyNuGetOrg",
+    "Seconds": 23.66
+  },
+  {
+    "Name": "RegressionBundleTests.ACleanRunMakesASmallBundleThatVerifies",
+    "Seconds": 10.14
+  },
+  {
+    "Name": "RegressionBundleTests.ACurrentBundlePinsThePackageContainingTargetedRegression",
+    "Seconds": 10.09
+  },
+  {
+    "Name": "RegressionBundleTests.AMachinePathOrPrivateIdentifierIsRefused",
+    "Seconds": 95.81
+  },
+  {
+    "Name": "RegressionBundleTests.APluginTheNativeRunPinnedOutsideTheAllowlistCannotBeNamedAnywhere",
+    "Seconds": 17.91
+  },
+  {
+    "Name": "RegressionBundleTests.ARetainedRunIsBundledFromATemplateAndAPortHoldingTheNativeAssertions",
+    "Seconds": 8.88
+  },
+  {
+    "Name": "RegressionBundleTests.ATamperedResultIsRefused",
+    "Seconds": 31.0
+  },
+  {
+    "Name": "RegressionBundleTests.AWrongFileCountIsRefused",
+    "Seconds": 10.33
+  },
+  {
+    "Name": "RegressionBundleTests.AnEditedBundleFileOrChangedEvidenceIsRefused",
+    "Seconds": 15.08
+  },
+  {
+    "Name": "RegressionBundleTests.AnExistingIncompleteDirectoryIsNeverDeleted",
+    "Seconds": 10.17
+  },
+  {
+    "Name": "RegressionBundleTests.AnObsoleteOrUnavailableToolkitIsRefused",
+    "Seconds": 10.15
+  },
+  {
+    "Name": "RegressionBundleTests.AnUnrelatedAbsentPinIsRefusedWithItsFileAndLine",
+    "Seconds": 10.45
+  },
+  {
+    "Name": "RegressionBundleTests.OnlyTheModMayDifferBetweenTheArms",
+    "Seconds": 13.33
+  },
+  {
+    "Name": "RegressionBundleTests.PackageVersionsCompareAsNuGetOrdersThem",
+    "Seconds": 11.98
+  },
+  {
+    "Name": "RegressionBundleTests.TheGamePackageHoldsNoBundleTypesAndNoHttpClient",
+    "Seconds": 10.39
+  },
+  {
+    "Name": "RegressionBundleTests.TheSampleBundleSpecNamesOnlyKnownFields",
+    "Seconds": 10.25
+  },
+  {
+    "Name": "TargetedRegressionTests.ADependencyIsMetByWhatADllDeclaresNeverByItsFileName",
+    "Seconds": 23.89
+  },
+  {
+    "Name": "TargetedRegressionTests.ADesktopOrNonWindowsPreflightCanStage",
+    "Seconds": 19.74
+  },
+  {
+    "Name": "TargetedRegressionTests.ADirectConsumersCharacterUsesTheSameRecoverableEntriesAsStart",
+    "Seconds": 0.04
+  },
+  {
+    "Name": "TargetedRegressionTests.AFixtureHoldingAnotherUidIsRefusedNamingTheUidItHolds",
+    "Seconds": 0.03
+  },
+  {
+    "Name": "TargetedRegressionTests.AGeneratedConsumerRefusesWindowsSshBeforePreflightCopiesTheGame",
+    "Seconds": 0.03
+  },
+  {
+    "Name": "TargetedRegressionTests.AGeneratedConsumerRefusesWindowsSshBeforeRunWritesEvidenceOrCopiesTheGame",
+    "Seconds": 0.04
+  },
+  {
+    "Name": "TargetedRegressionTests.AManifestFileResolvesRelativePathsAndRefusesUnknownFields",
+    "Seconds": 0.03
+  },
+  {
+    "Name": "TargetedRegressionTests.AMissingCharacterIsRefusedBeforeTheLaunch",
+    "Seconds": 7.78
+  },
+  {
+    "Name": "TargetedRegressionTests.ARegisteredCharacterCanBePreflightedWithoutTouchingTheLiveCharacterFolder",
+    "Seconds": 11.46
+  },
+  {
+    "Name": "TargetedRegressionTests.ARegressionCarriesOnlyItsDeclaredClientVariablesIntoTheOwnedPlan",
+    "Seconds": 4.67
+  },
+  {
+    "Name": "TargetedRegressionTests.ARegressionRefusesInvalidOrLoaderClientVariablesBeforeStaging",
+    "Seconds": 0.13
+  },
+  {
+    "Name": "TargetedRegressionTests.ARejectedMacCopyIsRemovedBeforeAnyClientLaunch",
+    "Seconds": 0.06
+  },
+  {
+    "Name": "TargetedRegressionTests.ARejectedMacSourceStopsBeforeTheDisposableCopy",
+    "Seconds": 0.03
+  },
+  {
+    "Name": "TargetedRegressionTests.ARetiredEnvironmentManifestNamesWhereEachMachineFieldNowComesFrom",
+    "Seconds": 0.04
+  },
+  {
+    "Name": "TargetedRegressionTests.AStaleOrIncompleteValheimCliSetIsRefusedByItsCapabilityManifest",
+    "Seconds": 31.86
+  },
+  {
+    "Name": "TargetedRegressionTests.ATargetedRunValidatesItsExpectedErrorLinesBeforeStaging",
+    "Seconds": 16.05
+  },
+  {
+    "Name": "TargetedRegressionTests.AValidManifestStagesOnlyTheAllowlistThenPreflightsEveryArm",
+    "Seconds": 14.86
+  },
+  {
+    "Name": "TargetedRegressionTests.AWrongCandidateHashIsRefusedNamingTheCommitToRebuild",
+    "Seconds": 0.03
+  },
+  {
+    "Name": "TargetedRegressionTests.AWronglyNestedFixtureIsRefusedWithTheExpectedTree",
+    "Seconds": 0.12
+  },
+  {
+    "Name": "TargetedRegressionTests.AnArmsCommitIsOptionalButNeverBlank",
+    "Seconds": 0.03
+  },
+  {
+    "Name": "TargetedRegressionTests.AnAssemblyNothingStagedProvidesIsRefusedUnlessDeclaredOptional",
+    "Seconds": 14.81
+  },
+  {
+    "Name": "TargetedRegressionTests.AnExtraPluginOutsideTheAllowlistIsRefusedBeforeTheLaunch",
+    "Seconds": 14.31
+  },
+  {
+    "Name": "TargetedRegressionTests.AnInstallThisToolDidNotCreateIsNeverChanged",
+    "Seconds": 7.54
+  },
+  {
+    "Name": "TargetedRegressionTests.AnOmittedDependencyTheModDeclaresIsRefusedNamingThePluginToStage",
+    "Seconds": 5.16
+  },
+  {
+    "Name": "TargetedRegressionTests.AnUnpinnedFileIsRefusedWithTheHashToReview",
+    "Seconds": 0.04
+  },
+  {
+    "Name": "TargetedRegressionTests.AnX64RegressionWithAnArm64OnlyLoaderStopsBeforeTheDisposableCopy",
+    "Seconds": 0.03
+  },
+  {
+    "Name": "TargetedRegressionTests.ArmsOfDifferentModsAreRefused",
+    "Seconds": 0.03
+  },
+  {
+    "Name": "TargetedRegressionTests.DirectClientLaunchHasNoWindowsSessionZeroRoute",
+    "Seconds": 0.03
+  },
+  {
+    "Name": "TargetedRegressionTests.DirectRegressionHoldsTheHostLockUntilItsCopyIsRetired",
+    "Seconds": 6.42
+  },
+  {
+    "Name": "TargetedRegressionTests.EachArmGetsAFreshCopyThatReflectsTheGamesLoader",
+    "Seconds": 19.75
+  },
+  {
+    "Name": "TargetedRegressionTests.EachMacArmCopyIsAssessedBeforeLaunch",
+    "Seconds": 0.03
+  },
+  {
+    "Name": "TargetedRegressionTests.IncompatibleServerOnlyAndDuplicatePluginsAreRefused",
+    "Seconds": 5.23
+  },
+  {
+    "Name": "TargetedRegressionTests.PluginMetadataIsReadFromTheAttributesBepInExReads",
+    "Seconds": 0.03
+  },
+  {
+    "Name": "TargetedRegressionTests.ReadUsesTheRecordedMachineOrThisOne",
+    "Seconds": 0.04
+  },
+  {
+    "Name": "TargetedRegressionTests.RegressionClientArchitectureMustBeASupportedSlice",
+    "Seconds": 0.04
+  },
+  {
+    "Name": "TargetedRegressionTests.RegressionClientUsesTheSameStartAndJoinLimitsAsClientRunPlan",
+    "Seconds": 0.07
+  },
+  {
+    "Name": "TargetedRegressionTests.RegressionInputsOverrideTheInventorySlice",
+    "Seconds": 0.03
+  },
+  {
+    "Name": "TargetedRegressionTests.RemovingTheInstallIsTheLastArmsCleanupStep",
+    "Seconds": 6.34
+  },
+  {
+    "Name": "TargetedRegressionTests.TheClientEnvironmentSuppliesTheMachineAndMustBeOnThisMachine",
+    "Seconds": 0.04
+  },
+  {
+    "Name": "TargetedRegressionTests.TheExamplesSampleIsARegressionsInputs",
+    "Seconds": 0.03
+  },
+  {
+    "Name": "TargetedRegressionTests.TwoArmsWithOneInstalledHashAreRefusedUnlessARepeatabilityRun",
+    "Seconds": 4.65
+  }
+]

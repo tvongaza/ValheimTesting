@@ -31,7 +31,7 @@ jobs:
       # GitHub's Windows runners run the job in the signed-in console session, so the interactive client's scheduled-task
       # start is required to run there (with stand-ins for Steam and the game) rather than only its refusal.
       VALHEIM_TESTING_WINDOWS_DESKTOP: ${{ matrix.os == 'windows-latest' && '1' || '' }}
-      VT_CI_PROFILE: ${{ matrix.os == 'windows-latest' && '1' || '' }}
+      VT_CI_PROFILE: ${{ matrix.os == 'windows-latest' && github.event_name == 'workflow_dispatch' && '1' || '' }}
       # The NuGet package cache's paths (see "Restore the NuGet package cache"), shared by its restore and save.
       VT_NUGET_CACHE_PATHS: |
         ~/.nuget/packages
@@ -68,10 +68,12 @@ jobs:
       # CI runs the two slower, local-shell integration classes in a separate three-OS job. Plain local validate still runs
       # them. Normal runs take 3-6 minutes; the step timeout bounds a stuck one. The transcript and test results are kept when the
       # step fails or is cancelled (#171), and a test run with no progress for five minutes names its unfinished tests.
-      - run: dotnet run scripts/validate.cs -- --skip-ci-shell
+      # A manual dispatch keeps the full Windows suite and its TRX timings to refresh ci-test-timings.json.
+      # PR Windows runs move the measured serial bottlenecks into two parallel jobs; new tests stay here by default.
+      - run: dotnet run scripts/validate.cs -- ${{ matrix.os == 'windows-latest' && github.event_name != 'workflow_dispatch' && '--ci-main' || '--skip-ci-shell' }}
         timeout-minutes: 20
       - name: Keep Windows test timings for CI profiling
-        if: runner.os == 'Windows' && always()
+        if: runner.os == 'Windows' && github.event_name == 'workflow_dispatch' && always()
         uses: actions/upload-artifact@v7
         with:
           name: windows-test-timings
@@ -121,6 +123,43 @@ jobs:
         with:
           path: ${{ env.VT_NUGET_CACHE_PATHS }}
           key: ${{ steps.nuget-cache.outputs.cache-primary-key }}
+  timed-windows:
+    name: timed Windows tests (${{ matrix.shard }}/2)
+    # These methods took 515 cumulative test-seconds on the 2026-10-09 Windows profile. Separate processes let xUnit's
+    # otherwise serial same-class tests run concurrently; the manifest partitions each class by measured method time.
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    runs-on: windows-latest
+    timeout-minutes: 15
+    env:
+      VALHEIM_TESTING_WINDOWS_DESKTOP: '1'
+      VT_NUGET_CACHE_PATHS: |
+        ~/.nuget/packages
+        !~/.nuget/packages/valheim.testing*
+        !~/.nuget/packages/valheim.cli*
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - uses: actions/cache/restore@v6
+        with:
+          path: ${{ env.VT_NUGET_CACHE_PATHS }}
+          key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', 'scripts/*.cs', 'cli-dependency.json', 'NuGet.Config', '.config/dotnet-tools.json') }}
+          restore-keys: nuget-${{ runner.os }}-
+      - run: dotnet run scripts/bootstrap-cli.cs
+      - name: Run measured toolkit methods
+        run: dotnet run scripts/validate.cs -- --ci-timed ${{ matrix.shard }}
+      - name: Keep shard evidence on failure
+        if: failure() || cancelled()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ci-timed-windows-${{ matrix.shard }}
+          path: artifacts/validate
+          if-no-files-found: ignore
+          retention-days: 14
   ci-shell:
     name: local shell integration (${{ matrix.os }})
     # These tests start real bash/pwsh processes. They accounted for over half of the toolkit-suite wall time in a local
