@@ -101,15 +101,28 @@ public sealed class TargetedRegression
     private HostLock? _hostLock;
     private readonly string _stage;
     private bool _prepared;
-    private double _lastCopySeconds;
+    private double _lastStageSeconds;
+    private string? _activeGameRoot;
+    private InstallPins? _activePins;
 
     public RegressionInputs Inputs { get; }
     /// <summary>The client environment the run uses (<see cref="EnvironmentRecipe.Name"/>) and why.</summary>
     public string ClientEnvironment { get; }
     /// <summary>The prepared Valheim install the disposable copy is made from: the client environment's install. Only read.</summary>
     public string Game { get; }
-    /// <summary>The disposable install this runner creates and owns, in the client environment's runtime.</summary>
+    /// <summary>The disposable loader profile or full game copy this runner owns in the client environment's runtime.</summary>
     public string Install { get; }
+    private bool _copyGame;
+    /// <summary>Opt in to a full disposable game copy before the first arm. By default the run stages a disposable loader profile.</summary>
+    public bool CopyGame
+    {
+        get => _copyGame;
+        set
+        {
+            if (_prepared) throw new InvalidOperationException("Cannot change launch mode while a regression arm is staged; remove the prepared arm first.");
+            _copyGame = value;
+        }
+    }
     /// <summary>The client's ValheimCLI port: the client environment's.</summary>
     public int Port { get; }
     /// <summary>The client environment's loader package, when it names one.</summary>
@@ -261,6 +274,7 @@ public sealed class TargetedRegression
             try { PrepareCopy(selected); }
             finally { File.Delete(generatedConfig); }
             string install = Install;
+            string gameRoot = _activeGameRoot ?? throw new InvalidOperationException("The game root was not recorded after staging.");
             var staged = new List<(StagedFile File, PluginAssembly Metadata)>();
             foreach (var (role, source, sha256, relative, read) in placements)
             {
@@ -277,20 +291,24 @@ public sealed class TargetedRegression
                 .Select(path => new StagedFile("config", "BepInEx/config/" + Path.GetFileName(path), FileHash.Sha256(path), FileHash.Md5(path), null, [])).ToList();
 
             // The one declared-dependency rule (DependencyRule, as the resolver applies it), over exactly what was staged.
-            string managed = Path.GetDirectoryName(InstallPins.GameAssembly(install))!;
+            string managed = Path.GetDirectoryName(InstallPins.GameAssembly(gameRoot))!;
             var provided = new[] { managed, Path.Combine(install, InstallPins.CoreDirectory) }
                 .SelectMany(folder => Directory.EnumerateFiles(folder, "*.dll")).Select(Path.GetFileNameWithoutExtension).OfType<string>();
             var unmet = DependencyRule.Check(staged.Select(entry => (entry.File.Path, entry.Metadata)).ToList(), provided, Inputs.OptionalReferences, "valheim");
             if (unmet.Count != 0) throw new InvalidOperationException("The staged plugins' declared dependencies are not met: " + string.Join("; ", unmet.Select(problem => problem.Message)) + ".");
-            string saveDirectory = SaveDirectory ?? HostedWorld.DefaultSaveDirectory(GameLaunch.DetectClient(install));
+            string saveDirectory = SaveDirectory ?? HostedWorld.DefaultSaveDirectory(GameLaunch.DetectClient(gameRoot));
             string character = Path.Combine(saveDirectory, "characters_local", env.Client.Character + ".fch");
             if (env.Client.CharacterStore != null) DisposableCharacterStore.Open(env.Client.CharacterStore).Get(env.Client.Character);
             else if (!File.Exists(character))
                 throw new InvalidOperationException($"client.character: {env.Client.Character}.fch is not in {Path.GetDirectoryName(character)}. Stage the disposable local character (never a cloud one) before the run, or name the one that is staged.");
-            var installPins = InstallPins.Of(install);
+            var installPins = _activePins ?? throw new InvalidOperationException("The game and loader pins were not recorded after staging.");
             var plan = new ClientRunPlan
             {
-                Mode = "owned", Install = install, Port = Port, Character = env.Client.Character,
+                Mode = "owned", Install = gameRoot, PreparedLoaderRoot = gameRoot == install ? null : install,
+                PreparedLaunchMode = CopyGame ? "copy" : "profile",
+                PreparedSourceGameRoot = CopyGame ? null : Path.GetFullPath(Game),
+                PreparedSourceGameHash = CopyGame ? null : installPins.Game,
+                Port = Port, Character = env.Client.Character,
                 Architecture = Architecture,
                 LaunchArguments = env.Client.LaunchArguments, Environment = env.Client.Environment,
                 StartSeconds = env.Client.StartSeconds, JoinSeconds = env.Client.JoinSeconds,
@@ -377,7 +395,8 @@ public sealed class TargetedRegression
             afterStaged?.Invoke();
             var staged = stagedArm!;
             staged.Record(report.Provenance);
-            report.Provenance["disposableCopySeconds"] = _lastCopySeconds.ToString("F3", System.Globalization.CultureInfo.InvariantCulture);
+            report.Provenance["launchMode"] = CopyGame ? "copy" : "profile";
+            report.Provenance["disposableStageSeconds"] = _lastStageSeconds.ToString("F3", System.Globalization.CultureInfo.InvariantCulture);
             File.WriteAllText(Path.Combine(output, "run-manifest.json"), JsonSerializer.Serialize(staged.Manifest, ManifestJson));
             new ClientRounds { Client = staged.Plan, Report = report, Output = output, Rounds = rounds, Cancellation = cancellation }.Run(() =>
             {
@@ -421,7 +440,7 @@ public sealed class TargetedRegression
                 catch (Exception error) { if (report.Steps.All(step => step.Passed)) report.RecordFailure(StepPhase.Cleanup, "character cleanup failed", error); }
             if (logs.Count != 0) report.ScanLogs(logs, Inputs.LogScan);
             // A failed preflight can already have retired its copy. Whoever removes a successful arm records that later.
-            report.Provenance["disposableInstall"] = _prepared ? "kept after this arm" : "no copy left after this arm";
+            report.Provenance["disposableInstall"] = _prepared ? "kept after this arm" : "no owned runtime left after this arm";
             // The one-shot command adds its process-journal and final copy-cleanup verdict before writing.
             // Direct API callers retain the usual report-on-every-outcome behavior.
             if (!deferReportWrite) report.Write(output);
@@ -487,7 +506,7 @@ public sealed class TargetedRegression
     private void PrepareCopy(IReadOnlyList<HostedRuntimeFile> selected)
     {
         string source = Path.GetFullPath(Game);
-        if (!Directory.Exists(source)) throw new DirectoryNotFoundException($"game: {source} does not exist. Give the Valheim install to copy into the disposable run.");
+        if (!Directory.Exists(source)) throw new DirectoryNotFoundException($"game: {source} does not exist. Give the Valheim install for the disposable run.");
         var package = LoaderPackage == null ? null : BepInExLoaderPackage.Read(LoaderPackage);
         if (package != null && (RegressionInputs.Inside(package.Root, source) || RegressionInputs.Inside(source, package.Root)))
             throw new InvalidOperationException($"The pinned BepInEx package {package.Root} overlaps the game {source}; extract one reviewed loader set outside the live game before staging.");
@@ -520,21 +539,39 @@ public sealed class TargetedRegression
         RequireStopped(null, clientSession: true);
         string parent = Path.GetDirectoryName(Install)!;
         Directory.CreateDirectory(Path.GetDirectoryName(parent)!);
-        var capacity = HostCopyCapacityProbe.InspectAsync(_host, source, Path.GetDirectoryName(parent)!, LocalClientCopy.StepTimeout).GetAwaiter().GetResult();
-        HostCopyCapacityProbe.RequireCombined(_host.Name, [(Inputs.Name, capacity)]);
+        if (CopyGame)
+        {
+            var capacity = HostCopyCapacityProbe.InspectAsync(_host, source, Path.GetDirectoryName(parent)!, LocalClientCopy.StepTimeout).GetAwaiter().GetResult();
+            HostCopyCapacityProbe.RequireCombined(_host.Name, [(Inputs.Name, capacity)]);
+        }
         string actor = "regression-" + Inputs.Name;
         _journal.AppendLocal(actor, JournalEntry.Of(JournalEntry.CopyIntended,
-            ("runtime", Install), ("stage", _stage), ("parent", parent)));
+            ("runtime", Install), ("stage", _stage), ("parent", parent), ("launchMode", CopyGame ? "copy" : "profile")));
         try
         {
             Func<IGameHost, string, TimeSpan, CancellationToken, Task<MacBundleInspection.Verdict>>? repair = BundleInspection == null
                 ? null : (_, install, timeout, _) => Task.FromResult(BundleInspection(install, true, timeout));
             var copyClock = Stopwatch.StartNew();
-            var listing = HostedRuntimeStage.PrepareAsync(_host, HostedRuntimeKind.Client, source, Install, _stage,
-                selected, LocalClientCopy.StepTimeout, loaderPackage: package, repairMac: repair).GetAwaiter().GetResult();
-            _lastCopySeconds = copyClock.Elapsed.TotalSeconds;
+            HostListing listing;
+            if (CopyGame)
+            {
+                listing = HostedRuntimeStage.PrepareAsync(_host, HostedRuntimeKind.Client, source, Install, _stage,
+                    selected, LocalClientCopy.StepTimeout, loaderPackage: package, repairMac: repair).GetAwaiter().GetResult();
+                _activeGameRoot = Install;
+                _activePins = HostInstall.Pins(listing);
+            }
+            else
+            {
+                var profile = HostedRuntimeStage.PrepareProfileAsync(_host, HostedRuntimeKind.Client, source, Install, _stage,
+                    selected, LocalClientCopy.StepTimeout, loaderPackage: package).GetAwaiter().GetResult();
+                listing = profile.Loader;
+                _activeGameRoot = profile.GameRoot;
+                _activePins = profile.Pins;
+            }
+            _lastStageSeconds = copyClock.Elapsed.TotalSeconds;
             _journal.AppendLocal(actor, JournalEntry.Of(JournalEntry.CopyDone, ("runtime", Install),
-                ("files", listing.Files.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)), ("source", source)));
+                ("files", listing.Files.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)), ("source", source),
+                ("launchMode", CopyGame ? "copy" : "profile")));
             _prepared = true;
         }
         catch (Exception error) when (error is not AggregateException)
@@ -548,10 +585,12 @@ public sealed class TargetedRegression
 
     private void RetirePrepared()
     {
-        RequireStopped([Install], clientSession: false);
+        RequireStopped([_activeGameRoot ?? Install], clientSession: false);
         HostedRuntimeStage.RetireAsync(_host, Install, _stage, LocalClientCopy.StepTimeout).GetAwaiter().GetResult();
         _journal.AppendLocal("regression-" + Inputs.Name, JournalEntry.Of(JournalEntry.CopyRetired, ("runtime", Install)));
         _prepared = false;
+        _activeGameRoot = null;
+        _activePins = null;
     }
 
     private void RequireStopped(IReadOnlyCollection<string>? runtimes, bool clientSession)

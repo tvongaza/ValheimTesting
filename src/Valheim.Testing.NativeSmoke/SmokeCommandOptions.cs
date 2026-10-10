@@ -28,6 +28,7 @@ internal static class SmokeCommandOptions
         ["--search-root"] = new(Kind.Repeat), ["--optional-reference"] = new(Kind.Repeat),
         ["--expected-log-error"] = new(Kind.Single), ["--expected-log-reason"] = new(Kind.Single),
         ["--join-seconds"] = new(Kind.Single), ["--hold"] = new(Kind.Switch, ServerLoadAb: false),
+        ["--copy-game"] = new(Kind.Switch, ServerLoad: false, ServerLoadAb: false),
         ["--game"] = new(Kind.Single, ServerLoad: false, ServerLoadAb: false),
         ["--source"] = new(Kind.Single, ServerLoad: false, ServerLoadAb: false),
         ["--compare-mod"] = new(Kind.Single, ServerLoad: false, ServerLoadAb: false),

@@ -47,6 +47,16 @@ public sealed class SmokeCommandOptionsTests
     }
 
     [Fact]
+    public void FullGameCopyIsAnExplicitOneShotChoice()
+    {
+        Assert.True(StartArguments.TryRead(["--mod", "mod.dll", "--copy-game"], out var start,
+            out _, out _, out _, out string startError), startError);
+        Assert.Equal("true", start!["--copy-game"]);
+        Assert.False(StartArguments.TryRead(["--mod", "mod.dll", "--copy-game", "--copy-game"],
+            out _, out _, out _, out _, out _));
+    }
+
+    [Fact]
     public void LongGenerationBudgetBelongsToDedicatedServerRuns()
     {
         Assert.True(ServerLoad.TryRead(["--mod", "mod.dll", "--server-only", "--server-startup-seconds", "900"],

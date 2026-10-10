@@ -29,7 +29,7 @@ internal sealed class LocalClientCopy
 
     // The plan as it was before it was bound, restored when the copy is retired: a plan reused later makes a new copy.
     private sealed record Unbound(string Install, InstallPins? InstallPins, Dictionary<string, string> Pins, string? CliManifest,
-        string? LoaderRoot, string? LaunchMode);
+        string? LoaderRoot, string? LaunchMode, string? SourceGameRoot, string? SourceGameHash);
 
     private LocalClientCopy(IGameHost host, string actor, string runtime, string stage, string launchRoot, RunJournal journal, ClientRunPlan plan, Unbound unbound)
     { _host = host; _actor = actor; _runtime = runtime; _stage = stage; _launchRoot = launchRoot; _journal = journal; _plan = plan; _unbound = unbound; }
@@ -128,7 +128,8 @@ internal sealed class LocalClientCopy
             journal.AppendLocal(actor, JournalEntry.Of(JournalEntry.CopyDone, ("runtime", runtime),
                 ("files", listing.Files.Count.ToString(CultureInfo.InvariantCulture)), ("source", source),
                 ("launchMode", copyGame ? "copy" : "profile"), ("runtimeKind", "client"), ("launchRoot", gameRoot)));
-            var unbound = new Unbound(plan.Install, plan.InstallPins, plan.Pins, plan.CliManifest, plan.PreparedLoaderRoot, plan.PreparedLaunchMode);
+            var unbound = new Unbound(plan.Install, plan.InstallPins, plan.Pins, plan.CliManifest, plan.PreparedLoaderRoot, plan.PreparedLaunchMode,
+                plan.PreparedSourceGameRoot, plan.PreparedSourceGameHash);
             Bind(plan, source, gameRoot, loaderRoot, pins, manifest, manifestPath, setFolder, copyGame);
             return new LocalClientCopy(host, actor, runtime, stage, gameRoot, journal, plan, unbound);
         }
@@ -150,6 +151,7 @@ internal sealed class LocalClientCopy
         _journal.AppendLocal(_actor, JournalEntry.Of(JournalEntry.CopyRetired, ("runtime", _runtime)));
         _plan.Install = _unbound.Install; _plan.InstallPins = _unbound.InstallPins; _plan.Pins = _unbound.Pins; _plan.CliManifest = _unbound.CliManifest;
         _plan.PreparedLoaderRoot = _unbound.LoaderRoot; _plan.PreparedLaunchMode = _unbound.LaunchMode;
+        _plan.PreparedSourceGameRoot = _unbound.SourceGameRoot; _plan.PreparedSourceGameHash = _unbound.SourceGameHash;
         _plan.CopiedFrom = null; _plan.Prepared = false;
     }
 
@@ -206,6 +208,8 @@ internal sealed class LocalClientCopy
         plan.Install = gameRoot;
         plan.PreparedLoaderRoot = gameRoot == loaderRoot ? null : loaderRoot;
         plan.PreparedLaunchMode = copyGame ? "copy" : "profile";
+        plan.PreparedSourceGameRoot = copyGame ? null : source;
+        plan.PreparedSourceGameHash = copyGame ? null : runtimePins.Game;
         if (plan.Pinned)
         {
             plan.InstallPins = runtimePins;

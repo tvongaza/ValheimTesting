@@ -117,6 +117,7 @@ public sealed class TargetedRegressionTests : IDisposable
         if (!OperatingSystem.IsMacOS()) return;
         var runner = new TargetedRegression(_rig.Manifest(), inventory: _rig.Inventory())
         {
+            CopyGame = true,
             SaveDirectory = _rig.Save,
             BundleInspection = (_, repair, _) => repair
                 ? new(MacBundleInspection.State.Rejected, 0, "Gatekeeper refused the copy")
@@ -135,6 +136,7 @@ public sealed class TargetedRegressionTests : IDisposable
         int repairs = 0;
         var runner = new TargetedRegression(_rig.Manifest(), inventory: _rig.Inventory())
         {
+            CopyGame = true,
             SaveDirectory = _rig.Save,
             BundleInspection = (_, repair, _) => !repair || ++repairs == 1
                 ? new(MacBundleInspection.State.Accepted, 0, "")
@@ -403,6 +405,7 @@ public sealed class TargetedRegressionTests : IDisposable
         // Restoring the game's own proxy changed neither the game build nor BepInEx's core, and the reused copy kept the old one.
         _rig.Write("game/.doorstop_version", Encoding.UTF8.GetBytes("4.4.0"));
         var regression = _rig.Regression(_rig.Manifest());
+        regression.CopyGame = true;
         regression.Stage("parent");
         string earlier = Path.Combine(_rig.Install, "from-the-first-copy.txt");
         File.WriteAllText(earlier, "only in the disposable install");
@@ -420,6 +423,52 @@ public sealed class TargetedRegressionTests : IDisposable
         regression.Stage("candidate").Verify();
         Assert.False(File.Exists(Path.Combine(_rig.Install, ".doorstop_version")));
         Assert.False(File.Exists(stale));
+    }
+
+    [Fact] public void ADefaultArmUsesAnOwnedProfileWithoutChangingTheSourceInstall()
+    {
+        if (OperatingSystem.IsWindows())
+            _rig.Write("game/version.dll", Encoding.UTF8.GetBytes("another mod manager's proxy"));
+        var before = Directory.GetFiles(_rig.Game, "*", SearchOption.AllDirectories)
+            .ToDictionary(path => Path.GetRelativePath(_rig.Game, path), FileHash.Sha256, StringComparer.Ordinal);
+        var regression = _rig.Regression(_rig.Manifest());
+
+        var arm = regression.Stage("parent");
+        Assert.Equal("profile", arm.Plan.PreparedLaunchMode);
+        Assert.Throws<InvalidOperationException>(() => regression.CopyGame = true);
+        Assert.Equal(OperatingSystem.IsWindows() ? regression.Install : _rig.Game, arm.Plan.Install);
+        Assert.True(File.Exists(Path.Combine(regression.Install, "BepInEx", "plugins", "ExampleMod.dll")));
+        if (OperatingSystem.IsWindows()) Assert.False(File.Exists(Path.Combine(regression.Install, "version.dll")));
+        arm.Verify();
+        regression.Remove();
+
+        Assert.False(Directory.Exists(regression.Install));
+        var after = Directory.GetFiles(_rig.Game, "*", SearchOption.AllDirectories)
+            .ToDictionary(path => Path.GetRelativePath(_rig.Game, path), FileHash.Sha256, StringComparer.Ordinal);
+        Assert.Equal(before.OrderBy(file => file.Key), after.OrderBy(file => file.Key));
+    }
+
+    [Fact] public void AReplacedWindowsSourceGameIsRefusedBeforeTheLinkedProfileLaunches()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var regression = _rig.Regression(_rig.Manifest());
+        var arm = regression.Stage("parent");
+        string sourceAssembly = InstallPins.GameAssembly(_rig.Game);
+        string replacement = sourceAssembly + ".replacement";
+        try
+        {
+            File.WriteAllBytes(replacement, Encoding.UTF8.GetBytes("a Steam update replaced the original file"));
+            File.Move(replacement, sourceAssembly, overwrite: true);
+            // The launch folder still has the old hard-linked file; checking it alone would pass.
+            arm.Plan.InstallPins!.Check(arm.Plan.Install, arm.Plan.LoaderRoot, "linked profile");
+            Assert.Contains("source game changed", Assert.Throws<InvalidOperationException>(arm.Plan.CheckInstallPins).Message,
+                StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            if (File.Exists(replacement)) File.Delete(replacement);
+            regression.Remove();
+        }
     }
 
     [Fact] public void AMissingCharacterIsRefusedBeforeTheLaunch()
