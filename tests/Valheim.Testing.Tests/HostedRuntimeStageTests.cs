@@ -90,6 +90,15 @@ public sealed class HostedRuntimeStageTests : IDisposable
         await HostedRuntimeStage.RequireStoppedAsync(host, TimeSpan.FromSeconds(60), default, clientSession: false);
     }
 
+    [Fact] public async Task AnUnprovableWindowsGameProcessStillRefusesTheRuntime()
+    {
+        var host = new FakeServerHost("windows-process", Path.Combine(_root, "mirror"), windows: true);
+        host.Failures["game-process"] = new HostResult(HostOutcome.Exited, 1, "", "Cannot establish the running game executable path", TimeSpan.Zero, false);
+        var error = await Assert.ThrowsAsync<HostOperationException>(() =>
+            HostedRuntimeStage.RequireStoppedAsync(host, TimeSpan.FromSeconds(30), runtimes: [Path.Combine(_root, "runtime")], clientSession: false));
+        Assert.Contains("Cannot establish the running game executable path", error.ToString());
+    }
+
     // One check covers every copy on a host (#257): a "server" running from the second of two runtimes is busy, and from none
     // of the named ones it is not. The stand-in is ping.exe copied under the server's name, so Win32_Process reports its path.
     [Fact] public async Task WindowsProcessCheckFindsAGameRunningFromAnyOfTheNamedRuntimes()
