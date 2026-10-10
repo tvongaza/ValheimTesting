@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using Xunit;
 
@@ -86,6 +87,32 @@ public sealed class DetachedSessionTests : IDisposable
         Assert.Contains("$definition.Settings.ExecutionTimeLimit = 'PT0S'", registration);
         Assert.Contains("C:\\run''s folder\\launcher.ps1", registration);
         Assert.DoesNotContain("S4U", registration);
+    }
+
+    [Fact]
+    public void InstalledToolUsesTheRuntimeDotnetHostRatherThanItsUnstagedShim()
+    {
+        string runtime = Path.Combine(_root, "dotnet", "shared", "Microsoft.NETCore.App", "10.0.0");
+        Directory.CreateDirectory(runtime);
+        string host = Path.Combine(_root, "dotnet", OperatingSystem.IsWindows() ? "dotnet.exe" : "dotnet");
+        File.WriteAllText(host, "host");
+
+        Assert.Equal(host, DetachedSession.DotnetHost(runtime));
+        string shim = Path.Combine(_root, "tools", "valheim-test.exe");
+        string packageDll = Path.Combine(_root, "tools", ".store", "valheim.test", "tools", "net10.0", "any", "Valheim.Testing.NativeSmoke.dll");
+        string staged = Path.Combine(_root, "staged-tool");
+        var command = DetachedSession.OwnCommandForPaths(staged, shim, packageDll, runtime);
+        Assert.Equal(host, command.Program);
+        Assert.Equal(new[] { Path.Combine(staged, "Valheim.Testing.NativeSmoke.dll") }, command.Prefix);
+        Assert.NotEqual(Path.Combine(staged, "valheim-test.exe"), command.Program);
+        File.Delete(host);
+        Assert.Throws<InvalidOperationException>(() => DetachedSession.DotnetHost(runtime));
+    }
+
+    [Fact]
+    public void RuntimeHasTheHostUsedForStagedToolDlls()
+    {
+        Assert.True(File.Exists(DetachedSession.DotnetHost(RuntimeEnvironment.GetRuntimeDirectory())));
     }
 
     [Fact]

@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using Valheim.Testing.Game;
 using Valheim.Testing.GameSessions;
@@ -243,9 +244,26 @@ internal static class DetachedSession
     {
         string process = Environment.ProcessPath ?? throw new InvalidOperationException("The valheim-test executable path is unavailable.");
         string assembly = Assembly.GetEntryAssembly()?.Location ?? "";
-        if (!Path.GetFileNameWithoutExtension(process).Equals("dotnet", StringComparison.OrdinalIgnoreCase))
-            return (Path.Combine(toolDirectory, Path.GetFileName(process)), []);
-        return (process, [Path.Combine(toolDirectory, Path.GetFileName(assembly))]);
+        return OwnCommandForPaths(toolDirectory, process, assembly, RuntimeEnvironment.GetRuntimeDirectory());
+    }
+
+    internal static (string Program, string[] Prefix) OwnCommandForPaths(string toolDirectory, string process, string assembly,
+        string runtimeDirectory)
+    {
+        // A dotnet tool's apphost shim lives outside the package's DLL directory. The staged
+        // directory contains the framework-dependent entry DLL, not that shim.
+        string host = Path.GetFileNameWithoutExtension(process).Equals("dotnet", StringComparison.OrdinalIgnoreCase)
+            ? process : DotnetHost(runtimeDirectory);
+        return (host, [Path.Combine(toolDirectory, Path.GetFileName(assembly))]);
+    }
+
+    internal static string DotnetHost(string runtimeDirectory)
+    {
+        string host = Path.GetFullPath(Path.Combine(runtimeDirectory, "..", "..", "..",
+            OperatingSystem.IsWindows() ? "dotnet.exe" : "dotnet"));
+        if (!File.Exists(host))
+            throw new InvalidOperationException("The .NET host beside the active runtime was not found: " + host);
+        return host;
     }
 
     private static async Task<int> RunCommand(ProcessStartInfo start)
