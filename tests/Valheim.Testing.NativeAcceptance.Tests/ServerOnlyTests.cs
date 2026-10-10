@@ -146,14 +146,20 @@ public sealed class ServerOnlyTests : IDisposable
         Assert.Equal(1, generator.Count("cli_extension valheim.world/terrain-grid"));
     }
 
-    [Fact] public void ThePluginPinsCoverExactlyTheFivePlugins()
+    [Fact] public void ThePluginPinsRequireTheObservePackAndRefuseExtras()
     {
         string plugins = Path.Combine(_directory, "runtime", "BepInEx", "plugins");
         Directory.CreateDirectory(Path.Combine(plugins, "packs"));
         foreach (var (_, file) in ServerFixture.Plugins) File.WriteAllText(Path.Combine(file.StartsWith("Valheim.Cli.", StringComparison.Ordinal) ? Path.Combine(plugins, "packs") : plugins, file), file);
         var pins = ServerFixture.PluginPins(Path.Combine(_directory, "runtime"));
         Assert.Equal(ServerFixture.Plugins.Select(p => p.Guid).Order(), pins.Keys.Order());
+        Assert.Equal(6, pins.Count);
+        Assert.Contains("valheimCLI.observe", pins.Keys);
         Assert.Equal("2ec66bac798a42ebfcce13f6e7baa994", pins[LifecyclePlan.ModPlugin]); // MD5 of the file's bytes, "AcceptanceMod.dll".
+        string observe = Path.Combine(plugins, "packs", "Valheim.Cli.Observe.dll");
+        File.Delete(observe);
+        Assert.Contains("Valheim.Cli.Observe.dll", Assert.Throws<InvalidOperationException>(() => ServerFixture.PluginPins(Path.Combine(_directory, "runtime"))).Message);
+        File.WriteAllText(observe, "Valheim.Cli.Observe.dll");
         File.WriteAllText(Path.Combine(plugins, "Other.dll"), "other");
         Assert.Throws<InvalidOperationException>(() => ServerFixture.PluginPins(Path.Combine(_directory, "runtime")));
     }
