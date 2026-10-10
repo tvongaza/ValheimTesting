@@ -8,7 +8,7 @@ A local Ubuntu 24.04 image for owned native checks against the **Linux** Valheim
 - a non-root `valheim` user that owns `/opt/valheim`.
 - git, for `scripts/bootstrap-cli.cs`.
 
-SteamCMD logs in anonymously; no Steam or game credentials are needed. CI uses its GitHub token to read the plain Ubuntu base from GHCR. A local build may need GHCR package read access until that package is made public.
+SteamCMD logs in anonymously; no Steam, game or registry credentials are needed. The plain Ubuntu base is public on GHCR.
 
 **Verified** on a Linux x86-64 Docker host on 28 September 2026 with dedicated-server build 25527701: the image built, [LinuxServerSmoke](smoke/README.md) passed all five steps (BepInEx chainloader after about 5 s, the new world loaded after about 51 s), and `scripts/validate.cs` passed inside the container. Only the Apple Silicon (emulated) path below remains experimental.
 
@@ -21,7 +21,6 @@ The image and every layer, export or saved tarball of it contain Valheim's game 
 From the repository root:
 
 ```sh
-# If the GHCR base package is private, sign in with a token that has read:packages.
 docker build -t valheimtesting-linux-server:local docker/linux-server
 ```
 
@@ -33,7 +32,7 @@ The build context is this directory only; no repository source enters the image.
 
 Only the **unmodified Ubuntu 24.04 amd64 base** is mirrored at `ghcr.io/tvongaza/valheimtesting-ubuntu-base`. The [source record](ubuntu-base.json) names Canonical's ECR Public manifest digest, its one compressed layer (29,765,758 bytes), and the GHCR package. The mirror workflow copies that exact OCI manifest without building a new layer and verifies the copied digest and architecture. It contains no Valheim, BepInEx, credentials or private assets. The private server image above is still built and discarded on each runner.
 
-The two native workflows sign in with their read-only GitHub token, pull this digest from GHCR with a named error if it is unavailable, then build the private image. A fresh or repeated native run therefore fetches its **base image** only from GHCR, even with `docker build --pull`; neither run contacts ECR Public or Docker Hub for an image layer. The build's ordinary `RUN` steps still fetch Ubuntu packages, the .NET installer, BepInEx and the dedicated server from their own services.
+The two native workflows pull this public digest from GHCR with a named error if it is unavailable, then build the private image. A fresh or repeated native run therefore fetches its **base image** only from GHCR, even with `docker build --pull`; neither run contacts ECR Public or Docker Hub for an image layer. The build's ordinary `RUN` steps still fetch Ubuntu packages, the .NET installer, BepInEx and the dedicated server from their own services.
 
 Refresh deliberately:
 

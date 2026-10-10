@@ -118,9 +118,6 @@ jobs:
     if: needs.build-id.outputs.run == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 75
-    permissions:
-      contents: read
-      packages: read
     outputs:
       build-id: ${{ steps.image.outputs.build-id }}
       summary: ${{ steps.collect.outputs.summary }}
@@ -130,10 +127,6 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - name: Sign in to GHCR for the pinned plain Ubuntu base
-        env:
-          GHCR_TOKEN: ${{ github.token }}
-        run: printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
       - name: Fetch the pinned Ubuntu base from GHCR
         run: bash docker/linux-server/pull-ubuntu-base.sh
       # The transport package main pins (cli-dependency.json), built from its pinned ValheimCLI commit into the checkout's
