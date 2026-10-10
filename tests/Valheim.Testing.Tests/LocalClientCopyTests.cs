@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using Valheim.Testing.Game;
 using Xunit;
 using Valheim.Testing.GameSessions;
@@ -11,9 +10,6 @@ public sealed class LocalClientCopyTests : IDisposable
 {
     private readonly RegressionRig _rig = new();
     public void Dispose() => _rig.Dispose();
-
-    private static bool GameRunsHere() =>
-        Process.GetProcessesByName("valheim").Length + Process.GetProcessesByName("Valheim").Length != 0; // a station with a game up
 
     // The rig's ValheimCLI set, its manifest beside its DLLs as a bundle holds them.
     private string CliSet()
@@ -35,7 +31,7 @@ public sealed class LocalClientCopyTests : IDisposable
     {
         var local = new LocalGameHost("this machine", OperatingSystem.IsWindows() ? HostShell.WindowsPowerShell : HostShell.Bash);
         // A fake Valheim.app is unsigned, so the real macOS bundle check would refuse it (MacAppBundleTests covers that check).
-        return OperatingSystem.IsMacOS() ? new BundleAcceptingHost(local) : local;
+        return new BundleAcceptingHost(local, assumeNoGame: true);
     }
 
     private static Dictionary<string, string> Tree(string root) =>
@@ -43,7 +39,6 @@ public sealed class LocalClientCopyTests : IDisposable
 
     [Fact] public async Task AnOwnedClientRunsFromACopyWithTheSetStagedAndTheInstallUnchanged()
     {
-        if (GameRunsHere()) return;
         string source = _rig.Game;
         _rig.Write("game/BepInEx/plugins/valheimCLI.dll", System.Text.Encoding.UTF8.GetBytes("an older ValheimCLI core")); // another build, by name
         string manifest = CliSet();
@@ -99,7 +94,7 @@ public sealed class LocalClientCopyTests : IDisposable
     // BepInEx.cfg among them) replace the install's, which an install that ran once always has. Windows: the pack is Windows'.
     [Fact] public async Task AShippedLoaderReplacesTheInstallsLoaderFilesInTheCopy()
     {
-        if (!OperatingSystem.IsWindows() || GameRunsHere()) return;
+        if (!OperatingSystem.IsWindows()) return;
         string pack = Path.Combine(_rig.Root, "pack");
         foreach (var (relative, text) in new[] { ("winhttp.dll", "MZ target_assembly"), ("doorstop_config.ini", "[General]\nenabled = true\ntarget_assembly = BepInEx\\core\\BepInEx.Preloader.dll\n"),
             ("BepInEx/core/BepInEx.Preloader.dll", "shipped preloader"), ("BepInEx/core/BepInEx.dll", "shipped core"), ("BepInEx/config/BepInEx.cfg", "[Logging]\nshipped = true\n") })
