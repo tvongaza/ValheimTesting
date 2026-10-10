@@ -1,4 +1,5 @@
 using Valheim.Testing.Game;
+using Valheim.Testing.GameSessions;
 
 // A targeted native regression: one owned client hosts one disposable fixture world with one mod under test, once per arm
 // (parent and candidate builds). Scenario.cs holds the rounds and assertions; regression.json the files to stage. The machine
@@ -6,15 +7,14 @@ using Valheim.Testing.Game;
 // an inventory names (--inventory environments.json, --client-env NAME).
 //   preflight <regression.json> [machine]                   stage and check every arm; never opens the game
 //   run <regression.json> <arm> <new-output-dir> [machine]  stage that arm, check it again, then run the scenario in the game
-//   clean <regression.json> [machine]                       delete the disposable install this tool created
 int positional = args is ["run", ..] ? 4 : 2;
 var machine = new Dictionary<string, string>();
-bool usage = args.Length < positional || args[0] is not ("preflight" or "run" or "clean");
+bool usage = args.Length < positional || args[0] is not ("preflight" or "run");
 for (int i = positional; !usage && i < args.Length; i += 2)
     usage = i + 1 >= args.Length || args[i] is not ("--inventory" or "--client-env") || !machine.TryAdd(args[i], args[i + 1]);
 if (usage)
 {
-    Console.Error.WriteLine("Usage: targeted-regression preflight <regression.json> | run <regression.json> <arm> <new-output-directory> | clean <regression.json>, " +
+    Console.Error.WriteLine("Usage: targeted-regression preflight <regression.json> | run <regression.json> <arm> <new-output-directory> , " +
         "each optionally followed by --inventory <environments.json> and --client-env <name>");
     return 2;
 }
@@ -31,16 +31,17 @@ try
     switch (args[0])
     {
         case "preflight":
-            foreach (var arm in regression.Preflight())
-                foreach (string line in arm.Describe()) Console.WriteLine(line);
-            Console.WriteLine("PREFLIGHT PASSED; nothing was launched. Review the arms' commits and hashes above before the run.");
-            return 0;
-        case "clean":
-            regression.Remove();
-            Console.WriteLine("REMOVED the disposable install " + regression.Install);
-            return 0;
+            try
+            {
+                foreach (var arm in regression.Preflight())
+                    foreach (string line in arm.Describe()) Console.WriteLine(line);
+                Console.WriteLine("PREFLIGHT PASSED; nothing was launched. Review the arms' commits and hashes above before the run.");
+                return 0;
+            }
+            finally { regression.Remove(); }
         default:
             var report = regression.Run(args[2], args[3], Scenario.Name, Scenario.Rounds, Scenario.Measure, cancel.Token);
+            regression.Remove(report, args[3]);
             Console.WriteLine(report.Passed ? "PASS" : "FAIL");
             return report.Passed ? 0 : 1;
     }

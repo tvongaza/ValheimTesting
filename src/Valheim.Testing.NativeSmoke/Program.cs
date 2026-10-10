@@ -46,9 +46,6 @@ ScenarioReport? lastArm = null; string? lastArmOutput = null;
 int exitCode = 3;
 string? outcome = null;
 bool journalClean = true;
-bool copyJournalled = false;
-bool copyClaimed = false;
-bool copyDone = false;
 bool characterPending = false;
 string? output = null;
 bool outputChecked = false;
@@ -110,7 +107,7 @@ try
     var character = DefaultSmokeCharacter.Prepare(Path.Combine(output, "character-source"));
     var inputs = new RegressionInputs
     {
-        // A name per run: its disposable install is <runtime>/regression-<name>, never shared with another start.
+        // A name per run: its shared hosted-runtime copy is never shared with another start.
         Name = "native-smoke-" + DateTime.UtcNow.ToString("yyyyMMdd-HHmmss-fff", System.Globalization.CultureInfo.InvariantCulture),
         Fixture = new RegressionFixture { Root = Path.Combine(output, "world-source"), WorldUid = world.UidText },
         Client = new RegressionClient { Character = DefaultSmokeCharacter.Name, CharacterStore = character.Root, Architecture = architecture },
@@ -134,12 +131,6 @@ try
     inputs.Write(Path.Combine(output, "regression.json"));
     runner = TargetedRegression.Read(Path.Combine(output, "regression.json")); // the inputs on the machine recorded beside them
     Console.WriteLine($"disposable install: {runner.Install}");
-    if (Directory.Exists(runner.Install)) throw new IOException("The disposable install already exists: " + runner.Install);
-    RunJournal.ThisProcess.AppendLocal(WorldFixture.Actor, JournalEntry.Of(JournalEntry.CopyIntended,
-        ("runtime", runner.Install), ("local", "true"), ("copyKind", "regression"), ("evidenceRoot", output)));
-    copyJournalled = true;
-    RegressionCopyClaim.Create(runner.Install, runId);
-    copyClaimed = true;
     Console.WriteLine("run ID: " + runId);
     bool passed = true;
     foreach (string arm in inputs.Mod.Arms.Keys)
@@ -169,13 +160,7 @@ try
                     return OperatingSystem.IsWindows()
                         ? DesktopClientSession.Open(plan, directory, logs, token, processJournal.Begin, processJournal.Started)
                         : ClientSession.Open(plan, directory, logs, token, processJournal.Begin, processJournal.Started);
-                }, afterStaged: () =>
-                {
-                    if (!copyJournalled || copyDone) return;
-                    RunJournal.ThisProcess.AppendLocal(WorldFixture.Actor, JournalEntry.Of(JournalEntry.CopyDone,
-                        ("runtime", runner.Install), ("local", "true"), ("copyKind", "regression")));
-                    copyDone = true;
-                }, characterJournal: (point, characters, userData, name, expectedSha256) =>
+                }, afterStaged: null, characterJournal: (point, characters, userData, name, expectedSha256) =>
                 {
                     var entry = point switch
                     {
@@ -233,15 +218,11 @@ finally
         try
         {
             if (lastArm != null) runner.Remove(lastArm, lastArmOutput!); else runner.Remove();
-            if (copyClaimed) RegressionCopyClaim.Retire(runner.Install, runId);
-            if (copyJournalled)
-                RunJournal.ThisProcess.AppendLocal(WorldFixture.Actor, JournalEntry.Of(JournalEntry.CopyRetired,
-                    ("runtime", runner.Install), ("local", "true")));
         }
         catch (Exception cleanup) when (cleanup is IOException or UnauthorizedAccessException or InvalidOperationException)
         {
             journalClean = false;
-            // A partially copied install may not yet have its ownership marker. Never delete it by path alone.
+            // Recovery follows the hosted runtime's journal and ownership rules; never delete a copy by name.
             Console.Error.WriteLine("CLEANUP REFUSED: " + cleanup.Message + "; inspect the disposable install at " + runner.Install);
             if (exitCode == 0) exitCode = 1;
         }

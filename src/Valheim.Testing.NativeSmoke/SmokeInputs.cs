@@ -92,7 +92,7 @@ internal static class SmokeInputs
         // Refuse a locked or non-console Mac before creating run evidence or a disposable install.
         // The optional probe lets every test host prove the refusal order without an actual GUI session.
         if (requireMacGui != null) requireMacGui();
-        else if (OperatingSystem.IsMacOS()) MacGuiSession.Require();
+        else if (OperatingSystem.IsMacOS()) LocalHostPreflight.RequireMacDesktop();
         // An install whose own Doorstop pair does not match takes the shipped BepInExPack in its disposable copy (one printed line).
         var (clientManifest, shipped) = SmokeInputResolver.Loader("client", client,
             options.GetValueOrDefault("--client-loader-package"), shippedLoader);

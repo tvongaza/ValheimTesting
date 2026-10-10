@@ -177,102 +177,79 @@ public sealed class RunRecoveryTests : IDisposable
     }
 
     [Fact]
-    public async Task InterruptedPlainStartListsAndRecoversItsMarkedDisposableCopy()
+    public async Task InterruptedPlainStartListsAndRecoversItsHostedRuntimeCopy()
     {
-        using var rig = new RegressionRig();
-        var regression = rig.Regression(rig.Manifest());
-        regression.Stage("parent"); // The fake runner was killed after this copy, before normal cleanup.
-        Assert.True(Directory.Exists(regression.Install));
-        string evidence = Path.Combine(_root, "plain-start-evidence");
-        Directory.CreateDirectory(evidence);
         const string run = "run-plain-start";
-        Line(_host, run, "fixture", Gone, JournalEntry.CopyIntended,
-            ("runtime", regression.Install), ("local", "true"), ("copyKind", "regression"), ("evidenceRoot", evidence));
-        Line(_host, run, "fixture", Gone, JournalEntry.CopyDone,
-            ("runtime", regression.Install), ("local", "true"), ("copyKind", "regression"));
+        const string parent = "/srv/runs/client/vt-prep-regression-plain";
+        string runtime = parent + "/runtime";
+        Directory.CreateDirectory(Path.Combine(_host.Local(runtime), "BepInEx"));
+        File.WriteAllText(Path.Combine(_host.Local(runtime), "BepInEx", "LogOutput.log"), "game log");
+        Line(_host, run, "regression-plain", Gone, JournalEntry.CopyIntended,
+            ("runtime", runtime), ("stage", parent + "/staging"), ("parent", parent));
+        Line(_host, run, "regression-plain", Gone, JournalEntry.CopyDone, ("runtime", runtime));
         Line(_host, run, "client", Gone, JournalEntry.CharacterIntended,
             ("characters", Characters), ("userData", UserData), ("fileName", "vt01"),
             ("characterKind", "regression"), ("local", "true"));
-        Line(_host, run, "client", Gone, JournalEntry.CharacterDone,
-            ("fileName", "vt01"), ("staged", "true"));
-        var hosts = new Dictionary<string, HostProfile> { ["pc"] = new() { Kind = "local", Lock = "/var/tmp/vt/lock" } };
-        var before = await RunJournalStatus.InspectAsync(hosts, _ => _host, TimeSpan.FromSeconds(5));
-        var listed = Assert.Single(before.Runs);
-        Assert.Equal(JournalRunState.Recoverable, listed.State);
-        Assert.Contains(listed.Items, item => item.Kind == "copy" && item.What == regression.Install);
-        Assert.Contains(listed.Items, item => item.Kind == "character" && item.Fields.GetValueOrDefault("staged") == "true");
+        Line(_host, run, "client", Gone, JournalEntry.CharacterDone, ("fileName", "vt01"), ("staged", "true"));
 
-        var recovered = await RunRecovery.RecoverAsync(hosts, _ => _host, run, false, TimeSpan.FromSeconds(5));
+        var before = await StatusAsync();
+        Assert.Equal(JournalRunState.Recoverable, Assert.Single(before.Runs).State);
+        Assert.Contains(Assert.Single(before.Runs).Items, item => item.Kind == "copy" && item.What == runtime);
+        var recovered = await RecoverAsync(run);
 
         Assert.True(recovered.Recovered, string.Join("\n", recovered.Steps));
-        Assert.False(Directory.Exists(regression.Install));
+        Assert.False(Directory.Exists(_host.Local(parent)));
         Assert.Contains(_host.Runs, call => call.Script == "character-retire");
-        Assert.Empty(Assert.Single((await RunJournalStatus.InspectAsync(hosts, _ => _host,
-            TimeSpan.FromSeconds(5))).Runs).Items);
+        Assert.Empty(Assert.Single((await StatusAsync()).Runs).Items);
     }
 
     [Fact]
-    public async Task InterruptedPlainStartRecoversItsClaimedPartialCopy()
+    public async Task InterruptedPlainStartRecoversItsPartialHostedCopy()
     {
-        using var rig = new RegressionRig();
-        var regression = rig.Regression(rig.Manifest());
         const string run = "run-partial-plain-start";
-        string evidence = Path.Combine(_root, "partial-copy-evidence");
-        Directory.CreateDirectory(evidence);
-        RegressionCopyClaim.Create(regression.Install, run);
-        Directory.CreateDirectory(regression.Install);
-        File.WriteAllText(Path.Combine(regression.Install, "unfinished-copy"), "partial");
-        Line(_host, run, "fixture", Gone, JournalEntry.CopyIntended,
-            ("runtime", regression.Install), ("local", "true"), ("copyKind", "regression"), ("evidenceRoot", evidence));
+        const string parent = "/srv/runs/client/vt-prep-regression-partial";
+        string runtime = parent + "/runtime";
+        Directory.CreateDirectory(_host.Local(runtime));
+        File.WriteAllText(Path.Combine(_host.Local(runtime), "unfinished-copy"), "partial");
+        Line(_host, run, "regression-partial", Gone, JournalEntry.CopyIntended,
+            ("runtime", runtime), ("stage", parent + "/staging"), ("parent", parent));
 
-        var hosts = new Dictionary<string, HostProfile> { ["pc"] = new() { Kind = "local", Lock = "/var/tmp/vt/lock" } };
-        var recovered = await RunRecovery.RecoverAsync(hosts, _ => _host, run, false, TimeSpan.FromSeconds(5));
+        var recovered = await RecoverAsync(run);
 
         Assert.True(recovered.Recovered, string.Join("\n", recovered.Steps));
-        Assert.False(Directory.Exists(regression.Install));
-        Assert.False(File.Exists(RegressionCopyClaim.PathFor(regression.Install)));
+        Assert.False(Directory.Exists(_host.Local(parent)));
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task ACopyClaimedByAnotherRunIsNeverRemoved(bool complete)
+    [Fact]
+    public async Task AJournalledCopyOutsideTheHostedRuntimeShapeIsNeverRemoved()
     {
-        using var rig = new RegressionRig();
-        var regression = rig.Regression(rig.Manifest());
-        string evidence = Path.Combine(_root, "foreign-copy-evidence");
-        Directory.CreateDirectory(evidence);
-        RegressionCopyClaim.Create(regression.Install, "another-run");
-        if (complete) regression.Stage("parent");
-        else
-        {
-            Directory.CreateDirectory(regression.Install);
-            File.WriteAllText(Path.Combine(regression.Install, "keep-me"), "personal");
-        }
-        Line(_host, "run-partial-foreign", "fixture", Gone, JournalEntry.CopyIntended,
-            ("runtime", regression.Install), ("local", "true"), ("copyKind", "regression"), ("evidenceRoot", evidence));
+        const string run = "run-foreign-copy";
+        const string parent = "/srv/runs/client/personal";
+        string runtime = parent + "/runtime";
+        Directory.CreateDirectory(_host.Local(runtime));
+        File.WriteAllText(Path.Combine(_host.Local(runtime), "keep-me"), "personal");
+        Line(_host, run, "regression-plain", Gone, JournalEntry.CopyIntended,
+            ("runtime", runtime), ("stage", parent + "/staging"), ("parent", parent));
 
-        var hosts = new Dictionary<string, HostProfile> { ["pc"] = new() { Kind = "local", Lock = "/var/tmp/vt/lock" } };
-        var recovered = await RunRecovery.RecoverAsync(hosts, _ => _host, "run-partial-foreign", false, TimeSpan.FromSeconds(5));
+        var recovered = await RecoverAsync(run);
 
         Assert.False(recovered.Recovered);
-        Assert.True(Directory.Exists(regression.Install));
-        Assert.True(File.Exists(RegressionCopyClaim.PathFor(regression.Install)));
+        Assert.True(File.Exists(Path.Combine(_host.Local(runtime), "keep-me")));
     }
 
     [Fact]
     public async Task CompletedPlainStartLeavesNoRecoverableCopyCharacterOrProcess()
     {
         const string run = "run-plain-complete";
-        const string copy = "/tmp/regression-plain-complete";
-        Line(_host, run, "fixture", Gone, JournalEntry.CopyIntended,
-            ("runtime", copy), ("local", "true"), ("copyKind", "regression"), ("evidenceRoot", "/tmp/evidence"));
+        const string copy = "/srv/runs/client/vt-prep-regression-complete/runtime";
+        Line(_host, run, "regression-complete", Gone, JournalEntry.CopyIntended,
+            ("runtime", copy), ("stage", "/srv/runs/client/vt-prep-regression-complete/staging"));
         Line(_host, run, "client", Gone, JournalEntry.CharacterIntended,
             ("characters", Characters), ("userData", UserData), ("fileName", "vt01"),
             ("characterKind", "regression"), ("local", "true"));
         Line(_host, run, "client", Gone, JournalEntry.CharacterDone, ("fileName", "vt01"), ("staged", "true"));
         Line(_host, run, "client", Gone, JournalEntry.CharacterRetired, ("fileName", "vt01"));
-        Line(_host, run, "fixture", Gone, JournalEntry.CopyRetired, ("runtime", copy), ("local", "true"));
+        Line(_host, run, "regression-complete", Gone, JournalEntry.CopyRetired, ("runtime", copy));
         Line(_host, run, "run", Gone, JournalEntry.RunEnded, ("state", "passed"), ("cleanupVerified", "true"));
 
         var status = await StatusAsync();
@@ -548,44 +525,6 @@ public sealed class RunRecoveryTests : IDisposable
         Assert.Equal("kept as the run's save (handed over to its output)", Assert.Single(report.Steps, step => step.What == "copy " + save).Outcome);
         var after = Assert.Single((await RunJournalStatus.InspectAsync(hosts, _ => local, TimeSpan.FromSeconds(60))).Runs);
         Assert.Equal(JournalRunState.Ended, after.State);
-    }
-
-    [Fact] public async Task ADeadOneShotRunRetiresOnlyItsMarkedRegressionInstall()
-    {
-        string data = Path.Combine(_root, "data"), journal = Path.Combine(data, "journal");
-        string install = Path.Combine(_root, "regression-native-smoke-recovery"), evidence = Path.Combine(_root, "evidence");
-        Directory.CreateDirectory(install);
-        Directory.CreateDirectory(Path.Combine(install, "BepInEx"));
-        Directory.CreateDirectory(evidence);
-        File.WriteAllText(Path.Combine(install, TargetedRegression.MarkerFile), "{\"tool\":\"TargetedRegression\"}");
-        File.WriteAllText(Path.Combine(install, "BepInEx", "LogOutput.log"), "game log from the interrupted run");
-        string file = Path.Combine(journal, "run-regression", WorldFixture.Actor + ".jsonl");
-        Directory.CreateDirectory(Path.GetDirectoryName(file)!);
-        foreach (string kind in new[] { JournalEntry.CopyIntended, JournalEntry.CopyDone })
-            File.AppendAllText(file, System.Text.Json.JsonSerializer.Serialize(new Dictionary<string, object>
-            {
-                ["utc"] = DateTime.UtcNow.AddHours(-1).ToString("O"), ["run"] = "run-regression", ["actor"] = WorldFixture.Actor, ["kind"] = kind,
-                ["fields"] = new Dictionary<string, string> { ["runtime"] = install, ["local"] = "true", ["copyKind"] = "regression", ["evidenceRoot"] = evidence },
-                ["runner"] = new Dictionary<string, object> { ["machine"] = Gone.Machine, ["pid"] = Gone.Pid, ["startedUtc"] = Gone.StartedUtc.ToString("O") },
-            }) + "\n");
-        using var localJournal = RunJournal.UseLocalDirectory(journal);
-        var hosts = new Dictionary<string, HostProfile> { ["this-machine"] = new() { Kind = "local", Lock = Path.Combine(data, "lock") } };
-        var local = OperatingSystem.IsWindows() ? new LocalGameHost("this-machine", HostShell.WindowsPowerShell) : new LocalGameHost("this-machine", HostShell.Bash);
-
-        Assert.True((await RunRecovery.RecoverAsync(hosts, _ => local, "run-regression", false, TimeSpan.FromSeconds(60))).Recovered);
-        Assert.False(Directory.Exists(install));
-        Assert.Equal("game log from the interrupted run", File.ReadAllText(Path.Combine(evidence, "recovered-game-logs", "BepInEx", "LogOutput.log")));
-
-        // A journal entry alone never authorizes deletion of an unmarked directory.
-        Directory.CreateDirectory(install);
-        File.WriteAllText(Path.Combine(install, "personal.txt"), "keep");
-        string other = File.ReadAllText(file).Replace("run-regression", "run-unmarked", StringComparison.Ordinal);
-        string otherFile = Path.Combine(journal, "run-unmarked", WorldFixture.Actor + ".jsonl");
-        Directory.CreateDirectory(Path.GetDirectoryName(otherFile)!);
-        File.WriteAllText(otherFile, other);
-        var refused = await RunRecovery.RecoverAsync(hosts, _ => local, "run-unmarked", false, TimeSpan.FromSeconds(60));
-        Assert.False(refused.Recovered);
-        Assert.True(File.Exists(Path.Combine(install, "personal.txt")));
     }
 
     // #412: the game's logs inside a copy are what explains why the run was interrupted. Recover keeps them in the run's

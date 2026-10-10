@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Valheim.Testing.Game;
@@ -66,16 +67,16 @@ public sealed class StagedArm
 /// hands one arm to the existing strict-pinned <see cref="ClientRounds"/>.
 /// <list type="number">
 /// <item>The fixture root must hold exactly one world with the manifest's UID (<see cref="FixtureLayout"/>).</item>
-/// <item>Every staged file must be its pinned SHA256; each arm is copied to its own artifact name first.</item>
-/// <item>The disposable install is a copy of the prepared game with <c>BepInEx/plugins</c>, <c>patchers</c>, <c>config</c>
-/// and <c>scripts</c> rebuilt from the allowlist only: the ValheimCLI core and packs, the plugins, the probe and one arm.</item>
+/// <item>Every staged file must be its pinned SHA256; the manifest records every arm's source hash and the chosen arm is staged.</item>
+/// <item>The shared hosted-runtime stage makes a fresh disposable copy per arm with <c>BepInEx/plugins</c>, <c>patchers</c>,
+/// <c>config</c> and <c>scripts</c> rebuilt from the allowlist only: the ValheimCLI core and packs, the plugins, the probe and one arm.</item>
 /// <item>Every hard <c>[BepInDependency]</c> any staged plugin declares must be met by a staged plugin's own
 /// <c>[BepInPlugin]</c> (with its minimum version), no <c>[BepInIncompatibility]</c> may be staged, every plugin must load in
 /// the client process, and every assembly reference must resolve to the game, BepInEx or a staged DLL. File names count for nothing.</item>
 /// <item>The plan's own <see cref="ClientRunPlan.Validate"/> and <see cref="ClientRunPlan.Preflight(IEnumerable{string})"/> run on the
 /// staged install, including the static ValheimCLI capability check against <see cref="RegressionCli.Manifest"/> when set.</item>
 /// </list>
-/// Nothing launches. <see cref="Run"/> repeats the staging for one arm, refuses any file outside the allowlist right before
+/// Nothing launches. <see cref="Run"/> stages a fresh copy for one arm, refuses any file outside the allowlist right before
 /// the launch, and keeps <see cref="ClientRounds"/>' live capability check and strict per-command pins as the second gate.
 /// </summary>
 public sealed class TargetedRegression
@@ -83,19 +84,24 @@ public sealed class TargetedRegression
     // Generated consumers use the public, direct client opener. The one-shot runner supplies its
     // desktop opener explicitly and performs its own desktop preflight before staging.
     internal Func<(bool Windows, int SessionId)> DirectClientSession { get; set; } = DirectClientDesktop.Current;
+    // Controlled tests use a synthetic install without inspecting unrelated processes on the test machine.
+    internal Func<IReadOnlyCollection<string>?, bool, Task>? ProcessCheck { get; init; }
+    internal bool SkipHostLockForTest { get; init; }
 
     private void RequireDirectClientDesktop() => DirectClientDesktop.Require(DirectClientSession());
 
-    /// <summary>The file that marks a disposable install as this tool's; an install without it is never changed.</summary>
-    public const string MarkerFile = "valheim-testing-install.json";
-    /// <summary>Where each arm's build is copied under its own artifact name, inside the disposable install.</summary>
-    public const string ArtifactsDirectory = "valheim-testing-artifacts";
     internal const string CliPlugin = "valheimCLI.valheimCLI", CliConfig = "valheimCLI.valheimCLI.cfg", BepInExConfig = "BepInEx.cfg";
     private static readonly string[] StagedFolders = ["plugins", "patchers", "config", "scripts"];
     // What a copy of the prepared install leaves out: everything BepInEx loads or writes besides its core.
     // ValheimCLI's own extension owners: the Standard and World Tools packs register valheim.* and cli.*.
     private static bool OwnedByCli(string path) => path.StartsWith("valheim.", StringComparison.Ordinal) || path.StartsWith("cli.", StringComparison.Ordinal);
-    private static readonly string[] NotCopied = ["plugins", "patchers", "config", "scripts", "cache", "DumpedAssemblies", "LogOutput.log", "LogOutput.log.1", "LogOutput.log.2"];
+    private readonly IGameHost _host = new LocalGameHost("this machine", OperatingSystem.IsWindows() ? HostShell.WindowsPowerShell : HostShell.Bash);
+    private readonly RunJournal _journal = RunJournal.ThisProcess;
+    private readonly string _lockPath;
+    private HostLock? _hostLock;
+    private readonly string _stage;
+    private bool _prepared;
+    private double _lastCopySeconds;
 
     public RegressionInputs Inputs { get; }
     /// <summary>The client environment the run uses (<see cref="EnvironmentRecipe.Name"/>) and why.</summary>
@@ -117,8 +123,7 @@ public sealed class TargetedRegression
     // The client's save root (worlds_local, characters_local): this user's by default; tests replace it.
     internal string? SaveDirectory { get; init; }
     // Synthetic test installs are not notarized Steam apps; production always uses the real macOS assessment.
-    internal Func<string, bool, MacBundleInspection.Verdict> BundleInspection { get; init; } =
-        (install, repair) => repair ? MacBundleInspection.Repair(install) : MacBundleInspection.Inspect(install);
+    internal Func<string, bool, TimeSpan, MacBundleInspection.Verdict>? BundleInspection { get; init; }
     /// <summary>
     /// The ValheimCLI capabilities the run uses: <see cref="CliCapabilities.HostedRounds"/> and the scenario's own whose owner is
     /// ValheimCLI's (<c>valheim.*</c> or <c>cli.*</c>). They are checked against <see cref="RegressionCli.Manifest"/> before
@@ -149,11 +154,13 @@ public sealed class TargetedRegression
             throw new ArgumentException($"Client environment {recipe.Name} is on {recipe.Host}, not this machine. A targeted regression runs its client here; " +
                 "name a client environment on this machine.");
         ClientEnvironment = recipe.Name;
+        _lockPath = host.Lock;
         Game = recipe.Install; Port = recipe.CliPort; LoaderPackage = recipe.LoaderPackage;
-        Architecture = inputs.Client.Architecture.Length == 0 ? recipe.Architecture : inputs.Client.Architecture;
-        if (Architecture == "arm64" && host.Platform != "macos")
-            throw new ArgumentException("client.architecture arm64 needs a macOS client environment.");
-        Install = Path.Combine(recipe.Runtime, "regression-" + inputs.Name);
+        Architecture = ClientArchitectureChoice.Select(inputs.Client.Architecture, recipe.Architecture,
+            host.Platform, EnvironmentInventory.ThisMachine.OsArchitecture);
+        string parent = Path.Combine(recipe.Runtime, "vt-prep-regression-" + inputs.Name + "-" + _journal.RunId);
+        Install = Path.Combine(parent, "runtime");
+        _stage = Path.Combine(parent, "staging");
         SteamUserData = inventory.SteamUserData;
         Detected = inventory.Detected;
         if (RegressionInputs.Inside(Install, Game) || RegressionInputs.Inside(Game, Install))
@@ -177,7 +184,9 @@ public sealed class TargetedRegression
         return new TargetedRegression(RegressionInputs.Read(inputsFile), scenarioCapabilities, EnvironmentInventory.Read(File.Exists(machine) ? machine : null));
     }
 
-    /// <summary>Stages and preflights every arm in turn, without the game; returns them in manifest order (the last stays staged).</summary>
+    /// <summary>Stages and preflights every arm in turn, without the game; returns them in manifest order (the last stays staged).
+    /// Call <see cref="Remove()"/> in a <c>finally</c> block to retire that copy and release the host lock.
+    /// </summary>
     public IReadOnlyList<StagedArm> Preflight()
     {
         RequireDirectClientDesktop();
@@ -225,95 +234,98 @@ public sealed class TargetedRegression
             throw new InvalidOperationException($"probe: {env.Probe.File} declares no [BepInPlugin]; a probe is a plugin.");
 
         // A direct regression.json consumer gets the same refusal as valheim-test start, before its large game copy.
-        if (Architecture is "arm64" or "x64")
-            GameLaunch.RequireClientArchitecture(Game, Architecture == "arm64" ? ClientArchitecture.Arm64 : ClientArchitecture.X64,
-                LoaderPackage == null ? null : BepInExLoaderPackage.Read(LoaderPackage).Root);
-        // The one-shot path makes its own copy rather than using HostedRuntimeStage. Check the signed app here as well:
+        ClientArchitectureChoice.Require(Game, Architecture, LoaderPackage);
+        // Check the signed source app before staging through HostedRuntimeStage:
         // otherwise an old preloader log inside the source bundle becomes a Gatekeeper "damaged" dialog at launch.
         if (OperatingSystem.IsMacOS() && Directory.Exists(Path.Combine(Game, GameLaunch.ClientMacBundle)))
         {
-            string? refusal = MacBundleInspection.SourceRefusal(BundleInspection(Game, false));
+            var verdict = BundleInspection?.Invoke(Game, false, TimeSpan.FromSeconds(Inputs.Client.StartSeconds))
+                ?? MacBundleInspection.Inspect(Game, TimeSpan.FromSeconds(Inputs.Client.StartSeconds));
+            string? refusal = MacBundleInspection.SourceRefusal(verdict);
             if (refusal != null) throw new InvalidOperationException(refusal);
         }
-        string install = PrepareInstall();
-        string plugins = Path.Combine(install, "BepInEx", "plugins");
-        var staged = new List<(StagedFile File, PluginAssembly Metadata)>();
-        void Place(string role, string source, string sha256, string name)
-        {
-            string target = Path.Combine(plugins, name);
-            File.Copy(source, target);
-            RequireCopied(target, sha256);
-            var read = Read(source);
-            staged.Add((new(role, "BepInEx/plugins/" + name, sha256, FileHash.Md5(target), read.AssemblyName, read.Plugins.Select(p => $"{p.Guid} {p.Version}").ToList()), read));
-        }
-        foreach (var (role, file, sha256) in sources) Place(role, file.File, sha256, Path.GetFileName(file.File));
-
-        // Each arm under its own artifact name, then only the chosen one installed.
-        string artifacts = Path.Combine(install, ArtifactsDirectory);
-        if (Directory.Exists(artifacts)) Directory.Delete(artifacts, recursive: true);
-        Directory.CreateDirectory(artifacts);
-        var arms = new List<RunManifestArm>();
-        foreach (var (name, build) in env.Mod.Arms)
-        {
-            string artifact = $"{name}-{env.Mod.InstallAs}";
-            File.Copy(build.File, Path.Combine(artifacts, artifact));
-            RequireCopied(Path.Combine(artifacts, artifact), build.Sha256);
-            arms.Add(new(name, build.Commit, artifact, build.Sha256.ToLowerInvariant(), FileHash.Md5(Path.Combine(artifacts, artifact))));
-        }
-        Place("mod", Path.Combine(artifacts, $"{arm}-{env.Mod.InstallAs}"), chosen.Sha256.ToLowerInvariant(), env.Mod.InstallAs);
-        var allowlist = staged.Select(entry => entry.File).ToList();
-
-        foreach (var (file, sha256) in patchers)
-        {
-            string target = Path.Combine(install, "BepInEx", "patchers", Path.GetFileName(file.File));
-            File.Copy(file.File, target);
-            RequireCopied(target, sha256);
-        }
-        string config = Path.Combine(install, "BepInEx", "config");
-        foreach (var (name, source) in env.Configs) File.Copy(source, Path.Combine(config, name), overwrite: true);
+        // HostedRuntimeStage is the one owner of the disposable copy, its loader and the Mac bundle repair.
+        // Select exactly this regression's allowlist; LocalClientCopy selects a broader installed set through the
+        // same stage. No source plugin is inherited merely because it happens to be in the prepared game.
+        var placements = new List<(string Role, string Source, string Sha256, string Relative, PluginAssembly Metadata)>();
+        foreach (var (role, file, sha256) in sources)
+            placements.Add((role, file.File, sha256, "BepInEx/plugins/" + Path.GetFileName(file.File), Read(file.File)));
+        placements.Add(("mod", chosen.File, chosen.Sha256.ToLowerInvariant(), "BepInEx/plugins/" + env.Mod.InstallAs, armPlugins[arm]));
+        var selected = placements.Select(file => new HostedRuntimeFile(file.Source, file.Relative)).ToList();
+        selected.AddRange(patchers.Select(file => new HostedRuntimeFile(file.File.File, "BepInEx/patchers/" + Path.GetFileName(file.File.File))));
+        selected.AddRange(env.Configs.Select(file => new HostedRuntimeFile(file.Value, "BepInEx/config/" + file.Key)));
+        string? generatedConfig = null;
         if (!env.Configs.ContainsKey(CliConfig))
-            File.WriteAllText(Path.Combine(config, CliConfig), $"[Server]\nEnabled = true\nPort = {Port.ToString(System.Globalization.CultureInfo.InvariantCulture)}\n");
-        var configs = Directory.EnumerateFiles(config).Order(StringComparer.Ordinal)
-            .Select(path => new StagedFile("config", "BepInEx/config/" + Path.GetFileName(path), FileHash.Sha256(path), FileHash.Md5(path), null, [])).ToList();
-
-        // The one declared-dependency rule (DependencyRule, as the resolver applies it), over exactly what was staged.
-        string managed = Path.GetDirectoryName(InstallPins.GameAssembly(install))!;
-        var provided = new[] { managed, Path.Combine(install, InstallPins.CoreDirectory) }
-            .SelectMany(folder => Directory.EnumerateFiles(folder, "*.dll")).Select(Path.GetFileNameWithoutExtension).OfType<string>();
-        var unmet = DependencyRule.Check(staged.Select(entry => (entry.File.Path, entry.Metadata)).ToList(), provided, Inputs.OptionalReferences, "valheim");
-        if (unmet.Count != 0) throw new InvalidOperationException("The staged plugins' declared dependencies are not met: " + string.Join("; ", unmet.Select(problem => problem.Message)) + ".");
-        string saveDirectory = SaveDirectory ?? HostedWorld.DefaultSaveDirectory(GameLaunch.DetectClient(install));
-        string character = Path.Combine(saveDirectory, "characters_local", env.Client.Character + ".fch");
-        if (env.Client.CharacterStore != null) DisposableCharacterStore.Open(env.Client.CharacterStore).Get(env.Client.Character);
-        else if (!File.Exists(character))
-            throw new InvalidOperationException($"client.character: {env.Client.Character}.fch is not in {Path.GetDirectoryName(character)}. Stage the disposable local character (never a cloud one) before the run, or name the one that is staged.");
-        var installPins = InstallPins.Of(install);
-        var plan = new ClientRunPlan
         {
-            Mode = "owned", Install = install, Port = Port, Character = env.Client.Character,
-            Architecture = Architecture,
-            LaunchArguments = env.Client.LaunchArguments, Environment = env.Client.Environment,
-            StartSeconds = env.Client.StartSeconds, JoinSeconds = env.Client.JoinSeconds,
-            Pins = staged.SelectMany(file => file.Metadata.Plugins.Select(plugin => (plugin.Guid, file.File.Md5))).ToDictionary(pin => pin.Guid, pin => pin.Md5, StringComparer.Ordinal),
-            InstallPins = installPins,
-            CliManifest = env.Cli.Manifest, // Required (RegressionCli.Validate): the static check always runs on what was staged.
-            Prepared = true, // The disposable install staged above, with the regression's ValheimCLI set.
-            Capabilities = Capabilities.Except(CliCapabilities.HostedRounds).ToArray(), // The hosted rounds add their own.
-            HostWorld = new HostWorldPlan
+            generatedConfig = Path.Combine(Path.GetTempPath(), "vt-regression-" + Guid.NewGuid().ToString("N") + ".cfg");
+            File.WriteAllText(generatedConfig, $"[Server]\nEnabled = true\nPort = {Port.ToString(System.Globalization.CultureInfo.InvariantCulture)}\n");
+            selected.Add(new HostedRuntimeFile(generatedConfig, "BepInEx/config/" + CliConfig));
+        }
+        try
+        {
+            try { PrepareCopy(selected); }
+            finally { if (generatedConfig != null) File.Delete(generatedConfig); }
+            string install = Install;
+            var staged = new List<(StagedFile File, PluginAssembly Metadata)>();
+            foreach (var (role, source, sha256, relative, read) in placements)
             {
-                World = new PinnedDirectory { Source = Path.GetFullPath(env.Fixture.Root), Sha256 = new Dictionary<string, string>(fixture) },
-                WorldUid = env.Fixture.WorldUid, SaveDirectory = SaveDirectory,
-            },
-        };
-        plan.Validate();
-        plan.Preflight(CliCapabilities.HostedRounds);
-        string cliManifest = plan.CheckCliManifest(CliCapabilities.HostedRounds)?.ToString() ?? plan.CliPreflight;
+                string target = Path.Combine(install, relative.Replace('/', Path.DirectorySeparatorChar));
+                RequireCopied(target, sha256);
+                staged.Add((new(role, relative, sha256, FileHash.Md5(target), read.AssemblyName,
+                    read.Plugins.Select(p => $"{p.Guid} {p.Version}").ToList()), read));
+            }
+            var allowlist = staged.Select(entry => entry.File).ToList();
+            var arms = env.Mod.Arms.Select(entry => new RunManifestArm(entry.Key, entry.Value.Commit,
+                $"{entry.Key}-{env.Mod.InstallAs}", entry.Value.Sha256.ToLowerInvariant(), FileHash.Md5(entry.Value.File))).ToList();
+            string config = Path.Combine(install, "BepInEx", "config");
+            var configs = Directory.EnumerateFiles(config).Order(StringComparer.Ordinal)
+                .Select(path => new StagedFile("config", "BepInEx/config/" + Path.GetFileName(path), FileHash.Sha256(path), FileHash.Md5(path), null, [])).ToList();
 
-        var tree = StagedTree(install);
-        WriteMarker(install, arm, tree);
-        var manifest = new RunManifest(env.Name, arm, string.Join(", ", armPlugins[arm].Plugins.Select(p => p.Guid)), chosen.Commit, chosen.Sha256.ToLowerInvariant(),
-            env.Mod.Repeatability, arms, allowlist, configs, installPins, identity.Name, identity.UidText, fixture.Count, Capabilities, LiveOnlyCapabilities, cliManifest);
-        return new StagedArm(arm, plan, manifest, tree, install);
+            // The one declared-dependency rule (DependencyRule, as the resolver applies it), over exactly what was staged.
+            string managed = Path.GetDirectoryName(InstallPins.GameAssembly(install))!;
+            var provided = new[] { managed, Path.Combine(install, InstallPins.CoreDirectory) }
+                .SelectMany(folder => Directory.EnumerateFiles(folder, "*.dll")).Select(Path.GetFileNameWithoutExtension).OfType<string>();
+            var unmet = DependencyRule.Check(staged.Select(entry => (entry.File.Path, entry.Metadata)).ToList(), provided, Inputs.OptionalReferences, "valheim");
+            if (unmet.Count != 0) throw new InvalidOperationException("The staged plugins' declared dependencies are not met: " + string.Join("; ", unmet.Select(problem => problem.Message)) + ".");
+            string saveDirectory = SaveDirectory ?? HostedWorld.DefaultSaveDirectory(GameLaunch.DetectClient(install));
+            string character = Path.Combine(saveDirectory, "characters_local", env.Client.Character + ".fch");
+            if (env.Client.CharacterStore != null) DisposableCharacterStore.Open(env.Client.CharacterStore).Get(env.Client.Character);
+            else if (!File.Exists(character))
+                throw new InvalidOperationException($"client.character: {env.Client.Character}.fch is not in {Path.GetDirectoryName(character)}. Stage the disposable local character (never a cloud one) before the run, or name the one that is staged.");
+            var installPins = InstallPins.Of(install);
+            var plan = new ClientRunPlan
+            {
+                Mode = "owned", Install = install, Port = Port, Character = env.Client.Character,
+                Architecture = Architecture,
+                LaunchArguments = env.Client.LaunchArguments, Environment = env.Client.Environment,
+                StartSeconds = env.Client.StartSeconds, JoinSeconds = env.Client.JoinSeconds,
+                Pins = staged.SelectMany(file => file.Metadata.Plugins.Select(plugin => (plugin.Guid, file.File.Md5))).ToDictionary(pin => pin.Guid, pin => pin.Md5, StringComparer.Ordinal),
+                InstallPins = installPins,
+                CliManifest = env.Cli.Manifest, // Required (RegressionCli.Validate): the static check always runs on what was staged.
+                Prepared = true, // The disposable install staged above, with the regression's ValheimCLI set.
+                Capabilities = Capabilities.Except(CliCapabilities.HostedRounds).ToArray(), // The hosted rounds add their own.
+                HostWorld = new HostWorldPlan
+                {
+                    World = new PinnedDirectory { Source = Path.GetFullPath(env.Fixture.Root), Sha256 = new Dictionary<string, string>(fixture) },
+                    WorldUid = env.Fixture.WorldUid, SaveDirectory = SaveDirectory,
+                },
+            };
+            plan.Validate();
+            plan.Preflight(CliCapabilities.HostedRounds);
+            string cliManifest = plan.CheckCliManifest(CliCapabilities.HostedRounds)?.ToString() ?? plan.CliPreflight;
+
+            var tree = StagedTree(install);
+            var manifest = new RunManifest(env.Name, arm, string.Join(", ", armPlugins[arm].Plugins.Select(p => p.Guid)), chosen.Commit, chosen.Sha256.ToLowerInvariant(),
+                env.Mod.Repeatability, arms, allowlist, configs, installPins, identity.Name, identity.UidText, fixture.Count, Capabilities, LiveOnlyCapabilities, cliManifest);
+            return new StagedArm(arm, plan, manifest, tree, install);
+        }
+        catch (Exception failure)
+        {
+            // A rejected preflight must not strand a valid but unusable game copy or a live journal entry.
+            try { if (_prepared || _hostLock != null) Remove(); }
+            catch (Exception cleanup) { throw new AggregateException("Regression preflight and copy cleanup both failed.", failure, cleanup); }
+            throw;
+        }
     }
 
     /// <summary>
@@ -321,6 +333,7 @@ public sealed class TargetedRegression
     /// <paramref name="rounds"/> and <paramref name="measure"/>, refusing a changed install right before the launch and
     /// requiring the scenario's capabilities live before its first round. Scans the client's logs and writes
     /// <c>result.json</c> and <c>junit.xml</c> in every outcome. <paramref name="output"/> must not exist yet.
+    /// Call <see cref="Remove(ScenarioReport, string)"/> after the last arm to retire the copy and release the host lock.
     /// <paramref name="afterPinnedClientOpened"/> runs once the owned client has reached its menu with the selected
     /// plugins verified; a caller can record cold-start timing there without treating later world entry as plugin load.
     /// </summary>
@@ -347,6 +360,7 @@ public sealed class TargetedRegression
         var report = new ScenarioReport(scenario);
         var logs = new List<RunLog>();
         RegisteredCharacterStage? characterStage = null;
+        LocalClientJournal? directClientJournal = null;
         try
         {
             report.Provenance["clientEnvironment"] = ClientEnvironment;
@@ -358,7 +372,7 @@ public sealed class TargetedRegression
                 report.Step(StepPhase.Setup, "stage only the registered disposable character", () => characterStage = RegisteredCharacterStage.InstallRegistered(
                     store, Inputs.Client.Character, Path.Combine(save, "characters_local"),
                     SteamUserData ?? throw new DirectoryNotFoundException("No Steam userdata was detected on this machine; a registered character is checked against it for a same-named Steam Cloud character."),
-                    Inputs.Client.Character, characterJournal));
+                    Inputs.Client.Character, characterJournal ?? JournalCharacterEvent));
                 report.Provenance["characterSource"] = "registered disposable store";
             }
             StagedArm? stagedArm = null;
@@ -366,16 +380,23 @@ public sealed class TargetedRegression
             afterStaged?.Invoke();
             var staged = stagedArm!;
             staged.Record(report.Provenance);
+            report.Provenance["disposableCopySeconds"] = _lastCopySeconds.ToString("F3", System.Globalization.CultureInfo.InvariantCulture);
             File.WriteAllText(Path.Combine(output, "run-manifest.json"), JsonSerializer.Serialize(staged.Manifest, ManifestJson));
             new ClientRounds { Client = staged.Plan, Report = report, Output = output, Rounds = rounds, Cancellation = cancellation }.Run(() =>
             {
                 staged.Verify();
-                var client = openClient == null ? ClientSession.Open(staged.Plan, output, logs, cancellation)
-                    : openClient(staged.Plan, output, logs, cancellation);
+                ClientSession client;
+                if (openClient == null)
+                {
+                    // Direct consumers must record the exact process too, not only the staged copy.
+                    directClientJournal = new LocalClientJournal(staged.Plan, output, desktopTask: false);
+                    client = ClientSession.Open(staged.Plan, output, logs, cancellation,
+                        directClientJournal.Begin, directClientJournal.Started);
+                }
+                else client = openClient(staged.Plan, output, logs, cancellation);
                 report.RecordPlugins("client", staged.Plan.Pins); // confirmed at its menu
                 if (LoaderPackage != null)
                 {
-                    MarkLoaderSmoke(staged.Plan.Install);
                     report.Provenance["bepInExMenuSmoke"] = "passed: fresh BepInEx log, pinned plugins and main menu";
                 }
                 afterPinnedClientOpened?.Invoke(report);
@@ -395,16 +416,33 @@ public sealed class TargetedRegression
         }
         finally
         {
+            if (directClientJournal != null)
+                try { directClientJournal.Complete(); }
+                catch (Exception error) { report.RecordFailure(StepPhase.Cleanup, "owned client process was not proved stopped", error); }
             if (characterStage != null)
                 try { report.Step(StepPhase.Cleanup, "remove only the staged test character", characterStage.Dispose); }
                 catch (Exception error) { if (report.Steps.All(step => step.Passed)) report.RecordFailure(StepPhase.Cleanup, "character cleanup failed", error); }
             if (logs.Count != 0) report.ScanLogs(logs, Inputs.LogScan);
-            // Kept for the next arm. Whoever removes it (TargetedRegression.Remove) records that in the last arm's report.
-            report.Provenance["disposableInstall"] = "kept after this arm";
+            // A failed preflight can already have retired its copy. Whoever removes a successful arm records that later.
+            report.Provenance["disposableInstall"] = _prepared ? "kept after this arm" : "no copy left after this arm";
             report.Write(output);
         }
         return report;
     }
+
+    private void JournalCharacterEvent(CharacterStageEvent point, string characters, string userData, string name, string expectedSha256) =>
+        _journal.AppendLocal("client", CharacterEntry(point, characters, userData, name, expectedSha256));
+
+    internal static JournalEntry CharacterEntry(CharacterStageEvent point, string characters, string userData, string name, string expectedSha256) =>
+        point switch
+        {
+            CharacterStageEvent.Intended => JournalEntry.Of(JournalEntry.CharacterIntended,
+                ("characters", characters), ("userData", userData), ("fileName", name),
+                ("characterKind", "regression"), ("local", "true"), ("expectedSha256", expectedSha256)),
+            CharacterStageEvent.Done => JournalEntry.Of(JournalEntry.CharacterDone,
+                ("fileName", name), ("staged", "true")),
+            _ => JournalEntry.Of(JournalEntry.CharacterRetired, ("fileName", name)),
+        };
 
     /// <summary>
     /// Deletes the disposable install as a <see cref="StepPhase.Cleanup"/> step of the last arm's report, records what
@@ -427,212 +465,101 @@ public sealed class TargetedRegression
         finally { lastArm.Write(lastArmOutput); }
     }
 
-    /// <summary>Deletes the disposable install, only when it carries this tool's marker.</summary>
+    /// <summary>Retires the copy made by this runner through the shared hosted-runtime owner.</summary>
     public void Remove()
     {
-        RemoveJournalledInstall(Install);
-    }
-
-    // Recovery has only the journalled path, not the regression recipe. Keep the same ownership
-    // check as normal removal and refuse an unmarked partial copy instead of deleting by name.
-    internal static void RemoveJournalledInstall(string path)
-    {
-        string install = Path.GetFullPath(path);
-        if (!Path.GetFileName(install).StartsWith("regression-", StringComparison.Ordinal) ||
-            Path.GetFileName(install).Length == "regression-".Length)
-            throw new InvalidDataException("A regression copy must have a regression-* directory name.");
-        if (!Directory.Exists(install)) return;
-        RequireOwned(install);
-        Directory.Delete(install, recursive: true);
-    }
-
-    // A killed one-shot runner never got to collect its game logs. Recovery keeps them beside
-    // the run's evidence before deleting the exact marked copy, with idempotent retries.
-    internal static int RecoverJournalledInstall(string path, string evidenceRoot)
-    {
-        string install = Path.GetFullPath(path), evidence = Path.GetFullPath(evidenceRoot);
-        if (!Directory.Exists(install)) return 0;
-        if (!Directory.Exists(evidence) || RegressionInputs.Inside(evidence, install))
-            throw new InvalidDataException("The journalled evidence folder is missing or lies inside the disposable install.");
-        RequireOwned(install);
-        var logs = new List<(string Source, string Relative)>();
-        void Add(string source, string relative)
+        if (!_prepared)
         {
-            if (File.Exists(source) && (File.GetAttributes(source) & FileAttributes.ReparsePoint) == 0)
-                logs.Add((source, relative));
+            if (Directory.Exists(Install) || Directory.Exists(_stage))
+                throw new InvalidOperationException($"The disposable install or staging directory at {Install} was not proven cleaned by this runner. Use env recover for a run that was interrupted; this runner never removes a copy by its name alone.");
         }
-        Add(Path.Combine(install, "BepInEx", "LogOutput.log"), Path.Combine("BepInEx", "LogOutput.log"));
-        Add(Path.Combine(install, "toolkit-unity.log"), "toolkit-unity.log");
-        foreach (string source in Directory.EnumerateFiles(install, "preloader_*.log", SearchOption.TopDirectoryOnly))
-            Add(source, Path.GetFileName(source));
-        string kept = Path.Combine(evidence, "recovered-game-logs");
-        foreach (var (source, relative) in logs)
+        else RetirePrepared();
+        if (_hostLock is { } held)
         {
-            string destination = Path.Combine(kept, relative);
-            Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
-            if (File.Exists(destination))
-            {
-                if (FileHash.Sha256(source) != FileHash.Sha256(destination))
-                    throw new IOException("Recovery refuses to overwrite a different game log: " + destination);
-            }
-            else File.Copy(source, destination);
+            var released = held.ReleaseAsync().GetAwaiter().GetResult();
+            if (released.State is not (HostLockState.Released or HostLockState.Free)) throw new HostLockException(released);
+            _journal.AppendLocal("run", JournalEntry.Of(JournalEntry.LockReleased, ("lock", held.Path), ("claimant", held.Owner)));
+            _hostLock = null;
         }
-        RemoveJournalledInstall(install);
-        return logs.Count;
     }
 
     internal static readonly JsonSerializerOptions ManifestJson = new() { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
-    // ---- the disposable install ----
-
-    private sealed record Marker(string Tool, string GameSha256, string? LoaderSha256, string? Arm,
-        Dictionary<string, string>? Tree, Dictionary<string, string>? LoaderFiles, string? LoaderPackage = null, bool LoaderSmoke = false);
-
-    // A copy of the prepared game with BepInEx's loadable folders empty; reused while its game build and loader are the selected ones.
-    private string PrepareInstall()
+    private void PrepareCopy(IReadOnlyList<HostedRuntimeFile> selected)
     {
-        var env = Inputs;
-        string game = Path.GetFullPath(Game), install = Path.GetFullPath(Install);
-        if (!Directory.Exists(game)) throw new DirectoryNotFoundException($"game: {game} does not exist. Give the Valheim install to copy into the disposable run.");
+        string source = Path.GetFullPath(Game);
+        if (!Directory.Exists(source)) throw new DirectoryNotFoundException($"game: {source} does not exist. Give the Valheim install to copy into the disposable run.");
         var package = LoaderPackage == null ? null : BepInExLoaderPackage.Read(LoaderPackage);
-        if (package != null && (RegressionInputs.Inside(package.Root, game) || RegressionInputs.Inside(game, package.Root)))
-            throw new InvalidOperationException($"The pinned BepInEx package {package.Root} overlaps the game {game}; extract one reviewed loader set outside the live game before staging.");
-        if (package != null && (RegressionInputs.Inside(package.Root, install) || RegressionInputs.Inside(install, package.Root)))
-            throw new InvalidOperationException($"The disposable install {install} overlaps the pinned BepInEx package {package.Root}; keep the package outside the install so cleanup cannot delete it.");
-        if (package == null && !Directory.Exists(Path.Combine(game, InstallPins.CoreDirectory)))
-            throw new InvalidOperationException($"game: {game} has no {InstallPins.CoreDirectory}. Install BepInEx (BepInExPack_Valheim) in the prepared game first; the disposable install is copied from it.");
-        // The selected loader: the game's own, or the package's, which an install it is applied to has (BepInExLoaderPackage.Loader).
-        var pins = package == null ? InstallPins.Of(game) : new InstallPins
+        if (package != null && (RegressionInputs.Inside(package.Root, source) || RegressionInputs.Inside(source, package.Root)))
+            throw new InvalidOperationException($"The pinned BepInEx package {package.Root} overlaps the game {source}; extract one reviewed loader set outside the live game before staging.");
+        if (package != null && (RegressionInputs.Inside(package.Root, Install) || RegressionInputs.Inside(Install, package.Root)))
+            throw new InvalidOperationException($"The disposable install {Install} overlaps the pinned BepInEx package {package.Root}; keep the package outside the install so cleanup cannot delete it.");
+        if (package == null && !Directory.Exists(Path.Combine(source, InstallPins.CoreDirectory)))
+            throw new InvalidOperationException($"game: {source} has no {InstallPins.CoreDirectory}. Install BepInEx (BepInExPack_Valheim) in the prepared game first, or name a reviewed loader package.");
+        if (Inputs.GamePins != null)
         {
-            Game = InstallPins.GameHash(game),
-            Loader = package.Loader,
-            Patchers = InstallPins.DirectoryHash(Path.Combine(game, BepInExLoader.Patchers)),
-        };
-        if (env.GamePins != null)
-            env.GamePins.Compare(new InstallPins { Game = pins.Game, Loader = pins.Loader, Patchers = env.GamePins.Patchers }, "prepared game and selected loader package", "Managed");
-        if (Directory.Exists(install))
-        {
-            var marker = RequireOwned(install);
-            bool current = marker.GameSha256 == pins.Game && marker.LoaderSha256 == pins.Loader && marker.LoaderPackage == package?.Identity &&
-                Directory.Exists(Path.Combine(install, InstallPins.CoreDirectory)) &&
-                InstallPins.Of(install) is var found && found.Game == pins.Game && found.Loader == pins.Loader &&
-                (package == null ? LoaderCopied(game, install, marker.LoaderFiles) : package.Matches(install));
-            if (!current) Directory.Delete(install, recursive: true);
+            var chosen = new InstallPins { Game = InstallPins.GameHash(source),
+                Loader = package?.Loader ?? InstallPins.Of(source).Loader, Patchers = Inputs.GamePins.Patchers };
+            Inputs.GamePins.Compare(chosen, "prepared game and selected loader package", "Managed");
         }
-        if (!Directory.Exists(install))
+        if (_prepared) RetirePrepared();
+        else if (Directory.Exists(Install) || Directory.Exists(_stage))
+            throw new IOException($"The disposable install already exists: {Install}. Inspect env status and recover its owner; it is never replaced by name.");
+        // Keep the host exclusive from the first copy through the final arm's client and copy retirement.
+        // The journal lets env recover release a lock left by an interrupted direct consumer.
+        if (_hostLock == null && !SkipHostLockForTest)
         {
-            try
-            {
-                Copy(game, install, game);
-                package?.Apply(install);
-                RequireLaunchableMacCopy(install);
-                WriteMarker(install, null, null, InstallPins.Of(install), LoaderFiles(install), package?.Identity);
-            }
+            var held = _host.AcquireLockAsync(_lockPath, "regression " + _journal.RunId, HostedTimeouts.Quick).GetAwaiter().GetResult();
+            try { _journal.AppendLocal("run", JournalEntry.Of(JournalEntry.LockHeld, ("lock", held.Path), ("claimant", held.Owner))); }
             catch
             {
-                // This run just created the install. A failed copy must not strand an unmarked partial install that a
-                // retry would correctly refuse to touch.
-                if (Directory.Exists(install)) Directory.Delete(install, recursive: true);
+                held.DisposeAsync().AsTask().GetAwaiter().GetResult();
                 throw;
             }
+            _hostLock = held;
         }
-        else RequireLaunchableMacCopy(install); // A reused copy may have gained preloader logs inside its bundle.
-        foreach (string folder in StagedFolders.Append("cache"))
+        RequireStopped(null, clientSession: true);
+        string parent = Path.GetDirectoryName(Install)!;
+        Directory.CreateDirectory(Path.GetDirectoryName(parent)!);
+        var capacity = HostCopyCapacityProbe.InspectAsync(_host, source, Path.GetDirectoryName(parent)!, LocalClientCopy.StepTimeout).GetAwaiter().GetResult();
+        HostCopyCapacityProbe.RequireCombined(_host.Name, [(Inputs.Name, capacity)]);
+        string actor = "regression-" + Inputs.Name;
+        _journal.AppendLocal(actor, JournalEntry.Of(JournalEntry.CopyIntended,
+            ("runtime", Install), ("stage", _stage), ("parent", parent)));
+        try
         {
-            string path = Path.Combine(install, "BepInEx", folder);
-            if (Directory.Exists(path)) Directory.Delete(path, recursive: true);
+            Func<IGameHost, string, TimeSpan, CancellationToken, Task<MacBundleInspection.Verdict>>? repair = BundleInspection == null
+                ? null : (_, install, timeout, _) => Task.FromResult(BundleInspection(install, true, timeout));
+            var copyClock = Stopwatch.StartNew();
+            var listing = HostedRuntimeStage.PrepareAsync(_host, HostedRuntimeKind.Client, source, Install, _stage,
+                selected, LocalClientCopy.StepTimeout, loaderPackage: package, repairMac: repair).GetAwaiter().GetResult();
+            _lastCopySeconds = copyClock.Elapsed.TotalSeconds;
+            _journal.AppendLocal(actor, JournalEntry.Of(JournalEntry.CopyDone, ("runtime", Install),
+                ("files", listing.Files.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)), ("source", source)));
+            _prepared = true;
         }
-        foreach (string folder in new[] { "plugins", "patchers", "config" }) Directory.CreateDirectory(Path.Combine(install, "BepInEx", folder));
-        string sourceSettings = Path.Combine(game, "BepInEx", "config", BepInExConfig);
-        string? packageSettings = package == null ? null : Path.Combine(package.Root, "BepInEx", "config", BepInExConfig);
-        // An explicit regression config is staged later, after this copy, and therefore wins over either source.
-        var settingsOrigin = BepInExSettings.Choose(File.Exists(sourceSettings),
-            packageSettings != null && File.Exists(packageSettings), explicitExists: false);
-        string? settings = settingsOrigin switch
+        catch (Exception error) when (error is not AggregateException)
         {
-            BepInExSettingsOrigin.Source => sourceSettings,
-            BepInExSettingsOrigin.LoaderPackage => packageSettings,
-            _ => null,
-        };
-        if (settings != null) File.Copy(settings, Path.Combine(install, "BepInEx", "config", BepInExConfig));
-        var copied = InstallPins.Of(install);
-        if (copied.Game != pins.Game || copied.Loader != pins.Loader)
-            throw new InvalidOperationException($"The disposable install {install} does not match the selected game and loader after copying (game {copied.Game} vs {pins.Game}, loader {copied.Loader} vs {pins.Loader}). Remove it and stage again.");
-        return install;
-    }
-
-    private void RequireLaunchableMacCopy(string install)
-    {
-        if (!OperatingSystem.IsMacOS() || !Directory.Exists(Path.Combine(install, GameLaunch.ClientMacBundle))) return;
-        var verdict = BundleInspection(install, true);
-        if (verdict.State != MacBundleInspection.State.Accepted)
-            throw new InvalidOperationException("macOS would reject the disposable Valheim.app before it reaches BepInEx (" +
-                verdict.State + ": " + verdict.Detail + "). No client was launched and the source install was not changed.");
-    }
-
-    // Remember the source file set as well as its contents: removal of an old Doorstop proxy must invalidate the copy too.
-    // The install may acquire unrelated runtime files at its root, so compare it to the source snapshot rather than requiring
-    // the install's root directory to have exactly the same entries.
-    private static Dictionary<string, string> LoaderFiles(string game)
-    {
-        string libraries = Path.Combine(game, "doorstop_libs");
-        return Directory.EnumerateFiles(game).Concat(Directory.Exists(libraries) ? Directory.EnumerateFiles(libraries, "*", SearchOption.AllDirectories) : [])
-            .Where(path => !FileHash.IsMacMetadata(path))
-            .ToDictionary(path => Path.GetRelativePath(game, path).Replace('\\', '/'), FileHash.Sha256, StringComparer.Ordinal);
-    }
-
-    private static bool LoaderCopied(string game, string install, Dictionary<string, string>? recorded)
-    {
-        if (recorded == null) return false; // An older marker cannot prove which files were copied.
-        var current = LoaderFiles(game);
-        return current.Count == recorded.Count && current.All(file =>
-            recorded.TryGetValue(file.Key, out string? hash) && hash == file.Value &&
-            File.Exists(Path.Combine(install, file.Key)) && FileHash.Sha256(Path.Combine(install, file.Key)) == file.Value);
-    }
-
-    private static void Copy(string source, string target, string root)
-    {
-        Directory.CreateDirectory(target);
-        foreach (string entry in Directory.EnumerateFileSystemEntries(source))
-        {
-            string relative = Path.GetRelativePath(root, entry);
-            string[] parts = relative.Split(Path.DirectorySeparatorChar);
-            if (parts.Length == 2 && parts[0] == "BepInEx" && NotCopied.Contains(parts[1], StringComparer.OrdinalIgnoreCase)) continue;
-            string destination = Path.Combine(target, Path.GetFileName(entry));
-            var info = new FileInfo(entry);
-            if (info.LinkTarget != null)
-            {
-                if (Directory.Exists(entry)) Directory.CreateSymbolicLink(destination, info.LinkTarget); else File.CreateSymbolicLink(destination, info.LinkTarget);
-            }
-            else if (Directory.Exists(entry)) Copy(entry, destination, root);
-            else File.Copy(entry, destination);
+            // HostedRuntimeStage proved cleanup before it rethrew. An aggregate failure retains the journal for recovery.
+            if (!Directory.Exists(Install) && !Directory.Exists(_stage))
+                _journal.AppendLocal(actor, JournalEntry.Of(JournalEntry.CopyRetired, ("runtime", Install), ("failed", "true")));
+            throw;
         }
     }
 
-    private static Marker RequireOwned(string install)
+    private void RetirePrepared()
     {
-        string path = Path.Combine(install, MarkerFile);
-        Marker? marker = null;
-        try { if (File.Exists(path)) marker = JsonSerializer.Deserialize<Marker>(File.ReadAllText(path), ManifestJson); }
-        catch (JsonException) { }
-        if (marker?.Tool != nameof(TargetedRegression))
-            throw new InvalidOperationException($"install: {install} exists and is not a disposable install this tool created (no {MarkerFile}). It is never changed: give a new directory, or remove that one yourself if it is disposable.");
-        return marker;
+        RequireStopped([Install], clientSession: false);
+        HostedRuntimeStage.RetireAsync(_host, Install, _stage, LocalClientCopy.StepTimeout).GetAwaiter().GetResult();
+        _journal.AppendLocal("regression-" + Inputs.Name, JournalEntry.Of(JournalEntry.CopyRetired, ("runtime", Install)));
+        _prepared = false;
     }
 
-    private static void WriteMarker(string install, string? arm, Dictionary<string, string>? tree, InstallPins? pins = null,
-        Dictionary<string, string>? loaderFiles = null, string? loaderPackage = null)
+    private void RequireStopped(IReadOnlyCollection<string>? runtimes, bool clientSession)
     {
-        var previous = pins == null ? RequireOwned(install) : null;
-        var marker = new Marker(nameof(TargetedRegression), pins?.Game ?? previous!.GameSha256, pins?.Loader ?? previous!.LoaderSha256,
-            arm, tree, loaderFiles ?? previous?.LoaderFiles, loaderPackage ?? previous?.LoaderPackage, previous?.LoaderSmoke ?? false);
-        File.WriteAllText(Path.Combine(install, MarkerFile), JsonSerializer.Serialize(marker, ManifestJson));
-    }
-
-    private static void MarkLoaderSmoke(string install)
-    {
-        var marker = RequireOwned(install);
-        File.WriteAllText(Path.Combine(install, MarkerFile), JsonSerializer.Serialize(marker with { LoaderSmoke = true }, ManifestJson));
+        if (ProcessCheck is { } controlled) controlled(runtimes, clientSession).GetAwaiter().GetResult();
+        else HostedRuntimeStage.RequireStoppedAsync(_host, LocalClientCopy.StepTimeout,
+            runtimes: runtimes, clientSession: clientSession).GetAwaiter().GetResult();
     }
 
     /// <summary>Every file under the install's <c>BepInEx/plugins</c>, <c>patchers</c>, <c>config</c> and <c>scripts</c>, by relative path and SHA256.</summary>

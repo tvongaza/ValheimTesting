@@ -5,7 +5,7 @@
   "environment": "<the run's regression.json>",
   "runner": "ExampleModMarkRegression",
   "sources": ["<your copy of TargetedRegression>/Program.cs", "<your copy of TargetedRegression>/Scenario.cs"],
-  "toolkit": { "package": "<the published Valheim.Testing.Game version the run used, or newer>" },
+  "toolkit": { "packageId": "Valheim.Testing.GameSessions", "package": "<the published GameSessions version the run used, or newer>" },
   "plugins": ["example.examplemod", "example.examplemod.testadapter"],
   "arms": {
     "parent": { "evidence": "<new-evidence-parent>", "expect": "fail", "failingStep": "<the step the fix changes>" },

@@ -150,12 +150,14 @@ internal static class HostedRuntimeStage
 
     public static Task<HostListing> PrepareAsync(IGameHost host, HostedRuntimeKind kind, string source, string destination, string staging,
         IReadOnlyList<HostedRuntimeFile> files, TimeSpan timeout, CancellationToken cancellation = default,
-        BepInExLoaderPackage? loaderPackage = null) =>
-        PrepareWithInspectedSourceAsync(host, kind, source, destination, staging, files, timeout, cancellation, loaderPackage, null);
+        BepInExLoaderPackage? loaderPackage = null,
+        Func<IGameHost, string, TimeSpan, CancellationToken, Task<MacBundleInspection.Verdict>>? repairMac = null) =>
+        PrepareWithInspectedSourceAsync(host, kind, source, destination, staging, files, timeout, cancellation, loaderPackage, null, repairMac);
 
     internal static async Task<HostListing> PrepareWithInspectedSourceAsync(IGameHost host, HostedRuntimeKind kind,
         string source, string destination, string staging, IReadOnlyList<HostedRuntimeFile> files, TimeSpan timeout,
-        CancellationToken cancellation, BepInExLoaderPackage? loaderPackage, HostListing? inspectedSource)
+        CancellationToken cancellation, BepInExLoaderPackage? loaderPackage, HostListing? inspectedSource,
+        Func<IGameHost, string, TimeSpan, CancellationToken, Task<MacBundleInspection.Verdict>>? repairMac = null)
     {
         ArgumentNullException.ThrowIfNull(host);
         ArgumentNullException.ThrowIfNull(files);
@@ -255,7 +257,7 @@ internal static class HostedRuntimeStage
             // removed and codesign and Gatekeeper must accept it, or preparation fails here and nothing launches it.
             if (kind == HostedRuntimeKind.Client && MacAppBundle.IsMacClient(copy))
             {
-                var bundle = await MacAppBundle.RepairAsync(host, destination, timeout, cancellation).ConfigureAwait(false);
+                var bundle = await (repairMac ?? MacAppBundle.RepairAsync)(host, destination, timeout, cancellation).ConfigureAwait(false);
                 if (bundle.State != MacBundleInspection.State.Accepted)
                     throw new IOException($"macOS would refuse the disposable copy of {GameLaunch.ClientMacBundle} at {destination} on {host.Name} " +
                         $"({MacBundleInspection.Describe(bundle)}), so it is not launched: a launch would make macOS call it damaged and kill it.");

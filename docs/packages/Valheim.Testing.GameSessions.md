@@ -6,7 +6,7 @@
 
 `Valheim.Testing.GameSessions` (net10.0) runs game sessions for mod tests: one or more real game processes in roles (a dedicated server, clients, a client that hosts its own world) on this machine or on others reached over SSH or a container, prepared, started, joined and torn down as one run. It is built on [`Valheim.Testing.Game`](Valheim.Testing.Game.md), which drives one game process; this package adds what a run of several processes, or a run on another machine, needs. Unofficial community tooling; not affiliated with or endorsed by Iron Gate or Coffee Stain. Valheim is a trademark of Iron Gate AB.
 
-A test project that only observes or drives one game through `GameActor`, `OwnedServerSession`, `ClientSession`, `ClientRounds` or a `TargetedRegression` needs `Valheim.Testing.Game` alone. Add this package when the test runs a session: a dedicated server with its clients, a hosted world with peers, a server-only load check, or any actor on another machine.
+A test project that only observes or drives one game through `GameActor`, `OwnedServerSession`, `ClientSession` or `ClientRounds` needs `Valheim.Testing.Game` alone. Add this package for `TargetedRegression`, which now uses the shared hosted-runtime copy and recovery path, or when the test runs a session: a dedicated server with its clients, a hosted world with peers, a server-only load check, or any actor on another machine.
 
 Topic pages: [pinned world dumps](../world-dump-contract.md) (`WorldDump`) and [evidence linked from `result.json`](../evidence.md) (review captures and clips).
 
