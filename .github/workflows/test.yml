@@ -345,6 +345,8 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup
+      - name: Check the native Ubuntu mirror pin
+        run: bash docker/linux-server/check-ubuntu-base.sh
       - run: dotnet run scripts/pins.cs -- docs
       # Negative controls: each edits tracked files, expects a refusal naming the file (and line), and restores them.
       - name: Refusals (negative controls)
