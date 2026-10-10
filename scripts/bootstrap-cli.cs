@@ -1,8 +1,9 @@
 // Build the exact pinned ValheimCLI transport into the local feed as Valheim.Testing.Cli.
 // Needs only the .NET 10 SDK and Git; never needs a game install.
 //
-//   dotnet run scripts/bootstrap-cli.cs
-//   dotnet run scripts/bootstrap-cli.cs -- --source /path/to/valheimCLI
+//   sh scripts/bootstrap-cli.sh                  (macOS/Linux)
+//   pwsh -File scripts/bootstrap-cli.ps1          (Windows)
+//   sh scripts/bootstrap-cli.sh --source /path/to/valheimCLI
 //
 // --source uses an existing Git repository, but exports the pinned commit
 // only, never its working tree.
@@ -16,7 +17,7 @@ string? sourceArg = null;
 for (int i = 0; i < args.Length; i++)
 {
     if (args[i] == "--source" && i + 1 < args.Length) sourceArg = args[++i];
-    else { Console.Error.WriteLine("usage: dotnet run scripts/bootstrap-cli.cs [-- --source <git repository>]"); return 2; }
+    else { Console.Error.WriteLine("usage: bootstrap-cli.sh or bootstrap-cli.ps1 [--source <git repository>]"); return 2; }
 }
 
 using JsonDocument pinDoc = JsonDocument.Parse(File.ReadAllText(Path.Combine(root, "cli-dependency.json")));

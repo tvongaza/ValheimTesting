@@ -39,7 +39,7 @@ For reusable synthetic ground and multi-zone height/paint state, read [Shared-wo
 3. For framework development, bootstrap the exact ValheimCLI dependency, then run local validation:
 
    ```sh
-   dotnet run scripts/bootstrap-cli.cs
+   sh scripts/bootstrap-cli.sh  # macOS/Linux; on Windows: powershell -NoProfile -File scripts/bootstrap-cli.ps1
    dotnet run scripts/validate.cs
    ```
 
@@ -49,7 +49,7 @@ For reusable synthetic ground and multi-zone height/paint state, read [Shared-wo
    A new public Game type is an operation, an operation's input, or a result shape marked `[ResultShape]` (any data type
    an operation returns; versioned with any JSON it is written to); the check refuses anything else ([CONTRIBUTING.md](../CONTRIBUTING.md)).
 
-   The same commands work in any shell on any OS (a blocked sandbox: see [AGENTS.md](../AGENTS.md)). This needs no game, Steam or test machine. For a mod checkout, use released packages directly, or restore candidates from a local feed. The [first mod test](../examples/ModWithTests/README.md) restores its pure packages from NuGet.org and needs no ValheimCLI bootstrap; it includes a GitHub Actions workflow for a mod repository. Package versions differ deliberately; follow the setup table rather than setting all packages to the same preview.
+   The platform bootstrap entrypoint checks both NuGet caches before the SDK restores the C# script, and prints the locations it uses. It moves an unwritable cache to an owned folder under `artifacts/nuget-bootstrap/`; `--check-caches` checks this without building or downloading anything. A blocked SDK file-based app directory is separate (see [AGENTS.md](../AGENTS.md)). This needs no game, Steam or test machine. For a mod checkout, use released packages directly, or restore candidates from a local feed. The [first mod test](../examples/ModWithTests/README.md) restores its pure packages from NuGet.org and needs no ValheimCLI bootstrap; it includes a GitHub Actions workflow for a mod repository. Package versions differ deliberately; follow the setup table rather than setting all packages to the same preview.
 4. If the task is satisfied by local tests, stop there. Otherwise prepare a bounded native test plan with explicit independent expectations and a negative control where useful. Do not invent a whole new runner for a check an example already performs.
 
 ## Before an authorized native run

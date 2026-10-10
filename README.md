@@ -51,7 +51,7 @@ Synthetic inputs are not Valheim's generator, a replay of a capture is not indep
 
 ## Contribute
 
-Mod developers and coding agents are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) has repository ownership, a worked fixture example, local checks (`dotnet run scripts/bootstrap-cli.cs`, then `dotnet run scripts/validate.cs`; no game) and PR expectations. Agents start with [AGENTS.md](AGENTS.md) and the [agent workflow](docs/agent-guide.md). Before a native run, read the [runtime hygiene checklist](docs/runtime-hygiene.md).
+Mod developers and coding agents are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) has repository ownership, a worked fixture example, local checks (the platform's `scripts/bootstrap-cli` entrypoint, then `dotnet run scripts/validate.cs`; no game) and PR expectations. Agents start with [AGENTS.md](AGENTS.md) and the [agent workflow](docs/agent-guide.md). Before a native run, read the [runtime hygiene checklist](docs/runtime-hygiene.md).
 
 ## License
 
