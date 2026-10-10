@@ -298,6 +298,7 @@ public sealed class HostedRuntimeStageTests : IDisposable
         FakeInstalls.Client(source);
         File.WriteAllText(Path.Combine(source, GameLaunch.ClientWindowsExecutable), "game executable");
         StageLoader(source);
+        File.WriteAllText(Path.Combine(source, "version.dll"), "another mod manager proxy");
         string originalMod = Path.Combine(source, "BepInEx", "plugins", "original.dll");
         Directory.CreateDirectory(Path.GetDirectoryName(originalMod)!);
         File.WriteAllText(originalMod, "unselected");
@@ -316,6 +317,7 @@ public sealed class HostedRuntimeStageTests : IDisposable
         Assert.Equal(InstallPins.Of(source).Loader, prepared.Pins.Loader);
         Assert.Equal(FileHash.Sha256(selected), prepared.Loader.Files["BepInEx/plugins/selected.dll"]);
         Assert.False(prepared.Loader.Files.ContainsKey("BepInEx/plugins/original.dll"));
+        Assert.False(prepared.Loader.Files.ContainsKey("version.dll"));
         Assert.Equal(before, WorldFixture.Manifest(source));
         Assert.False(Directory.Exists(Path.Combine(parent, "staging")));
         await HostedRuntimeStage.RetireAsync(host, prepared.LoaderRoot, Path.Combine(parent, "staging"), TimeSpan.FromSeconds(45));

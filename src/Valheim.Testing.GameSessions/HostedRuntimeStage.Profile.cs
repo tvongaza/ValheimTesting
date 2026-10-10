@@ -43,11 +43,18 @@ internal static partial class HostedRuntimeStage
             : preserveSourceSettings ? [settings] : Array.Empty<string>();
         // Windows loads the proxy from the executable directory. Its disposable launch folder hard-links
         // game files only, then receives a separately copied loader and selected BepInEx files.
+        // A mod manager may have placed another proxy beside valheim.exe (for example version.dll). Linking
+        // arbitrary root DLLs into our launch folder would load that manager's chain alongside this profile.
+        // Keep only the game's known root dependencies; every other source file stays untouched and out of the run.
         var gameLinks = windows ? game.Files.Keys.Where(path =>
             !path.StartsWith("BepInEx/", StringComparison.OrdinalIgnoreCase) &&
             !path.StartsWith("logs/", StringComparison.OrdinalIgnoreCase) &&
             !path.EndsWith(".log", StringComparison.OrdinalIgnoreCase) &&
-            !InstallPins.IsLoaderFile(path, StringComparison.OrdinalIgnoreCase)).ToArray() : [];
+            !InstallPins.IsLoaderFile(path, StringComparison.OrdinalIgnoreCase) &&
+            (path.Contains('/') || !path.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) ||
+                new[] { "UnityPlayer.dll", "steam_api64.dll", "steamclient64.dll" }.Contains(path, StringComparer.OrdinalIgnoreCase)) &&
+            !path.StartsWith(".doorstop", StringComparison.OrdinalIgnoreCase) &&
+            !path.StartsWith("doorstop", StringComparison.OrdinalIgnoreCase)).ToArray() : [];
         string payload = Path.Combine(Path.GetTempPath(), "valheim-profile-stage-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(payload);
         bool shipped = false, created = false;
