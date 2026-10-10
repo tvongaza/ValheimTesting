@@ -63,7 +63,7 @@ public sealed partial class GameLaunch
     public IReadOnlyDictionary<string, string> Prepended { get; }
     /// <summary>Inherited variables removed before the launch: Doorstop's, apart from the ones set here.</summary>
     public IReadOnlyList<string> Unset { get; }
-    /// <summary>Files, relative to <see cref="WorkingDirectory"/> and written with <c>/</c>, the game and BepInEx's loader need.</summary>
+    /// <summary>Files the game and BepInEx loader need: relative to <see cref="WorkingDirectory"/> for a normal install, or absolute loader paths when a disposable profile supplies it.</summary>
     public IReadOnlyList<string> RequiredFiles { get; }
     /// <summary>
     /// Names of variables whose values come from this process's environment at launch and reach only the game's environment (a
@@ -104,32 +104,38 @@ public sealed partial class GameLaunch
 
     // A launch for this machine, built as if on builtOn (so every machine's branches are tested on any OS).
     internal static GameLaunch LocalServer(string runtimeDirectory, IEnumerable<string> arguments, IReadOnlyDictionary<string, string>? environment, ServerHost builtOn,
-        ClientArchitecture macArchitecture)
+        ClientArchitecture macArchitecture, string? loaderDirectory = null)
     {
         ArgumentNullException.ThrowIfNull(arguments);
         string runtime = FullRuntime(runtimeDirectory);
+        string loader = loaderDirectory == null ? runtime : FullRuntime(loaderDirectory);
         var (platform, executable) = ResolveServer(runtime, builtOn);
-        BepInExLoader.RequireCore(runtime, "runtime");
+        if (platform == ServerPlatform.Windows && loader.Equals(runtime, StringComparison.OrdinalIgnoreCase)) loader = runtime;
+        if (platform == ServerPlatform.Windows && !loader.Equals(runtime, StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("A Windows Doorstop proxy must be beside the server executable; use a launch folder that owns both.", nameof(loaderDirectory));
+        string loaderKind = loader == runtime ? "runtime" : "loader";
+        BepInExLoader.RequireCore(loader, loaderKind);
         string? macDoorstop = null;
-        if (platform == ServerPlatform.Windows) BepInExLoader.RequireWindowsLoader(runtime, "runtime");
-        else if (platform == ServerPlatform.Linux) BepInExLoader.RequireFile(runtime, BepInExLoader.LinuxLibrary, "BepInEx's Doorstop loader is missing from the runtime");
+        if (platform == ServerPlatform.Windows) BepInExLoader.RequireWindowsLoader(loader, loaderKind);
+        else if (platform == ServerPlatform.Linux) BepInExLoader.RequireFile(loader, BepInExLoader.LinuxLibrary, "BepInEx's Doorstop loader is missing from the runtime");
         else
         {
-            macDoorstop = MacDoorstop(runtime, executable, macArchitecture, client: false);
+            macDoorstop = MacDoorstop(loader, executable, macArchitecture, client: false);
             // DYLD_INSERT_LIBRARIES splits on ':', so such a path cannot be listed.
-            if (runtime.Contains(':')) throw new ArgumentException("A macOS runtime path cannot contain ':'.", nameof(runtimeDirectory));
+            if (runtime.Contains(':') || loader.Contains(':')) throw new ArgumentException("A macOS runtime or loader path cannot contain ':'.", nameof(runtimeDirectory));
         }
         environment ??= new Dictionary<string, string>();
         var names = builtOn == ServerHost.Windows ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
         var passed = BepInExLoader.RefuseOverrides(environment, arguments, names, nameof(GameLaunch));
         // Both lists split on ':' (LD_LIBRARY_PATH also on ';'), so such a path cannot be represented.
         // Checked where the launch can run; a Windows host only builds this for inspection.
-        if (platform == ServerPlatform.Linux && builtOn != ServerHost.Windows && runtime.IndexOfAny([':', ';']) >= 0)
+        if (platform == ServerPlatform.Linux && builtOn != ServerHost.Windows && (runtime.IndexOfAny([':', ';']) >= 0 || loader.IndexOfAny([':', ';']) >= 0))
             throw new ArgumentException("A Linux runtime path cannot contain ':' or ';'.", nameof(runtimeDirectory));
 
         var os = platform == ServerPlatform.Windows ? ClientPlatform.Windows : platform == ServerPlatform.Linux ? ClientPlatform.Linux : ClientPlatform.MacOS;
-        var (set, prepended, required) = Loader(server: true, os, environment, names, LocalJoin(runtime), Relative(runtime, executable),
-            macDoorstop == null ? null : Relative(runtime, macDoorstop));
+        var (set, prepended, required) = Loader(server: true, os, environment, names, LocalJoin(runtime), LocalJoin(loader),
+            !loader.Equals(runtime, platform == ServerPlatform.Windows ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal),
+            Relative(runtime, executable), macDoorstop == null ? null : Relative(loader, macDoorstop));
         return new GameLaunch(server: true, os, forHost: false, runtime, executable, passed, set, prepended, required, macArchitecture);
     }
 
@@ -147,7 +153,8 @@ public sealed partial class GameLaunch
         RequireHostEnvironment(environment, refuseLoaderPaths: !windows);
         var os = windows ? ClientPlatform.Windows : ClientPlatform.Linux;
         string executable = windows ? ServerWindowsExecutable : ServerLinuxExecutable;
-        var (set, prepended, required) = Loader(server: true, os, environment, names, relative => HostJoin(root, windows, relative), executable, null);
+        var join = (string relative) => HostJoin(root, windows, relative);
+        var (set, prepended, required) = Loader(server: true, os, environment, names, join, join, false, executable, null);
         return new GameLaunch(server: true, os, forHost: true, root, HostJoin(root, windows, executable), passed, set, prepended, required);
     }
 
@@ -194,17 +201,22 @@ public sealed partial class GameLaunch
 
     // A launch for this machine, built as if on builtOn (so every machine's branches are tested on any OS).
     internal static GameLaunch LocalClient(string installDirectory, IEnumerable<string> arguments, IReadOnlyDictionary<string, string>? environment,
-        ClientArchitecture architecture, bool console, ClientPlatform builtOn)
+        ClientArchitecture architecture, bool console, ClientPlatform builtOn, string? loaderDirectory = null)
     {
         ArgumentNullException.ThrowIfNull(arguments);
         string install = FullInstall(installDirectory);
+        string loader = loaderDirectory == null ? install : FullInstall(loaderDirectory);
         var (platform, executable) = ResolveClient(install, builtOn);
+        if (platform == ClientPlatform.Windows && loader.Equals(install, StringComparison.OrdinalIgnoreCase)) loader = install;
         RequireX64(platform, architecture);
-        BepInExLoader.RequireCore(install, "install");
+        if (platform == ClientPlatform.Windows && !loader.Equals(install, StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("A Windows Doorstop proxy must be beside the client executable; use a launch folder that owns both.", nameof(loaderDirectory));
+        string loaderKind = loader == install ? "install" : "loader";
+        BepInExLoader.RequireCore(loader, loaderKind);
         string? macDoorstop = null;
-        if (platform == ClientPlatform.Windows) BepInExLoader.RequireWindowsLoader(install, "install");
-        else if (platform == ClientPlatform.Linux) BepInExLoader.RequireFile(install, BepInExLoader.LinuxLibrary, "BepInEx's Doorstop loader is missing from the install");
-        else macDoorstop = RequireMacArchitecture(install, architecture);
+        if (platform == ClientPlatform.Windows) BepInExLoader.RequireWindowsLoader(loader, loaderKind);
+        else if (platform == ClientPlatform.Linux) BepInExLoader.RequireFile(loader, BepInExLoader.LinuxLibrary, "BepInEx's Doorstop loader is missing from the install");
+        else macDoorstop = RequireMacArchitecture(install, architecture, loader);
 
         environment ??= new Dictionary<string, string>();
         var names = builtOn == ClientPlatform.Windows ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
@@ -212,11 +224,13 @@ public sealed partial class GameLaunch
         // Search lists split on ':' (LD_LIBRARY_PATH also on ';'), so such a path cannot be represented. Checked only
         // where the launch can run; a Windows machine builds these launches only when a test injects the host.
         if (platform != ClientPlatform.Windows && !OperatingSystem.IsWindows()
-            && install.IndexOfAny(platform == ClientPlatform.Linux ? [':', ';'] : [':']) >= 0)
+            && (install.IndexOfAny(platform == ClientPlatform.Linux ? [':', ';'] : [':']) >= 0 ||
+                loader.IndexOfAny(platform == ClientPlatform.Linux ? [':', ';'] : [':']) >= 0))
             throw new ArgumentException($"A {platform} install path cannot contain ':'" + (platform == ClientPlatform.Linux ? " or ';'." : "."), nameof(installDirectory));
 
-        var (set, prepended, required) = Loader(server: false, platform, environment, names, LocalJoin(install), Relative(install, executable),
-            macDoorstop == null ? null : Relative(install, macDoorstop));
+        var (set, prepended, required) = Loader(server: false, platform, environment, names, LocalJoin(install), LocalJoin(loader),
+            !loader.Equals(install, platform == ClientPlatform.Windows ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal),
+            Relative(install, executable), macDoorstop == null ? null : Relative(loader, macDoorstop));
         return new GameLaunch(server: false, platform, forHost: false, install, executable, passed, set, prepended, required, architecture);
     }
 
@@ -237,37 +251,40 @@ public sealed partial class GameLaunch
         // The client's start script puts the loader's entries in front of the caller's own value.
         RequireHostEnvironment(environment, refuseLoaderPaths: false);
         string executable = windows ? ClientWindowsExecutable : ClientLinuxExecutable;
-        var (set, prepended, required) = Loader(server: false, platform, environment, names, relative => HostJoin(root, windows, relative), executable, null);
+        var join = (string relative) => HostJoin(root, windows, relative);
+        var (set, prepended, required) = Loader(server: false, platform, environment, names, join, join, false, executable, null);
         return new GameLaunch(server: false, platform, forHost: true, root, HostJoin(root, windows, executable), passed, set, prepended, required, secretVariables: secretVariables);
     }
 
     // The loader's part of every launch, one rule set for both roles, here and on a host: the caller's variables first, then
     // SteamAppId's default, Doorstop's variables on Linux and macOS, the entries the pack's scripts put in front of a search list,
-    // and the files the launch needs. join turns a path relative to the root (written with '/') into the launch's own form;
-    // executable and macDoorstop are relative the same way.
+    // and the files the launch needs. The game and loader joins are the same for a copied install, but differ for a profile;
+    // executable is relative to the game, and macDoorstop to the loader.
     private static (Dictionary<string, string> Set, Dictionary<string, string> Prepended, string[] Required) Loader(bool server, ClientPlatform platform,
-        IReadOnlyDictionary<string, string>? caller, StringComparer names, Func<string, string> join, string executable, string? macDoorstop)
+        IReadOnlyDictionary<string, string>? caller, StringComparer names, Func<string, string> gameJoin, Func<string, string> loaderJoin,
+        bool separateRoots, string executable, string? macDoorstop)
     {
         var set = new Dictionary<string, string>(names);
         foreach (var (name, value) in caller ?? new Dictionary<string, string>()) set[name] = value;
         set.TryAdd("SteamAppId", SteamAppId);
         var prepended = new Dictionary<string, string>(names);
-        if (platform == ClientPlatform.Windows) return (set, prepended, [executable, .. BepInExLoader.LoaderFiles(ClientPlatform.Windows)]);
+        string RequiredLoader(string relative) => separateRoots ? loaderJoin(relative) : relative;
+        if (platform == ClientPlatform.Windows) return (set, prepended, [executable, .. BepInExLoader.LoaderFiles(ClientPlatform.Windows).Select(RequiredLoader)]);
         set["DOORSTOP_ENABLED"] = "1";
-        set["DOORSTOP_TARGET_ASSEMBLY"] = join(BepInExLoader.CorePreloader);
+        set["DOORSTOP_TARGET_ASSEMBLY"] = loaderJoin(BepInExLoader.CorePreloader);
         if (platform == ClientPlatform.Linux)
         {
             // Same effective order as the pack's scripts: (the server's linux64, then) doorstop_libs, then the existing value.
-            prepended["LD_LIBRARY_PATH"] = server ? join("linux64") + ":" + join("doorstop_libs") : join("doorstop_libs");
+            prepended["LD_LIBRARY_PATH"] = server ? gameJoin("linux64") + ":" + loaderJoin("doorstop_libs") : loaderJoin("doorstop_libs");
             prepended["LD_PRELOAD"] = "libdoorstop_x64.so";
-            return (set, prepended, [executable, .. BepInExLoader.LoaderFiles(ClientPlatform.Linux)]);
+            return (set, prepended, [executable, .. BepInExLoader.LoaderFiles(ClientPlatform.Linux).Select(RequiredLoader)]);
         }
         // macOS, on this machine only. With Doorstop injected, Mono finds the server's libmono-native.dylib only through the library
         // path, and the server keeps it beside itself, not at the root: without it, or with the root, the server never started
         // (30 Sep 2026, build 25527701). The client's Doorstop library is named by full path, so it needs no library path.
-        if (server) prepended["DYLD_LIBRARY_PATH"] = join(executable[..executable.LastIndexOf('/')]);
-        prepended["DYLD_INSERT_LIBRARIES"] = join(macDoorstop!);
-        return (set, prepended, [executable, BepInExLoader.CorePreloader, BepInExLoader.CoreLibrary, macDoorstop!]);
+        if (server) prepended["DYLD_LIBRARY_PATH"] = gameJoin(executable[..executable.LastIndexOf('/')]);
+        prepended["DYLD_INSERT_LIBRARIES"] = loaderJoin(macDoorstop!);
+        return (set, prepended, [executable, RequiredLoader(BepInExLoader.CorePreloader), RequiredLoader(BepInExLoader.CoreLibrary), RequiredLoader(macDoorstop!)]);
     }
 
     private static Func<string, string> LocalJoin(string root) => relative => Path.Combine(root, relative.Replace('/', Path.DirectorySeparatorChar));

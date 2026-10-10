@@ -202,6 +202,42 @@ public class ClientLaunchTests
         Assert.Equal(":0", start.Environment["DISPLAY"]);
         Assert.Equal("892970", start.Environment["SteamAppId"]);
     }
+
+    [Fact] public void LinuxProfileLoadsOnlyFromItsSeparateLoaderRoot()
+    {
+        using var game = Install.Linux(name: "game");
+        using var profile = Install.Linux(name: "profile");
+        var launch = GameLaunch.LocalClient(game.Root, [], null, ClientArchitecture.X64, true, ClientPlatform.Linux, profile.Root);
+        var start = launch.ToStartInfo();
+        Assert.Equal(game.Executable, start.FileName);
+        Assert.Equal(game.Root, start.WorkingDirectory);
+        Assert.Equal(Path.Combine(profile.Root, "BepInEx", "core", "BepInEx.Preloader.dll"), start.Environment["DOORSTOP_TARGET_ASSEMBLY"]);
+        Assert.StartsWith(Path.Combine(profile.Root, "doorstop_libs"), start.Environment["LD_LIBRARY_PATH"]);
+        Assert.Contains(Path.Combine(profile.Root, "doorstop_libs", "libdoorstop_x64.so"), launch.RequiredFiles);
+        Assert.DoesNotContain(launch.RequiredFiles, file => file.StartsWith(Path.Combine(game.Root, "BepInEx"), StringComparison.Ordinal));
+    }
+
+    [Fact] public void MacProfileKeepsTheRealBundleAndInsertsOnlyItsOwnDoorstop()
+    {
+        using var game = Install.Mac(name: "game");
+        using var profile = Install.Mac(name: "profile", universalDoorstop: true, core: NativeDetour);
+        var launch = GameLaunch.LocalClient(game.Root, [], null, ClientArchitecture.Arm64, true, ClientPlatform.MacOS, profile.Root);
+        var start = launch.ToStartInfo();
+        Assert.Contains(game.Executable, start.ArgumentList);
+        Assert.Equal(game.Root, start.WorkingDirectory);
+        Assert.Equal(Path.Combine(profile.Root, "BepInEx", "core", "BepInEx.Preloader.dll"), start.Environment["DOORSTOP_TARGET_ASSEMBLY"]);
+        Assert.Equal(new[] { "-e", "DYLD_INSERT_LIBRARIES=" + Path.Combine(profile.Root, "libdoorstop.dylib") },
+            ExportPair(start.ArgumentList.ToList(), "DYLD_INSERT_LIBRARIES"));
+    }
+
+    [Fact] public void WindowsRefusesALoaderAwayFromItsExecutable()
+    {
+        using var game = Install.Windows(name: "game");
+        using var profile = Install.Windows(name: "profile");
+        var error = Assert.Throws<ArgumentException>(() => GameLaunch.LocalClient(game.Root, [], null,
+            ClientArchitecture.X64, true, ClientPlatform.Windows, profile.Root));
+        Assert.Contains("beside the client executable", error.Message);
+    }
     [Fact] public void EmptyLibraryPathsAddNoEmptyEntry()
     {
         using var install = Install.Linux();
