@@ -90,6 +90,47 @@ public sealed class ServerLoadPhasesTests : IDisposable
     }
 
     [Fact]
+    public async Task OutputInsideTheServerInstallIsRefusedBeforeAnyWrite()
+    {
+        string plan = Plan(), server = Path.Combine(_root, "server");
+        string output = Path.Combine(server, "phase-run");
+        int calls = 0;
+
+        int result = await ServerLoadPhases.RunAsync(["--plan", plan, "--output", output], _ =>
+        {
+            calls++;
+            return Task.FromResult(0);
+        });
+
+        Assert.Equal(3, result);
+        Assert.Equal(0, calls);
+        Assert.False(Directory.Exists(output));
+        Assert.Equal("source server", File.ReadAllText(Path.Combine(server, "server-marker")));
+    }
+
+    [Fact]
+    public async Task InventorySelectedServerAlsoProtectsItsInstallBeforeAnyWrite()
+    {
+        string plan = Plan(), server = Path.Combine(_root, "server");
+        string inventory = Path.Combine(_root, "inventory.json");
+        File.WriteAllText(inventory, JsonSerializer.Serialize(new
+        {
+            environments = new[] { new { name = "server", roles = new[] { "server" }, install = server } },
+        }));
+        var parsed = JsonSerializer.Deserialize<ServerLoadPhases.Plan>(File.ReadAllText(plan),
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true })!;
+        parsed.CommonArgs = ["--inventory", inventory];
+        File.WriteAllText(plan, JsonSerializer.Serialize(parsed));
+        string output = Path.Combine(server, "inventory-phase-run");
+
+        int result = await ServerLoadPhases.RunAsync(["--plan", plan, "--output", output], _ => Task.FromResult(0));
+
+        Assert.Equal(3, result);
+        Assert.False(Directory.Exists(output));
+        Assert.Equal("source server", File.ReadAllText(Path.Combine(server, "server-marker")));
+    }
+
+    [Fact]
     public async Task AReportedSuccessWithoutAConfirmedFixtureStopsBeforeTheNextPhase()
     {
         string output = Path.Combine(_root, "unconfirmed-run");

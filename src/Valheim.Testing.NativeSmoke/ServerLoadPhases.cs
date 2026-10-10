@@ -67,7 +67,19 @@ internal static class ServerLoadPhases
             // Validate every phase's exact server-load command before any copy or game process exists.
             foreach (var (phase, _, evidence, checkpoint) in phases)
                 BuildArgs(plan.CommonArgs, phase.Args, fixture, evidence, checkpoint);
+            // Resolve the server even when it came from an inventory. The aggregate output is
+            // written before the first server-load command, so its own protected-path check is
+            // too late to keep this wrapper out of the source install or loader package.
+            string[] firstArgs = BuildArgs(plan.CommonArgs, phases[0].phase.Args, fixture,
+                phases[0].evidence, phases[0].checkpoint);
+            if (!ServerLoad.TryRead(firstArgs, out var parsed, out string parseError, allowImplicitMod: false))
+                throw new InvalidDataException("Invalid first server-load phase: " + parseError);
+            var choice = ServerLoad.Choose(parsed!, output);
+            string? loader = parsed!.Options.GetValueOrDefault("--loader-package") ?? choice.Server.LoaderPackage;
+            FixtureBake.RefuseOutput(output, loader == null ? [choice.Server.Install]
+                : [choice.Server.Install, BepInExLoaderPackage.Read(loader).Root]);
             var inputs = CaptureInputs(planFile, plan);
+            FixtureBake.RefuseOutput(output, inputs.Where(input => input.Files != null).Select(input => input.Path).ToArray());
             Directory.CreateDirectory(output);
             File.Copy(planFile, Path.Combine(output, "phase-plan.json"));
             if (generatedSource != null) DefaultSmokeWorld.PrepareServerSaveRoot(generatedSource);
