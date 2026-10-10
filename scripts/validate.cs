@@ -3,6 +3,9 @@
 //   dotnet run scripts/validate.cs
 //   dotnet run scripts/validate.cs -- --skip-ci-shell   CI only: shell integration runs in its own job
 //   dotnet run scripts/validate.cs -- --only-ci-shell   CI only: run that shard with the same data-root guard
+//   dotnet run scripts/validate.cs -- --ci-main-tests  CI only: Windows toolkit tests excluding measured slow methods
+//   dotnet run scripts/validate.cs -- --ci-timed 1|2   CI only: one balanced slow-method shard
+//   dotnet run scripts/validate.cs -- --ci-build-only  CI only: Windows packaging and other test layers
 //
 // Runs the library tests, compiles the adapter source package against reference stubs, builds every example, tool and script, runs
 // the FullLifecycle example's and the native acceptance suite's tests against scripted fakes,
@@ -18,13 +21,17 @@
 // followed by a comparison with the folder as validation found it, and the first command that changed it fails, naming what.
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
+using System.Text.Json;
 using System.Xml.Linq;
 
 string root = FindRoot();
 bool skipCiShell = args.SequenceEqual(["--skip-ci-shell"]);
 bool onlyCiShell = args.SequenceEqual(["--only-ci-shell"]);
-if (args.Length != 0 && !skipCiShell && !onlyCiShell)
-    throw new ArgumentException("usage: dotnet run scripts/validate.cs [--skip-ci-shell|--only-ci-shell]");
+bool ciMainTests = args.SequenceEqual(["--ci-main-tests"]);
+bool ciBuildOnly = args.SequenceEqual(["--ci-build-only"]);
+int ciTimed = args is ["--ci-timed", "1"] ? 1 : args is ["--ci-timed", "2"] ? 2 : 0;
+if (args.Length != 0 && !skipCiShell && !onlyCiShell && !ciMainTests && !ciBuildOnly && ciTimed == 0)
+    throw new ArgumentException("usage: dotnet run scripts/validate.cs [--skip-ci-shell|--only-ci-shell|--ci-main-tests|--ci-timed 1|2|--ci-build-only]");
 string results = Path.Combine(root, "artifacts", "validate");
 Directory.CreateDirectory(results);
 string transcript = Path.Combine(results, "validate.log");
@@ -40,9 +47,52 @@ if (onlyCiShell)
     return 0;
 }
 
+// The timing manifest is an optimisation, not an allowlist. A newly added test stays in ci-main until its measured
+// method is added here. Every listed method appears in exactly one timed shard, and ci-main-tests excludes that list.
+using var timingDocument = JsonDocument.Parse(File.ReadAllText(Path.Combine(root, "scripts", "ci-test-timings.json")));
+var timedMethods = timingDocument.RootElement.EnumerateArray()
+    .Select(item => new TimedMethod(item.GetProperty("Name").GetString() ?? "", item.GetProperty("Seconds").GetDouble())).ToArray();
+if (timedMethods.Length == 0 || timedMethods.Any(method => method.Seconds <= 0 ||
+    !method.Name.Contains('.') || !System.Text.RegularExpressions.Regex.IsMatch(method.Name, @"^[A-Za-z_][A-Za-z_0-9.]*$")) ||
+    timedMethods.Select(method => method.Name).Distinct(StringComparer.Ordinal).Count() != timedMethods.Length)
+    throw new InvalidOperationException("CI test timing manifest has an invalid or duplicate method.");
+var timedShards = timedMethods.GroupBy(method => method.Name[..method.Name.LastIndexOf('.')])
+    .SelectMany(group =>
+    {
+        double[] loads = [0, 0];
+        return group.OrderByDescending(method => method.Seconds).ThenBy(method => method.Name, StringComparer.Ordinal)
+            .Select(method =>
+            {
+                int shard = loads[0] <= loads[1] ? 0 : 1;
+                loads[shard] += method.Seconds;
+                return (method.Name, Shard: shard + 1);
+            });
+    }).ToArray();
+if (ciTimed != 0)
+{
+    var selected = timedShards.Where(method => method.Shard == ciTimed).Select(method => method.Name).ToArray();
+    if (selected.Length == 0) throw new InvalidOperationException($"CI timed shard {ciTimed} has no methods.");
+    Note($"CI timed shard {ciTimed}: {selected.Length} methods; measured total {timedMethods.Where(method => selected.Contains(method.Name)).Sum(method => method.Seconds):F1} test-seconds.");
+    Test("tests/Valheim.Testing.Tests/Valheim.Testing.Tests.csproj", "--filter",
+        string.Join('|', selected.Select(name => "FullyQualifiedName=" + name)), "--", "RunConfiguration.TreatNoTestsAsError=true");
+    Note($"CI timed shard {ciTimed} passed; the data-root guard found no changes.");
+    return 0;
+}
+
 // CI runs the slower local-shell integration tests in their own three-OS job. Plain local validation still runs all tests.
-if (skipCiShell) Test("tests/Valheim.Testing.Tests/Valheim.Testing.Tests.csproj", "--filter", "Category!=CiShell");
-else Test("tests/Valheim.Testing.Tests/Valheim.Testing.Tests.csproj");
+if (ciMainTests)
+{
+    Test("tests/Valheim.Testing.Tests/Valheim.Testing.Tests.csproj", "--filter",
+        "Category!=CiShell&" + string.Join('&', timedMethods.Select(method => "FullyQualifiedName!=" + method.Name)),
+        "--", "RunConfiguration.TreatNoTestsAsError=true");
+    Note("CI main toolkit tests passed; the data-root guard found no changes.");
+    return 0;
+}
+if (!ciBuildOnly)
+{
+    if (skipCiShell) Test("tests/Valheim.Testing.Tests/Valheim.Testing.Tests.csproj", "--filter", "Category!=CiShell");
+    else Test("tests/Valheim.Testing.Tests/Valheim.Testing.Tests.csproj");
+}
 Test("tests/Valheim.Testing.Doubles.Tests/Valheim.Testing.Doubles.Tests.csproj");
 Test("tests/Valheim.Testing.Bindings.Tests/Valheim.Testing.Bindings.Tests.csproj");
 // The adapter source is compiled into a mod's game-side adapter against the game; here, against declared signatures
@@ -93,7 +143,7 @@ Run("dotnet", "run", "scripts/package-audit.cs", "--", "--directory", feed, "--c
 // A mod's view of what was just packed: outside this checkout, the candidate packages only from .packages and byte-identical
 // to it, the Cli from .packages too (its pin may not be published yet), every other package from NuGet.org.
 Run("dotnet", "run", "scripts/consumer.cs", "--", "--feed", "local", "--candidate", candidate);
-Note(skipCiShell ? "CI validation passed; local-shell integration tests run in their separate job." : "Local validation passed.");
+Note(skipCiShell || ciBuildOnly ? "CI validation passed; toolkit shards run in separate jobs." : "Local validation passed.");
 return 0;
 
 static string ScriptPath([CallerFilePath] string path = "") => path;
@@ -127,8 +177,12 @@ void Test(string project, params string[] extra)
     string output = Path.Combine(results, Path.GetFileNameWithoutExtension(project));
     try
     {
-        Run("dotnet", ["test", project, "-c", "Release", "-m:1", "--blame-hang-timeout", "5m", "--blame-hang-dump-type", "none",
-            "--results-directory", output, .. extra]);
+        var arguments = new List<string> { "test", project, "-c", "Release", "-m:1", "--blame-hang-timeout", "5m",
+            "--blame-hang-dump-type", "none", "--results-directory", output };
+        if (Environment.GetEnvironmentVariable("VT_CI_PROFILE") == "1")
+            arguments.AddRange(["--logger", "trx;LogFileName=timings.trx"]);
+        arguments.AddRange(extra);
+        Run("dotnet", arguments.ToArray());
     }
     catch
     {
@@ -235,3 +289,5 @@ void Note(string text)
 }
 
 static string Elapsed(TimeSpan span) => $"{(int)span.TotalMinutes}m{span.Seconds:00}s";
+
+file sealed record TimedMethod(string Name, double Seconds);
