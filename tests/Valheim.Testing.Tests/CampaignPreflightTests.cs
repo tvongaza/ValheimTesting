@@ -150,6 +150,7 @@ public sealed class CampaignPreflightTests : IDisposable
     [Fact]
     public async Task EnvPreflightWithoutACampaignReportsTheInventoryAndWhatIsMissing()
     {
+        using var machine = EnvironmentInventory.UseMachine(new FakeMachine(HostProfile.CurrentPlatform));
         // This machine's journal is this test's own: runs other test processes left in the shared one never decide it.
         using var journal = RunJournal.UseLocalDirectory(Path.Combine(_root, "journal"));
         using var output = new StringWriter();
@@ -189,22 +190,64 @@ public sealed class CampaignPreflightTests : IDisposable
         using var journal = RunJournal.UseLocalDirectory(Path.Combine(_root, "packaged-journal"));
         string inventory = Inventory();
         using var refused = new StringWriter();
-        Assert.Equal(3, await EnvCommand.RunAsync(["preflight", "--inventory", inventory], refused, new StringWriter(),
-            () => PackagedApp.RefusalFor("Claude_1.0.0.0_x64__test")));
-        Assert.Contains("REFUSED this-machine packaged app: valheim-test is running inside the packaged app Claude_1.0.0.0_x64__test.", refused.ToString());
-        Assert.Contains("Run valheim-test from an ordinary terminal", refused.ToString());
-        Assert.EndsWith("REFUSED: valheim-test runs inside a packaged app; run it from an ordinary terminal." + Environment.NewLine, refused.ToString());
-        using var json = new StringWriter();
-        Assert.Equal(3, await EnvCommand.RunAsync(["preflight", "--json", "--inventory", inventory], json, new StringWriter(),
-            () => PackagedApp.RefusalFor("Claude_1.0.0.0_x64__test")));
-        var listing = System.Text.Json.JsonDocument.Parse(json.ToString()).RootElement;
-        Assert.False(listing.GetProperty("Ready").GetBoolean());
-        Assert.Contains(listing.GetProperty("Problems").EnumerateArray(), problem => problem.GetProperty("Input").GetString() == "packaged app");
+        using (LocalHostPreflight.ReplaceDefaultProbesForTest(new(Packaged: () => PackagedApp.RefusalFor("Claude_1.0.0.0_x64__test"))))
+        {
+            Assert.Equal(3, await EnvCommand.RunAsync(["preflight", "--inventory", inventory], refused, new StringWriter()));
+            Assert.Contains("REFUSED this-machine packaged app: valheim-test is running inside the packaged app Claude_1.0.0.0_x64__test.", refused.ToString());
+            Assert.Contains("Run valheim-test from an ordinary terminal", refused.ToString());
+            Assert.EndsWith("REFUSED: valheim-test runs inside a packaged app; run it from an ordinary terminal." + Environment.NewLine, refused.ToString());
+            using var json = new StringWriter();
+            Assert.Equal(3, await EnvCommand.RunAsync(["preflight", "--json", "--inventory", inventory], json, new StringWriter()));
+            var listing = System.Text.Json.JsonDocument.Parse(json.ToString()).RootElement;
+            Assert.False(listing.GetProperty("Ready").GetBoolean());
+            Assert.Contains(listing.GetProperty("Problems").EnumerateArray(), problem => problem.GetProperty("Input").GetString() == "packaged app");
+        }
         // Not packaged: the same inventory is eligible.
         using var eligible = new StringWriter();
-        Assert.True(await EnvCommand.RunAsync(["preflight", "--inventory", inventory], eligible, new StringWriter(), () => null) == 0, eligible.ToString());
+        Assert.True(await EnvCommand.RunAsync(["preflight", "--inventory", inventory], eligible, new StringWriter()) == 0, eligible.ToString());
         Assert.Contains("ELIGIBLE:", eligible.ToString());
+        Assert.Contains("No local host checks were required.", eligible.ToString());
+        Assert.Contains("No local client desktop or Steam check was required.", eligible.ToString());
         Assert.Equal(OperatingSystem.IsWindows(), eligible.ToString().Contains("This process is not inside a packaged app.", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task EnvPreflightDoesNotClaimRemoteClientChecksPassed()
+    {
+        string inventory = Write("local-server-remote-client.json", new
+        {
+            hosts = new Dictionary<string, object>
+            {
+                ["here"] = new { kind = "local", platform = HostProfile.CurrentPlatform,
+                    shell = OperatingSystem.IsWindows() ? "powershell" : "bash", @lock = Path.Combine(_root, "host.lock") },
+                ["elsewhere"] = new { kind = "ssh", platform = "windows", shell = "powershell",
+                    @lock = @"C:\locks\test.lock", destination = "test@elsewhere" },
+            },
+            environments = new object[]
+            {
+                new { name = "local-server", host = "here", roles = new[] { "server" },
+                    install = Path.Combine(_root, "server"), runtime = Path.Combine(_root, "runs"), cliPort = 5577, gamePort = 2456 },
+                new { name = "remote-client", host = "elsewhere", roles = new[] { "client" },
+                    install = @"C:\client", runtime = @"C:\runs", cliPort = 5578 },
+            },
+            leaseHost = "elsewhere",
+            leaseDirectory = @"C:\leases",
+        });
+        using var probes = LocalHostPreflight.ReplaceDefaultProbesForTest(new(
+            Lock: (_, _, _, _) => Task.FromResult(new HostLockResult(HostLockState.Free, null, "free")),
+            Port: (_, _, _, _) => Task.CompletedTask,
+            Processes: (_, _, _, _) => Task.CompletedTask,
+            Journals: (_, _) => Task.FromResult<IReadOnlyList<CampaignPreflightProblem>>([]),
+            SteamRunning: () => throw new Exception("a remote client must not check this machine's Steam"),
+            Desktop: _ => throw new Exception("a remote client must not check this machine's desktop"),
+            MacDesktop: () => throw new Exception("a remote client must not check this machine's desktop"),
+            Packaged: () => null));
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+        int result = await EnvCommand.RunAsync(["preflight", "--inventory", inventory], output, error);
+        Assert.True(result == 0, output + Environment.NewLine + error);
+        Assert.Contains("The selected local host lock, game processes, and ValheimCLI ports passed", output.ToString());
+        Assert.Contains("No local client desktop or Steam check was required.", output.ToString());
     }
 
     // #257: a bare preflight reads this machine's journal (through its own shell) and refuses while a run of another process
@@ -246,6 +289,44 @@ public sealed class CampaignPreflightTests : IDisposable
         using var eligible = new StringWriter();
         Assert.Equal(0, await EnvCommand.RunAsync(["preflight", "--inventory", inventory], eligible, new StringWriter()));
         Assert.Contains("ELIGIBLE: the inventory has a server and a client environment, and this machine's journal holds no run going or left unrecovered.", eligible.ToString());
+    }
+
+    [Fact]
+    public async Task FakeHostedClientStillChecksTheLocalSteamProcess()
+    {
+        string inventory = Write("local-inventory.json", new
+        {
+            hosts = new { here = new { kind = "local", platform = HostProfile.CurrentPlatform,
+                shell = OperatingSystem.IsWindows() ? "powershell" : "bash", @lock = Path.Combine(_root, "host.lock") } },
+            environments = new object[]
+            {
+                new { name = "local-server", host = "here", roles = new[] { "server" }, install = Path.Combine(_root, "server"),
+                    runtime = Path.Combine(_root, "runs", "server"), cliPort = 5577, gamePort = 2456 },
+                new { name = "local-client", host = "here", roles = new[] { "client" }, install = Path.Combine(_root, "client"),
+                    runtime = Path.Combine(_root, "runs", "client"), cliPort = 5578 },
+            },
+        });
+        string file = Write("local-campaign.json", new
+        {
+            inventory, server = new { dependencyLock = "missing-server-lock.json" },
+            clients = new Dictionary<string, object> { ["client"] = new { dependencyLock = "missing-client-lock.json" } },
+        });
+        var host = new FakeServerHost("here", Path.Combine(_root, "local-mirror"), windows: OperatingSystem.IsWindows(),
+            kind: GameHostKind.Local);
+        using var probes = LocalHostPreflight.ReplaceDefaultProbesForTest(new(
+            Lock: (_, _, _, _) => Task.FromResult(new HostLockResult(HostLockState.Free, null, "free")),
+            Port: (_, _, _, _) => Task.CompletedTask, Desktop: _ => Task.CompletedTask, MacDesktop: () => { },
+            SteamRunning: () => false, Packaged: () => null,
+            Processes: (_, _, _, _) => Task.CompletedTask,
+            Journals: (_, _) => Task.FromResult<IReadOnlyList<CampaignPreflightProblem>>([])));
+        using var env = new StringWriter();
+        using var envError = new StringWriter();
+        Assert.Equal(3, await EnvCommand.RunAsync(["preflight", "--inventory", inventory], env, envError));
+        Assert.True(env.ToString().Contains("REFUSED here Steam session: No Steam client is running on this machine", StringComparison.Ordinal),
+            "output: " + env + "; error: " + envError);
+        var report = await HostedCampaignPreparation.InspectAsync(file, TimeSpan.FromSeconds(2), _ => host);
+        Assert.Contains(report.Problems, problem => problem.Input == "Steam session" &&
+            problem.Message.Contains("No Steam client is running on this machine", StringComparison.Ordinal));
     }
 
     // A campaign that leaves out its inventory is assigned on this machine; without Steam that is refused with what was tried.

@@ -31,8 +31,18 @@ public sealed class PinnedServerRunOptions<TPlan> where TPlan : ServerRunPlan
     /// server has started (<c>session.Server.Game</c>), with its report, output and cancellation.
     /// </summary>
     public required Func<GameSession, TPlan, Task> Scenario { get; init; }
-    /// <summary>Optional cleanup budget for a run whose final server save needs longer than the usual five minutes.</summary>
-    public TimeSpan? CleanupBudget { get; init; }
+    private TimeSpan? _cleanupBudget;
+    /// <summary>Optional positive cleanup budget for a run whose final server save needs longer than the usual five minutes.</summary>
+    public TimeSpan? CleanupBudget
+    {
+        get => _cleanupBudget;
+        init
+        {
+            if (value is { } budget && budget <= TimeSpan.Zero)
+                throw new ArgumentOutOfRangeException(nameof(CleanupBudget), value, "The cleanup budget must be positive.");
+            _cleanupBudget = value;
+        }
+    }
     /// <summary>Test seam: the owned server's session (scripted) instead of launching the copied runtime.</summary>
     internal Func<TPlan, OwnedServerSession>? SessionOverride { get; init; }
     /// <summary>What a run on other hosts reaches outside this process (<see cref="IHostedRunHooks"/>); tests pass fakes.</summary>

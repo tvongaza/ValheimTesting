@@ -9,7 +9,13 @@ using Valheim.Testing.GameSessions;
 public sealed class ServerLoadOneOffTests : IDisposable
 {
     private readonly RegressionRig _rig = new();
-    public void Dispose() => _rig.Dispose();
+    private readonly IDisposable _preflight = LocalHostPreflight.ReplaceDefaultProbesForTest(new(
+        Processes: (_, _, _, _) => Task.CompletedTask,
+        Port: (_, _, _, _) => Task.CompletedTask,
+        Lock: (_, _, _, _) => Task.FromResult(new HostLockResult(HostLockState.Free, null, "free")),
+        Desktop: _ => Task.CompletedTask, MacDesktop: () => { }, SteamRunning: () => true,
+        Journals: (_, _) => Task.FromResult<IReadOnlyList<CampaignPreflightProblem>>([]), Packaged: () => null));
+    public void Dispose() { _preflight.Dispose(); _rig.Dispose(); }
 
     private static readonly CampaignPreflightReport Ready = new([]);
     [Fact]
@@ -489,6 +495,23 @@ public sealed class ServerLoadOneOffTests : IDisposable
         Assert.Equal(3, await ServerLoad.RunAsync(args, new ServerLoad.Seams(Inspect: _ => Task.FromResult(Ready),
             Campaign: (_, _, _, _, _) => throw new InvalidOperationException("never run"))));
         Assert.False(File.Exists(Path.Combine(output, "dependencies.lock.json")));
+    }
+
+    [Fact] public async Task ALocalHostRefusalStopsBeforeAnyAdapterOrFixtureIsWritten()
+    {
+        string output = Path.Combine(_rig.Root, "local-preflight-refused");
+        bool campaignInspected = false;
+        var args = Arguments(output, "--server-only", "--preflight-only");
+        using var refused = LocalHostPreflight.ReplaceDefaultProbesForTest(new(
+            Lock: (_, _, _, _) => Task.FromResult(new HostLockResult(HostLockState.Free, null, "free")),
+            Processes: (_, _, _, _) => Task.CompletedTask,
+            Port: (_, _, _, _) => throw new InvalidOperationException("port already in use"),
+            Journals: (_, _) => Task.FromResult<IReadOnlyList<CampaignPreflightProblem>>([]), Packaged: () => null));
+        int result = await ServerLoad.RunAsync(args, new ServerLoad.Seams(
+            Inspect: _ => { campaignInspected = true; return Task.FromResult(Ready); }));
+        Assert.Equal(3, result);
+        Assert.False(campaignInspected);
+        Assert.False(Path.Exists(output));
     }
 
     // A Mac now writes and runs the same campaign as Windows and Linux, with the inventory's ports.

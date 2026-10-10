@@ -13,12 +13,7 @@ internal static class EnvCommand
         "valheim-test env recover|teardown --run ID [--inventory FILE] [--json] | valheim-test env teardown --copy PATH [--inventory FILE] | " +
         "valheim-test env teardown --run ID --machine-gone [--inventory FILE]";
 
-    public static async Task<int> RunAsync(string[] args, TextWriter? output = null, TextWriter? error = null) =>
-        await RunAsync(args, output, error, PackagedApp.Refusal).ConfigureAwait(false);
-
-    // packagedRefusal: why this process cannot run valheim-test because it is inside a Windows package (#406), or null; tests
-    // pass one, a real run asks Windows (PackagedApp).
-    internal static async Task<int> RunAsync(string[] args, TextWriter? output, TextWriter? error, Func<string?> packagedRefusal)
+    public static async Task<int> RunAsync(string[] args, TextWriter? output = null, TextWriter? error = null)
     {
         output ??= Console.Out;
         error ??= Console.Error;
@@ -33,7 +28,7 @@ internal static class EnvCommand
             error.WriteLine("Usage: " + Usage + (session ? ". A session's check is valheim-test session check SESSION [--hosts] [--json]." : ""));
             return 2;
         }
-        return await Inventory(inventoryFile, args[0] == "preflight", json, output, error, packagedRefusal).ConfigureAwait(false);
+        return await Inventory(inventoryFile, args[0] == "preflight", json, output, error).ConfigureAwait(false);
     }
 
     // The value after a single option, removed from rest; a missing value (or another option in its place) leaves the option
@@ -51,7 +46,7 @@ internal static class EnvCommand
     // gives no verdict; preflight shows the same and says whether a one-off can run on it: a server and a client, and no run of
     // another process going on this machine or left unrecovered by its journal (#257), and this process not inside a Windows
     // package (#406).
-    private static async Task<int> Inventory(string? file, bool preflight, bool json, TextWriter output, TextWriter error, Func<string?> packagedRefusal)
+    private static async Task<int> Inventory(string? file, bool preflight, bool json, TextWriter output, TextWriter error)
     {
         EnvironmentInventory inventory;
         try { inventory = EnvironmentInventory.Read(file == null ? null : Path.GetFullPath(file)); }
@@ -61,21 +56,14 @@ internal static class EnvCommand
             return 3;
         }
         var missingRoles = new[] { "server", "client" }.Where(role => !inventory.Environments.Any(recipe => recipe.Roles.Contains(role))).ToArray();
-        string? packaged = null;
-        if (preflight)
-            try { packaged = packagedRefusal(); }
-            catch (InvalidOperationException unread) { packaged = unread.Message; } // an identity Windows would not report refuses too
         List<CampaignPreflightProblem> problems = preflight
-            ? [.. packaged == null ? [] : new[] { new CampaignPreflightProblem("this-machine", "packaged app", packaged) },
-               .. await inventory.LocalJournalProblemsAsync().ConfigureAwait(false)]
+            ? [.. await LocalHostPreflight.InspectAsync(inventory,
+                inventory.Environments.Select(recipe => new LocalHostPreflight.Actor(recipe.Name, recipe)),
+                TimeSpan.FromSeconds(60)).ConfigureAwait(false)]
             : [];
-        if (preflight && OperatingSystem.IsWindows() && inventory.Environments.Any(recipe => recipe.Roles.Contains("client") &&
-            inventory.Hosts.TryGetValue(recipe.Host, out var host) && host.Kind == "local"))
-        {
-            try { await DesktopClientSession.PreflightAsync().ConfigureAwait(false); }
-            catch (Exception failure) when (failure is InteractiveSessionException or HostOperationException)
-            { problems.Add(new CampaignPreflightProblem("this-machine", "client desktop", failure.Message)); }
-        }
+        bool packaged = problems.Any(problem => problem.Input == "packaged app");
+        bool localEnvironment = inventory.Environments.Any(recipe => inventory.Hosts[recipe.Host].Kind == "local");
+        bool localClient = inventory.Environments.Any(recipe => inventory.Hosts[recipe.Host].Kind == "local" && recipe.Roles.Contains("client"));
         foreach (var recipe in inventory.Environments.Where(recipe => preflight && recipe.Roles.Contains("client") &&
             inventory.Hosts[recipe.Host].Kind == "local" && inventory.Hosts[recipe.Host].Platform == "macos"))
         {
@@ -110,10 +98,15 @@ internal static class EnvCommand
         if (!preflight) return 0;
         foreach (var problem in problems) output.WriteLine($"REFUSED {problem.Actor} {problem.Input}: {problem.Message}");
         output.WriteLine(missingRoles.Length != 0 ? "REFUSED: the inventory has no " + string.Join(" and no ", missingRoles) + " environment."
-            : packaged != null ? "REFUSED: valheim-test runs inside a packaged app; run it from an ordinary terminal."
+            : packaged ? "REFUSED: valheim-test runs inside a packaged app; run it from an ordinary terminal."
             : problems.Any(problem => problem.Input == "client desktop") ? "REFUSED: the client desktop is unavailable; see the reason above."
-            : problems.Count != 0 ? "REFUSED: a run on this machine is going or was left unrecovered; see valheim-test env status."
+            : problems.Any(problem => problem.Input == "run journal") ? "REFUSED: a run on this machine is going or was left unrecovered; see valheim-test env status."
+            : problems.Count != 0 ? "REFUSED: a local preflight check failed; see the reason above."
             : "ELIGIBLE: the inventory has a server and a client environment, and this machine's journal holds no run going or left unrecovered. " +
+              (localEnvironment ? "The selected local host lock, game processes, and ValheimCLI ports passed their checks. " :
+                  "No local host checks were required. ") +
+              (localClient ? "The local client desktop and Steam process passed their checks. " :
+                  "No local client desktop or Steam check was required. ") +
               (OperatingSystem.IsWindows() ? "This process is not inside a packaged app. " : "") +
               "A session's inputs and host readiness are checked by valheim-test session check SESSION [--hosts].");
         return ready ? 0 : 3;

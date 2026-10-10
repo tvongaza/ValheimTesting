@@ -6,7 +6,12 @@ using Xunit;
 public sealed class NativeSmokeLoaderTests : IDisposable
 {
     private readonly RegressionRig _rig = new();
-    public void Dispose() => _rig.Dispose();
+    private readonly IDisposable _preflight = LocalHostPreflight.ReplaceDefaultProbesForTest(new(
+        Processes: (_, _, _, _) => Task.CompletedTask, Port: (_, _, _, _) => Task.CompletedTask,
+        Lock: (_, _, _, _) => Task.FromResult(new HostLockResult(HostLockState.Free, null, "free")),
+        Desktop: _ => Task.CompletedTask, MacDesktop: () => { }, SteamRunning: () => true,
+        Journals: (_, _) => Task.FromResult<IReadOnlyList<CampaignPreflightProblem>>([]), Packaged: () => null));
+    public void Dispose() { _preflight.Dispose(); _rig.Dispose(); }
 
     [Fact]
     public async Task RemovingOneModKeepsTheSameLoaderPackagesInBothArms()
@@ -67,6 +72,26 @@ public sealed class NativeSmokeLoaderTests : IDisposable
         Assert.False(Directory.Exists(Path.Combine(output, "consumer")));
     }
 
+    [Fact]
+    public void StartRefusesMissingSteamBeforeWritingAnOutput()
+    {
+        using var journal = RunJournal.UseLocalDirectory(Path.Combine(_rig.Root, "steam-refusal-journal"));
+        using var probes = LocalHostPreflight.ReplaceDefaultProbesForTest(new(
+            Lock: (_, _, _, _) => Task.FromResult(new HostLockResult(HostLockState.Free, null, "free")),
+            Port: (_, _, _, _) => Task.CompletedTask, Processes: (_, _, _, _) => Task.CompletedTask,
+            Desktop: _ => Task.CompletedTask, MacDesktop: () => { }, SteamRunning: () => false,
+            Journals: (_, _) => Task.FromResult<IReadOnlyList<CampaignPreflightProblem>>([]), Packaged: () => null));
+        string output = Path.Combine(_rig.Root, "missing-steam");
+        object? exit = typeof(SmokeProject).Assembly.EntryPoint!.Invoke(null, [new[]
+        {
+            "start", "--game", _rig.Game, "--mod", _rig.Parent, "--client-architecture", "x64",
+            "--cli-manifest", _rig.CliManifest(save: true), "--cli-files", Path.Combine(_rig.Root, "cli"),
+            "--search-root", Path.Combine(_rig.Root, "deps"), "--output", output,
+        }]);
+        Assert.Equal(3, exit);
+        Assert.False(Directory.Exists(output));
+    }
+
     // #297: start goes straight to the hosted run from the tool's own assemblies; no consumer project comes first. The
     // run stops at its first Setup step here (this test machine has no Steam, so no userdata to check the character
     // against), before anything outside the output changes. Its client is the --game override, written beside its inputs.
@@ -74,30 +99,15 @@ public sealed class NativeSmokeLoaderTests : IDisposable
     public void StartRunsTheHostedRunWithoutBuildingAConsumer()
     {
         using var journal = RunJournal.UseLocalDirectory(Path.Combine(_rig.Root, "journal"));
-        // The fake game has no desktop. Keep this test on the hosted-run path while a separate test checks that the
-        // real Windows preflight refuses an unavailable desktop before any copy.
-        using var desktop = DesktopClientSession.ReplacePreflightForTest(_ => Task.CompletedTask);
+        // This test stops while staging the disposable character, before launching a client. The local-host probes
+        // above keep its result independent of the CI worker's Steam and desktop state.
         string output = Path.Combine(_rig.Root, "offline-start");
-        // On a locked Mac the new preflight must stop before the output exists. The hosted-run
-        // assertion below still runs on every other host and on an unlocked Mac desktop.
-        bool unavailableMacGui = false;
-        if (OperatingSystem.IsMacOS())
-        {
-            try { MacGuiSession.Require(); }
-            catch (InvalidOperationException) { unavailableMacGui = true; }
-        }
         object? exit = typeof(SmokeProject).Assembly.EntryPoint!.Invoke(null, [new[]
         {
             "start", "--game", _rig.Game, "--mod", _rig.Parent, "--client-architecture", "x64", // Synthetic Mac loader is x64-only.
             "--cli-manifest", _rig.CliManifest(save: true),
             "--cli-files", Path.Combine(_rig.Root, "cli"), "--search-root", Path.Combine(_rig.Root, "deps"), "--output", output,
         }]);
-        if (unavailableMacGui)
-        {
-            Assert.Equal(3, exit);
-            Assert.False(Directory.Exists(output));
-            return;
-        }
         Assert.Equal(1, exit);
         var report = System.Text.Json.JsonDocument.Parse(File.ReadAllText(Path.Combine(output, "evidence", "smoke", "result.json")));
         string runId = report.RootElement.GetProperty("Provenance").GetProperty("runId").GetString()!;
