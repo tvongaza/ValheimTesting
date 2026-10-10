@@ -53,7 +53,7 @@ public sealed class LocalClientCopyTests : IDisposable
         string data = Path.Combine(_rig.Root, "data");
         using var journalDirectory = RunJournal.UseLocalDirectory(Path.Combine(data, "journal"));
         using var run = RunJournal.UseRun("run-localcopy-" + Guid.NewGuid().ToString("N")[..8]);
-        var copy = await LocalClientCopy.PrepareAsync("client", plan, default, data, ThisMachine(), loader: (_, _) => null);
+        var copy = await LocalClientCopy.PrepareAsync("client", plan, default, data, ThisMachine(), loader: (_, _) => null, copyGame: true);
 
         // Bound to the copy: its install, its pins (the staged core's MD5 in place of the plan's) and the staged set's manifest.
         Assert.True(plan.Prepared);
@@ -90,6 +90,34 @@ public sealed class LocalClientCopyTests : IDisposable
         Assert.Equal(manifest, plan.CliManifest);
         Assert.Contains("\"copy-retired\"", string.Concat(Directory.EnumerateFiles(Path.Combine(data, "journal"), "client.jsonl", SearchOption.AllDirectories).Select(File.ReadAllText)));
         Assert.Equal(before, Tree(source));
+    }
+
+    [Fact] public async Task AnOwnedClientDefaultsToAProfileAndKeepsItsSourceUnchanged()
+    {
+        string source = _rig.Game;
+        var plan = Plan(source);
+        plan.CliManifest = CliSet();
+        var before = Tree(source);
+        string data = Path.Combine(_rig.Root, "profile-data");
+        using var journalDirectory = RunJournal.UseLocalDirectory(Path.Combine(data, "journal"));
+        using var run = RunJournal.UseRun("run-localprofile-" + Guid.NewGuid().ToString("N")[..8]);
+        var profile = await LocalClientCopy.PrepareAsync("client", plan, default, data, ThisMachine(), loader: (_, _) => null);
+        try
+        {
+            Assert.Equal("profile", plan.PreparedLaunchMode);
+            Assert.True(plan.Prepared);
+            Assert.Equal(OperatingSystem.IsWindows() ? profile.Runtime : source, plan.Install);
+            Assert.Equal(OperatingSystem.IsWindows() ? null : profile.Runtime, plan.PreparedLoaderRoot);
+            Assert.Equal(InstallPins.Of(plan.Install, plan.LoaderRoot).Game, plan.InstallPins!.Game);
+            Assert.Equal(InstallPins.Of(plan.Install, plan.LoaderRoot).Loader, plan.InstallPins.Loader);
+            Assert.Equal(2, plan.CheckCliManifest()!.Files.Count);
+            Assert.True(File.Exists(Path.Combine(profile.Runtime, "BepInEx", "plugins", "valheimCLI.dll")));
+            Assert.Equal(before, Tree(source));
+        }
+        finally { await profile.RetireAsync(); }
+        Assert.False(Directory.Exists(profile.Runtime));
+        Assert.Equal(before, Tree(source));
+        Assert.Null(plan.PreparedLaunchMode);
     }
 
     [Theory]
@@ -130,7 +158,7 @@ public sealed class LocalClientCopyTests : IDisposable
         plan.CliManifest = CliSet();
         string data = Path.Combine(_rig.Root, "data");
         using var journalDirectory = RunJournal.UseLocalDirectory(Path.Combine(data, "journal"));
-        var copy = await LocalClientCopy.PrepareAsync("client", plan, default, data, ThisMachine(), loader: (_, _) => null);
+        var copy = await LocalClientCopy.PrepareAsync("client", plan, default, data, ThisMachine(), loader: (_, _) => null, copyGame: true);
         Assert.Equal(chosen, File.ReadAllText(Path.Combine(copy.Runtime, "BepInEx", "config", "valheimCLI.valheimCLI.cfg")));
         Assert.Equal(before, Tree(_rig.Game));
         await copy.RetireAsync();
@@ -155,7 +183,7 @@ public sealed class LocalClientCopyTests : IDisposable
         var before = Tree(_rig.Game);
         string data = Path.Combine(_rig.Root, "data");
         using var journalDirectory = RunJournal.UseLocalDirectory(Path.Combine(data, "journal"));
-        var copy = await LocalClientCopy.PrepareAsync("client", plan, default, data, ThisMachine(), loader: (_, _) => new ShippedLoader.Choice(package, "test"));
+        var copy = await LocalClientCopy.PrepareAsync("client", plan, default, data, ThisMachine(), loader: (_, _) => new ShippedLoader.Choice(package, "test"), copyGame: true);
         Assert.Contains("shipped = true", File.ReadAllText(Path.Combine(copy.Runtime, "BepInEx", "config", "BepInEx.cfg")));
         Assert.Equal(BepInExLoaderPackage.Read(package).Loader, plan.InstallPins!.Loader);
         Assert.Equal(before, Tree(_rig.Game));

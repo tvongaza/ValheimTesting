@@ -187,7 +187,7 @@ public sealed class ClientSession : IDisposable
         catch (SocketException error) { throw new InvalidOperationException($"Something already listens on the client's CLI port {plan.Port}; stop it first, this session only drives a client it launched.", error); }
         finally { reservation.Stop(); }
         RequireSteamRunning();
-        string log = Path.Combine(plan.Install, "BepInEx", "LogOutput.log");
+        string log = Path.Combine(plan.LoaderRoot, "BepInEx", "LogOutput.log");
         var platform = GameLaunch.DetectClient(plan.Install);
         string playerLog = PlayerLog(platform);
         string prefix = Path.Combine(output, "client-boot");
@@ -255,7 +255,8 @@ public sealed class ClientSession : IDisposable
 
     /// <summary>The owned launch of the plan's install as the plan's architecture, built for <paramref name="host"/> (injectable for tests).</summary>
     internal static ProcessStartInfo StartInfo(ClientRunPlan plan, ClientPlatform host) =>
-        GameLaunch.LocalClient(plan.Install, plan.LaunchArguments, plan.Environment, plan.LaunchArchitecture, true, host).ToStartInfo();
+        GameLaunch.LocalClient(plan.Install, plan.LaunchArguments, plan.Environment, plan.LaunchArchitecture, true, host,
+            plan.LoaderRoot).ToStartInfo();
 
     // True once this machine's Steam logged "Logged In Elsewhere" after the launch; false at the deadline, on cancellation or when unreadable.
     private static async Task<bool> WatchLocalAsync(LogWait? steamLog, TimeSpan left, CancellationToken token)

@@ -40,11 +40,18 @@ public sealed partial class GameLaunch
 
     private GameLaunch(bool server, ClientPlatform platform, bool forHost, string workingDirectory, string executable, IReadOnlyList<string> arguments,
         IReadOnlyDictionary<string, string> environment, IReadOnlyDictionary<string, string> prepended, IReadOnlyList<string> requiredFiles,
-        ClientArchitecture macArchitecture = ClientArchitecture.X64, IEnumerable<string>? secretVariables = null)
+        ClientArchitecture macArchitecture = ClientArchitecture.X64, IEnumerable<string>? secretVariables = null,
+        bool isolatedLoader = false)
     {
         IsServer = server; Platform = platform; ForHost = forHost; WorkingDirectory = workingDirectory; Executable = executable; Arguments = arguments;
         Environment = environment; Prepended = prepended; RequiredFiles = requiredFiles; MacArchitecture = macArchitecture;
-        Unset = BepInExLoader.Variables.Where(name => !environment.ContainsKey(name)).ToList();
+        var unset = BepInExLoader.Variables.Where(name => !environment.ContainsKey(name)).ToList();
+        // A profile must not inherit a mod manager's injected libraries from the runner's shell. The profile's
+        // own Doorstop paths are prepended after these names are cleared in ToStartInfo.
+        if (isolatedLoader)
+            unset.AddRange(platform == ClientPlatform.Linux ? ["LD_LIBRARY_PATH", "LD_PRELOAD"]
+                : platform == ClientPlatform.MacOS ? ["DYLD_LIBRARY_PATH", "DYLD_INSERT_LIBRARIES"] : []);
+        Unset = unset;
         SecretVariables = Secrets(secretVariables, environment, prepended, Unset, platform == ClientPlatform.Windows ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
     }
 
@@ -139,7 +146,8 @@ public sealed partial class GameLaunch
         var (set, prepended, required) = Loader(server: true, os, environment, names, LocalJoin(runtime), LocalJoin(loader),
             !loader.Equals(runtime, platform == ServerPlatform.Windows ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal),
             Relative(runtime, executable), macDoorstop == null ? null : Relative(loader, macDoorstop));
-        return new GameLaunch(server: true, os, forHost: false, runtime, executable, passed, set, prepended, required, macArchitecture);
+        return new GameLaunch(server: true, os, forHost: false, runtime, executable, passed, set, prepended, required,
+            macArchitecture, isolatedLoader: loader != runtime);
     }
 
     private static GameLaunch ServerOnHost(ServerPlatform platform, string runtime, IEnumerable<string> arguments, IReadOnlyDictionary<string, string>? environment)
@@ -234,7 +242,8 @@ public sealed partial class GameLaunch
         var (set, prepended, required) = Loader(server: false, platform, environment, names, LocalJoin(install), LocalJoin(loader),
             !loader.Equals(install, platform == ClientPlatform.Windows ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal),
             Relative(install, executable), macDoorstop == null ? null : Relative(loader, macDoorstop));
-        return new GameLaunch(server: false, platform, forHost: false, install, executable, passed, set, prepended, required, architecture);
+        return new GameLaunch(server: false, platform, forHost: false, install, executable, passed, set, prepended, required,
+            architecture, isolatedLoader: loader != install);
     }
 
     private static GameLaunch ClientOnHost(ClientPlatform platform, string install, IEnumerable<string> arguments, IReadOnlyDictionary<string, string>? environment,

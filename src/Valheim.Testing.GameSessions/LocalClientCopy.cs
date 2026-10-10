@@ -21,17 +21,18 @@ internal sealed class LocalClientCopy
     internal static readonly TimeSpan StepTimeout = TimeSpan.FromMinutes(30);
 
     private readonly IGameHost _host;
-    private readonly string _actor, _runtime, _stage;
+    private readonly string _actor, _runtime, _stage, _launchRoot;
     private readonly RunJournal _journal;
     private readonly ClientRunPlan _plan;
     private readonly Unbound _unbound;
     private int _retired;
 
     // The plan as it was before it was bound, restored when the copy is retired: a plan reused later makes a new copy.
-    private sealed record Unbound(string Install, InstallPins? InstallPins, Dictionary<string, string> Pins, string? CliManifest);
+    private sealed record Unbound(string Install, InstallPins? InstallPins, Dictionary<string, string> Pins, string? CliManifest,
+        string? LoaderRoot, string? LaunchMode);
 
-    private LocalClientCopy(IGameHost host, string actor, string runtime, string stage, RunJournal journal, ClientRunPlan plan, Unbound unbound)
-    { _host = host; _actor = actor; _runtime = runtime; _stage = stage; _journal = journal; _plan = plan; _unbound = unbound; }
+    private LocalClientCopy(IGameHost host, string actor, string runtime, string stage, string launchRoot, RunJournal journal, ClientRunPlan plan, Unbound unbound)
+    { _host = host; _actor = actor; _runtime = runtime; _stage = stage; _launchRoot = launchRoot; _journal = journal; _plan = plan; _unbound = unbound; }
 
     /// <summary>The disposable copy the client runs from.</summary>
     internal string Runtime => _runtime;
@@ -47,7 +48,8 @@ internal sealed class LocalClientCopy
     /// <see cref="ShippedLoader.Instead(string, string)"/>).
     /// </summary>
     internal static async Task<LocalClientCopy> PrepareAsync(string actor, ClientRunPlan plan, CancellationToken cancellation,
-        string? dataRoot = null, IGameHost? host = null, Func<CliBundleSource?>? cliBundle = null, Func<string, string, ShippedLoader.Choice?>? loader = null)
+        string? dataRoot = null, IGameHost? host = null, Func<CliBundleSource?>? cliBundle = null, Func<string, string, ShippedLoader.Choice?>? loader = null,
+        bool copyGame = false)
     {
         ArgumentNullException.ThrowIfNull(plan);
         if (!plan.CopySource) throw new InvalidOperationException("Only an owned client that does not run in place, and is not bound to a copy yet, gets a disposable copy.");
@@ -83,18 +85,36 @@ internal sealed class LocalClientCopy
             // One client per desktop session, and never a copy over a game that runs.
             await HostedRuntimeStage.RequireStoppedAsync(host, StepTimeout, cancellation, clientSession: true).ConfigureAwait(false);
             Directory.CreateDirectory(root);
-            var capacity = await HostCopyCapacityProbe.InspectAsync(host, source, root, StepTimeout, cancellation).ConfigureAwait(false);
-            HostCopyCapacityProbe.RequireCombined(host.Name, [(actor, capacity)]);
-            Console.WriteLine($"Copying your Valheim install ({DiskSpace.Format(capacity.SourceBytes)}) so nothing in it changes; --in-place runs your install directly.");
+            if (copyGame)
+            {
+                var capacity = await HostCopyCapacityProbe.InspectAsync(host, source, root, StepTimeout, cancellation).ConfigureAwait(false);
+                HostCopyCapacityProbe.RequireCombined(host.Name, [(actor, capacity)]);
+                Console.WriteLine($"Copying your Valheim install ({DiskSpace.Format(capacity.SourceBytes)}) so nothing in it changes; --in-place runs your install directly.");
+            }
+            else Console.WriteLine($"Preparing an owned mod profile for {source}; the game install stays in place.");
             if (replaced.Count != 0)
                 Console.WriteLine($"{actor}: the copy stages ValheimCLI {manifest.Build} in place of the install's own {string.Join(", ", replaced)}.");
             // Journalled before the copy: an interrupted preparation leaves a record of every path it may own.
-            journal.AppendLocal(actor, JournalEntry.Of(JournalEntry.CopyIntended, ("runtime", runtime), ("stage", stage), ("parent", parent)));
+            journal.AppendLocal(actor, JournalEntry.Of(JournalEntry.CopyIntended, ("runtime", runtime), ("stage", stage), ("parent", parent),
+                ("launchMode", copyGame ? "copy" : "profile")));
             HostListing listing;
+            InstallPins pins;
+            string gameRoot, loaderRoot;
             try
             {
-                listing = await HostedRuntimeStage.PrepareAsync(host, HostedRuntimeKind.Client, source, runtime, stage, selection, StepTimeout,
-                    cancellation, loaderPackage).ConfigureAwait(false);
+                if (copyGame)
+                {
+                    listing = await HostedRuntimeStage.PrepareAsync(host, HostedRuntimeKind.Client, source, runtime, stage, selection, StepTimeout,
+                        cancellation, loaderPackage).ConfigureAwait(false);
+                    pins = HostInstall.Pins(listing); gameRoot = runtime; loaderRoot = runtime;
+                }
+                else
+                {
+                    var profile = await HostedRuntimeStage.PrepareProfileAsync(host, HostedRuntimeKind.Client, source, runtime, stage,
+                        selection, StepTimeout, cancellation, loaderPackage).ConfigureAwait(false);
+                    listing = profile.Loader; pins = profile.Pins;
+                    gameRoot = profile.GameRoot; loaderRoot = profile.LoaderRoot;
+                }
             }
             catch (Exception error) when (error is not AggregateException)
             {
@@ -103,10 +123,11 @@ internal sealed class LocalClientCopy
                 throw;
             }
             journal.AppendLocal(actor, JournalEntry.Of(JournalEntry.CopyDone, ("runtime", runtime),
-                ("files", listing.Files.Count.ToString(CultureInfo.InvariantCulture)), ("source", source)));
-            var unbound = new Unbound(plan.Install, plan.InstallPins, plan.Pins, plan.CliManifest);
-            Bind(plan, source, runtime, listing, manifest, manifestPath, setFolder);
-            return new LocalClientCopy(host, actor, runtime, stage, journal, plan, unbound);
+                ("files", listing.Files.Count.ToString(CultureInfo.InvariantCulture)), ("source", source),
+                ("launchMode", copyGame ? "copy" : "profile")));
+            var unbound = new Unbound(plan.Install, plan.InstallPins, plan.Pins, plan.CliManifest, plan.PreparedLoaderRoot, plan.PreparedLaunchMode);
+            Bind(plan, source, gameRoot, loaderRoot, pins, manifest, manifestPath, setFolder, copyGame);
+            return new LocalClientCopy(host, actor, runtime, stage, gameRoot, journal, plan, unbound);
         }
         finally { if (config != null) File.Delete(config); }
     }
@@ -121,10 +142,11 @@ internal sealed class LocalClientCopy
         if (Interlocked.Exchange(ref _retired, 1) != 0) return;
         // Linux's process list names a game without its path, so there the caller's proven stop is the check.
         if (!OperatingSystem.IsLinux())
-            await HostedRuntimeStage.RequireStoppedAsync(_host, StepTimeout, runtimes: [_runtime], clientSession: false).ConfigureAwait(false);
+            await HostedRuntimeStage.RequireStoppedAsync(_host, StepTimeout, runtimes: [_launchRoot], clientSession: false).ConfigureAwait(false);
         await HostedRuntimeStage.RetireAsync(_host, _runtime, _stage, StepTimeout).ConfigureAwait(false);
         _journal.AppendLocal(_actor, JournalEntry.Of(JournalEntry.CopyRetired, ("runtime", _runtime)));
         _plan.Install = _unbound.Install; _plan.InstallPins = _unbound.InstallPins; _plan.Pins = _unbound.Pins; _plan.CliManifest = _unbound.CliManifest;
+        _plan.PreparedLoaderRoot = _unbound.LoaderRoot; _plan.PreparedLaunchMode = _unbound.LaunchMode;
         _plan.CopiedFrom = null; _plan.Prepared = false;
     }
 
@@ -174,13 +196,16 @@ internal sealed class LocalClientCopy
 
     // The plan, bound to its copy: the copy's install and install pins, its plugin pins with the staged set's in place of any
     // ValheimCLI pin the plan carried (each file's MD5, as the session derives them), and the staged set's manifest.
-    private static void Bind(ClientRunPlan plan, string source, string runtime, HostListing listing, CliCapabilityManifest manifest, string manifestPath, string setFolder)
+    private static void Bind(ClientRunPlan plan, string source, string gameRoot, string loaderRoot, InstallPins runtimePins,
+        CliCapabilityManifest manifest, string manifestPath, string setFolder, bool copyGame)
     {
-        plan.CopiedFrom = source;
-        plan.Install = runtime;
+        plan.CopiedFrom = copyGame ? source : null;
+        plan.Install = gameRoot;
+        plan.PreparedLoaderRoot = gameRoot == loaderRoot ? null : loaderRoot;
+        plan.PreparedLaunchMode = copyGame ? "copy" : "profile";
         if (plan.Pinned)
         {
-            plan.InstallPins = HostInstall.Pins(listing);
+            plan.InstallPins = runtimePins;
             var pins = plan.Pins.Where(pin => !CliBuildManifest.IsCliPlugin(pin.Key)).ToDictionary(pin => pin.Key, pin => pin.Value, StringComparer.Ordinal);
             foreach (var file in manifest.Files)
             {
