@@ -17,11 +17,16 @@ public sealed class ServerLoadPhasesTests : IDisposable
         File.WriteAllText(Path.Combine(_root, "first.dll"), "first plugin");
         File.WriteAllText(Path.Combine(_root, "second.dll"), "second plugin");
         File.WriteAllText(Path.Combine(_root, "second.cfg"), "second config");
+        string bundle = Path.Combine(_root, "cli-bundle");
+        Directory.CreateDirectory(bundle);
+        string manifest = Path.Combine(bundle, "cli-manifest.json");
+        File.WriteAllText(manifest, "{\"schema\":1,\"build\":\"fixture\",\"files\":[{\"file\":\"valheimCLI.dll\",\"sha256\":\"" +
+            new string('a', 64) + "\",\"plugins\":[\"valheimCLI.valheimCLI\"],\"extensions\":{}}]}");
         string plan = Path.Combine(_root, "plan.json");
         File.WriteAllText(plan, JsonSerializer.Serialize(new
         {
             schema = 1, worldFixture = fixture, keepFinal,
-            commonArgs = new[] { "--server", server },
+            commonArgs = new[] { "--server", server, "--cli-manifest", manifest, "--cli-files", bundle },
             phases = new[]
             {
                 new { name = "first", args = new[] { "--mod", Path.Combine(_root, "first.dll"), "--assert-command", "first_ready", "--assert-line", "READY" } },
@@ -119,7 +124,7 @@ public sealed class ServerLoadPhasesTests : IDisposable
         }));
         var parsed = JsonSerializer.Deserialize<ServerLoadPhases.Plan>(File.ReadAllText(plan),
             new JsonSerializerOptions { PropertyNameCaseInsensitive = true })!;
-        parsed.CommonArgs = ["--inventory", inventory];
+        parsed.CommonArgs = ["--inventory", inventory, .. parsed.CommonArgs.Skip(2)];
         File.WriteAllText(plan, JsonSerializer.Serialize(parsed));
         string output = Path.Combine(server, "inventory-phase-run");
 
@@ -134,13 +139,9 @@ public sealed class ServerLoadPhasesTests : IDisposable
     public async Task ImplicitCliFilesDirectoryIsProtectedBeforeAnyWrite()
     {
         string plan = Plan(), bundle = Path.Combine(_root, "cli-bundle");
-        Directory.CreateDirectory(bundle);
-        string manifest = Path.Combine(bundle, "cli-manifest.json");
-        File.WriteAllText(manifest, "{\"schema\":1,\"build\":\"fixture\",\"files\":[{\"file\":\"valheimCLI.dll\",\"sha256\":\"" +
-            new string('a', 64) + "\",\"plugins\":[\"valheimCLI.valheimCLI\"],\"extensions\":{}}]}");
         var parsed = JsonSerializer.Deserialize<ServerLoadPhases.Plan>(File.ReadAllText(plan),
             new JsonSerializerOptions { PropertyNameCaseInsensitive = true })!;
-        parsed.CommonArgs = [.. parsed.CommonArgs, "--cli-manifest", manifest];
+        parsed.CommonArgs = parsed.CommonArgs.Where((_, index) => index < 4).ToArray(); // manifest, but no --cli-files
         File.WriteAllText(plan, JsonSerializer.Serialize(parsed));
         string output = Path.Combine(bundle, "phase-run");
         int calls = 0;
@@ -154,7 +155,7 @@ public sealed class ServerLoadPhasesTests : IDisposable
         Assert.Equal(3, result);
         Assert.Equal(0, calls);
         Assert.False(Directory.Exists(output));
-        Assert.True(File.Exists(manifest));
+        Assert.True(File.Exists(Path.Combine(bundle, "cli-manifest.json")));
     }
 
     [Fact]
