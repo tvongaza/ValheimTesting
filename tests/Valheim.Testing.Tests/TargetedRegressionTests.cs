@@ -190,6 +190,7 @@ public sealed class TargetedRegressionTests : IDisposable
             Directory.EnumerateFiles(plugins).Select(path => Path.GetFileName(path)).Order(StringComparer.Ordinal));
         Assert.False(File.Exists(Path.Combine(plugins, "Unrelated.dll"))); // The prepared game's own plugins are never copied.
         Assert.True(File.Exists(Path.Combine(_rig.Game, "BepInEx", "plugins", "Unrelated.dll"))); // ...nor touched.
+        Assert.Contains("AllowOnServerClients = true", File.ReadAllText(Path.Combine(_rig.Install, "BepInEx", "config", "valheimCLI.valheimCLI.cfg")));
         // Every staged plugin is pinned under its declared GUID by MD5, and nothing else: no absent pins for other mods.
         Assert.Equal(new[] { "example.dependency", "example.mod", "testing.probe", "valheimCLI.standard", "valheimCLI.valheimCLI" }, parent.Plan.Pins.Keys.Order(StringComparer.Ordinal));
         Assert.DoesNotContain("absent", parent.Plan.Pins.Values);
