@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Runtime.Loader;
 using System.Text.Json;
 using Microsoft.CodeAnalysis;
@@ -17,6 +18,17 @@ public sealed class ToolkitProvenanceTests : IDisposable
 
     [Fact]
     public void SourceBuiltRunnerIsDistinctFromReusedCandidatePackage()
+    {
+        AssertSourceBuiltRunnerIsDistinctFromReusedCandidatePackage();
+        // Windows keeps a loaded DLL open until its collectible context is finalized. Keep the
+        // Assembly locals out of this frame, then release the files before Dispose removes _output.
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private void AssertSourceBuiltRunnerIsDistinctFromReusedCandidatePackage()
     {
         // The candidate set was built first. A later source edit changes the runner without rebuilding that set.
         // Its package coordinate must not masquerade as the code that the entry assembly actually executed.
