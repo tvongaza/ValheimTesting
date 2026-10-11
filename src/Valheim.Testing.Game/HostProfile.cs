@@ -77,6 +77,8 @@ internal sealed class GameRole
     // executable remains in the read-only source; these paths never come from inventory JSON.
     internal string? PreparedGameRoot { get; set; }
     internal string? PreparedLoaderRoot { get; set; }
+    internal string? PreparedSteamRuntimeRoot { get; set; }
+    internal IReadOnlyDictionary<string, string>? PreparedSteamRuntimeFiles { get; set; }
     // The original install for every profile, including a Windows hard-linked launch folder.
     // Never use this as a retirement target.
     internal string? PreparedSourceRoot { get; set; }

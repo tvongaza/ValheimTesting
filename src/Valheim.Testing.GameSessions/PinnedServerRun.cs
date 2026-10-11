@@ -626,6 +626,15 @@ public static class PinnedServerRun
                     prepared = await HostedCampaignPreparation.PrepareAsync(inspection, Path.Combine(output, "prepared"), CampaignTimeout,
                         name => options.Hooks.CreateHost(inspection.Inputs!.Profile, name), cancellation.Token, campaignRunId, PreparationCleanup(report), options.Hooks.ShippedLoaderAsync, ShippedLoaderChosen(report), options.CopyGame).ConfigureAwait(false)).ConfigureAwait(false);
                 report.Provenance["campaignLaunchModes"] = prepared!.LaunchModes(options.CopyGame);
+                if (prepared.Manifest.Server?.SteamRuntimePackage is { } steamPackagePath)
+                {
+                    var steamPackage = MacSteamRuntimePackage.Read(steamPackagePath);
+                    string snapshot = Path.Combine(output, "mac-steam-runtime.json");
+                    steamPackage.Write(snapshot);
+                    report.Provenance["macSteamRuntime"] = steamPackage.Identity;
+                    report.Provenance["macSteamRuntimeSource"] = steamPackage.Root;
+                    report.Provenance["macSteamRuntimeManifestSha256"] = FileHash.Sha256(snapshot);
+                }
                 report.Step(StepPhase.Setup, "bind the prepared actors to the plan", () =>
                 {
                     prepared!.ApplyTo(plan, prepared.Manifest, campaignPlans!, Path.Combine(output, "prepared"));

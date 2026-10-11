@@ -333,6 +333,21 @@ public class ServerLaunchTests
         var x64 = GameLaunch.LocalServer(runtime.Root, [], null, ServerHost.MacOS, ClientArchitecture.X64).ToStartInfo();
         Assert.Equal("-x86_64", x64.ArgumentList[0]);
     }
+    [Fact] public void MacServerProfileAddsOnlyItsPinnedSteamDirectoryAfterTheGamesLibraryDirectory()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        using var runtime = Runtime.Mac();
+        string steam = Path.Combine(runtime.Root, "owned-profile", "steam-runtime");
+        Directory.CreateDirectory(steam);
+        File.WriteAllText(Path.Combine(steam, "steamclient.dylib"), "pinned in the profile");
+        var start = GameLaunch.LocalServer(runtime.Root, [], null, ServerHost.MacOS, ClientArchitecture.Arm64,
+            macSteamRuntimeDirectory: steam).ToStartInfo();
+        Assert.Contains("DYLD_LIBRARY_PATH=" + Path.Combine(runtime.Root, "valheim_server") + ":" + steam, start.ArgumentList);
+        Assert.DoesNotContain(start.Environment.Keys, key => key.StartsWith("DYLD_", StringComparison.Ordinal));
+        File.Delete(Path.Combine(steam, "steamclient.dylib"));
+        Assert.Throws<FileNotFoundException>(() => GameLaunch.LocalServer(runtime.Root, [], null, ServerHost.MacOS,
+            ClientArchitecture.Arm64, macSteamRuntimeDirectory: steam));
+    }
     [Fact] public void MacLaunchRefusesAServerOrDoorstopWithoutTheNativeSlice()
     {
         if (OperatingSystem.IsWindows()) return;

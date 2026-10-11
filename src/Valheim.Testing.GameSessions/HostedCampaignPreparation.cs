@@ -16,6 +16,8 @@ public sealed class HostedCampaignRole
     public List<string> DifferentHostFrom { get; set; } = [];
     /// <summary>Optional local manifest for a reviewed loader/core set applied only to the disposable runtime.</summary>
     public string? LoaderPackage { get; set; }
+    /// <summary>Mac dedicated server only: a pinned SteamCMD native-library closure staged in the disposable profile.</summary>
+    public string? SteamRuntimePackage { get; set; }
     /// <summary>Client only: x64 or arm64; empty inherits the selected environment's architecture.</summary>
     public string Architecture { get; set; } = "";
     public List<HostedRuntimeFile> Files { get; set; } = [];
@@ -82,6 +84,7 @@ public sealed class HostedCampaignManifest
                 throw new InvalidDataException("A campaign role's environmentCandidates, differentHostFrom and files must be lists, not null.");
             role.DependencyLock = Path.GetFullPath(role.DependencyLock, directory);
             if (role.LoaderPackage != null) role.LoaderPackage = Path.GetFullPath(role.LoaderPackage, directory);
+            if (role.SteamRuntimePackage != null) role.SteamRuntimePackage = Path.GetFullPath(role.SteamRuntimePackage, directory);
             foreach (var file in role.Files)
                 if (string.IsNullOrWhiteSpace(file.Source)) throw new InvalidDataException("An extra staged file has no source path.");
             role.Files = role.Files.Select(file => file with { Source = Path.GetFullPath(file.Source, directory) }).ToList();
@@ -334,7 +337,7 @@ public static class HostedCampaignPreparation
     private static HostedCampaignRole WithLoader(HostedCampaignRole input, string? loaderPackage) => loaderPackage == input.LoaderPackage ? input : new HostedCampaignRole
     {
         DependencyLock = input.DependencyLock, EnvironmentCandidates = input.EnvironmentCandidates,
-        DifferentHostFrom = input.DifferentHostFrom, LoaderPackage = loaderPackage,
+        DifferentHostFrom = input.DifferentHostFrom, LoaderPackage = loaderPackage, SteamRuntimePackage = input.SteamRuntimePackage,
         Files = input.Files, Character = input.Character,
     };
 
@@ -451,6 +454,9 @@ public static class HostedCampaignPreparation
             new Dictionary<string, string>(), new Dictionary<string, HostListing>(), new Dictionary<string, CharacterDirectories>());
         var inputs = inspection.Inputs!;
         var failures = new ConcurrentBag<CampaignPreflightProblem>(inspection.Report.Problems);
+        if (copyGame)
+            foreach (var role in inputs.Roles.Where(role => role.Input.SteamRuntimePackage != null))
+                failures.Add(new(role.Name, "Mac Steam runtime", "steamRuntimePackage requires a disposable server profile; leave out --copy-game."));
         var observedSteamIds = new ConcurrentDictionary<string, string>(StringComparer.Ordinal);
         var sourceListings = new ConcurrentDictionary<string, HostListing>(StringComparer.Ordinal);
         var characterDirectories = new ConcurrentDictionary<string, CharacterDirectories>(StringComparer.Ordinal);
@@ -762,6 +768,13 @@ public static class HostedCampaignPreparation
                 .Select(client => (Name: client.Key, Input: client.Value))).ToArray();
         foreach (var (name, input) in manifestRoles)
         {
+            if (input.SteamRuntimePackage != null)
+                Try(name, "Mac Steam runtime", () =>
+                {
+                    if (name != "server" || resolved?.Environment.Hosts[resolved.Environment.Server!.Host].Platform != "macos")
+                        throw new InvalidDataException("steamRuntimePackage is only for a Mac dedicated server profile.");
+                    _ = MacSteamRuntimePackage.Read(input.SteamRuntimePackage);
+                });
             string? loaderPackage = resolved?.LoaderPackages.GetValueOrDefault(name) ?? input.LoaderPackage;
             if (loaderPackage != null)
                 Try(name, "loader", () => _ = BepInExLoaderPackage.Read(loaderPackage));
@@ -935,11 +948,12 @@ public static class HostedCampaignPreparation
                     // run-ended entry says cleanup was verified only when no copy of it remains, not when the copy's own cleanup failed.
                     copies.Add((hostName, name, runtime, stage));
                     var loader = item.Input.LoaderPackage == null ? null : BepInExLoaderPackage.Read(item.Input.LoaderPackage);
+                    var steamRuntime = item.Input.SteamRuntimePackage == null ? null : MacSteamRuntimePackage.Read(item.Input.SteamRuntimePackage);
                     if (profileLaunch)
                     {
                         var prepared = await HostedRuntimeStage.PrepareProfileAsync(host, kind,
                             role.Install, runtime, stage, selections[name], timeout, cancellation,
-                            loader, readiness.SourceListings[name]).ConfigureAwait(false);
+                            loader, readiness.SourceListings[name], steamRuntimePackage: steamRuntime).ConfigureAwait(false);
                         listings[name] = prepared.Game;
                         loaderListings[name] = prepared.Loader;
                         role.PreparedSourceRoot = prepared.Source.Root;
@@ -950,9 +964,20 @@ public static class HostedCampaignPreparation
                             role.PreparedGameRoot = prepared.GameRoot;
                             role.PreparedLoaderRoot = prepared.LoaderRoot;
                         }
+                        if (steamRuntime != null)
+                        {
+                            role.PreparedSteamRuntimeRoot = HostPath.Join(prepared.LoaderRoot, "steam-runtime");
+                            role.PreparedSteamRuntimeFiles = prepared.Loader.Files
+                                .Where(file => file.Key.StartsWith("steam-runtime/", StringComparison.Ordinal))
+                                .ToDictionary(file => file.Key["steam-runtime/".Length..], file => file.Value, StringComparer.Ordinal);
+                            if (role.PreparedSteamRuntimeFiles.Count != steamRuntime.Files.Count)
+                                throw new IOException("The signed Mac Steam runtime is incomplete in the prepared server profile.");
+                        }
                     }
                     else
                     {
+                        if (steamRuntime != null)
+                            throw new InvalidDataException("A Mac Steam runtime package requires a disposable profile; leave out --copy-game.");
                         listings[name] = await HostedRuntimeStage.PrepareWithInspectedSourceAsync(host, kind,
                             role.Install, runtime, stage, selections[name], timeout, cancellation,
                             loader, readiness.SourceListings[name]).ConfigureAwait(false);

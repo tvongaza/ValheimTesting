@@ -16,7 +16,7 @@ using Valheim.Testing.GameSessions;
 internal static class ServerLoad
 {
     internal static readonly string Usage = "valheim-test server-load [--mod DLL ... | --project MOD.csproj] [--scenario TEST.dll | --scenario-project TEST.csproj] [--adapter DLL | --adapter-project ADAPTER.csproj] [--adapter-property NAME={mod}|{cli} ...] [--session-capability OWNER/session --session-token-variable NAME] [--dependency NAME=DLL ...] [--output NEW_DIR] [--inventory FILE | --server DIR] [--client DIR] " +
-        $"[--server-env NAME] [--client-env NAME] [--client-architecture x64|arm64] [--server-only] [--server-startup-seconds 1..{ServerRunPlan.MaximumStartupSeconds}] [--world-fixture DIR] [--bake-fixture NEW_DIR] [--before-save-command TEXT --before-save-line PREFIX] [--assert-command TEXT --assert-line PREFIX] [--join HOST:PORT] [--join-seconds 10..900] [--preflight-only] [--hold] [--copy-game] [--loader-package FILE] [--client-loader-package FILE] " +
+        $"[--server-env NAME] [--client-env NAME] [--client-architecture x64|arm64] [--server-only] [--server-startup-seconds 1..{ServerRunPlan.MaximumStartupSeconds}] [--world-fixture DIR] [--bake-fixture NEW_DIR] [--before-save-command TEXT --before-save-line PREFIX] [--assert-command TEXT --assert-line PREFIX] [--join HOST:PORT] [--join-seconds 10..900] [--preflight-only] [--hold] [--copy-game] [--loader-package FILE] [--steam-runtime-package FILE] [--client-loader-package FILE] " +
         "[--build-inputs FILE] [--cli-manifest FILE --cli-files DIR] [--search-root DIR|DLL ...] [--config FILE ...] [--plugin-file FILE ...] [--plugin-dir DIR ...] " +
         "[--optional-reference ASSEMBLY ...] [--expected-log-error EXACT_HEADER --expected-log-reason REASON]";
     private static readonly string[] Session = ["valheim.session/state", "valheim.session/join", "valheim.session/leave"];
@@ -241,6 +241,14 @@ internal static class ServerLoad
             FixtureBake.RefuseOutput(bakeDestination, new[] { output, serverInstall, choice.Client?.Install, fixtureSource }.OfType<string>().ToArray());
         // A loader package given, or the chosen environment's own (which the campaign applies too); else the install's BepInEx.
         var (serverLoader, serverAuto) = SelectServerLoader(parsed, server, seams.Loader);
+        string? steamRuntimePackage = parsed.Options.TryGetValue("--steam-runtime-package", out string? requestedSteam)
+            ? Path.GetFullPath(requestedSteam) : null;
+        if (steamRuntimePackage != null)
+        {
+            if (parsed.Switches.Contains("--copy-game") || choice.Inventory.Hosts[server.Host].Platform != "macos")
+                throw new InvalidDataException("--steam-runtime-package requires a Mac dedicated server profile, without --copy-game.");
+            _ = MacSteamRuntimePackage.Read(steamRuntimePackage);
+        }
         if (seams.FrozenServerLoader is { } frozen)
         {
             if (serverLoader == null || !Path.GetFullPath(serverLoader).Equals(Path.GetFullPath(frozen.Manifest),
@@ -398,7 +406,8 @@ internal static class ServerLoad
         {
             Inventory = choice.InventoryFile ?? "", World = Path.Combine(output, "world-source", "worlds_local"), WorldUid = worldUid,
             Join = choice.Join ?? "127.0.0.1:" + server.GamePort.ToString(CultureInfo.InvariantCulture),
-            Server = new HostedCampaignRole { DependencyLock = serverLock, EnvironmentCandidates = [server.Name], LoaderPackage = serverLoader, Files = files },
+            Server = new HostedCampaignRole { DependencyLock = serverLock, EnvironmentCandidates = [server.Name], LoaderPackage = serverLoader,
+                SteamRuntimePackage = steamRuntimePackage, Files = files },
         };
         if (choice.Client is { } clientRecipe)
         {

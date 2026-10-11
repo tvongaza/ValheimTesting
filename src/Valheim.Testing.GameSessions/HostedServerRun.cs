@@ -94,6 +94,7 @@ internal sealed class HostedServerRun : IServerPlacement
     // from this read-only game root while Doorstop and BepInEx remain under RuntimeDirectory.
     public string GameDirectory => Role.PreparedGameRoot ?? RuntimeDirectory;
     public string LoaderDirectory => RuntimeDirectory;
+    public string? MacSteamRuntimeDirectory => Role.PreparedSteamRuntimeRoot;
     public string WorldDirectory { get; }
     /// <summary>The runtime copy's files on the host, once copied.</summary>
     public IReadOnlyDictionary<string, string> RuntimeHashes => _runtime?.Files ?? new Dictionary<string, string>();
@@ -297,6 +298,13 @@ internal sealed class HostedServerRun : IServerPlacement
 
     ServerBoot IServerPlacement.Start(int n, GameLaunch launch, string output, CancellationToken cancellation)
     {
+        if (Role.PreparedSteamRuntimeRoot is { } steam && Role.PreparedSteamRuntimeFiles is { } files)
+            foreach (var (relative, expectedHash) in files)
+            {
+                string path = Path.Combine(steam, relative);
+                if (!File.Exists(path) || !FileHash.Sha256(path).Equals(expectedHash, StringComparison.OrdinalIgnoreCase))
+                    throw new IOException("The pinned Mac Steam runtime changed before server launch: " + relative);
+            }
         if (Role.PreparedSourceRoot is { } source && _preparedPins != null)
         {
             HostInstall.CheckProfilePinsAsync(Host, _preparedPins, GameDirectory, LoaderDirectory, source,

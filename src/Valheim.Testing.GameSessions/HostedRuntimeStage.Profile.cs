@@ -22,11 +22,18 @@ internal static partial class HostedRuntimeStage
         string source, string destination, string staging, IReadOnlyList<HostedRuntimeFile> files, TimeSpan timeout,
         CancellationToken cancellation = default, BepInExLoaderPackage? loaderPackage = null,
         HostListing? inspectedSource = null,
-        Func<IGameHost, string, TimeSpan, CancellationToken, Task<MacBundleInspection.Verdict>>? inspectMac = null)
+        Func<IGameHost, string, TimeSpan, CancellationToken, Task<MacBundleInspection.Verdict>>? inspectMac = null,
+        MacSteamRuntimePackage? steamRuntimePackage = null)
     {
         RequireStagePaths(host, kind, source, destination, staging, files);
         bool windows = host.Shell.Kind == HostShellKind.PowerShell;
         var (selected, explicitlySelectedSettings) = SelectPayload(files, loaderPackage, host.Shell.Kind);
+        if (steamRuntimePackage != null)
+        {
+            if (kind != HostedRuntimeKind.Server || windows || !OperatingSystem.IsMacOS())
+                throw new InvalidDataException("A Mac Steam runtime package requires a local Mac dedicated server profile.");
+            steamRuntimePackage.Validate();
+        }
         if (inspectedSource != null && (inspectedSource.HostName != host.Name || inspectedSource.Root != source))
             throw new ArgumentException("The inspected source belongs to a different host or install.", nameof(inspectedSource));
         var game = inspectedSource ?? await InspectSourceAsync(host, kind, source, loaderPackage, timeout, cancellation).ConfigureAwait(false);
@@ -74,6 +81,16 @@ internal static partial class HostedRuntimeStage
                 File.Copy(value.Source, target);
                 if (!FileHash.Sha256(target).Equals(value.Sha, StringComparison.OrdinalIgnoreCase))
                     throw new IOException("The local profile payload changed: " + relative);
+            }
+            if (steamRuntimePackage != null)
+            {
+                string steamRoot = Path.Combine(payload, "steam-runtime");
+                foreach (var (relative, sha) in steamRuntimePackage.StageSignedFiles(steamRoot))
+                {
+                    string name = "steam-runtime/" + relative;
+                    if (!selected.TryAdd(name, (Path.Combine(steamRoot, relative), sha)))
+                        throw new InvalidDataException("Steam runtime target collides with another staged file: " + name);
+                }
             }
             shipped = true;
             await host.ShipFilesAsync(payload, staging, timeout, cancellation).ConfigureAwait(false);
