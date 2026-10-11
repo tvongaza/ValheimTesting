@@ -14,6 +14,8 @@ This example takes the mod from [ModWithTests](../ModWithTests/README.md) and te
 
 `dotnet run scripts/validate.cs` runs the scripted tests on every platform. The mod and the adapter compile against your game install, so they build only where you have one. They take its references from [tools/game-references](../../tools/game-references/README.md): set `ValheimPath` (or `VALHEIM_PATH`) to the game folder, and a missing install, BepInEx or ValheimCLI core stops the build with an error naming it. Outside this repository, build the test project from the published package with `-p:GameSessionsPackageVersion=<version>` ([package table](../../docs/getting-started.md#package-versions-and-feeds)).
 
+The shared game-reference props supply .NET Framework 4.8 reference assemblies for compilation, so these game-side builds work with the .NET SDK on Windows, macOS and Linux without Mono. The package is private to the build and does not enter the plugin output or game runtime.
+
 ## What belongs to the mod, and what to the toolkit
 
 | The mod supplies | The toolkit supplies |

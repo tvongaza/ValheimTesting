@@ -21,6 +21,8 @@
     <ValheimGameReferencesPropsImported>true</ValheimGameReferencesPropsImported>
   </PropertyGroup>
   <ItemGroup>
+    <!-- Build net48 game-side projects with the .NET SDK on macOS and Linux without a machine-wide targeting pack. -->
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
     <!-- Name: the reference's assembly name. File (optional): its path relative to the folder, default <Name>.dll. -->
     <ValheimReference Include="assembly_valheim" />
     <ValheimReference Include="assembly_utils" />

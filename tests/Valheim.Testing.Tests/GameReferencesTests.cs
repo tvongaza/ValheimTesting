@@ -27,6 +27,9 @@ public sealed class GameReferencesBuildTests : IDisposable
         Assert.True(File.Exists(Path.Combine(output, "Fixture.dll")), run.Output);
         Assert.Empty(Directory.GetFiles(output, "assembly_valheim.dll"));
         Assert.Empty(Directory.GetFiles(output, "BepInEx.dll"));
+        Assert.Empty(Directory.GetFiles(output, "mscorlib.dll"));
+        Assert.Contains("Microsoft.NETFramework.ReferenceAssemblies/1.0.3",
+            File.ReadAllText(_project.PathOf("obj/project.assets.json")), StringComparison.Ordinal);
     }
 
     [Fact]
