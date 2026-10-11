@@ -628,9 +628,9 @@ public static class PinnedServerRun
                 report.Provenance["campaignLaunchModes"] = prepared!.LaunchModes(options.CopyGame);
                 if (prepared.Manifest.Server?.SteamRuntimePackage is { } steamPackagePath)
                 {
-                    var steamPackage = MacSteamRuntimePackage.Read(steamPackagePath);
+                    bool remote = prepared.Environment.Hosts[prepared.Environment.Server!.Host].Kind == "ssh";
                     string snapshot = Path.Combine(output, "mac-steam-runtime.json");
-                    steamPackage.Write(snapshot);
+                    var steamPackage = MacSteamRuntimePackage.Snapshot(steamPackagePath, snapshot, remote);
                     report.Provenance["macSteamRuntime"] = steamPackage.Identity;
                     report.Provenance["macSteamRuntimeSource"] = steamPackage.Root;
                     report.Provenance["macSteamRuntimeManifestSha256"] = FileHash.Sha256(snapshot);

@@ -86,7 +86,26 @@ internal static class RunRecovery
         if (refused != null) return new(runId, run.State, refused, []);
 
         var items = run.Items.Where(item => teardown || !item.Kept).ToList();
-        if (items.Count == 0 && run.SettledLaunches.Count == 0) return new(runId, run.State, null, []); // it left nothing to recover
+        if (items.Count == 0 && run.SettledLaunches.Count == 0)
+        {
+            // A local runner can prove that an interrupted run left nothing. Record that conclusion so another machine,
+            // which cannot verify a Mac/Linux runner's start identity, does not mistake the old run for a live one.
+            if (run.State != JournalRunState.Ended || run.EndRecorded) return new(runId, run.State, null, []);
+            if (status.Hosts.Any(host => host.Error != null))
+                return new(runId, JournalRunState.Unknown, "not every host journal could be read; cannot record a clean end", []);
+            string name = run.Hosts[0];
+            try
+            {
+                await journal.AppendAsync(hostFactory(name), RunJournal.DirectoryFor(hosts[name]), Actor,
+                    JournalEntry.Of(JournalEntry.RunEnded, ("state", "recovered: runner gone"), ("cleanupVerified", "true")),
+                    timeout, cancellation).ConfigureAwait(false);
+                return new(runId, JournalRunState.Ended, null, [new(name, "run end", "recorded after proving its runner gone and no owned state remains", false)]);
+            }
+            catch (Exception error) when (error is not OperationCanceledException)
+            {
+                return new(runId, JournalRunState.Unknown, "could not record the clean end: " + error.Message, []);
+            }
+        }
         var steps = new List<RecoveryStep>();
         var connections = items.Concat(run.SettledLaunches).Select(item => item.Host).Distinct(StringComparer.Ordinal).ToDictionary(name => name, hostFactory, StringComparer.Ordinal);
         void Step(string host, string what, string outcome, bool failed = false) => steps.Add(new(host, what, outcome, failed));

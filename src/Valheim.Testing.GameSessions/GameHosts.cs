@@ -37,7 +37,7 @@ public sealed class LocalGameHost : ScriptedGameHost
 }
 
 /// <summary>
-/// A machine reached through the system OpenSSH client (<c>ssh</c>, on Windows, macOS and Linux) with key or agent authentication
+/// A machine reached through OpenSSH (<c>ssh</c>, on macOS and Linux; Git for Windows' OpenSSH when installed on Windows) with key or agent authentication
 /// only: BatchMode is always on, so ssh never prompts, and nothing here accepts a password. The destination is <c>user@host</c>,
 /// <c>ssh://user@host:port</c> or an ssh-config alias; the host key must already be known (or pass <c>StrictHostKeyChecking=accept-new</c>).
 /// A bash host needs a POSIX login shell; a PowerShell host works under any login shell, including Windows' cmd.exe. Unlike a local
@@ -65,7 +65,9 @@ public sealed class SshGameHost : ScriptedGameHost
     /// RemoteCommand is refused.
     /// </param>
     /// <param name="connectTimeout">ssh's ConnectTimeout; 10 s by default.</param>
-    /// <param name="sshExecutable">The OpenSSH client; <c>ssh</c> from PATH by default.</param>
+    /// <param name="sshExecutable">The OpenSSH client. The default uses Git for Windows' matching ssh/scp pair when installed on Windows,
+    /// because Windows' inbox ssh can hang when a .NET process sends its script through redirected stdin; elsewhere it uses <c>ssh</c> from PATH.
+    /// An explicit path always wins.</param>
     public SshGameHost(string name, string destination, HostShell shell, int port = 0, IEnumerable<string>? sshOptions = null, TimeSpan? connectTimeout = null, string sshExecutable = "ssh")
         : this(name, destination, shell, port, sshOptions, connectTimeout, sshExecutable, SystemProcessLauncher.Instance) { }
 
@@ -79,8 +81,27 @@ public sealed class SshGameHost : ScriptedGameHost
         ConnectTimeout = connectTimeout ?? TimeSpan.FromSeconds(10);
         if (ConnectTimeout < TimeSpan.FromSeconds(1)) throw new ArgumentOutOfRangeException(nameof(connectTimeout), "Use a connect timeout of at least one second.");
         ArgumentException.ThrowIfNullOrWhiteSpace(sshExecutable);
-        _ssh = sshExecutable;
+        _ssh = ReferenceEquals(launcher, SystemProcessLauncher.Instance)
+            ? DefaultSshExecutable(sshExecutable, OperatingSystem.IsWindows(), Environment.GetEnvironmentVariable("SSH_CONNECTION") is { Length: > 0 },
+                Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), File.Exists)
+            : sshExecutable;
         _options = (sshOptions ?? []).Select(option => OptionArgument(SshChecks.CheckOption(option))).ToArray();
+    }
+
+    internal static string DefaultSshExecutable(string requested, bool windows, bool inSshSession, string programFiles, string localAppData,
+        Func<string, bool> exists)
+    {
+        if (!windows || requested != "ssh") return requested;
+        foreach (string root in new[] { Path.Combine(programFiles, "Git"), Path.Combine(localAppData, "Programs", "Git") })
+        {
+            string ssh = Path.Combine(root, "usr", "bin", "ssh.exe");
+            string scp = Path.Combine(root, "usr", "bin", "scp.exe");
+            if (exists(ssh) && exists(scp)) return ssh;
+        }
+        if (inSshSession)
+            throw new InvalidOperationException("Windows' inbox ssh can hang while receiving a ValheimTesting script from a .NET runner in an SSH session. " +
+                "Install Git for Windows (its ssh.exe and scp.exe are used together), or set this host's ssh field to a tested OpenSSH client path before staging.");
+        return requested;
     }
 
     public override GameHostKind Kind => GameHostKind.Ssh;

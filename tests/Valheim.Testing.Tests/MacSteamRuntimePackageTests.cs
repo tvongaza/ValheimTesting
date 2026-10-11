@@ -5,6 +5,25 @@ using Xunit;
 
 public sealed class MacSteamRuntimePackageTests
 {
+    [Fact] public void RemoteManifestSnapshotDoesNotInspectMacFilesOnItsWindowsRunner()
+    {
+        string folder = Directory.CreateTempSubdirectory("vt-steam-remote-").FullName;
+        try
+        {
+            string manifest = Path.Combine(folder, "reviewed.json"), snapshot = Path.Combine(folder, "evidence.json");
+            File.WriteAllText(manifest, """
+                {"name":"SteamCMD","version":"123","root":"/remote/steamcmd","profileFormat":"thin-arm64-adhoc-sign-v1",
+                 "sourceManifestSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                 "files":{"steamclient.dylib":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                          "crashhandler.dylib":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}}
+                """);
+            var package = MacSteamRuntimePackage.Snapshot(manifest, snapshot, remote: true);
+            Assert.Equal("/remote/steamcmd", package.Root);
+            Assert.Equal(File.ReadAllBytes(manifest), File.ReadAllBytes(snapshot));
+        }
+        finally { Directory.Delete(folder, recursive: true); }
+    }
+
     [Fact]
     public async Task PinsTheNativeClosureAndRefusesChangedOrMissingMembers()
     {

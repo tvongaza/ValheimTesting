@@ -85,6 +85,15 @@ internal sealed class MacSteamRuntimePackage
         return package;
     }
 
+    /// <summary>Keep the reviewed manifest in a run's evidence. A remote source was checked on its Mac host already.</summary>
+    internal static MacSteamRuntimePackage Snapshot(string path, string snapshot, bool remote)
+    {
+        var package = remote ? ReadRemote(path) : Read(path);
+        if (remote) File.Copy(path, snapshot);
+        else package.Write(snapshot);
+        return package;
+    }
+
     /// <summary>Verify all pins, arm64 availability and the complete current @loader_path closure.</summary>
     public void Validate()
     {

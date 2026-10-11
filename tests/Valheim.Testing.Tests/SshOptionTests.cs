@@ -7,6 +7,36 @@ using Valheim.Testing.GameSessions;
 // written out by hand from those rules; the ssh-to-localhost job checks the same values against a real ssh.
 public class SshOptionTests
 {
+    [Fact] public void WindowsDefaultUsesOneGitSshAndScpPair()
+    {
+        string programFiles = Path.Combine("root", "Program Files");
+        string git = Path.Combine(programFiles, "Git", "usr", "bin");
+        string ssh = Path.Combine(git, "ssh.exe"), scp = Path.Combine(git, "scp.exe");
+        var checkedPaths = new List<string>();
+        string selected = SshGameHost.DefaultSshExecutable("ssh", windows: true, inSshSession: true, programFiles, "local",
+            path => { checkedPaths.Add(path); return path == ssh || path == scp; });
+        Assert.Equal(ssh, selected);
+        Assert.Equal([ssh, scp], checkedPaths);
+    }
+
+    [Fact] public void MissingOrIncompleteGitSshRefusesBeforeAWindowsSshSessionStagesAnything()
+    {
+        string programFiles = Path.Combine("root", "Program Files");
+        string gitSsh = Path.Combine(programFiles, "Git", "usr", "bin", "ssh.exe");
+        var error = Assert.Throws<InvalidOperationException>(() => SshGameHost.DefaultSshExecutable("ssh", windows: true,
+            inSshSession: true, programFiles, "local", path => path == gitSsh));
+        Assert.Contains("ssh.exe and scp.exe", error.Message);
+        Assert.Equal("ssh", SshGameHost.DefaultSshExecutable("ssh", windows: true, inSshSession: false, programFiles, "local", _ => false));
+    }
+
+    [Fact] public void AnExplicitClientAndOtherPlatformsKeepTheirSelection()
+    {
+        Assert.Equal("chosen-ssh", SshGameHost.DefaultSshExecutable("chosen-ssh", windows: true, inSshSession: true,
+            "programs", "local", _ => false));
+        Assert.Equal("ssh", SshGameHost.DefaultSshExecutable("ssh", windows: false, inSshSession: true,
+            "programs", "local", _ => false));
+    }
+
     [Theory]
     [InlineData("IdentityFile=/keys/valheim_tests")]
     [InlineData(@"IdentityFile=C:\Users\tester\.ssh\key")]

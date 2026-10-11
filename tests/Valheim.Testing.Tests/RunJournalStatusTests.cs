@@ -44,6 +44,28 @@ public sealed class RunJournalStatusTests : IDisposable
 
     private static JournalRunStatus Run(JournalStatusReport report, string run) => Assert.Single(report.Runs, status => status.Run == run);
 
+    [Fact] public async Task RecoveryRecordsAnEndOnlyAfterLocalProofThatAnInterruptedRunLeftNothing()
+    {
+        const string old = "run-unsealed", live = "run-live";
+        Line(_host, old, "server", Gone, JournalEntry.CopyIntended, ("runtime", "/srv/old"));
+        Line(_host, old, "server", Gone, JournalEntry.CopyRetired, ("runtime", "/srv/old"));
+        Line(_host, live, "server", JournalRunner.Current, JournalEntry.CopyIntended, ("runtime", "/srv/live"));
+        Line(_host, live, "server", JournalRunner.Current, JournalEntry.CopyRetired, ("runtime", "/srv/live"));
+        var before = await InspectAsync();
+        Assert.Equal(JournalRunState.Ended, Run(before, old).State);
+        Assert.False(Run(before, old).EndRecorded);
+        Assert.Equal(JournalRunState.Live, Run(before, live).State);
+
+        var refused = await RunRecovery.RecoverAsync(Hosts("pc"), _ => _host, live, false, TimeSpan.FromSeconds(5));
+        Assert.NotNull(refused.Refused);
+        var recovered = await RunRecovery.RecoverAsync(Hosts("pc"), _ => _host, old, false, TimeSpan.FromSeconds(5));
+        Assert.Null(recovered.Refused);
+        Assert.Equal("run end", Assert.Single(recovered.Steps).What);
+        Assert.True(Run(await InspectAsync(), old).EndRecorded);
+        var again = await RunRecovery.RecoverAsync(Hosts("pc"), _ => _host, old, false, TimeSpan.FromSeconds(5));
+        Assert.Empty(again.Steps);
+    }
+
     [Fact] public async Task ACapturedMacAccessListStaysVisibleUntilRestorationIsJournalled()
     {
         const string run = "run-mac-lists";
