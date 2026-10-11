@@ -37,6 +37,22 @@ public sealed class LocalClientCopyTests : IDisposable
     private static Dictionary<string, string> Tree(string root) =>
         Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories).ToDictionary(path => Path.GetRelativePath(root, path), FileHash.Sha256);
 
+    [Fact] public void AnOldSplitCliSetIsRefusedBeforeACopyIsPrepared()
+    {
+        string manifestPath = CliSet();
+        var manifest = CliCapabilityManifest.Read(manifestPath);
+        manifest.Files.Add(new CliManifestFile
+        {
+            File = "Valheim.Cli.Standard.dll", Sha256 = new string('a', 64), Plugins = ["valheimCLI.standard"]
+        });
+        manifest.Write(manifestPath);
+        var plan = Plan(_rig.Game);
+        plan.CliManifest = manifestPath;
+        var error = Assert.Throws<InvalidOperationException>(plan.Preflight);
+        Assert.Contains("not a one-plugin build", error.Message);
+        Assert.False(plan.Prepared);
+    }
+
     [Fact] public async Task AnOwnedClientRunsFromACopyWithTheSetStagedAndTheInstallUnchanged()
     {
         string source = _rig.Game;

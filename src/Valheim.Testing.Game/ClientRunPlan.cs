@@ -405,7 +405,12 @@ public sealed class ClientRunPlan
         if (CopySource)
         {
             StaticCapabilities.UnionWith(wanted);
-            if (CliManifest != null) CliCapabilityManifest.Read(CliManifest).RequireCapabilities(wanted);
+            if (CliManifest != null)
+            {
+                var manifest = CliCapabilityManifest.Read(CliManifest);
+                manifest.RequireDefaultPlugin(); // Refuse an old split set before preparing a disposable client.
+                manifest.RequireCapabilities(wanted);
+            }
             return null;
         }
         if (CliManifest == null)
