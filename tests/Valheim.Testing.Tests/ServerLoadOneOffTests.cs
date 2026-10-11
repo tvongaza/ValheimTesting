@@ -586,6 +586,24 @@ public sealed class ServerLoadOneOffTests : IDisposable
         Assert.Equal(("local-server", "lab-client", "pc.lan:2486"), (choice.Server.Name, choice.Client!.Name, choice.Join));
     }
 
+    [Fact] public void ARemoteMacClientUsesTheSharedCampaignPath()
+    {
+        string file = Path.Combine(_rig.Root, "mac-client-lab.json");
+        File.WriteAllText(file, JsonSerializer.Serialize(new
+        {
+            hosts = new { mac = new { kind = "ssh", platform = "macos", shell = "bash", destination = "tester@mac", @lock = "/vt/mac-lock" } },
+            environments = new object[]
+            {
+                new { name = "local-server", roles = new[] { "server" }, install = OperatingSystem.IsWindows() ? @"C:\Server" : "/srv/server" },
+                new { name = "mac-client", host = "mac", roles = new[] { "client" }, install = "/Applications/Valheim", runtime = "/vt/runs", cliPort = 5701, architecture = "arm64" },
+            },
+            leaseHost = "mac", leaseDirectory = "/vt/leases",
+        }));
+        Assert.True(ServerLoad.TryRead(["--mod", "a.dll", "--inventory", file, "--client-env", "mac-client", "--join", "server.lan:2486"], out var parsed, out _));
+        var choice = ServerLoad.Choose(parsed!, _rig.Root);
+        Assert.Equal(("local-server", "mac-client", "server.lan:2486"), (choice.Server.Name, choice.Client!.Name, choice.Join));
+    }
+
     [Fact] public void ConflictingOptionsAreRefusedBeforeAnything()
     {
         foreach (string[] args in new string[][]

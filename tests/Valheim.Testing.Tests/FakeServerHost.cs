@@ -89,6 +89,7 @@ internal sealed class FakeServerHost : IGameHost
     /// <summary>What the macOS bundle check answers on a source install (read only) and on a copy it repairs (MacAppBundle).</summary>
     public string MacBundleInspect { get; set; } = "VT-BUNDLE accepted 0 -";
     public string MacBundleRepair { get; set; } = "VT-BUNDLE accepted 0 -";
+    public string MacAgentReply { get; set; } = "VT-AGENT removed\n";
     /// <summary>A process this host reports as running until it is stopped; for journal tests.</summary>
     public void Running(int pid, string start)
     {
@@ -131,7 +132,8 @@ internal sealed class FakeServerHost : IGameHost
         ("party", [CrossplayLibraryScripts.Check]),
         ("server-logon", [HostServerScripts.WindowsServerLogonCheck]),
         ("wait", [InteractiveScripts.LinuxWait, InteractiveScripts.WindowsWait]),
-        ("stop", [InteractiveScripts.LinuxStop, HostServerScripts.WindowsStop]),
+        ("stop", [InteractiveScripts.LinuxStop, HostServerScripts.WindowsStop, RunRecovery.MacStop]),
+        ("mac-agent-retire", [InteractiveScripts.MacAgentRetire]),
         ("client-start", [InteractiveScripts.LinuxStart]),
         ("client-keep", [HostedClientScripts.BashKeep]),
         ("preloader", [HostedClientScripts.BashPreloader, HostedClientScripts.PowerShellPreloader]),
@@ -174,6 +176,7 @@ internal sealed class FakeServerHost : IGameHost
         switch (name)
         {
             case "machine-name": return Ok("VT-MACHINE " + MachineName + "\n");
+            case "mac-agent-retire": return Ok(MacAgentReply);
             case "mac-bundle": return Ok((v["repair"] == "1" ? MacBundleRepair : MacBundleInspect) + "\n");
             case "game-process": return Ok(GameActive ? $"VT-GAME busy {GameProcessIds}\n".Replace(" \n", "\n") : "VT-GAME idle\n");
             case "server-logon": return Ok("VT-LOGON " + ServerTaskLogon + "\n");

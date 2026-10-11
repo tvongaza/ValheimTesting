@@ -71,7 +71,8 @@ public enum InteractiveStop { Stopped, AlreadyGone, Quit }
 /// whatever happened.</item>
 /// <item>Linux (a bash host): the game starts in its own session (setsid) with the <see cref="LinuxDisplay"/>'s DISPLAY,
 /// WAYLAND_DISPLAY, XDG_RUNTIME_DIR, XAUTHORITY and session bus. The host user must be the display's user.</item>
-/// <item>macOS: not supported from another machine (<see cref="GameLaunch.ForClient"/> refuses it).</item>
+/// <item>macOS: an SSH host bootstraps a run-owned LaunchAgent into its unlocked console user's GUI session;
+/// the agent starts the selected native or Rosetta slice and is removed after the exact client process stops.</item>
 /// </list>
 /// The host refuses before anything starts when the user has no desktop session there (on Windows, also when it has more than one),
 /// when no Steam client runs as the user in it, when a required install file is missing or when the launch directory exists.
@@ -120,8 +121,8 @@ public static class InteractiveClient
     /// <summary>
     /// Starts <paramref name="launch"/> in <paramref name="host"/>'s desktop session and returns the game's process, identified by
     /// process ID and start time. <paramref name="launchDirectory"/> is a new absolute directory on the host for this launch's evidence:
-    /// the recorded process identity (its <c>pid</c> file), and the game's standard output (Linux) or the launcher's error (Windows);
-    /// the launch spec is not kept there. Secret variables are read here first; a missing one is refused before anything runs. Their values never enter the
+    /// the recorded process identity (its <c>pid</c> file), and the game's standard output or the launcher's error.
+    /// A Mac agent keeps a non-secret launch spec there; other hosts discard theirs after launch. Secret variables are read here first; a missing one is refused before anything runs. Their values never enter the
     /// composed script (which the host's wrapper writes to a temporary file): they follow it on standard input, the wrapper keeps
     /// them in memory, and they reach only the game's environment (on Windows through a file in the user's temporary directory
     /// that the launcher deletes as it reads it). They are redacted from every reply. It returns when the game process exists, not
@@ -145,8 +146,8 @@ public static class InteractiveClient
         bool windows = launch.Platform == ClientPlatform.Windows;
         if (windows != (host.Shell.Kind == HostShellKind.PowerShell))
             throw new ArgumentException(windows ? $"A Windows client starts through a PowerShell host; {host.Name} runs {host.Shell}."
-                : $"A Linux client starts through a bash host; {host.Name} runs {host.Shell}.", nameof(host));
-        if (windows && display != null) throw new ArgumentException("A display belongs to a Linux client.", nameof(display));
+                : $"A Linux or macOS client starts through a bash host; {host.Name} runs {host.Shell}.", nameof(host));
+        if (launch.Platform != ClientPlatform.Linux && display != null) throw new ArgumentException("A display belongs to a Linux client.", nameof(display));
         launchDirectory = CheckDirectory(host, launchDirectory, windows);
 
         var secretValues = new List<string>();
@@ -173,6 +174,14 @@ public static class InteractiveClient
             ["files"] = string.Join('\n', launch.RequiredFiles),
         };
         if (windows) { variables["task"] = task!; variables["launcher"] = InteractiveScripts.WindowsLauncher; }
+        else if (launch.Platform == ClientPlatform.MacOS)
+        {
+            variables["exe"] = "Valheim.app/Contents/MacOS/Valheim";
+            variables["arch"] = launch.MacArchitecture == ClientArchitecture.Arm64 ? "arm64" : "x86_64";
+            variables["launcher"] = InteractiveScripts.MacLauncher;
+            variables["label"] = InteractiveScripts.MacLabelPrefix + Guid.NewGuid().ToString("N");
+            variables["plist"] = InteractiveScripts.MacPlist(variables["label"], launchDirectory);
+        }
         else
         {
             display ??= new LinuxDisplay();
@@ -180,7 +189,12 @@ public static class InteractiveClient
             variables["display"] = display.Display; variables["wayland"] = display.WaylandDisplay ?? "";
             variables["runtime"] = display.RuntimeDirectory ?? ""; variables["xauthority"] = display.XAuthority ?? "";
         }
-        string script = windows ? InteractiveScripts.WindowsStart : InteractiveScripts.LinuxStart;
+        string script = launch.Platform switch
+        {
+            ClientPlatform.Windows => InteractiveScripts.WindowsStart,
+            ClientPlatform.MacOS => InteractiveScripts.MacStart,
+            _ => InteractiveScripts.LinuxStart,
+        };
         beforeLaunch?.Invoke();
         var result = Redact(await (host is ScriptedGameHost scripted
             ? scripted.RunWithSecretsAsync(script, variables, secretTokens, timeout, cancellation)
@@ -296,7 +310,7 @@ public sealed class InteractiveClientProcess : IOwnedProcess, IAsyncDisposable
     public string HostName => _host.Name;
     /// <summary>The game's process ID on its host.</summary>
     public int Id { get; }
-    /// <summary>The process's start time as the host reports it (Windows: UTC file time; Linux: clock ticks after boot), which tells it from a later process with the same ID.</summary>
+    /// <summary>The process's start identity as the host reports it (Windows: UTC file time; Linux: clock ticks after boot; macOS: checksum of the reported start time), which tells it from a later process with the same ID.</summary>
     public string StartIdentity { get; }
     /// <summary>The launch's evidence directory on the host.</summary>
     public string LaunchDirectory { get; }
@@ -314,7 +328,8 @@ public sealed class InteractiveClientProcess : IOwnedProcess, IAsyncDisposable
     {
         while (true)
         {
-            var result = (await _host.RunAsync(_platform == ClientPlatform.Windows ? InteractiveScripts.WindowsWait : InteractiveScripts.LinuxWait,
+            var result = (await _host.RunAsync(_platform switch
+                { ClientPlatform.Windows => InteractiveScripts.WindowsWait, ClientPlatform.MacOS => InteractiveScripts.MacWait, _ => InteractiveScripts.LinuxWait },
                 Variables(("seconds", "600")), TimeSpan.FromSeconds(660), cancellation).ConfigureAwait(false)).EnsureSuccess($"Waiting for client process {Id} on {HostName}");
             string? verdict = InteractiveClient.Line(result.Stdout, "VT-WAIT ");
             if (verdict == "running") continue;
@@ -347,17 +362,20 @@ public sealed class InteractiveClientProcess : IOwnedProcess, IAsyncDisposable
         {
             string seconds = Math.Max(1, (int)Math.Ceiling(timeout.TotalSeconds)).ToString(CultureInfo.InvariantCulture);
             string quitSeconds = ((int)Math.Ceiling(quit.TotalSeconds)).ToString(CultureInfo.InvariantCulture);
-            var result = (await _host.RunAsync(_platform == ClientPlatform.Windows ? InteractiveScripts.WindowsStop : InteractiveScripts.LinuxStop,
+            var result = (await _host.RunAsync(_platform switch
+                { ClientPlatform.Windows => InteractiveScripts.WindowsStop, ClientPlatform.MacOS => InteractiveScripts.MacStop, _ => InteractiveScripts.LinuxStop },
                 Variables(("seconds", seconds), ("quit", quitSeconds), ("signal", "TERM"),
                     ("quitTask", InteractiveClient.TaskPrefix + "quit-" + Guid.NewGuid().ToString("N")),
                     ("desktopQuit", InteractiveScripts.WindowsDesktopQuit)), quit + timeout + TimeSpan.FromSeconds(30), cancellation).ConfigureAwait(false))
                 .EnsureSuccess($"Stopping client process {Id} on {HostName}");
             if (_platform == ClientPlatform.Windows && InteractiveClient.Line(result.Stdout, "VT-TASK ") is { } taskReply && taskReply.StartsWith("kept ", StringComparison.Ordinal))
                 throw new HostOperationException($"The desktop quit task {taskReply["kept ".Length..]} was not removed on {HostName}; inspect and remove it before another run.", result);
+            if (_platform == ClientPlatform.MacOS && InteractiveClient.Line(result.Stdout, "VT-AGENT ") != "removed")
+                throw new HostOperationException($"The Mac GUI launch agent for client {Id} on {HostName} was not proven removed; inspect {LaunchDirectory} before another run.", result);
             string? verdict = InteractiveClient.Line(result.Stdout, "VT-STOP ");
             string? request = _platform == ClientPlatform.Windows ? InteractiveClient.Line(result.Stdout, "VT-QUIT ") : null;
             _quitRequested = _platform != ClientPlatform.Windows || request is "window" or "desktop-window";
-            LastQuitRequest = _platform != ClientPlatform.Windows ? "SIGTERM" : request switch
+            LastQuitRequest = _platform == ClientPlatform.MacOS ? "SIGINT" : _platform != ClientPlatform.Windows ? "SIGTERM" : request switch
             {
                 "window" => "window close requested in this session",
                 "desktop-window" => "window close requested through desktop task",
@@ -450,7 +468,7 @@ internal static class WindowsCommandLine
 
 // The fixed scripts of an interactive client start. Values arrive as variables (ScriptedGameHost.Compose); every script ends
 // with one verdict line the C# side requires. Line endings are normalised because a checkout may have converted this file to CRLF.
-internal static class InteractiveScripts
+internal static partial class InteractiveScripts
 {
     // The user's desktop sessions (sessions other than 0, where services and SSH run) in which $me runs processes, optionally
     // only those running $image; tasklist reports them without administrator rights. Needs $me and $system. The client's and

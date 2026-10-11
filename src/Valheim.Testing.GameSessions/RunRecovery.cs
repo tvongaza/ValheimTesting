@@ -117,6 +117,16 @@ internal static class RunRecovery
             catch (Exception error) when (error is not OperationCanceledException) { Step(name, "journal " + entry.Kind, "could not be journalled: " + error.Message); }
         }
         IEnumerable<JournalItem> Of(string kind) => items.Where(item => item.Kind == kind);
+        async Task RetireMacClientAgent(string hostName, string? directory)
+        {
+            if (hosts[hostName] is not { Kind: "ssh", Platform: "macos" } ||
+                directory is not { Length: > 0 }) return;
+            var result = (await connections[hostName].RunAsync(InteractiveScripts.MacAgentRetire,
+                new Dictionary<string, string> { ["dir"] = directory }, timeout, cancellation).ConfigureAwait(false))
+                .EnsureSuccess($"Removing the Mac client GUI agent on {hostName}");
+            if (InteractiveClient.Line(result.Stdout, "VT-AGENT ") != "removed")
+                throw new HostOperationException($"The Mac client GUI agent on {hostName} could not be proven removed", result);
+        }
         // A process adopted from a launch's pid file: once it is stopped or gone, its launch is settled too.
         Task SettleAdopted(JournalItem process) => process.Fields.GetValueOrDefault("adoptedFrom") is { Length: > 0 } directory
             ? Note(process.Host, Settled(process.Actor, directory)) : Task.CompletedTask;
@@ -144,6 +154,7 @@ internal static class RunRecovery
                 {
                     if (probed.State is ProbedState.Gone or ProbedState.Reused)
                     {
+                        await RetireMacClientAgent(group.Key, process.Fields.GetValueOrDefault("launchDirectory")).ConfigureAwait(false);
                         Step(group.Key, what, "already gone");
                         await Note(group.Key, Stopped(pid, start)).ConfigureAwait(false);
                         await SettleAdopted(process).ConfigureAwait(false);
@@ -177,6 +188,7 @@ internal static class RunRecovery
                         var owned = new InteractiveClientProcess(host, host.Shell.Kind == HostShellKind.PowerShell ? ClientPlatform.Windows : ClientPlatform.Linux, pid, start, directory, null);
                         outcome = await owned.StopAsync(TimeSpan.FromSeconds(30), cancellation).ConfigureAwait(false);
                     }
+                    await RetireMacClientAgent(group.Key, process.Fields.GetValueOrDefault("launchDirectory")).ConfigureAwait(false);
                     Step(group.Key, what, outcome == InteractiveStop.AlreadyGone ? "already gone" : "stopped");
                     await Note(group.Key, Stopped(pid, start)).ConfigureAwait(false);
                     await SettleAdopted(process).ConfigureAwait(false);
@@ -190,6 +202,20 @@ internal static class RunRecovery
         {
             Step(launch.Host, "launch " + launch.What, "settled: its pid file's process is gone");
             await Note(launch.Host, Settled(launch.Actor, launch.What)).ConfigureAwait(false);
+        }
+        // An agent can outlive a game that exited on its own, or a stop whose bootout reply was lost.
+        // Keep it visible to env status until this exact run-owned launch directory is retired.
+        foreach (var agent in Of("mac-agent"))
+        {
+            string what = "Mac GUI agent " + agent.What;
+            if (Failed(agent.Host)) { Step(agent.Host, what, "not attempted: its process was not proven stopped", failed: true); continue; }
+            try
+            {
+                await RetireMacClientAgent(agent.Host, agent.What).ConfigureAwait(false);
+                Step(agent.Host, what, "removed");
+                await Note(agent.Host, JournalEntry.Of(JournalEntry.MacAgentRetired, ("launchDirectory", agent.What))).ConfigureAwait(false);
+            }
+            catch (Exception error) when (error is not OperationCanceledException) { Step(agent.Host, what, "not removed: " + error.Message, failed: true); }
         }
         bool processLeft = steps.Any(step => step.Failed);
 

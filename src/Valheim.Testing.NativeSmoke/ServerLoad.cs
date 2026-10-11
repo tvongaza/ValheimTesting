@@ -199,8 +199,6 @@ internal static class ServerLoad
         var clientRecipe = SmokeInputResolver.Pick(inventory, "client", parsed.Options.GetValueOrDefault("--client-env"),
             "--client-env", where, "Give --client DIR, add a client environment, or use --server-only to skip the client's join.",
             localOnly: false, command: "server-load");
-        if (inventory.Hosts[clientRecipe.Host] is { Platform: "macos", Kind: not "local" })
-            throw new ArgumentException($"Client environment {clientRecipe.Name} is on a remote macOS host; owned Mac clients need this runner's local GUI session.");
         string clientReason = parsed.Options.ContainsKey("--client-env") ? "named by --client-env" : "default; --server-only to skip";
         if (parsed.Options.TryGetValue("--join", out string? joinOption) &&
             !joinOption.EndsWith(":" + serverRecipe.GamePort.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal))

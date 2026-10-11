@@ -943,7 +943,7 @@ public sealed partial class HostedServerRunTests : IDisposable
             refused = Record.Exception(() => run.OpenClient(client));
             return Task.CompletedTask;
         }, clientHost, new ScriptedTransport())));
-        Assert.Contains("architecture arm64 is for a macOS client launched locally in this runner's GUI session", Assert.IsType<ArgumentException>(refused).Message);
+        Assert.Contains("architecture arm64 is for a macOS client", Assert.IsType<ArgumentException>(refused).Message);
         Assert.Empty(clientHost.Claims); Assert.Empty(clientHost.Runs); Assert.Empty(clientHost.Tunnels);
     }
 }

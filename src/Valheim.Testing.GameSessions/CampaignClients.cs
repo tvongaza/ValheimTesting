@@ -131,17 +131,23 @@ internal sealed class CampaignClients
         if (plan.Owned && plan.Architecture.Length == 0)
             plan.Architecture = EnvironmentInventory.DefaultClientArchitecture(hostProfile.Platform,
                 hostProfile.Kind == "local" ? EnvironmentInventory.ThisMachine.OsArchitecture : null);
-        if (platform == ClientPlatform.MacOS)
+        if (platform == ClientPlatform.MacOS && hostProfile.Kind == "local")
             return await OpenLocalMacClientAsync(report, output, plan, name, role, hostProfile, cancellation).ConfigureAwait(false);
-        // Remote Windows and Linux clients are x64 only.
-        if (plan.LaunchArchitecture != ClientArchitecture.X64)
-            throw new ArgumentException($"Profile client '{name}' starts in a remote host's desktop session, where only x64 Windows and Linux clients run; " +
-                "architecture arm64 is for a macOS client launched locally in this runner's GUI session. Leave architecture out.");
+        if (platform != ClientPlatform.MacOS && plan.LaunchArchitecture != ClientArchitecture.X64)
+            throw new ArgumentException($"Profile client '{name}' on {platform} needs x64; architecture arm64 is for a macOS client.");
         string gameRoot = role.PreparedGameRoot ?? role.Install;
         string loaderRoot = role.PreparedLoaderRoot ?? role.Install;
-        var launch = GameLaunch.ForClientWithLoader(gameRoot, loaderRoot, plan.LaunchArguments, plan.Environment,
-            platform, plan.LaunchArchitecture, plan.PasswordVariable is { } password ? new[] { password } : null);
         var host = ClientHost(role);
+        string? macDoorstop = null;
+        if (platform == ClientPlatform.MacOS)
+        {
+            await RemoteMacClientPreflight.RequireDesktopAsync(host, HostedTimeouts.Quick, cancellation).ConfigureAwait(false);
+            await RemoteMacClientPreflight.RequireGameAsync(host, gameRoot, plan.LaunchArchitecture, HostedTimeouts.Quick, cancellation).ConfigureAwait(false);
+            macDoorstop = await RemoteMacClientPreflight.SelectLoaderAsync(host, loaderRoot, plan.LaunchArchitecture,
+                HostedTimeouts.Quick, cancellation).ConfigureAwait(false);
+        }
+        var launch = GameLaunch.ForClientWithLoader(gameRoot, loaderRoot, plan.LaunchArguments, plan.Environment,
+            platform, plan.LaunchArchitecture, plan.PasswordVariable is { } password ? new[] { password } : null, macDoorstop);
         var account = await HoldAccountAsync(report, name, () => host, cancellation).ConfigureAwait(false);
         // A dedicated server's lock covers its own host; another client host is locked for the rest of the run.
         await LockHostAsync(role.Host, host, hostProfile, cancellation).ConfigureAwait(false);
@@ -177,6 +183,8 @@ internal sealed class CampaignClients
             var session = ClientSession.Launch(plan, output,
                 () =>
                 {
+                    if (platform == ClientPlatform.MacOS)
+                        RemoteMacClientPreflight.RequireDesktopAsync(host, HostedTimeouts.Quick, cancellation).GetAwaiter().GetResult();
                     if (role.PreparedSourceRoot is { } source && plan.InstallPins is { } pinned)
                     {
                         HostInstall.CheckProfilePinsAsync(host, pinned, gameRoot, loaderRoot, source,
@@ -186,6 +194,9 @@ internal sealed class CampaignClients
                     string expected = launch.CommandLineSha256();
                     JournalAsync(host, role.Host, name, JournalEntry.Of(JournalEntry.ProcessIntended, ("launchDirectory", launchDirectory),
                         ("expectedCommandLineSha256", expected)), cancellation).GetAwaiter().GetResult();
+                    if (platform == ClientPlatform.MacOS)
+                        JournalAsync(host, role.Host, name, JournalEntry.Of(JournalEntry.MacAgentIntended,
+                            ("launchDirectory", launchDirectory)), cancellation).GetAwaiter().GetResult();
                     var started = account == null ? InteractiveClient.StartAsync(host, launch, launchDirectory, start, display, cancellation)
                         : InteractiveClient.StartAsync(account.Hold, host, launch, launchDirectory, start, display, cancellation);
                     var client = started.GetAwaiter().GetResult();
@@ -193,7 +204,9 @@ internal sealed class CampaignClients
                     HostedServerRun.WarnUnexpectedCommandLine(host, client.Id, expected, commandLine);
                     NoteAsync(host, role.Host, name, JournalEntry.Of(JournalEntry.ProcessStarted, ("pid", client.Id.ToString(CultureInfo.InvariantCulture)),
                         ("startIdentity", client.StartIdentity), ("commandLineSha256", commandLine), ("launchDirectory", launchDirectory))).GetAwaiter().GetResult();
-                    var process = new HostedClientProcess(client, host, loaderRoot, tunnel, local);
+                    var process = new HostedClientProcess(client, host, loaderRoot, tunnel, local,
+                        platform == ClientPlatform.MacOS ? () => NoteAsync(host, role.Host, name,
+                            JournalEntry.Of(JournalEntry.MacAgentRetired, ("launchDirectory", launchDirectory))).GetAwaiter().GetResult() : null);
                     if (account != null) account.Process = process; // Its lease is released only once this process is gone.
                     return process;
                 },
