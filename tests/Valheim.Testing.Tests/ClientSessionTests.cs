@@ -18,6 +18,16 @@ public sealed class ClientSessionTests : IDisposable
         Assert.Equal(1, process.Stops);
     }
 
+    [Fact] public void FailedStartupRetiresItsTemporaryCommandLease()
+    {
+        var plan = Plan();
+        OwnedClientCommandLease.Write(_output, 99, "test-start", plan);
+        Assert.Throws<WaitTimeoutException>(() => ClientSession.Launch(plan, _output, () => new FakeOwnedProcess(99),
+            () => new ScriptedTransport(), (_, _) => throw new WaitTimeoutException("menu", TimeSpan.Zero, null)));
+        Assert.False(File.Exists(Path.Combine(_output, OwnedClientCommandLease.FileName)));
+        Assert.False(File.Exists(Path.Combine(_output, OwnedClientCommandLease.MenuPins)));
+    }
+
     [Fact] public void FailedPinVerificationCannotSendADiagnosticGameCommand()
     {
         var process = new FakeOwnedProcess(99);
@@ -148,9 +158,23 @@ public sealed class ClientSessionTests : IDisposable
             Assert.True(File.Exists(Path.Combine(_output, OwnedClientCommandLease.FileName)));
             Assert.Contains("\"Pid\": 99", File.ReadAllText(Path.Combine(_output, OwnedClientCommandLease.FileName)));
             Assert.Contains("my.mod=absent", File.ReadAllText(Path.Combine(_output, OwnedClientCommandLease.MenuPins)));
-            Assert.Contains("worlduid=fixture-uid", File.ReadAllText(Path.Combine(_output, OwnedClientCommandLease.WorldPins)));
+            Assert.False(File.Exists(Path.Combine(_output, OwnedClientCommandLease.WorldPins))); // The host has not entered its fixture yet.
         }
         Assert.True(process.HasExited);
+        Assert.False(File.Exists(Path.Combine(_output, OwnedClientCommandLease.FileName)));
+        Assert.False(File.Exists(Path.Combine(_output, OwnedClientCommandLease.MenuPins)));
+    }
+
+    [Fact] public void AChangedWorldCannotPublishDiagnosticPins()
+    {
+        var plan = Plan();
+        var transport = new ScriptedTransport();
+        using var session = ClientSession.Launch(plan, _output, () => new FakeOwnedProcess(99),
+            () => transport, (_, _) => Task.CompletedTask);
+        OwnedClientCommandLease.Write(_output, 99, "test-start", plan);
+        transport.PinsHold = false; // The game changed world before the joined world could be verified.
+        Assert.Throws<InvalidOperationException>(() => session.WorldEntered(plan, "4242"));
+        Assert.False(File.Exists(Path.Combine(_output, OwnedClientCommandLease.WorldPins)));
     }
 
     [Fact] public void AnOwnedClientReceivesItsDeclaredProcessVariable()

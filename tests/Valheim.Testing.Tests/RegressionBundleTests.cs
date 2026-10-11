@@ -46,12 +46,12 @@ public sealed class RegressionBundleTests : IDisposable
     {
         var spec = _rig.Spec();
         spec.Toolkit.PackageId = "Valheim.Testing.GameSessions";
-        spec.Toolkit.Package = "0.1.0-preview.16";
+        spec.Toolkit.Package = "0.1.0-preview.17";
         string output = _rig.Output();
 
         RegressionBundle.Create(spec, output, _rig.Sources);
 
-        Assert.Contains("<PackageReference Include=\"Valheim.Testing.GameSessions\" Version=\"[0.1.0-preview.16]\" />",
+        Assert.Contains("<PackageReference Include=\"Valheim.Testing.GameSessions\" Version=\"[0.1.0-preview.17]\" />",
             File.ReadAllText(Path.Combine(output, "ExampleRegression.csproj")));
         Assert.Contains("Valheim.Testing.GameSessions", File.ReadAllText(Path.Combine(output, "README.md")));
         RegressionBundle.Verify(output, spec);
@@ -482,7 +482,7 @@ internal sealed class BundleRig : IDisposable
         public IReadOnlyList<string>? PackageVersions(string id) => id switch
         {
             RegressionBundle.Package => ["0.1.0-preview.16", "0.1.0-preview.17"],
-            "Valheim.Testing.GameSessions" => ["0.1.0-preview.16"],
+            "Valheim.Testing.GameSessions" => ["0.1.0-preview.16", "0.1.0-preview.17"],
             _ => null,
         };
         public bool HasCommit(string repository, string commit) => commit == Commit;
