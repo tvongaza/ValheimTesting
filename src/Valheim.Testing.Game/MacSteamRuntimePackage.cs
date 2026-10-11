@@ -9,7 +9,7 @@ namespace Valheim.Testing.Game;
 /// A reviewed set of SteamCMD's macOS server libraries. The files stay in the operator's SteamCMD installation;
 /// a run copies only the pinned dependency closure into its disposable server profile.
 /// </summary>
-public sealed class MacSteamRuntimePackage
+internal sealed class MacSteamRuntimePackage
 {
     internal const string SignedProfileFormat = "thin-arm64-adhoc-sign-v1";
     public string Name { get; set; } = "";

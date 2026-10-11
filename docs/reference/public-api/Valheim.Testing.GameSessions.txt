@@ -285,6 +285,7 @@ sealed class Valheim.Testing.GameSessions.HostedCampaignRole
   property System.String Architecture { get; set; }
   property System.String DependencyLock { get; set; }
   property System.String LoaderPackage { get; set; }
+  property System.String SteamRuntimePackage { get; set; }
   property Valheim.Testing.GameSessions.HostedCampaignCharacter Character { get; set; }
 sealed class Valheim.Testing.GameSessions.HostedRunOptions`1
   method System.Void .ctor()
