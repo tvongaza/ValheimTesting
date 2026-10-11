@@ -35,7 +35,7 @@ internal sealed class HostedWorldLifecycle(ClientRunPlan plan, string output, Ca
         // The staged set's manifest (bound by the campaign) must offer the session commands hosting uses; its files are on the host.
         if (plan.Owned)
             CliCapabilityManifest.Read(plan.CliManifest ?? throw new InvalidOperationException("A campaign host's client names no staged ValheimCLI manifest; the campaign binds one."))
-                .RequireCapabilities(CliCapabilities.HostedRounds.Concat(plan.Capabilities.Where(CliCapabilities.IsPackCapability)));
+                .RequireCapabilities(CliCapabilities.HostedRounds.Concat(plan.Capabilities.Where(CliCapabilities.IsBuiltInCapability)));
     }
     /// <summary>The native client's save directory, which holds <c>worlds_local</c>; a native macOS client must use its signed-in user's default.</summary>
     public void CheckSaveDirectory()

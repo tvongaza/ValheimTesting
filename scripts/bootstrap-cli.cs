@@ -88,7 +88,7 @@ finally
 }
 Console.WriteLine($"Pinned CLI dependency ready as {packageId} {packageVersion} ({targetFramework}, upstream {version}): {feed}");
 
-// The game-side ValheimCLI bundle (core, packs, manifest) built from the same commit and published once, by its SHA-256:
+// The game-side ValheimCLI bundle (one default plugin and manifest) built from the same commit and published once, by its SHA-256:
 // Valheim.Testing.GameSessions embeds .packages/valheimcli-bundle.zip (valheim-test carries it through GameSessions), so a run needs no
 // plugins in the game and no network.
 if (pinDoc.RootElement.TryGetProperty("bundle", out JsonElement bundlePin))

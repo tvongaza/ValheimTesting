@@ -824,7 +824,7 @@ public static class RegressionBundle
             Fixture = new() { Root = Placeholder("fixture.root", "directory holding exactly one world folder"), WorldUid = Placeholder("fixture.worldUid", "that world's UID") },
             Cli = new()
             {
-                Core = Copy(environment.Cli.Core, "cli.core"), Packs = environment.Cli.Packs.Select((pack, i) => Copy(pack, $"cli.packs[{i}]")).ToList(),
+                Core = Copy(environment.Cli.Core, "cli.core"),
                 Manifest = environment.Cli.Manifest == null ? null : Placeholder("cli.manifest", "that ValheimCLI build's capability manifest"),
             },
             Plugins = environment.Plugins.Select((plugin, i) => Copy(plugin, $"plugins[{i}]")).ToList(),
@@ -879,7 +879,6 @@ public static class RegressionBundle
         yield return ("fixture.worldUid", manifest.Fixture.WorldUid);
         yield return ("cli.manifest", manifest.Cli.Manifest);
         yield return ("cli.core.file", manifest.Cli.Core.File);
-        foreach (var (pack, i) in manifest.Cli.Packs.Select((pack, i) => (pack, i))) yield return ($"cli.packs[{i}].file", pack.File);
         foreach (var (plugin, i) in manifest.Plugins.Select((plugin, i) => (plugin, i))) yield return ($"plugins[{i}].file", plugin.File);
         if (manifest.Probe != null) yield return ("probe.file", manifest.Probe.File);
         foreach (var (patcher, i) in manifest.Patchers.Select((patcher, i) => (patcher, i))) yield return ($"patchers[{i}].file", patcher.File);
@@ -921,7 +920,7 @@ public static class RegressionBundle
         }
         text.Append("## What the run loads\n\n");
         text.Append("A clean install of Valheim with BepInEx and only these files in `BepInEx/plugins` (see `regression.template.json` for their hashes):\n\n");
-        text.Append($"- ValheimCLI: `{FileName(template.Cli.Core.File)}`" + string.Concat(template.Cli.Packs.Select(pack => $", `{FileName(pack.File)}`")) + ", from one build\n");
+        text.Append($"- ValheimCLI: `{FileName(template.Cli.Core.File)}` with its built-in commands\n");
         foreach (var plugin in template.Plugins) text.Append($"- `{FileName(plugin.File)}`\n");
         if (template.Probe != null) text.Append($"- the test probe `{FileName(template.Probe.File)}`" + (spec.Probe != null ? $", built from `{ProbeDirectory}/`" : "") + "\n");
         text.Append($"- the mod under test as `{template.Mod.InstallAs}`, one arm at a time\n\n");
@@ -1039,7 +1038,7 @@ public static class RegressionBundle
             foreach (string? path in new[] { run.Game, run.Install, Path.GetDirectoryName(run.Install), save, run.SteamUserData, run.LoaderPackage, loaderRoot,
                     environment.Fixture.Root, environment.Client.CharacterStore, environment.Cli.Manifest }
                 .Concat(environment.Configs.Values.Select(path => Path.GetDirectoryName(path)))
-                .Concat(new[] { environment.Cli.Core }.Concat(environment.Cli.Packs).Concat(environment.Plugins).Concat(environment.Patchers).Concat(environment.Probe == null ? [] : [environment.Probe]).Select(file => Path.GetDirectoryName(file.File)))
+                .Concat(new[] { environment.Cli.Core }.Concat(environment.Plugins).Concat(environment.Patchers).Concat(environment.Probe == null ? [] : [environment.Probe]).Select(file => Path.GetDirectoryName(file.File)))
                 .Concat(environment.Mod.Arms.Values.Select(arm => Path.GetDirectoryName(arm.File))))
                 Secret(path, "a path");
             Secret(environment.Client.Character, "the disposable character's name");
@@ -1048,7 +1047,7 @@ public static class RegressionBundle
             string plugins = Path.Combine(run.Game, "BepInEx", "plugins");
             if (Directory.Exists(plugins))
             {
-                var staged = new[] { environment.Cli.Core }.Concat(environment.Cli.Packs).Concat(environment.Plugins).Concat(environment.Probe == null ? [] : [environment.Probe])
+                var staged = new[] { environment.Cli.Core }.Concat(environment.Plugins).Concat(environment.Probe == null ? [] : [environment.Probe])
                     .Select(file => Path.GetFileNameWithoutExtension(file.File)).Append(Path.GetFileNameWithoutExtension(environment.Mod.InstallAs)).ToHashSet(StringComparer.OrdinalIgnoreCase);
                 foreach (string dll in Directory.EnumerateFiles(plugins, "*.dll", SearchOption.AllDirectories))
                 {

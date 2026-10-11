@@ -7,7 +7,7 @@ namespace Valheim.Testing.GameSessions;
 
 /// <summary>
 /// One human-review screenshot at a declared site. The host directory must be a fresh, private directory belonging to
-/// this run; the local evidence directory must not exist. ValheimCLI's Observe pack provides the paired
+/// this run; the local evidence directory must not exist. The default ValheimCLI plugin provides the paired
 /// <c>review-begin</c>/<c>review-restore</c> commands. Images are evidence for a person, never an automated pass.
 /// </summary>
 public sealed record ReviewCapturePlan(
@@ -30,7 +30,7 @@ public sealed record ReviewCaptureReceipt(string ImagePath, string MetadataPath,
 /// <summary>
 /// Makes a reproducible still view with a protected, arrived player. It restores the client's exact starting safety,
 /// weather, debug time, mist and camera mode on success or failure. A failed restore fails the capture even if a complete
-/// PNG was written. The Observe pack also restores on unload when the client is still alive.
+/// PNG was written. The default ValheimCLI plugin also restores on unload when the client is still alive.
 /// </summary>
 public static class ReviewCapture
 {
@@ -68,8 +68,8 @@ public static class ReviewCapture
         var restore = client.RequireCapability("valheim.observe/review-restore");
         var mistOff = plan.MistOff ? client.RequireCapability("valheim.observe/review-mist-off") : null;
         var clutterOff = plan.ClutterOff ? client.RequireCapability("valheim.observe/review-clutter-off") : null;
-        if (!begin.ReadOnly || restore.ReadOnly) throw new InvalidOperationException("The Observe pack's begin/restore capabilities have the wrong access modes.");
-        if (mistOff?.ReadOnly == true || clutterOff?.ReadOnly == true) throw new InvalidOperationException("The Observe pack's visual commands must be mutations.");
+        if (!begin.ReadOnly || restore.ReadOnly) throw new InvalidOperationException("The default ValheimCLI plugin's begin/restore capabilities have the wrong access modes.");
+        if (mistOff?.ReadOnly == true || clutterOff?.ReadOnly == true) throw new InvalidOperationException("The default ValheimCLI plugin's visual commands must be mutations.");
         string hostImage = plan.HostDirectory.TrimEnd('\\', '/') + (shell == HostShellKind.PowerShell ? "\\" : "/") + plan.Id + ".png";
         Exception? failure = null;
         ReviewCaptureReceipt? receipt = null;

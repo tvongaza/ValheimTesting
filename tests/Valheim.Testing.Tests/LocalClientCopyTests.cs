@@ -62,20 +62,20 @@ public sealed class LocalClientCopyTests : IDisposable
         Assert.Equal(copy.Runtime, plan.Install);
         Assert.StartsWith(Path.Combine(data, "runs", "local-clients", "vt-prep-"), copy.Runtime);
         Assert.Equal(FileHash.Md5(Path.Combine(_rig.Root, "cli", "valheimCLI.dll")), plan.Pins["valheimCLI.valheimCLI"]);
-        Assert.Equal(FileHash.Md5(Path.Combine(_rig.Root, "cli", "Valheim.Cli.Standard.dll")), plan.Pins["valheimCLI.standard"]);
+        Assert.DoesNotContain("valheimCLI.standard", plan.Pins.Keys);
         Assert.Equal("absent", plan.Pins["example.unrelated"]);
         Assert.Equal(manifest, plan.CliManifest);
         Assert.Equal(InstallPins.Of(copy.Runtime).Game, plan.InstallPins!.Game);
         // The copy holds the install's own plugins and config, the staged set instead of its ValheimCLI, and ValheimCLI's port.
         Assert.Equal(FileHash.Sha256(Path.Combine(_rig.Root, "cli", "valheimCLI.dll")), FileHash.Sha256(Path.Combine(copy.Runtime, "BepInEx", "plugins", "valheimCLI.dll")));
-        Assert.True(File.Exists(Path.Combine(copy.Runtime, "BepInEx", "plugins", "Valheim.Cli.Standard.dll")));
+        Assert.False(File.Exists(Path.Combine(copy.Runtime, "BepInEx", "plugins", "Valheim.Cli.Standard.dll")));
         Assert.True(File.Exists(Path.Combine(copy.Runtime, "BepInEx", "plugins", "Unrelated.dll")));
         Assert.True(File.Exists(Path.Combine(copy.Runtime, "BepInEx", "config", "BepInEx.cfg")));
         string cliConfig = File.ReadAllText(Path.Combine(copy.Runtime, "BepInEx", "config", "valheimCLI.valheimCLI.cfg"));
         Assert.Contains("Port = 5556", cliConfig);
         Assert.Contains("AllowOnServerClients = true", cliConfig);
         // The static check runs on the copy: exactly the staged set, by SHA256.
-        Assert.Equal(2, plan.CheckCliManifest()!.Files.Count);
+        Assert.Single(plan.CheckCliManifest()!.Files);
         // Nothing in the install changed.
         Assert.Equal(before, Tree(source));
         string journal = string.Concat(Directory.EnumerateFiles(Path.Combine(data, "journal"), "client.jsonl", SearchOption.AllDirectories).Select(File.ReadAllText));
@@ -110,7 +110,7 @@ public sealed class LocalClientCopyTests : IDisposable
             Assert.Equal(OperatingSystem.IsWindows() ? null : profile.Runtime, plan.PreparedLoaderRoot);
             Assert.Equal(InstallPins.Of(plan.Install, plan.LoaderRoot).Game, plan.InstallPins!.Game);
             Assert.Equal(InstallPins.Of(plan.Install, plan.LoaderRoot).Loader, plan.InstallPins.Loader);
-            Assert.Equal(2, plan.CheckCliManifest()!.Files.Count);
+            Assert.Single(plan.CheckCliManifest()!.Files);
             Assert.True(File.Exists(Path.Combine(profile.Runtime, "BepInEx", "plugins", "valheimCLI.dll")));
             Assert.Equal(before, Tree(source));
         }
@@ -200,7 +200,7 @@ public sealed class LocalClientCopyTests : IDisposable
         Assert.Contains("carries no pinned ValheimCLI bundle", none.Message);
         Assert.Contains("--in-place", none.Message);
         string manifest = CliSet();
-        File.Delete(Path.Combine(_rig.Root, "cli", "Valheim.Cli.Standard.dll"));
+        File.Delete(Path.Combine(_rig.Root, "cli", "valheimCLI.dll"));
         plan.CliManifest = manifest;
         var partial = await Assert.ThrowsAsync<InvalidDataException>(() =>
             LocalClientCopy.PrepareAsync("client", plan, default, data, ThisMachine(), loader: (_, _) => null));
@@ -221,7 +221,7 @@ public sealed class LocalClientCopyTests : IDisposable
         plan.Preflight(CliCapabilities.HostedRounds); // Nothing reads the source's ValheimCLI files.
         Assert.Null(plan.CheckCliManifest(PlayerPlacement.ArrivalCapabilities));
         // What the runner needs before the copy exists is checked on the copy before its launch.
-        Assert.Superset(new HashSet<string>(CliCapabilities.HostedRounds.Where(CliCapabilities.IsPackCapability)), plan.StaticCapabilities);
+        Assert.Superset(new HashSet<string>(CliCapabilities.HostedRounds.Where(CliCapabilities.IsBuiltInCapability)), plan.StaticCapabilities);
         var launch = Assert.Throws<InvalidOperationException>(() => ClientSession.Launch(plan, install.Root));
         Assert.Contains("runs from a disposable copy", launch.Message);
         Assert.Contains("inPlace (--in-place)", launch.Message);

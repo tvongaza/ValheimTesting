@@ -390,7 +390,7 @@ public sealed class ClientRunPlan
     /// The static capability check alone: an owned client's install against its <see cref="CliManifest"/>
     /// (<see cref="CliCapabilityManifest.Check"/>), requiring only the ValheimCLI-owned entries in
     /// <see cref="Capabilities"/> and <paramref name="capabilities"/>. A mod's own extensions are
-    /// checked from the live game after its plugin loads; the CLI pack manifest cannot declare them.
+    /// checked from the live game after its plugin loads; the ValheimCLI capability manifest cannot declare them.
     /// Before a disposable copy exists (<see cref="CopySource"/>), <paramref name="capabilities"/> are recorded for the copy's
     /// check before its launch, and a named <see cref="CliManifest"/> must offer them already; the result is then null. Null,
     /// with nothing read, also for an attached client and an owned one run in place without a manifest, whose capabilities only
@@ -401,7 +401,7 @@ public sealed class ClientRunPlan
     public CliManifestCheck? CheckCliManifest(IEnumerable<string>? capabilities = null)
     {
         if (!Owned) return null;
-        var wanted = Capabilities.Concat(StaticCapabilities).Concat(capabilities ?? []).Where(CliCapabilities.IsPackCapability).Distinct(StringComparer.Ordinal).ToList();
+        var wanted = Capabilities.Concat(StaticCapabilities).Concat(capabilities ?? []).Where(CliCapabilities.IsBuiltInCapability).Distinct(StringComparer.Ordinal).ToList();
         if (CopySource)
         {
             StaticCapabilities.UnionWith(wanted);

@@ -811,7 +811,7 @@ public static class HostedCampaignPreparation
             string? loaderPackage = resolved?.LoaderPackages.GetValueOrDefault(name) ?? input.LoaderPackage;
             if (loaderPackage != null)
                 Try(name, "loader", () => _ = BepInExLoaderPackage.Read(loaderPackage));
-            Try(name, "dependencies and CLI packs", () =>
+            Try(name, "dependencies and ValheimCLI", () =>
             {
                 var files = HostedRuntimeStage.FromDependencies(input.DependencyLock).Concat(input.Files).ToArray();
                 var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);

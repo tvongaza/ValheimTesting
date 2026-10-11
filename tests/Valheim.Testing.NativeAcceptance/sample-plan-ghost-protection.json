@@ -36,8 +36,6 @@
   "pins": {
     "worlduid": "<the fixture world's UID>",
     "valheimCLI.valheimCLI": "<md5 of the runtime's valheimCLI.dll>",
-    "valheimCLI.standard": "<md5 of the runtime's Valheim.Cli.Standard.dll>",
-    "valheimCLI.worldtools": "<md5 of the runtime's Valheim.Cli.WorldTools.dll>",
     "valheimtesting.acceptancemod": "<md5 of AcceptanceMod.dll>",
     "valheimtesting.acceptancemod.adapter": "<md5 of AcceptanceMod.Adapter.dll>"
   },
@@ -66,8 +64,6 @@
     "port": 5556,
     "pins": {
       "valheimCLI.valheimCLI": "<md5 of the client's valheimCLI.dll>",
-      "valheimCLI.standard": "<md5 of the client's Valheim.Cli.Standard.dll>",
-      "valheimCLI.worldtools": "<md5 of the client's Valheim.Cli.WorldTools.dll>",
       "valheimtesting.acceptancemod": "<md5 of AcceptanceMod.dll>",
       "valheimtesting.acceptancemod.adapter": "<md5 of AcceptanceMod.Adapter.dll>"
     },
@@ -104,8 +100,6 @@
     "port": 5557,
     "pins": {
       "valheimCLI.valheimCLI": "<md5 of the client's valheimCLI.dll>",
-      "valheimCLI.standard": "<md5 of the client's Valheim.Cli.Standard.dll>",
-      "valheimCLI.worldtools": "<md5 of the client's Valheim.Cli.WorldTools.dll>",
       "valheimtesting.acceptancemod": "<md5 of AcceptanceMod.dll>",
       "valheimtesting.acceptancemod.adapter": "<md5 of AcceptanceMod.Adapter.dll>"
     },

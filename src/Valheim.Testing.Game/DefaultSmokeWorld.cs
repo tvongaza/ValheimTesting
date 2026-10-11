@@ -2,7 +2,7 @@ namespace Valheim.Testing.Game;
 
 /// <summary>
 /// A small, game-created Valheim 1.0.16 world for an owned smoke run. The server that created it had only ValheimCLI
-/// core and its Standard and WorldTools packs. It is a starting point, not a synthetic terrain replacement: the game
+/// default plugin and its built-in commands. It is a starting point, not a synthetic terrain replacement: the game
 /// still generates terrain and locations when the client enters it.
 /// </summary>
 /// <remarks>

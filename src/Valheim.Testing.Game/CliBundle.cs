@@ -2,12 +2,12 @@ using System.IO.Compression;
 
 namespace Valheim.Testing.Game;
 
-/// <summary>A ValheimCLI core-and-pack set ready to stage: its capability manifest, the folder holding its DLLs, and where it came from.</summary>
+/// <summary>A pinned default ValheimCLI plugin ready to stage: its capability manifest, containing folder, and origin.</summary>
 [ResultShape]
 public sealed record CliBundleSource(string Manifest, string Files, string Origin);
 
 /// <summary>
-/// The pinned ValheimCLI plugin bundle the toolkit ships: one zip of the core, its packs, their capability manifest
+/// The pinned ValheimCLI plugin bundle the toolkit ships: one zip of the default plugin, its capability manifest
 /// (<c>cli-manifest.json</c>) and ValheimCLI's license, built once from the pinned commit and identified by its SHA-256.
 /// Valheim.Testing.GameSessions embeds it with its pin (<c>cli-dependency.json</c>), so a disposable client copy and
 /// <c>valheim-test</c> stage the same set.
@@ -48,6 +48,8 @@ public static class CliBundle
             {
                 if (entry.FullName.Contains('/') || entry.FullName.Contains('\\') || entry.FullName is "" or "." or ".." || entry.FullName.StartsWith('.'))
                     throw new InvalidDataException($"The ValheimCLI bundle holds {entry.FullName}, which is not a file at its root.");
+                if (entry.FullName.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) && entry.FullName != "valheimCLI.dll")
+                    throw new InvalidDataException($"The ValheimCLI bundle holds old first-party pack or extra plugin {entry.FullName}; use the one-plugin bundle.");
                 using var content = entry.Open();
                 expected[entry.FullName] = FileHash.Sha256(content);
             }
@@ -82,8 +84,8 @@ public static class CliBundle
         string manifestFile = Path.Combine(folder, ManifestFile);
         if (!File.Exists(manifestFile)) return false;
         CliCapabilityManifest manifest;
-        try { manifest = CliCapabilityManifest.Read(manifestFile); }
-        catch (Exception error) when (error is InvalidDataException or System.Text.Json.JsonException or ArgumentException) { return false; }
+        try { manifest = CliCapabilityManifest.Read(manifestFile); manifest.RequireDefaultPlugin(); }
+        catch (Exception error) when (error is InvalidDataException or System.Text.Json.JsonException or ArgumentException or InvalidOperationException) { return false; }
         return manifest.Files.Count != 0 && manifest.Files.All(file =>
             expected.TryGetValue(file.File, out string? hash) && hash.Equals(file.Sha256, StringComparison.OrdinalIgnoreCase));
     }

@@ -1,5 +1,5 @@
 // Source from Valheim.Testing.Adapter, compiled into a mod's test-only game-side adapter. A mutation
-// is guarded by the adapter's fixture gate; the optional Observe pack owns the read-only key list.
+// is guarded by the adapter's fixture gate; the default ValheimCLI plugin owns the read-only key list.
 #nullable enable
 using System;
 using System.Collections;
@@ -10,7 +10,7 @@ using valheimCLI.Extensions;
 namespace Valheim.Testing.Adapter
 {
     /// <summary>
-    /// A fixture command that sets or removes a global key on the server. ValheimCLI's optional Observe pack owns the
+    /// A fixture command that sets or removes a global key on the server. ValheimCLI's default ValheimCLI plugin owns the
     /// read-only key list. In Valheim 1.0.16 a change goes to the server, which applies it and sends
     /// its whole list to every client; each client replaces its own list with it. Keys are stored lower case, as
     /// <c>name</c> or <c>name value</c>. The runner's <c>GlobalKeyFixture</c> in Valheim.Testing.Game issues a change once

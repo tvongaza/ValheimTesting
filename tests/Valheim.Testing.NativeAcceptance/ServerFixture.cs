@@ -15,7 +15,7 @@ namespace Valheim.Testing.NativeAcceptance;
 /// prepared a fixture by hand, such as a scheduled CI job: <c>prepare-server &lt;server-runtime&gt; &lt;new-output-directory&gt;</c>.
 /// <list type="number">
 /// <item>Pins the runtime by the SHA256 of every file, and each required plugin in its <c>BepInEx/plugins</c> by the MD5 of
-/// their files: ValheimCLI with its Standard, WorldTools and Observe packs, the mod and its adapter.</item>
+/// their files: the default ValheimCLI plugin, the mod and its adapter.</item>
 /// <item>Starts one owned server on a copy of the runtime (the source is never launched), and the game creates a new world
 /// in <c>world/</c>. Its uid is not known yet, so this one boot pins the plugins strictly and accepts any world.</item>
 /// <item>Reads the world's uid (<c>cli_world</c>) and picks the sites from the world generator's heights, read through
@@ -40,8 +40,7 @@ public static class ServerFixture
     /// <summary>The plugins the plan pins, by GUID and file name. Any other plugin file in the runtime is refused.</summary>
     public static readonly IReadOnlyList<(string Guid, string File)> Plugins =
     [
-        ("valheimCLI.valheimCLI", "valheimCLI.dll"), ("valheimCLI.standard", "Valheim.Cli.Standard.dll"), ("valheimCLI.worldtools", "Valheim.Cli.WorldTools.dll"),
-        ("valheimCLI.observe", "Valheim.Cli.Observe.dll"),
+        ("valheimCLI.valheimCLI", "valheimCLI.dll"),
         (LifecyclePlan.ModPlugin, "AcceptanceMod.dll"), (LifecyclePlan.AdapterPlugin, "AcceptanceMod.Adapter.dll"),
     ];
     /// <summary>Generator grids of 16 by 16 samples (centre and spacing in metres), read in order until both sites are found.</summary>

@@ -9,7 +9,7 @@ namespace ExampleMod.TestAdapter;
 /// <summary>
 /// The example's test adapter, installed only in test runtimes. It serves the toolkit's owned-session identity
 /// (<c>examplemod.testing/session</c>), which proves the runner talks to its own server. ValheimCLI's optional
-/// Observe pack owns <c>valheim.observe/harmony</c>, which checks the mod's declared patches. The scenario drives
+/// default ValheimCLI plugin owns <c>valheim.observe/harmony</c>, which checks the mod's declared patches. The scenario drives
 /// the mod through its own console command. A mod that needs a test-only action or observation adds it here as
 /// another extension command; generic game observations belong in ValheimCLI.
 /// <para>

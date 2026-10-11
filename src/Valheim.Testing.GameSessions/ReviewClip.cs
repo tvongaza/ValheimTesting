@@ -55,7 +55,7 @@ public static class ReviewClip
         var clip = client.RequireCapability("valheim.observe/review-clip-frames");
         var restore = client.RequireCapability("valheim.observe/review-restore");
         if (!begin.ReadOnly || clip.ReadOnly || restore.ReadOnly)
-            throw new InvalidOperationException("The Observe pack's capture access modes are wrong.");
+            throw new InvalidOperationException("The default ValheimCLI plugin's capture access modes are wrong.");
         string hostFrames = plan.HostDirectory.TrimEnd('\\', '/') + (clientHostSeparator(plan.HostDirectory)) + plan.Id + "-frames";
         Exception? failure = null;
         ReviewClipReceipt? receipt = null;

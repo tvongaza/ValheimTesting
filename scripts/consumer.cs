@@ -136,7 +136,7 @@ try
         if (plane.GetHeight(2, 0) != 41f) { Console.Error.WriteLine("PlaneTerrain returned " + plane.GetHeight(2, 0)); return 1; }
         foreach (Type type in new[] { typeof(PlaneTerrain), typeof(GameActor), typeof(GameSession), typeof(BindingCheck) })
             Console.WriteLine($"{type.FullName}: {type.Assembly.GetName().Name} {type.Assembly.GetName().Version}");
-        // The public transport and Game package must agree on strict pins and schema-1 pack discovery.
+        // The public transport and Game package must agree on strict pins and schema-1 built-in command discovery.
         var transport = new ScriptedTransport()
             .Extension("valheim.session", "state", _ => new { })
             .Extension("valheim.session", "save", _ => new { })
@@ -146,10 +146,10 @@ try
         try
         {
             CliCapabilities.Require(actor, CliCapabilities.HostedRounds.Append("valheim.world/terrain"));
-            Console.Error.WriteLine("The incomplete World Tools pack was accepted without valheim.world/terrain.");
+            Console.Error.WriteLine("The incomplete default ValheimCLI plugin was accepted without valheim.world/terrain.");
             return 2;
         }
-        catch (InvalidOperationException error) when (error.Message.Contains("World Tools pack")) { }
+        catch (InvalidOperationException error) when (error.Message.Contains("default valheimCLI.dll")) { }
         int listings = transport.Count("cli_extensions");
         int pinChecks = transport.Count("cli_expect");
         transport.PinsHold = false;

@@ -5,7 +5,7 @@ using valheim_cli.Testing;
 namespace Valheim.Testing.Game;
 
 /// <summary>
-/// What one coherent ValheimCLI build (its core and command packs) provides, tied to each DLL's exact SHA256: the file name,
+/// What one pinned ValheimCLI build provides, tied to the default plugin's exact SHA256: the file name,
 /// the BepInEx plugin GUIDs it declares and the extension commands it registers, with their result schema versions. An owned
 /// client's <see cref="ClientRunPlan.CliManifest"/> names one, and <see cref="ClientRunPlan.Preflight()"/> then refuses,
 /// before the game starts, an install whose ValheimCLI files are not that set (a file missing, another build of it, a second
@@ -21,7 +21,7 @@ public sealed class CliCapabilityManifest
     public int Schema { get; set; } = 1;
     /// <summary>Where the set came from, for messages and evidence: a repository and commit, or a release.</summary>
     public string Build { get; set; } = "";
-    /// <summary>The core and every pack of the set, each installed exactly once.</summary>
+    /// <summary>The plugin files of the pinned build. Current builds contain one default DLL.</summary>
     public List<CliManifestFile> Files { get; set; } = [];
 
     private static readonly JsonSerializerOptions Options = new()
@@ -84,6 +84,15 @@ public sealed class CliCapabilityManifest
         if (Files.SelectMany(file => file.Plugins).Distinct(StringComparer.Ordinal).Count() != Files.Sum(file => file.Plugins.Count)) throw new ArgumentException("A plugin GUID is declared by two files.");
     }
 
+    /// <summary>Refuses a legacy split core-plus-pack manifest where a one-shot run requires the default plugin.</summary>
+    public void RequireDefaultPlugin()
+    {
+        Validate();
+        if (Files is not [{ File: "valheimCLI.dll" } core] ||
+            core.Plugins is not ["valheimCLI.valheimCLI"])
+            throw new InvalidOperationException($"The ValheimCLI build {Build} is not a one-plugin build. Replace the old core and first-party pack DLLs together with one pinned valheimCLI.dll and its matching capability manifest.");
+    }
+
     private static bool ValidName(string name) => name.Length != 0 && !name.Contains('/') && !name.Any(c => char.IsWhiteSpace(c) || char.IsControl(c));
 
     /// <summary>
@@ -110,7 +119,7 @@ public sealed class CliCapabilityManifest
     }
 
     /// <summary>
-    /// Selects the core and only the packs that provide <paramref name="capabilities"/> from this pinned build. Each
+    /// Selects the plugin files that provide <paramref name="capabilities"/> from this pinned build. Each
     /// command must have result schema 1, which is what the native runner consumes. The selected manifest can be written
     /// beside an environment lock and checked against the staged files before launch; no DLL from another build is used.
     /// </summary>
@@ -128,7 +137,7 @@ public sealed class CliCapabilityManifest
         var missing = wanted.Where(path => !providers.ContainsKey(path)).ToList();
         if (missing.Count != 0) throw new InvalidOperationException($"The ValheimCLI build {Build} lacks {string.Join(", ", missing)}. " +
             string.Join(" ", missing.Select(path => path.Split('/')[0]).Distinct(StringComparer.Ordinal).Select(CliCapabilities.Provider)) +
-            " Supply one coherent core and pack set that provides those commands.");
+            " Supply the pinned default ValheimCLI plugin that provides those commands.");
         var wrongSchema = wanted.Where(path => providers[path].Version != 1).ToList();
         if (wrongSchema.Count != 0) throw new InvalidOperationException($"The ValheimCLI build {Build} provides {string.Join(", ", wrongSchema.Select(path => path + " with result version " + providers[path].Version))}; the runner needs result version 1.");
         var selected = new HashSet<CliManifestFile>(core);
@@ -193,7 +202,7 @@ public sealed class CliCapabilityManifest
                 .Where(cost => cost.Paths.Count != 0).Select(cost => $"{string.Join(", ", cost.Paths)} from {Name(cost.File)}").ToList();
             throw new InvalidOperationException($"The client's ValheimCLI files are not the set {where} describes: {string.Join("; ", problems)}. " +
                 (costs.Count == 0 ? "" : $"The run needs {string.Join(", and ", costs)}, which this install does not have as the manifest's build. ") +
-                "Install the manifest's core and packs together, each once, from one build (or the manifest that build ships), before anything launches.");
+                "Install the manifest's pinned valheimCLI.dll once, remove old first-party pack DLLs, and retry before launch.");
         }
         RequireCapabilities(wanted);
         return new CliManifestCheck(Build, located, wanted);
@@ -210,9 +219,9 @@ public sealed class CliCapabilityManifest
         var missing = capabilities.Distinct(StringComparer.Ordinal).Where(path => !have.TryGetValue(path, out int version) || version != 1).ToList();
         if (missing.Count != 0)
             throw new InvalidOperationException($"The client's ValheimCLI set (the ValheimCLI capability manifest of {Build}) lacks {string.Join(", ", missing.Select(path => have.ContainsKey(path) ? path + " (another result schema)" : path))}. " +
-                (have.Count == 0 ? "Its files register no extension commands at all, as an old monolithic ValheimCLI that predates command packs. " : "") +
+                (have.Count == 0 ? "Its plugin registers no extension commands; it predates the required built-in API. " : "") +
                 string.Join(" ", missing.Select(path => path.Split('/')[0]).Distinct(StringComparer.Ordinal).Select(CliCapabilities.Provider)) +
-                " Install a ValheimCLI core with each pack the run needs, from one build, and use that build's manifest.");
+                " Install the pinned default ValheimCLI plugin and use its matching capability manifest.");
     }
 
     /// <summary>
@@ -259,6 +268,12 @@ public sealed class CliCapabilityManifest
         foreach (var dll in candidates.Where(dll => othersLoad && !claimed.Contains(dll.Path)))
         {
             var plugins = CliBuildManifest.Plugins(dll.Path) ?? [];
+            if (Files.Count == 1 && Files[0].Plugins.Contains("valheimCLI.valheimCLI", StringComparer.Ordinal) &&
+                plugins.Any(LegacyFirstPartyPack))
+            {
+                problems.Add(new(Files[0], $"{dll.Shown} declares old first-party ValheimCLI pack {string.Join(", ", plugins.Where(LegacyFirstPartyPack))}; remove all old pack DLLs before loading the one-plugin build", [dll.Path]));
+                continue;
+            }
             var file = Files.FirstOrDefault(candidate => SameFile(dll.Shown, candidate)) ?? Files.FirstOrDefault(candidate => candidate.Plugins.Intersect(plugins, StringComparer.Ordinal).Any());
             if (file == null) continue;
             string declares = plugins.Count == 0 ? "" : $", declaring {string.Join(", ", plugins)},";
@@ -268,6 +283,8 @@ public sealed class CliCapabilityManifest
     }
 
     private static bool SameFile(string relative, CliManifestFile file) => Path.GetFileName(relative).Equals(file.File, StringComparison.OrdinalIgnoreCase);
+    private static bool LegacyFirstPartyPack(string guid) => guid is "valheimCLI.standard" or "valheimCLI.worldtools" or
+        "valheimCLI.reflection" or "valheimCLI.capture" or "valheimCLI.observe";
     private static string Name(CliManifestFile file) => $"{file.File} (plugin {string.Join(", ", file.Plugins)})";
 }
 
@@ -279,13 +296,13 @@ internal sealed record CliSetProblem(CliManifestFile File, string Message, IRead
 /// <summary>One DLL of a <see cref="CliCapabilityManifest"/>.</summary>
 public sealed class CliManifestFile
 {
-    /// <summary>The DLL's file name, as the build ships it (<c>Valheim.Cli.Standard.dll</c>).</summary>
+    /// <summary>The DLL's file name, normally <c>valheimCLI.dll</c>.</summary>
     public string File { get; set; } = "";
     /// <summary>The DLL's full SHA256: its identity. Another build, even with the same name and plugin GUID, has another.</summary>
     public string Sha256 { get; set; } = "";
-    /// <summary>The BepInEx plugin GUIDs the DLL declares (<c>valheimCLI.standard</c>).</summary>
+    /// <summary>The BepInEx plugin GUIDs the DLL declares (normally <c>valheimCLI.valheimCLI</c>).</summary>
     public List<string> Plugins { get; set; } = [];
-    /// <summary>The extensions the DLL registers: owner, then each command's result schema version. Empty for the core.</summary>
+    /// <summary>The extensions the DLL registers: owner, then each command's result schema version.</summary>
     public SortedDictionary<string, SortedDictionary<string, int>> Extensions { get; set; } = new(StringComparer.Ordinal);
 
     internal IEnumerable<(string Path, int Version)> Commands() =>

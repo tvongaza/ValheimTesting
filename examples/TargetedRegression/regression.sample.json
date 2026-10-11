@@ -10,10 +10,6 @@
   },
   "cli": {
     "core": { "file": "<ValheimCLI build>/valheimCLI.dll", "sha256": "<sha256>" },
-    "packs": [
-      { "file": "<ValheimCLI build>/Valheim.Cli.Standard.dll", "sha256": "<sha256>" },
-      { "file": "<ValheimCLI build>/Valheim.Cli.WorldTools.dll", "sha256": "<sha256>" }
-    ],
     "manifest": "<that build's capability manifest>"
   },
   "plugins": [],

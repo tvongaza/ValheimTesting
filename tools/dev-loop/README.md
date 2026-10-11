@@ -42,7 +42,7 @@ The game must not be running when the script deploys: a running game keeps the o
 
 ## Strict pins in the dev loop
 
-With a plan, the script runs it in strict mode against `VALHEIM_EXPECTATIONS`. Every rebuild changes the mod's md5, so it never passes that file as it is, and never accepts whatever md5 the game reports: it hashes the DLL it just built and deploys, writes a temporary copy of the pins file in which only that mod's pin is replaced, checks the installed copy matches, and passes the copy to `--expect-strict`. The pins file must pin the mod exactly once, under its DLL name or under the key named by `VALHEIM_PLUGIN_KEY` (its GUID or name); otherwise the script stops before deploying. Every other pin, including the core and pack hashes, is kept as written. See ValheimCLI's `docs/expectations.md` for the pins file format.
+With a plan, the script runs it in strict mode against `VALHEIM_EXPECTATIONS`. Every rebuild changes the mod's md5, so it never passes that file as it is, and never accepts whatever md5 the game reports: it hashes the DLL it just built and deploys, writes a temporary copy of the pins file in which only that mod's pin is replaced, checks the installed copy matches, and passes the copy to `--expect-strict`. The pins file must pin the mod exactly once, under its DLL name or under the key named by `VALHEIM_PLUGIN_KEY` (its GUID or name); otherwise the script stops before deploying. Every other pin, including the default ValheimCLI plugin hash, is kept as written. See ValheimCLI's `docs/expectations.md` for the pins file format.
 
 A launch without a plan, or `valheim-cli --status`, only brings a game up; neither is a test result.
 
