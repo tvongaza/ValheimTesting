@@ -2,6 +2,8 @@
 
 `Valheim.GameReferences.props` and `Valheim.GameReferences.targets` let a game-side project (the mod itself, or its test adapter) reference a local Valheim install's managed assemblies and BepInEx with one property, and stop the build with an error that names what is missing. They are MSBuild source files for your repository, not a package.
 
+The props also pin `Microsoft.NETFramework.ReferenceAssemblies` as a build-only dependency. A .NET SDK can therefore compile `net48` plugins on macOS and Linux without Mono or a machine-wide .NET Framework targeting pack. NuGet access is needed on the first restore; the reference assemblies are never installed into Valheim or copied beside the plugin.
+
 Unit-test projects do not use them. A test project that links your sources against `Valheim.Testing.Doubles` builds without the game, on any machine and on hosted CI; see [a layout that builds on hosted CI](../../docs/adopting.md#a-layout-that-builds-on-hosted-ci). The targets refuse a project that references both the game and the doubles, whose types have the same names.
 
 ## Use them
