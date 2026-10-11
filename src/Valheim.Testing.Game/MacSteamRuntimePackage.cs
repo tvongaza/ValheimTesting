@@ -146,6 +146,9 @@ internal sealed class MacSteamRuntimePackage
                 }
                 else if (dependency.StartsWith('@'))
                     throw new InvalidDataException($"Mac Steam runtime dependency {dependency} in {relative} is unresolved.");
+                else if (!dependency.StartsWith("/System/Library/", StringComparison.Ordinal) &&
+                    !dependency.StartsWith("/usr/lib/", StringComparison.Ordinal))
+                    throw new InvalidDataException($"Mac Steam runtime dependency {dependency} in {relative} is outside macOS system libraries and is not pinned.");
             }
         }
         return found.Order(StringComparer.Ordinal).ToArray();
