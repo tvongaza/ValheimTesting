@@ -100,7 +100,6 @@ internal static class SmokeAdapter
                 <TargetFramework>net48</TargetFramework><LangVersion>10</LangVersion><Nullable>enable</Nullable>
                 <AssemblyName>NativeSmoke.SessionAdapter</AssemblyName><UseValheimCli>true</UseValheimCli>
               </PropertyGroup>
-              <ItemGroup><PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" /></ItemGroup>
               <Import Project="Valheim.GameReferences.targets" />
             </Project>
             """);
