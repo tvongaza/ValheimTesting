@@ -206,7 +206,28 @@ internal sealed class CampaignClients
                     }
                     var started = account == null ? InteractiveClient.StartAsync(host, launch, launchDirectory, start, display, cancellation)
                         : InteractiveClient.StartAsync(account.Hold, host, launch, launchDirectory, start, display, cancellation);
-                    var client = started.GetAwaiter().GetResult();
+                    InteractiveClientProcess client;
+                    try { client = started.GetAwaiter().GetResult(); }
+                    catch (Exception error) when (platform == ClientPlatform.MacOS && InteractiveClient.NeverStarted(error))
+                    {
+                        // The script proved no process or agent from this attempt exists. Settle both
+                        // intents before releasing the host lock and account; ambiguous replies stay owned.
+                        try
+                        {
+                            JournalAsync(host, role.Host, name, JournalEntry.Of(JournalEntry.LaunchSettled,
+                                ("actor", name), ("directory", launchDirectory)), CancellationToken.None).GetAwaiter().GetResult();
+                            JournalAsync(host, role.Host, name, JournalEntry.Of(JournalEntry.MacAgentRetired,
+                                ("launchDirectory", launchDirectory)), CancellationToken.None).GetAwaiter().GetResult();
+                            lock (_clientState) _pendingMacAgents.Remove(name);
+                        }
+                        catch (Exception journalError)
+                        {
+                            throw new InvalidOperationException($"The client did not start on {host.Name}, but its launch refusal could not be recorded. " +
+                                $"Keep the run owned and inspect its journal before recovery: {journalError.Message}",
+                                new AggregateException(error, journalError));
+                        }
+                        throw;
+                    }
                     string commandLine = HostProcessProbe.CommandLineAsync(host, client.Id, client.StartIdentity, HostedTimeouts.Quick).GetAwaiter().GetResult() ?? "";
                     HostedServerRun.WarnUnexpectedCommandLine(host, client.Id, expected, commandLine);
                     NoteAsync(host, role.Host, name, JournalEntry.Of(JournalEntry.ProcessStarted, ("pid", client.Id.ToString(CultureInfo.InvariantCulture)),

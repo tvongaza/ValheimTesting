@@ -31,6 +31,9 @@ internal static partial class InteractiveScripts
     // the fixed launch mechanics and the public launch specification, not the password values.
     internal static readonly string MacLauncher = ("set -u\n" + HostServerScripts.MacStarted + "\n" + """
         dir=$(cd -- "$(dirname -- "$0")" && pwd -P) || exit 3
+        # This marker precedes every possible game spawn. A failed bootstrap can only be
+        # settled as never started when neither this marker nor a pid exists.
+        printf 'entered\n' > "$dir/launcher-entered" || exit 3
         IFS= read -r secrets < "$dir/secrets" || exit 3
         rm -f -- "$dir/secrets"
         spec=$(cat -- "$dir/spec") || exit 3
@@ -105,7 +108,13 @@ internal static partial class InteractiveScripts
         mkfifo "$dir/secrets" && chmod 600 "$dir/secrets" || exit 3
         if ! /bin/launchctl bootstrap "gui/$uid" "$dir/agent.plist" 2> "$dir/launchctl-error.txt"; then
           reason=$(tail -c 300 "$dir/launchctl-error.txt" | tr '\n' ' ')
-          echo "VT-INTERACTIVE failed launchctl could not start the GUI agent: $reason"; exit 0
+          if ! /bin/launchctl print "gui/$uid/$label" >/dev/null 2>&1 &&
+             [ ! -e "$dir/launcher-entered" ] && [ ! -e "$dir/pid" ]; then
+            echo "VT-INTERACTIVE not-started launchctl could not start the GUI agent: $reason"
+          else
+            echo "VT-INTERACTIVE failed launchctl could not prove the GUI agent never ran: $reason"
+          fi
+          exit 0
         fi
         # The writer times out if the agent never opens the pipe. No password is an argument or file.
         if ! printf '%s\n' "$secrets" | /usr/bin/perl -e '

@@ -392,6 +392,25 @@ public class InteractiveClientTests
         }
     }
 
+    [Fact] public async Task ARemoteMacBootstrapRefusalCanBeSettledOnlyWhenItsAgentNeverRan()
+    {
+        var launch = GameLaunch.ForClientWithLoader(MacInstall, MacProfile, [], null, ClientPlatform.MacOS,
+            ClientArchitecture.Arm64, macDoorstop: "libdoorstop.dylib");
+        var neverStarted = new FakeLauncher().Exits(0,
+            Reply("VT-INTERACTIVE not-started launchctl could not start the GUI agent"), FakeLauncher.Report(0));
+        var refused = await Record.ExceptionAsync(() => InteractiveClient.StartAsync(MacHost(neverStarted), launch, MacLaunch, Timeout));
+        Assert.IsType<InteractiveClient.ClientNeverStartedException>(refused);
+        Assert.True(InteractiveClient.NeverStarted(refused!));
+
+        var ambiguous = new FakeLauncher().Exits(0,
+            Reply("VT-INTERACTIVE failed launchctl could not prove the GUI agent never ran"), FakeLauncher.Report(0));
+        var unknown = await Record.ExceptionAsync(() => InteractiveClient.StartAsync(MacHost(ambiguous), launch, MacLaunch, Timeout));
+        Assert.IsType<InvalidOperationException>(unknown);
+        Assert.False(InteractiveClient.NeverStarted(unknown!));
+        Assert.Contains("launcher-entered", InteractiveScripts.MacLauncher);
+        Assert.Contains("[ ! -e \"$dir/launcher-entered\" ]", InteractiveScripts.MacStart);
+    }
+
     [Fact] public async Task ATaskThatCouldNotBeRemovedStopsTheClientAndFails()
     {
         var fake = new FakeLauncher()

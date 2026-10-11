@@ -246,11 +246,20 @@ public static class InteractiveClient
             "no-steam" => new InteractiveSessionException(InteractiveRefusal.NoSteam, host.Name, detail),
             "unsupported" => new PlatformNotSupportedException($"Cannot start a {platform} client on {host.Name}: {detail}"),
             "missing" => new FileNotFoundException($"The client install on {host.Name} is incomplete: {detail}. Nothing was started."),
+            "exists" when platform == ClientPlatform.MacOS => new ClientNeverStartedException($"{launchDirectory} already exists on {host.Name}; give each launch a new directory. Nothing was started."),
             "exists" => new InvalidOperationException($"{launchDirectory} already exists on {host.Name}; give each launch a new directory. Nothing was started."),
+            "not-started" when platform == ClientPlatform.MacOS => new ClientNeverStartedException($"The client did not start on {host.Name}: {detail}. Evidence is in {launchDirectory}."),
             "failed" => new InvalidOperationException($"The client did not start on {host.Name}: {detail}. Evidence is in {launchDirectory}.{removed}"),
             _ => new HostOperationException($"Unexpected reply while starting a client on {host.Name}.{removed}", result),
         };
     }
+
+    // Only these refusals prove the Mac start script did not create a process. A timed-out,
+    // lost or ambiguous reply must keep its launch intent for identity-based recovery.
+    internal static bool NeverStarted(Exception error) =>
+        error is InteractiveSessionException or FileNotFoundException or ClientNeverStartedException;
+
+    internal sealed class ClientNeverStartedException(string message) : InvalidOperationException(message);
 
     internal static string Base64(string value) => Convert.ToBase64String(Utf8.GetBytes(value));
 

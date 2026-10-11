@@ -394,6 +394,24 @@ public sealed class RunRecoveryTests : IDisposable
             Assert.Single((await RunJournalStatus.InspectAsync(hosts, _ => _host, TimeSpan.FromSeconds(5))).Runs).State);
     }
 
+    [Fact] public async Task ProvenNeverStartedMacLaunchDoesNotBlockRecovery()
+    {
+        const string run = "run-mac-never-started", launch = "/srv/runs/run-mac-never-started/client-1";
+        var hosts = new Dictionary<string, HostProfile> { ["pc"] = new() { Kind = "ssh", Platform = "macos", Lock = "/var/tmp/vt/lock" } };
+        Line(_host, run, "client", Gone, JournalEntry.ProcessIntended, ("launchDirectory", launch),
+            ("expectedCommandLineSha256", FakeServerHost.CommandLineSha256("never")));
+        Line(_host, run, "client", Gone, JournalEntry.MacAgentIntended, ("launchDirectory", launch));
+        Line(_host, run, "client", Gone, JournalEntry.LaunchSettled, ("actor", "client"), ("directory", launch));
+        Line(_host, run, "client", Gone, JournalEntry.MacAgentRetired, ("launchDirectory", launch));
+
+        var report = await RunRecovery.RecoverAsync(hosts, _ => _host, run, false, TimeSpan.FromSeconds(5));
+
+        Assert.True(report.Recovered, string.Join("\n", report.Steps));
+        Assert.Equal(JournalRunState.Ended,
+            Assert.Single((await RunJournalStatus.InspectAsync(hosts, _ => _host, TimeSpan.FromSeconds(5))).Runs).State);
+        Assert.DoesNotContain(_host.Runs, call => call.Script is "stop" or "mac-agent-retire" or "pid-file");
+    }
+
     [Fact] public async Task RemoteMacLostStopReplyKeepsItsProfileUntilTheGuiAgentIsProvenRemoved()
     {
         const string run = "run-mac-lost-stop", launch = "/srv/runs/run-mac-lost-stop/client-1";
