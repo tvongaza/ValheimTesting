@@ -86,7 +86,7 @@ public sealed class OwnedRunPreflightTests : IDisposable
         var error = Assert.Throws<InvalidOperationException>(plan.Preflight);
         Assert.Contains("valheimCLI.valheimCLI (BepInEx/scripts/valheimCLI.dll)", error.Message);
         Assert.Contains("[General] LoadOnStart = false", error.Message);
-        Assert.Contains("install the current ValheimCLI core and its packs in BepInEx/plugins", error.Message);
+        Assert.Contains("install the current default valheimCLI.dll in BepInEx/plugins", error.Message);
         install.Add("BepInEx/config/com.bepis.bepinex.scriptengine.cfg", "[General]\nLoadOnStart = true\n");
         plan.Preflight();
     }

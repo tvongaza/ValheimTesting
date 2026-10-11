@@ -350,11 +350,11 @@ public sealed class CliCapabilityManifestTests : IDisposable
         // An owned client's install (ClientRunPlan.Preflight -> CliCapabilityManifest.Check).
         using (var install = Staged(builds, [.. files]))
             Assert.Contains(expected, Assert.Throws<InvalidOperationException>(() => PlanFor(install, manifestPath).Preflight(CliCapabilities.HostedRounds)).Message);
-        // A dependency lock (ApplyTo and ReadReady both ask RequireExactCliSet). A lock of the
-        // wrong count is refused for its count first; the others reach the one check.
+        // The low-level manifest check still describes historical split builds, but a new dependency lock
+        // refuses them all before considering the location of an individual legacy pack.
         var dependencyLock = new NativeDependencyLock { CliManifest = manifest, CliFiles = paths.Select(path => new NativeDependencyFile(path, FileHash.Sha256(path), "test")).ToList() };
         string refusal = Assert.Throws<InvalidDataException>(dependencyLock.RequireExactCliSet).Message;
-        Assert.Contains(files.Count == manifest.Files.Count ? expected : "must contain exactly the ValheimCLI core and packs", refusal);
+        Assert.Contains("not a one-plugin build", refusal);
     }
 
     [Fact] public void AManifestPackInScriptsMustLoadAtStartupEvenWhenItIsNotSeparatelyPinned()
