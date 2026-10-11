@@ -1,5 +1,8 @@
 using System.Reflection;
+using System.Runtime.Loader;
 using System.Text.Json;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 using Valheim.Testing.Game;
 using Xunit;
 
@@ -11,6 +14,55 @@ public sealed class ToolkitProvenanceTests : IDisposable
     public void Dispose() => Directory.Delete(_output, recursive: true);
 
     private static string Built(Assembly assembly) => assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()!.InformationalVersion.Split('+')[0];
+
+    [Fact]
+    public void SourceBuiltRunnerIsDistinctFromReusedCandidatePackage()
+    {
+        // The candidate set was built first. A later source edit changes the runner without rebuilding that set.
+        // Its package coordinate must not masquerade as the code that the entry assembly actually executed.
+        const string oldCommit = "230157f6", newCommit = "abcdef12";
+        var context = new AssemblyLoadContext("provenance-test", isCollectible: true);
+        var candidate = Compile("Valheim.Testing.Game", oldCommit, "old behavior", candidate: true, context);
+        var runner = Compile("Valheim.Testing.NativeSmoke", newCommit, "new behavior", candidate: false, context);
+        var result = ToolkitProvenance.Of([candidate], runner);
+        Assert.Equal(oldCommit, result.Packages.Single(package => package.Id == "Valheim.Testing.Game").Commit);
+        Assert.Equal(oldCommit, result.LoadedAssemblies.Single(assembly => assembly.Name == "Valheim.Testing.Game").Commit);
+        var actualRunner = result.LoadedAssemblies.Single(assembly => assembly.Name == "Valheim.Testing.NativeSmoke");
+        Assert.Equal(newCommit, actualRunner.Commit);
+        Assert.Equal(ToolkitProvenance.Unreleased, actualRunner.State);
+        Assert.Equal(result.RunnerSha256, actualRunner.Sha256);
+        Assert.NotEqual(result.Packages.Single(package => package.Id == "Valheim.Testing.Game").Sha256, actualRunner.Sha256);
+        Assert.NotEqual(candidate.ManifestModule.ModuleVersionId, runner.ManifestModule.ModuleVersionId);
+        using var written = JsonSerializer.SerializeToDocument(result);
+        Assert.Equal(newCommit, written.RootElement.GetProperty("LoadedAssemblies").EnumerateArray()
+            .Single(assembly => assembly.GetProperty("Name").GetString() == "Valheim.Testing.NativeSmoke")
+            .GetProperty("Commit").GetString());
+        Assert.Equal(oldCommit, written.RootElement.GetProperty("Packages").EnumerateArray()
+            .Single(package => package.GetProperty("Id").GetString() == "Valheim.Testing.Game")
+            .GetProperty("Commit").GetString());
+        context.Unload();
+    }
+
+    private Assembly Compile(string name, string commit, string behavior, bool candidate, AssemblyLoadContext context)
+    {
+        string version = candidate ? $"0.1.0-preview.1-candidate.{commit}+{commit}" : $"0.1.0-preview.1+{commit}";
+        string source = $$"""
+            using System.Reflection;
+            [assembly: AssemblyInformationalVersion("{{version}}")]
+            public static class TestCode { public static string Behavior() => "{{behavior}}"; }
+            """;
+        var platform = ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!).Split(Path.PathSeparator);
+        var compilation = CSharpCompilation.Create(name, [CSharpSyntaxTree.ParseText(source)],
+            platform.Select(path => MetadataReference.CreateFromFile(path)),
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+        string file = Path.Combine(_output, name + ".dll");
+        using (var stream = File.Create(file))
+        {
+            var emitted = compilation.Emit(stream);
+            Assert.True(emitted.Success, string.Join(Environment.NewLine, emitted.Diagnostics));
+        }
+        return context.LoadFromAssemblyPath(file);
+    }
 
     [Fact]
     public void OnlyAReleaseBuildIsReleasedAndACandidateNeverIs()
@@ -52,13 +104,22 @@ public sealed class ToolkitProvenanceTests : IDisposable
         report.Write(_output);
         using var result = JsonDocument.Parse(File.ReadAllText(Path.Combine(_output, "result.json")));
         var root = result.RootElement;
-        Assert.Equal(3, root.GetProperty("Schema").GetInt32());
+        Assert.Equal(4, root.GetProperty("Schema").GetInt32());
         var toolkit = root.GetProperty("Toolkit");
         var packages = toolkit.GetProperty("Packages").EnumerateArray().ToDictionary(package => package.GetProperty("Id").GetString()!);
         // Game's own references are listed even before anything used them: Valheim.Testing and the transport.
         Assert.Superset(new HashSet<string> { "Valheim.Testing", "Valheim.Testing.Cli", "Valheim.Testing.Game" }, packages.Keys.ToHashSet());
         Assert.Equal(Built(typeof(GameActor).Assembly), packages["Valheim.Testing.Game"].GetProperty("Version").GetString());
         Assert.Equal(ToolkitProvenance.Unreleased, packages["Valheim.Testing.Game"].GetProperty("State").GetString());
+        var loaded = toolkit.GetProperty("LoadedAssemblies").EnumerateArray()
+            .ToDictionary(assembly => assembly.GetProperty("Name").GetString()!);
+        Assert.Equal(packages["Valheim.Testing.Game"].GetProperty("Sha256").GetString(),
+            loaded["Valheim.Testing.Game"].GetProperty("Sha256").GetString());
+        Assert.Equal(typeof(GameActor).Assembly.ManifestModule.ModuleVersionId.ToString("D"),
+            loaded["Valheim.Testing.Game"].GetProperty("Mvid").GetString());
+        Assert.True(loaded.ContainsKey(toolkit.GetProperty("Runner").GetString()!));
+        Assert.Equal(toolkit.GetProperty("RunnerSha256").GetString(),
+            loaded[toolkit.GetProperty("Runner").GetString()!].GetProperty("Sha256").GetString());
         // The transport this checkout pins (cli-dependency.json's packageVersion) is the one that ran.
         using var pin = JsonDocument.Parse(File.ReadAllText(Path.Combine(FixtureProjects.RepositoryRoot(), "cli-dependency.json")));
         Assert.Equal(pin.RootElement.GetProperty("packageVersion").GetString(), packages["Valheim.Testing.Cli"].GetProperty("Version").GetString());

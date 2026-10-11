@@ -51,9 +51,10 @@ public sealed class ScenarioReport
 {
     /// <summary>
     /// The <c>result.json</c> schema: 2 since steps carry a phase and the four states are reported; 3 since every result names
-    /// the toolkit that ran (<see cref="Toolkit"/>) and each actor's in-game plugin hashes (<see cref="Plugins"/>).
+    /// the toolkit that ran (<see cref="Toolkit"/>) and each actor's in-game plugin hashes (<see cref="Plugins"/>);
+    /// 4 since loaded assembly identities are separate from package coordinates.
     /// </summary>
-    public int Schema => 3;
+    public int Schema => 4;
     private readonly object _stepGate = new();
     /// <summary>The run name written into both result files and each JUnit phase suite.</summary>
     public string Name { get; }

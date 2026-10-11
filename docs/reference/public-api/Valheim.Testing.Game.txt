@@ -956,6 +956,22 @@ sealed class Valheim.Testing.Game.InstallPins
   property System.String Server { get; init; }
   property System.TimeSpan Elapsed { get; init; }
   property Valheim.Testing.Game.GameConnectionStatus Status { get; init; }
+[result shape] sealed class Valheim.Testing.Game.LoadedAssemblyProvenance : System.IEquatable`1<Valheim.Testing.Game.LoadedAssemblyProvenance>
+  method System.Boolean Equals(Valheim.Testing.Game.LoadedAssemblyProvenance other)
+  method System.Void .ctor(System.String Name, System.String Version, System.String Commit, System.String State, System.String Sha256, System.String Mvid)
+  method System.Void Deconstruct(out System.String& Name, out System.String& Version, out System.String& Commit, out System.String& State, out System.String& Sha256, out System.String& Mvid)
+  method Valheim.Testing.Game.LoadedAssemblyProvenance <Clone>$()
+  method static System.Boolean op_Equality(Valheim.Testing.Game.LoadedAssemblyProvenance left, Valheim.Testing.Game.LoadedAssemblyProvenance right)
+  method static System.Boolean op_Inequality(Valheim.Testing.Game.LoadedAssemblyProvenance left, Valheim.Testing.Game.LoadedAssemblyProvenance right)
+  method virtual System.Boolean Equals(System.Object obj)
+  method virtual System.Int32 GetHashCode()
+  method virtual System.String ToString()
+  property System.String Commit { get; init; }
+  property System.String Mvid { get; init; }
+  property System.String Name { get; init; }
+  property System.String Sha256 { get; init; }
+  property System.String State { get; init; }
+  property System.String Version { get; init; }
 [result shape] sealed class Valheim.Testing.Game.LogClassification
   method System.Void .ctor()
   property System.Collections.Generic.List`1<System.String> Expected { get; set; }
@@ -2048,6 +2064,7 @@ enum Valheim.Testing.Game.TestActorRole
   method virtual System.Boolean Equals(System.Object obj)
   method virtual System.Int32 GetHashCode()
   method virtual System.String ToString()
+  property System.Collections.Generic.IReadOnlyList`1<Valheim.Testing.Game.LoadedAssemblyProvenance> LoadedAssemblies { get; init; }
   property System.Collections.Generic.IReadOnlyList`1<Valheim.Testing.Game.PackageProvenance> Packages { get; init; }
   property System.String Error { get; init; }
   property System.String Runner { get; init; }

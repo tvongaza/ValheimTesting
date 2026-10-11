@@ -46,12 +46,12 @@ public sealed class RegressionBundleTests : IDisposable
     {
         var spec = _rig.Spec();
         spec.Toolkit.PackageId = "Valheim.Testing.GameSessions";
-        spec.Toolkit.Package = "0.1.0-preview.15";
+        spec.Toolkit.Package = "0.1.0-preview.16";
         string output = _rig.Output();
 
         RegressionBundle.Create(spec, output, _rig.Sources);
 
-        Assert.Contains("<PackageReference Include=\"Valheim.Testing.GameSessions\" Version=\"[0.1.0-preview.15]\" />",
+        Assert.Contains("<PackageReference Include=\"Valheim.Testing.GameSessions\" Version=\"[0.1.0-preview.16]\" />",
             File.ReadAllText(Path.Combine(output, "ExampleRegression.csproj")));
         Assert.Contains("Valheim.Testing.GameSessions", File.ReadAllText(Path.Combine(output, "README.md")));
         RegressionBundle.Verify(output, spec);
@@ -373,7 +373,7 @@ internal sealed class BundleRig : IDisposable
         try { report.Step("first: exactly one marker stands there", () => { if (!pass) throw new InvalidOperationException(error); }); }
         catch (InvalidOperationException) { }
         report.Write(directory);
-        // The run's toolkit as result.json names it (schema 3): this arm ran the Game version given.
+        // The run's toolkit as result.json names it (schema 4): this arm ran the Game version given.
         var written = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(Path.Combine(directory, "result.json")))!;
         var packages = written["Toolkit"]!["Packages"]!.AsArray();
         foreach (var ran in packages.Where(package => (string?)package!["Id"] == "Valheim.Testing.Game").ToList()) packages.Remove(ran);
@@ -482,7 +482,7 @@ internal sealed class BundleRig : IDisposable
         public IReadOnlyList<string>? PackageVersions(string id) => id switch
         {
             RegressionBundle.Package => ["0.1.0-preview.16", "0.1.0-preview.17"],
-            "Valheim.Testing.GameSessions" => ["0.1.0-preview.15"],
+            "Valheim.Testing.GameSessions" => ["0.1.0-preview.16"],
             _ => null,
         };
         public bool HasCommit(string repository, string commit) => commit == Commit;
