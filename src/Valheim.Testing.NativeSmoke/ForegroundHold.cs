@@ -171,6 +171,9 @@ internal sealed class ForegroundHold : IDisposable
         catch (Exception error) when (error is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception) { }
         if (ownerAlive) throw new InvalidOperationException("The holding runner is still alive; finish it instead of recovering it.");
         if (File.ReadAllText(marker) != source) throw new IOException("The hold marker changed during recovery.");
+        // env recover has already proved the owned game is gone. The hold's world/menu pins and
+        // process pointer are live-session capabilities, not lasting evidence; command records stay.
+        OwnedClientCommandLease.Retire(identity.Evidence);
         File.Delete(Path.Combine(directory, run + ".finish"));
         File.Delete(marker);
     }

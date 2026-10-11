@@ -379,13 +379,22 @@ public sealed class GameSession : IAsyncDisposable
         if (actor.Plan.Crossplay && lobby == null) throw new ArgumentException($"Client {client} joins by crossplay: pass the server's lobby.", nameof(lobby));
         return await Task.Run(() =>
         {
+            actor.Session?.WorldLeft(); // A previous world pin cannot authorize commands during a new join.
             Report.Step(StepPhase.Setup, $"{what} accepts game connections for client {client}", () => joinable.WaitUntilJoinable(game()));
             if (host != null)
                 Report.Step(StepPhase.Setup, $"client {client} in host {host.Name}'s world {world}" + (protect ? ", protected" : ""),
-                    () => new SessionControl(actor.Game).JoinHost(actor.Plan, host.Game, world, protect, Cancellation));
+                    () =>
+                    {
+                        new SessionControl(actor.Game).JoinHost(actor.Plan, host.Game, world, protect, Cancellation);
+                        actor.Session?.WorldEntered(actor.Plan, world);
+                    });
             else
                 Report.Step(StepPhase.Setup, $"client {client} in world {world}" + (protect ? ", protected" : ""),
-                    () => new SessionControl(actor.Game).JoinWorld(actor.Plan, world, lobby, protect, Cancellation));
+                    () =>
+                    {
+                        new SessionControl(actor.Game).JoinWorld(actor.Plan, world, lobby, protect, Cancellation);
+                        actor.Session?.WorldEntered(actor.Plan, world);
+                    });
             PlayerPlacement.TeleportArrival? arrived = null;
             if (arrival is { } point)
                 Report.Step(StepPhase.Setup, $"client {client} at the arrival point",
@@ -413,6 +422,7 @@ public sealed class GameSession : IAsyncDisposable
         string? world = _worldUid;
         await Task.Run(() => Report.Step(StepPhase.Setup, $"client {client} back at its menu", () =>
         {
+            actor.Session?.WorldLeft();
             var game = actor.Game;
             var control = new SessionControl(game);
             // Where the client is now, once it settles (a host's restart drops its peers to their menus, and they may still be leaving).

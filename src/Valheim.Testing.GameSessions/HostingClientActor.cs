@@ -105,9 +105,18 @@ public sealed class HostingClientActor : IOwnedServer, IDisposable
     }
 
     /// <summary>The start alone (<see cref="HostWorlds.Start"/>), protected as <see cref="ProtectPlayer"/> says.</summary>
-    internal SessionState StartWorld(GameActor host) => _world.StartWorld(host, ProtectPlayer);
+    internal SessionState StartWorld(GameActor host)
+    {
+        var state = _world.StartWorld(host, ProtectPlayer);
+        Session?.WorldEntered(Plan, WorldUid);
+        return state;
+    }
     /// <summary>The host leaves its world (the game saves it) and is re-pinned at its menu.</summary>
-    internal void LeaveWorld(GameActor host) => _world.LeaveWorld(host);
+    internal void LeaveWorld(GameActor host)
+    {
+        try { _world.LeaveWorld(host); }
+        finally { Session?.WorldLeft(); }
+    }
 
     /// <summary>
     /// Waits until <paramref name="host"/>, this host's <see cref="Game"/>, is in its fixture world with its player, within the

@@ -65,6 +65,21 @@ public sealed class ClientSession : IDisposable
         TryCaptureFailure(_failureEvidence, _process, Actor.Pinned ? Actor : null, _output);
     }
 
+    // The world's identity is not in a joining client's launch plan. Only publish a diagnostic
+    // world pin after the session has entered and reverified the fixture's world on this actor.
+    internal void WorldEntered(ClientRunPlan plan, string worldUid)
+    {
+        if (_process == null || _output == null || !File.Exists(Path.Combine(_output, OwnedClientCommandLease.FileName))) return;
+        OwnedClientCommandLease.LeaveWorld(_output);
+        Actor.VerifyEnvironment(plan.WorldExpectations(worldUid));
+        OwnedClientCommandLease.WriteVerifiedWorld(_output, plan, worldUid);
+    }
+
+    internal void WorldLeft()
+    {
+        if (_output != null) OwnedClientCommandLease.LeaveWorld(_output);
+    }
+
     private static void TryCaptureFailure(Action<IOwnedProcess, GameActor?, string>? capture, IOwnedProcess process, GameActor? actor, string output)
     {
         if (capture == null) return;
@@ -336,7 +351,14 @@ public sealed class ClientSession : IDisposable
             // A client whose pins or capabilities failed verification must not receive a diagnostic game command.
             TryCaptureFailure(failureEvidence, process, pinsVerified ? actor : null, output);
             actor?.Dispose();
-            try { process.Stop(TimeSpan.FromSeconds(15)); } finally { process.Dispose(); }
+            try { process.Stop(TimeSpan.FromSeconds(15)); }
+            finally
+            {
+                process.Dispose();
+                try { OwnedClientCommandLease.Retire(output); }
+                catch (Exception cleanup) when (cleanup is IOException or UnauthorizedAccessException)
+                { error.Data["owned-cli-lease-cleanup"] = cleanup.Message; }
+            }
             throw;
         }
     }
@@ -377,9 +399,13 @@ public sealed class ClientSession : IDisposable
         try { Actor.Dispose(); }
         finally
         {
-            if (_process != null)
-                try { Stopped = _process.StopCleanly(QuitTimeout, TimeSpan.FromSeconds(15)); }
-                finally { _process.Dispose(); }
+            try
+            {
+                if (_process != null)
+                    try { Stopped = _process.StopCleanly(QuitTimeout, TimeSpan.FromSeconds(15)); }
+                    finally { _process.Dispose(); }
+            }
+            finally { if (_output != null) OwnedClientCommandLease.Retire(_output); }
         }
     }
 

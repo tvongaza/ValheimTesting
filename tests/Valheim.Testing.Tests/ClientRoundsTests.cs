@@ -229,6 +229,26 @@ public sealed class ClientRoundsTests : IDisposable
             System.Runtime.InteropServices.RuntimeInformation.OSArchitecture), report.Provenance["clientArchitecture"]);
     }
 
+    [Fact] public void JoinedClientPublishesWorldPinsOnlyWhileItsVerifiedWorldIsOpen()
+    {
+        var plan = Plan();
+        string worldPins = Path.Combine(Output, OwnedClientCommandLease.WorldPins);
+        OwnedClientCommandLease.Write(Output, _process.Id, "test-start", plan);
+        Assert.False(File.Exists(worldPins)); // A menu lease cannot claim the server's world before joining.
+        var report = new ScenarioReport("joined-pins");
+        int observations = 0;
+        Rounds(report, plan).Run(Server(), Open(plan), Measure(also: _ =>
+        {
+            Assert.Contains("worlduid=" + WorldUid, File.ReadAllText(worldPins));
+            Assert.Contains("my.mod=absent", File.ReadAllText(worldPins));
+            observations++;
+        }), afterRestart: _ => Assert.False(File.Exists(worldPins)));
+        Assert.True(report.Passed);
+        Assert.Equal(2, observations);
+        Assert.False(File.Exists(worldPins));
+        Assert.False(File.Exists(Path.Combine(Output, OwnedClientCommandLease.FileName)));
+    }
+
     [Fact] public void EachRoundsArrivalMakesOneWaitPerPhaseAndWritesItsTrace()
     {
         var plan = Plan();
@@ -593,6 +613,24 @@ public sealed class ClientRoundsTests : IDisposable
         // The verified input copy stays beside it, as the server runner keeps its fixture copies.
         Assert.Single(Directory.GetDirectories(Output, "valheim-test-*"));
         Assert.True(File.Exists(Path.Combine(Output, "first-reading.json"))); Assert.True(File.Exists(Path.Combine(Output, "after-restart-reading.json")));
+    }
+
+    [Fact] public void HostingClientCannotAdvertiseWorldPinsBeforeItsFixtureLoads()
+    {
+        var plan = HostPlan();
+        string worldPins = Path.Combine(Output, OwnedClientCommandLease.WorldPins);
+        OwnedClientCommandLease.Write(Output, _process.Id, "test-start", plan);
+        Assert.False(File.Exists(worldPins));
+        int observations = 0;
+        var report = new ScenarioReport("host-pins");
+        RunHosted(report, plan, new Game(Worlds), Measure(also: _ =>
+        {
+            Assert.Contains("worlduid=" + WorldUid, File.ReadAllText(worldPins));
+            observations++;
+        }));
+        Assert.True(report.Passed);
+        Assert.Equal(2, observations);
+        Assert.False(File.Exists(worldPins));
     }
 
     [Theory] [InlineData(Name + ".fwl")] [InlineData(Name + "_backup_auto-20260929.db")] [InlineData("hostfixture.db")]

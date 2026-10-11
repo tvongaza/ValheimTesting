@@ -167,6 +167,30 @@ public sealed class GameSessionTests : IDisposable
         Assert.True(report.Passed);
     }
 
+    [Fact] public async Task AJoinedClientPublishesStrictWorldPinsOnlyAfterJoining()
+    {
+        var report = new ScenarioReport("session");
+        var session = Session(report, clients: ["client-a"]);
+        string output = GameSession.ActorOutput(_root, "client-a");
+        try
+        {
+            await session.StartAsync();
+            OwnedClientCommandLease.Write(output, _clientProcesses["client-a"].Id, "test-start", session.Clients["client-a"].Plan);
+            Assert.False(File.Exists(Path.Combine(output, OwnedClientCommandLease.WorldPins)));
+
+            await session.Join("client-a");
+            string worldPins = File.ReadAllText(Path.Combine(output, OwnedClientCommandLease.WorldPins));
+            Assert.Contains("worlduid=" + WorldUid, worldPins);
+            Assert.Contains("valheimCLI.valheimCLI=" + new string('a', 32), worldPins);
+
+            await session.Rejoin("client-a", protect: false);
+            Assert.Equal(worldPins, File.ReadAllText(Path.Combine(output, OwnedClientCommandLease.WorldPins)));
+        }
+        finally { await session.DisposeAsync(); }
+        Assert.False(File.Exists(Path.Combine(output, OwnedClientCommandLease.WorldPins)));
+        Assert.False(File.Exists(Path.Combine(output, OwnedClientCommandLease.FileName)));
+    }
+
     [Fact] public async Task ASessionStartsOnceAndAFailedServerStopIsReported()
     {
         var report = new ScenarioReport("session");

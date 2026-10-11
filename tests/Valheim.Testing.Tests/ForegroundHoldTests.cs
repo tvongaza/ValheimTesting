@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Valheim.Testing.Game;
 using Valheim.Testing.Game.Fakes;
 using Xunit;
 
@@ -128,7 +129,14 @@ public sealed class ForegroundHoldTests : IDisposable
         string marker = Path.Combine(markers, "run-dead.json"), request = Path.Combine(markers, "run-dead.finish");
         File.WriteAllText(marker, JsonSerializer.Serialize(new { Run = "run-dead", Evidence = evidence, Pid = int.MaxValue, Started = "1" }));
         File.WriteAllText(request, "");
+        foreach (string name in new[] { OwnedClientCommandLease.FileName, OwnedClientCommandLease.MenuPins, OwnedClientCommandLease.WorldPins })
+            File.WriteAllText(Path.Combine(evidence, name), "temporary lease");
+        string record = Path.Combine(evidence, "owned-cli-command-history.jsonl");
+        File.WriteAllText(record, "retained command evidence");
         ForegroundHold.RetireRecovered("run-dead", markers);
+        foreach (string name in new[] { OwnedClientCommandLease.FileName, OwnedClientCommandLease.MenuPins, OwnedClientCommandLease.WorldPins })
+            Assert.False(File.Exists(Path.Combine(evidence, name)));
+        Assert.Equal("retained command evidence", File.ReadAllText(record));
         Assert.False(File.Exists(marker));
         Assert.False(File.Exists(request));
     }
