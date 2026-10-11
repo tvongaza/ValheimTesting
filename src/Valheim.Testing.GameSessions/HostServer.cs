@@ -66,6 +66,9 @@ public static class HostServer
         var variables = new Dictionary<string, string>
         {
             ["runtime"] = launch.WorkingDirectory, ["logroot"] = logRoot ?? launch.WorkingDirectory,
+            // Steam writes logs relative to the process cwd. A profile must not write them into the installed game.
+            ["workdir"] = !windows && logRoot != null && !logRoot.Equals(launch.WorkingDirectory, StringComparison.Ordinal)
+                ? directory : launch.WorkingDirectory,
             ["exe"] = windows ? GameLaunch.ServerWindowsExecutable : GameLaunch.ServerLinuxExecutable, ["files"] = string.Join('\n', launch.RequiredFiles), ["dir"] = directory,
             ["spec"] = launch.Spec(), ["logs"] = string.Join('\n', kept),
             ["crossplay"] = launch.Crossplay ? "1" : "", ["libraries"] = string.Join('\n', CrossplayLibraries.PartyLibraries),
@@ -456,7 +459,7 @@ internal static class HostServerScripts
         started() { local s; s=$(cat "/proc/$1/stat" 2> /dev/null) || return 1; s=${s##*) }; set -- $s; [ "$1" != Z ] && echo "${20}"; }
         """;
 
-    // Variables: runtime, exe, files, dir, spec, logs, seconds, crossplay, libraries. A crossplay launch first proves the game's
+    // Variables: runtime, workdir, exe, files, dir, spec, logs, seconds, crossplay, libraries. A crossplay launch first proves the game's
     // libparty.so loads (CrossplayLibraryScripts), and otherwise replies with that check's lines and "libraries". The recorder writes the server's PID and start identity to
     // the boot's pid file (what an interrupted run's recovery reads, #257) and hands the PID back through a FIFO the script already holds open, so the start waits for that event (bounded by seconds) rather than looking for a file; the
     // FIFO is opened read-write at both ends, so neither side can block on a missing partner. The server's own descriptors
@@ -509,7 +512,7 @@ internal static class HostServerScripts
         if env --default-signal=INT true 2> /dev/null; then signals=(--default-signal=INT); fi
         mkfifo -m 600 -- "$dir/started" || exit 3
         exec 3<> "$dir/started"
-        cd -- "$runtime" || exit 3
+        cd -- "$workdir" || exit 3
         setsid bash -c 'f=$1; p=$2; x=$3; shift 3; exec 4<> "$f"; "$@" 4>&- & g=$!; s=$(cat "/proc/$g/stat" 2> /dev/null); s=${s##*) }; set -- $s; printf "%s %s\n" "$g" "${20:-}" > "$p.tmp" && mv -f -- "$p.tmp" "$p"; printf "%s\n" "$g" >&4; exec 4>&-; wait "$g"; printf "%s\n" "$?" > "$x.tmp" && mv -f -- "$x.tmp" "$x"' \
             vt-server "$dir/started" "$dir/pid" "$dir/exit" env ${signals[@]+"${signals[@]}"} ${unsets[@]+"${unsets[@]}"} ${sets[@]+"${sets[@]}"} "$runtime/$exe" ${args[@]+"${args[@]}"} \
             > "$dir/stdout.log" 2> "$dir/stderr.log" < /dev/null 3<&- &
