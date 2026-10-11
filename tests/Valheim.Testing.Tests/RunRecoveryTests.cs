@@ -869,6 +869,16 @@ public sealed class RunRecoveryTests : IDisposable
         await Assert.ThrowsAsync<ArgumentException>(() => RunRecovery.KeepLogsAsync(local, Path.Combine(runs, "elsewhere", "runtime"), "run-x", "server", copied, TimeSpan.FromSeconds(60)));
     }
 
+    [Theory]
+    [InlineData(HostShellKind.PowerShell, "windows", "")]
+    [InlineData(HostShellKind.Bash, "macos", "Library/Logs/IronGate/Valheim/Player.log")]
+    [InlineData(HostShellKind.Bash, "linux", ".config/unity3d/IronGate/Valheim/Player.log")]
+    public void RecoverySelectsTheHostPlatformPlayerLog(HostShellKind shell, string platform, string expected)
+    {
+        Assert.Equal(expected, RunRecovery.PlayerLogArgument(shell, platform, ""));
+        Assert.Equal("/explicit/Player.log", RunRecovery.PlayerLogArgument(shell, platform, "/explicit/Player.log"));
+    }
+
     [Fact] public async Task TheCommandLineRequiresARunAndSaysWhatItRefused()
     {
         foreach (string[] args in new[] { new[] { "recover" }, ["teardown", "--run"], ["recover", "--run", "x", "extra"], ["recover", "--hosts", "--run", "x"] })

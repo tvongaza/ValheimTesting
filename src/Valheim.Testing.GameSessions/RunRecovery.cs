@@ -483,9 +483,7 @@ internal static class RunRecovery
         var result = (await host.RunAsync(host.Shell.Kind == HostShellKind.PowerShell ? WindowsKeepLogs : BashKeepLogs, new Dictionary<string, string>
         {
             ["runtime"] = runtime, ["keep"] = folder, ["client"] = actor == "server" ? "false" : "true",
-            ["playerlog"] = playerLog.Length == 0
-                ? HostedClientScripts.UnixPlayerLogRelative(platform == "macos" ? ClientPlatform.MacOS : ClientPlatform.Linux)
-                : playerLog,
+            ["playerlog"] = PlayerLogArgument(host.Shell.Kind, platform, playerLog),
             ["since"] = new DateTimeOffset(copiedUtc.ToUniversalTime()).ToUnixTimeSeconds().ToString(CultureInfo.InvariantCulture),
         }, timeout, cancellation).ConfigureAwait(false)).EnsureSuccess($"Keeping the game logs of {runtime} on {host.Name}");
         if (InteractiveClient.Line(result.Stdout, "VT-LOGS-DONE") == null) throw new HostOperationException($"Unexpected reply while keeping the game logs of {runtime} on {host.Name}", result);
@@ -493,6 +491,12 @@ internal static class RunRecovery
             .Where(line => line.StartsWith(verdict + " ", StringComparison.Ordinal)).Select(line => line[(verdict.Length + 1)..]).ToList();
         return new(folder, Named("VT-LOG-KEPT"), Named("VT-LOG-OLDER"));
     }
+
+    // PowerShell's empty argument selects the Windows LocalLow path in its script. Unix hosts
+    // need the platform-specific path relative to the remote account's home directory.
+    internal static string PlayerLogArgument(HostShellKind shell, string platform, string supplied) =>
+        supplied.Length != 0 || shell == HostShellKind.PowerShell ? supplied
+        : HostedClientScripts.UnixPlayerLogRelative(platform == "macos" ? ClientPlatform.MacOS : ClientPlatform.Linux);
 
     // Variables: runtime, keep, since (Unix seconds: when the copy was made), client (true: the host user's Player.log too),
     // playerlog (absolute or relative to that user's home). Each log written since the copy was made is copied into keep with its time, and named;
