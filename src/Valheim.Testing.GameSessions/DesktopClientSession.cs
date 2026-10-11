@@ -127,6 +127,9 @@ internal static class DesktopClientSession
         catch (Exception error)
         {
             foreach (var kept in ClientSession.KeptLogs(error)) logs.Add(kept);
+            try { OwnedClientCommandLease.Retire(output); }
+            catch (Exception cleanup) when (cleanup is IOException or UnauthorizedAccessException)
+            { error.Data["owned-cli-lease-cleanup"] = cleanup.Message; }
             tunnel.Dispose();
             throw;
         }

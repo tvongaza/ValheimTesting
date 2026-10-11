@@ -124,8 +124,12 @@ public sealed class OwnedCliCommandTests
             OwnedClientCommandLease.Write(output, current.Id, start, plan);
             Assert.Contains("my.mod=" + new string('a', 32), File.ReadAllText(Path.Combine(output, OwnedClientCommandLease.MenuPins)));
             Assert.DoesNotContain("worlduid", File.ReadAllText(Path.Combine(output, OwnedClientCommandLease.MenuPins)));
+            Assert.False(File.Exists(Path.Combine(output, OwnedClientCommandLease.WorldPins)));
+            OwnedClientCommandLease.WriteVerifiedWorld(output, plan, "123");
             Assert.Contains("worlduid=123", File.ReadAllText(Path.Combine(output, OwnedClientCommandLease.WorldPins)));
             Assert.Contains("--strict", StrictExpectations.Load(Path.Combine(output, OwnedClientCommandLease.WorldPins)));
+            OwnedClientCommandLease.LeaveWorld(output);
+            Assert.False(File.Exists(Path.Combine(output, OwnedClientCommandLease.WorldPins)));
         }
         finally { Directory.Delete(output, recursive: true); }
     }

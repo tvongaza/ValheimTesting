@@ -133,13 +133,17 @@ public sealed class ClientRounds
             {
                 var round = new ClientRound(Rounds[i], i, i == Rounds.Count - 1, world.ServerFor(client), client, Report, Output, world.WorldUid);
                 if (i > 0) afterRestart?.Invoke(round);
-                world.Enter(round);
+                world.Enter(round, session);
                 measure(round);
                 if (!round.Last) Report.Step(StepPhase.Setup, Between("confirmed world save", i), () => world.Save(round));
                 round.Step(StepPhase.Setup, world.LeaveStep, () =>
                 {
-                    new SessionControl(client).Leave();
-                    client.VerifyEnvironment(Client.MenuExpectations); // A transition always needs fresh pins.
+                    try
+                    {
+                        new SessionControl(client).Leave();
+                        client.VerifyEnvironment(Client.MenuExpectations); // A transition always needs fresh pins.
+                    }
+                    finally { session.WorldLeft(); }
                 });
                 completed.Add(round.Name);
                 Report.Provenance[world.CompletedKey] = string.Join(",", completed);
@@ -190,7 +194,7 @@ public sealed class ClientRounds
         void Prepare();
         void Opened(GameActor client);
         GameActor ServerFor(GameActor client);
-        void Enter(ClientRound round);
+        void Enter(ClientRound round, ClientSession session);
         void Save(ClientRound round);
         void Restart(int round);
         void Release(bool released);
@@ -218,7 +222,7 @@ public sealed class ClientRounds
         }
         public void Opened(GameActor client) { }
         public GameActor ServerFor(GameActor client) => _server;
-        public void Enter(ClientRound round) => rounds.Join(round);
+        public void Enter(ClientRound round, ClientSession session) => rounds.Join(round, session);
         public void Save(ClientRound round) => round.Server.SaveConfirmed();
         public void Restart(int round) => rounds.Report.Step(StepPhase.Setup, rounds.Between("restart only the owned server", round), () => _server = rounds.OwnedServer!.Restart());
         public void Release(bool released) { }
@@ -245,11 +249,15 @@ public sealed class ClientRounds
         public void Opened(GameActor client) =>
             Report.Step(StepPhase.Setup, "the client's ValheimCLI offers the session commands the rounds use", () => CliCapabilities.Require(client, CliCapabilities.HostedRounds));
         public GameActor ServerFor(GameActor client) => client; // The host is both.
-        public void Enter(ClientRound round)
+        public void Enter(ClientRound round, ClientSession session)
         {
             string protect = rounds.ProtectPlayer ? ", protected" : "";
             round.Step(StepPhase.Setup, round.Index == 0 ? "host the fixture world with the disposable character" + protect : "restart the hosted world" + protect,
-                () => _world.StartWorld(round.Client, rounds.ProtectPlayer));
+                () =>
+                {
+                    _world.StartWorld(round.Client, rounds.ProtectPlayer);
+                    session.WorldEntered(Client, WorldUid);
+                });
             // The owned host's disposable character and fixture acknowledge cheats; an operator's client keeps devcommands only.
             if (Client.Owned)
                 round.Step(StepPhase.Setup, "establish test access on the owned host", () => HostedWorldLifecycle.EstablishTestAccess(round.Client));
@@ -259,7 +267,7 @@ public sealed class ClientRounds
         public void Release(bool released) => _world.ReleaseWorld(Report, released);
     }
 
-    private void Join(ClientRound round)
+    private void Join(ClientRound round, ClientSession session)
     {
         round.Step(StepPhase.Setup, "the server accepts game connections", () => OwnedServer!.WaitUntilJoinable(round.Server));
         CrossplayLobby? lobby = null;
@@ -269,7 +277,11 @@ public sealed class ClientRounds
         // client keeps devcommands only.
         round.Step(StepPhase.Setup, (Client.Crossplay ? "join the owned server's crossplay lobby with the disposable character" : "join the owned server with the disposable character") +
             (ProtectPlayer ? ", protected" : ""),
-            () => new SessionControl(round.Client).JoinWorld(Client, WorldUid!, lobby, ProtectPlayer, Cancellation)); // CheckJoined requires WorldUid.
+            () =>
+            {
+                new SessionControl(round.Client).JoinWorld(Client, WorldUid!, lobby, ProtectPlayer, Cancellation);
+                session.WorldEntered(Client, WorldUid!); // Only after the joined client verified the server fixture.
+            }); // CheckJoined requires WorldUid.
         if (Arrival is { } point)
         {
             round.Step(StepPhase.Setup, ArriveStep, () =>
