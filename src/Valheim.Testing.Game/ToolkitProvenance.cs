@@ -69,8 +69,9 @@ public sealed record ToolkitProvenance(IReadOnlyList<PackageProvenance> Packages
     internal static string StateOf(string version, bool releaseBuild) =>
         version.Contains("-candidate", StringComparison.OrdinalIgnoreCase) ? Candidate : releaseBuild ? Released : Unreleased;
 
-    internal static ToolkitProvenance Of(IEnumerable<Assembly> loaded, Assembly? entry)
+    internal static ToolkitProvenance Of(IEnumerable<Assembly> loaded, Assembly? entry, Func<Assembly, string>? hash = null)
     {
+        hash ??= Hash;
         var packages = new List<PackageProvenance>();
         var assemblies = new List<LoadedAssemblyProvenance>();
         foreach (var assembly in new[] { entry }.Concat(loaded).OfType<Assembly>().Where(assembly => !assembly.IsDynamic)
@@ -82,7 +83,7 @@ public sealed record ToolkitProvenance(IReadOnlyList<PackageProvenance> Packages
             bool releaseBuild = name == CliAssembly || assembly.GetCustomAttributes<AssemblyMetadataAttribute>()
                 .Any(attribute => attribute.Key == ReleaseMetadata && attribute.Value == "true");
             string state = StateOf(version, releaseBuild);
-            string sha256 = Hash(assembly);
+            string sha256 = hash(assembly);
             string buildCommit = commit;
             if (name == CliAssembly && buildCommit.Length == 0)
             {
@@ -99,7 +100,7 @@ public sealed record ToolkitProvenance(IReadOnlyList<PackageProvenance> Packages
                 packages.Add(new(name, version, buildCommit, state, sha256));
             // Anything else (tests, examples, a mod's assemblies) is not the toolkit's.
         }
-        return new(packages, entry?.GetName().Name ?? "unknown", entry == null ? "" : Hash(entry)) { LoadedAssemblies = assemblies };
+        return new(packages, entry?.GetName().Name ?? "unknown", entry == null ? "" : hash(entry)) { LoadedAssemblies = assemblies };
     }
 
     // The informational version split at its source revision (version+commit), as the package was versioned and built.

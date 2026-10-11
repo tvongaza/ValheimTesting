@@ -1,6 +1,6 @@
 using System.Reflection;
-using System.Runtime.CompilerServices;
 using System.Runtime.Loader;
+using System.Security.Cryptography;
 using System.Text.Json;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
@@ -19,24 +19,13 @@ public sealed class ToolkitProvenanceTests : IDisposable
     [Fact]
     public void SourceBuiltRunnerIsDistinctFromReusedCandidatePackage()
     {
-        AssertSourceBuiltRunnerIsDistinctFromReusedCandidatePackage();
-        // Windows keeps a loaded DLL open until its collectible context is finalized. Keep the
-        // Assembly locals out of this frame, then release the files before Dispose removes _output.
-        GC.Collect();
-        GC.WaitForPendingFinalizers();
-        GC.Collect();
-    }
-
-    [MethodImpl(MethodImplOptions.NoInlining)]
-    private void AssertSourceBuiltRunnerIsDistinctFromReusedCandidatePackage()
-    {
         // The candidate set was built first. A later source edit changes the runner without rebuilding that set.
         // Its package coordinate must not masquerade as the code that the entry assembly actually executed.
         const string oldCommit = "230157f6", newCommit = "abcdef12";
         var context = new AssemblyLoadContext("provenance-test", isCollectible: true);
-        var candidate = Compile("Valheim.Testing.Game", oldCommit, "old behavior", candidate: true, context);
-        var runner = Compile("Valheim.Testing.NativeSmoke", newCommit, "new behavior", candidate: false, context);
-        var result = ToolkitProvenance.Of([candidate], runner);
+        var (candidate, candidateHash) = Compile("Valheim.Testing.Game", oldCommit, "old behavior", candidate: true, context);
+        var (runner, runnerHash) = Compile("Valheim.Testing.NativeSmoke", newCommit, "new behavior", candidate: false, context);
+        var result = ToolkitProvenance.Of([candidate], runner, assembly => assembly == candidate ? candidateHash : runnerHash);
         Assert.Equal(oldCommit, result.Packages.Single(package => package.Id == "Valheim.Testing.Game").Commit);
         Assert.Equal(oldCommit, result.LoadedAssemblies.Single(assembly => assembly.Name == "Valheim.Testing.Game").Commit);
         var actualRunner = result.LoadedAssemblies.Single(assembly => assembly.Name == "Valheim.Testing.NativeSmoke");
@@ -55,7 +44,7 @@ public sealed class ToolkitProvenanceTests : IDisposable
         context.Unload();
     }
 
-    private Assembly Compile(string name, string commit, string behavior, bool candidate, AssemblyLoadContext context)
+    private static (Assembly Assembly, string Sha256) Compile(string name, string commit, string behavior, bool candidate, AssemblyLoadContext context)
     {
         string version = candidate ? $"0.1.0-preview.1-candidate.{commit}+{commit}" : $"0.1.0-preview.1+{commit}";
         string source = $$"""
@@ -67,13 +56,11 @@ public sealed class ToolkitProvenanceTests : IDisposable
         var compilation = CSharpCompilation.Create(name, [CSharpSyntaxTree.ParseText(source)],
             platform.Select(path => MetadataReference.CreateFromFile(path)),
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
-        string file = Path.Combine(_output, name + ".dll");
-        using (var stream = File.Create(file))
-        {
-            var emitted = compilation.Emit(stream);
-            Assert.True(emitted.Success, string.Join(Environment.NewLine, emitted.Diagnostics));
-        }
-        return context.LoadFromAssemblyPath(file);
+        using var stream = new MemoryStream();
+        var emitted = compilation.Emit(stream);
+        Assert.True(emitted.Success, string.Join(Environment.NewLine, emitted.Diagnostics));
+        byte[] bytes = stream.ToArray();
+        return (context.LoadFromStream(new MemoryStream(bytes)), Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant());
     }
 
     [Fact]
