@@ -532,14 +532,16 @@ internal sealed class HostedServerRun : IServerPlacement
             var locked = _clientActors.LockedHosts.ToList();
             if (_lock != null) locked.Add(Host.Name);
             // A server that may still run kept its own copy above; the process check below only looks at the copies retired.
-            foreach (var failure in await retirement.CampaignAsync(prepared, locked, cleanup).ConfigureAwait(false))
+            foreach (var failure in await retirement.CampaignAsync(prepared, locked, cleanup,
+                _clientActors.PendingMacAgentHosts).ConfigureAwait(false))
             { failures.Add(failure); Console.Error.WriteLine("Teardown: " + failure.Message); }
         }
         await _clientActors.ReleaseLocksAsync(Try).ConfigureAwait(false);
         if (_lock != null)
-            await Try("release the server host's lock", () => serverStopped ? ReleaseAndNoteAsync(Host, Role.Host, _lock)
+            await Try("release the server host's lock", () => serverStopped && !_clientActors.HasPendingMacAgent(Role.Host)
+                ? ReleaseAndNoteAsync(Host, Role.Host, _lock)
                 : throw new HostLockException(new HostLockResult(HostLockState.Unknown, _lock.Owner,
-                    $"Kept {_lock.Path} on {Host.Name}: the owned server there may still run. Remove {_lock.Path}/owner by hand once it has stopped."))).ConfigureAwait(false);
+                    $"Kept {_lock.Path} on {Host.Name}: the owned server or a Mac GUI client agent there may still run. Use env recover after it has stopped."))).ConfigureAwait(false);
         return failures;
     }
 
@@ -598,7 +600,8 @@ internal sealed class ClientAccount(string client, SteamAccountHold hold, IGameH
 /// clean stop asks it to quit first),
 /// keeps its BepInEx log and Player.log in its launch directory, fetches that directory here and closes its CLI tunnel.
 /// </summary>
-internal sealed class HostedClientProcess(InteractiveClientProcess process, IGameHost host, string install, CliTunnel tunnel, string evidence) : IOwnedProcess, IClientProcessIdentity
+internal sealed class HostedClientProcess(InteractiveClientProcess process, IGameHost host, string install, CliTunnel tunnel, string evidence,
+    Action? afterStopped = null, ClientPlatform platform = ClientPlatform.Windows) : IOwnedProcess, IClientProcessIdentity
 {
     private bool _kept;
     public int Id => process.Id;
@@ -621,8 +624,10 @@ internal sealed class HostedClientProcess(InteractiveClientProcess process, IGam
         try
         {
             stop();
+            afterStopped?.Invoke();
             if (_kept) return;
-            var kept = host.RunAsync(HostedClientScripts.Keep(host.Shell.Kind), new Dictionary<string, string> { ["install"] = install, ["dir"] = process.LaunchDirectory },
+            var kept = host.RunAsync(HostedClientScripts.Keep(host.Shell.Kind), new Dictionary<string, string>
+                { ["install"] = install, ["dir"] = process.LaunchDirectory, ["playerlog"] = HostedClientScripts.UnixPlayerLogRelative(platform) },
                 TimeSpan.FromSeconds(60)).GetAwaiter().GetResult().EnsureSuccess($"Keeping the logs of client process {Id} on {host.Name}");
             if (InteractiveClient.Line(kept.Stdout, "VT-KEPT") == null) throw new HostOperationException($"Unexpected reply while keeping the client's logs on {host.Name}", kept);
             host.FetchDirectoryAsync(process.LaunchDirectory, evidence, TimeSpan.FromMinutes(5)).GetAwaiter().GetResult();
@@ -641,6 +646,9 @@ internal sealed class HostedClientProcess(InteractiveClientProcess process, IGam
 // Scripts for a hosted client's logs. Values arrive as variables; each ends with its verdict.
 internal static class HostedClientScripts
 {
+    internal static string UnixPlayerLogRelative(ClientPlatform platform) => platform == ClientPlatform.MacOS
+        ? "Library/Logs/IronGate/Valheim/Player.log" : ".config/unity3d/IronGate/Valheim/Player.log";
+
     public static string MoveAside(HostShellKind kind) => kind == HostShellKind.Bash ? BashMoveAside : PowerShellMoveAside;
     public static string Keep(HostShellKind kind) => kind == HostShellKind.Bash ? BashKeep : PowerShellKeep;
     public static string Preloader(HostShellKind kind) => kind == HostShellKind.Bash ? BashPreloader : PowerShellPreloader;
@@ -716,14 +724,16 @@ internal static class HostedClientScripts
         'VT-MOVED'
         """.ReplaceLineEndings("\n");
 
-    // Variables: install, dir. The game's BepInEx log and Unity's Player.log (in the host user's profile) are copied into the
+    // Variables: install, dir, playerlog (relative to the host user's home). The game's BepInEx log and Unity's Player.log are copied into the
     // launch directory as game-0.log and game-1.log, or an .absent note says the game never wrote one.
     public static readonly string BashKeep = """
         set -u
         [ -d "$dir" ] || exit 3
         keep() { if [ -f "$1" ]; then cp -- "$1" "$dir/$2" || exit 3; else printf 'The game did not write %s\n' "$1" > "$dir/$2.absent" || exit 3; fi; }
         keep "$install/BepInEx/LogOutput.log" game-0.log
-        keep "${HOME:-/nonexistent}/.config/unity3d/IronGate/Valheim/Player.log" game-1.log
+        playerlog="${playerlog:-.config/unity3d/IronGate/Valheim/Player.log}"
+        case "$playerlog" in /*) ;; *) playerlog="${HOME:-/nonexistent}/$playerlog" ;; esac
+        keep "$playerlog" game-1.log
         # BepInEx's preloader crash logs beside the game (#254): this launch's (not older than its pid file) are kept; older
         # ones, left by an earlier start, are only named.
         ref="$dir/pid"; [ -e "$ref" ] || ref="$dir"

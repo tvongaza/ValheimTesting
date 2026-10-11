@@ -20,6 +20,7 @@ internal sealed class CampaignClients
     private readonly string _owner;
     private readonly List<(string Host, HostLock Lock)> _clientLocks = [];
     private readonly List<(string Host, IOwnedProcess Process)> _localMacProcesses = [];
+    private readonly Dictionary<string, string> _pendingMacAgents = new(StringComparer.Ordinal);
     private readonly List<ClientAccount> _accounts = [];
     private readonly (string Name, IGameHost Host)? _serverHost;
     private readonly Func<IGameHost, string, string, JournalEntry, CancellationToken, Task> _journal;
@@ -38,6 +39,9 @@ internal sealed class CampaignClients
     public string RunId { get; }
     /// <summary>The client hosts this run locked (a dedicated server's own host excluded).</summary>
     public IReadOnlyList<string> LockedHosts { get { lock (_clientState) return _clientLocks.Select(held => held.Host).ToList(); } }
+    /// <summary>Hosts whose owned Mac GUI agent has not been proven removed, even if its game process has exited.</summary>
+    public IReadOnlyList<string> PendingMacAgentHosts { get { lock (_clientState) return _pendingMacAgents.Values.Distinct(StringComparer.OrdinalIgnoreCase).ToList(); } }
+    public bool HasPendingMacAgent(string host) { lock (_clientState) return _pendingMacAgents.Values.Contains(host, StringComparer.OrdinalIgnoreCase); }
 
     private IGameHost HostNamed(string name) => name == _serverHost?.Name ? _serverHost.Value.Host : _hooks.CreateHost(Profile, name);
     private Task JournalAsync(IGameHost host, string hostName, string actor, JournalEntry entry, CancellationToken cancellation) =>
@@ -131,17 +135,23 @@ internal sealed class CampaignClients
         if (plan.Owned && plan.Architecture.Length == 0)
             plan.Architecture = EnvironmentInventory.DefaultClientArchitecture(hostProfile.Platform,
                 hostProfile.Kind == "local" ? EnvironmentInventory.ThisMachine.OsArchitecture : null);
-        if (platform == ClientPlatform.MacOS)
+        if (platform == ClientPlatform.MacOS && hostProfile.Kind == "local")
             return await OpenLocalMacClientAsync(report, output, plan, name, role, hostProfile, cancellation).ConfigureAwait(false);
-        // Remote Windows and Linux clients are x64 only.
-        if (plan.LaunchArchitecture != ClientArchitecture.X64)
-            throw new ArgumentException($"Profile client '{name}' starts in a remote host's desktop session, where only x64 Windows and Linux clients run; " +
-                "architecture arm64 is for a macOS client launched locally in this runner's GUI session. Leave architecture out.");
+        if (platform != ClientPlatform.MacOS && plan.LaunchArchitecture != ClientArchitecture.X64)
+            throw new ArgumentException($"Profile client '{name}' on {platform} needs x64; architecture arm64 is for a macOS client.");
         string gameRoot = role.PreparedGameRoot ?? role.Install;
         string loaderRoot = role.PreparedLoaderRoot ?? role.Install;
-        var launch = GameLaunch.ForClientWithLoader(gameRoot, loaderRoot, plan.LaunchArguments, plan.Environment,
-            platform, plan.LaunchArchitecture, plan.PasswordVariable is { } password ? new[] { password } : null);
         var host = ClientHost(role);
+        string? macDoorstop = null;
+        if (platform == ClientPlatform.MacOS)
+        {
+            await RemoteMacClientPreflight.RequireDesktopAsync(host, HostedTimeouts.Quick, cancellation).ConfigureAwait(false);
+            await RemoteMacClientPreflight.RequireGameAsync(host, gameRoot, plan.LaunchArchitecture, HostedTimeouts.Quick, cancellation).ConfigureAwait(false);
+            macDoorstop = await RemoteMacClientPreflight.SelectLoaderAsync(host, loaderRoot, plan.LaunchArchitecture,
+                HostedTimeouts.Quick, cancellation).ConfigureAwait(false);
+        }
+        var launch = GameLaunch.ForClientWithLoader(gameRoot, loaderRoot, plan.LaunchArguments, plan.Environment,
+            platform, plan.LaunchArchitecture, plan.PasswordVariable is { } password ? new[] { password } : null, macDoorstop);
         var account = await HoldAccountAsync(report, name, () => host, cancellation).ConfigureAwait(false);
         // A dedicated server's lock covers its own host; another client host is locked for the rest of the run.
         await LockHostAsync(role.Host, host, hostProfile, cancellation).ConfigureAwait(false);
@@ -177,6 +187,8 @@ internal sealed class CampaignClients
             var session = ClientSession.Launch(plan, output,
                 () =>
                 {
+                    if (platform == ClientPlatform.MacOS)
+                        RemoteMacClientPreflight.RequireDesktopAsync(host, HostedTimeouts.Quick, cancellation).GetAwaiter().GetResult();
                     if (role.PreparedSourceRoot is { } source && plan.InstallPins is { } pinned)
                     {
                         HostInstall.CheckProfilePinsAsync(host, pinned, gameRoot, loaderRoot, source,
@@ -186,14 +198,48 @@ internal sealed class CampaignClients
                     string expected = launch.CommandLineSha256();
                     JournalAsync(host, role.Host, name, JournalEntry.Of(JournalEntry.ProcessIntended, ("launchDirectory", launchDirectory),
                         ("expectedCommandLineSha256", expected)), cancellation).GetAwaiter().GetResult();
+                    if (platform == ClientPlatform.MacOS)
+                    {
+                        JournalAsync(host, role.Host, name, JournalEntry.Of(JournalEntry.MacAgentIntended,
+                            ("launchDirectory", launchDirectory)), cancellation).GetAwaiter().GetResult();
+                        lock (_clientState) _pendingMacAgents[name] = role.Host;
+                    }
                     var started = account == null ? InteractiveClient.StartAsync(host, launch, launchDirectory, start, display, cancellation)
                         : InteractiveClient.StartAsync(account.Hold, host, launch, launchDirectory, start, display, cancellation);
-                    var client = started.GetAwaiter().GetResult();
+                    InteractiveClientProcess client;
+                    try { client = started.GetAwaiter().GetResult(); }
+                    catch (Exception error) when (platform == ClientPlatform.MacOS && InteractiveClient.NeverStarted(error))
+                    {
+                        // The script proved no process or agent from this attempt exists. Settle both
+                        // intents before releasing the host lock and account; ambiguous replies stay owned.
+                        try
+                        {
+                            JournalAsync(host, role.Host, name, JournalEntry.Of(JournalEntry.LaunchSettled,
+                                ("actor", name), ("directory", launchDirectory)), CancellationToken.None).GetAwaiter().GetResult();
+                            JournalAsync(host, role.Host, name, JournalEntry.Of(JournalEntry.MacAgentRetired,
+                                ("launchDirectory", launchDirectory)), CancellationToken.None).GetAwaiter().GetResult();
+                            lock (_clientState) _pendingMacAgents.Remove(name);
+                        }
+                        catch (Exception journalError)
+                        {
+                            throw new InvalidOperationException($"The client did not start on {host.Name}, but its launch refusal could not be recorded. " +
+                                $"Keep the run owned and inspect its journal before recovery: {journalError.Message}",
+                                new AggregateException(error, journalError));
+                        }
+                        throw;
+                    }
                     string commandLine = HostProcessProbe.CommandLineAsync(host, client.Id, client.StartIdentity, HostedTimeouts.Quick).GetAwaiter().GetResult() ?? "";
                     HostedServerRun.WarnUnexpectedCommandLine(host, client.Id, expected, commandLine);
                     NoteAsync(host, role.Host, name, JournalEntry.Of(JournalEntry.ProcessStarted, ("pid", client.Id.ToString(CultureInfo.InvariantCulture)),
                         ("startIdentity", client.StartIdentity), ("commandLineSha256", commandLine), ("launchDirectory", launchDirectory))).GetAwaiter().GetResult();
-                    var process = new HostedClientProcess(client, host, loaderRoot, tunnel, local);
+                    var process = new HostedClientProcess(client, host, loaderRoot, tunnel, local,
+                        platform == ClientPlatform.MacOS ? () =>
+                        {
+                            NoteAsync(host, role.Host, name, JournalEntry.Of(JournalEntry.MacAgentRetired,
+                                ("launchDirectory", launchDirectory))).GetAwaiter().GetResult();
+                            lock (_clientState) _pendingMacAgents.Remove(name);
+                        } : null,
+                        platform);
                     if (account != null) account.Process = process; // Its lease is released only once this process is gone.
                     return process;
                 },
@@ -315,13 +361,15 @@ internal sealed class CampaignClients
                     () => { open.Dispose(); return Task.CompletedTask; }).ConfigureAwait(false);
             await step($"release client {account.Client}'s Steam account lease", async () =>
             {
-                if (account.Process is { HasExited: false })
+                bool agentPending;
+                lock (_clientState) agentPending = _pendingMacAgents.ContainsKey(account.Client);
+                if (agentPending || account.Process is { HasExited: false })
                 {
                     account.Hold.Keep();
                     await NoteAsync(account.LeaseHost, account.LeaseHostName, account.Client, LeaseEntry(JournalEntry.LeaseKept, account.Hold,
-                        ("why", "its client may still run"))).ConfigureAwait(false);
+                        ("why", agentPending ? "its Mac GUI agent was not proven removed" : "its client may still run"))).ConfigureAwait(false);
                     throw new SteamAccountLeaseException(SteamAccountLeaseState.Unknown, account.Hold.Pool, [], $"Kept the lease on Steam account {account.Hold.Account}: the client " +
-                        $"{account.Client} may still run on {account.Hold.ClientHost}. It is held until that client is proven stopped: valheim-test env teardown --run {RunId} releases it then.");
+                        $"{account.Client} or its Mac GUI agent may still run on {account.Hold.ClientHost}. It is held until both are proven stopped: valheim-test env teardown --run {RunId} releases it then.");
                 }
                 await account.Hold.ReleaseAsync().ConfigureAwait(false);
                 await NoteAsync(account.LeaseHost, account.LeaseHostName, account.Client, LeaseEntry(JournalEntry.LeaseReleased, account.Hold)).ConfigureAwait(false);
@@ -335,9 +383,9 @@ internal sealed class CampaignClients
         List<(string Host, HostLock Lock)> locks;
         lock (_clientState) locks = [.. _clientLocks];
         foreach (var (name, held) in locks) await step($"release client host {name}'s lock", () =>
-            _localMacProcesses.Any(item => item.Host == name && !item.Process.HasExited)
+            (_localMacProcesses.Any(item => item.Host == name && !item.Process.HasExited) || HasPendingMacAgent(name))
                 ? throw new HostLockException(new HostLockResult(HostLockState.Unknown, held.Owner,
-                    $"Kept {held.Path} on {name}: an owned local Mac client may still run. Confirm its recorded process has stopped before releasing this lock."))
+                    $"Kept {held.Path} on {name}: an owned Mac client or its GUI agent may still run. Confirm both are stopped before releasing this lock."))
                 : ReleaseAndNoteAsync(HostNamed(name), name, held)).ConfigureAwait(false);
     }
 

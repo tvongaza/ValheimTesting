@@ -249,8 +249,8 @@ public sealed partial class GameLaunch
 
     internal static GameLaunch ForClientWithLoader(string install, string loader, IEnumerable<string> arguments,
         IReadOnlyDictionary<string, string>? environment, ClientPlatform hostPlatform, ClientArchitecture architecture,
-        IEnumerable<string>? secretVariables = null) =>
-        ClientOnHost(hostPlatform, install, arguments, environment, architecture, true, secretVariables, loader);
+        IEnumerable<string>? secretVariables = null, string? macDoorstop = null) =>
+        ClientOnHost(hostPlatform, install, arguments, environment, architecture, true, secretVariables, loader, macDoorstop);
 
     // A launch for this machine, built as if on builtOn (so every machine's branches are tested on any OS).
     internal static GameLaunch LocalClient(string installDirectory, IEnumerable<string> arguments, IReadOnlyDictionary<string, string>? environment,
@@ -289,13 +289,14 @@ public sealed partial class GameLaunch
     }
 
     private static GameLaunch ClientOnHost(ClientPlatform platform, string install, IEnumerable<string> arguments, IReadOnlyDictionary<string, string>? environment,
-        ClientArchitecture architecture, bool console, IEnumerable<string>? secretVariables, string? loaderDirectory = null)
+        ClientArchitecture architecture, bool console, IEnumerable<string>? secretVariables, string? loaderDirectory = null, string? macDoorstop = null)
     {
         ArgumentNullException.ThrowIfNull(arguments);
-        if (platform == ClientPlatform.MacOS)
-            throw new PlatformNotSupportedException("A macOS client cannot be started in its desktop session from another machine: a process started over SSH is not in the " +
-                "logged-in user's GUI session and cannot reach its Steam client. Run the test runner inside that session and use ClientSession.Launch, or use a Windows or Linux client host.");
         RequireX64(platform, architecture);
+        if (platform == ClientPlatform.MacOS && macDoorstop is not ("doorstop_libs/libdoorstop_x64.dylib" or "libdoorstop.dylib"))
+            throw new ArgumentException("A remote Mac client needs the Doorstop library selected and checked on its host.", nameof(macDoorstop));
+        if (platform != ClientPlatform.MacOS && macDoorstop != null)
+            throw new ArgumentException("A Mac Doorstop library belongs to a macOS client.", nameof(macDoorstop));
         bool windows = platform == ClientPlatform.Windows;
         string root = HostRoot(windows, install, nameof(install), "install", server: false);
         string loader = loaderDirectory == null ? root : HostRoot(windows, loaderDirectory, nameof(loaderDirectory), "loader", server: false);
@@ -308,12 +309,12 @@ public sealed partial class GameLaunch
         RequireHostArguments(passed, lineBreaks: windows);
         // The client's start script puts the loader's entries in front of the caller's own value.
         RequireHostEnvironment(environment, refuseLoaderPaths: false);
-        string executable = windows ? ClientWindowsExecutable : ClientLinuxExecutable;
+        string executable = windows ? ClientWindowsExecutable : platform == ClientPlatform.MacOS ? ClientMacBundle + "/Contents/MacOS/Valheim" : ClientLinuxExecutable;
         var join = (string relative) => HostJoin(root, windows, relative);
         var loaderJoin = (string relative) => HostJoin(loader, windows, relative);
-        var (set, prepended, required) = Loader(server: false, platform, environment, names, join, loaderJoin, separateRoots, executable, null);
+        var (set, prepended, required) = Loader(server: false, platform, environment, names, join, loaderJoin, separateRoots, executable, macDoorstop);
         return new GameLaunch(server: false, platform, forHost: true, root, HostJoin(root, windows, executable), passed, set, prepended, required,
-            secretVariables: secretVariables, isolatedLoader: separateRoots);
+            macArchitecture: architecture, secretVariables: secretVariables, isolatedLoader: separateRoots);
     }
 
     // The loader's part of every launch, one rule set for both roles, here and on a host: the caller's variables first, then

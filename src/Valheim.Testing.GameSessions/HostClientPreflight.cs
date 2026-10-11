@@ -10,9 +10,12 @@ internal static class HostClientPreflight
     internal static async Task CheckAsync(IGameHost host, string install, ClientPlatform platform, ClientRunPlan plan,
         TimeSpan timeout, CancellationToken cancellation)
     {
-        // A remote client is Windows or Linux (a macOS client runs locally). Every loader file in one existence check, so a
+        // Every loader file in one existence check, so a
         // refusal names all that are missing; then, on Windows, the proxy and configuration as one Doorstop version.
-        var present = await ExistingAsync(host, install, BepInExLoader.LoaderFiles(platform), timeout, cancellation).ConfigureAwait(false);
+        var needed = platform == ClientPlatform.MacOS
+            ? [BepInExLoader.CorePreloader, BepInExLoader.CoreLibrary, .. GameLaunch.MacDoorstopFiles]
+            : BepInExLoader.LoaderFiles(platform);
+        var present = await ExistingAsync(host, install, needed, timeout, cancellation).ConfigureAwait(false);
         BepInExLoader.RequireLoaderFiles(platform, present.Contains, $"client install on {host.Name}");
         if (platform == ClientPlatform.Windows)
             await RequireWindowsLoaderAsync(host, install, $"client install on {host.Name}", timeout, cancellation).ConfigureAwait(false);

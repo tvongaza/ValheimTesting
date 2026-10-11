@@ -186,7 +186,8 @@ internal sealed class RunRetirement(ScenarioReport? report, string output)
     /// retire. A copy kept by <see cref="HostAsync"/> (kept on request, or its server may still run) stays with its staging.
     /// Returns the failures; it never throws.
     /// </summary>
-    public async Task<IReadOnlyList<Exception>> CampaignAsync(PreparedHostedCampaign prepared, IReadOnlyCollection<string> lockedHosts, CancellationToken cancellation = default)
+    public async Task<IReadOnlyList<Exception>> CampaignAsync(PreparedHostedCampaign prepared, IReadOnlyCollection<string> lockedHosts,
+        CancellationToken cancellation = default, IReadOnlyCollection<string>? blockedHosts = null)
     {
         var failures = new List<Exception>();
         var characters = prepared.Characters.Reverse().Where(item => First("character " + Key(item.Host, item.Character.FileName))).ToList();
@@ -231,6 +232,8 @@ internal sealed class RunRetirement(ScenarioReport? report, string output)
             try
             {
                 host = prepared.HostFor(name);
+                if (blockedHosts?.Contains(name, StringComparer.OrdinalIgnoreCase) == true)
+                    throw new IOException("an owned Mac GUI agent was not proven removed; recover its journalled launch before retiring this host's test state");
                 if (!lockedHosts.Contains(name, StringComparer.OrdinalIgnoreCase))
                     claim = await host.AcquireLockAsync(prepared.LockOf(name), "campaign-retire " + Guid.NewGuid().ToString("N"), prepared.Timeout, cancellation).ConfigureAwait(false);
                 // Any client on a host with characters is a conflict; on a copies-only host only a process running from one of them is.

@@ -279,6 +279,20 @@ public sealed class NativeDependencyResolverTests : IDisposable
         Assert.Equal(claimsBefore + 2, sharedHost.Claims.Count);
         Assert.Equal(checksBefore + 1, sharedHost.Scripts.Count(script => script == "game-process"));
 
+        // A game can exit while its Mac GUI agent stays loaded. That host's character and profile
+        // must remain journalled until recovery proves the agent was removed.
+        var blockedCampaign = await HostedCampaignPreparation.PrepareAsync(sameHostManifestFile,
+            Path.Combine(_rig.Root, "blocked-agent-prepared"), TimeSpan.FromSeconds(30), copyGame: true, hostFactory: name => hosts[name]);
+        string blockedRuntime = blockedCampaign.Copies.Single(copy => copy.Actor == "client-a").Runtime;
+        var blocked = await new RunRetirement(null, "").CampaignAsync(blockedCampaign, ["server"], blockedHosts: ["server"]);
+        Assert.Single(blocked);
+        Assert.Contains("Mac GUI agent", blocked[0].Message + blocked[0].InnerException?.Message);
+        Assert.True(File.Exists(sharedHost.Local(@"C:\save\characters_local\vt-one.fch")));
+        Assert.True(Directory.Exists(sharedHost.Local(blockedRuntime)));
+        await blockedCampaign.DisposeAsync();
+        Assert.False(File.Exists(sharedHost.Local(@"C:\save\characters_local\vt-one.fch")));
+        Assert.False(Directory.Exists(sharedHost.Local(blockedRuntime)));
+
         // VALHEIM_TESTING_KEEP_RUNTIME=1 keeps every actor's install (the disposable characters still go), and a second retire
         // by the same owner touches nothing, not even what the first one kept.
         var keptCampaign = await HostedCampaignPreparation.PrepareAsync(sameHostManifestFile, Path.Combine(_rig.Root, "kept-prepared"),

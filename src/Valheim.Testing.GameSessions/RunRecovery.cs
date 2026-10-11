@@ -117,6 +117,16 @@ internal static class RunRecovery
             catch (Exception error) when (error is not OperationCanceledException) { Step(name, "journal " + entry.Kind, "could not be journalled: " + error.Message); }
         }
         IEnumerable<JournalItem> Of(string kind) => items.Where(item => item.Kind == kind);
+        async Task RetireMacClientAgent(string hostName, string? directory)
+        {
+            if (hosts[hostName] is not { Kind: "ssh", Platform: "macos" } ||
+                directory is not { Length: > 0 }) return;
+            var result = (await connections[hostName].RunAsync(InteractiveScripts.MacAgentRetire,
+                new Dictionary<string, string> { ["dir"] = directory }, timeout, cancellation).ConfigureAwait(false))
+                .EnsureSuccess($"Removing the Mac client GUI agent on {hostName}");
+            if (InteractiveClient.Line(result.Stdout, "VT-AGENT ") != "removed")
+                throw new HostOperationException($"The Mac client GUI agent on {hostName} could not be proven removed", result);
+        }
         // A process adopted from a launch's pid file: once it is stopped or gone, its launch is settled too.
         Task SettleAdopted(JournalItem process) => process.Fields.GetValueOrDefault("adoptedFrom") is { Length: > 0 } directory
             ? Note(process.Host, Settled(process.Actor, directory)) : Task.CompletedTask;
@@ -144,6 +154,7 @@ internal static class RunRecovery
                 {
                     if (probed.State is ProbedState.Gone or ProbedState.Reused)
                     {
+                        await RetireMacClientAgent(group.Key, process.Fields.GetValueOrDefault("launchDirectory")).ConfigureAwait(false);
                         Step(group.Key, what, "already gone");
                         await Note(group.Key, Stopped(pid, start)).ConfigureAwait(false);
                         await SettleAdopted(process).ConfigureAwait(false);
@@ -177,6 +188,7 @@ internal static class RunRecovery
                         var owned = new InteractiveClientProcess(host, host.Shell.Kind == HostShellKind.PowerShell ? ClientPlatform.Windows : ClientPlatform.Linux, pid, start, directory, null);
                         outcome = await owned.StopAsync(TimeSpan.FromSeconds(30), cancellation).ConfigureAwait(false);
                     }
+                    await RetireMacClientAgent(group.Key, process.Fields.GetValueOrDefault("launchDirectory")).ConfigureAwait(false);
                     Step(group.Key, what, outcome == InteractiveStop.AlreadyGone ? "already gone" : "stopped");
                     await Note(group.Key, Stopped(pid, start)).ConfigureAwait(false);
                     await SettleAdopted(process).ConfigureAwait(false);
@@ -190,6 +202,20 @@ internal static class RunRecovery
         {
             Step(launch.Host, "launch " + launch.What, "settled: its pid file's process is gone");
             await Note(launch.Host, Settled(launch.Actor, launch.What)).ConfigureAwait(false);
+        }
+        // An agent can outlive a game that exited on its own, or a stop whose bootout reply was lost.
+        // Keep it visible to env status until this exact run-owned launch directory is retired.
+        foreach (var agent in Of("mac-agent"))
+        {
+            string what = "Mac GUI agent " + agent.What;
+            if (Failed(agent.Host)) { Step(agent.Host, what, "not attempted: its process was not proven stopped", failed: true); continue; }
+            try
+            {
+                await RetireMacClientAgent(agent.Host, agent.What).ConfigureAwait(false);
+                Step(agent.Host, what, "removed");
+                await Note(agent.Host, JournalEntry.Of(JournalEntry.MacAgentRetired, ("launchDirectory", agent.What))).ConfigureAwait(false);
+            }
+            catch (Exception error) when (error is not OperationCanceledException) { Step(agent.Host, what, "not removed: " + error.Message, failed: true); }
         }
         bool processLeft = steps.Any(step => step.Failed);
 
@@ -356,7 +382,8 @@ internal static class RunRecovery
                         }
                         // The game's logs go with the copy: kept first, so a copy whose logs could not be kept stays (#412).
                         RecoveredLogs logs;
-                        try { logs = await KeepLogsAsync(host, copy.What, runId, copy.Actor, copy.SinceUtc, timeout, cancellation).ConfigureAwait(false); }
+                        try { logs = await KeepLogsAsync(host, copy.What, runId, copy.Actor, copy.SinceUtc, timeout, cancellation,
+                            platform: hosts[group.Key].Platform).ConfigureAwait(false); }
                         catch (Exception error) when (error is not OperationCanceledException)
                         {
                             throw new IOException($"its game logs could not be kept, so it stays ({error.Message}); recover again once they can be, or remove it by hand", error);
@@ -446,7 +473,7 @@ internal static class RunRecovery
     /// only named. Throws when a log could not be kept.
     /// </summary>
     internal static async Task<RecoveredLogs> KeepLogsAsync(IGameHost host, string runtime, string runId, string actor, DateTime copiedUtc,
-        TimeSpan timeout, CancellationToken cancellation = default, string playerLog = "")
+        TimeSpan timeout, CancellationToken cancellation = default, string playerLog = "", string platform = "linux")
     {
         string parent = HostedRuntimeStage.RequirePrepared(host, runtime, runId);
         int at = parent.LastIndexOfAny(['/', '\\']);
@@ -455,7 +482,8 @@ internal static class RunRecovery
         string folder = HostPath.Join(parent[..at], runId, "recovered-" + actor);
         var result = (await host.RunAsync(host.Shell.Kind == HostShellKind.PowerShell ? WindowsKeepLogs : BashKeepLogs, new Dictionary<string, string>
         {
-            ["runtime"] = runtime, ["keep"] = folder, ["client"] = actor == "server" ? "false" : "true", ["playerlog"] = playerLog,
+            ["runtime"] = runtime, ["keep"] = folder, ["client"] = actor == "server" ? "false" : "true",
+            ["playerlog"] = PlayerLogArgument(host.Shell.Kind, platform, playerLog),
             ["since"] = new DateTimeOffset(copiedUtc.ToUniversalTime()).ToUnixTimeSeconds().ToString(CultureInfo.InvariantCulture),
         }, timeout, cancellation).ConfigureAwait(false)).EnsureSuccess($"Keeping the game logs of {runtime} on {host.Name}");
         if (InteractiveClient.Line(result.Stdout, "VT-LOGS-DONE") == null) throw new HostOperationException($"Unexpected reply while keeping the game logs of {runtime} on {host.Name}", result);
@@ -464,8 +492,14 @@ internal static class RunRecovery
         return new(folder, Named("VT-LOG-KEPT"), Named("VT-LOG-OLDER"));
     }
 
+    // PowerShell's empty argument selects the Windows LocalLow path in its script. Unix hosts
+    // need the platform-specific path relative to the remote account's home directory.
+    internal static string PlayerLogArgument(HostShellKind shell, string platform, string supplied) =>
+        supplied.Length != 0 || shell == HostShellKind.PowerShell ? supplied
+        : HostedClientScripts.UnixPlayerLogRelative(platform == "macos" ? ClientPlatform.MacOS : ClientPlatform.Linux);
+
     // Variables: runtime, keep, since (Unix seconds: when the copy was made), client (true: the host user's Player.log too),
-    // playerlog (empty: that user's own). Each log written since the copy was made is copied into keep with its time, and named;
+    // playerlog (absolute or relative to that user's home). Each log written since the copy was made is copied into keep with its time, and named;
     // an older one is only named; links are never followed, and the folder is made only for a log. Then the verdict.
     internal static readonly string BashKeepLogs = """
         set -u
@@ -482,7 +516,11 @@ internal static class RunRecovery
           save "$runtime/toolkit-unity.log" "toolkit-unity.log"
           for f in "$runtime"/preloader_*.log; do save "$f" "$(basename -- "$f")"; done
         fi
-        if [ "$client" = "true" ]; then save "${playerlog:-${HOME:-/nonexistent}/.config/unity3d/IronGate/Valheim/Player.log}" "Player.log"; fi
+        if [ "$client" = "true" ]; then
+          playerlog="${playerlog:-.config/unity3d/IronGate/Valheim/Player.log}"
+          case "$playerlog" in /*) ;; *) playerlog="${HOME:-/nonexistent}/$playerlog" ;; esac
+          save "$playerlog" "Player.log"
+        fi
         echo "VT-LOGS-DONE"
         """.ReplaceLineEndings("\n");
 

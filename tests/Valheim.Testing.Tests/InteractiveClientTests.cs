@@ -30,11 +30,15 @@ public class InteractiveClientTests
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(60);
     private const string WindowsInstall = @"C:\Games\Valheim";
     private const string WindowsLaunch = @"C:\ValheimTesting\runs\run-42\client";
+    private const string MacInstall = "/Users/tester/Library/Application Support/Steam/steamapps/common/Valheim";
+    private const string MacProfile = "/Users/tester/Library/Application Support/ValheimTesting/runs/run-42/client";
+    private const string MacLaunch = "/Users/tester/Library/Application Support/ValheimTesting/runs/run-42/launch";
     private const string LinuxInstall = "/home/steam/valheim";
     private const string LinuxLaunch = "/srv/valheim-testing/runs/run-42/client";
 
     private static ScriptedGameHost WindowsHost(FakeLauncher fake) => new SshGameHost("gaming-pc", "tester@gaming-pc.example", HostShell.WindowsPowerShell, 0, null, null, "ssh", fake);
     private static ScriptedGameHost LinuxHost(FakeLauncher fake) => new SshGameHost("linux-box", "tester@linux-box.example", HostShell.Bash, 0, null, null, "ssh", fake);
+    private static ScriptedGameHost MacHost(FakeLauncher fake) => new SshGameHost("mac-box", "tester@mac-box.example", HostShell.Bash, 0, null, null, "ssh", fake);
     private static string Reply(params string[] lines) => string.Join('\n', lines) + "\n";
 
     [Theory]
@@ -128,7 +132,7 @@ public class InteractiveClientTests
 
     [Fact] public void ALaunchThatWouldNotLoadBepInExOrCannotBeStartedIsRefused()
     {
-        Assert.Throws<PlatformNotSupportedException>(() => GameLaunch.ForClient("/Users/tester/Valheim", [], hostPlatform: ClientPlatform.MacOS));
+        Assert.Throws<ArgumentException>(() => GameLaunch.ForClient("/Users/tester/Valheim", [], hostPlatform: ClientPlatform.MacOS));
         Assert.Throws<ArgumentException>(() => GameLaunch.ForClient(WindowsInstall, [], new Dictionary<string, string> { ["doorstop_enabled"] = "0" }, hostPlatform: ClientPlatform.Windows));
         Assert.Throws<ArgumentException>(() => GameLaunch.ForClient(LinuxInstall, ["--doorstop-enabled", "false"], hostPlatform: ClientPlatform.Linux));
         Assert.Throws<ArgumentException>(() => GameLaunch.ForClient("games/valheim", [], hostPlatform: ClientPlatform.Linux));
@@ -138,6 +142,101 @@ public class InteractiveClientTests
         Assert.Throws<ArgumentException>(() => GameLaunch.ForClient(LinuxInstall, [], hostPlatform: ClientPlatform.Linux, secretVariables: ["DOORSTOP_ENABLED"]));
         Assert.Throws<ArgumentException>(() => GameLaunch.ForClient(LinuxInstall, [], new Dictionary<string, string> { ["PW"] = "x" }, hostPlatform: ClientPlatform.Linux, secretVariables: ["PW"]));
         Assert.Throws<ArgumentException>(() => GameLaunch.ForClient(LinuxInstall, [], hostPlatform: ClientPlatform.Linux, secretVariables: ["not a name"]));
+    }
+
+    [Fact] public async Task ARemoteMacClientUsesTheChosenSliceAndRunOwnedGuiAgent()
+    {
+        var launch = GameLaunch.ForClientWithLoader(MacInstall, MacProfile, ["+connect", "server.example:2456"],
+            null, ClientPlatform.MacOS, ClientArchitecture.Arm64, macDoorstop: "libdoorstop.dylib");
+        Assert.Equal(MacInstall + "/Valheim.app/Contents/MacOS/Valheim", launch.Executable);
+        Assert.Equal(MacProfile + "/libdoorstop.dylib", launch.Prepended["DYLD_INSERT_LIBRARIES"]);
+        Assert.Contains(MacProfile + "/BepInEx/core/BepInEx.Preloader.dll", launch.RequiredFiles);
+        var fake = new FakeLauncher()
+            .Exits(0, Reply("VT-INTERACTIVE started 5412 391851"), FakeLauncher.Report(0))
+            .Exits(0, Reply("VT-AGENT removed", "VT-STOP quit"), FakeLauncher.Report(0));
+        var process = await InteractiveClient.StartAsync(MacHost(fake), launch, MacLaunch, Timeout);
+        Assert.Equal(5412, process.Id);
+        string start = FakeLauncher.Script(fake.Calls[0]);
+        Assert.Contains("launchctl bootstrap", start);
+        Assert.Contains("mkfifo", start);
+        Assert.Contains("arch='arm64'", start);
+        Assert.Contains("/launcher.sh", start);
+        Assert.DoesNotContain("launchctl asuser", start);
+        Assert.Equal(InteractiveStop.Quit, await process.StopAsync(TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(10)));
+        Assert.Contains("launchctl bootout", FakeLauncher.Script(fake.Calls[1]));
+    }
+
+    [Fact] public async Task ARemoteMacStopKeepsOwnershipIfTheGuiAgentCouldNotBeRemoved()
+    {
+        var fake = new FakeLauncher()
+            .Exits(0, Reply("VT-INTERACTIVE started 5412 391851"), FakeLauncher.Report(0))
+            .Exits(0, Reply("VT-AGENT kept", "VT-STOP quit"), FakeLauncher.Report(0));
+        var launch = GameLaunch.ForClientWithLoader(MacInstall, MacProfile, [], null, ClientPlatform.MacOS,
+            ClientArchitecture.Arm64, macDoorstop: "libdoorstop.dylib");
+        var process = await InteractiveClient.StartAsync(MacHost(fake), launch, MacLaunch, Timeout);
+        await Assert.ThrowsAsync<HostOperationException>(() => process.StopAsync(TimeSpan.FromSeconds(10)));
+        Assert.False(process.HasExited);
+    }
+
+    [Fact] public async Task AnUnreadableMacProcessIsNotReportedAsExitedOrStopped()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        using var child = Process.Start(new ProcessStartInfo("/bin/sleep", "30") { UseShellExecute = false })!;
+        try
+        {
+            var host = new LocalGameHost("mac-process-observation", HostShell.Bash);
+            var variables = new Dictionary<string, string>
+            {
+                ["game"] = child.Id.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                ["start"] = "known-owned-start", ["seconds"] = "1", ["quit"] = "0", ["dir"] = "/nonexistent",
+            };
+            // A ps failure while kill -0 still sees the process must retain ownership.
+            string unreadable = "ps() { return 1; }\n";
+            var wait = await host.RunAsync(unreadable + InteractiveScripts.MacWait, variables, TimeSpan.FromSeconds(5));
+            var stop = await host.RunAsync(unreadable + InteractiveScripts.MacStop, variables, TimeSpan.FromSeconds(5));
+            Assert.True(wait.Succeeded, wait.Describe());
+            Assert.True(stop.Succeeded, stop.Describe());
+            Assert.Contains("VT-WAIT unproven", wait.Stdout);
+            Assert.Contains("VT-STOP unproven", stop.Stdout);
+            Assert.False(child.HasExited);
+        }
+        finally { if (!child.HasExited) child.Kill(); await child.WaitForExitAsync(); }
+    }
+
+    [Fact] public void MacGuiScriptsParseAndThePlistEscapesItsRunDirectory()
+    {
+        string plist = InteractiveScripts.MacPlist("org.valheimtesting.client." + new string('a', 32), "/Users/test/A&B <run>");
+        Assert.Contains("/Users/test/A&amp;B &lt;run&gt;/launcher.sh", plist);
+        Assert.Throws<ArgumentException>(() => InteractiveScripts.MacPlist("org.valheimtesting.client.other", "/tmp/run"));
+        if (OperatingSystem.IsMacOS())
+        {
+            string path = Path.Combine(Path.GetTempPath(), "vt-mac-plist-" + Guid.NewGuid().ToString("N") + ".plist");
+            try
+            {
+                File.WriteAllText(path, plist);
+                using var lint = Process.Start(new ProcessStartInfo("/usr/bin/plutil")
+                {
+                    ArgumentList = { "-lint", path }, UseShellExecute = false,
+                    RedirectStandardOutput = true, RedirectStandardError = true,
+                })!;
+                Assert.True(lint.WaitForExit(5000));
+                Assert.True(lint.ExitCode == 0, lint.StandardOutput.ReadToEnd() + lint.StandardError.ReadToEnd());
+            }
+            finally { File.Delete(path); }
+        }
+        if (OperatingSystem.IsWindows()) return;
+        foreach (string script in new[] { InteractiveScripts.MacStart, InteractiveScripts.MacLauncher,
+            InteractiveScripts.MacStop, InteractiveScripts.MacWait, InteractiveScripts.MacAgentRetire })
+        {
+            using var process = Process.Start(new ProcessStartInfo("/bin/bash", "-n")
+            {
+                RedirectStandardInput = true, RedirectStandardError = true, UseShellExecute = false,
+            })!;
+            process.StandardInput.Write(script);
+            process.StandardInput.Close();
+            Assert.True(process.WaitForExit(5000));
+            Assert.True(process.ExitCode == 0, process.StandardError.ReadToEnd());
+        }
     }
 
     [Theory]
@@ -293,6 +392,25 @@ public class InteractiveClientTests
         }
     }
 
+    [Fact] public async Task ARemoteMacBootstrapRefusalCanBeSettledOnlyWhenItsAgentNeverRan()
+    {
+        var launch = GameLaunch.ForClientWithLoader(MacInstall, MacProfile, [], null, ClientPlatform.MacOS,
+            ClientArchitecture.Arm64, macDoorstop: "libdoorstop.dylib");
+        var neverStarted = new FakeLauncher().Exits(0,
+            Reply("VT-INTERACTIVE not-started launchctl could not start the GUI agent"), FakeLauncher.Report(0));
+        var refused = await Record.ExceptionAsync(() => InteractiveClient.StartAsync(MacHost(neverStarted), launch, MacLaunch, Timeout));
+        Assert.IsType<InteractiveClient.ClientNeverStartedException>(refused);
+        Assert.True(InteractiveClient.NeverStarted(refused!));
+
+        var ambiguous = new FakeLauncher().Exits(0,
+            Reply("VT-INTERACTIVE failed launchctl could not prove the GUI agent never ran"), FakeLauncher.Report(0));
+        var unknown = await Record.ExceptionAsync(() => InteractiveClient.StartAsync(MacHost(ambiguous), launch, MacLaunch, Timeout));
+        Assert.IsType<InvalidOperationException>(unknown);
+        Assert.False(InteractiveClient.NeverStarted(unknown!));
+        Assert.Contains("launcher-entered", InteractiveScripts.MacLauncher);
+        Assert.Contains("[ ! -e \"$dir/launcher-entered\" ]", InteractiveScripts.MacStart);
+    }
+
     [Fact] public async Task ATaskThatCouldNotBeRemovedStopsTheClientAndFails()
     {
         var fake = new FakeLauncher()
@@ -418,6 +536,16 @@ public sealed class OsFactAttribute : FactAttribute
     }
 }
 
+/// <summary>Opt-in native desktop check: CI does not promise an unlocked, signed-in Mac console.</summary>
+public sealed class MacGuiFactAttribute : FactAttribute
+{
+    public MacGuiFactAttribute()
+    {
+        if (!OperatingSystem.IsMacOS() || Environment.GetEnvironmentVariable("VALHEIM_TESTING_MAC_GUI") != "1")
+            Skip = "Set VALHEIM_TESTING_MAC_GUI=1 on an unlocked Mac desktop";
+    }
+}
+
 /// <summary>
 /// Runs only where VALHEIM_TESTING_DISPLAY names a local X display this user may use (the game-hosts CI job starts Xvfb). The
 /// tests start a stand-in Steam (a copy of sleep named steam) and a stand-in game on it, and stop only what they started.
@@ -436,6 +564,70 @@ public sealed class DisplayTheoryAttribute : TheoryAttribute
 public class InteractiveClientShellTests
 {
     private static readonly TimeSpan Generous = TimeSpan.FromSeconds(60);
+
+    [MacGuiFact] public Task MacGuiAgentStartsAndStopsOnlyItsStandInClient() =>
+        CheckMacGuiAgentStartAndStop(new LocalGameHost("local-mac-gui", HostShell.Bash));
+
+    [MacGuiFact] public Task MacGuiAgentStartsAndStopsOnlyItsStandInClientOverSsh()
+    {
+        string? destination = Environment.GetEnvironmentVariable("VALHEIM_TESTING_SSH_DESTINATION");
+        if (string.IsNullOrWhiteSpace(destination)) return Task.CompletedTask;
+        string[] options = (Environment.GetEnvironmentVariable("VALHEIM_TESTING_SSH_OPTIONS") ?? "")
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return CheckMacGuiAgentStartAndStop(new SshGameHost("ssh-mac-gui", destination,
+            HostShell.Bash, sshOptions: options));
+    }
+
+    private static async Task CheckMacGuiAgentStartAndStop(IGameHost host)
+    {
+        if (!OperatingSystem.IsMacOS()) return;
+        MacGuiSession.Require();
+        string root = Path.Combine("/private/tmp", "vt-mac-client-agent-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        string install = Path.Combine(root, "install"), launchDirectory = Path.Combine(root, "launch");
+        InteractiveClientProcess? client = null;
+        try
+        {
+            string game = Path.Combine(install, "Valheim.app/Contents/MacOS/Valheim");
+            Directory.CreateDirectory(Path.GetDirectoryName(game)!);
+            File.WriteAllText(game, "#!/bin/sh\nexec /bin/sleep 600\n");
+            File.SetUnixFileMode(game, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            foreach (string path in new[] { "BepInEx/core/BepInEx.Preloader.dll", "BepInEx/core/BepInEx.dll" })
+            {
+                string file = Path.Combine(install, path);
+                Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+                File.WriteAllText(file, "stand-in");
+            }
+            string doorstop = Path.Combine(install, "libdoorstop.dylib");
+            using (var compile = Process.Start(new ProcessStartInfo("/usr/bin/clang")
+            {
+                UseShellExecute = false, RedirectStandardInput = true, RedirectStandardError = true,
+                ArgumentList = { "-arch", "arm64", "-dynamiclib", "-x", "c", "-", "-o", doorstop },
+            })!)
+            {
+                compile.StandardInput.WriteLine("void valheim_testing_standin(void) {}");
+                compile.StandardInput.Close();
+                Assert.True(compile.WaitForExit(30000));
+                Assert.True(compile.ExitCode == 0, compile.StandardError.ReadToEnd());
+            }
+            var launch = GameLaunch.ForClientWithLoader(install, install, [], null, ClientPlatform.MacOS,
+                ClientArchitecture.Arm64, macDoorstop: "libdoorstop.dylib");
+            client = await InteractiveClient.StartAsync(host, launch, launchDirectory, Generous);
+            Assert.True(client.Id > 0);
+            Assert.True(File.Exists(Path.Combine(launchDirectory, "pid")));
+            Assert.NotNull(await HostProcessProbe.CommandLineAsync(host, client.Id, client.StartIdentity, TimeSpan.FromSeconds(10)));
+            Assert.Equal(InteractiveStop.Quit, await client.StopAsync(TimeSpan.FromSeconds(3), TimeSpan.FromSeconds(10)));
+            Assert.True(client.HasExited);
+            string label = File.ReadAllText(Path.Combine(launchDirectory, "label"));
+            // StopAsync's VT-AGENT verdict proves bootout; the exact label is kept as evidence.
+            Assert.StartsWith(InteractiveScripts.MacLabelPrefix, label);
+        }
+        finally
+        {
+            if (client is { HasExited: false }) { try { await client.StopAsync(TimeSpan.FromSeconds(10)); } catch { } }
+            Directory.Delete(root, recursive: true);
+        }
+    }
 
     internal static string FakeLinuxInstall(string root, string argumentsFile)
     {

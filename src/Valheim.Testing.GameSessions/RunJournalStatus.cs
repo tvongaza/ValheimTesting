@@ -92,7 +92,7 @@ internal static class RunJournalStatus
         // What each run left, host by host, from its own entries in the order written.
         var pending = new Dictionary<string, List<Pending>>(StringComparer.Ordinal);
         var ended = new Dictionary<string, (string State, bool Cleaned)>(StringComparer.Ordinal);
-        var recovered = new HashSet<string>(StringComparer.Ordinal);
+        var recovered = new Dictionary<string, bool>(StringComparer.Ordinal);
         var abandoned = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var (hostName, connection, records) in read)
             foreach (var run in records.GroupBy(record => record.Run, StringComparer.Ordinal))
@@ -144,6 +144,8 @@ internal static class RunJournalStatus
                             break;
                         }
                         case JournalEntry.ProcessStopped: left.Remove($"process {Field("pid")} {Field("startIdentity")}"); break;
+                        case JournalEntry.MacAgentIntended: Open("mac-agent " + Field("launchDirectory"), "mac-agent", Field("launchDirectory"), "GUI agent may still be loaded"); break;
+                        case JournalEntry.MacAgentRetired: left.Remove("mac-agent " + Field("launchDirectory")); break;
                         case JournalEntry.LaunchSettled: left.Remove($"launch {Field("actor")} {Field("directory")}"); break;
                         case JournalEntry.LeaseHeld: Open($"lease {Field("account")} {Field("owner")}", "lease", $"Steam account {Field("account")} ({Field("pool")})", "held"); break;
                         case JournalEntry.LeaseKept: Open($"lease {Field("account")} {Field("owner")}", "lease", $"Steam account {Field("account")} ({Field("pool")})", "kept: its client may still run", kept: true); break;
@@ -151,7 +153,7 @@ internal static class RunJournalStatus
                         case JournalEntry.LockHeld: Open($"lock {Field("lock")} {Field("claimant")}", "lock", Field("lock"), "held"); break;
                         case JournalEntry.LockReleased: left.Remove($"lock {Field("lock")} {Field("claimant")}"); break;
                         case JournalEntry.RunEnded: ended[run.Key] = (Field("state"), Field("cleanupVerified") == "true"); break;
-                        case JournalEntry.RunRecovered: recovered.Add(run.Key); break;
+                        case JournalEntry.RunRecovered: recovered[run.Key] = Field("complete") == "true"; break;
                         case JournalEntry.CleanupAbandoned: abandoned[run.Key] = Field("reason"); break;
                     }
                 }
@@ -225,9 +227,13 @@ internal static class RunJournalStatus
                     settled.Add(new JournalItem(item.Kind, item.Host, item.Actor, item.What, "its pid file's process is gone", item.SinceUtc) { Fields = item.Fields });
             }
             // TryGetValue, not GetValueOrDefault: a default tuple would read as "asked, and gone".
-            var (state, reason) = Verdict(isEnded ? end : null, runner, items, remoteRunners.TryGetValue(run.Key, out var remote) ? remote : null);
+            // A complete recovery is an explicit clean conclusion even when the original runner was on a
+            // different machine and never wrote run-ended. The remote runner need not be reachable again.
+            var completedRecovery = recovered.GetValueOrDefault(run.Key);
+            var (state, reason) = Verdict(isEnded ? end : completedRecovery ? ("recovered", true) : null,
+                runner, items, remoteRunners.TryGetValue(run.Key, out var remote) ? remote : null);
             if (abandoned.TryGetValue(run.Key, out string? why)) reason += $"; its cleanup was abandoned ({why})";
-            if (recovered.Contains(run.Key)) reason += "; recovered by env recover/teardown" + (items.Count == 0 ? "" : ", but not all of it");
+            if (recovered.ContainsKey(run.Key)) reason += "; recovered by env recover/teardown" + (items.Count == 0 ? "" : ", but not all of it");
             runs.Add(new(run.Key, state, reason, ordered[0].Record.Utc, ordered[^1].Record.Utc,
                 run.Select(entry => entry.Host).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList(), runner?.ToString(),
                 items.OrderBy(item => item.Host, StringComparer.Ordinal).ThenBy(item => item.SinceUtc).ToList())

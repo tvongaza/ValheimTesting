@@ -375,6 +375,67 @@ public sealed class RunRecoveryTests : IDisposable
         Assert.DoesNotContain("pid-file", _host.Scripts.Skip(before));
     }
 
+    [Fact] public async Task RemoteMacLostLaunchReplyStopsItsExactClientAndRetiresItsGuiAgent()
+    {
+        const string run = "run-mac-lost-launch", launch = "/srv/runs/run-mac-lost-launch/client-1";
+        var hosts = new Dictionary<string, HostProfile> { ["pc"] = new() { Kind = "ssh", Platform = "macos", Lock = "/var/tmp/vt/lock" } };
+        _host.Running(91153, "391852");
+        Line(_host, run, "client", Gone, JournalEntry.ProcessIntended, ("launchDirectory", launch),
+            ("expectedCommandLineSha256", FakeServerHost.CommandLineSha256("91153")));
+        Line(_host, run, "client", Gone, JournalEntry.MacAgentIntended, ("launchDirectory", launch));
+        PidFile(_host, launch, "91153 391852");
+
+        var report = await RunRecovery.RecoverAsync(hosts, _ => _host, run, false, TimeSpan.FromSeconds(5));
+
+        Assert.True(report.Recovered, string.Join("\n", report.Steps));
+        Assert.Contains(("91153", "391852"), _host.Stops);
+        Assert.Contains(_host.Runs, call => call.Script == "mac-agent-retire" && call.Variables["dir"] == launch);
+        Assert.Equal(JournalRunState.Ended,
+            Assert.Single((await RunJournalStatus.InspectAsync(hosts, _ => _host, TimeSpan.FromSeconds(5))).Runs).State);
+    }
+
+    [Fact] public async Task ProvenNeverStartedMacLaunchDoesNotBlockRecovery()
+    {
+        const string run = "run-mac-never-started", launch = "/srv/runs/run-mac-never-started/client-1";
+        var hosts = new Dictionary<string, HostProfile> { ["pc"] = new() { Kind = "ssh", Platform = "macos", Lock = "/var/tmp/vt/lock" } };
+        Line(_host, run, "client", Gone, JournalEntry.ProcessIntended, ("launchDirectory", launch),
+            ("expectedCommandLineSha256", FakeServerHost.CommandLineSha256("never")));
+        Line(_host, run, "client", Gone, JournalEntry.MacAgentIntended, ("launchDirectory", launch));
+        Line(_host, run, "client", Gone, JournalEntry.LaunchSettled, ("actor", "client"), ("directory", launch));
+        Line(_host, run, "client", Gone, JournalEntry.MacAgentRetired, ("launchDirectory", launch));
+
+        var report = await RunRecovery.RecoverAsync(hosts, _ => _host, run, false, TimeSpan.FromSeconds(5));
+
+        Assert.True(report.Recovered, string.Join("\n", report.Steps));
+        Assert.Equal(JournalRunState.Ended,
+            Assert.Single((await RunJournalStatus.InspectAsync(hosts, _ => _host, TimeSpan.FromSeconds(5))).Runs).State);
+        Assert.DoesNotContain(_host.Runs, call => call.Script is "stop" or "mac-agent-retire" or "pid-file");
+    }
+
+    [Fact] public async Task RemoteMacLostStopReplyKeepsItsProfileUntilTheGuiAgentIsProvenRemoved()
+    {
+        const string run = "run-mac-lost-stop", launch = "/srv/runs/run-mac-lost-stop/client-1";
+        var hosts = new Dictionary<string, HostProfile> { ["pc"] = new() { Kind = "ssh", Platform = "macos", Lock = "/var/tmp/vt/lock" } };
+        _host.Running(91154, "391853");
+        Line(_host, run, "client", Gone, JournalEntry.ProcessStarted, ("pid", "91154"),
+            ("startIdentity", "391853"), ("commandLineSha256", FakeServerHost.CommandLineSha256("91154")),
+            ("launchDirectory", launch));
+        Line(_host, run, "client", Gone, JournalEntry.MacAgentIntended, ("launchDirectory", launch));
+        _host.MacAgentReply = "VT-AGENT kept\n";
+
+        var first = await RunRecovery.RecoverAsync(hosts, _ => _host, run, false, TimeSpan.FromSeconds(5));
+
+        Assert.False(first.Recovered);
+        Assert.Contains(first.Steps, step => step.Failed && step.What.Contains("process", StringComparison.Ordinal));
+        Assert.Equal(JournalRunState.Recoverable,
+            Assert.Single((await RunJournalStatus.InspectAsync(hosts, _ => _host, TimeSpan.FromSeconds(5))).Runs).State);
+
+        _host.MacAgentReply = "VT-AGENT removed\n";
+        var second = await RunRecovery.RecoverAsync(hosts, _ => _host, run, false, TimeSpan.FromSeconds(5));
+        Assert.True(second.Recovered, string.Join("\n", second.Steps));
+        Assert.Single(_host.Stops);
+    }
+
     // A pid file proves no more than it says: a process whose command line is not the launch's is never stopped and the run is
     // refused whole; an ID another process reused since is not the launch's and is left alone, the launch counting as gone.
     [Fact] public async Task RecoverNeverStopsAProcessAPidFileDoesNotProveTheLaunchs()
@@ -824,6 +885,16 @@ public sealed class RunRecoveryTests : IDisposable
         Assert.Empty(logs.Kept);
         Assert.False(Directory.Exists(logs.Folder));
         await Assert.ThrowsAsync<ArgumentException>(() => RunRecovery.KeepLogsAsync(local, Path.Combine(runs, "elsewhere", "runtime"), "run-x", "server", copied, TimeSpan.FromSeconds(60)));
+    }
+
+    [Theory]
+    [InlineData(HostShellKind.PowerShell, "windows", "")]
+    [InlineData(HostShellKind.Bash, "macos", "Library/Logs/IronGate/Valheim/Player.log")]
+    [InlineData(HostShellKind.Bash, "linux", ".config/unity3d/IronGate/Valheim/Player.log")]
+    public void RecoverySelectsTheHostPlatformPlayerLog(HostShellKind shell, string platform, string expected)
+    {
+        Assert.Equal(expected, RunRecovery.PlayerLogArgument(shell, platform, ""));
+        Assert.Equal("/explicit/Player.log", RunRecovery.PlayerLogArgument(shell, platform, "/explicit/Player.log"));
     }
 
     [Fact] public async Task TheCommandLineRequiresARunAndSaysWhatItRefused()

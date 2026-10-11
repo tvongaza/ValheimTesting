@@ -30,6 +30,20 @@ internal static class MacGuiSession
     {
         if (manager.Trim() != "Aqua" || consoleUser.Trim() != user)
             throw new InvalidOperationException("The runner is not in the logged-in macOS console user's Aqua session; launch it from that unlocked desktop, not SSH or a service.");
+        RequireUnlockedConsole(user, registry);
+    }
+
+    // An SSH command has a Background audit session. A launchctl bootstrap into this user's gui domain is the
+    // supported desktop handoff; the console and lock checks are otherwise the same as a local client.
+    internal static void RequireRemoteEvidence(string user, string consoleUser, bool guiDomain, string registry)
+    {
+        if (!guiDomain || consoleUser.Trim() != user)
+            throw new InvalidOperationException("The remote Mac has no GUI session for its SSH user at the console; sign in at its desktop before starting a client.");
+        RequireUnlockedConsole(user, registry);
+    }
+
+    private static void RequireUnlockedConsole(string user, string registry)
+    {
         bool active = Regex.Matches(registry, @"\{[^{}]*\}").Select(match => match.Value).Any(entry =>
             entry.Contains("\"kCGSSessionUserNameKey\"=\"" + user + "\"", StringComparison.Ordinal) &&
             entry.Contains("\"kCGSSessionOnConsoleKey\"=Yes", StringComparison.Ordinal) &&

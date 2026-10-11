@@ -286,7 +286,6 @@ public static class HostedCampaignPreparation
 {
     // Windows needs an owned launch folder for its proxy; Unix launches the source executable
     // against the separate owned profile. The same stage owner handles local and remote hosts.
-    // A remote Mac dedicated server can use this profile; a remote Mac GUI client cannot.
     internal static bool UseProfile(HostProfile host, bool copyGame) =>
         !copyGame && (host.Kind is "local" or "ssh" or "container") &&
         (host.Platform is "windows" or "linux" || host.Platform == "macos" && host.Kind is ("local" or "ssh"));
@@ -504,6 +503,10 @@ public static class HostedCampaignPreparation
                 }
                 catch (Exception error) when (HostCheckRefusal(error))
                 { failures.Add(new(group.Key, "session", error.Message)); }
+            if (inputs.Profile.Hosts[group.Key] is { Kind: "ssh", Platform: "macos" } && group.Any(role => role.Name != "server"))
+                try { await RemoteMacClientPreflight.RequireDesktopAsync(host, timeout, cancellation).ConfigureAwait(false); }
+                catch (Exception error) when (HostCheckRefusal(error))
+                { failures.Add(new(group.Key, "Mac client desktop", error.Message)); }
             if (group.Any(role => role.Name == "server"))
             {
                 try { await HostServer.RequireTaskLogonAsync(host, timeout, cancellation).ConfigureAwait(false); }
@@ -567,6 +570,15 @@ public static class HostedCampaignPreparation
                         // inspection actually selected. Session check --hosts must refuse before any copy.
                         if (item.Name != "server" && inputs.Profile.Hosts[group.Key] is { Kind: "local", Platform: "macos" } && hostFactory == null)
                             RequireLocalMacClientArchitecture(item.Input, item.Role, loaderPackage);
+                        if (item.Name != "server" && inputs.Profile.Hosts[group.Key] is { Kind: "ssh", Platform: "macos" })
+                        {
+                            string selected = ClientArchitectureChoice.Select(item.Input.Architecture, item.Role.Architecture,
+                                "macos", null);
+                            var architecture = selected == "arm64" ? ClientArchitecture.Arm64 : ClientArchitecture.X64;
+                            await RemoteMacClientPreflight.RequireGameAsync(host, item.Role.Install, architecture, timeout, cancellation).ConfigureAwait(false);
+                            if (loader != null) RemoteMacClientPreflight.SelectPackage(loader, architecture);
+                            else await RemoteMacClientPreflight.SelectLoaderAsync(host, item.Role.Install, architecture, timeout, cancellation).ConfigureAwait(false);
+                        }
                     }
                     catch (Exception error) when (HostCheckRefusal(error))
                     { failures.Add(new(item.Name, "game and loader", error.Message)); }

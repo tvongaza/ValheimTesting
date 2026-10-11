@@ -16,6 +16,7 @@ internal sealed record JournalEntry(string Kind, IReadOnlyDictionary<string, str
     public const string CharacterIntended = "character-intended", CharacterDone = "character-done", CharacterRetired = "character-retired";
     public const string LockHeld = "lock-held", LockReleased = "lock-released";
     public const string ProcessIntended = "process-intended", ProcessStarted = "process-started", ProcessStopped = "process-stopped";
+    public const string MacAgentIntended = "mac-agent-intended", MacAgentRetired = "mac-agent-retired";
     /// <summary>A recovery's word that a launch never journalled as started is over: its pid file's process is stopped or proven gone.</summary>
     public const string LaunchSettled = "launch-settled";
     public const string LeaseHeld = "lease-held", LeaseReleased = "lease-released", LeaseKept = "lease-kept";

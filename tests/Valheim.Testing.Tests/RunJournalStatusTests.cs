@@ -66,6 +66,25 @@ public sealed class RunJournalStatusTests : IDisposable
         Assert.Empty(again.Steps);
     }
 
+    [Fact] public async Task CompletedRecoveryOnAnotherMachineClearsAnUnendedRun()
+    {
+        const string complete = "run-remote-recovered", incomplete = "run-remote-incomplete";
+        Line(_host, complete, "run", Elsewhere, JournalEntry.LockHeld,
+            ("lock", "/var/tmp/vt/lock"), ("claimant", "remote [a]"));
+        Line(_host, complete, "recovery", Elsewhere, JournalEntry.LockReleased,
+            ("lock", "/var/tmp/vt/lock"), ("claimant", "remote [a]"));
+        Line(_host, complete, "recovery", Elsewhere, JournalEntry.RunRecovered,
+            ("complete", "true"), ("teardown", "false"));
+        Line(_host, incomplete, "run", Elsewhere, JournalEntry.RunRecovered,
+            ("complete", "false"), ("teardown", "false"));
+
+        var status = await InspectAsync();
+
+        Assert.Equal(JournalRunState.Ended, Run(status, complete).State);
+        Assert.Equal(JournalRunState.Unknown, Run(status, incomplete).State);
+        Assert.False(status.Clean); // the incomplete control still blocks preflight
+    }
+
     [Fact] public async Task ACapturedMacAccessListStaysVisibleUntilRestorationIsJournalled()
     {
         const string run = "run-mac-lists";
