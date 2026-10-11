@@ -111,18 +111,27 @@ public sealed partial class GameLaunch
 
     /// <summary>Build a server launch whose reviewed loader lives in a separate disposable profile.</summary>
     internal static GameLaunch ForServerWithLoader(string runtime, string loader, IEnumerable<string> arguments,
-        IReadOnlyDictionary<string, string>? environment, ServerPlatform? hostPlatform) =>
-        hostPlatform is { } platform ? ServerOnHost(platform, runtime, arguments, environment, loader)
-            : LocalServer(runtime, arguments, environment, CurrentServerHost, MacServerArchitecture, loader);
+        IReadOnlyDictionary<string, string>? environment, ServerPlatform? hostPlatform, string? macSteamRuntimeDirectory = null)
+    {
+        if (hostPlatform is { } platform)
+        {
+            if (macSteamRuntimeDirectory != null)
+                throw new PlatformNotSupportedException("A Mac Steam runtime package needs the local Mac server path.");
+            return ServerOnHost(platform, runtime, arguments, environment, loader);
+        }
+        return LocalServer(runtime, arguments, environment, CurrentServerHost, MacServerArchitecture, loader, macSteamRuntimeDirectory);
+    }
 
     // A launch for this machine, built as if on builtOn (so every machine's branches are tested on any OS).
     internal static GameLaunch LocalServer(string runtimeDirectory, IEnumerable<string> arguments, IReadOnlyDictionary<string, string>? environment, ServerHost builtOn,
-        ClientArchitecture macArchitecture, string? loaderDirectory = null)
+        ClientArchitecture macArchitecture, string? loaderDirectory = null, string? macSteamRuntimeDirectory = null)
     {
         ArgumentNullException.ThrowIfNull(arguments);
         string runtime = FullRuntime(runtimeDirectory);
         string loader = loaderDirectory == null ? runtime : FullRuntime(loaderDirectory);
         var (platform, executable) = ResolveServer(runtime, builtOn);
+        if (macSteamRuntimeDirectory != null && platform != ServerPlatform.MacOS)
+            throw new ArgumentException("A Mac Steam runtime is only for a macOS dedicated server.", nameof(macSteamRuntimeDirectory));
         if (platform == ServerPlatform.Windows && loader.Equals(runtime, StringComparison.OrdinalIgnoreCase)) loader = runtime;
         if (platform == ServerPlatform.Windows && !loader.Equals(runtime, StringComparison.OrdinalIgnoreCase))
             throw new ArgumentException("A Windows Doorstop proxy must be beside the server executable; use a launch folder that owns both.", nameof(loaderDirectory));
@@ -152,6 +161,15 @@ public sealed partial class GameLaunch
         var (set, prepended, required) = Loader(server: true, os, environment, names, LocalJoin(runtime), LocalJoin(loader),
             !loader.Equals(runtime, platform == ServerPlatform.Windows ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal),
             Relative(runtime, executable), macDoorstop == null ? null : Relative(loader, macDoorstop));
+        if (macSteamRuntimeDirectory != null)
+        {
+            string steam = FullRuntime(macSteamRuntimeDirectory);
+            if (steam.Contains(':')) throw new ArgumentException("A Mac Steam runtime path cannot contain ':'.", nameof(macSteamRuntimeDirectory));
+            string clientLibrary = Path.Combine(steam, "steamclient.dylib");
+            if (!File.Exists(clientLibrary)) throw new FileNotFoundException("The pinned Mac Steam runtime has no steamclient.dylib.", clientLibrary);
+            prepended["DYLD_LIBRARY_PATH"] += ":" + steam;
+            required = [.. required, clientLibrary];
+        }
         return new GameLaunch(server: true, os, forHost: false, runtime, executable, passed, set, prepended, required,
             macArchitecture, isolatedLoader: loader != runtime);
     }

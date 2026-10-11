@@ -36,6 +36,7 @@ internal static class SmokeCommandOptions
         ["--server"] = new(Kind.Single, Start: false), ["--client"] = new(Kind.Single, Start: false),
         ["--server-env"] = new(Kind.Single, Start: false), ["--join"] = new(Kind.Single, Start: false),
         ["--adapter"] = new(Kind.Single, Start: false), ["--loader-package"] = new(Kind.Single, Start: false),
+        ["--steam-runtime-package"] = new(Kind.Single, Start: false, ServerLoadAb: false),
         ["--config"] = new(Kind.Repeat, Start: false), ["--plugin-file"] = new(Kind.Repeat, Start: false),
         ["--plugin-dir"] = new(Kind.Repeat, Start: false),
         ["--server-only"] = new(Kind.Switch, Start: false),

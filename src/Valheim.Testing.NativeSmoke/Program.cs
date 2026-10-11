@@ -15,6 +15,7 @@ if (args is ["help" or "--help"])
     Console.WriteLine(DetachedSession.Usage + " (experimental local detached dedicated server; Task Scheduler on Windows)");
     Console.WriteLine(OwnedCliCommand.Usage + " (one strictly pinned command to a running owned Windows client)");
     Console.WriteLine(SessionCommand.Usage + " (read only; --hosts adds the host checks)");
+    Console.WriteLine(MacSteamRuntimeCommand.Usage + " (review and pin SteamCMD's Mac server libraries)");
     return 0;
 }
 if (args.Length != 0 && args[0] == "init") return await SmokeProject.InitAsync(args[1..]);
@@ -24,6 +25,7 @@ if (args.Length != 0 && args[0] == "finish") return ForegroundHold.FinishCommand
 if (args.Length != 0 && args[0] == "detach") return await DetachedSession.RunAsync(args[1..]);
 if (args.Length != 0 && args[0] == "cli") return OwnedCliCommand.Run(args[1..]);
 if (args.Length != 0 && args[0] == "session") return await SessionCommand.RunAsync(args[1..]);
+if (args.Length != 0 && args[0] == "steam-runtime") return MacSteamRuntimeCommand.Run(args[1..]);
 if (args.Length != 0 && args[0] == "server-load-phases") return await ServerLoadPhases.RunAsync(args[1..]);
 if (args.Length != 0 && args[0] == "start") args = args[1..];
 if (args.Length != 0 && args[0] is "server-load" or "server-load-ab")
