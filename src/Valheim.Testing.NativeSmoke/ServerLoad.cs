@@ -259,15 +259,6 @@ internal static class ServerLoad
             if (seams.ClientArchitecture is { } check) check(choice.Inventory, architectureClient, clientArchitecture!, clientLoader);
             else SmokeInputResolver.RequireClientArchitecture(choice.Inventory, architectureClient, clientArchitecture!, clientLoader);
         }
-        // The one-shot's local hosts are checked before an adapter, fixture or campaign file is written. The later campaign
-        // inspection still checks remote actors and rechecks local conditions just before staging, closing the time gap.
-        var local = await LocalHostPreflight.InspectAsync(choice.Inventory,
-            new[] { new LocalHostPreflight.Actor("server", server) }
-                .Concat(choice.Client is { } client ? [new LocalHostPreflight.Actor("client", client)] : []),
-            TimeSpan.FromSeconds(60), cancellation).ConfigureAwait(false);
-        if (local.Count != 0)
-            throw new InvalidOperationException(string.Join("; ", local.Select(problem =>
-                $"{problem.Actor} {problem.Input}: {problem.Message}")));
         var serverPackage = serverLoader == null ? null : BepInExLoaderPackage.Read(serverLoader);
         string core = Path.Combine(serverPackage?.Root ?? serverInstall, InstallPins.CoreDirectory);
         if (!Directory.Exists(core))
@@ -288,6 +279,16 @@ internal static class ServerLoad
             throw new ArgumentException(custom.Runner.RequiresClient
                 ? $"Scenario {custom.Runner.Name} needs the clean client; leave out --server-only."
                 : $"Scenario {custom.Runner.Name} uses only the server; give --server-only.");
+        // A scenario/client-shape mismatch is a pure input error. Refuse it before probing the
+        // host: an unrelated slow or transient desktop/Steam check must not mask that reason.
+        // The output is already protected above, and no adapter, fixture or campaign was written.
+        var local = await LocalHostPreflight.InspectAsync(choice.Inventory,
+            new[] { new LocalHostPreflight.Actor("server", server) }
+                .Concat(choice.Client is { } client ? [new LocalHostPreflight.Actor("client", client)] : []),
+            TimeSpan.FromSeconds(60), cancellation).ConfigureAwait(false);
+        if (local.Count != 0)
+            throw new InvalidOperationException(string.Join("; ", local.Select(problem =>
+                $"{problem.Actor} {problem.Input}: {problem.Message}")));
         // The later campaign reads this exact chosen set, even if an inventory file or
         // Steam detection changes before its preflight. It cannot choose another actor.
         string selectedInventory = SmokeInputResolver.RecordSelected(choice.Inventory, output,

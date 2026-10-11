@@ -65,6 +65,9 @@ public sealed class ServerLoadOneOffTests : IDisposable
     {
         string output = Path.Combine(_rig.Root, "wrong-client-shape");
         bool launched = false;
+        bool checkedHost = false;
+        using var unexpectedPreflight = LocalHostPreflight.ReplaceDefaultProbesForTest(new(
+            Packaged: () => { checkedHost = true; return "unrelated host preflight refusal"; }));
         using (EnvironmentInventory.UseMachine(WithValheim(out _)))
         {
             int result = await ServerLoad.RunAsync(Arguments(output, "--scenario", typeof(SampleOneShotServerScenario).Assembly.Location),
@@ -74,7 +77,10 @@ public sealed class ServerLoadOneOffTests : IDisposable
             Assert.Equal(3, result);
         }
         Assert.False(launched);
-        Assert.Contains("--server-only", File.ReadAllText(Path.Combine(output, "REFUSED.txt")));
+        Assert.False(checkedHost);
+        Assert.False(File.Exists(Path.Combine(output, "dependencies.lock.json")));
+        string refusal = File.ReadAllText(Path.Combine(output, "REFUSED.txt"));
+        Assert.True(refusal.Contains("--server-only", StringComparison.Ordinal), "REFUSED.txt: " + refusal);
     }
     [Fact]
     public void JoinedClientArchitectureOverridesTheInventoryAndServerOnlyRejectsIt()
