@@ -180,7 +180,8 @@ internal sealed class CampaignClients
                     if (role.PreparedSourceRoot is { } source && plan.InstallPins is { } pinned)
                     {
                         HostInstall.CheckProfilePinsAsync(host, pinned, gameRoot, loaderRoot, source,
-                            "prepared client profile before launch", HostedTimeouts.Long, cancellation).GetAwaiter().GetResult();
+                            "prepared client profile before launch", HostedTimeouts.Long, cancellation,
+                            role.PreparedSourceFiles).GetAwaiter().GetResult();
                     }
                     string expected = launch.CommandLineSha256();
                     JournalAsync(host, role.Host, name, JournalEntry.Of(JournalEntry.ProcessIntended, ("launchDirectory", launchDirectory),

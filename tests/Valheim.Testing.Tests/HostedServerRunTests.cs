@@ -73,7 +73,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.False(Directory.Exists(Path.Combine(Output, "boot-1")));
     }
 
-    [Fact] public async Task APreparedWindowsProfileRefusesAReplacedSourceGameBeforeBoot()
+    [Fact] public async Task APreparedWindowsProfileRefusesAChangedUnpinnedSourceFileBeforeBoot()
     {
         var host = new FakeServerHost("windows-server", Mirror, windows: true);
         var (planPath, profilePath) = Write(host, hostPlatform: "windows", hostShell: "powershell");
@@ -85,13 +85,14 @@ public sealed partial class HostedServerRunTests : IDisposable
         environment.Server.PreparedGameRoot = owned;
         environment.Server.PreparedLoaderRoot = owned;
         environment.Server.PreparedSourceRoot = source;
+        environment.Server.PreparedSourceFiles = (await HostInstall.ListAsync(host, source, TimeSpan.FromSeconds(30))).Files;
         var hosted = HostedServerRun.Create(environment, plan, "test", new FakeRunHooks { Host = _ => host, RunId = RunId }, prepared: true);
         await hosted.LockAndCopyRuntimeAsync(new ScenarioReport("prepared profile"), plan, pinned: true, CancellationToken.None);
-        File.AppendAllText(Directory.EnumerateFiles(host.Local(source), "assembly_valheim.dll", SearchOption.AllDirectories).Single(), "steam update");
+        File.WriteAllText(Path.Combine(host.Local(source), "unrelated-source-file.txt"), "changed after preparation");
 
         var launch = GameLaunch.ForServerWithLoader(owned, owned, ["-batchmode"], null, ServerPlatform.Windows);
         var error = Assert.ThrowsAny<Exception>(() => ((IServerPlacement)hosted).Start(1, launch, Output, CancellationToken.None));
-        Assert.Contains("source game changed", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("source game before profile launch", error.Message, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("start", host.Scripts);
     }
 

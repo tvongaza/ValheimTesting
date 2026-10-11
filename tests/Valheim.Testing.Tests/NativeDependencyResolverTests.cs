@@ -235,6 +235,8 @@ public sealed class NativeDependencyResolverTests : IDisposable
             profileRuntimes = [campaign.Environment.Server!.Install, .. campaign.Environment.Clients.Values.Select(role => role.Install)];
             Assert.All(new[] { "server", "client-a", "client-b", "client-c" }, name =>
                 Assert.Contains(name + ":profile", campaign.LaunchModes(copyGame: false)));
+            Assert.NotNull(campaign.Environment.Server!.PreparedSourceFiles);
+            Assert.All(campaign.Environment.Clients.Values, role => Assert.NotNull(role.PreparedSourceFiles));
             Assert.Equal(copiesBeforeProfiles, hosts.Values.Sum(host => host.Scripts.Count(script => script == "copy")));
             Assert.Equal(4, hosts.Values.Sum(host => host.Scripts.Count(script => script == "profile-seed")));
         }

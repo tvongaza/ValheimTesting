@@ -943,6 +943,8 @@ public static class HostedCampaignPreparation
                         listings[name] = prepared.Game;
                         loaderListings[name] = prepared.Loader;
                         role.PreparedSourceRoot = prepared.Source.Root;
+                        if (profile.Hosts[hostName].Kind != "local")
+                            role.PreparedSourceFiles = prepared.Source.Files;
                         if (prepared.GameRoot != prepared.LoaderRoot)
                         {
                             role.PreparedGameRoot = prepared.GameRoot;
