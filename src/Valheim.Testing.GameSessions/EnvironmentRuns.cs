@@ -45,7 +45,7 @@ public static class EnvironmentRuns
     /// whose runner cannot be checked, or that left anything that cannot be proven its own is refused before anything changes.
     /// A process is stopped only when its ID, start time and command line still all match the run's journal. Copies and leases
     /// the run kept on purpose stay unless <paramref name="teardown"/>; a world copy, a run's save, is handed over to the output
-    /// it is in, never removed by a run's recovery. Returns true when nothing of the run is left.
+    /// it is in, never removed by a run's recovery. Returns true only when post-recovery status says nothing of the run is left.
     /// </summary>
     public static async Task<bool> RecoverRunAsync(string? inventoryPath, string runId, bool teardown, TextWriter output, bool json = false,
         CancellationToken cancellation = default)
@@ -57,7 +57,7 @@ public static class EnvironmentRuns
         var report = await RunRecovery.RecoverAsync(hosts, new ResolvedEnvironment { Hosts = hosts }.CreateHost, runId, teardown,
             TimeSpan.FromSeconds(60), cancellation, inventory.LeaseHost, inventory.LeaseDirectory).ConfigureAwait(false);
         RunRecovery.Write(report, output, json);
-        return report.Recovered;
+        return report.Clean;
     }
 
     /// <summary>

@@ -129,7 +129,8 @@ internal static class EnvCommand
     // From each host's run journal: status (what earlier runs left; changes nothing), recover (clear what one run provably
     // left, except what it kept on purpose) or teardown (that too, or one unjournalled copy by --copy; with --machine-gone, only the
     // Steam leases of a run whose machine is gone for good). Exit 0 when nothing is left (status: of any run; recover and
-    // teardown: of that run); 3 otherwise or when refused; 2 for a usage error.
+    // teardown: of that run). A successful recover that intentionally retains a copy reports it and exits 3, because
+    // env status is not clean; teardown removes it. Exit 3 also covers partial recovery or refusal; 2 is a usage error.
     private static async Task<int> Journal(string action, string[] args, TextWriter output, TextWriter error)
     {
         var rest = args.ToList();

@@ -510,6 +510,44 @@ public sealed class RunRecoveryTests : IDisposable
         Assert.Equal(JournalRunState.Ended, Assert.Single((await StatusAsync()).Runs).State);
     }
 
+    [Fact] public async Task AFailedStopThenRecoveryReportsItsRetainedRuntimeUntilTeardown()
+    {
+        InterruptedRun("run-retained-after-stop");
+        _host.Failures["stop"] = FakeServerHost.TransportFailure;
+        var failedStop = await RecoverAsync("run-retained-after-stop");
+        Assert.False(failedStop.Recovered);
+        Assert.True(Directory.Exists(_host.Local(Prep + "/runtime")));
+
+        // The run keeps its runtime as evidence of the failed stop. The next recovery
+        // succeeds at stopping the game, but must not call that retained copy "gone".
+        Line(_host, "run-retained-after-stop", "server", Gone, JournalEntry.CopyKept,
+            ("runtime", Prep + "/runtime"), ("why", "inspect failed stop"));
+        _host.Failures.Remove("stop");
+        var recovered = await RecoverAsync("run-retained-after-stop");
+        Assert.True(recovered.Recovered, string.Join("\n", recovered.Steps));
+        Assert.False(recovered.Clean);
+        Assert.Equal(JournalRunState.Kept, recovered.After);
+        Assert.Equal("copy", Assert.Single(recovered.Remaining).Kind);
+        using var text = new StringWriter();
+        RunRecovery.Write(recovered, text, json: false);
+        Assert.Contains("WITH RETAINED EVIDENCE: 1 item(s) remain: copy on pc:", text.ToString());
+        Assert.Contains("valheim-test env teardown --run run-retained-after-stop", text.ToString());
+        Assert.DoesNotContain("nothing of it is left", text.ToString());
+        using var json = new StringWriter();
+        RunRecovery.Write(recovered, json, json: true);
+        using var value = System.Text.Json.JsonDocument.Parse(json.ToString());
+        Assert.True(value.RootElement.GetProperty("Recovered").GetBoolean());
+        Assert.False(value.RootElement.GetProperty("Clean").GetBoolean());
+        Assert.Single(value.RootElement.GetProperty("Remaining").EnumerateArray());
+        Assert.Equal(JournalRunState.Kept, Assert.Single((await StatusAsync()).Runs).State);
+        Assert.True(Directory.Exists(_host.Local(Prep + "/runtime")));
+
+        var torn = await RecoverAsync("run-retained-after-stop", teardown: true);
+        Assert.True(torn.Clean, string.Join("\n", torn.Steps));
+        Assert.Equal(JournalRunState.Ended, Assert.Single((await StatusAsync()).Runs).State);
+        Assert.False(Directory.Exists(_host.Local(Prep)));
+    }
+
     // Q2 at the moment of the stop: a process whose command line changed after env status read it is not stopped, and what it may use stays.
     [Fact] public async Task AProcessIsCheckedAgainRightBeforeItsStop()
     {
