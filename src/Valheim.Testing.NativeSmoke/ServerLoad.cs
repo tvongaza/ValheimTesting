@@ -339,7 +339,8 @@ internal static class ServerLoad
             }
             string adapterOutput = Path.Combine(output, "adapter-build");
             adapter = await OneShotScenario.BuildAsync(adapterProject, adapterOutput, cancellation, properties,
-                captureAdapterSources: true).ConfigureAwait(false);
+                captureAdapterSources: true, testedBinaries: parsed.Mods.Select(Path.GetFullPath).Append(cliCore).ToArray())
+                .ConfigureAwait(false);
             string sourceManifest = Path.Combine(adapterOutput, "source-inputs", "manifest.json");
             adapterSource = JsonSerializer.Deserialize<AdapterSourceInputs.Record>(File.ReadAllText(sourceManifest))
                 ?? throw new InvalidDataException("The adapter source-input manifest is empty.");

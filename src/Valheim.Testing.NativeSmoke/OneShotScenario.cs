@@ -12,7 +12,8 @@ internal static class OneShotScenario
     internal sealed record HostedSelection(IOneShotHostedScenario Runner, string File, string Sha256);
 
     internal static async Task<string> BuildAsync(string project, string output, CancellationToken cancellation,
-        IReadOnlyDictionary<string, string>? properties = null, bool captureAdapterSources = false)
+        IReadOnlyDictionary<string, string>? properties = null, bool captureAdapterSources = false,
+        IReadOnlyCollection<string>? testedBinaries = null)
     {
         project = Path.GetFullPath(project); output = Path.GetFullPath(output);
         if (!File.Exists(project) || Path.GetExtension(project) != ".csproj")
@@ -59,7 +60,8 @@ internal static class OneShotScenario
             if (process.ExitCode != 0)
                 throw new InvalidDataException("The adapter project failed to restore: " +
                     (await restoreOutput.ConfigureAwait(false)) + "\n" + (await restoreError.ConfigureAwait(false)));
-            sourceInputs = await AdapterSourceInputs.BeforeAsync(project, output, arguments, packages, http, cancellation).ConfigureAwait(false);
+            sourceInputs = await AdapterSourceInputs.BeforeAsync(project, output, arguments, packages, http,
+                cancellation, testedBinaries).ConfigureAwait(false);
         }
         var start = new ProcessStartInfo("dotnet") { WorkingDirectory = Path.GetDirectoryName(project)!,
             RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
