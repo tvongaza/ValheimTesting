@@ -18,7 +18,10 @@ internal sealed record RecoveredLogs(string Folder, IReadOnlyList<string> Kept, 
 /// <summary>A recovery of one run: refused before anything changed (with why), or its steps.</summary>
 internal sealed record RecoveryReport(string Run, JournalRunState Before, string? Refused, IReadOnlyList<RecoveryStep> Steps)
 {
+    public JournalRunState? After { get; init; }
+    public IReadOnlyList<JournalItem> Remaining { get; init; } = [];
     public bool Recovered => Refused == null && Steps.All(step => !step.Failed);
+    public bool Clean => Recovered && After == JournalRunState.Ended && Remaining.Count == 0;
 }
 
 /// <summary>
@@ -90,7 +93,8 @@ internal static class RunRecovery
         {
             // A local runner can prove that an interrupted run left nothing. Record that conclusion so another machine,
             // which cannot verify a Mac/Linux runner's start identity, does not mistake the old run for a live one.
-            if (run.State != JournalRunState.Ended || run.EndRecorded) return new(runId, run.State, null, []);
+            if (run.State != JournalRunState.Ended || run.EndRecorded)
+                return new(runId, run.State, null, []) { After = run.State, Remaining = run.Items };
             if (status.Hosts.Any(host => host.Error != null))
                 return new(runId, JournalRunState.Unknown, "not every host journal could be read; cannot record a clean end", []);
             string name = run.Hosts[0];
@@ -99,7 +103,8 @@ internal static class RunRecovery
                 await journal.AppendAsync(hostFactory(name), RunJournal.DirectoryFor(hosts[name]), Actor,
                     JournalEntry.Of(JournalEntry.RunEnded, ("state", "recovered: runner gone"), ("cleanupVerified", "true")),
                     timeout, cancellation).ConfigureAwait(false);
-                return new(runId, JournalRunState.Ended, null, [new(name, "run end", "recorded after proving its runner gone and no owned state remains", false)]);
+                return new(runId, JournalRunState.Ended, null, [new(name, "run end", "recorded after proving its runner gone and no owned state remains", false)])
+                { After = JournalRunState.Ended };
             }
             catch (Exception error) when (error is not OperationCanceledException)
             {
@@ -461,7 +466,31 @@ internal static class RunRecovery
                     ("teardown", teardown ? "true" : "false"), ("complete", whole ? "true" : "false")), timeout, cancellation).ConfigureAwait(false);
             }
             catch (Exception error) when (error is not OperationCanceledException) { Step(name, "journal " + JournalEntry.RunRecovered, "could not be journalled: " + error.Message); }
-        return new(runId, run.State, null, steps);
+        JournalRunState? afterState = null;
+        IReadOnlyList<JournalItem> remaining = [];
+        if (steps.All(step => !step.Failed))
+        {
+            // A successful sequence of effects is not proof that the environment is empty:
+            // recover intentionally skips kept copies. Read the same journal as env status.
+            try
+            {
+                var after = await RunJournalStatus.InspectAsync(hosts, hostFactory, timeout, cancellation,
+                    leaseHost, leaseDirectory).ConfigureAwait(false);
+                var checkedRun = after.Runs.SingleOrDefault(candidate => candidate.Run == runId);
+                if (after.Hosts.Any(host => host.Error != null) || checkedRun == null)
+                    Step("run", "post-recovery status", "could not read every host journal or find the run", failed: true);
+                else
+                {
+                    afterState = checkedRun.State;
+                    remaining = checkedRun.Items;
+                    if (remaining.Any(item => !item.Kept) || afterState is not (JournalRunState.Ended or JournalRunState.Kept))
+                        Step("run", "post-recovery status", $"run is {afterState} with {remaining.Count} item(s) left; inspect env status", failed: true);
+                }
+            }
+            catch (Exception error) when (error is not OperationCanceledException)
+            { Step("run", "post-recovery status", "could not verify what remains: " + error.Message, failed: true); }
+        }
+        return new(runId, run.State, null, steps) { After = afterState, Remaining = remaining };
     }
 
     /// <summary>
@@ -558,7 +587,8 @@ internal static class RunRecovery
     {
         if (json)
         {
-            output.WriteLine(JsonSerializer.Serialize(new { report.Run, report.Before, report.Refused, report.Steps, report.Recovered },
+            output.WriteLine(JsonSerializer.Serialize(new { report.Run, report.Before, report.After, report.Refused, report.Steps, report.Recovered,
+                report.Clean, report.Remaining },
                 new JsonSerializerOptions { WriteIndented = true, Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() } }));
             return;
         }
@@ -568,6 +598,13 @@ internal static class RunRecovery
             return;
         }
         foreach (var step in report.Steps) output.WriteLine($"{(step.Failed ? "FAILED" : "done")} {step.What} on {step.Host}: {step.Outcome}");
-        output.WriteLine(report.Recovered ? $"RECOVERED {report.Run}: nothing of it is left." : $"PARTLY RECOVERED {report.Run}: run env status for what is left, and recover again once it can be.");
+        if (report.Clean) output.WriteLine($"RECOVERED {report.Run}: nothing of it is left.");
+        else if (report.Recovered && report.Remaining.Count != 0)
+        {
+            output.WriteLine($"RECOVERED {report.Run} WITH RETAINED EVIDENCE: {report.Remaining.Count} item(s) remain: " +
+                string.Join("; ", report.Remaining.Select(item => $"{item.Kind} on {item.Host}: {item.What}")) + ".");
+            output.WriteLine($"The environment is not empty. Run valheim-test env teardown --run {report.Run} to remove the retained items.");
+        }
+        else output.WriteLine($"PARTLY RECOVERED {report.Run}: run env status for what is left, and recover again once it can be.");
     }
 }
