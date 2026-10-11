@@ -4,6 +4,8 @@ obj/
 .packages/*
 !.packages/.gitkeep
 artifacts/
+# Writable local NuGet caches selected when the default user cache is unavailable.
+.cache/
 docs/reference/api/
 docs/reference/_site/
 docs/reference/packages/
