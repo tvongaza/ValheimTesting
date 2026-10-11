@@ -267,6 +267,7 @@ internal static class ServerLoad
         if (verifiedBuild != null) ModBuild.RequireLoaderMatches(verifiedBuild, core);
         var (cliManifest, cliFiles) = SmokeInputs.Cli(parsed.Options);
         string? adapter = parsed.Options.TryGetValue("--adapter", out string? adapterFile) ? Path.GetFullPath(adapterFile) : null;
+        AdapterSourceInputs.Record? adapterSource = null;
         foreach (string path in new[] { adapter, cliManifest }.OfType<string>().Concat(parsed.Mods.Select(Path.GetFullPath)))
             if (!File.Exists(path)) throw new FileNotFoundException("A selected file is missing: " + path, path);
         var clientPackage = clientLoader == null ? null : BepInExLoaderPackage.Read(clientLoader);
@@ -337,7 +338,13 @@ internal static class ServerLoad
                 properties.Add(given[..equal], value);
             }
             string adapterOutput = Path.Combine(output, "adapter-build");
-            adapter = await OneShotScenario.BuildAsync(adapterProject, adapterOutput, cancellation, properties).ConfigureAwait(false);
+            adapter = await OneShotScenario.BuildAsync(adapterProject, adapterOutput, cancellation, properties,
+                captureAdapterSources: true).ConfigureAwait(false);
+            string sourceManifest = Path.Combine(adapterOutput, "source-inputs", "manifest.json");
+            adapterSource = JsonSerializer.Deserialize<AdapterSourceInputs.Record>(File.ReadAllText(sourceManifest))
+                ?? throw new InvalidDataException("The adapter source-input manifest is empty.");
+            if (adapterSource.AdapterSha256 != FileHash.Sha256(adapter))
+                throw new InvalidDataException("The adapter DLL changed after its source inputs were recorded.");
             File.WriteAllText(Path.Combine(adapterOutput, "inputs.json"), JsonSerializer.Serialize(new
             {
                 project = Path.GetFullPath(adapterProject),
@@ -345,6 +352,10 @@ internal static class ServerLoad
                 cli = new { file = cliCore, sha256 = FileHash.Sha256(cliCore) },
                 properties,
                 adapter = new { file = adapter, sha256 = FileHash.Sha256(adapter) },
+                sourceInputSha256 = adapterSource.SourceInputSha256,
+                compiledSourceSha256 = adapterSource.CompiledSourceSha256,
+                evaluatedBuildSha256 = adapterSource.EvaluatedBuildSha256,
+                sourceManifest,
             }, new JsonSerializerOptions { WriteIndented = true }) + "\n");
         }
         adapter ??= await SmokeAdapter.BuildAsync(serverInstall, dependencies, output, cancellation, core).ConfigureAwait(false);
@@ -484,6 +495,11 @@ internal static class ServerLoad
                         SmokeInputResolver.RecordLoader(record, "server", serverLoader, serverAuto);
                         SmokeInputResolver.RecordLoader(record, "client", clientLoader, clientAuto);
                         record["modSelection"] = parsed.ModSelection;
+                        if (adapterSource != null)
+                        {
+                            record["adapterSourceInputSha256"] = adapterSource.SourceInputSha256;
+                            record["adapterSha256"] = adapterSource.AdapterSha256;
+                        }
                         if (custom != null)
                         {
                             record["oneShotScenario"] = custom.Runner.Name;

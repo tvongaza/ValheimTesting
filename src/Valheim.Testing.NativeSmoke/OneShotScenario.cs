@@ -12,7 +12,7 @@ internal static class OneShotScenario
     internal sealed record HostedSelection(IOneShotHostedScenario Runner, string File, string Sha256);
 
     internal static async Task<string> BuildAsync(string project, string output, CancellationToken cancellation,
-        IReadOnlyDictionary<string, string>? properties = null)
+        IReadOnlyDictionary<string, string>? properties = null, bool captureAdapterSources = false)
     {
         project = Path.GetFullPath(project); output = Path.GetFullPath(output);
         if (!File.Exists(project) || Path.GetExtension(project) != ".csproj")
@@ -27,16 +27,46 @@ internal static class OneShotScenario
         foreach (var property in properties ?? new Dictionary<string, string>())
         {
             if (!System.Text.RegularExpressions.Regex.IsMatch(property.Key, "^[A-Za-z][A-Za-z0-9_]*$") ||
-                property.Key is "OutputPath" or "CopyOutputDLLPath" or "CopyOutputDLLPath2" or "CopyOutputDLLPath3")
+                property.Key is "OutputPath" or "CopyOutputDLLPath" or "CopyOutputDLLPath2" or "CopyOutputDLLPath3" or
+                    "DebugType" or "EmbedAllSources")
                 throw new ArgumentException("Unsafe build property name: " + property.Key);
             arguments.Add("-p:" + property.Key + "=" + property.Value);
         }
+        if (captureAdapterSources)
+        {
+            arguments.Add("-p:DebugType=embedded");
+            arguments.Add("-p:EmbedAllSources=true");
+        }
         Directory.CreateDirectory(output);
+        AdapterSourceInputs.Snapshot? sourceInputs = null;
+        if (captureAdapterSources)
+        {
+            var restore = new ProcessStartInfo("dotnet") { WorkingDirectory = Path.GetDirectoryName(project)!,
+                RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
+            restore.Environment["NUGET_PACKAGES"] = packages; restore.Environment["NUGET_HTTP_CACHE_PATH"] = http;
+            restore.ArgumentList.Add("restore");
+            foreach (string argument in arguments) restore.ArgumentList.Add(argument);
+            using var process = Process.Start(restore) ?? throw new InvalidOperationException("Could not restore the adapter project.");
+            Task<string> restoreOutput = process.StandardOutput.ReadToEndAsync(cancellation);
+            Task<string> restoreError = process.StandardError.ReadToEndAsync(cancellation);
+            try { await process.WaitForExitAsync(cancellation).ConfigureAwait(false); }
+            catch (OperationCanceledException)
+            {
+                if (!process.HasExited) process.Kill(entireProcessTree: true);
+                await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
+                throw;
+            }
+            if (process.ExitCode != 0)
+                throw new InvalidDataException("The adapter project failed to restore: " +
+                    (await restoreOutput.ConfigureAwait(false)) + "\n" + (await restoreError.ConfigureAwait(false)));
+            sourceInputs = await AdapterSourceInputs.BeforeAsync(project, output, arguments, packages, http, cancellation).ConfigureAwait(false);
+        }
         var start = new ProcessStartInfo("dotnet") { WorkingDirectory = Path.GetDirectoryName(project)!,
             RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
         start.Environment["NUGET_PACKAGES"] = packages; start.Environment["NUGET_HTTP_CACHE_PATH"] = http;
         start.ArgumentList.Add("build");
         foreach (string argument in arguments) start.ArgumentList.Add(argument);
+        if (captureAdapterSources) start.ArgumentList.Add("--no-restore");
         using var build = Process.Start(start) ?? throw new InvalidOperationException("Could not start the .NET SDK for the test-project build.");
         Task<string> stdout = build.StandardOutput.ReadToEndAsync(cancellation);
         Task<string> stderr = build.StandardError.ReadToEndAsync(cancellation);
@@ -64,6 +94,12 @@ internal static class OneShotScenario
         string file = (await path.ConfigureAwait(false)).Trim();
         if (target.ExitCode != 0 || !Path.IsPathFullyQualified(file) || !File.Exists(file))
             throw new InvalidDataException("The test project produced no inspectable DLL: " + (await error.ConfigureAwait(false)).Trim());
+        if (sourceInputs != null)
+        {
+            var record = await AdapterSourceInputs.AfterAsync(sourceInputs, file, arguments, packages, http, cancellation).ConfigureAwait(false);
+            File.WriteAllText(Path.Combine(output, "source-inputs", "manifest.json"),
+                JsonSerializer.Serialize(record, new JsonSerializerOptions { WriteIndented = true }) + "\n");
+        }
         return file;
     }
 
