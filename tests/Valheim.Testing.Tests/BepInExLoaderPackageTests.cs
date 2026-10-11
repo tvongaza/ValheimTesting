@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Valheim.Testing.Game;
 using Valheim.Testing.GameSessions;
 using Xunit;
@@ -158,9 +159,31 @@ public sealed class BepInExLoaderPackageTests : IDisposable
         { Directory.CreateDirectory(Path.GetDirectoryName(Path.Combine(mac, relative))!); File.WriteAllText(Path.Combine(mac, relative), relative); }
         var macPackage = BepInExLoaderPackage.Capture(mac, "mac", "1");
         macPackage.RequireFor(ClientPlatform.MacOS, "package");
+        Assert.Contains("arm64 slice", Assert.Throws<InvalidDataException>(() => macPackage.RequireNativeMacServer()).Message);
         Assert.Contains("lacks doorstop_libs/libdoorstop_x64.so", Assert.Throws<FileNotFoundException>(() => macPackage.RequireFor(ClientPlatform.Linux, "package")).Message);
         File.Delete(Path.Combine(root, "BepInEx", "core", "BepInEx.Preloader.dll"));
         Assert.Contains("lacks BepInEx/core/BepInEx.Preloader.dll", Assert.Throws<InvalidDataException>(() => BepInExLoaderPackage.Capture(root, "partial", "1")).Message);
+    }
+
+    [Fact] public void AnX64OnlyMacLoaderIsRefusedBeforeItCanBecomeARemoteServerProfile()
+    {
+        if (!OperatingSystem.IsMacOS()) return;
+        string root = Path.Combine(_rig.Root, "x64-mac-loader");
+        Directory.CreateDirectory(Path.Combine(root, "BepInEx", "core"));
+        File.WriteAllText(Path.Combine(root, "BepInEx", "core", "BepInEx.dll"), "test core");
+        File.WriteAllText(Path.Combine(root, "BepInEx", "core", "BepInEx.Preloader.dll"), "test preloader");
+        string source = Path.Combine(root, "doorstop.c");
+        File.WriteAllText(source, "void doorstop(void) {}\n");
+        using var compiler = Process.Start(new ProcessStartInfo("/usr/bin/clang")
+        {
+            ArgumentList = { "-arch", "x86_64", "-dynamiclib", "-o", Path.Combine(root, "libdoorstop.dylib"), source },
+            RedirectStandardError = true, UseShellExecute = false,
+        }) ?? throw new IOException("Could not compile the x64-only loader control.");
+        string error = compiler.StandardError.ReadToEnd();
+        compiler.WaitForExit();
+        if (compiler.ExitCode != 0) throw new IOException("Could not compile the x64-only loader control: " + error);
+        var package = BepInExLoaderPackage.Capture(root, "x64-only", "1");
+        Assert.Contains("arm64 slice", Assert.Throws<InvalidDataException>(package.RequireNativeMacServer).Message);
     }
 
     private BepInExLoaderPackage Package()

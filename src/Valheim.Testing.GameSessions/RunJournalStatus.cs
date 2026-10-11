@@ -35,6 +35,8 @@ internal sealed record JournalItem(string Kind, string Host, string Actor, strin
 internal sealed record JournalRunStatus(string Run, JournalRunState State, string Reason, DateTime FirstUtc, DateTime LastUtc,
     IReadOnlyList<string> Hosts, string? Runner, IReadOnlyList<JournalItem> Items)
 {
+    /// <summary>An explicit end was written, rather than inferred from a locally proven dead runner and empty state.</summary>
+    [System.Text.Json.Serialization.JsonIgnore] public bool EndRecorded { get; init; }
     /// <summary>Launches never journalled as started whose pid file proves their process gone: a recovery journals them settled.</summary>
     [System.Text.Json.Serialization.JsonIgnore] public IReadOnlyList<JournalItem> SettledLaunches { get; init; } = [];
 }
@@ -228,7 +230,8 @@ internal static class RunJournalStatus
             if (recovered.Contains(run.Key)) reason += "; recovered by env recover/teardown" + (items.Count == 0 ? "" : ", but not all of it");
             runs.Add(new(run.Key, state, reason, ordered[0].Record.Utc, ordered[^1].Record.Utc,
                 run.Select(entry => entry.Host).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList(), runner?.ToString(),
-                items.OrderBy(item => item.Host, StringComparer.Ordinal).ThenBy(item => item.SinceUtc).ToList()) { SettledLaunches = settled });
+                items.OrderBy(item => item.Host, StringComparer.Ordinal).ThenBy(item => item.SinceUtc).ToList())
+            { SettledLaunches = settled, EndRecorded = isEnded });
         }
         // Copies made before runs journalled them: every copy any journal names is the journal's to judge.
         var comparison = OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;

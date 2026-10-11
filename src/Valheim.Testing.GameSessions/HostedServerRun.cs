@@ -82,6 +82,8 @@ internal sealed class HostedServerRun : IServerPlacement
     public GameRole Role { get; }
     public HostProfile HostProfile { get; }
     private bool LocalMac => HostProfile is { Kind: "local", Platform: "macos" };
+    private bool RemoteMac => HostProfile is { Kind: "ssh", Platform: "macos" };
+    private bool MacServer => HostProfile.Platform == "macos";
     public IGameHost Host { get; }
     public string RunId { get; }
     /// <summary>
@@ -95,7 +97,7 @@ internal sealed class HostedServerRun : IServerPlacement
     public string GameDirectory => Role.PreparedGameRoot ?? RuntimeDirectory;
     public string LoaderDirectory => RuntimeDirectory;
     public string? MacSteamRuntimeDirectory => Role.PreparedSteamRuntimeRoot;
-    public string WorldDirectory { get; }
+    public string WorldDirectory { get; private set; }
     /// <summary>The runtime copy's files on the host, once copied.</summary>
     public IReadOnlyDictionary<string, string> RuntimeHashes => _runtime?.Files ?? new Dictionary<string, string>();
 
@@ -109,6 +111,8 @@ internal sealed class HostedServerRun : IServerPlacement
         var role = profile.Server ?? throw new ArgumentException("The environment places no dedicated server.");
         var hostProfile = profile.Hosts[role.Host];
         if (Refusal(hostProfile, role, plan) is { } refusal) throw new ArgumentException($"The server environment on host '{role.Host}': {refusal}");
+        if (hostProfile is { Kind: "ssh", Platform: "macos" } && !prepared)
+            throw new InvalidOperationException("A remote Mac dedicated server needs a prepared profile campaign with its pinned native loader and SteamCMD runtime; a standalone full game copy is unsupported.");
         hooks ??= HostedRunHooks.Production;
         var host = hooks.CreateHost(profile, role.Host);
         return new HostedServerRun(profile, role, hostProfile, host, hooks.RunId(campaignRunId), runner, hooks, prepared ? role.Install : null);
@@ -118,9 +122,9 @@ internal sealed class HostedServerRun : IServerPlacement
     internal static string? Refusal(HostProfile hostProfile, GameRole role, ServerRunPlan plan)
     {
         if (!((hostProfile.Platform == "linux" && HostShell.Parse(hostProfile.Shell).Kind == HostShellKind.Bash) ||
-              (hostProfile.Platform == "macos" && hostProfile.Kind == "local" && HostShell.Parse(hostProfile.Shell).Kind == HostShellKind.Bash) ||
+              (hostProfile.Platform == "macos" && hostProfile.Kind is ("local" or "ssh") && HostShell.Parse(hostProfile.Shell).Kind == HostShellKind.Bash) ||
               (hostProfile.Platform == "windows" && HostShell.Parse(hostProfile.Shell).Kind == HostShellKind.PowerShell)))
-            return $"it is {hostProfile.Platform} with {hostProfile.Shell}; a hosted dedicated server needs Linux/bash, local macOS/bash or Windows/PowerShell.";
+            return $"it is {hostProfile.Platform} with {hostProfile.Shell}; a hosted dedicated server needs Linux/bash, macOS/bash on a local or SSH host, or Windows/PowerShell.";
         if (hostProfile.Kind == "local" && hostProfile.Platform != HostProfile.CurrentPlatform)
             return $"it is a local {hostProfile.Platform} host, but this machine is {HostProfile.CurrentPlatform}.";
         // The plan's runtime names its platform by its server executable; a pinned manifest lists it.
@@ -152,17 +156,21 @@ internal sealed class HostedServerRun : IServerPlacement
     public async Task LockAndCopyRuntimeAsync(ScenarioReport report, ServerRunPlan plan, bool pinned, CancellationToken cancellation)
     {
         _preparedPins = Role.PreparedSourceRoot != null ? plan.RuntimePins : null;
+        if (RemoteMac)
+            WorldDirectory = await HostedWorldOnHost.MacSaveRootAsync(Host, HostedTimeouts.Quick, cancellation).ConfigureAwait(false);
         // A Windows host that can register no server task is refused before the copy (a campaign's preflight asked already).
         if (Host.Shell.Kind == HostShellKind.PowerShell)
             await report.StepAsync(StepPhase.Setup, "the server host can start a server task", () => HostServer.RequireTaskLogonAsync(Host, HostedTimeouts.Quick, cancellation)).ConfigureAwait(false);
         await report.StepAsync(StepPhase.Setup, "take the server host's lock", async () => _lock = await Host.AcquireLockAsync(HostProfile.Lock, _owner, HostedTimeouts.Quick, cancellation).ConfigureAwait(false)).ConfigureAwait(false);
         await NoteLockAsync(Host, Role.Host, _lock!, JournalEntry.LockHeld).ConfigureAwait(false);
-        if (LocalMac)
+        if (MacServer)
             await report.StepAsync(StepPhase.Setup, "preserve the Mac server's user-level access lists", async () =>
             {
-                _macLists = MacServerLists.Capture(WorldDirectory, Path.Combine(RunDirectory, "server-lists"));
+                string backup = HostPath.Join(RunDirectory, "server-lists");
+                _macLists = LocalMac ? MacServerLists.Capture(WorldDirectory, backup)
+                    : await MacServerLists.CaptureRemoteAsync(Host, WorldDirectory, backup, HostedTimeouts.Quick, cancellation).ConfigureAwait(false);
                 await JournalAsync(Host, Role.Host, "server", _macLists.Captured(), cancellation).ConfigureAwait(false);
-                _macLists.Isolate();
+                await _macLists.IsolateAsync(HostedTimeouts.Quick, cancellation).ConfigureAwait(false);
             }).ConfigureAwait(false);
         // Only an unpinned plan may leave out the manifest; the copy is then recorded as found.
         bool verified = pinned || plan.Runtime.Sha256.Count != 0;
@@ -214,7 +222,7 @@ internal sealed class HostedServerRun : IServerPlacement
 
     /// <summary>Ships the verified local world copy to the host and verifies every file there.</summary>
     public Task ShipWorldAsync(ScenarioReport report, string localWorld, string output, CancellationToken cancellation) =>
-        LocalMac ? report.StepAsync(StepPhase.Setup, "place the pinned world in the Mac's default worlds", () =>
+        MacServer ? report.StepAsync(StepPhase.Setup, "place the pinned world in the Mac's default worlds", () =>
         {
             // A campaign's prepared server save root contains worlds_local; HostedWorldOnHost takes the
             // contents of that folder, with the named world at its root.
@@ -294,17 +302,29 @@ internal sealed class HostedServerRun : IServerPlacement
 
     // The owned server's placement on the host (ServerActor owns the rest of the wiring): each boot through HostServer, its
     // log waited on in the host's log, ValheimCLI only through the tunnel.
-    ServerPlatform? IServerPlacement.Platform => LocalMac ? null : Host.Shell.Kind == HostShellKind.PowerShell ? ServerPlatform.Windows : ServerPlatform.Linux;
+    ServerPlatform? IServerPlacement.Platform => LocalMac ? null : RemoteMac ? ServerPlatform.MacOS
+        : Host.Shell.Kind == HostShellKind.PowerShell ? ServerPlatform.Windows : ServerPlatform.Linux;
 
     ServerBoot IServerPlacement.Start(int n, GameLaunch launch, string output, CancellationToken cancellation)
     {
         if (Role.PreparedSteamRuntimeRoot is { } steam && Role.PreparedSteamRuntimeFiles is { } files)
-            foreach (var (relative, expectedHash) in files)
+        {
+            if (RemoteMac)
+            {
+                MacSteamRuntimeOnHost.VerifyAsync(Host, Role.PreparedSteamRuntimePackage
+                    ?? throw new InvalidDataException("The remote Mac Steam runtime has no source contract."),
+                    HostedTimeouts.Quick, cancellation).GetAwaiter().GetResult();
+                var observed = HostInstall.ListAsync(Host, steam, HostedTimeouts.Quick, cancellation: cancellation)
+                    .GetAwaiter().GetResult();
+                HostInstall.RequireSame(files, observed, "signed Mac Steam runtime before launch");
+            }
+            else foreach (var (relative, expectedHash) in files)
             {
                 string path = Path.Combine(steam, relative);
                 if (!File.Exists(path) || !FileHash.Sha256(path).Equals(expectedHash, StringComparison.OrdinalIgnoreCase))
                     throw new IOException("The pinned Mac Steam runtime changed before server launch: " + relative);
             }
+        }
         if (Role.PreparedSourceRoot is { } source && _preparedPins != null)
         {
             HostInstall.CheckProfilePinsAsync(Host, _preparedPins, GameDirectory, LoaderDirectory, source,
@@ -456,9 +476,9 @@ internal sealed class HostedServerRun : IServerPlacement
             if (serverStopped || !launched && !_serverMayRun)
             {
                 int before = failures.Count;
-                await Try("restore the Mac server's user-level access lists", () => { _macLists.Restore(); return Task.CompletedTask; }).ConfigureAwait(false);
+                await Try("restore the Mac server's user-level access lists", () => _macLists.RestoreAsync(HostedTimeouts.Quick, cleanup)).ConfigureAwait(false);
                 if (failures.Count == before)
-                    await NoteAsync(Host, Role.Host, "server", JournalEntry.Of(JournalEntry.MacListsRestored, ("backup", Path.Combine(RunDirectory, "server-lists")))).ConfigureAwait(false);
+                    await NoteAsync(Host, Role.Host, "server", JournalEntry.Of(JournalEntry.MacListsRestored, ("backup", HostPath.Join(RunDirectory, "server-lists")))).ConfigureAwait(false);
                 else serverStopped = false; // the lock and backup stay for env recover
             }
             else

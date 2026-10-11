@@ -416,7 +416,8 @@ public class ServerLaunchTests
 
     [Fact] public void AHostLaunchKeepsTheHostsPathRules()
     {
-        Assert.Throws<PlatformNotSupportedException>(() => GameLaunch.ForServer("/srv/rt", [], hostPlatform: ServerPlatform.MacOS));
+        Assert.Equal("/srv/rt/valheim_server/Valheim",
+            GameLaunch.ForServer("/srv/rt", [], hostPlatform: ServerPlatform.MacOS).Executable);
         // A server's task may have no network credentials (S4U): a share is refused, as before.
         Assert.Throws<ArgumentException>(() => GameLaunch.ForServer(@"\\nas\share\runtime\", [], hostPlatform: ServerPlatform.Windows));
         Assert.Equal(@"C:\valheim_server.exe", GameLaunch.ForServer(@"C:\", [], hostPlatform: ServerPlatform.Windows).Executable);

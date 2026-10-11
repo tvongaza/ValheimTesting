@@ -145,7 +145,7 @@ internal sealed class FakeServerHost : IGameHost
         ("journal-read", [RunJournalOnHost.BashRead, RunJournalOnHost.WindowsRead]),
         ("journal-read-all", [RunJournalOnHost.BashReadAll, RunJournalOnHost.WindowsReadAll]),
         ("pid-file", [RunJournalStatus.BashPidFiles, RunJournalStatus.WindowsPidFiles]),
-        ("process-probe", [HostProcessProbe.Bash, HostProcessProbe.Windows]),
+        ("process-probe", [HostProcessProbe.Unix, HostProcessProbe.Windows]),
         ("mac-bundle", [MacAppBundle.Bash]),
         ("machine-name", [RunJournalStatus.WindowsMachineName]),
         ("lease", [LeaseScripts.Bash, LeaseScripts.PowerShell]),

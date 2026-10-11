@@ -28,11 +28,14 @@ internal static partial class HostedRuntimeStage
         RequireStagePaths(host, kind, source, destination, staging, files);
         bool windows = host.Shell.Kind == HostShellKind.PowerShell;
         var (selected, explicitlySelectedSettings) = SelectPayload(files, loaderPackage, host.Shell.Kind);
+        if (steamRuntimePackage != null) loaderPackage?.RequireNativeMacServer();
         if (steamRuntimePackage != null)
         {
-            if (kind != HostedRuntimeKind.Server || windows || !OperatingSystem.IsMacOS())
-                throw new InvalidDataException("A Mac Steam runtime package requires a local Mac dedicated server profile.");
-            steamRuntimePackage.Validate();
+            if (kind != HostedRuntimeKind.Server || windows || host.Kind == GameHostKind.Container ||
+                host.Kind == GameHostKind.Local && !OperatingSystem.IsMacOS())
+                throw new InvalidDataException("A Mac Steam runtime package requires a Mac dedicated server profile on a local or SSH host.");
+            if (host.Kind == GameHostKind.Local) steamRuntimePackage.Validate();
+            else await MacSteamRuntimeOnHost.VerifyAsync(host, steamRuntimePackage, timeout, cancellation).ConfigureAwait(false);
         }
         if (inspectedSource != null && (inspectedSource.HostName != host.Name || inspectedSource.Root != source))
             throw new ArgumentException("The inspected source belongs to a different host or install.", nameof(inspectedSource));
@@ -82,7 +85,7 @@ internal static partial class HostedRuntimeStage
                 if (!FileHash.Sha256(target).Equals(value.Sha, StringComparison.OrdinalIgnoreCase))
                     throw new IOException("The local profile payload changed: " + relative);
             }
-            if (steamRuntimePackage != null)
+            if (steamRuntimePackage != null && host.Kind == GameHostKind.Local)
             {
                 string steamRoot = Path.Combine(payload, "steam-runtime");
                 foreach (var (relative, sha) in steamRuntimePackage.StageSignedFiles(steamRoot))
@@ -133,6 +136,11 @@ internal static partial class HostedRuntimeStage
             applied.EnsureSuccess($"Applying the profile files on {host.Name}");
             if (InteractiveClient.Line(applied.Stdout, "VT-STAGED") == null)
                 throw new HostOperationException($"No profile-apply verdict from {host.Name}", applied);
+            if (steamRuntimePackage != null && host.Kind != GameHostKind.Local)
+                foreach (var (relative, sha) in await MacSteamRuntimeOnHost.StageAsync(host, steamRuntimePackage,
+                    destination, timeout, cancellation).ConfigureAwait(false))
+                    if (!selected.TryAdd("steam-runtime/" + relative, ("remote SteamCMD source", sha)))
+                        throw new InvalidDataException("Steam runtime target collides with another staged file: " + relative);
             var profile = await HostInstall.ListAsync(host, destination, timeout, cancellation: cancellation).ConfigureAwait(false);
             foreach (var (relative, value) in selected)
                 if (!profile.Files.TryGetValue(relative, out string? hash) || !hash.Equals(value.Sha, StringComparison.OrdinalIgnoreCase))

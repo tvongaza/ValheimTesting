@@ -37,7 +37,7 @@ internal static class RunRecovery
     /// <summary>The actor a recovery journals as on every host: its entries never make the recovering process the run's runner.</summary>
     public const string Actor = "recovery";
 
-    // A Mac server is started locally rather than by HostServer's Linux shell. Check all three journalled
+    // The local Mac server path predates HostServer's remote Mac backend. Check all three journalled
     // process facts again in the stop script, immediately before signalling; an unproven process is untouched.
     internal static readonly string MacStop = """
         set -u
@@ -86,7 +86,26 @@ internal static class RunRecovery
         if (refused != null) return new(runId, run.State, refused, []);
 
         var items = run.Items.Where(item => teardown || !item.Kept).ToList();
-        if (items.Count == 0 && run.SettledLaunches.Count == 0) return new(runId, run.State, null, []); // it left nothing to recover
+        if (items.Count == 0 && run.SettledLaunches.Count == 0)
+        {
+            // A local runner can prove that an interrupted run left nothing. Record that conclusion so another machine,
+            // which cannot verify a Mac/Linux runner's start identity, does not mistake the old run for a live one.
+            if (run.State != JournalRunState.Ended || run.EndRecorded) return new(runId, run.State, null, []);
+            if (status.Hosts.Any(host => host.Error != null))
+                return new(runId, JournalRunState.Unknown, "not every host journal could be read; cannot record a clean end", []);
+            string name = run.Hosts[0];
+            try
+            {
+                await journal.AppendAsync(hostFactory(name), RunJournal.DirectoryFor(hosts[name]), Actor,
+                    JournalEntry.Of(JournalEntry.RunEnded, ("state", "recovered: runner gone"), ("cleanupVerified", "true")),
+                    timeout, cancellation).ConfigureAwait(false);
+                return new(runId, JournalRunState.Ended, null, [new(name, "run end", "recorded after proving its runner gone and no owned state remains", false)]);
+            }
+            catch (Exception error) when (error is not OperationCanceledException)
+            {
+                return new(runId, JournalRunState.Unknown, "could not record the clean end: " + error.Message, []);
+            }
+        }
         var steps = new List<RecoveryStep>();
         var connections = items.Concat(run.SettledLaunches).Select(item => item.Host).Distinct(StringComparer.Ordinal).ToDictionary(name => name, hostFactory, StringComparer.Ordinal);
         void Step(string host, string what, string outcome, bool failed = false) => steps.Add(new(host, what, outcome, failed));
@@ -137,7 +156,7 @@ internal static class RunRecovery
                     }
                     string directory = process.Fields.GetValueOrDefault("bootDirectory") is { Length: > 0 } boot ? boot : process.Fields.GetValueOrDefault("launchDirectory") ?? "";
                     InteractiveStop outcome;
-                    if (host.Kind == GameHostKind.Local && OperatingSystem.IsMacOS())
+                    if (hosts[group.Key].Platform == "macos")
                     {
                         var result = (await host.RunAsync(MacStop, new Dictionary<string, string>
                         {
@@ -240,9 +259,16 @@ internal static class RunRecovery
                 {
                     try
                     {
-                        if (host.Kind != GameHostKind.Local || !OperatingSystem.IsMacOS())
-                            throw new InvalidDataException("Mac server access lists can be restored only on their local Mac host.");
-                        MacServerLists.FromJournal(item.Fields, runId).Restore();
+                        if (hosts[group.Key].Platform != "macos")
+                            throw new InvalidDataException("Mac server access lists can be restored only on their Mac host.");
+                        if (host.Kind == GameHostKind.Local)
+                            MacServerLists.FromJournal(item.Fields, runId).Restore();
+                        else
+                        {
+                            string saveRoot = await HostedWorldOnHost.MacSaveRootAsync(host, timeout, cancellation).ConfigureAwait(false);
+                            await MacServerLists.FromRemoteJournal(item.Fields, runId, host, saveRoot)
+                                .RestoreAsync(timeout, cancellation).ConfigureAwait(false);
+                        }
                         Step(group.Key, "Mac server access lists", "restored; versions written during the run kept in its backup");
                         await Note(group.Key, JournalEntry.Of(JournalEntry.MacListsRestored, ("backup", item.Fields["backup"]))).ConfigureAwait(false);
                     }

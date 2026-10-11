@@ -442,9 +442,10 @@ public sealed class CampaignPreflightTests : IDisposable
         Assert.DoesNotContain(report.Problems, problem => problem.Input == "server task");
     }
 
-    // A Mac dedicated server must be local: a remote Mac environment is refused before any host check.
+    // An SSH Mac dedicated server reaches the host check, but missing loader and dependency pins still refuse
+    // before any runtime is copied.
     [Fact]
-    public async Task ARemoteMacDedicatedServerIsRefusedByTheInventory()
+    public async Task ARemoteMacDedicatedServerNeedsPinnedInputsBeforeCopying()
     {
         string inventory = Write("mac-inventory.json", new
         {
@@ -462,8 +463,11 @@ public sealed class CampaignPreflightTests : IDisposable
         var host = new FakeServerHost("mac", Path.Combine(_root, "mirror"));
         var report = await HostedCampaignPreparation.InspectAsync(file, TimeSpan.FromSeconds(2), _ => host);
         Assert.False(report.Ready);
-        Assert.Contains(report.Problems, problem => problem.Input == "inventory" && problem.Message.Contains("must run on this machine, not a remote host"));
-        Assert.DoesNotContain(host.Scripts, script => script is "copy" or "ship" or "start" or "apply-stage" or "port");
+        Assert.DoesNotContain(report.Problems, problem => problem.Input == "inventory");
+        Assert.Contains(report.Problems, problem => problem.Input == "loader" || problem.Input == "game and loader");
+        Assert.Contains(report.Problems, problem => problem.Input == "Mac server host");
+        Assert.DoesNotContain(host.Scripts, script => script is "copy" or "ship" or "start" or "apply-stage");
+        Assert.Contains("port", host.Scripts); // read-only preflight reached the host
     }
 
     // A probe's refusal of a kind no check listed (a bash host that cannot tell which ports are in use) fills its own line

@@ -176,6 +176,7 @@ public sealed class HostedWorld : IDisposable
 
     // Set only by Fakes.FakeClientDataDirectory: the innermost open scope, whose directory a no-game test's simulated client keeps.
     internal static readonly AsyncLocal<Fakes.FakeClientDataDirectory?> SimulatedClientData = new();
+    internal const string MacSaveRelative = "Library/Application Support/IronGate/Valheim";
 
     /// <summary>
     /// Where Unity keeps a game client's data on <paramref name="platform"/> (company IronGate, product Valheim), which holds <c>worlds_local</c>.
@@ -188,7 +189,7 @@ public sealed class HostedWorld : IDisposable
         return platform switch
         {
             ClientPlatform.Windows => Path.Combine(home, "AppData", "LocalLow", "IronGate", "Valheim"),
-            ClientPlatform.MacOS => Path.Combine(home, "Library", "Application Support", "IronGate", "Valheim"),
+            ClientPlatform.MacOS => Path.Combine(home, MacSaveRelative),
             _ => Path.Combine(home, ".config", "unity3d", "IronGate", "Valheim"),
         };
     }

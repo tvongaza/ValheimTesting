@@ -6,6 +6,30 @@ public sealed class MacServerListsTests : IDisposable
     private readonly string _root = Directory.CreateTempSubdirectory("mac-server-lists-").FullName;
     public void Dispose() => Directory.Delete(_root, recursive: true);
 
+    [Fact] public async Task RemoteMacListOwnerRestoresOriginalsAndKeepsRunVersions()
+    {
+        if (!OperatingSystem.IsMacOS()) return;
+        var host = new LocalGameHost("mac-shell", HostShell.Bash);
+        string run = "run-" + Guid.NewGuid().ToString("N"), save = Path.Combine(_root, "save");
+        string backup = Path.Combine(_root, run, "server-lists");
+        Directory.CreateDirectory(save);
+        File.WriteAllText(Path.Combine(save, "adminlist.txt"), "user admin\n");
+        File.WriteAllText(Path.Combine(save, "permittedlist.txt"), "user permit\n");
+        var owner = await MacServerLists.CaptureRemoteAsync(host, save, backup, TimeSpan.FromSeconds(30), default);
+        await owner.IsolateAsync(TimeSpan.FromSeconds(30), default);
+        Assert.DoesNotContain(MacServerLists.Names, name => File.Exists(Path.Combine(save, name)));
+        File.WriteAllText(Path.Combine(save, "adminlist.txt"), "run admin\n");
+        File.WriteAllText(Path.Combine(save, "bannedlist.txt"), "run ban\n");
+        var recovery = MacServerLists.FromRemoteJournal(owner.Captured().Fields, run, host, save);
+        await recovery.RestoreAsync(TimeSpan.FromSeconds(30), default);
+        Assert.Equal("user admin\n", File.ReadAllText(Path.Combine(save, "adminlist.txt")));
+        Assert.Equal("user permit\n", File.ReadAllText(Path.Combine(save, "permittedlist.txt")));
+        Assert.False(File.Exists(Path.Combine(save, "bannedlist.txt")));
+        Assert.Equal("run admin\n", File.ReadAllText(Path.Combine(backup, "after", "adminlist.txt")));
+        Assert.Equal("run ban\n", File.ReadAllText(Path.Combine(backup, "after", "bannedlist.txt")));
+        await recovery.RestoreAsync(TimeSpan.FromSeconds(30), default);
+    }
+
     [Fact] public void ExistingListsAreIsolatedAndRestoredWhileRunVersionsAreKept()
     {
         string save = Path.Combine(_root, "save"), backup = Path.Combine(_root, "run", "server-lists");

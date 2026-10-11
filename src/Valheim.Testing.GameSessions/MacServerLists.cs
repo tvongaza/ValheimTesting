@@ -13,9 +13,52 @@ internal sealed class MacServerLists
     internal static readonly string[] Names = ["adminlist.txt", "permittedlist.txt", "bannedlist.txt"];
     private readonly string _saveRoot, _backup;
     private readonly string[] _hashes;
+    private readonly IGameHost? _host;
 
-    private MacServerLists(string saveRoot, string backup, string[] hashes)
-    { _saveRoot = saveRoot; _backup = backup; _hashes = hashes; }
+    private MacServerLists(string saveRoot, string backup, string[] hashes, IGameHost? host = null)
+    { _saveRoot = saveRoot; _backup = backup; _hashes = hashes; _host = host; }
+
+    internal static async Task<MacServerLists> CaptureRemoteAsync(IGameHost host, string saveRoot, string backup,
+        TimeSpan timeout, CancellationToken cancellation)
+    {
+        var result = (await host.RunAsync(RemoteCapture, new Dictionary<string, string> { ["saveRoot"] = saveRoot,
+            ["backup"] = backup }, timeout, cancellation).ConfigureAwait(false))
+            .EnsureSuccess($"Capturing the Mac server lists on {host.Name}");
+        string[] hashes = new string[Names.Length];
+        for (int i = 0; i < Names.Length; i++)
+        {
+            string value = InteractiveClient.Line(result.Stdout, "VT-MAC-LIST " + Names[i] + " ")
+                ?? throw new HostOperationException($"The Mac server list {Names[i]} was not reported by {host.Name}", result);
+            if (value != "-" && (value.Length != 64 || !value.All(Uri.IsHexDigit)))
+                throw new HostOperationException($"The Mac server list {Names[i]} has no valid hash on {host.Name}", result);
+            hashes[i] = value;
+        }
+        return new(saveRoot, backup, hashes, host);
+    }
+
+    private Dictionary<string, string> RemoteVariables() => new()
+    {
+        ["saveRoot"] = _saveRoot, ["backup"] = _backup,
+        ["hashes"] = string.Join('\n', Names.Zip(_hashes).Select(pair => pair.First + " " + pair.Second)),
+    };
+
+    internal async Task IsolateAsync(TimeSpan timeout, CancellationToken cancellation)
+    {
+        if (_host == null) { Isolate(); return; }
+        var result = (await _host.RunAsync(RemoteIsolate, RemoteVariables(), timeout, cancellation).ConfigureAwait(false))
+            .EnsureSuccess($"Isolating the Mac server lists on {_host.Name}");
+        if (InteractiveClient.Line(result.Stdout, "VT-MAC-LISTS-ISOLATED") == null)
+            throw new HostOperationException($"The Mac server lists were not isolated on {_host.Name}", result);
+    }
+
+    internal async Task RestoreAsync(TimeSpan timeout, CancellationToken cancellation)
+    {
+        if (_host == null) { Restore(); return; }
+        var result = (await _host.RunAsync(RemoteRestore, RemoteVariables(), timeout, cancellation).ConfigureAwait(false))
+            .EnsureSuccess($"Restoring the Mac server lists on {_host.Name}");
+        if (InteractiveClient.Line(result.Stdout, "VT-MAC-LISTS-RESTORED") == null)
+            throw new HostOperationException($"The Mac server lists were not restored on {_host.Name}", result);
+    }
 
     internal static MacServerLists Capture(string saveRoot, string backup)
     {
@@ -68,6 +111,89 @@ internal sealed class MacServerLists
             throw new InvalidDataException("The journal has an invalid Mac server list hash.");
         return new(root, backup, hashes);
     }
+
+    internal static MacServerLists FromRemoteJournal(IReadOnlyDictionary<string, string> fields, string runId,
+        IGameHost host, string expectedSaveRoot)
+    {
+        string root = fields.GetValueOrDefault("saveRoot") ?? "", backup = fields.GetValueOrDefault("backup") ?? "";
+        if (!root.Equals(expectedSaveRoot, StringComparison.Ordinal) ||
+            backup.Split('/').LastOrDefault() != "server-lists" ||
+            backup.Split('/').Reverse().Skip(1).FirstOrDefault() != runId ||
+            backup.Split('/').Any(part => part is "." or ".."))
+            throw new InvalidDataException("The journal does not name this remote Mac user's save root and this run's server-lists directory.");
+        string[] hashes = [fields.GetValueOrDefault("admin") ?? "", fields.GetValueOrDefault("permitted") ?? "", fields.GetValueOrDefault("banned") ?? ""];
+        if (hashes.Any(hash => hash != "-" && (hash.Length != 64 || !hash.All(Uri.IsHexDigit))))
+            throw new InvalidDataException("The journal has an invalid Mac server list hash.");
+        return new(root, backup, hashes, host);
+    }
+
+    internal static readonly string RemoteCapture = """
+        set -eu
+        [ "$(uname -s)" = Darwin ] || exit 4
+        [ ! -e "$backup" ] || { echo 'VT-MAC-LISTS-EXISTS'; exit 4; }
+        mkdir -p -- "$backup"
+        for name in adminlist.txt permittedlist.txt bannedlist.txt; do
+          original="$saveRoot/$name"
+          [ ! -L "$original" ] && [ ! -d "$original" ] || exit 4
+          if [ -f "$original" ]; then
+            hash=$(shasum -a 256 "$original" | awk '{print $1}')
+            cp "$original" "$backup/$name"
+            copied=$(shasum -a 256 "$backup/$name" | awk '{print $1}')
+            [ "$hash" = "$copied" ] || exit 4
+          else hash=-; fi
+          printf 'VT-MAC-LIST %s %s\n' "$name" "$hash"
+        done
+        """.ReplaceLineEndings("\n");
+
+    internal static readonly string RemoteIsolate = """
+        set -eu
+        while read -r name expected; do
+          [ -n "$name" ] || continue
+          original="$saveRoot/$name"
+          [ ! -L "$original" ] && [ ! -d "$original" ] || exit 4
+          if [ -f "$original" ]; then actual=$(shasum -a 256 "$original" | awk '{print $1}'); else actual=-; fi
+          [ "$actual" = "$expected" ] || exit 4
+        done <<< "$hashes"
+        while read -r name expected; do
+          [ "$expected" = - ] || rm -- "$saveRoot/$name"
+        done <<< "$hashes"
+        echo VT-MAC-LISTS-ISOLATED
+        """.ReplaceLineEndings("\n");
+
+    internal static readonly string RemoteRestore = """
+        set -eu
+        # Check all backups and live paths before changing one list. The journal keeps their expected hashes.
+        while read -r name expected; do
+          [ -n "$name" ] || continue
+          original="$saveRoot/$name"; before="$backup/$name"; after="$backup/after/$name"
+          [ ! -L "$original" ] && [ ! -L "$before" ] && [ ! -L "$after" ] || exit 4
+          [ ! -d "$original" ] && [ ! -d "$before" ] && [ ! -d "$after" ] || exit 4
+          if [ "$expected" != - ]; then
+            [ -f "$before" ] || exit 4
+            actual=$(shasum -a 256 "$before" | awk '{print $1}')
+            [ "$actual" = "$expected" ] || exit 4
+          fi
+          if [ -f "$original" ]; then
+            current=$(shasum -a 256 "$original" | awk '{print $1}')
+            if [ "$current" != "$expected" ] && [ -f "$after" ]; then
+              prior=$(shasum -a 256 "$after" | awk '{print $1}')
+              [ "$prior" = "$current" ] || exit 4
+            fi
+          fi
+        done <<< "$hashes"
+        while read -r name expected; do
+          [ -n "$name" ] || continue
+          original="$saveRoot/$name"; before="$backup/$name"; after="$backup/after/$name"
+          if [ -f "$original" ]; then current=$(shasum -a 256 "$original" | awk '{print $1}'); else current=-; fi
+          if [ "$current" != "$expected" ] && [ "$current" != - ]; then
+            mkdir -p -- "$backup/after"
+            [ -f "$after" ] || cp "$original" "$after"
+          fi
+          if [ "$expected" = - ]; then [ ! -f "$original" ] || rm -- "$original"
+          elif [ "$current" != "$expected" ]; then cp "$before" "$original"; fi
+        done <<< "$hashes"
+        echo VT-MAC-LISTS-RESTORED
+        """.ReplaceLineEndings("\n");
 
     internal void Restore()
     {

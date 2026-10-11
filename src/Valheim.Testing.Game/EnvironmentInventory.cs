@@ -284,8 +284,8 @@ public sealed class EnvironmentInventory
                 errors.Add($"Environment {recipe.Name} needs a gamePort only when it serves a world.");
             foreach (string role in recipe.Roles)
                 recipe.Role().Validate(role == "server" ? "server" : "client " + recipe.Name, host, errors);
-            if (recipe.Roles.Contains("server") && host.Platform == "macos" && host.Kind != "local")
-                errors.Add($"Environment {recipe.Name}: a macOS dedicated server must run on this machine, not a remote host.");
+            if (recipe.Roles.Contains("server") && host.Platform == "macos" && host.Kind is not ("local" or "ssh"))
+                errors.Add($"Environment {recipe.Name}: a macOS dedicated server needs a local or SSH Mac host.");
             if (recipe.LoaderPackage != null)
                 recipe.LoaderPackage = Path.GetFullPath(recipe.LoaderPackage, directory);
         }

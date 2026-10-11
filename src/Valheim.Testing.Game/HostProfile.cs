@@ -79,6 +79,7 @@ internal sealed class GameRole
     internal string? PreparedLoaderRoot { get; set; }
     internal string? PreparedSteamRuntimeRoot { get; set; }
     internal IReadOnlyDictionary<string, string>? PreparedSteamRuntimeFiles { get; set; }
+    internal MacSteamRuntimePackage? PreparedSteamRuntimePackage { get; set; }
     // The original install for every profile, including a Windows hard-linked launch folder.
     // Never use this as a retirement target.
     internal string? PreparedSourceRoot { get; set; }

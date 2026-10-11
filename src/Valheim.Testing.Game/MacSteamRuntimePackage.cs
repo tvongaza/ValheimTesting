@@ -60,6 +60,40 @@ internal sealed class MacSteamRuntimePackage
         return package;
     }
 
+    /// <summary>
+    /// Read a manifest copied to the campaign runner while its source root remains on a remote Mac. The host-side stage
+    /// validates every source byte and Mach-O slice before it changes the disposable profile.
+    /// </summary>
+    internal static MacSteamRuntimePackage ReadRemote(string path)
+    {
+        var package = JsonSerializer.Deserialize<MacSteamRuntimePackage>(File.ReadAllText(path), Json)
+            ?? throw new InvalidDataException("The Mac Steam runtime manifest is empty.");
+        if (package.Name != "SteamCMD" || string.IsNullOrWhiteSpace(package.Version) ||
+            package.Version.Any(c => !char.IsAsciiDigit(c)) || package.ProfileFormat != SignedProfileFormat ||
+            package.Root is not { Length: > 1 } root || !root.StartsWith('/') || root.Any(char.IsControl) ||
+            root.Split('/').Any(part => part is "." or "..") ||
+            package.SourceManifestSha256 is not { Length: 64 } manifestHash || !manifestHash.All(Uri.IsHexDigit) ||
+            package.Files is not { Count: > 0 })
+            throw new InvalidDataException("The remote Mac Steam runtime manifest has invalid source identity or paths.");
+        foreach (var (relative, hash) in package.Files)
+            if (string.IsNullOrWhiteSpace(relative) || relative.StartsWith('/') || relative.Contains('\\') ||
+                relative.Split('/').Any(part => part is "" or "." or "..") || relative.Any(char.IsControl) ||
+                hash is not { Length: 64 } || !hash.All(Uri.IsHexDigit))
+                throw new InvalidDataException("The remote Mac Steam runtime manifest has an unsafe or unpinned file: " + relative);
+        if (!package.Files.ContainsKey("steamclient.dylib") || !package.Files.ContainsKey("crashhandler.dylib"))
+            throw new InvalidDataException("The remote Mac Steam runtime manifest lacks its required entry libraries.");
+        return package;
+    }
+
+    /// <summary>Keep the reviewed manifest in a run's evidence. A remote source was checked on its Mac host already.</summary>
+    internal static MacSteamRuntimePackage Snapshot(string path, string snapshot, bool remote)
+    {
+        var package = remote ? ReadRemote(path) : Read(path);
+        if (remote) File.Copy(path, snapshot);
+        else package.Write(snapshot);
+        return package;
+    }
+
     /// <summary>Verify all pins, arm64 availability and the complete current @loader_path closure.</summary>
     public void Validate()
     {
@@ -128,30 +162,59 @@ internal sealed class MacSteamRuntimePackage
         {
             if (!found.Add(relative)) continue;
             string path = SafeFile(root, relative);
-            string directory = Path.GetDirectoryName(relative)?.Replace('\\', '/') ?? "";
-            // The first indented line in each Mach-O slice is its own install name, not a dependency.
-            // Framework install names need not be relative to the framework binary's actual directory.
-            bool firstInSlice = true;
-            foreach (string line in Tool("/usr/bin/otool", ["-L", path]).Split('\n'))
-            {
-                if (!char.IsWhiteSpace(line.FirstOrDefault())) { firstInSlice = true; continue; }
-                if (firstInSlice) { firstInSlice = false; continue; }
-                string dependency = line.TrimStart().Split(' ', 2)[0];
-                if (dependency.StartsWith("@loader_path/", StringComparison.Ordinal))
-                {
-                    string name = Path.GetFullPath(Path.Combine(root, directory, dependency[13..]));
-                    string child = Path.GetRelativePath(root, name).Replace('\\', '/');
-                    SafeFile(root, child);
-                    pending.Enqueue(child);
-                }
-                else if (dependency.StartsWith('@'))
-                    throw new InvalidDataException($"Mac Steam runtime dependency {dependency} in {relative} is unresolved.");
-                else if (!dependency.StartsWith("/System/Library/", StringComparison.Ordinal) &&
-                    !dependency.StartsWith("/usr/lib/", StringComparison.Ordinal))
-                    throw new InvalidDataException($"Mac Steam runtime dependency {dependency} in {relative} is outside macOS system libraries and is not pinned.");
-            }
+            foreach (string child in Dependencies(relative, Tool("/usr/bin/otool", ["-L", path]))) pending.Enqueue(child);
         }
         return found.Order(StringComparer.Ordinal).ToArray();
+    }
+
+    // The same Mach-O dependency parser checks a local capture and the read-only otool replies from an SSH Mac.
+    // Only file inspection differs; the decision about which files form a complete closure has one owner.
+    internal void RequireRemoteClosure(IReadOnlyDictionary<string, string> listings)
+    {
+        if (!listings.Keys.ToHashSet(StringComparer.Ordinal).SetEquals(Files.Keys))
+            throw new InvalidDataException("The remote SteamCMD dependency inspection did not cover every pinned file.");
+        var found = new HashSet<string>(StringComparer.Ordinal);
+        var pending = new Queue<string>(["steamclient.dylib", "crashhandler.dylib"]);
+        while (pending.TryDequeue(out string? relative))
+        {
+            if (!found.Add(relative)) continue;
+            if (!listings.TryGetValue(relative, out string? output))
+                throw new InvalidDataException("The remote SteamCMD dependency closure lacks " + relative + ".");
+            foreach (string child in Dependencies(relative, output)) pending.Enqueue(child);
+        }
+        if (!found.SetEquals(Files.Keys))
+            throw new InvalidDataException("The remote SteamCMD dependency closure differs from its manifest: " +
+                string.Join(", ", Files.Keys.Except(found, StringComparer.Ordinal).Concat(found.Except(Files.Keys, StringComparer.Ordinal))));
+    }
+
+    private static IEnumerable<string> Dependencies(string relative, string listing)
+    {
+        bool firstInSlice = true;
+        foreach (string line in listing.Split('\n'))
+        {
+            if (!char.IsWhiteSpace(line.FirstOrDefault())) { firstInSlice = true; continue; }
+            if (firstInSlice) { firstInSlice = false; continue; }
+            string dependency = line.TrimStart().Split(' ', 2)[0];
+            if (dependency.StartsWith("@loader_path/", StringComparison.Ordinal))
+            {
+                // Framework install names need not be relative to the framework binary's actual directory.
+                var parts = relative.Split('/')[..^1].ToList();
+                foreach (string part in dependency[13..].Split('/'))
+                {
+                    if (part == ".") continue;
+                    if (part == "..") { if (parts.Count == 0) throw new InvalidDataException("Mac Steam runtime dependency escapes its root: " + dependency); parts.RemoveAt(parts.Count - 1); }
+                    else if (part.Length == 0 || part.Contains('\\') || part.Any(char.IsControl))
+                        throw new InvalidDataException("Unsafe Mac Steam runtime dependency: " + dependency);
+                    else parts.Add(part);
+                }
+                yield return string.Join('/', parts);
+            }
+            else if (dependency.StartsWith('@'))
+                throw new InvalidDataException($"Mac Steam runtime dependency {dependency} in {relative} is unresolved.");
+            else if (!dependency.StartsWith("/System/Library/", StringComparison.Ordinal) &&
+                !dependency.StartsWith("/usr/lib/", StringComparison.Ordinal))
+                throw new InvalidDataException($"Mac Steam runtime dependency {dependency} in {relative} is outside macOS system libraries and is not pinned.");
+        }
     }
 
     private static string SafeFile(string root, string relative)
