@@ -6,6 +6,7 @@
 //   dotnet run scripts/validate.cs -- --ci-main-tests  CI only: Windows toolkit tests excluding measured slow methods
 //   dotnet run scripts/validate.cs -- --ci-timed 1|2   CI only: one balanced slow-method shard
 //   dotnet run scripts/validate.cs -- --ci-build-only  CI only: Windows packaging and other test layers
+//   sh scripts/validate.sh --restricted-sandbox  Selected no-host tests only; exits 4 (incomplete)
 //
 // Runs the library tests, compiles the adapter source package against reference stubs, builds every example, tool and script, runs
 // the FullLifecycle example's and the native acceptance suite's tests against scripted fakes,
@@ -20,6 +21,8 @@
 // leases, runs and extracted bundles of the user running validation): tests use temporary folders (#411). Each command is
 // followed by a comparison with the folder as validation found it, and the first command that changed it fails, naming what.
 using System.Diagnostics;
+using System.Net;
+using System.Net.Sockets;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Xml.Linq;
@@ -29,9 +32,10 @@ bool skipCiShell = args.SequenceEqual(["--skip-ci-shell"]);
 bool onlyCiShell = args.SequenceEqual(["--only-ci-shell"]);
 bool ciMainTests = args.SequenceEqual(["--ci-main-tests"]);
 bool ciBuildOnly = args.SequenceEqual(["--ci-build-only"]);
+bool restrictedSandbox = args.SequenceEqual(["--restricted-sandbox"]);
 int ciTimed = args is ["--ci-timed", "1"] ? 1 : args is ["--ci-timed", "2"] ? 2 : 0;
-if (args.Length != 0 && !skipCiShell && !onlyCiShell && !ciMainTests && !ciBuildOnly && ciTimed == 0)
-    throw new ArgumentException("usage: dotnet run scripts/validate.cs [--skip-ci-shell|--only-ci-shell|--ci-main-tests|--ci-timed 1|2|--ci-build-only]");
+if (args.Length != 0 && !skipCiShell && !onlyCiShell && !ciMainTests && !ciBuildOnly && !restrictedSandbox && ciTimed == 0)
+    throw new ArgumentException("usage: dotnet run scripts/validate.cs [--skip-ci-shell|--only-ci-shell|--ci-main-tests|--ci-timed 1|2|--ci-build-only|--restricted-sandbox]");
 string results = Path.Combine(root, "artifacts", "validate");
 Directory.CreateDirectory(results);
 string transcript = Path.Combine(results, "validate.log");
@@ -39,6 +43,33 @@ File.WriteAllText(transcript, "");
 var started = Stopwatch.StartNew();
 string dataRoot = DataRoot();
 var dataBefore = Snapshot(dataRoot);
+
+if (restrictedSandbox)
+{
+    Note("RESTRICTED SANDBOX: running only selected no-host tests. This cannot establish full validation.");
+    var testHostProbe = new TcpListener(IPAddress.Loopback, 0);
+    try
+    {
+        testHostProbe.Start();
+    }
+    catch (SocketException ex)
+    {
+        Note($"UNAVAILABLE: local test-host socket: {ex.Message}. The .NET test runner needs a localhost socket; run validation in CI or an authorized shell.");
+        Note("INCOMPLETE: no tests ran in this restricted sandbox.");
+        return 3;
+    }
+    finally
+    {
+        testHostProbe.Stop();
+    }
+    Test("tests/Valheim.Testing.Tests/Valheim.Testing.Tests.csproj", "--filter",
+        "FullyQualifiedName~GridDumpTerrainTests|FullyQualifiedName~LayeredDumpTerrainTests", "--",
+        "RunConfiguration.TreatNoTestsAsError=true");
+    Test("tests/Valheim.Testing.Doubles.Tests/Valheim.Testing.Doubles.Tests.csproj");
+    Test("tests/Valheim.Testing.Bindings.Tests/Valheim.Testing.Bindings.Tests.csproj");
+    Note("INCOMPLETE: process, port, recovery, shell, package and consumer checks were not run. Full validation must pass in CI or an authorized shell.");
+    return 4;
+}
 
 // On macOS a PowerShell wrapper inherited from a checkout under Documents can wait for a privacy prompt without showing
 // one to the test runner. Prove that pwsh and its .NET runtime start from a safe directory before many shell tests time out.
@@ -111,7 +142,7 @@ Run("dotnet", "build", Solution("examples", new[] { "examples", "tools" }
 // first fail when someone needs them. This script is running, so it is not built again.
 foreach (string script in Directory.GetFiles(Path.Combine(root, "scripts"), "*.cs").Order(StringComparer.Ordinal)
     .Where(script => Path.GetFileName(script) != "validate.cs"))
-    Run("dotnet", "build", script);
+    BuildScript(script);
 // The full-life-cycle example's test project; its game-side mod and adapter (and the suite's) need a game install and build
 // elsewhere. The native session tests (trait Category=Native) launch the game when a private session.json sits beside their
 // project (the example's skip without one, the native acceptance suite's fail), so validation leaves them out.
@@ -125,7 +156,7 @@ Run("dotnet", "run", "--project", "examples/SharedWorld", "-c", "Release", "--no
 string[] packed = Directory.GetDirectories(Path.Combine(root, "src"), "Valheim.Testing*", SearchOption.TopDirectoryOnly)
     .Select(Path.GetFileName).OfType<string>()
     .Where(id => File.Exists(Path.Combine(root, "src", id, id + ".csproj"))).Order(StringComparer.Ordinal).ToArray();
-string candidate = Capture("dotnet", "run", "scripts/pins.cs", "--", "candidate").Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).LastOrDefault() ?? "";
+string candidate = CaptureScript("scripts/pins.cs", "candidate").Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).LastOrDefault() ?? "";
 if (!System.Text.RegularExpressions.Regex.IsMatch(candidate, "^candidate\\.h?[0-9a-f]{12}$")) throw new InvalidOperationException("pins.cs candidate printed no identity: " + candidate);
 Note("candidate identity: " + candidate);
 string feed = Path.Combine(root, ".packages");
@@ -139,15 +170,15 @@ else
     foreach (string partial in current) File.Delete(partial);
     // PackTool includes everything under PublishDir, even files from an earlier run. Clear only the two generated tool
     // publish directories before the solution pack; other build outputs and the reviewed feed stay intact (#523).
-    Run("dotnet", "run", "scripts/tool-pack.cs", "--", "clean");
+    RunScript("scripts/tool-pack.cs", "clean");
     Run("dotnet", "pack", Solution("packages", packed.Select(name => $"src/{name}/{name}.csproj")),
         "-c", "Release", "-nodeReuse:false", "-o", feed, "-p:ValheimTestingCandidate=" + candidate);
 }
-Run("dotnet", "run", "scripts/tool-pack.cs", "--", "verify", feed);
-Run("dotnet", "run", "scripts/package-audit.cs", "--", "--directory", feed, "--candidate");
+RunScript("scripts/tool-pack.cs", "verify", feed);
+RunScript("scripts/package-audit.cs", "--directory", feed, "--candidate");
 // A mod's view of what was just packed: outside this checkout, the candidate packages only from .packages and byte-identical
 // to it, the Cli from .packages too (its pin may not be published yet), every other package from NuGet.org.
-Run("dotnet", "run", "scripts/consumer.cs", "--", "--feed", "local", "--candidate", candidate);
+RunScript("scripts/consumer.cs", "--feed", "local", "--candidate", candidate);
 Note(skipCiShell || ciBuildOnly ? "CI validation passed; toolkit shards run in separate jobs." : "Local validation passed.");
 return 0;
 
@@ -209,8 +240,8 @@ string Solution(string name, IEnumerable<string> projects)
     return file;
 }
 
-// A test run's results go under artifacts/validate. When its test host is stopped (--blame-hang) or crashes, vstest reports
-// only "Test host process crashed"; the blame sequence file says which tests had started and not completed, so name them.
+// A test run's results go under artifacts/validate. Keep a TRX for ordinary assertion failures too: console output can be
+// lost when an agent shell yields. When a host crashes, the blame sequence names tests that started but did not complete.
 void Test(string project, params string[] extra)
 {
     string output = Path.Combine(results, Path.GetFileNameWithoutExtension(project));
@@ -218,8 +249,8 @@ void Test(string project, params string[] extra)
     {
         var arguments = new List<string> { "test", project, "-c", "Release", "-m:1", "--blame-hang-timeout", "5m",
             "--blame-hang-dump-type", "none", "--results-directory", output };
-        if (Environment.GetEnvironmentVariable("VT_CI_PROFILE") == "1")
-            arguments.AddRange(["--logger", "trx;LogFileName=timings.trx"]);
+        arguments.AddRange(["--logger", Environment.GetEnvironmentVariable("VT_CI_PROFILE") == "1"
+            ? "trx;LogFileName=timings.trx" : "trx;LogFileName=results.trx"]);
         arguments.AddRange(extra);
         Run("dotnet", arguments.ToArray());
     }
@@ -232,6 +263,24 @@ void Test(string project, params string[] extra)
         throw;
     }
 }
+
+// Full validation invokes more file apps after its own entrypoint. Give those builds and runs the same SDK-cache fallback.
+void BuildScript(string script)
+{
+    if (OperatingSystem.IsWindows()) Run("dotnet", "build", script);
+    else Run("sh", "scripts/run-file-app.sh", "--build-only", script);
+}
+
+void RunScript(string script, params string[] arguments)
+{
+    if (OperatingSystem.IsWindows()) Run("dotnet", ["run", script, "--", .. arguments]);
+    else Run("sh", ["scripts/run-file-app.sh", script, .. arguments]);
+}
+
+string CaptureScript(string script, params string[] arguments) =>
+    OperatingSystem.IsWindows()
+        ? Capture("dotnet", ["run", script, "--", .. arguments])
+        : Capture("sh", ["scripts/run-file-app.sh", script, .. arguments]);
 
 void Run(string file, params string[] arguments)
 {
