@@ -69,15 +69,36 @@ public sealed class ValidationEntryTests : IDisposable
         Assert.Contains("READY: full local validation can start", result.Output);
     }
 
+    [Fact]
+    public void UnwritableFileAppCacheStillBuildsAndRunsAScript()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        Directory.CreateDirectory(_root);
+        string script = Path.Combine(_root, "probe.cs");
+        File.WriteAllText(script, "Console.WriteLine(\"fallback-ok\");\n");
+        string repo = RepositoryRoot();
+
+        var build = RunFileApp(repo, _root, "--build-only", script);
+        Assert.Equal(0, build.ExitCode);
+        Assert.Contains("SDK file-app cache unavailable", build.Output);
+        Assert.Contains("Build succeeded.", build.Output);
+
+        var run = RunFileApp(repo, _root, script);
+        Assert.Equal(0, run.ExitCode);
+        Assert.Contains("fallback-ok", run.Output);
+
+        var projectReference = RunFileApp(repo, _root, "--build-only", Path.Combine(repo, "scripts", "bepinex-loader.cs"));
+        Assert.Equal(0, projectReference.ExitCode);
+        Assert.Contains("Build succeeded.", projectReference.Output);
+    }
+
     private void Prepare(string ps, string netstat)
     {
         string scripts = Path.Combine(_root, "scripts");
         string bin = Path.Combine(_root, "bin");
         Directory.CreateDirectory(scripts);
         Directory.CreateDirectory(bin);
-        string repo = AppContext.BaseDirectory;
-        while (!File.Exists(Path.Combine(repo, "scripts", "validate.sh")))
-            repo = Directory.GetParent(repo)?.FullName ?? throw new InvalidOperationException("Cannot find validation scripts.");
+        string repo = RepositoryRoot();
         File.Copy(Path.Combine(repo, "scripts", "validate.sh"), Path.Combine(scripts, "validate.sh"));
         File.Copy(Path.Combine(repo, "scripts", "nuget-caches.sh"), Path.Combine(scripts, "nuget-caches.sh"));
         WriteExecutable("uname", "echo Darwin");
@@ -107,6 +128,37 @@ public sealed class ValidationEntryTests : IDisposable
         string output = process.StandardOutput.ReadToEnd() + process.StandardError.ReadToEnd();
         Assert.True(process.WaitForExit(10_000), "Validation probe did not exit within ten seconds.");
         return (process.ExitCode, output);
+    }
+
+    private static string RepositoryRoot()
+    {
+        string repo = AppContext.BaseDirectory;
+        while (!File.Exists(Path.Combine(repo, "scripts", "validate.sh")))
+            repo = Directory.GetParent(repo)?.FullName ?? throw new InvalidOperationException("Cannot find validation scripts.");
+        return repo;
+    }
+
+    private static (int ExitCode, string Output) RunFileApp(string repo, string testRoot, params string[] arguments)
+    {
+        // SDK build servers can keep inherited pipes open after the command exits. Capture to a file instead.
+        string driver = Path.Combine(testRoot, "capture.sh");
+        string log = Path.Combine(testRoot, "capture-" + Guid.NewGuid().ToString("N") + ".log");
+        File.WriteAllText(driver, "#!/bin/sh\nlog=$1\nshift\nexec \"$@\" > \"$log\" 2>&1\n");
+        var info = new ProcessStartInfo("sh") { UseShellExecute = false, WorkingDirectory = repo };
+        info.ArgumentList.Add(driver);
+        info.ArgumentList.Add(log);
+        info.ArgumentList.Add("sh");
+        info.ArgumentList.Add("scripts/run-file-app.sh");
+        foreach (string argument in arguments) info.ArgumentList.Add(argument);
+        info.Environment["VT_FORCE_RUNFILE_FALLBACK"] = "1";
+        info.Environment["NuGetAudit"] = "false";
+        using var process = Process.Start(info)!;
+        if (!process.WaitForExit(90_000))
+        {
+            if (!process.HasExited) process.Kill(entireProcessTree: true);
+            throw new TimeoutException("File-app fallback did not exit within 90 seconds.");
+        }
+        return (process.ExitCode, File.ReadAllText(log));
     }
 
     public void Dispose()

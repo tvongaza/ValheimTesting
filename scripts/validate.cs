@@ -142,7 +142,7 @@ Run("dotnet", "build", Solution("examples", new[] { "examples", "tools" }
 // first fail when someone needs them. This script is running, so it is not built again.
 foreach (string script in Directory.GetFiles(Path.Combine(root, "scripts"), "*.cs").Order(StringComparer.Ordinal)
     .Where(script => Path.GetFileName(script) != "validate.cs"))
-    Run("dotnet", "build", script);
+    BuildScript(script);
 // The full-life-cycle example's test project; its game-side mod and adapter (and the suite's) need a game install and build
 // elsewhere. The native session tests (trait Category=Native) launch the game when a private session.json sits beside their
 // project (the example's skip without one, the native acceptance suite's fail), so validation leaves them out.
@@ -156,7 +156,7 @@ Run("dotnet", "run", "--project", "examples/SharedWorld", "-c", "Release", "--no
 string[] packed = Directory.GetDirectories(Path.Combine(root, "src"), "Valheim.Testing*", SearchOption.TopDirectoryOnly)
     .Select(Path.GetFileName).OfType<string>()
     .Where(id => File.Exists(Path.Combine(root, "src", id, id + ".csproj"))).Order(StringComparer.Ordinal).ToArray();
-string candidate = Capture("dotnet", "run", "scripts/pins.cs", "--", "candidate").Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).LastOrDefault() ?? "";
+string candidate = CaptureScript("scripts/pins.cs", "candidate").Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).LastOrDefault() ?? "";
 if (!System.Text.RegularExpressions.Regex.IsMatch(candidate, "^candidate\\.h?[0-9a-f]{12}$")) throw new InvalidOperationException("pins.cs candidate printed no identity: " + candidate);
 Note("candidate identity: " + candidate);
 string feed = Path.Combine(root, ".packages");
@@ -170,15 +170,15 @@ else
     foreach (string partial in current) File.Delete(partial);
     // PackTool includes everything under PublishDir, even files from an earlier run. Clear only the two generated tool
     // publish directories before the solution pack; other build outputs and the reviewed feed stay intact (#523).
-    Run("dotnet", "run", "scripts/tool-pack.cs", "--", "clean");
+    RunScript("scripts/tool-pack.cs", "clean");
     Run("dotnet", "pack", Solution("packages", packed.Select(name => $"src/{name}/{name}.csproj")),
         "-c", "Release", "-nodeReuse:false", "-o", feed, "-p:ValheimTestingCandidate=" + candidate);
 }
-Run("dotnet", "run", "scripts/tool-pack.cs", "--", "verify", feed);
-Run("dotnet", "run", "scripts/package-audit.cs", "--", "--directory", feed, "--candidate");
+RunScript("scripts/tool-pack.cs", "verify", feed);
+RunScript("scripts/package-audit.cs", "--directory", feed, "--candidate");
 // A mod's view of what was just packed: outside this checkout, the candidate packages only from .packages and byte-identical
 // to it, the Cli from .packages too (its pin may not be published yet), every other package from NuGet.org.
-Run("dotnet", "run", "scripts/consumer.cs", "--", "--feed", "local", "--candidate", candidate);
+RunScript("scripts/consumer.cs", "--feed", "local", "--candidate", candidate);
 Note(skipCiShell || ciBuildOnly ? "CI validation passed; toolkit shards run in separate jobs." : "Local validation passed.");
 return 0;
 
@@ -263,6 +263,24 @@ void Test(string project, params string[] extra)
         throw;
     }
 }
+
+// Full validation invokes more file apps after its own entrypoint. Give those builds and runs the same SDK-cache fallback.
+void BuildScript(string script)
+{
+    if (OperatingSystem.IsWindows()) Run("dotnet", "build", script);
+    else Run("sh", "scripts/run-file-app.sh", "--build-only", script);
+}
+
+void RunScript(string script, params string[] arguments)
+{
+    if (OperatingSystem.IsWindows()) Run("dotnet", ["run", script, "--", .. arguments]);
+    else Run("sh", ["scripts/run-file-app.sh", script, .. arguments]);
+}
+
+string CaptureScript(string script, params string[] arguments) =>
+    OperatingSystem.IsWindows()
+        ? Capture("dotnet", ["run", script, "--", .. arguments])
+        : Capture("sh", ["scripts/run-file-app.sh", script, .. arguments]);
 
 void Run(string file, params string[] arguments)
 {
