@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using Valheim.Testing.Game;
+using Valheim.Testing.Game.Fakes;
 using Xunit;
 using Valheim.Testing.GameSessions;
 
@@ -34,6 +35,37 @@ public sealed class ServerLoadOneOffTests : IDisposable
         Assert.Equal(900, JsonSerializer.Deserialize<ServerRunPlan>(File.ReadAllText(Path.Combine(output, "plan.json")))!.StartupSeconds);
         Assert.Equal("sample-one-shot", OneShotScenario.Load(typeof(SampleOneShotServerScenario).Assembly.Location,
             Path.Combine(_rig.Root, "separate-selection")).Runner.Name);
+    }
+
+    [Fact]
+    public async Task BuiltAdapterBindsCompiledSourceAndDllIntoTheCampaignResult()
+    {
+        using var dataRoot = new FakeDataRoot(Path.Combine(_rig.Root, "machine"));
+        string projectDirectory = Path.Combine(_rig.Root, "adapter-project");
+        Directory.CreateDirectory(projectDirectory);
+        string project = Path.Combine(projectDirectory, "Adapter.csproj");
+        File.WriteAllText(project, "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>");
+        File.WriteAllText(Path.Combine(projectDirectory, "Adapter.cs"), "public sealed class Adapter { }");
+        string output = Path.Combine(_rig.Root, "adapter-source-result");
+        var args = Arguments(output, "--server-only").ToList();
+        int selected = args.IndexOf("--adapter");
+        args.RemoveRange(selected, 2);
+        args.AddRange(["--adapter-project", project, "--session-capability", "test/session",
+            "--session-token-variable", "TEST_SESSION_TOKEN"]);
+        Assert.True(ServerLoad.TryRead(args.ToArray(), out _, out string parseError), parseError);
+        Dictionary<string, string>? provenance = null;
+        Assert.Equal(0, await ServerLoad.RunAsync(args.ToArray(), new ServerLoad.Seams(
+            Inspect: _ => Task.FromResult(Ready),
+            Campaign: (_, plan, _, _, options) =>
+            {
+                provenance = new Dictionary<string, string>();
+                options.Provenance!(plan, provenance);
+                return Task.FromResult(0);
+            })));
+        var inputs = JsonDocument.Parse(File.ReadAllText(Path.Combine(output, "adapter-build", "inputs.json"))).RootElement;
+        Assert.Equal(inputs.GetProperty("sourceInputSha256").GetString(), provenance!["adapterSourceInputSha256"]);
+        Assert.Equal(inputs.GetProperty("adapter").GetProperty("sha256").GetString(), provenance["adapterSha256"]);
+        Assert.True(File.Exists(inputs.GetProperty("sourceManifest").GetString()));
     }
 
     [Fact]
