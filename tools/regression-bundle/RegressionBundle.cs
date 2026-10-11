@@ -198,22 +198,52 @@ public interface IBundleSources
 /// <summary>NuGet.org's flat container and GitHub's commit API. Needs the network; an unanswered query throws rather than passes.</summary>
 public sealed class PublicBundleSources : IBundleSources
 {
-    private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(30) };
-    static PublicBundleSources() => Http.DefaultRequestHeaders.UserAgent.ParseAdd("ValheimTesting-regression-bundle");
+    private static readonly HttpClient SharedHttp = CreateHttp();
+    private readonly HttpClient _http;
+
+    public PublicBundleSources() : this(SharedHttp) { }
+    internal PublicBundleSources(HttpClient http) => _http = http;
+
+    private static HttpClient CreateHttp()
+    {
+        var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+        http.DefaultRequestHeaders.UserAgent.ParseAdd("ValheimTesting-regression-bundle");
+        return http;
+    }
 
     public IReadOnlyList<string>? PackageVersions(string id)
     {
-        using var reply = Http.GetAsync($"https://api.nuget.org/v3-flatcontainer/{id.ToLowerInvariant()}/index.json").GetAwaiter().GetResult();
-        if (reply.StatusCode == System.Net.HttpStatusCode.NotFound) return null;
-        reply.EnsureSuccessStatusCode();
-        using var document = JsonDocument.Parse(reply.Content.ReadAsStringAsync().GetAwaiter().GetResult());
-        return document.RootElement.GetProperty("versions").EnumerateArray().Select(version => version.GetString()!).ToList();
+        string url = $"https://api.nuget.org/v3-flatcontainer/{id.ToLowerInvariant()}/index.json";
+        for (int attempt = 0; attempt < 2; attempt++)
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, url);
+            if (attempt != 0)
+            {
+                // A CDN can return 304 without a usable body. Force a fresh representation once.
+                request.Headers.CacheControl = new System.Net.Http.Headers.CacheControlHeaderValue { NoCache = true };
+                request.Headers.Pragma.ParseAdd("no-cache");
+            }
+            using var reply = _http.SendAsync(request).GetAwaiter().GetResult();
+            if (reply.StatusCode == System.Net.HttpStatusCode.NotFound) return null;
+            if (reply.StatusCode == System.Net.HttpStatusCode.NotModified)
+            {
+                if (attempt == 0) continue;
+                throw new HttpRequestException($"NuGet.org returned 304 Not Modified twice for {id}; no package-version body was available.");
+            }
+            if (!reply.IsSuccessStatusCode)
+                throw new HttpRequestException(
+                    $"NuGet.org package versions for {id} returned {(int)reply.StatusCode} {reply.ReasonPhrase} after {attempt + 1} request(s).",
+                    null, reply.StatusCode);
+            using var document = JsonDocument.Parse(reply.Content.ReadAsStringAsync().GetAwaiter().GetResult());
+            return document.RootElement.GetProperty("versions").EnumerateArray().Select(version => version.GetString()!).ToList();
+        }
+        throw new InvalidOperationException("The bounded NuGet.org package query did not produce a response.");
     }
 
     public bool HasCommit(string repository, string commit)
     {
         string path = new Uri(repository).AbsolutePath.Trim('/');
-        using var reply = Http.GetAsync($"https://api.github.com/repos/{path}/commits/{commit}").GetAwaiter().GetResult();
+        using var reply = _http.GetAsync($"https://api.github.com/repos/{path}/commits/{commit}").GetAwaiter().GetResult();
         if (reply.StatusCode is System.Net.HttpStatusCode.NotFound or System.Net.HttpStatusCode.UnprocessableEntity) return false;
         reply.EnsureSuccessStatusCode();
         return true;
