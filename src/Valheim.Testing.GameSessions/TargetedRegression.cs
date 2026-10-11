@@ -69,7 +69,7 @@ public sealed class StagedArm
 /// <item>The fixture root must hold exactly one world with the manifest's UID (<see cref="FixtureLayout"/>).</item>
 /// <item>Every staged file must be its pinned SHA256; the manifest records every arm's source hash and the chosen arm is staged.</item>
 /// <item>The shared hosted-runtime stage makes a fresh disposable copy per arm with <c>BepInEx/plugins</c>, <c>patchers</c>,
-/// <c>config</c> and <c>scripts</c> rebuilt from the allowlist only: the ValheimCLI core and packs, the plugins, the probe and one arm.</item>
+/// <c>config</c> and <c>scripts</c> rebuilt from the allowlist only: the default ValheimCLI plugin, the mod plugins, the probe and one arm.</item>
 /// <item>Every hard <c>[BepInDependency]</c> any staged plugin declares must be met by a staged plugin's own
 /// <c>[BepInPlugin]</c> (with its minimum version), no <c>[BepInIncompatibility]</c> may be staged, every plugin must load in
 /// the client process, and every assembly reference must resolve to the game, BepInEx or a staged DLL. File names count for nothing.</item>
@@ -93,7 +93,7 @@ public sealed class TargetedRegression
     internal const string CliPlugin = "valheimCLI.valheimCLI", CliConfig = "valheimCLI.valheimCLI.cfg", BepInExConfig = "BepInEx.cfg";
     private static readonly string[] StagedFolders = ["plugins", "patchers", "config", "scripts"];
     // What a copy of the prepared install leaves out: everything BepInEx loads or writes besides its core.
-    // ValheimCLI's own extension owners: the Standard and World Tools packs register valheim.* and cli.*.
+    // ValheimCLI's own extension owners are logical command groups in the default plugin.
     private static bool OwnedByCli(string path) => path.StartsWith("valheim.", StringComparison.Ordinal) || path.StartsWith("cli.", StringComparison.Ordinal);
     private readonly IGameHost _host = new LocalGameHost("this machine", OperatingSystem.IsWindows() ? HostShell.WindowsPowerShell : HostShell.Bash);
     private readonly RunJournal _journal = RunJournal.ThisProcess;
@@ -222,7 +222,6 @@ public sealed class TargetedRegression
         var sources = new List<(string Role, RegressionFile File, string Sha256)>();
         void Source(string role, RegressionFile file, string field) => sources.Add((role, file, RequirePinned(file.File, file.Sha256, field)));
         Source("cli-core", env.Cli.Core, "cli.core");
-        foreach (var (pack, i) in env.Cli.Packs.Select((pack, i) => (pack, i))) Source("cli-pack", pack, $"cli.packs[{i}]");
         foreach (var (plugin, i) in env.Plugins.Select((plugin, i) => (plugin, i))) Source("plugin", plugin, $"plugins[{i}]");
         if (env.Probe != null) Source("probe", env.Probe, "probe");
         foreach (var (name, other) in env.Mod.Arms) RequireArm(name, other);
@@ -241,8 +240,6 @@ public sealed class TargetedRegression
         var core = Read(env.Cli.Core.File);
         if (!core.Plugins.Any(plugin => plugin.Guid == CliPlugin))
             throw new InvalidOperationException($"cli.core: {env.Cli.Core.File} declares {Declared(core)}, not ValheimCLI's core plugin {CliPlugin}. Give the core valheimCLI.dll of one coherent ValheimCLI build.");
-        foreach (var (pack, i) in env.Cli.Packs.Select((pack, i) => (pack, i)))
-            if (Read(pack.File).Plugins.Count == 0) throw new InvalidOperationException($"cli.packs[{i}]: {pack.File} declares no [BepInPlugin]; a ValheimCLI pack is a plugin.");
         if (env.Probe != null && Read(env.Probe.File).Plugins.Count == 0)
             throw new InvalidOperationException($"probe: {env.Probe.File} declares no [BepInPlugin]; a probe is a plugin.");
 

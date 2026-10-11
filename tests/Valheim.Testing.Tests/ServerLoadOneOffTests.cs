@@ -353,14 +353,14 @@ public sealed class ServerLoadOneOffTests : IDisposable
     }
 
     [Fact]
-    public async Task MissingPinnedObservationPackRefusesBeforeAnyCommandOrLaunch()
+    public async Task MissingPinnedObservationCommandRefusesBeforeAnyCommandOrLaunch()
     {
         string output = Path.Combine(_rig.Root, "missing-observation-pack");
         bool launched = false;
         string[] args = Arguments(output, "--server-only", "--assert-command", "mymod_new_alias", "--assert-line", "READY");
         string manifestFile = args[Array.IndexOf(args, "--cli-manifest") + 1];
         var manifest = CliCapabilityManifest.Read(manifestFile);
-        manifest.Files.RemoveAll(file => file.File == "Valheim.Cli.Observe.dll");
+        manifest.Files.Single(file => file.File == "valheimCLI.dll").Extensions["valheim.observe"].Remove("zones");
         manifest.Write(manifestFile);
         int result = await ServerLoad.RunAsync(args,
             new ServerLoad.Seams(Inspect: _ => Task.FromResult(Ready),
@@ -369,22 +369,22 @@ public sealed class ServerLoadOneOffTests : IDisposable
         Assert.False(launched);
         string refusal = File.ReadAllText(Path.Combine(output, "REFUSED.txt"));
         Assert.Contains("valheim.observe/zones", refusal);
-        Assert.Contains("Observe", refusal);
+        Assert.Contains("default valheimCLI.dll", refusal);
     }
 
     [Fact]
-    public async Task ChangedUnusedPackRefusesBeforeLaunchWithItsName()
+    public async Task ChangedDefaultPluginRefusesBeforeLaunchWithItsName()
     {
         string output = Path.Combine(_rig.Root, "changed-unused-pack");
         string[] args = Arguments(output, "--server-only", "--assert-command", "mymod_new_alias", "--assert-line", "READY");
-        File.AppendAllText(Path.Combine(_rig.Root, "cli", "Valheim.Cli.Reflection.dll"), "changed");
+        File.AppendAllText(Path.Combine(_rig.Root, "cli", "valheimCLI.dll"), "changed");
         bool launched = false;
         int result = await ServerLoad.RunAsync(args, new ServerLoad.Seams(Inspect: _ => Task.FromResult(Ready),
             Campaign: (_, _, _, _, _) => { launched = true; return Task.FromResult(0); }));
         Assert.Equal(3, result);
         Assert.False(launched);
         string refusal = File.ReadAllText(Path.Combine(output, "REFUSED.txt"));
-        Assert.Contains("Valheim.Cli.Reflection.dll", refusal);
+        Assert.Contains("valheimCLI.dll", refusal);
         Assert.Contains("another build", refusal);
     }
 

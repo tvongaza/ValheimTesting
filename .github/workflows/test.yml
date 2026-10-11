@@ -103,14 +103,16 @@ jobs:
           unzip -q .packages/valheimcli-bundle.zip -d "$t/cli"
           dotnet run scripts/bepinex-loader.cs -- capture "$t/loader" "$root" "$(jq -r .version loader-dependency.json)" "$t/loader.json"
           dotnet run scripts/bepinex-loader.cs -- check "$t/loader.json"
-          # A real plugin from the pinned bundle. With no game assemblies here its references are confirmed optional, so the lock
-          # is ready. A bundle pin that adds a reference fails resolve with a gap line naming it: add that name to the list.
+          # The default plugin from the pinned bundle. CI has no game assemblies, so this lock fixture explicitly treats known
+          # game-provided references as optional. A new reference fails resolve with a gap naming it for review.
           mkdir "$t/managed"
           cat > "$t/request.json" <<'EOF'
-          {"mods": ["cli/Valheim.Cli.WorldTools.dll"], "searchRoots": [], "gameManaged": "managed",
+          {"mods": ["cli/valheimCLI.dll"], "searchRoots": [], "gameManaged": "managed",
            "bepInExCore": "loader/BepInEx/core", "cliManifest": "cli/cli-manifest.json", "cliFiles": "cli",
            "capabilities": [], "optionalReferences": ["System", "System.Core", "mscorlib", "UnityEngine.CoreModule",
-           "UnityEngine.PhysicsModule", "assembly_utils", "assembly_valheim"]}
+           "UnityEngine.PhysicsModule", "UnityEngine.ImageConversionModule", "UnityEngine.ScreenCaptureModule",
+           "UnityEngine.UI", "UnityEngine.UIModule", "Unity.TextMeshPro", "SoftReferenceableAssets",
+           "assembly_utils", "assembly_valheim", "assembly_guiutils", "gui_framework"]}
           EOF
           dotnet run scripts/native-dependencies.cs -- resolve "$t/request.json" "$t/lock.json"
           dotnet run scripts/native-dependencies.cs -- check "$t/lock.json"

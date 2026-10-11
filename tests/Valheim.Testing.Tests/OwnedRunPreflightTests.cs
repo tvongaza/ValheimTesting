@@ -86,7 +86,7 @@ public sealed class OwnedRunPreflightTests : IDisposable
         var error = Assert.Throws<InvalidOperationException>(plan.Preflight);
         Assert.Contains("valheimCLI.valheimCLI (BepInEx/scripts/valheimCLI.dll)", error.Message);
         Assert.Contains("[General] LoadOnStart = false", error.Message);
-        Assert.Contains("install the current ValheimCLI core and its packs in BepInEx/plugins", error.Message);
+        Assert.Contains("install the current default valheimCLI.dll in BepInEx/plugins", error.Message);
         install.Add("BepInEx/config/com.bepis.bepinex.scriptengine.cfg", "[General]\nLoadOnStart = true\n");
         plan.Preflight();
     }
@@ -271,21 +271,21 @@ public sealed class OwnedRunPreflightTests : IDisposable
         using var actor = transport.Actor("client");
         var error = Assert.Throws<InvalidOperationException>(() => CliCapabilities.Require(actor, CliCapabilities.HostedRounds));
         Assert.Contains("has no cli_extensions", error.Message);
-        Assert.Contains("predates command packs", error.Message);
-        Assert.Contains("Standard and World Tools packs", error.Message);
+        Assert.Contains("predates the built-in command API", error.Message);
+        Assert.Contains("current valheimCLI.dll", error.Message);
         // Every capability lookup says the same, not only the preflight.
-        Assert.Contains("predates command packs", Assert.Throws<InvalidOperationException>(() => actor.RequireCapability("valheim.session/state")).Message);
+        Assert.Contains("predates the built-in command API", Assert.Throws<InvalidOperationException>(() => actor.RequireCapability("valheim.session/state")).Message);
     }
 
-    [Fact] public void AMissingPackIsNamedWithEveryMissingCommand()
+    [Fact] public void AMissingBuiltInIsNamedWithEveryMissingCommand()
     {
         var transport = new ScriptedTransport().Extension("valheim.session", "state", _ => new { });
         using var actor = transport.Actor("client");
         var error = Assert.Throws<InvalidOperationException>(() => CliCapabilities.Require(actor, CliCapabilities.HostedRounds.Append("valheim.world/terrain")));
         Assert.Contains("lacks valheim.session/save, valheim.session/leave, valheim.world/terrain", error.Message);
-        Assert.Contains("valheim.session comes from the Standard pack (Valheim.Cli.Standard.dll", error.Message);
-        Assert.Contains("valheim.world comes from the World Tools pack (Valheim.Cli.WorldTools.dll", error.Message);
-        Assert.Contains("the World Tools pack", Assert.Throws<InvalidOperationException>(() => actor.RequireCapability("valheim.world/terrain")).Message);
+        Assert.Contains("valheim.session comes from the default valheimCLI.dll", error.Message);
+        Assert.Contains("valheim.world comes from the default valheimCLI.dll", error.Message);
+        Assert.Contains("default valheimCLI.dll", Assert.Throws<InvalidOperationException>(() => actor.RequireCapability("valheim.world/terrain")).Message);
         transport.Extension("valheim.session", "save", _ => new { }, readOnly: false).Extension("valheim.session", "leave", _ => new { }, readOnly: false);
         CliCapabilities.Require(actor, CliCapabilities.HostedRounds);
     }

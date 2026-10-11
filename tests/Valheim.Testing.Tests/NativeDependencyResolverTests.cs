@@ -47,7 +47,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         var plan = NativeDependencyResolver.Resolve(request);
         Assert.True(plan.Ready, string.Join("; ", plan.Gaps.Select(gap => gap.Reason)));
         Assert.Equal(new[] { "Dependency.dll" }, plan.Plugins.Select(file => Path.GetFileName(file.File)));
-        Assert.Equal(new[] { "valheimCLI.dll", "Valheim.Cli.Standard.dll" }, plan.CliFiles.Select(file => Path.GetFileName(file.File)));
+        Assert.Equal(new[] { "valheimCLI.dll" }, plan.CliFiles.Select(file => Path.GetFileName(file.File)));
         Assert.Contains("example.soft", plan.OptionalCandidates); // Soft plugins are reported, never auto-staged.
         Assert.Contains("hard [BepInDependency]", plan.Plugins[0].Reason);
         string lockFile = Path.Combine(_rig.Root, "dependency-lock.json");
@@ -490,7 +490,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
             $"expected {actor} {input} containing \"{text}\" in: " + string.Join(" | ", report.Problems.Select(problem => $"{problem.Actor} {problem.Input}: {problem.Message}")));
         Has("client-a", "Steam identity", "");                    // bad account
         Has("server", "game and loader", "Doorstop 4");           // loader mix
-        Has("client-b", "dependencies and CLI packs", "");        // missing pack
+        Has("client-b", "dependencies and ValheimCLI", "");        // missing pack
         Has("client-b", "game and loader", "does not match the host platform"); // wrong package
         Has("server", "world fixture", "world UID");              // stale world UID
         Has("pc", "session", "conflicting");                      // server + client on one host, already in use
@@ -498,7 +498,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         // The static part through the CLI (no host): the missing pack and the stale UID together, exit 3.
         using var output = new StringWriter();
         Assert.Equal(3, await SessionCommand.RunAsync(["check", faulty], output, new StringWriter()));
-        Assert.Contains("REFUSED client-b dependencies and CLI packs", output.ToString());
+        Assert.Contains("REFUSED client-b dependencies and ValheimCLI", output.ToString());
         Assert.Contains("REFUSED server world fixture", output.ToString());
 
         // The same campaign without the faults: server and client on one host are no conflict when nothing runs there.
@@ -1114,7 +1114,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         plan.CliFiles.Add(plan.CliFiles[0]);
         string path = Path.Combine(_rig.Root, "edited-lock.json");
         plan.Write(path);
-        Assert.Contains("exactly the ValheimCLI core and packs", Assert.Throws<InvalidDataException>(() => NativeDependencyLock.ReadReady(path)).Message);
+        Assert.Contains("exactly one pinned valheimCLI.dll", Assert.Throws<InvalidDataException>(() => NativeDependencyLock.ReadReady(path)).Message);
         Assert.Throws<InvalidDataException>(() => plan.ApplyTo(_rig.Manifest(), Path.Combine(_rig.Root, "should-not-be-written.json")));
         Assert.False(File.Exists(Path.Combine(_rig.Root, "should-not-be-written.json")));
     }
@@ -1126,7 +1126,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         core.Plugins = ["a.different.plugin"];
         string path = Path.Combine(_rig.Root, "no-core-lock.json");
         plan.Write(path);
-        Assert.Contains("exactly one ValheimCLI core", Assert.Throws<InvalidDataException>(() => NativeDependencyLock.ReadReady(path)).Message);
+        Assert.Contains("not a one-plugin build", Assert.Throws<InvalidDataException>(() => NativeDependencyLock.ReadReady(path)).Message);
     }
 
     [Fact] public void UniqueReferencedLibraryIsIncludedAndAmbiguityIsLeftForAnExplicitChoice()
@@ -1259,17 +1259,18 @@ public sealed class NativeDependencyResolverTests : IDisposable
         Assert.False(Directory.Exists(_rig.Install));
     }
 
-    [Fact] public void ManifestPackMissingFromLocalBuildIsAnUnresolvedGap()
+    [Fact] public void PinnedDefaultPluginChangedInLocalBuildIsAnUnresolvedGap()
     {
         var request = Request(_rig.Parent);
         string coreOnly = Path.Combine(_rig.Root, "cli-core-only");
         Directory.CreateDirectory(coreOnly);
         File.Copy(_rig.Manifest().Cli.Core.File, Path.Combine(coreOnly, "valheimCLI.dll"));
+        File.AppendAllText(Path.Combine(coreOnly, "valheimCLI.dll"), "changed");
         request.CliFiles = coreOnly;
         var plan = NativeDependencyResolver.Resolve(request);
-        var gap = Assert.Single(plan.Gaps);
+        var gap = Assert.Single(plan.Gaps.Where(entry => entry.Kind == "cli"));
         Assert.Equal("cli", gap.Kind);
-        Assert.Equal("Valheim.Cli.Standard.dll", gap.Name);
+        Assert.Equal("valheimCLI.dll", gap.Name);
         Assert.Contains("pinned ValheimCLI build", gap.Reason);
         Assert.False(Directory.Exists(_rig.Install));
     }

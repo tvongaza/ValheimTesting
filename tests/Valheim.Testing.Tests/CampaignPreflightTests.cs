@@ -43,8 +43,8 @@ public sealed class CampaignPreflightTests : IDisposable
         Assert.False(report.Ready);
         Assert.Contains(report.Problems, problem => problem.Actor == "campaign" && problem.Input == "inventory");
         Assert.Contains(report.Problems, problem => problem.Actor == "server" && problem.Input == "loader");
-        Assert.Contains(report.Problems, problem => problem.Actor == "server" && problem.Input == "dependencies and CLI packs");
-        Assert.Contains(report.Problems, problem => problem.Actor == "client-a" && problem.Input == "dependencies and CLI packs");
+        Assert.Contains(report.Problems, problem => problem.Actor == "server" && problem.Input == "dependencies and ValheimCLI");
+        Assert.Contains(report.Problems, problem => problem.Actor == "client-a" && problem.Input == "dependencies and ValheimCLI");
         Assert.Contains(report.Problems, problem => problem.Actor == "client-a" && problem.Input == "character");
         Assert.Contains(report.Problems, problem => problem.Actor == "server" && problem.Input == "world fixture");
         Assert.True(report.Problems.Count >= 6);
@@ -72,7 +72,7 @@ public sealed class CampaignPreflightTests : IDisposable
         var report = HostedCampaignPreparation.Inspect(file);
         Assert.Contains(report.Actors, actor => actor.Name == "server" && actor.Host == "pc" && actor.Platform == "windows");
         Assert.Contains(report.Problems, problem => problem.Actor == "server" && problem.Input == "world fixture" && problem.Message.Contains("world UID"));
-        Assert.Contains(report.Problems, problem => problem.Actor == "server" && problem.Input == "dependencies and CLI packs");
+        Assert.Contains(report.Problems, problem => problem.Actor == "server" && problem.Input == "dependencies and ValheimCLI");
         using var output = new StringWriter();
         Assert.Equal(3, await SessionCommand.RunAsync(["check", file, "--json"], output, new StringWriter()));
         using var json = JsonDocument.Parse(output.ToString());
@@ -354,7 +354,7 @@ public sealed class CampaignPreflightTests : IDisposable
         });
         var host = new FakeServerHost("pc", Path.Combine(_root, "mirror"), windows: true) { GameActive = true, PortBusy = true };
         var report = await HostedCampaignPreparation.InspectAsync(file, TimeSpan.FromSeconds(2), _ => host);
-        Assert.Contains(report.Problems, problem => problem.Actor == "server" && problem.Input == "dependencies and CLI packs");
+        Assert.Contains(report.Problems, problem => problem.Actor == "server" && problem.Input == "dependencies and ValheimCLI");
         Assert.Contains(report.Problems, problem => problem.Actor == "pc" && problem.Input == "session");
         Assert.Contains(report.Problems, problem => problem.Actor == "server" && problem.Input == "game and loader");
         Assert.Contains(report.Problems, problem => problem.Actor == "server" && problem.Input == "ValheimCLI port");
@@ -493,7 +493,7 @@ public sealed class CampaignPreflightTests : IDisposable
         Assert.False(report.Ready);
         Assert.Contains(report.Problems, problem => problem.Actor == "server" && problem.Input == "ValheimCLI port" && problem.Message.Contains("cannot tell which ports are in use"));
         Assert.Contains(report.Problems, problem => problem.Actor == "box" && problem.Input == "session");
-        Assert.Contains(report.Problems, problem => problem.Actor == "server" && problem.Input == "dependencies and CLI packs");
+        Assert.Contains(report.Problems, problem => problem.Actor == "server" && problem.Input == "dependencies and ValheimCLI");
         Assert.DoesNotContain(host.Scripts, script => script is "copy" or "ship" or "start" or "apply-stage");
     }
 

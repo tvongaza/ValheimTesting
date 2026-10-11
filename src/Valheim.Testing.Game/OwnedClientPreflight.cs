@@ -122,7 +122,7 @@ internal static class OwnedClientPreflight
     {
         if (inScripts.Count == 0) return;
         string listed = string.Join(", ", inScripts);
-        string remedy = "or install the current ValheimCLI core and its packs in BepInEx/plugins, which needs no ScriptEngine.";
+        string remedy = "or install the current default valheimCLI.dll in BepInEx/plugins, which needs no ScriptEngine.";
         if (!pins.Any(pin => pin.Key.Equals(ScriptEngine, StringComparison.OrdinalIgnoreCase) && pin.Value != "absent"))
             throw new InvalidOperationException($"The plan pins {listed} in {Slash(Scripts)}, which only ScriptEngine loads, but does not pin ScriptEngine ({ScriptEngine}) as loaded. Install and pin ScriptEngine, " + remedy);
         var enginePaths = located.Where(entry => entry.Key.Equals(ScriptEngine, StringComparison.OrdinalIgnoreCase))

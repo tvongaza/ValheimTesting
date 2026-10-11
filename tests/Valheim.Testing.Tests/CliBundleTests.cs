@@ -10,7 +10,7 @@ public sealed class CliBundleTests : IDisposable
     private readonly RegressionRig _rig = new();
     public void Dispose() => _rig.Dispose();
 
-    // A bundle zip of the rig's core and Standard pack with their manifest, as the published asset holds them.
+    // A bundle zip of the rig's one default plugin with its manifest, as the published asset holds them.
     private byte[] Zip(Action<ZipArchive>? extra = null)
     {
         string manifest = _rig.CliManifest(save: true);
@@ -18,8 +18,7 @@ public sealed class CliBundleTests : IDisposable
         using (var archive = new ZipArchive(buffer, ZipArchiveMode.Create, leaveOpen: true))
         {
             archive.CreateEntryFromFile(manifest, CliBundle.ManifestFile);
-            foreach (string dll in new[] { "valheimCLI.dll", "Valheim.Cli.Standard.dll" })
-                archive.CreateEntryFromFile(Path.Combine(_rig.Root, "cli", dll), dll);
+            archive.CreateEntryFromFile(Path.Combine(_rig.Root, "cli", "valheimCLI.dll"), "valheimCLI.dll");
             archive.CreateEntry("LICENSE").Open().Dispose();
             extra?.Invoke(archive);
         }
@@ -38,10 +37,10 @@ public sealed class CliBundleTests : IDisposable
         // Reused while intact.
         Assert.Contains(", at ", CliBundle.Extract(new MemoryStream(zip), sha, "80fb6ce", "shipped", data).Origin);
         // A changed DLL in the extracted copy: extracted again, never staged as it is.
-        File.AppendAllText(Path.Combine(first.Files, "Valheim.Cli.Standard.dll"), "tampered");
+        File.AppendAllText(Path.Combine(first.Files, "valheimCLI.dll"), "tampered");
         var again = CliBundle.Extract(new MemoryStream(zip), sha, "80fb6ce", "shipped", data);
         Assert.Contains("extracted to", again.Origin);
-        Assert.Equal(FileHash.Sha256(Path.Combine(_rig.Root, "cli", "Valheim.Cli.Standard.dll")), FileHash.Sha256(Path.Combine(again.Files, "Valheim.Cli.Standard.dll")));
+        Assert.Equal(FileHash.Sha256(Path.Combine(_rig.Root, "cli", "valheimCLI.dll")), FileHash.Sha256(Path.Combine(again.Files, "valheimCLI.dll")));
         Assert.Empty(Directory.GetDirectories(Path.Combine(data, "cli"), "*.extract-*"));
     }
 
@@ -79,8 +78,7 @@ public sealed class CliBundleTests : IDisposable
     [Fact] public void ManyRunsExtractingAtOnceNeverFailAndLeaveOneIntactCopy()
     {
         byte[] zip = Zip();
-        string sha = FileHash.Sha256(zip), dll = FileHash.Sha256(Path.Combine(_rig.Root, "cli", "valheimCLI.dll")),
-            standard = FileHash.Sha256(Path.Combine(_rig.Root, "cli", "Valheim.Cli.Standard.dll"));
+        string sha = FileHash.Sha256(zip), dll = FileHash.Sha256(Path.Combine(_rig.Root, "cli", "valheimCLI.dll"));
         const int Runs = 8, Rounds = 24;
         var failures = new System.Collections.Concurrent.ConcurrentQueue<Exception>();
         var wrong = new List<string>();
@@ -90,7 +88,7 @@ public sealed class CliBundleTests : IDisposable
             if (round % 2 == 1)
             {
                 CliBundle.Extract(new MemoryStream(zip), sha, "80fb6ce", "shipped", data);
-                File.AppendAllText(Path.Combine(target, "Valheim.Cli.Standard.dll"), "damaged");
+                File.AppendAllText(Path.Combine(target, "valheimCLI.dll"), "damaged");
             }
             using var start = new Barrier(Runs);
             var sources = new System.Collections.Concurrent.ConcurrentQueue<CliBundleSource>();
@@ -108,8 +106,7 @@ public sealed class CliBundleTests : IDisposable
             // copy is never replaced (ExtractOnce, shared with the shipped BepInExPack).
             int extracted = sources.Count(source => source.Origin.Contains("extracted to", StringComparison.Ordinal));
             if (sources.Count == Runs && extracted != 1) wrong.Add($"round {round}: {extracted} runs extracted, not 1");
-            if (!File.Exists(Path.Combine(target, "valheimCLI.dll")) || FileHash.Sha256(Path.Combine(target, "valheimCLI.dll")) != dll ||
-                FileHash.Sha256(Path.Combine(target, "Valheim.Cli.Standard.dll")) != standard)
+            if (!File.Exists(Path.Combine(target, "valheimCLI.dll")) || FileHash.Sha256(Path.Combine(target, "valheimCLI.dll")) != dll)
                 wrong.Add($"round {round}: the copy is not intact");
             var left = Directory.GetDirectories(Path.Combine(data, "cli")).Where(folder => folder != target).Select(Path.GetFileName).ToList();
             if (left.Count != 0) wrong.Add($"round {round}: left beside the copy: {string.Join(", ", left)}");
@@ -175,10 +172,13 @@ public sealed class CliBundleTests : IDisposable
         string commit = pin.RootElement.GetProperty("commit").GetString()!;
         Assert.Equal(Path.Combine(data, "cli", commit, CliBundle.ManifestFile), pinned.Manifest);
         Assert.StartsWith($"the pinned {commit[..7]} bundle", pinned.Origin);
-        var capabilities = CliCapabilityManifest.Read(pinned.Manifest).Capabilities;
+        var manifest = CliCapabilityManifest.Read(pinned.Manifest);
+        manifest.RequireDefaultPlugin();
+        Assert.Equal("tvongaza/valheimCLI@" + commit, manifest.Build);
+        var capabilities = manifest.Capabilities;
         Assert.NotEmpty(capabilities);
         // The release workflow runs this suite before publishing any packages. A toolkit change that starts using a
-        // command from a newer ValheimCLI pack must re-pin the shipped bundle first, not discover the mismatch in game.
+        // command from a newer ValheimCLI build must re-pin the shipped bundle first, not discover the mismatch in game.
         var missing = CliCapabilities.Toolkit.Where(path => !capabilities.TryGetValue(path, out int version) || version != 1).ToArray();
         Assert.True(missing.Length == 0, "The pinned ValheimCLI bundle lacks schema-1 commands required by this toolkit: " +
             string.Join(", ", missing));

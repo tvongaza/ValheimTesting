@@ -14,7 +14,7 @@ namespace Valheim.Testing.Game;
 /// </summary>
 public static class PlayerPlacement
 {
-    /// <summary>What <see cref="Arrive"/> needs from the client's ValheimCLI: the Standard pack's bounded teleport commands
+    /// <summary>What <see cref="Arrive"/> needs from the client's ValheimCLI: the default plugin's bounded teleport commands
     /// (<c>cli_wait_teleportable</c>, <c>cli_teleport_trace_arm</c>/<c>cli_teleport_trace_wait</c>), World Tools' support
     /// wait, and its support reading (the flying check). <see cref="ClientRounds"/> checks them for an arriving client.</summary>
     public static readonly IReadOnlyList<string> ArrivalCapabilities = [CliCapabilities.TeleportSignals, "valheim.world/player-support-wait", "valheim.world/player-support"];
@@ -203,7 +203,7 @@ public static class PlayerPlacement
         string replicated = targetable ? " ghostReplicated=True targetable=True" : " ghostReplicated=True";
         if (!reply.Output.Any(line => line.StartsWith(confirmed, StringComparison.Ordinal) && line.Contains(replicated, StringComparison.Ordinal)))
             throw new InvalidOperationException("Player protection held only in the player's own game: ValheimCLI did not report ghostReplicated=True, so creatures " +
-                "another peer simulates could still see the player. Use a ValheimCLI whose Standard pack replicates ghost mode. Reply: " + string.Join(" | ", reply.Output));
+                "another peer simulates could still see the player. Use a current default ValheimCLI plugin that replicates ghost mode. Reply: " + string.Join(" | ", reply.Output));
     }
 
     /// <summary>

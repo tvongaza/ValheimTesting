@@ -186,8 +186,8 @@ public sealed class CliCapabilityManifestTests : IDisposable
         plan.CliManifest = Manifest(builds, "monolithic", (Core, builds.Monolithic));
         var own = Assert.Throws<InvalidOperationException>(() => plan.Preflight(CliCapabilities.HostedRounds));
         Assert.Contains("lacks valheim.session/state, valheim.session/save, valheim.session/leave", own.Message);
-        Assert.Contains("register no extension commands at all, as an old monolithic ValheimCLI", own.Message);
-        Assert.Contains("valheim.session comes from the Standard pack (Valheim.Cli.Standard.dll, plugin valheimCLI.standard)", own.Message);
+        Assert.Contains("plugin registers no extension commands", own.Message);
+        Assert.Contains("valheim.session comes from the default valheimCLI.dll", own.Message);
     }
 
     [Fact] public void TheEpicLootRunsStaleCoreAndPackFailBeforeTheClientStarts()
@@ -217,7 +217,35 @@ public sealed class CliCapabilityManifestTests : IDisposable
         plan.CliManifest = Manifest(builds, "stale", (Core, builds.OlderCore), (Standard, builds.OlderStandard), (WorldTools, builds.WorldTools));
         var stale = Assert.Throws<InvalidOperationException>(() => plan.Preflight(CliCapabilities.HostedRounds));
         Assert.Contains("lacks valheim.session/state, valheim.session/save, valheim.session/leave", stale.Message);
-        Assert.Contains("valheim.session comes from the Standard pack", stale.Message);
+        Assert.Contains("valheim.session comes from the default valheimCLI.dll", stale.Message);
+    }
+
+    [Fact] public void OneDefaultPluginProvidesBuiltInsAndRefusesAStaleFirstPartyPack()
+    {
+        var builds = new Builds();
+        byte[] combined = Builds.Compile(OptimizationLevel.Release, "valheimCLI", Builds.CoreSource("1.2.0") + """
+            namespace valheimCLI
+            {
+                internal static class EmbeddedCommands
+                {
+                    internal static void Register() => valheimCLIPlugin.Instance.Extensions.Register(
+                        "valheim.session", "0.1.0", 1,
+                        new valheimCLI.Extensions.ExtensionCommand("state", "Read state", Run, readOnly: true));
+                    private static System.Collections.IEnumerator Run(valheimCLI.Extensions.ExtensionContext context) { yield break; }
+                }
+            }
+            """, builds.BepInEx);
+        var manifest = CliCapabilityManifest.Generate("one-plugin", Write(builds, "one-plugin", (Core, combined)));
+        Assert.Equal(new[] { Core }, manifest.Files.Select(file => file.File));
+        Assert.Equal(new[] { "valheim.session/state" }, manifest.Capabilities.Keys);
+        Assert.Single(manifest.ForCapabilities(["valheim.session/state"]).Files);
+
+        using var clean = Staged(builds, (Core, combined));
+        Assert.Single(manifest.Check(clean.Root, ["valheim.session/state"]).Files);
+        using var mixed = Staged(builds, (Core, combined), (Standard, builds.Standard));
+        string refusal = Assert.Throws<InvalidOperationException>(() => manifest.Check(mixed.Root, ["valheim.session/state"])).Message;
+        Assert.Contains("old first-party ValheimCLI pack valheimCLI.standard", refusal);
+        Assert.Contains("remove all old pack DLLs", refusal);
     }
 
     [Fact] public void AMixedSetIsRefusedAsAnotherBuildOfThePack()
@@ -322,11 +350,11 @@ public sealed class CliCapabilityManifestTests : IDisposable
         // An owned client's install (ClientRunPlan.Preflight -> CliCapabilityManifest.Check).
         using (var install = Staged(builds, [.. files]))
             Assert.Contains(expected, Assert.Throws<InvalidOperationException>(() => PlanFor(install, manifestPath).Preflight(CliCapabilities.HostedRounds)).Message);
-        // A dependency lock (ApplyTo and ReadReady both ask RequireExactCliSet). A lock of the
-        // wrong count is refused for its count first; the others reach the one check.
+        // The low-level manifest check still describes historical split builds, but a new dependency lock
+        // refuses them all before considering the location of an individual legacy pack.
         var dependencyLock = new NativeDependencyLock { CliManifest = manifest, CliFiles = paths.Select(path => new NativeDependencyFile(path, FileHash.Sha256(path), "test")).ToList() };
         string refusal = Assert.Throws<InvalidDataException>(dependencyLock.RequireExactCliSet).Message;
-        Assert.Contains(files.Count == manifest.Files.Count ? expected : "must contain exactly the ValheimCLI core and packs", refusal);
+        Assert.Contains("not a one-plugin build", refusal);
     }
 
     [Fact] public void AManifestPackInScriptsMustLoadAtStartupEvenWhenItIsNotSeparatelyPinned()
@@ -528,7 +556,7 @@ public sealed class CliCapabilityManifestTests : IDisposable
                 """, BepInEx);
         }
 
-        private static string CoreSource(string version) => $$"""
+        internal static string CoreSource(string version) => $$"""
             using System;
             using System.Collections;
             using BepInEx;

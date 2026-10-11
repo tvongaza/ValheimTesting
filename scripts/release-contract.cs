@@ -91,9 +91,9 @@ static void RequireDependency(XDocument spec, string owner, string dependency, s
 RequireDependency(nuspecs["Valheim.Testing.Game"], "Valheim.Testing.Game", "Valheim.Testing.Cli", versions["Valheim.Testing.Cli"]);
 RequireDependency(nuspecs["Valheim.Testing.GameSessions"], "Valheim.Testing.GameSessions", "Valheim.Testing.Game", versions["Valheim.Testing.Game"]);
 
-string[] requiredPacks = CliCapabilities.Toolkit.ToArray();
+string[] requiredBuiltIns = CliCapabilities.Toolkit.ToArray();
 // The manifest describes the bundle a disposable game will actually load. A matching transport commit alone would
-// not prove that its Standard and World Tools packs offer the commands the toolkit expects.
+// not prove that the default plugin offers the commands the toolkit expects.
 {
     byte[] bytes = await GetBytes(http, cli.RootElement.GetProperty("bundle").GetProperty("url").GetString()!);
     if (!Convert.ToHexStringLower(SHA256.HashData(bytes)).Equals(bundleHash, StringComparison.OrdinalIgnoreCase))
@@ -101,12 +101,14 @@ string[] requiredPacks = CliCapabilities.Toolkit.ToArray();
     using var zip = new ZipArchive(new MemoryStream(bytes), ZipArchiveMode.Read);
     using var listing = zip.GetEntry("cli-manifest.json")?.Open() ?? throw new InvalidDataException("The ValheimCLI bundle has no capability manifest.");
     using var manifest = JsonDocument.Parse(listing);
-    if (manifest.RootElement.GetProperty("build").GetString() != forkCommit[..7])
-        throw new InvalidDataException("The ValheimCLI bundle names another fork build.");
+    if (manifest.RootElement.GetProperty("build").GetString() != "tvongaza/valheimCLI@" + forkCommit)
+        throw new InvalidDataException("The ValheimCLI bundle must name the exact pinned fork commit.");
     var files = manifest.RootElement.GetProperty("files").EnumerateArray().ToArray();
-    if (!files.Any(file => file.GetProperty("file").GetString() == "valheimCLI.dll" &&
-            file.GetProperty("plugins").EnumerateArray().Any(plugin => plugin.GetString() == "valheimCLI.valheimCLI")))
-        throw new InvalidDataException("The ValheimCLI bundle has no core plugin.");
+    if (files.Length != 1 || files[0].GetProperty("file").GetString() != "valheimCLI.dll" ||
+        files[0].GetProperty("plugins").EnumerateArray().Select(plugin => plugin.GetString()).ToArray() is not ["valheimCLI.valheimCLI"])
+        throw new InvalidDataException("The ValheimCLI bundle must name one default valheimCLI.dll and no first-party pack plugins.");
+    if (zip.Entries.Any(entry => entry.FullName.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) && entry.FullName != "valheimCLI.dll"))
+        throw new InvalidDataException("The ValheimCLI bundle contains an extra DLL; first-party command packs must not ship separately.");
     foreach (var file in files)
     {
         string name = file.GetProperty("file").GetString() ?? "";
@@ -114,7 +116,7 @@ string[] requiredPacks = CliCapabilities.Toolkit.ToArray();
         if (!Convert.ToHexStringLower(SHA256.HashData(member)).Equals(file.GetProperty("sha256").GetString(), StringComparison.OrdinalIgnoreCase))
             throw new InvalidDataException("The ValheimCLI bundle's " + name + " differs from its manifest.");
     }
-    foreach (string capability in requiredPacks)
+    foreach (string capability in requiredBuiltIns)
     {
         string[] parts = capability.Split('/');
         if (!files.Any(file => file.GetProperty("extensions").TryGetProperty(parts[0], out var owner)
@@ -147,8 +149,8 @@ using (var json = new Utf8JsonWriter(stream, new JsonWriterOptions { Indented = 
     json.WriteStartArray("coreCommands");
     foreach (string command in new[] { "cli_expect", "cli_extensions" }) json.WriteStringValue(command);
     json.WriteEndArray();
-    json.WriteStartArray("packCapabilities");
-    foreach (string capability in requiredPacks) json.WriteStringValue(capability);
+    json.WriteStartArray("builtInCapabilities");
+    foreach (string capability in requiredBuiltIns) json.WriteStringValue(capability);
     json.WriteEndArray();
     json.WriteEndObject();
     json.WriteStartObject("compatiblePackages");

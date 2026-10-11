@@ -112,7 +112,7 @@ public sealed class NativeSmokeLoaderTests : IDisposable
             return resolved.CliFiles.Select(file => (Path.GetFileName(file.File), file.Sha256)).ToArray();
         }
         var expected = Pins(Path.Combine(start, "dependencies.lock.json"));
-        Assert.Equal(5, expected.Length); // Core, Standard, World Tools, Observe, and otherwise-unused Reflection.
+        Assert.Equal(new[] { "valheimCLI.dll" }, expected.Select(entry => entry.File)); // Every built-in command comes from one plugin.
         foreach (string path in new[] { Path.Combine(server, "dependencies.lock.json"),
             Path.Combine(baked, "dependencies.lock.json"), Path.Combine(comparison, "before-dependencies.lock.json"),
             Path.Combine(comparison, "after-dependencies.lock.json") })

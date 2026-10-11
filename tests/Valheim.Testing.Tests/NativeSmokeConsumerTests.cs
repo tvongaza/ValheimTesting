@@ -32,7 +32,7 @@ public sealed class NativeSmokeConsumerTests : IDisposable
         var error = Assert.Throws<InvalidDataException>(() =>
             SmokeInputs.Cli(new Dictionary<string, string> { ["--cli-files"] = bundle }));
         Assert.Contains("Several ValheimCLI capability manifests", error.Message);
-        Assert.Contains("never mix packs", error.Message);
+        Assert.Contains("remove old first-party pack DLLs", error.Message);
     }
 
     [Fact]

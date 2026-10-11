@@ -458,7 +458,7 @@ internal sealed class BundleRig : IDisposable
               "install": "<full path of a new directory for the disposable install>",
               "client": { "port": 5560, "character": "<a disposable local character's file name>" },
               "fixture": { "root": "<directory holding exactly one world folder>", "worldUid": "<that world's UID>" },
-              "cli": { "core": { "file": "<ValheimCLI build>/valheimCLI.dll", "sha256": "" }, "packs": [{ "file": "<ValheimCLI build>/Valheim.Cli.Standard.dll", "sha256": "" }] },
+              "cli": { "core": { "file": "<ValheimCLI build>/valheimCLI.dll", "sha256": "" } },
               "plugins": [{ "file": "<dependency>/Dependency.dll", "sha256": "" }],
               "probe": { "file": "<probe build>/Probe.dll", "sha256": "" },
               "mod": {

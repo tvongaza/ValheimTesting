@@ -13,7 +13,7 @@ public sealed class MarkerPlan : ServerRunPlan
     public const string ScenarioName = "dry-site-lifecycle";
     public const string ModPlugin = "example.examplemod", AdapterPlugin = "example.examplemod.testadapter";
     public const string SessionTokenVariable = "EXAMPLEMOD_TEST_SESSION_TOKEN";
-    /// <summary>ExampleMod as the runner sees it: its adapter's session, the Observe pack's Harmony capability, and the patch it declares.</summary>
+    /// <summary>ExampleMod as the runner sees it: its adapter's session, the default ValheimCLI plugin's Harmony capability, and the patch it declares.</summary>
     public static readonly ModDeclaration Mod = new("examplemod.testing/session", SessionTokenVariable)
     {
         HarmonyCapability = "valheim.observe/harmony", Owner = ModPlugin, Patches = MarkerScenario.Patches,

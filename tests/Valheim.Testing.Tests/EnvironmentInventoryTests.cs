@@ -344,7 +344,7 @@ public sealed class EnvironmentInventoryTests : IDisposable
         var report = HostedCampaignPreparation.Inspect(campaignFile);
         Assert.DoesNotContain(report.Problems, problem => problem.Input == "inventory");
         Assert.Contains(report.Problems, problem => problem.Actor == "server" && problem.Input == "loader");
-        Assert.Contains(report.Problems, problem => problem.Actor == "server" && problem.Input == "dependencies and CLI packs");
+        Assert.Contains(report.Problems, problem => problem.Actor == "server" && problem.Input == "dependencies and ValheimCLI");
         Assert.Equal(["server-pc", "client-pc", "client-vm"], report.Actors.Select(actor => actor.Environment));
         Assert.All(report.Actors, actor => Assert.NotNull(actor.SelectionReason));
     }

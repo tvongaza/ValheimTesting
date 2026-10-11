@@ -783,7 +783,7 @@ public sealed class ClientRoundsTests : IDisposable
         var game = new Game(Worlds, leaveOffered: false); var report = new ScenarioReport("host");
         var error = Assert.Throws<InvalidOperationException>(() => RunHosted(report, HostPlan(), game, Measure()));
         Assert.Contains("lacks valheim.session/leave", error.Message);
-        Assert.Contains("the Standard pack", error.Message);
+        Assert.Contains("default valheimCLI.dll", error.Message);
         Assert.Equal(new[] { "the client's ValheimCLI offers the session commands the rounds use" }, Failed(report));
         Assert.Equal(0, game.Transport.Count("cli_start_host_world"));
         Assert.Equal(1, _process.Stops);

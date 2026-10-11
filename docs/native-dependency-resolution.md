@@ -17,7 +17,7 @@ From a ValheimTesting checkout, create a private request such as:
 }
 ```
 
-Paths may be relative to the request file. Generate the ValheimCLI manifest for one known core-and-pack build with `CliCapabilityManifest.Generate(...)`, or use the manifest shipped with that build. The resolver selects the core and only packs providing the requested commands; it checks their hashes against that manifest. Include the commands your scenario needs as well as the runner's session commands.
+Paths may be relative to the request file. Generate the ValheimCLI manifest for one pinned default-plugin build with `CliCapabilityManifest.Generate(...)`, or use the manifest shipped with that build. The resolver selects the default plugin and checks its hash and requested commands against that manifest. Include the commands your scenario needs as well as the runner's session commands.
 
 ```sh
 sh scripts/bootstrap-cli.sh  # macOS/Linux; on Windows: powershell -NoProfile -File scripts/bootstrap-cli.ps1

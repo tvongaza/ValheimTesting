@@ -120,7 +120,7 @@ public sealed record ZoneCycleResult(ZoneReading Before, JsonElement AwayArrival
 /// left and recreates it from its saved data on return. A mod's object that keeps state only in a component field loses
 /// it here, and an object whose teardown throws shows up as <c>ZNetScene.RemoveObjects</c> errors in the client's log.
 /// <para>
-/// <see cref="Run(GameActor, GameActor, CancellationToken)"/> reads the <see cref="Zones"/> through the Observe pack's zone
+/// <see cref="Run(GameActor, GameActor, CancellationToken)"/> reads the <see cref="Zones"/> through the default ValheimCLI plugin's zone
 /// observation and requires them loaded, then has the protected player arrive at <see cref="Away"/>
 /// (<see cref="PlayerPlacement.Arrive"/>: one teleport by the server, arrival read on the client, never flying) and waits
 /// until the client holds nothing of those zones: no terrain and no object instance. Then the player arrives at

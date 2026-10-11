@@ -184,6 +184,7 @@ static class Valheim.Testing.Game.CliCapabilities
   method static System.Void Require(Valheim.Testing.Game.GameActor actor, params System.String[] paths)
 sealed class Valheim.Testing.Game.CliCapabilityManifest
   method System.Void .ctor()
+  method System.Void RequireDefaultPlugin()
   method System.Void Validate()
   method System.Void Write(System.String path)
   method Valheim.Testing.Game.CliCapabilityManifest ForCapabilities(System.Collections.Generic.IEnumerable`1<System.String> capabilities)
@@ -1144,7 +1145,7 @@ sealed class Valheim.Testing.Game.NativeDependencyLock
 sealed class Valheim.Testing.Game.NativeDependencyRequest
   method System.Void .ctor()
   method static Valheim.Testing.Game.NativeDependencyRequest Read(System.String path)
-  property System.Boolean StageAllCliPacks { get; set; }
+  property System.Boolean RequireToolkitCommands { get; set; }
   property System.Collections.Generic.List`1<System.String> Capabilities { get; set; }
   property System.Collections.Generic.List`1<System.String> Mods { get; set; }
   property System.Collections.Generic.List`1<System.String> OptionalReferences { get; set; }
@@ -1480,7 +1481,6 @@ sealed class Valheim.Testing.Game.RegressionArm
 sealed class Valheim.Testing.Game.RegressionCli
   method System.Void .ctor()
   method System.Void Validate()
-  property System.Collections.Generic.List`1<Valheim.Testing.Game.RegressionFile> Packs { get; set; }
   property System.String Manifest { get; set; }
   property Valheim.Testing.Game.RegressionFile Core { get; set; }
 sealed class Valheim.Testing.Game.RegressionClient

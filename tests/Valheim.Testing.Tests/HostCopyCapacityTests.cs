@@ -51,7 +51,7 @@ public sealed class HostCopyCapacityTests : IDisposable
         Assert.DoesNotContain(profile.Problems, problem => problem.Input == "copy space");
         var report = await HostedCampaignPreparation.InspectAsync(manifest, TimeSpan.FromSeconds(2), copyGame: true, hostFactory: _ => host);
         Assert.Contains(report.Problems, problem => problem.Actor == "pc" && problem.Input == "copy space");
-        Assert.Contains(report.Problems, problem => problem.Actor == "server" && problem.Input == "dependencies and CLI packs");
+        Assert.Contains(report.Problems, problem => problem.Actor == "server" && problem.Input == "dependencies and ValheimCLI");
         Assert.DoesNotContain(host.Scripts, script => script is "copy" or "ship" or "start");
     }
 }

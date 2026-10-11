@@ -188,13 +188,13 @@ public sealed class TargetedRegressionTests : IDisposable
         var regression = _rig.Regression(_rig.Manifest(), ["example.probe/read"]);
         var parent = regression.Stage("parent");
         string plugins = Path.Combine(_rig.Install, "BepInEx", "plugins");
-        Assert.Equal(new[] { "Dependency.dll", "ExampleMod.dll", "Probe.dll", "Valheim.Cli.Standard.dll", "valheimCLI.dll" },
+        Assert.Equal(new[] { "Dependency.dll", "ExampleMod.dll", "Probe.dll", "valheimCLI.dll" },
             Directory.EnumerateFiles(plugins).Select(path => Path.GetFileName(path)).Order(StringComparer.Ordinal));
         Assert.False(File.Exists(Path.Combine(plugins, "Unrelated.dll"))); // The prepared game's own plugins are never copied.
         Assert.True(File.Exists(Path.Combine(_rig.Game, "BepInEx", "plugins", "Unrelated.dll"))); // ...nor touched.
         Assert.Contains("AllowOnServerClients = true", File.ReadAllText(Path.Combine(_rig.Install, "BepInEx", "config", "valheimCLI.valheimCLI.cfg")));
         // Every staged plugin is pinned under its declared GUID by MD5, and nothing else: no absent pins for other mods.
-        Assert.Equal(new[] { "example.dependency", "example.mod", "testing.probe", "valheimCLI.standard", "valheimCLI.valheimCLI" }, parent.Plan.Pins.Keys.Order(StringComparer.Ordinal));
+        Assert.Equal(new[] { "example.dependency", "example.mod", "testing.probe", "valheimCLI.valheimCLI" }, parent.Plan.Pins.Keys.Order(StringComparer.Ordinal));
         Assert.DoesNotContain("absent", parent.Plan.Pins.Values);
         Assert.Equal(FileHash.Md5(_rig.Parent), parent.Plan.Pins["example.mod"]);
         Assert.Equal(_rig.Uid, parent.Plan.HostWorld!.WorldUid);
@@ -545,23 +545,23 @@ public sealed class TargetedRegressionTests : IDisposable
         manifest.Cli.Manifest = _rig.CliManifest(save: true);
         var regression = _rig.Regression(manifest, ["valheim.session/join", "example.probe/read"]);
         var staged = regression.Stage("parent");
-        Assert.StartsWith("valheimCLI test build: BepInEx/plugins/valheimCLI.dll, BepInEx/plugins/Valheim.Cli.Standard.dll", staged.Manifest.CliManifest);
+        Assert.StartsWith("valheimCLI test build: BepInEx/plugins/valheimCLI.dll", staged.Manifest.CliManifest);
         Assert.Equal(CliCapabilities.HostedRounds.Append("valheim.session/join"), staged.Manifest.Capabilities);
         Assert.Equal(new[] { "valheim.session/join" }, staged.Plan.Capabilities); // The hosted rounds add their own; ValheimCLI's are checked statically and live.
         Assert.Equal(new[] { "example.probe/read" }, staged.Manifest.LiveOnlyCapabilities);
-        // The Epic Loot shape: a pack with the expected file name and plugin GUID, from another build.
-        var coherent = manifest.Cli.Packs;
-        string stale = _rig.Write("stale/Valheim.Cli.Standard.dll", RegressionRig.Assembly("Valheim.Cli.Standard", new("valheimCLI.standard", "0.3.0") { Hard = ["valheimCLI.valheimCLI"] }, marker: "Stale"));
-        manifest.Cli.Packs = [new() { File = stale, Sha256 = FileHash.Sha256(stale) }];
+        // A plugin with the expected name and GUID, but from another build.
+        var coherent = manifest.Cli.Core;
+        string stale = _rig.Write("stale/valheimCLI.dll", RegressionRig.Assembly("valheimCLI", new("valheimCLI.valheimCLI", "0.3.0"), marker: "Stale"));
+        manifest.Cli.Core = new() { File = stale, Sha256 = FileHash.Sha256(stale) };
         var error = Assert.Throws<InvalidOperationException>(() => regression.Stage("parent"));
-        Assert.Contains("another build of Valheim.Cli.Standard.dll", error.Message);
-        Assert.Contains("Install the manifest's core and packs together", error.Message);
+        Assert.Contains("another build of valheimCLI.dll", error.Message);
+        Assert.Contains("Install the manifest's pinned valheimCLI.dll", error.Message);
         // A set without a command the run uses.
-        manifest.Cli.Packs = coherent;
+        manifest.Cli.Core = coherent;
         manifest.Cli.Manifest = _rig.CliManifest(save: false);
         error = Assert.Throws<InvalidOperationException>(() => regression.Stage("parent"));
         Assert.Contains("lacks valheim.session/save", error.Message);
-        Assert.Contains("valheim.session comes from the Standard pack", error.Message);
+        Assert.Contains("valheim.session comes from the default valheimCLI.dll", error.Message);
         manifest.Cli.Manifest = Path.Combine(_rig.Root, "missing-manifest.json"); // Named, never skipped.
         Assert.Throws<FileNotFoundException>(() => regression.Stage("parent"));
     }
@@ -717,7 +717,7 @@ internal sealed class RegressionRig : IDisposable
     public string Uid => "-1320459616";
     public string Parent { get; }
     public string Candidate { get; }
-    private readonly string _core, _pack, _worldTools, _observe, _reflection, _dependency, _probe;
+    private readonly string _core, _dependency, _probe;
     private readonly IDisposable _journalScope;
 
     public RegressionRig()
@@ -737,10 +737,6 @@ internal sealed class RegressionRig : IDisposable
         Write("fixture/SealFixture/_main.1.fwl2", OwnedRunPreflightTests.Metadata("SealFixture", long.Parse(Uid)));
         Write("fixture/SealFixture/_main.1.db2", Encoding.UTF8.GetBytes("world"));
         _core = Write("cli/valheimCLI.dll", Assembly("valheimCLI", new("valheimCLI.valheimCLI", "0.4.0")));
-        _pack = Write("cli/Valheim.Cli.Standard.dll", Assembly("Valheim.Cli.Standard", new("valheimCLI.standard", "0.4.0") { Hard = ["valheimCLI.valheimCLI"] }));
-        _worldTools = Write("cli/Valheim.Cli.WorldTools.dll", Assembly("Valheim.Cli.WorldTools", new("valheimCLI.worldtools", "0.4.0") { Hard = ["valheimCLI.valheimCLI"] }));
-        _observe = Write("cli/Valheim.Cli.Observe.dll", Assembly("Valheim.Cli.Observe", new("valheimCLI.observe", "0.4.0") { Hard = ["valheimCLI.valheimCLI"] }));
-        _reflection = Write("cli/Valheim.Cli.Reflection.dll", Assembly("Valheim.Cli.Reflection", new("valheimCLI.reflection", "0.4.0") { Hard = ["valheimCLI.valheimCLI"] }));
         _dependency = Write("deps/Dependency.dll", Assembly("Dependency", new("example.dependency", "1.3.0")));
         _probe = Write("probe/Probe.dll", Assembly("Probe", new("testing.probe") { Hard = ["valheimCLI.valheimCLI"], Soft = ["example.mod"] }));
         var mod = new Plugin("example.mod") { Minimum = [("example.dependency", "1.2.0")], Hard = ["valheimCLI.valheimCLI"], Soft = ["example.soft"] };
@@ -774,7 +770,7 @@ internal sealed class RegressionRig : IDisposable
         Name = "example-regression",
         Client = new() { Character = "smoketest" },
         Fixture = new() { Root = fixture ?? Fixture, WorldUid = worldUid ?? Uid },
-        Cli = new() { Core = Pinned(_core), Packs = [Pinned(_pack)], Manifest = CliManifest(save: true) },
+        Cli = new() { Core = Pinned(_core), Manifest = CliManifest(save: true) },
         Plugins = [Pinned(_dependency)],
         Probe = Pinned(_probe),
         Mod = new()
@@ -788,7 +784,7 @@ internal sealed class RegressionRig : IDisposable
         },
     };
 
-    /// <summary>A capability manifest of the rig's core and Standard pack, or its complete one-shot bundle. With
+    /// <summary>A capability manifest of the rig's one default plugin. With
     /// <paramref name="full"/> false, <paramref name="save"/> false leaves out valheim.session/save.</summary>
     public string CliManifest(bool save, bool full = false)
     {
@@ -797,43 +793,19 @@ internal sealed class RegressionRig : IDisposable
         var manifest = new CliCapabilityManifest
         {
             Build = "valheimCLI test build",
-            Files =
-            [
-                new() { File = "valheimCLI.dll", Sha256 = FileHash.Sha256(_core), Plugins = ["valheimCLI.valheimCLI"] },
-                new()
-                {
-                    File = "Valheim.Cli.Standard.dll", Sha256 = FileHash.Sha256(_pack), Plugins = ["valheimCLI.standard"],
-                    Extensions = new(StringComparer.Ordinal) { ["valheim.session"] = session },
-                },
-            ],
+            Files = [new() { File = "valheimCLI.dll", Sha256 = FileHash.Sha256(_core), Plugins = ["valheimCLI.valheimCLI"],
+                Extensions = new(StringComparer.Ordinal) { ["valheim.session"] = session } }],
         };
         if (full)
         {
-            // The one-shot fixture models the complete pinned bundle, including a pack no toolkit command requires.
+            // The one-shot fixture models every built-in toolkit capability in the default plugin.
             var commands = CliCapabilities.Toolkit.Select(path => path.Split('/'))
                 .GroupBy(parts => parts[0], StringComparer.Ordinal);
             foreach (var group in commands)
             {
-                string file = group.Key switch
-                {
-                    "valheim.session" => "Valheim.Cli.Standard.dll",
-                    "valheim.world" => "Valheim.Cli.WorldTools.dll",
-                    "valheim.observe" => "Valheim.Cli.Observe.dll",
-                    _ => throw new InvalidOperationException("Unknown toolkit capability owner " + group.Key),
-                };
-                var entry = manifest.Files.FirstOrDefault(item => item.File == file);
-                if (entry == null)
-                {
-                    string source = file == "Valheim.Cli.WorldTools.dll" ? _worldTools : _observe;
-                    entry = new CliManifestFile { File = file, Sha256 = FileHash.Sha256(source),
-                        Plugins = [file == "Valheim.Cli.WorldTools.dll" ? "valheimCLI.worldtools" : "valheimCLI.observe"] };
-                    manifest.Files.Add(entry);
-                }
-                entry.Extensions[group.Key] = new SortedDictionary<string, int>(
+                manifest.Files[0].Extensions[group.Key] = new SortedDictionary<string, int>(
                     group.ToDictionary(parts => parts[1], _ => 1, StringComparer.Ordinal), StringComparer.Ordinal);
             }
-            manifest.Files.Add(new CliManifestFile { File = "Valheim.Cli.Reflection.dll", Sha256 = FileHash.Sha256(_reflection),
-                Plugins = ["valheimCLI.reflection"] });
         }
         string path = Path.Combine(Root, $"cli-manifest-{Guid.NewGuid():N}.json");
         manifest.Write(path);
