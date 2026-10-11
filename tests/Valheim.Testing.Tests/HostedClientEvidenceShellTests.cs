@@ -9,11 +9,20 @@ public sealed class HostedClientEvidenceShellTests : IDisposable
     private readonly string _root = Directory.CreateTempSubdirectory("client-evidence-").FullName;
     public void Dispose() => Directory.Delete(_root, recursive: true);
 
+    [Theory]
+    [InlineData(ClientPlatform.MacOS, "Library/Logs/IronGate/Valheim/Player.log")]
+    [InlineData(ClientPlatform.Linux, ".config/unity3d/IronGate/Valheim/Player.log")]
+    public void RemoteUnixClientsUseTheirPlatformPlayerLog(ClientPlatform platform, string expected) =>
+        Assert.Equal(expected, HostedClientScripts.UnixPlayerLogRelative(platform));
+
     [Fact] public async Task AFreshPreloaderLogIsReadAndKeptAndAnOlderOneIsOnlyNamed()
     {
         var host = OperatingSystem.IsWindows() ? new LocalGameHost("client", HostShell.WindowsPowerShell) : new LocalGameHost("client", HostShell.Bash);
         string install = Path.Combine(_root, "game dir"), launch = Path.Combine(_root, "run", "client-1");
         Directory.CreateDirectory(install); Directory.CreateDirectory(launch);
+        string player = Path.Combine(_root, "Library", "Logs", "IronGate", "Valheim", "Player.log");
+        Directory.CreateDirectory(Path.GetDirectoryName(player)!);
+        File.WriteAllText(player, "Unity client diagnostic\n");
         string older = Path.Combine(install, "preloader_20260101_000000.log");
         File.WriteAllText(older, "[Error  :   BepInEx] an old failure\n");
         File.SetLastWriteTimeUtc(older, DateTime.UtcNow.AddHours(-2));
@@ -29,12 +38,15 @@ public sealed class HostedClientEvidenceShellTests : IDisposable
         Assert.Equal("[Fatal  :   BepInEx] Could not find BepInEx.Preloader.Core", first);
         Assert.Equal(["preloader_20260101_000000.log"], read!.Stale);
 
-        var kept = await host.RunAsync(HostedClientScripts.Keep(host.Shell.Kind), new Dictionary<string, string> { ["install"] = install, ["dir"] = launch }, TimeSpan.FromSeconds(60));
+        var kept = await host.RunAsync(HostedClientScripts.Keep(host.Shell.Kind), new Dictionary<string, string>
+            { ["install"] = install, ["dir"] = launch, ["playerlog"] = player }, TimeSpan.FromSeconds(60));
         Assert.True(kept.Succeeded, kept.Describe());
         Assert.Contains("VT-KEPT", kept.Stdout);
         Assert.Equal(File.ReadAllText(fresh), File.ReadAllText(Path.Combine(launch, "game-2.preloader-1.log")));
         Assert.False(File.Exists(Path.Combine(launch, "game-2.preloader-2.log")));
         Assert.Contains("preloader_20260101_000000.log", File.ReadAllText(Path.Combine(launch, "preloader.stale")));
         Assert.True(File.Exists(Path.Combine(launch, "game-0.log.absent")));
+        if (!OperatingSystem.IsWindows())
+            Assert.Equal("Unity client diagnostic\n", File.ReadAllText(Path.Combine(launch, "game-1.log")));
     }
 }

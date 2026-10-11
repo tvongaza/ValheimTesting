@@ -178,6 +178,31 @@ public class InteractiveClientTests
         Assert.False(process.HasExited);
     }
 
+    [Fact] public async Task AnUnreadableMacProcessIsNotReportedAsExitedOrStopped()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        using var child = Process.Start(new ProcessStartInfo("/bin/sleep", "30") { UseShellExecute = false })!;
+        try
+        {
+            var host = new LocalGameHost("mac-process-observation", HostShell.Bash);
+            var variables = new Dictionary<string, string>
+            {
+                ["game"] = child.Id.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                ["start"] = "known-owned-start", ["seconds"] = "1", ["quit"] = "0", ["dir"] = "/nonexistent",
+            };
+            // A ps failure while kill -0 still sees the process must retain ownership.
+            string unreadable = "ps() { return 1; }\n";
+            var wait = await host.RunAsync(unreadable + InteractiveScripts.MacWait, variables, TimeSpan.FromSeconds(5));
+            var stop = await host.RunAsync(unreadable + InteractiveScripts.MacStop, variables, TimeSpan.FromSeconds(5));
+            Assert.True(wait.Succeeded, wait.Describe());
+            Assert.True(stop.Succeeded, stop.Describe());
+            Assert.Contains("VT-WAIT unproven", wait.Stdout);
+            Assert.Contains("VT-STOP unproven", stop.Stdout);
+            Assert.False(child.HasExited);
+        }
+        finally { if (!child.HasExited) child.Kill(); await child.WaitForExitAsync(); }
+    }
+
     [Fact] public void MacGuiScriptsParseAndThePlistEscapesItsRunDirectory()
     {
         string plist = InteractiveScripts.MacPlist("org.valheimtesting.client." + new string('a', 32), "/Users/test/A&B <run>");

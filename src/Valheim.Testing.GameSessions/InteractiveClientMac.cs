@@ -152,32 +152,56 @@ internal static partial class InteractiveScripts
         if /bin/launchctl print "$domain" >/dev/null 2>&1; then echo 'VT-AGENT kept'; else echo 'VT-AGENT removed'; fi
         """.ReplaceLineEndings("\n");
 
-    internal static readonly string MacStop = ("set -u\n" + HostServerScripts.MacStarted + "\n" + """
+    // A failed ps read is not proof that the owned process exited. Keep the GUI agent and
+    // the run's ownership until the game is explicitly gone or its PID has been reused.
+    private static readonly string MacObserve = """
+        observed() {
+          state=$(LC_ALL=C ps -p "$game" -o stat= 2>/dev/null) || state=
+          if [ -z "$state" ]; then
+            if kill -0 "$game" 2>/dev/null; then echo unreadable; else echo gone; fi
+            return
+          fi
+          case "$state" in Z*) echo gone; return ;; esac
+          begin=$(LC_ALL=C ps -ww -p "$game" -o lstart= 2>/dev/null) || begin=
+          [ -n "$begin" ] || { echo unreadable; return; }
+          identity=$(printf '%s' "$begin" | cksum | awk '{print $1}')
+          if [ "$identity" = "$start" ]; then echo same; else echo reused; fi
+        }
+        """;
+
+    internal static readonly string MacStop = ("set -u\n" + MacObserve + "\n" + """
         outcome=gone
-        if [ "$(started "$game")" = "$start" ]; then
+        state=$(observed)
+        [ "$state" != unreadable ] || { echo 'VT-STOP unproven'; exit 0; }
+        if [ "$state" = same ]; then
           if [ "$quit" -gt 0 ] && kill -INT "$game" 2>/dev/null; then
             i=0
-            while [ "$(started "$game")" = "$start" ] && [ "$i" -lt $((quit * 10)) ]; do sleep 0.1; i=$((i + 1)); done
-            [ "$(started "$game")" != "$start" ] && outcome=quit
+            while [ "$(observed)" = same ] && [ "$i" -lt $((quit * 10)) ]; do sleep 0.1; i=$((i + 1)); done
+            state=$(observed)
+            case "$state" in gone|reused) outcome=quit ;; unreadable) echo 'VT-STOP unproven'; exit 0 ;; esac
           fi
-          if [ "$(started "$game")" = "$start" ]; then
+          if [ "$state" = same ]; then
             kill -KILL "$game" 2>/dev/null || true
             i=0
-            while [ "$(started "$game")" = "$start" ] && [ "$i" -lt $((seconds * 10)) ]; do sleep 0.1; i=$((i + 1)); done
-            [ "$(started "$game")" != "$start" ] && outcome=stopped
+            while [ "$(observed)" = same ] && [ "$i" -lt $((seconds * 10)) ]; do sleep 0.1; i=$((i + 1)); done
+            state=$(observed)
+            case "$state" in gone|reused) outcome=stopped ;; unreadable) echo 'VT-STOP unproven'; exit 0 ;; esac
           fi
         fi
-        [ "$(started "$game")" != "$start" ] || { echo 'VT-STOP running'; exit 0; }
+        [ "$state" != same ] || { echo 'VT-STOP running'; exit 0; }
         """ + "\n" + MacAgentRetire + "\n" + """
         echo "VT-STOP $outcome"
         """).ReplaceLineEndings("\n");
 
-    internal static readonly string MacWait = ("set -u\n" + HostServerScripts.MacStarted + "\n" + """
+    internal static readonly string MacWait = ("set -u\n" + MacObserve + "\n" + """
         i=0
-        while [ "$(started "$game")" = "$start" ]; do
+        state=$(observed)
+        while [ "$state" = same ]; do
           [ "$i" -lt "$seconds" ] || { echo 'VT-WAIT running'; exit 0; }
           sleep 1; i=$((i + 1))
+          state=$(observed)
         done
+        [ "$state" != unreadable ] || { echo 'VT-WAIT unproven'; exit 0; }
         for _ in 1 2 3 4 5 6 7 8 9 10; do [ ! -s "$dir/exit" ] || break; sleep 0.2; done
         if [ -s "$dir/exit" ]; then echo "VT-WAIT exited $(cat "$dir/exit")"; else echo 'VT-WAIT exited ?'; fi
         """).ReplaceLineEndings("\n");

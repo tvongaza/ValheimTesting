@@ -382,7 +382,8 @@ internal static class RunRecovery
                         }
                         // The game's logs go with the copy: kept first, so a copy whose logs could not be kept stays (#412).
                         RecoveredLogs logs;
-                        try { logs = await KeepLogsAsync(host, copy.What, runId, copy.Actor, copy.SinceUtc, timeout, cancellation).ConfigureAwait(false); }
+                        try { logs = await KeepLogsAsync(host, copy.What, runId, copy.Actor, copy.SinceUtc, timeout, cancellation,
+                            platform: hosts[group.Key].Platform).ConfigureAwait(false); }
                         catch (Exception error) when (error is not OperationCanceledException)
                         {
                             throw new IOException($"its game logs could not be kept, so it stays ({error.Message}); recover again once they can be, or remove it by hand", error);
@@ -472,7 +473,7 @@ internal static class RunRecovery
     /// only named. Throws when a log could not be kept.
     /// </summary>
     internal static async Task<RecoveredLogs> KeepLogsAsync(IGameHost host, string runtime, string runId, string actor, DateTime copiedUtc,
-        TimeSpan timeout, CancellationToken cancellation = default, string playerLog = "")
+        TimeSpan timeout, CancellationToken cancellation = default, string playerLog = "", string platform = "linux")
     {
         string parent = HostedRuntimeStage.RequirePrepared(host, runtime, runId);
         int at = parent.LastIndexOfAny(['/', '\\']);
@@ -481,7 +482,10 @@ internal static class RunRecovery
         string folder = HostPath.Join(parent[..at], runId, "recovered-" + actor);
         var result = (await host.RunAsync(host.Shell.Kind == HostShellKind.PowerShell ? WindowsKeepLogs : BashKeepLogs, new Dictionary<string, string>
         {
-            ["runtime"] = runtime, ["keep"] = folder, ["client"] = actor == "server" ? "false" : "true", ["playerlog"] = playerLog,
+            ["runtime"] = runtime, ["keep"] = folder, ["client"] = actor == "server" ? "false" : "true",
+            ["playerlog"] = playerLog.Length == 0
+                ? HostedClientScripts.UnixPlayerLogRelative(platform == "macos" ? ClientPlatform.MacOS : ClientPlatform.Linux)
+                : playerLog,
             ["since"] = new DateTimeOffset(copiedUtc.ToUniversalTime()).ToUnixTimeSeconds().ToString(CultureInfo.InvariantCulture),
         }, timeout, cancellation).ConfigureAwait(false)).EnsureSuccess($"Keeping the game logs of {runtime} on {host.Name}");
         if (InteractiveClient.Line(result.Stdout, "VT-LOGS-DONE") == null) throw new HostOperationException($"Unexpected reply while keeping the game logs of {runtime} on {host.Name}", result);
@@ -491,7 +495,7 @@ internal static class RunRecovery
     }
 
     // Variables: runtime, keep, since (Unix seconds: when the copy was made), client (true: the host user's Player.log too),
-    // playerlog (empty: that user's own). Each log written since the copy was made is copied into keep with its time, and named;
+    // playerlog (absolute or relative to that user's home). Each log written since the copy was made is copied into keep with its time, and named;
     // an older one is only named; links are never followed, and the folder is made only for a log. Then the verdict.
     internal static readonly string BashKeepLogs = """
         set -u
@@ -508,7 +512,11 @@ internal static class RunRecovery
           save "$runtime/toolkit-unity.log" "toolkit-unity.log"
           for f in "$runtime"/preloader_*.log; do save "$f" "$(basename -- "$f")"; done
         fi
-        if [ "$client" = "true" ]; then save "${playerlog:-${HOME:-/nonexistent}/.config/unity3d/IronGate/Valheim/Player.log}" "Player.log"; fi
+        if [ "$client" = "true" ]; then
+          playerlog="${playerlog:-.config/unity3d/IronGate/Valheim/Player.log}"
+          case "$playerlog" in /*) ;; *) playerlog="${HOME:-/nonexistent}/$playerlog" ;; esac
+          save "$playerlog" "Player.log"
+        fi
         echo "VT-LOGS-DONE"
         """.ReplaceLineEndings("\n");
 
