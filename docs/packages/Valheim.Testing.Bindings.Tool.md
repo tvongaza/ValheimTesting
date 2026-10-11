@@ -7,7 +7,7 @@
 Install and run the tool with the game assemblies that match the mod build:
 
 ```sh
-dotnet tool install Valheim.Testing.Bindings.Tool --version 0.1.0-preview.2 --tool-path .tools
+dotnet tool install Valheim.Testing.Bindings.Tool --version 0.1.0-preview.3 --tool-path .tools
 .tools/valheim-bindings path/to/MyMod.dll --game-dir path/to/valheim_Data/Managed
 ```
 

@@ -19,7 +19,7 @@ In the unit-test project, not the mod project. It needs C# 10 and works on net48
 ```xml
 <PropertyGroup><LangVersion>10</LangVersion></PropertyGroup> <!-- or newer; net48 test legs default to C# 7.3 -->
 <ItemGroup>
-  <PackageReference Include="Valheim.Testing.Doubles" Version="[0.1.0-preview.14]" PrivateAssets="all" />
+  <PackageReference Include="Valheim.Testing.Doubles" Version="[0.1.0-preview.15]" PrivateAssets="all" />
   <Compile Include="../MyMod/Src/RoadMath.cs" /> <!-- the mod's pure-logic sources -->
 </ItemGroup>
 ```
@@ -207,7 +207,7 @@ The doubles normally compile into the test assembly, so a type's assembly is the
 ```xml
 <!-- MyMod.Doubles/MyMod.Doubles.csproj -->
 <PropertyGroup><AssemblyName>assembly_valheim</AssemblyName><RootNamespace></RootNamespace><LangVersion>10</LangVersion></PropertyGroup>
-<ItemGroup><PackageReference Include="Valheim.Testing.Doubles" Version="[0.1.0-preview.14]" /></ItemGroup>
+<ItemGroup><PackageReference Include="Valheim.Testing.Doubles" Version="[0.1.0-preview.15]" /></ItemGroup>
 ```
 
 ```csharp
