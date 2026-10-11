@@ -6,6 +6,7 @@
 //   dotnet run scripts/validate.cs -- --ci-main-tests  CI only: Windows toolkit tests excluding measured slow methods
 //   dotnet run scripts/validate.cs -- --ci-timed 1|2   CI only: one balanced slow-method shard
 //   dotnet run scripts/validate.cs -- --ci-build-only  CI only: Windows packaging and other test layers
+//   sh scripts/validate.sh --restricted-sandbox  Selected no-host tests only; exits 4 (incomplete)
 //
 // Runs the library tests, compiles the adapter source package against reference stubs, builds every example, tool and script, runs
 // the FullLifecycle example's and the native acceptance suite's tests against scripted fakes,
@@ -20,6 +21,8 @@
 // leases, runs and extracted bundles of the user running validation): tests use temporary folders (#411). Each command is
 // followed by a comparison with the folder as validation found it, and the first command that changed it fails, naming what.
 using System.Diagnostics;
+using System.Net;
+using System.Net.Sockets;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Xml.Linq;
@@ -29,9 +32,10 @@ bool skipCiShell = args.SequenceEqual(["--skip-ci-shell"]);
 bool onlyCiShell = args.SequenceEqual(["--only-ci-shell"]);
 bool ciMainTests = args.SequenceEqual(["--ci-main-tests"]);
 bool ciBuildOnly = args.SequenceEqual(["--ci-build-only"]);
+bool restrictedSandbox = args.SequenceEqual(["--restricted-sandbox"]);
 int ciTimed = args is ["--ci-timed", "1"] ? 1 : args is ["--ci-timed", "2"] ? 2 : 0;
-if (args.Length != 0 && !skipCiShell && !onlyCiShell && !ciMainTests && !ciBuildOnly && ciTimed == 0)
-    throw new ArgumentException("usage: dotnet run scripts/validate.cs [--skip-ci-shell|--only-ci-shell|--ci-main-tests|--ci-timed 1|2|--ci-build-only]");
+if (args.Length != 0 && !skipCiShell && !onlyCiShell && !ciMainTests && !ciBuildOnly && !restrictedSandbox && ciTimed == 0)
+    throw new ArgumentException("usage: dotnet run scripts/validate.cs [--skip-ci-shell|--only-ci-shell|--ci-main-tests|--ci-timed 1|2|--ci-build-only|--restricted-sandbox]");
 string results = Path.Combine(root, "artifacts", "validate");
 Directory.CreateDirectory(results);
 string transcript = Path.Combine(results, "validate.log");
@@ -39,6 +43,33 @@ File.WriteAllText(transcript, "");
 var started = Stopwatch.StartNew();
 string dataRoot = DataRoot();
 var dataBefore = Snapshot(dataRoot);
+
+if (restrictedSandbox)
+{
+    Note("RESTRICTED SANDBOX: running only selected no-host tests. This cannot establish full validation.");
+    var testHostProbe = new TcpListener(IPAddress.Loopback, 0);
+    try
+    {
+        testHostProbe.Start();
+    }
+    catch (SocketException ex)
+    {
+        Note($"UNAVAILABLE: local test-host socket: {ex.Message}. The .NET test runner needs a localhost socket; run validation in CI or an authorized shell.");
+        Note("INCOMPLETE: no tests ran in this restricted sandbox.");
+        return 3;
+    }
+    finally
+    {
+        testHostProbe.Stop();
+    }
+    Test("tests/Valheim.Testing.Tests/Valheim.Testing.Tests.csproj", "--filter",
+        "FullyQualifiedName~GridDumpTerrainTests|FullyQualifiedName~LayeredDumpTerrainTests", "--",
+        "RunConfiguration.TreatNoTestsAsError=true");
+    Test("tests/Valheim.Testing.Doubles.Tests/Valheim.Testing.Doubles.Tests.csproj");
+    Test("tests/Valheim.Testing.Bindings.Tests/Valheim.Testing.Bindings.Tests.csproj");
+    Note("INCOMPLETE: process, port, recovery, shell, package and consumer checks were not run. Full validation must pass in CI or an authorized shell.");
+    return 4;
+}
 
 // On macOS a PowerShell wrapper inherited from a checkout under Documents can wait for a privacy prompt without showing
 // one to the test runner. Prove that pwsh and its .NET runtime start from a safe directory before many shell tests time out.
@@ -209,8 +240,8 @@ string Solution(string name, IEnumerable<string> projects)
     return file;
 }
 
-// A test run's results go under artifacts/validate. When its test host is stopped (--blame-hang) or crashes, vstest reports
-// only "Test host process crashed"; the blame sequence file says which tests had started and not completed, so name them.
+// A test run's results go under artifacts/validate. Keep a TRX for ordinary assertion failures too: console output can be
+// lost when an agent shell yields. When a host crashes, the blame sequence names tests that started but did not complete.
 void Test(string project, params string[] extra)
 {
     string output = Path.Combine(results, Path.GetFileNameWithoutExtension(project));
@@ -218,8 +249,8 @@ void Test(string project, params string[] extra)
     {
         var arguments = new List<string> { "test", project, "-c", "Release", "-m:1", "--blame-hang-timeout", "5m",
             "--blame-hang-dump-type", "none", "--results-directory", output };
-        if (Environment.GetEnvironmentVariable("VT_CI_PROFILE") == "1")
-            arguments.AddRange(["--logger", "trx;LogFileName=timings.trx"]);
+        arguments.AddRange(["--logger", Environment.GetEnvironmentVariable("VT_CI_PROFILE") == "1"
+            ? "trx;LogFileName=timings.trx" : "trx;LogFileName=results.trx"]);
         arguments.AddRange(extra);
         Run("dotnet", arguments.ToArray());
     }
