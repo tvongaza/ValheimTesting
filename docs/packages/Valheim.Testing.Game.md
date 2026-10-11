@@ -22,7 +22,7 @@ The runner copies the runtime and world again for every run and removes its runt
 
 ### What a test runtime holds
 
-A clean test runtime is BepInEx core plus the plugins below, with an empty `BepInEx/patchers` folder: a preloader patcher left behind by a removed mod breaks the game's types before any plugin loads, and the pinned runner refuses a patchers folder that is not the pinned one (`runtimePins` and `installPins` `patchers`), naming what it holds. Install one pinned `valheimCLI.dll` in `plugins`. Remove the older Standard, World Tools, Observe, Reflection and Capture DLLs before upgrading; mixing them with the new default plugin is refused before launch ([ValheimCLI migration guide](https://github.com/tvongaza/valheimCLI/blob/0a732d33eb75a318be49f7a2c55193eb666af1ee/docs/command-packs.md)).
+A clean test runtime is BepInEx core plus the plugins below, with an empty `BepInEx/patchers` folder: a preloader patcher left behind by a removed mod breaks the game's types before any plugin loads, and the pinned runner refuses a patchers folder that is not the pinned one (`runtimePins` and `installPins` `patchers`), naming what it holds. Install one pinned `valheimCLI.dll` in `plugins`. Remove the older Standard, World Tools, Observe, Reflection and Capture DLLs before upgrading; mixing them with the new default plugin is refused before launch. The [release contract](../valheimcli-release-contract.md) identifies the matching CLI build.
 
 | Component | Dedicated server | Client |
 |---|---|---|
