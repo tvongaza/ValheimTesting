@@ -33,6 +33,32 @@ internal static class HostServerChecks
         if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(server, File.GetUnixFileMode(server) | UnixFileMode.UserExecute);
     }
 
+    public static Task AProfileServerKeepsRuntimeWritesOutOfTheInstall(IGameHost host, string parent) =>
+        GameHostChecks.WithRootAsync(host, parent, async root =>
+        {
+            using var source = new TempDirectory();
+            WriteInstall(source.Path);
+            string server = Path.Combine(source.Path, GameLaunch.ServerLinuxExecutable);
+            File.WriteAllText(server, "#!/bin/bash\nmkdir -p logs\nprintf 'owned runtime output\\n' > logs/stats_log.txt\nexec sleep 300\n");
+            if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(server, File.GetUnixFileMode(server) | UnixFileMode.UserExecute);
+            string install = root + "/install", profile = root + "/profile", boot = root + "/boot-1";
+            await host.ShipFilesAsync(source.Path, install, Generous);
+            await HostInstall.CopyAsync(host, install, profile, Generous);
+            var before = await HostInstall.ListAsync(host, install, Generous);
+            var launch = GameLaunch.ForServerWithLoader(install, profile, ["-batchmode"], null, ServerPlatform.Linux);
+            using var evidence = new TempDirectory();
+            var process = await HostServer.StartAsync(host, launch, boot, Generous, logs: [], evidence: Path.Combine(evidence.Path, "boot"),
+                logonSeams: null, cancellation: CancellationToken.None, logRoot: profile);
+            try
+            {
+                (await host.WaitForLogAsync(boot + "/logs/stats_log.txt", 0,
+                    new System.Text.RegularExpressions.Regex("owned runtime output"), null, Generous)).EnsureMatched();
+            }
+            finally { await process.StopAsync(TimeSpan.FromSeconds(15)); }
+            HostInstall.RequireSame(before.Files, await HostInstall.ListAsync(host, install, Generous), "source install after profile boot");
+            Assert.Contains("owned runtime output", File.ReadAllText(Path.Combine(evidence.Path, "boot", "logs", "stats_log.txt")));
+        });
+
     public static Task AServerRunsFromAVerifiedCopyAndStopsByIdentity(IGameHost host, string parent) => GameHostChecks.WithRootAsync(host, parent, async root =>
     {
         using var source = new TempDirectory();
@@ -212,6 +238,9 @@ public class LocalHostServerTests
     [Fact] public Task ACrossplayStartNeedsLibpartyToLoadOnTheHost() =>
         OperatingSystem.IsLinux() ? HostServerChecks.ACrossplayStartNeedsLibpartyToLoadOnTheHost(new LocalGameHost("local-bash", HostShell.Bash), Path.GetTempPath()) : Task.CompletedTask;
 
+    [Fact] public Task AProfileServerKeepsRuntimeWritesOutOfTheInstall() =>
+        OperatingSystem.IsLinux() ? HostServerChecks.AProfileServerKeepsRuntimeWritesOutOfTheInstall(new LocalGameHost("local-bash", HostShell.Bash), Path.GetTempPath()) : Task.CompletedTask;
+
     [Theory, MemberData(nameof(LocalGameHostShellTests.Shells), MemberType = typeof(LocalGameHostShellTests))]
     public Task AListingMatchesTheLocalManifestAndPins(string shell) => HostServerChecks.AListingMatchesTheLocalManifestAndPins(new LocalGameHost("local-" + shell, HostShell.Parse(shell)));
 
@@ -258,6 +287,9 @@ public class SshHostServerIntegrationTests
 
     [SshTheory, MemberData(nameof(Shells))] public Task ACrossplayStartNeedsLibpartyToLoadOnTheHost(string shell) =>
         HostServerChecks.ACrossplayStartNeedsLibpartyToLoadOnTheHost(Host(shell), Path.GetTempPath());
+
+    [SshTheory, MemberData(nameof(Shells))] public Task AProfileServerKeepsRuntimeWritesOutOfTheInstall(string shell) =>
+        HostServerChecks.AProfileServerKeepsRuntimeWritesOutOfTheInstall(Host(shell), Path.GetTempPath());
 }
 
 [Trait("Category", "GameHosts")]
@@ -404,4 +436,7 @@ public class ContainerHostServerIntegrationTests
 
     [ContainerTheory, MemberData(nameof(Shells))] public Task ACrossplayStartNeedsLibpartyToLoadOnTheHost(string shell) =>
         HostServerChecks.ACrossplayStartNeedsLibpartyToLoadOnTheHost(new ContainerGameHost("ctr", Environment.GetEnvironmentVariable("VALHEIM_TESTING_CONTAINER")!, HostShell.Parse(shell)), "/tmp");
+
+    [ContainerTheory, MemberData(nameof(Shells))] public Task AProfileServerKeepsRuntimeWritesOutOfTheInstall(string shell) =>
+        HostServerChecks.AProfileServerKeepsRuntimeWritesOutOfTheInstall(new ContainerGameHost("ctr", Environment.GetEnvironmentVariable("VALHEIM_TESTING_CONTAINER")!, HostShell.Parse(shell)), "/tmp");
 }

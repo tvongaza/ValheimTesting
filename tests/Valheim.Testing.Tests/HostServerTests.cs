@@ -315,6 +315,7 @@ public sealed class HostServerTests : IDisposable
             ["BepInEx/LogOutput.log"], null, logonSeams: null, cancellation: CancellationToken.None, logRoot: "/owned/profile");
         Assert.Equal("/game/valheim", host.Runs[0].Variables["runtime"]);
         Assert.Equal("/owned/profile", host.Runs[0].Variables["logroot"]);
+        Assert.Equal("/owned/boot-1", host.Runs[0].Variables["workdir"]);
         Assert.Contains("/owned/profile/BepInEx/core/BepInEx.Preloader.dll", host.Runs[0].Variables["files"]);
         Assert.Equal("/game/valheim", process.Runtime);
         Assert.Equal("/owned/profile", process.LogRoot);

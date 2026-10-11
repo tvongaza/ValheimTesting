@@ -300,7 +300,8 @@ internal sealed class HostedServerRun : IServerPlacement
         if (Role.PreparedSourceRoot is { } source && _preparedPins != null)
         {
             HostInstall.CheckProfilePinsAsync(Host, _preparedPins, GameDirectory, LoaderDirectory, source,
-                "prepared server profile before launch", HostedTimeouts.Long, cancellation).GetAwaiter().GetResult();
+                "prepared server profile before launch", HostedTimeouts.Long, cancellation,
+                Role.PreparedSourceFiles).GetAwaiter().GetResult();
         }
         string local = Path.Combine(output, "boot-" + n), bootDirectory = HostPath.Join(RunDirectory, "boot-" + n);
         if (LocalMac) return StartLocalMac(launch, local, bootDirectory, cancellation);
