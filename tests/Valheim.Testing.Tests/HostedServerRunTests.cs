@@ -28,6 +28,23 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.Empty(host.Runs);
     }
 
+    [Fact] public void RemoteMacServerRefusesTheStandaloneCopyPathBeforeTouchingItsHost()
+    {
+        var host = NewHost();
+        var (planPath, profilePath) = Write(host);
+        var plan = ServerRunPlan.Read<ServerRunPlan>(planPath);
+        plan.Executable = GameLaunch.ServerMacExecutable;
+        plan.Runtime.Sha256.Clear();
+        var profile = TestEnvironment.Read(profilePath);
+        var serverHost = profile.Hosts[profile.Server!.Host];
+        serverHost.Platform = "macos";
+        serverHost.Kind = "ssh";
+        var error = Assert.Throws<InvalidOperationException>(() => HostedServerRun.Create(profile, plan, "test",
+            new FakeRunHooks { Host = _ => host, RunId = RunId }));
+        Assert.Contains("prepared profile campaign", error.Message);
+        Assert.Empty(host.Runs);
+    }
+
     // #257: a campaign's prepared install is the server's runtime, verified where it is and never copied again (the campaign
     // test proves the passing path); one that changed between preparation and the run is refused before anything launches.
     [Fact] public async Task APreparedRuntimeThatChangedSincePreparationIsRefusedAndNotCopied()

@@ -105,6 +105,17 @@ public sealed class BepInExLoaderPackage
     /// <summary>Refuses this package unless it is a complete loader for <paramref name="platform"/>, the platform it is applied on.</summary>
     internal void RequireFor(ClientPlatform platform, string kind) => BepInExLoader.RequireLoaderFiles(platform, Files.ContainsKey, kind);
 
+    /// <summary>A Mac dedicated-server profile launched natively needs this one reviewed arm64 loader/core set.</summary>
+    internal void RequireNativeMacServer()
+    {
+        RequireFor(ClientPlatform.MacOS, "Mac server loader package");
+        string doorstop = Path.Combine(Root, "libdoorstop.dylib");
+        if (!File.Exists(doorstop) || !GameLaunch.MachOArchitectures(doorstop).Contains(ClientArchitecture.Arm64))
+            throw new InvalidDataException("The Mac server loader package needs a root libdoorstop.dylib with an arm64 slice.");
+        if (GameLaunch.MacNativeCoreProblem(Root) is { } problem)
+            throw new InvalidDataException("The Mac server loader package cannot run natively: " + problem);
+    }
+
     /// <summary>Replaces only the copied install's loader/core files with this pinned package. Caller must own the install.</summary>
     internal void Apply(string install)
     {

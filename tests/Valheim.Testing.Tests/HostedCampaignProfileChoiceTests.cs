@@ -13,7 +13,7 @@ public sealed class HostedCampaignProfileChoiceTests
     [InlineData("local", "macos", true, false)]
     [InlineData("local", "linux", false, true)]
     [InlineData("local", "linux", true, false)]
-    [InlineData("ssh", "macos", false, false)]
+    [InlineData("ssh", "macos", false, true)]
     [InlineData("ssh", "linux", false, true)]
     [InlineData("ssh", "linux", true, false)]
     [InlineData("container", "linux", false, true)]

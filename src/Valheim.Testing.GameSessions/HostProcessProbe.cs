@@ -50,7 +50,8 @@ internal static class HostProcessProbe
         string list = string.Join(' ', processes.Distinct().Select(process => process.Pid.ToString(CultureInfo.InvariantCulture) + ":" + process.StartIdentity));
         var variables = new Dictionary<string, string> { ["processes"] = list };
         if (settle) variables["settle"] = "1";
-        var script = host.Shell.Kind == HostShellKind.PowerShell ? Windows : host.Kind == GameHostKind.Local && OperatingSystem.IsMacOS() ? Mac : Bash;
+        // An SSH bash host may be macOS or Linux. Ask the host rather than inferring its OS from the runner.
+        var script = host.Shell.Kind == HostShellKind.PowerShell ? Windows : Unix;
         var result = (await host.RunAsync(script, variables, timeout, cancellation).ConfigureAwait(false))
             .EnsureSuccess($"Reading journalled processes on {host.Name}");
         if (InteractiveClient.Line(result.Stdout, "VT-PROC-END") == null)
@@ -152,7 +153,6 @@ internal static class HostProcessProbe
         done
         echo VT-PROC-END
         """;
-
     // Variables: processes (space-separated PID:START pairs; an empty START matches any), settle (optional). One line per pair:
     // VT-PROC <pid> <start asked or -> gone|reused|same|unreadable <start read or -> <sha256 or ->, then VT-PROC-END. With
     // settle, a process still running as a launch stage (the recorder's forked shell, setsid or env, busybox's too, before the game is
@@ -176,6 +176,7 @@ internal static class HostProcessProbe
         done
         echo VT-PROC-END
         """;
+    internal static readonly string Unix = "if [ \"$(uname -s)\" = Darwin ]; then\n" + Mac + "\nelse\n" + Bash + "\nfi\n";
     // One CIM query reads every command line at once: each Get-CimInstance call costs about a second on Windows PowerShell.
     internal static readonly string Windows = """
         $utf8 = New-Object Text.UTF8Encoding $false

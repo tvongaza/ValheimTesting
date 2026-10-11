@@ -4,10 +4,10 @@ using Valheim.Testing.Game;
 namespace Valheim.Testing.GameSessions;
 
 /// <summary>
-/// Starts an owned dedicated server on a Linux/bash or Windows/PowerShell host and returns it identified by process ID
-/// and start time, the identity an owned session checks against its adapter's reported process ID. Linux uses a
-/// <c>setsid</c> recorder and keeps stdout and stderr in the boot directory. Windows uses a short-lived headless task
-/// to start the server independently of SSH, then removes that task.
+/// Starts an owned dedicated server on a Linux/bash, macOS/bash or Windows/PowerShell host and returns it identified by
+/// process ID and start time, the identity an owned session checks against its adapter's reported process ID. Linux uses
+/// a <c>setsid</c> recorder, macOS a detached supervisor, and both keep stdout and stderr in the boot directory. Windows
+/// uses a short-lived headless task to start the server independently of SSH, then removes that task.
 /// </summary>
 public static class HostServer
 {
@@ -69,7 +69,9 @@ public static class HostServer
             // Steam writes logs relative to the process cwd. A profile must not write them into the installed game.
             ["workdir"] = !windows && logRoot != null && !logRoot.Equals(launch.WorkingDirectory, StringComparison.Ordinal)
                 ? directory : launch.WorkingDirectory,
-            ["exe"] = windows ? GameLaunch.ServerWindowsExecutable : GameLaunch.ServerLinuxExecutable, ["files"] = string.Join('\n', launch.RequiredFiles), ["dir"] = directory,
+            ["exe"] = launch.Platform switch { ClientPlatform.Windows => GameLaunch.ServerWindowsExecutable,
+                ClientPlatform.MacOS => GameLaunch.ServerMacExecutable, _ => GameLaunch.ServerLinuxExecutable },
+            ["files"] = string.Join('\n', launch.RequiredFiles), ["dir"] = directory,
             ["spec"] = launch.Spec(), ["logs"] = string.Join('\n', kept),
             ["crossplay"] = launch.Crossplay ? "1" : "", ["libraries"] = string.Join('\n', CrossplayLibraries.PartyLibraries),
             ["seconds"] = Math.Max(5, (int)Math.Floor(timeout.TotalSeconds) - 10).ToString(CultureInfo.InvariantCulture),
@@ -77,7 +79,9 @@ public static class HostServer
         };
         foreach (var (name, value) in logonSeams ?? new Dictionary<string, string>())
             variables.Add(name is "elevated" or "session" or "desktops" ? name : throw new ArgumentException("Not a logon seam: " + name, nameof(logonSeams)), value);
-        var result = await host.RunAsync(windows ? HostServerScripts.WindowsStart : HostServerScripts.Start, variables, timeout, cancellation).ConfigureAwait(false);
+        var startScript = launch.Platform switch { ClientPlatform.Windows => HostServerScripts.WindowsStart,
+            ClientPlatform.MacOS => HostServerScripts.MacStart, _ => HostServerScripts.Start };
+        var result = await host.RunAsync(startScript, variables, timeout, cancellation).ConfigureAwait(false);
         if (!result.Succeeded)
             throw new HostOperationException($"Starting the dedicated server on {host.Name} (boot directory {directory}); a server may have started, see {directory}/pid", result);
         string? verdict = InteractiveClient.Line(result.Stdout, "VT-SERVER ");
@@ -90,7 +94,7 @@ public static class HostServer
             if (parts.Length != 2 || !int.TryParse(parts[0], NumberStyles.None, CultureInfo.InvariantCulture, out int id) || parts[1].Length == 0 || !parts[1].All(char.IsAsciiDigit))
                 throw new HostOperationException($"Unexpected process identity from {host.Name}; see {directory}/pid", result);
             return new HostServerProcess(host, id, parts[1], directory, launch.WorkingDirectory, kept, evidence,
-                logRoot ?? launch.WorkingDirectory)
+                logRoot ?? launch.WorkingDirectory, launch.Platform)
                 { TaskLogon = InteractiveClient.Line(result.Stdout, "VT-LOGON ") };
         }
         throw word switch
@@ -127,21 +131,23 @@ public sealed class HostServerProcess : IOwnedProcess, IAsyncDisposable
     private readonly SemaphoreSlim _stopping = new(1, 1);
     private bool _killed, _kept;
     private volatile bool _exited;
+    private readonly ClientPlatform _platform;
 
     /// <summary>On Windows, how the task that started this server logged on: <c>s4u</c> (session 0) or <c>interactive</c> (the user's desktop session).</summary>
     public string? TaskLogon { get; internal init; }
 
     internal HostServerProcess(IGameHost host, int id, string start, string bootDirectory, string runtime, IReadOnlyList<string> logs, string? evidence,
-        string? logRoot = null)
+        string? logRoot = null, ClientPlatform? platform = null)
     {
         _host = host; Id = id; StartIdentity = start; BootDirectory = bootDirectory; Runtime = runtime;
         LogRoot = logRoot ?? runtime; _logs = logs; EvidenceDirectory = evidence;
+        _platform = platform ?? (host.Shell.Kind == HostShellKind.PowerShell ? ClientPlatform.Windows : ClientPlatform.Linux);
     }
 
     public string HostName => _host.Name;
     /// <summary>The server's process ID on its host.</summary>
     public int Id { get; }
-    /// <summary>The process's start time in clock ticks after the host's boot, which tells it from a later process with the same ID.</summary>
+    /// <summary>The host-specific start identity, which tells this process from a later process with the same ID.</summary>
     public string StartIdentity { get; }
     /// <summary>This boot's evidence directory on the host.</summary>
     public string BootDirectory { get; }
@@ -162,7 +168,9 @@ public sealed class HostServerProcess : IOwnedProcess, IAsyncDisposable
     {
         while (true)
         {
-            var result = (await _host.RunAsync(_host.Shell.Kind == HostShellKind.PowerShell ? InteractiveScripts.WindowsWait : InteractiveScripts.LinuxWait,
+            var waitScript = _platform switch { ClientPlatform.Windows => InteractiveScripts.WindowsWait,
+                ClientPlatform.MacOS => HostServerScripts.MacWait, _ => InteractiveScripts.LinuxWait };
+            var result = (await _host.RunAsync(waitScript,
                 Variables(("seconds", "600")), TimeSpan.FromSeconds(660), cancellation).ConfigureAwait(false))
                 .EnsureSuccess($"Waiting for server process {Id} on {HostName}");
             string? verdict = InteractiveClient.Line(result.Stdout, "VT-WAIT ");
@@ -199,7 +207,9 @@ public sealed class HostServerProcess : IOwnedProcess, IAsyncDisposable
             {
                 string seconds = Math.Max(1, (int)Math.Ceiling(timeout.TotalSeconds)).ToString(CultureInfo.InvariantCulture);
                 string quitSeconds = ((int)Math.Ceiling(quit.TotalSeconds)).ToString(CultureInfo.InvariantCulture);
-                var result = (await _host.RunAsync(_host.Shell.Kind == HostShellKind.PowerShell ? HostServerScripts.WindowsStop : InteractiveScripts.LinuxStop,
+                var stopScript = _platform switch { ClientPlatform.Windows => HostServerScripts.WindowsStop,
+                    ClientPlatform.MacOS => HostServerScripts.MacStop, _ => InteractiveScripts.LinuxStop };
+                var result = (await _host.RunAsync(stopScript,
                     Variables(("seconds", seconds), ("quit", quitSeconds), ("signal", "INT"), ("quitHelper", ProcessQuit.WindowsConsoleControlScript)),
                     quit + timeout + TimeSpan.FromSeconds(30), cancellation).ConfigureAwait(false)).EnsureSuccess($"Stopping server process {Id} on {HostName}");
                 outcome = InteractiveClient.Line(result.Stdout, "VT-STOP ") switch
@@ -264,7 +274,7 @@ public sealed class HostServerProcess : IOwnedProcess, IAsyncDisposable
 
 // The fixed scripts of a dedicated server on a Linux host. Values arrive as variables (ScriptedGameHost.Compose); each ends
 // with one verdict line. The wait and stop are InteractiveScripts' Linux ones (same recorder files, same identity rule).
-internal static class HostServerScripts
+internal static partial class HostServerScripts
 {
     // Variables: game, start, quit, seconds, quitHelper. Identity is checked before either the console event or kill.
     // The Ctrl+Break helper attaches only to the target console. A failed event falls through to the bounded kill.

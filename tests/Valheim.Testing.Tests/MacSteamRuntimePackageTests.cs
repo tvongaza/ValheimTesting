@@ -1,11 +1,12 @@
 using System.Diagnostics;
 using Valheim.Testing.Game;
+using Valheim.Testing.GameSessions;
 using Xunit;
 
 public sealed class MacSteamRuntimePackageTests
 {
     [Fact]
-    public void PinsTheNativeClosureAndRefusesChangedOrMissingMembers()
+    public async Task PinsTheNativeClosureAndRefusesChangedOrMissingMembers()
     {
         if (!OperatingSystem.IsMacOS()) return;
         string root = Path.Combine(Path.GetTempPath(), "vt-steam-package-" + Guid.NewGuid().ToString("N"));
@@ -27,6 +28,13 @@ public sealed class MacSteamRuntimePackageTests
             string manifest = Path.Combine(root, "reviewed.json");
             package.Write(manifest);
             _ = MacSteamRuntimePackage.Read(manifest);
+            var remote = MacSteamRuntimePackage.ReadRemote(manifest);
+            var listings = package.Files.Keys.ToDictionary(relative => relative,
+                relative => Run("/usr/bin/otool", "-L", Path.Combine(root, relative)), StringComparer.Ordinal);
+            remote.RequireRemoteClosure(listings);
+            Assert.Contains("did not cover every pinned file", Assert.Throws<InvalidDataException>(() =>
+                remote.RequireRemoteClosure(listings.Where(file => file.Key != "libtier0_s.dylib")
+                    .ToDictionary(file => file.Key, file => file.Value, StringComparer.Ordinal))).Message);
             string profile = Path.Combine(root, "profile");
             var signed = package.StageSignedFiles(profile);
             Assert.Equal(package.Files.Keys.Order(StringComparer.Ordinal), signed.Keys.Order(StringComparer.Ordinal));
@@ -38,15 +46,34 @@ public sealed class MacSteamRuntimePackageTests
                 Assert.Equal(0, ExitCode("/usr/bin/codesign", "--verify", path));
                 Assert.Equal(package.Files[relative], FileHash.Sha256(Path.Combine(root, relative)));
             }
+            var host = new LocalGameHost("mac-shell", HostShell.Bash);
+            await MacSteamRuntimeOnHost.VerifyAsync(host, remote, TimeSpan.FromSeconds(60), default);
+            string sshProfile = Path.Combine(root, "ssh-profile");
+            Directory.CreateDirectory(sshProfile);
+            var sshSigned = await MacSteamRuntimeOnHost.StageAsync(host, remote, sshProfile, TimeSpan.FromSeconds(60), default);
+            Assert.Equal(package.Files.Keys.Order(StringComparer.Ordinal), sshSigned.Keys.Order(StringComparer.Ordinal));
+            foreach (var (relative, sha) in sshSigned)
+            {
+                Assert.Equal(sha, FileHash.Sha256(Path.Combine(sshProfile, "steam-runtime", relative)));
+                Assert.Equal(package.Files[relative], FileHash.Sha256(Path.Combine(root, relative)));
+            }
             string commandManifest = Path.Combine(root, "command.json");
             Assert.Equal(0, MacSteamRuntimeCommand.Run(["capture", "--steamcmd", root, "--output", commandManifest]));
             Assert.Equal(3, MacSteamRuntimeCommand.Run(["capture", "--steamcmd", root, "--output", commandManifest]));
 
             File.AppendAllText(Path.Combine(root, "libtier0_s.dylib"), "changed");
             Assert.Contains("libtier0_s.dylib", Assert.Throws<InvalidDataException>(() => MacSteamRuntimePackage.Read(manifest)).Message);
+            string refusedProfile = Path.Combine(root, "refused-profile");
+            Directory.CreateDirectory(refusedProfile);
+            await Assert.ThrowsAnyAsync<Exception>(() => MacSteamRuntimeOnHost.StageAsync(host, remote, refusedProfile, TimeSpan.FromSeconds(60), default));
+            Assert.Empty(Directory.EnumerateFileSystemEntries(refusedProfile));
             Compile(root, source, "libtier0_s.dylib");
             File.Delete(Path.Combine(root, "crashhandler.dylib"));
             Assert.Contains("crashhandler.dylib", Assert.Throws<FileNotFoundException>(() => MacSteamRuntimePackage.Read(manifest)).Message);
+            string missingProfile = Path.Combine(root, "missing-profile");
+            Directory.CreateDirectory(missingProfile);
+            await Assert.ThrowsAnyAsync<Exception>(() => MacSteamRuntimeOnHost.StageAsync(host, remote, missingProfile, TimeSpan.FromSeconds(60), default));
+            Assert.Empty(Directory.EnumerateFileSystemEntries(missingProfile));
 
             Compile(root, source, "crashhandler.dylib");
             Assert.Equal(0, ExitCode("/usr/bin/install_name_tool", "-id",

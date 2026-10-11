@@ -94,6 +94,24 @@ public sealed class EnvironmentInventoryTests : IDisposable
     }
 
     [Fact]
+    public void InventoryPlacesADedicatedMacServerOnAnSshHostButNotAContainer()
+    {
+        var inventory = new EnvironmentInventory
+        {
+            Hosts = new() { ["mac"] = new HostProfile { Kind = "ssh", Platform = "macos", Shell = "bash",
+                Destination = "test@example", Lock = "/tmp/vt-mac.lock" } },
+            Environments = [new EnvironmentRecipe { Name = "mac-server", Host = "mac", Roles = ["server"],
+                Install = "/Applications/Valheim Dedicated Server", Runtime = "/tmp/vt-runs",
+                CliPort = 5688, LocalCliPort = 5689, GamePort = 2486 }],
+        };
+        inventory.Validate(_root);
+        Assert.Equal("mac", inventory.Resolve(new HostedCampaignManifest { Server = new() }).Environment.Server!.Host);
+        inventory.Hosts["mac"].Kind = "container";
+        inventory.Hosts["mac"].Container = "mac-container";
+        Assert.Contains("local or SSH Mac host", Assert.Throws<ArgumentException>(() => inventory.Validate(_root)).Message);
+    }
+
+    [Fact]
     public void AssignsServerAndClientOnOneHostThenAnotherClientElsewhere()
     {
         var inventory = Inventory();

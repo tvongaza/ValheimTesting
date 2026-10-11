@@ -286,10 +286,10 @@ public static class HostedCampaignPreparation
 {
     // Windows needs an owned launch folder for its proxy; Unix launches the source executable
     // against the separate owned profile. The same stage owner handles local and remote hosts.
-    // A remote Mac desktop client/server needs its own launch support before taking this path.
+    // A remote Mac dedicated server can use this profile; a remote Mac GUI client cannot.
     internal static bool UseProfile(HostProfile host, bool copyGame) =>
         !copyGame && (host.Kind is "local" or "ssh" or "container") &&
-        (host.Platform is "windows" or "linux" || host.Kind == "local" && host.Platform == "macos");
+        (host.Platform is "windows" or "linux" || host.Platform == "macos" && host.Kind is ("local" or "ssh"));
     internal sealed record Inputs(HostedCampaignManifest Manifest, ResolvedEnvironment Profile,
         List<(string Name, GameRole Role, HostedCampaignRole Input)> Roles,
         Dictionary<string, HostedRuntimeFile[]> Selections, Dictionary<string, HostedCharacterSelection> Characters);
@@ -509,6 +509,14 @@ public static class HostedCampaignPreparation
                 try { await HostServer.RequireTaskLogonAsync(host, timeout, cancellation).ConfigureAwait(false); }
                 catch (Exception error) when (HostCheckRefusal(error))
                 { failures.Add(new("server", "server task", error.Message)); }
+                if (inputs.Profile.Hosts[group.Key] is { Kind: "ssh", Platform: "macos" })
+                    try
+                    {
+                        await RemoteMacServerPreflight.InspectAsync(host, group.Single(role => role.Name == "server").Role,
+                            timeout, cancellation).ConfigureAwait(false);
+                    }
+                    catch (Exception error) when (HostCheckRefusal(error))
+                    { failures.Add(new("server", "Mac server host", error.Message)); }
             }
             var capacities = new ConcurrentBag<(string Actor, HostCopyCapacity Capacity)>();
             await Task.WhenAll(group.Select(async item =>
@@ -541,9 +549,20 @@ public static class HostedCampaignPreparation
                             loaderPackage = choice.Manifest;
                         }
                         var loader = loaderPackage == null ? null : BepInExLoaderPackage.Read(loaderPackage);
+                        if (item.Name == "server" && inputs.Profile.Hosts[group.Key] is { Kind: "ssh", Platform: "macos" })
+                        {
+                            if (loader == null) throw new InvalidDataException("A remote Mac server needs one pinned native arm64 loader package.");
+                            loader.RequireNativeMacServer();
+                            if (item.Input.SteamRuntimePackage == null)
+                                throw new InvalidDataException("A remote Mac server needs a pinned SteamCMD runtime package from #495.");
+                        }
                         sourceListings[item.Name] = await HostedRuntimeStage.InspectSourceAsync(host,
                             item.Name == "server" ? HostedRuntimeKind.Server : HostedRuntimeKind.Client,
                             item.Role.Install, loader, timeout, cancellation).ConfigureAwait(false);
+                        if (item.Input.SteamRuntimePackage != null && inputs.Profile.Hosts[group.Key].Kind == "ssh" &&
+                            inputs.Profile.Hosts[group.Key].Platform == "macos")
+                            await MacSteamRuntimeOnHost.VerifyAsync(host,
+                                MacSteamRuntimePackage.ReadRemote(item.Input.SteamRuntimePackage), timeout, cancellation).ConfigureAwait(false);
                         // Use the same slice check as one-shot start/server-load, with the loader the host
                         // inspection actually selected. Session check --hosts must refuse before any copy.
                         if (item.Name != "server" && inputs.Profile.Hosts[group.Key] is { Kind: "local", Platform: "macos" } && hostFactory == null)
@@ -773,7 +792,9 @@ public static class HostedCampaignPreparation
                 {
                     if (name != "server" || resolved?.Environment.Hosts[resolved.Environment.Server!.Host].Platform != "macos")
                         throw new InvalidDataException("steamRuntimePackage is only for a Mac dedicated server profile.");
-                    _ = MacSteamRuntimePackage.Read(input.SteamRuntimePackage);
+                    var macHost = resolved.Environment.Hosts[resolved.Environment.Server.Host];
+                    _ = macHost.Kind == "ssh" ? MacSteamRuntimePackage.ReadRemote(input.SteamRuntimePackage)
+                        : MacSteamRuntimePackage.Read(input.SteamRuntimePackage);
                 });
             string? loaderPackage = resolved?.LoaderPackages.GetValueOrDefault(name) ?? input.LoaderPackage;
             if (loaderPackage != null)
@@ -948,7 +969,9 @@ public static class HostedCampaignPreparation
                     // run-ended entry says cleanup was verified only when no copy of it remains, not when the copy's own cleanup failed.
                     copies.Add((hostName, name, runtime, stage));
                     var loader = item.Input.LoaderPackage == null ? null : BepInExLoaderPackage.Read(item.Input.LoaderPackage);
-                    var steamRuntime = item.Input.SteamRuntimePackage == null ? null : MacSteamRuntimePackage.Read(item.Input.SteamRuntimePackage);
+                    var steamRuntime = item.Input.SteamRuntimePackage == null ? null :
+                        profile.Hosts[role.Host].Kind == "ssh" ? MacSteamRuntimePackage.ReadRemote(item.Input.SteamRuntimePackage)
+                            : MacSteamRuntimePackage.Read(item.Input.SteamRuntimePackage);
                     if (profileLaunch)
                     {
                         var prepared = await HostedRuntimeStage.PrepareProfileAsync(host, kind,
@@ -966,6 +989,7 @@ public static class HostedCampaignPreparation
                         }
                         if (steamRuntime != null)
                         {
+                            role.PreparedSteamRuntimePackage = steamRuntime;
                             role.PreparedSteamRuntimeRoot = HostPath.Join(prepared.LoaderRoot, "steam-runtime");
                             role.PreparedSteamRuntimeFiles = prepared.Loader.Files
                                 .Where(file => file.Key.StartsWith("steam-runtime/", StringComparison.Ordinal))

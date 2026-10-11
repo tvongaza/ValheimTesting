@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Sockets;
+using System.Diagnostics;
 using Valheim.Testing.Game;
 using Xunit;
 using Valheim.Testing.GameSessions;
@@ -11,6 +12,70 @@ using Valheim.Testing.GameSessions;
 internal static class HostServerChecks
 {
     private static readonly TimeSpan Generous = GameHostChecks.Generous;
+
+    public static Task ANativeMacServerProfileStartsAndQuitsByIdentity(IGameHost host, string parent) =>
+        GameHostChecks.WithRootAsync(host, parent, async root =>
+        {
+            using var source = new TempDirectory();
+            string game = Path.Combine(source.Path, "valheim_server", "Valheim");
+            string library = Path.Combine(source.Path, "libdoorstop.dylib");
+            string code = Path.Combine(source.Path, "stand-in.c");
+            Directory.CreateDirectory(Path.GetDirectoryName(game)!);
+            File.WriteAllText(code, """
+                #include <signal.h>
+                #include <stdio.h>
+                #include <unistd.h>
+                static volatile sig_atomic_t stop;
+                static void on_stop(int signal) { (void)signal; stop = 1; }
+                int main(void) {
+                  signal(SIGINT, on_stop);
+                  puts("native server running"); fflush(stdout);
+                  while (!stop) usleep(10000);
+                  puts("native server stopped"); fflush(stdout);
+                  return 0;
+                }
+                """);
+            static void Compile(string output, string input, bool library)
+            {
+                using var process = Process.Start(new ProcessStartInfo("/usr/bin/clang")
+                {
+                    ArgumentList = { "-arch", "arm64", library ? "-dynamiclib" : "-Wno-unused-command-line-argument", "-o", output, input },
+                    RedirectStandardError = true, UseShellExecute = false,
+                }) ?? throw new IOException("Could not start clang for the Mac server stand-in.");
+                string error = process.StandardError.ReadToEnd();
+                process.WaitForExit();
+                if (process.ExitCode != 0) throw new IOException("Could not compile the Mac server stand-in: " + error);
+            }
+            Compile(game, code, library: false);
+            File.WriteAllText(code, "void vt_doorstop_stand_in(void) {}\n");
+            Compile(library, code, library: true);
+            string core = Path.Combine(source.Path, "BepInEx", "core");
+            Directory.CreateDirectory(core);
+            File.WriteAllText(Path.Combine(core, "BepInEx.Preloader.dll"), "test preloader");
+            File.WriteAllText(Path.Combine(core, "BepInEx.dll"), "test core");
+            string install = root + "/install", profile = root + "/profile", boot = root + "/boot";
+            await host.ShipFilesAsync(Path.Combine(source.Path, "valheim_server"), install + "/valheim_server", Generous);
+            await host.ShipFilesAsync(source.Path, profile, Generous);
+            var before = await HostInstall.ListAsync(host, install, Generous);
+            var launch = GameLaunch.ForServerWithLoader(install, profile, ["-nographics"], null, ServerPlatform.MacOS);
+            var process = await HostServer.StartAsync(host, launch, boot, Generous, logs: [], logRoot: profile,
+                evidence: null, logonSeams: null, cancellation: CancellationToken.None);
+            try
+            {
+                (await host.WaitForLogAsync(boot + "/stdout.log", 0,
+                    new System.Text.RegularExpressions.Regex("native server running"), null, Generous)).EnsureMatched();
+                var found = (await HostProcessProbe.ProbeAsync(host, [(process.Id, process.StartIdentity)], Generous))
+                    [(process.Id, process.StartIdentity)];
+                Assert.Equal(ProbedState.Same, found.State);
+                Assert.Equal(launch.CommandLineSha256(), found.CommandLineSha256);
+                Assert.Equal(HostServerStop.Quit, await process.StopAsync(TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5)));
+                Assert.Equal(0, await process.WaitForExitAsync(CancellationToken.None));
+                Assert.Contains("native server stopped", (await host.RunAsync("cat \"$boot/stdout.log\"",
+                    new Dictionary<string, string> { ["boot"] = boot }, Generous)).Stdout);
+            }
+            finally { if (!process.HasExited) await process.StopAsync(TimeSpan.FromSeconds(5)); }
+            HostInstall.RequireSame(before.Files, await HostInstall.ListAsync(host, install, Generous), "Mac server source after a profile boot");
+        });
 
     // A server install as far as the launch and the pins need one: the game's Managed folder, BepInEx core, Doorstop's library
     // (a stand-in: the loader warns and carries on) and the server executable, here a script. Line endings stay LF.
@@ -240,6 +305,11 @@ public class LocalHostServerTests
 
     [Fact] public Task AProfileServerKeepsRuntimeWritesOutOfTheInstall() =>
         OperatingSystem.IsLinux() ? HostServerChecks.AProfileServerKeepsRuntimeWritesOutOfTheInstall(new LocalGameHost("local-bash", HostShell.Bash), Path.GetTempPath()) : Task.CompletedTask;
+
+    [Fact] public Task ANativeMacServerProfileStartsAndQuitsByIdentity() =>
+        OperatingSystem.IsMacOS() && System.Runtime.InteropServices.RuntimeInformation.OSArchitecture == System.Runtime.InteropServices.Architecture.Arm64
+            ? HostServerChecks.ANativeMacServerProfileStartsAndQuitsByIdentity(new LocalGameHost("local-bash", HostShell.Bash), Path.GetTempPath())
+            : Task.CompletedTask;
 
     [Theory, MemberData(nameof(LocalGameHostShellTests.Shells), MemberType = typeof(LocalGameHostShellTests))]
     public Task AListingMatchesTheLocalManifestAndPins(string shell) => HostServerChecks.AListingMatchesTheLocalManifestAndPins(new LocalGameHost("local-" + shell, HostShell.Parse(shell)));

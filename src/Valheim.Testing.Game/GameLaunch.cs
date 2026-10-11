@@ -100,8 +100,8 @@ public sealed partial class GameLaunch
     /// <c>libdoorstop_x64.so</c> in front of <c>LD_PRELOAD</c>. A caller's own values are kept behind them. A server runs only
     /// on its own OS, except that a Windows machine may build a Linux launch for inspection. Any other mismatch refuses with
     /// <see cref="PlatformNotSupportedException"/>.
-    /// With <paramref name="hostPlatform"/> (Windows or Linux) the launch is for a host of that platform. <paramref name="runtime"/> is then an absolute
-    /// path there: a drive path on Windows, and on Linux a path without ':', ';' or '=', which the loader's search lists and
+    /// With <paramref name="hostPlatform"/> the launch is for a host of that platform. <paramref name="runtime"/> is then an absolute
+    /// path there: a drive path on Windows, and on Unix a path without ':', ';' or '=', which the loader's search lists and
     /// <c>env</c> cannot hold. The caller's variables must be plain names, and on Linux they may not set
     /// <c>LD_LIBRARY_PATH</c>/<c>LD_PRELOAD</c>, which the host session supplies.
     /// </summary>
@@ -115,9 +115,7 @@ public sealed partial class GameLaunch
     {
         if (hostPlatform is { } platform)
         {
-            if (macSteamRuntimeDirectory != null)
-                throw new PlatformNotSupportedException("A Mac Steam runtime package needs the local Mac server path.");
-            return ServerOnHost(platform, runtime, arguments, environment, loader);
+            return ServerOnHost(platform, runtime, arguments, environment, loader, macSteamRuntimeDirectory);
         }
         return LocalServer(runtime, arguments, environment, CurrentServerHost, MacServerArchitecture, loader, macSteamRuntimeDirectory);
     }
@@ -175,12 +173,12 @@ public sealed partial class GameLaunch
     }
 
     private static GameLaunch ServerOnHost(ServerPlatform platform, string runtime, IEnumerable<string> arguments,
-        IReadOnlyDictionary<string, string>? environment, string? loaderDirectory = null)
+        IReadOnlyDictionary<string, string>? environment, string? loaderDirectory = null, string? macSteamRuntimeDirectory = null)
     {
         ArgumentNullException.ThrowIfNull(arguments);
-        if (platform == ServerPlatform.MacOS)
-            throw new PlatformNotSupportedException("A macOS dedicated server starts only on this machine: build its launch without a host platform.");
         bool windows = platform == ServerPlatform.Windows;
+        if (macSteamRuntimeDirectory != null && platform != ServerPlatform.MacOS)
+            throw new ArgumentException("A Mac Steam runtime is only for a macOS dedicated server.", nameof(macSteamRuntimeDirectory));
         string root = HostRoot(windows, runtime, nameof(runtime), "runtime", server: true);
         string loader = loaderDirectory == null ? root : HostRoot(windows, loaderDirectory, nameof(loaderDirectory), "loader", server: true);
         bool separateRoots = !loader.Equals(root, windows ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
@@ -191,12 +189,20 @@ public sealed partial class GameLaunch
         RequireHostArguments(passed, lineBreaks: false);
         // The server's start script prepends to the host session's value only, so a caller's LD_LIBRARY_PATH/LD_PRELOAD would be lost.
         RequireHostEnvironment(environment, refuseLoaderPaths: !windows);
-        var os = windows ? ClientPlatform.Windows : ClientPlatform.Linux;
-        string executable = windows ? ServerWindowsExecutable : ServerLinuxExecutable;
+        var os = platform switch { ServerPlatform.Windows => ClientPlatform.Windows, ServerPlatform.MacOS => ClientPlatform.MacOS, _ => ClientPlatform.Linux };
+        string executable = platform switch { ServerPlatform.Windows => ServerWindowsExecutable, ServerPlatform.MacOS => ServerMacExecutable, _ => ServerLinuxExecutable };
         var gameJoin = (string relative) => HostJoin(root, windows, relative);
         var loaderJoin = (string relative) => HostJoin(loader, windows, relative);
-        var (set, prepended, required) = Loader(server: true, os, environment, names, gameJoin, loaderJoin, separateRoots, executable, null);
+        var (set, prepended, required) = Loader(server: true, os, environment, names, gameJoin, loaderJoin, separateRoots,
+            executable, platform == ServerPlatform.MacOS ? "libdoorstop.dylib" : null);
+        if (macSteamRuntimeDirectory != null)
+        {
+            string steam = HostRoot(false, macSteamRuntimeDirectory, nameof(macSteamRuntimeDirectory), "Steam runtime", server: true);
+            prepended["DYLD_LIBRARY_PATH"] += ":" + steam;
+            required = [.. required, HostJoin(steam, false, "steamclient.dylib")];
+        }
         return new GameLaunch(server: true, os, forHost: true, root, HostJoin(root, windows, executable), passed, set, prepended, required,
+            macArchitecture: platform == ServerPlatform.MacOS ? ClientArchitecture.Arm64 : ClientArchitecture.X64,
             isolatedLoader: separateRoots);
     }
 
@@ -333,7 +339,7 @@ public sealed partial class GameLaunch
             prepended["LD_PRELOAD"] = "libdoorstop_x64.so";
             return (set, prepended, [executable, .. BepInExLoader.LoaderFiles(ClientPlatform.Linux).Select(RequiredLoader)]);
         }
-        // macOS, on this machine only. With Doorstop injected, Mono finds the server's libmono-native.dylib only through the library
+        // macOS, on this machine or an SSH Mac host. With Doorstop injected, Mono finds the server's libmono-native.dylib only through the library
         // path, and the server keeps it beside itself, not at the root: without it, or with the root, the server never started
         // (30 Sep 2026, build 25527701). The client's Doorstop library is named by full path, so it needs no library path.
         if (server) prepended["DYLD_LIBRARY_PATH"] = gameJoin(executable[..executable.LastIndexOf('/')]);

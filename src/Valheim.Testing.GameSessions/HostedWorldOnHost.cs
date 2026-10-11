@@ -16,6 +16,21 @@ internal static class HostedWorldOnHost
 {
     internal const string Holds = "hosted-world";
 
+    /// <summary>The game's user-data root on an SSH Mac, from that host's own home rather than the runner's home.</summary>
+    internal static async Task<string> MacSaveRootAsync(IGameHost host, TimeSpan timeout, CancellationToken cancellation)
+    {
+        var result = (await host.RunAsync("""
+            set -eu
+            [ "$(uname -s)" = Darwin ] && [ -d "$HOME" ] || exit 4
+            printf 'VT-MAC-HOME %s\n' "$HOME"
+            """, null, timeout, cancellation).ConfigureAwait(false)).EnsureSuccess($"Finding the Mac save root on {host.Name}");
+        string home = InteractiveClient.Line(result.Stdout, "VT-MAC-HOME ")
+            ?? throw new HostOperationException($"The Mac on {host.Name} did not name its home directory", result);
+        if (!home.StartsWith('/') || home.Any(char.IsControl) || home.Split('/').Any(part => part is "." or ".."))
+            throw new InvalidDataException($"The Mac on {host.Name} reported an unsafe home directory.");
+        return HostPath.Join(home, HostedWorld.MacSaveRelative);
+    }
+
     /// <summary>
     /// Where a placed world goes on its host (<paramref name="WorldsDirectory"/>), the run's folder it is shipped to first
     /// (<paramref name="Stage"/>) and moved out to after (<paramref name="KeepIn"/>), and how its moves are journalled.
