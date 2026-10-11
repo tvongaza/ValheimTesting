@@ -86,8 +86,11 @@ internal static partial class HostServerScripts
           print $pid "$game $identity\n"; close $pid;
           rename "$directory/pid.tmp", "$directory/pid" or die "pid rename: $!";
           print $writer "VT-SERVER started $game $identity\n"; close $writer;
-          waitpid($game, 0);
-          my $code = $? >> 8;
+          my $waited = waitpid($game, 0);
+          my $status = $?;
+          # Shell-compatible nonzero status for a signal, rather than treating it as exit 0.
+          my $signal = $status & 127;
+          my $code = $waited == $game ? ($signal ? 128 + $signal : $status >> 8) : -1;
           open my $exit, ">", "$directory/exit.tmp" or die "exit: $!";
           print $exit "$code\n"; close $exit;
           rename "$directory/exit.tmp", "$directory/exit" or die "exit rename: $!";

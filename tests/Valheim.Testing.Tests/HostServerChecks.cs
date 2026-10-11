@@ -74,6 +74,18 @@ internal static class HostServerChecks
                     new Dictionary<string, string> { ["boot"] = boot }, Generous)).Stdout);
             }
             finally { if (!process.HasExited) await process.StopAsync(TimeSpan.FromSeconds(5)); }
+            var killed = await HostServer.StartAsync(host, launch, root + "/killed", Generous, logs: [], logRoot: profile,
+                evidence: null, logonSeams: null, cancellation: CancellationToken.None);
+            try
+            {
+                (await host.WaitForLogAsync(root + "/killed/stdout.log", 0,
+                    new System.Text.RegularExpressions.Regex("native server running"), null, Generous)).EnsureMatched();
+                (await host.RunAsync("kill -KILL \"$game\"",
+                    new Dictionary<string, string> { ["game"] = killed.Id.ToString(System.Globalization.CultureInfo.InvariantCulture) }, Generous))
+                    .EnsureSuccess("Killing the Mac server stand-in");
+                Assert.Equal(137, await killed.WaitForExitAsync(CancellationToken.None));
+            }
+            finally { if (!killed.HasExited) await killed.StopAsync(TimeSpan.FromSeconds(5)); }
             HostInstall.RequireSame(before.Files, await HostInstall.ListAsync(host, install, Generous), "Mac server source after a profile boot");
         });
 
