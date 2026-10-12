@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Valheim.Testing;
 using Valheim.Testing.Game;
 using Valheim.Testing.Game.Fakes;
@@ -162,5 +163,27 @@ public sealed class ServerOnlyTests : IDisposable
         File.WriteAllText(cli, "valheimCLI.dll");
         File.WriteAllText(Path.Combine(plugins, "Other.dll"), "other");
         Assert.Throws<InvalidOperationException>(() => ServerFixture.PluginPins(Path.Combine(_directory, "runtime")));
+    }
+
+    // #691: the scheduled checks' script stale-built three ValheimCLI pack projects #642 removed, and only a full scheduled run
+    // noticed. Its builds and staged plugins must be exactly what ServerFixture.Plugins pins, and its ValheimCLI build only the default plugin.
+    [Fact] public void TheScheduledChecksScriptStagesOnlyThePluginsTheFixturePins()
+    {
+        string repo = AppContext.BaseDirectory;
+        while (!File.Exists(Path.Combine(repo, ".github", "scripts", "native-server-checks.sh")))
+            repo = Directory.GetParent(repo)?.FullName ?? throw new InvalidOperationException("Cannot find .github/scripts/native-server-checks.sh.");
+        string script = File.ReadAllText(Path.Combine(repo, ".github", "scripts", "native-server-checks.sh"));
+        var code = string.Join('\n', script.Split('\n').Where(line => !line.TrimStart().StartsWith('#')));
+
+        Assert.DoesNotContain("Packs/", code);
+        Assert.DoesNotContain("Valheim.Cli.", code);
+        var builtCli = Regex.Matches(code, @"dotnet build \S*\$cli/(\S+)").Select(m => m.Groups[1].Value.Trim('"'));
+        Assert.Equal(["valheimCLI.csproj"], builtCli);
+        // Each plugin file is found once (variable = only ... -name File.dll) and the copy into the runtime names exactly those variables.
+        var found = Regex.Matches(code, @"(\w+)=\$\(only [^\n]* -name (\S+\.dll)\)").ToDictionary(m => m.Groups[1].Value, m => m.Groups[2].Value);
+        Assert.Equal(ServerFixture.Plugins.Select(p => p.File).Order(), found.Values.Order());
+        var staged = Regex.Match(code, @"cp ((?:""\$\w+"" )+)""\$server/BepInEx/plugins/""").Groups[1].Value
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries).Select(name => name.Trim('"', '$'));
+        Assert.Equal(found.Keys.Order(), staged.Order());
     }
 }
