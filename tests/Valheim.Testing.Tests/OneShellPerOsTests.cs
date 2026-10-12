@@ -12,7 +12,7 @@ public sealed class OneShellPerOsTests
     [InlineData("macos", "bash", null)]
     [InlineData("linux", "pwsh", "PowerShell runs only on Windows hosts; use bash on this host.")]
     [InlineData("macos", "pwsh", "PowerShell runs only on Windows hosts; use bash on this host.")]
-    [InlineData("windows", "bash", "use pwsh on this host.")]
+    [InlineData("windows", "bash", "bash on Windows (WSL or Git Bash) sees other paths and tools; use pwsh on this host.")]
     [InlineData("windows", "powershell", "shell must be bash or pwsh.")]
     [InlineData("linux", "powershell", "shell must be bash or pwsh.")]
     public void AHostProfileTakesOnlyItsPlatformsShell(string platform, string shell, string? refusal)
