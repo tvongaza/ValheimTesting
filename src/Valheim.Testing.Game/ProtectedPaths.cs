@@ -19,22 +19,24 @@ internal static class ProtectedPaths
     /// <summary>
     /// The physical location of a path, walked component by component: each existing link (symlink or junction) is replaced
     /// by its target and the walk continues there, so <c>/tmp</c> becomes <c>/private/tmp</c>, a symlinked folder inside an install is
-    /// the install, and a <c>..</c> after a link goes up from the link's target. The final path need not exist yet. More than
+    /// the install, and a <c>..</c> in the given path after a link goes up from the link's target (one inside a link's own target text is collapsed as written). The final path need not exist yet. More than
     /// <see cref="MaxLinkHops"/> links in one path, which includes any link loop, throws <see cref="IOException"/>.
     /// </summary>
     internal static string Resolve(string path)
     {
         // GetFullPath would collapse "link/.." lexically, before the link is followed.
         string raw = Path.IsPathFullyQualified(path) ? path : Path.GetFullPath(path);
-        string current = Path.GetPathRoot(raw)!;
-        var pending = new Stack<string>(Parts(raw[current.Length..]).Reverse());
+        string root = Path.GetPathRoot(raw)!;
+        string current = Path.GetFullPath(root); // "C:/" becomes "C:\" on Windows
+        var pending = new Stack<string>(Parts(raw[root.Length..]).Reverse());
         int hops = 0;
         while (pending.Count > 0)
         {
             string part = pending.Pop();
             if (part == ".") continue;
             if (part == "..") { current = Directory.GetParent(current)?.FullName ?? current; continue; }
-            string next = Path.Combine(current, part);
+            // The part holds no dot segments now, so GetFullPath only normalizes what Windows does: trailing dots and spaces.
+            string next = Path.GetFullPath(Path.Combine(current, part));
             FileSystemInfo info = Directory.Exists(next) ? new DirectoryInfo(next) : new FileInfo(next);
             // A dangling link is still a link: its target may be a protected folder that is created later.
             if (!info.Exists && info.LinkTarget == null) { current = next; continue; }

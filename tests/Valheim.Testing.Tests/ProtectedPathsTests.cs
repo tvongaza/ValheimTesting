@@ -81,6 +81,16 @@ public sealed class ProtectedPathsTests : IDisposable
     }
 
     [Fact]
+    public void WindowsSpellingsOfTheSameFolderCompareEqual()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        string real = Folder("protected");
+        Assert.True(ProtectedPaths.Contains(real, real.Replace('\\', '/') + "/run"));
+        Assert.True(ProtectedPaths.Contains(real.Replace('\\', '/'), Path.Combine(real, "run")));
+        Assert.True(ProtectedPaths.Contains(real, real + ". \\run"));
+    }
+
+    [Fact]
     public void ADotDotAfterALinkGoesUpFromTheLinksTarget()
     {
         string real = Folder("protected");
