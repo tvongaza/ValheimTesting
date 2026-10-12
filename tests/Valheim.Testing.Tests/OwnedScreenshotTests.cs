@@ -179,7 +179,9 @@ public sealed class OwnedScreenshotTests : IDisposable
         using var waiting = new SemaphoreSlim(0);
         var canceller = new Thread(() =>
         {
-            if (waiting.Wait(Limit)) cancel.Cancel();
+            // After a failed test the source is disposed first; that must not take the test host down from a background thread.
+            try { if (waiting.Wait(Limit)) cancel.Cancel(); }
+            catch (ObjectDisposedException) { }
         }) { IsBackground = true };
         canceller.Start();
         using var actor = QueuedOnly();
