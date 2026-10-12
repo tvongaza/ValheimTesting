@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Valheim.Testing;
 using Valheim.Testing.Game;
 using Valheim.Testing.Game.Fakes;
@@ -176,11 +177,13 @@ public sealed class ServerOnlyTests : IDisposable
 
         Assert.DoesNotContain("Packs/", code);
         Assert.DoesNotContain("Valheim.Cli.", code);
-        var builtCli = System.Text.RegularExpressions.Regex.Matches(code, @"dotnet build ""\$cli/([^""]+)""").Select(m => m.Groups[1].Value);
+        var builtCli = Regex.Matches(code, @"dotnet build \S*\$cli/(\S+)").Select(m => m.Groups[1].Value.Trim('"'));
         Assert.Equal(["valheimCLI.csproj"], builtCli);
-        var outputs = System.Text.RegularExpressions.Regex.Matches(code, @"only [^\n]* -name (\S+\.dll)").Select(m => m.Groups[1].Value);
-        Assert.Equal(ServerFixture.Plugins.Select(p => p.File).Order(), outputs.Order());
-        var staged = System.Text.RegularExpressions.Regex.Match(code, @"cp ((?:""\$\w+"" )+)""\$server/BepInEx/plugins/""").Groups[1].Value.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        Assert.Equal(ServerFixture.Plugins.Count, staged.Length);
+        // Each plugin file is found once (variable = only ... -name File.dll) and the copy into the runtime names exactly those variables.
+        var found = Regex.Matches(code, @"(\w+)=\$\(only [^\n]* -name (\S+\.dll)\)").ToDictionary(m => m.Groups[1].Value, m => m.Groups[2].Value);
+        Assert.Equal(ServerFixture.Plugins.Select(p => p.File).Order(), found.Values.Order());
+        var staged = Regex.Match(code, @"cp ((?:""\$\w+"" )+)""\$server/BepInEx/plugins/""").Groups[1].Value
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries).Select(name => name.Trim('"', '$'));
+        Assert.Equal(found.Keys.Order(), staged.Order());
     }
 }
