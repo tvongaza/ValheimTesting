@@ -115,7 +115,7 @@ public sealed class GameActor : IDisposable
         if (_busyReads is { } previous && previous.Left < timeout)
             timeout = previous.Left;
         if (timeout <= TimeSpan.Zero)
-            throw new WaitTimeoutException("the game-thread read", TimeSpan.Zero, "The world-entry deadline has passed.");
+            throw DeadlinePassed("the game-thread read");
         var scope = new BusyReadScope(this, timeout, _busyReads, cancellation);
         _busyReads = scope;
         return scope;
@@ -146,8 +146,8 @@ public sealed class GameActor : IDisposable
         return left > MinimumReadTime ? left : throw DeadlinePassed(target);
     }
 
-    // Session waits and their read retries must use the same deadline. Re-applying the original timeout
-    // after capability or pin round trips leaves a window of 1 ms reads after the retry budget expires.
+    // Session waits and their read retries must use the same deadline: the time left, not the original timeout re-applied
+    // after capability or pin round trips.
     internal TimeSpan BusyReadTimeLeft(string target) =>
         _busyReads == null ? throw new InvalidOperationException("No busy-read scope is active.") : ReadTimeLeft(target)!.Value;
 
@@ -260,7 +260,7 @@ public sealed class GameActor : IDisposable
                 }
                 catch (WaitTimeoutException error) when (IsDeadlinePassed(error))
                 {
-                    _verified = true; // No pin check was sent: the pins that held before still hold.
+                    _verified = true; // The deadline refused the pin check (or its retry): nothing showed the pins that held before to be wrong.
                     throw;
                 }
             }

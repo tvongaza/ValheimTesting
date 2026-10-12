@@ -130,6 +130,25 @@ public class GameThreadBusyTests
         Assert.Single(transport.SessionReadTimeouts);
     }
 
+    // A command refused for lack of time sends nothing, so the pins that held before still hold and the actor stays usable.
+    [Fact]
+    public void ACommandRefusedForLackOfTimeLeavesTheActorVerified()
+    {
+        var transport = new ScriptedTransport().On("cli_noop", _ => ScriptedTransport.Ok("OK"));
+        var clock = new ManualClock();
+        using var actor = new GameActor("server", transport) { Clock = clock };
+        actor.VerifyEnvironment("cli_expect worlduid=7");
+        using (actor.BusyReadRetries(TimeSpan.FromMilliseconds(100)))
+        {
+            clock.Advance(TimeSpan.FromMilliseconds(90));
+            var error = Assert.Throws<WaitTimeoutException>(() => actor.Execute("cli_noop"));
+            Assert.Contains("deadline passed before another session read could start", error.Message);
+        }
+        Assert.Equal(0, transport.Count("cli_noop"));
+        actor.Execute("cli_noop");
+        Assert.Equal(1, transport.Count("cli_noop"));
+    }
+
     private static CommandResult Unstarted() => new()
     {
         Ok = false, ErrorCode = "command_failed",

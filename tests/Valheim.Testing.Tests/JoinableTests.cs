@@ -24,7 +24,7 @@ public class JoinableTests
         var clock = System.Diagnostics.Stopwatch.StartNew();
         var error = Assert.Throws<WaitTimeoutException>(() => OwnedServerSession.WaitUntilJoinable(server, "my.mod/session", TimeSpan.FromSeconds(1)));
         Assert.Contains("acceptingConnections", error.LastSeen);
-        Assert.InRange(clock.Elapsed, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(20));
+        Assert.InRange(clock.Elapsed, TimeSpan.FromSeconds(1) - TimeSpan.FromMilliseconds(25), TimeSpan.FromSeconds(20)); // A read is not started with under 25 ms left.
     }
 
     [Fact] public void AnAdapterThatDoesNotReportTheSocketIsRefusedAtOnce()
@@ -94,7 +94,7 @@ public class JoinableTests
         var error = Assert.Throws<WaitTimeoutException>(() => session.WaitUntilJoinable(server));
         Assert.Contains("acceptingConnections", error.LastSeen);
         Assert.True(reads() >= 1);
-        Assert.InRange(clock.Elapsed, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(20));
+        Assert.InRange(clock.Elapsed, TimeSpan.FromSeconds(1) - TimeSpan.FromMilliseconds(25), TimeSpan.FromSeconds(20)); // A read is not started with under 25 ms left.
         // Negative control: a session for another adapter reads its own capability, which this server does not offer.
         using var other = new FakeOwnedServer("other.mod").Session(TimeSpan.FromSeconds(1));
         Assert.Contains("other.mod/session", Assert.Throws<InvalidOperationException>(() => other.WaitUntilJoinable(server)).Message);

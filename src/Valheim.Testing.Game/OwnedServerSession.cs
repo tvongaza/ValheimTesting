@@ -385,7 +385,7 @@ public sealed class OwnedServerSession : IOwnedServer, IDisposable
     /// reports in <c>acceptingConnections</c> (Valheim.Testing.Adapter). The game opens its socket when world generation
     /// finishes, which on a first boot comes well after the world has loaded, so a join before it times out. Call it just
     /// before the first join rather than at startup, so the wait overlaps other work. The game offers no event for it: the
-    /// read-only observation is repeated until the timeout, which reports the last reading. A CLI command
+    /// read-only observation is repeated until the timeout (less the last 25 ms, too little to start another read), which reports the last reading. A CLI command
     /// that expired before the game thread started it is retried; a failed pin or started command is not.
     /// </summary>
     public static void WaitUntilJoinable(GameActor server, string sessionCapability, TimeSpan timeout, CancellationToken cancellation = default)
