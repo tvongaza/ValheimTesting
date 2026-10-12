@@ -231,7 +231,7 @@ public sealed class OwnedCopiesTests : IDisposable
         Directory.CreateDirectory(copy);
         File.WriteAllText(Path.Combine(copy, "fixture-provenance.json"), "{}");
         string program = Path.Combine(copy, OperatingSystem.IsWindows() ? "cmd.exe" : "sleep");
-        File.Copy(OperatingSystem.IsWindows() ? Path.Combine(Environment.SystemDirectory, "cmd.exe") : "/bin/sleep", program);
+        CopiedProgram.Copy(OperatingSystem.IsWindows() ? Path.Combine(Environment.SystemDirectory, "cmd.exe") : "/bin/sleep", program); // not File.Copy: ETXTBSY (#720)
         // macOS kills a copied Apple system binary at launch (exit 137); an ad-hoc signature lets the copy run.
         if (OperatingSystem.IsMacOS()) System.Diagnostics.Process.Start("codesign", ["--force", "--sign", "-", program])!.WaitForExit();
         var start = new System.Diagnostics.ProcessStartInfo(program) { UseShellExecute = false, CreateNoWindow = true };
