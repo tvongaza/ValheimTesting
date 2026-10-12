@@ -42,7 +42,8 @@ case "$check" in
     ;;
   acceptance)
     mkdir -p "$out"
-    # The game-side ValheimCLI from the commit cli-dependency.json pins, the same source as the transport package.
+    # The game-side ValheimCLI from the commit cli-dependency.json pins, the same source as the transport package. It is one
+    # default plugin, valheimCLI.dll, with its commands compiled in (#642): the only first-party file staged, as ServerFixture.Plugins pins.
     repository=$(sed -n 's/.*"repository": *"\([^"]*\)".*/\1/p' cli-dependency.json)
     commit=$(sed -n 's/.*"commit": *"\([0-9a-f]*\)".*/\1/p' cli-dependency.json)
     cli=$HOME/valheimCLI
@@ -63,9 +64,6 @@ case "$check" in
     done
     cli_build=(-c Release -p:VALHEIM_MANAGED="$managed" -p:BEPINEX_CORE="$core" -p:PUBLICIZED_PATH="$publicized")
     dotnet build "$cli/valheimCLI.csproj" "${cli_build[@]}"
-    dotnet build "$cli/Packs/Standard/Valheim.Cli.Standard.csproj" "${cli_build[@]}"
-    dotnet build "$cli/Packs/WorldTools/Valheim.Cli.WorldTools.csproj" "${cli_build[@]}"
-    dotnet build "$cli/Packs/Observe/Valheim.Cli.Observe.csproj" "${cli_build[@]}"
     only() { # Exactly one build output, or stop.
       local found
       found=$(find "$@")
@@ -73,9 +71,6 @@ case "$check" in
       printf '%s\n' "$found"
     }
     cli_dll=$(only "$cli/bin/Release" -name valheimCLI.dll)
-    standard_dll=$(only "$cli/Packs/Standard/bin/Release" -name Valheim.Cli.Standard.dll)
-    worldtools_dll=$(only "$cli/Packs/WorldTools/bin/Release" -name Valheim.Cli.WorldTools.dll)
-    observe_dll=$(only "$cli/Packs/Observe/bin/Release" -name Valheim.Cli.Observe.dll)
 
     game_build=(-c Release -p:ValheimManaged="$managed" -p:BepInExCore="$core")
     dotnet build tests/Valheim.Testing.NativeAcceptance/AcceptanceMod/AcceptanceMod.csproj "${game_build[@]}"
@@ -85,7 +80,7 @@ case "$check" in
 
     # The test runtime is this container's server directory: the runner and the preparation copy it before launching.
     mkdir -p "$server/BepInEx/plugins" "$server/BepInEx/config"
-    cp "$cli_dll" "$standard_dll" "$worldtools_dll" "$observe_dll" "$mod_dll" "$adapter_dll" "$server/BepInEx/plugins/"
+    cp "$cli_dll" "$mod_dll" "$adapter_dll" "$server/BepInEx/plugins/"
     printf '[Server]\n\nEnabled = true\nPort = 5577\n' > "$server/BepInEx/config/valheimCLI.valheimCLI.cfg"
 
     runner=(dotnet run --project tests/Valheim.Testing.NativeAcceptance -c Release)

@@ -163,4 +163,24 @@ public sealed class ServerOnlyTests : IDisposable
         File.WriteAllText(Path.Combine(plugins, "Other.dll"), "other");
         Assert.Throws<InvalidOperationException>(() => ServerFixture.PluginPins(Path.Combine(_directory, "runtime")));
     }
+
+    // #691: the scheduled checks' script stale-built three ValheimCLI pack projects #642 removed, and only a full scheduled run
+    // noticed. Its builds and staged plugins must be exactly what ServerFixture.Plugins pins, and its ValheimCLI build only the default plugin.
+    [Fact] public void TheScheduledChecksScriptStagesOnlyThePluginsTheFixturePins()
+    {
+        string repo = AppContext.BaseDirectory;
+        while (!File.Exists(Path.Combine(repo, ".github", "scripts", "native-server-checks.sh")))
+            repo = Directory.GetParent(repo)?.FullName ?? throw new InvalidOperationException("Cannot find .github/scripts/native-server-checks.sh.");
+        string script = File.ReadAllText(Path.Combine(repo, ".github", "scripts", "native-server-checks.sh"));
+        var code = string.Join('\n', script.Split('\n').Where(line => !line.TrimStart().StartsWith('#')));
+
+        Assert.DoesNotContain("Packs/", code);
+        Assert.DoesNotContain("Valheim.Cli.", code);
+        var builtCli = System.Text.RegularExpressions.Regex.Matches(code, @"dotnet build ""\$cli/([^""]+)""").Select(m => m.Groups[1].Value);
+        Assert.Equal(["valheimCLI.csproj"], builtCli);
+        var outputs = System.Text.RegularExpressions.Regex.Matches(code, @"only [^\n]* -name (\S+\.dll)").Select(m => m.Groups[1].Value);
+        Assert.Equal(ServerFixture.Plugins.Select(p => p.File).Order(), outputs.Order());
+        var staged = System.Text.RegularExpressions.Regex.Match(code, @"cp ((?:""\$\w+"" )+)""\$server/BepInEx/plugins/""").Groups[1].Value.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        Assert.Equal(ServerFixture.Plugins.Count, staged.Length);
+    }
 }
