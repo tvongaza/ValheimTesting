@@ -13,6 +13,30 @@ internal static partial class HostedRuntimeStage
     }
 
     /// <summary>
+    /// The DLLs at a Windows game root (client or dedicated server) that the game itself needs: Unity's player and the
+    /// Steam runtime. <c>tier0_s64.dll</c> and <c>vstdlib_s64.dll</c> are the server install's and are what
+    /// <c>steamclient64.dll</c> loads when no Steam client is running. Any other root DLL is not the game's (a mod
+    /// manager's proxy such as <c>version.dll</c>), so the profile leaves it out.
+    /// </summary>
+    internal static readonly string[] WindowsGameRootDlls =
+        ["UnityPlayer.dll", "steam_api64.dll", "steamclient64.dll", "tier0_s64.dll", "vstdlib_s64.dll"];
+
+    /// <summary>
+    /// Whether the Windows profile's launch folder hard-links <paramref name="path"/> (relative, <c>/</c> separators) from
+    /// the game install: game files only, never the loader (the profile gets its own), logs, or a root DLL outside
+    /// <see cref="WindowsGameRootDlls"/>.
+    /// </summary>
+    internal static bool IsWindowsProfileGameLink(string path) =>
+        !path.StartsWith("BepInEx/", StringComparison.OrdinalIgnoreCase) &&
+        !path.StartsWith("logs/", StringComparison.OrdinalIgnoreCase) &&
+        !path.EndsWith(".log", StringComparison.OrdinalIgnoreCase) &&
+        !InstallPins.IsLoaderFile(path, StringComparison.OrdinalIgnoreCase) &&
+        (path.Contains('/') || !path.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) ||
+            WindowsGameRootDlls.Contains(path, StringComparer.OrdinalIgnoreCase)) &&
+        !path.StartsWith(".doorstop", StringComparison.OrdinalIgnoreCase) &&
+        !path.StartsWith("doorstop", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
     /// Stage a client's or server's loader and selected files without copying the game. The caller journals
     /// <paramref name="destination"/> and <paramref name="staging"/> before calling and owns their retirement.
     /// This is the profile arm of the same stage owner that prepares full copies; it shares payload selection,
@@ -63,15 +87,7 @@ internal static partial class HostedRuntimeStage
         // A mod manager may have placed another proxy beside valheim.exe (for example version.dll). Linking
         // arbitrary root DLLs into our launch folder would load that manager's chain alongside this profile.
         // Keep only the game's known root dependencies; every other source file stays untouched and out of the run.
-        var gameLinks = windows ? game.Files.Keys.Where(path =>
-            !path.StartsWith("BepInEx/", StringComparison.OrdinalIgnoreCase) &&
-            !path.StartsWith("logs/", StringComparison.OrdinalIgnoreCase) &&
-            !path.EndsWith(".log", StringComparison.OrdinalIgnoreCase) &&
-            !InstallPins.IsLoaderFile(path, StringComparison.OrdinalIgnoreCase) &&
-            (path.Contains('/') || !path.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) ||
-                new[] { "UnityPlayer.dll", "steam_api64.dll", "steamclient64.dll" }.Contains(path, StringComparer.OrdinalIgnoreCase)) &&
-            !path.StartsWith(".doorstop", StringComparison.OrdinalIgnoreCase) &&
-            !path.StartsWith("doorstop", StringComparison.OrdinalIgnoreCase)).ToArray() : [];
+        var gameLinks = windows ? game.Files.Keys.Where(IsWindowsProfileGameLink).ToArray() : [];
         string payload = Path.Combine(Path.GetTempPath(), "valheim-profile-stage-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(payload);
         bool shipped = false, created = false;
