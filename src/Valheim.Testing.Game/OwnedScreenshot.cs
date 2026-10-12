@@ -42,9 +42,22 @@ internal static class OwnedScreenshot
         throw new IOException("Could not claim a fresh private screenshot destination; no command was sent.");
     }
 
+    /// <summary>
+    /// The longest Capture waits for a file event before looking at the image again. Events end the wait early; this only
+    /// covers a completed image whose last event came while its writer still had it open.
+    /// </summary>
+    private static readonly TimeSpan RecheckInterval = TimeSpan.FromMilliseconds(250);
+
+    /// <summary>
+    /// Sends the request and waits for the complete image. <paramref name="aboutToWait"/> (tests only) runs after each check that
+    /// found no complete image, right before the wait for the next event or <paramref name="recheck"/>.
+    /// </summary>
     internal static Outcome Capture(GameActor actor, string evidence, string requestedCommand, int supersize,
-        TimeSpan writeTimeout, CancellationToken cancellation = default, Func<string>? nextId = null)
+        TimeSpan writeTimeout, CancellationToken cancellation = default, Func<string>? nextId = null, Action? aboutToWait = null,
+        TimeSpan? recheck = null)
     {
+        TimeSpan recheckEvery = recheck ?? RecheckInterval;
+        if (recheckEvery <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(recheck), "The re-check interval must be positive.");
         var request = Prepare(evidence, requestedCommand, supersize, nextId);
         using var signal = new AutoResetEvent(false);
         using var watcher = new FileSystemWatcher(Path.GetDirectoryName(request.Image)!, Path.GetFileName(request.Image));
@@ -67,15 +80,18 @@ internal static class OwnedScreenshot
             if (!string.Equals(Path.GetFullPath(named), request.Image,
                     OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
                 return Write(request, true, false, "ValheimCLI named a different screenshot destination; no external file was collected", null);
-            DateTime deadline = DateTime.UtcNow + writeTimeout;
+            var clock = System.Diagnostics.Stopwatch.StartNew(); // Monotonic: a wall-clock step must not expire the wait.
             string? hash;
             while ((hash = CompletePngHash(request.Image)) == null)
             {
                 cancellation.ThrowIfCancellationRequested();
-                TimeSpan left = deadline - DateTime.UtcNow;
+                TimeSpan left = writeTimeout - clock.Elapsed;
                 if (left <= TimeSpan.Zero)
                     return Write(request, true, false, "Screenshot queued but a complete PNG did not appear before the deadline", null);
-                int fired = WaitHandle.WaitAny([signal, cancellation.WaitHandle], left);
+                aboutToWait?.Invoke(); // Tests order a write after this check; the event it raises is kept by the signal.
+                // A file event is only a hint that the image may be complete: a writer that still holds the file when its
+                // last event arrives (the check above is refused) closes it without raising another. So each wait is bounded.
+                int fired = WaitHandle.WaitAny([signal, cancellation.WaitHandle], left < recheckEvery ? left : recheckEvery);
                 if (fired == 1) cancellation.ThrowIfCancellationRequested();
             }
             return Write(request, true, true, "captured", hash);
