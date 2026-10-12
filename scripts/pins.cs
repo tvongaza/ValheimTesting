@@ -1,7 +1,9 @@
 // The released package versions, and every copyable place that names one. Never launches Valheim. The fresh consumer of a
 // release is scripts/consumer.cs --feed nuget.
 //
-//   dotnet run scripts/pins.cs -- write      after a release: rewrite every pin from toolkit-versions.json
+//   dotnet run scripts/pins.cs -- bump       cutting a release, before tagging: a new <Version> where one is needed
+//   dotnet run scripts/pins.cs -- record     after a release: record what NuGet.org now serves, then write
+//   dotnet run scripts/pins.cs -- write      rewrite every pin from toolkit-versions.json
 //   dotnet run scripts/pins.cs -- check      CI: the pins, toolkit-versions.json and NuGet.org agree
 //   dotnet run scripts/pins.cs -- versions   release.yml, before building
 //   dotnet run scripts/pins.cs -- docs       CI: the Markdown pages' headings and links (offline)
@@ -9,7 +11,18 @@
 //
 // toolkit-versions.json is the one record of what is released: the newest version NuGet.org lists of each package, and the
 // valheimCLI commit the released Valheim.Testing.Cli was built from. Documentation and examples pin exactly these versions
-// and follow every release: once a release is published, edit the file and run write; nothing else is edited by hand.
+// and follow every release: once a release is published, run record; nothing else is edited by hand.
+//
+// Pull requests change no version (#683), so main carries changed sources under versions NuGet.org already serves until
+// the release preparation; a source build calls itself unreleased (ToolkitProvenance). Cutting a release does, in one step:
+// bump gives a new <Version> to each published package whose source or shared build files changed since the commit its
+// published version was built from (or that is a candidate), to each published package built on one with a version
+// NuGet.org has never served, and to the Cli when cli-dependency.json names another fork commit than its published version
+// (Game's Cli reference reads that packageVersion, its one home). The new version is the next prerelease number after the
+// newest NuGet.org has ever served (unlisted ones too) or the source names. A version in the source that NuGet.org has never
+// served (a hand-set 0.1.0-rc.1) is kept; after a stable release the next version is chosen by hand. bump decides
+// everything before writing anything: it refuses a source version older than its release, one set through a property, and
+// a source it cannot compare with its published commit (a shallow clone). After it, versions refuses nothing it checks.
 //
 // Pins are the copyable versions in the README, CONTRIBUTING, docs, examples, tools and the packages' READMEs: a
 // PackageReference, a `dotnet tool install` or `dotnet add package` command, ToolkitPackageVersion (the Game package; a -p:
@@ -32,6 +45,9 @@
 // repository's main branch, whose file or heading anchor does not exist (#278). It needs no network, so a docs problem is
 // never hidden behind a release the pins have not caught up with.
 //
+// record reads each package's source version: one NuGet.org serves that differs from toolkit-versions.json is recorded (with
+// releasedCliCommit, the commit the published Cli was built from), then it runs write. A version not yet served keeps its record.
+//
 // versions refuses a release that publishes a new version of a package another released package references, unless that one
 // gets a new version too (its dependency floor would stay on the old one). It also refuses a release whose manifest or packed
 // dependencies name a `-candidate.<sha>` version: a candidate is a
@@ -40,11 +56,11 @@
 // source version older than the release recorded in toolkit-versions.json. A candidate may sit on main between releases.
 // A transport version already on NuGet.org must name the same fork commit as cli-dependency.json: --skip-duplicate would
 // otherwise keep old transport bytes while the newly built Game and bundled plugins use the new fork commit.
-// And it refuses a change under a published version in a package the valheim-test tool embeds (#363): the tool ships the
-// DLLs of the projects it references (GameSessions, and Game and Valheim.Testing through it), and the consumer its `init`
-// creates restores those versions from NuGet.org. So when NuGet.org already serves such a package's source <Version>, its directory and
-// those of the projects it references must equal the commit that package was built from (its nuspec's repository commit);
-// otherwise the release skips it as published while the tool carries other bytes under the same version. This part reads
+// And it refuses a change under a published version in any package
+// (#363, #683): when NuGet.org already serves a package's source <Version>, its directory and those of the projects it
+// references must equal the commit that package was built from (its nuspec's repository commit); otherwise the release
+// skips it as published and the change never ships (and the valheim-test tool, which embeds GameSessions, Game and
+// Valheim.Testing, would carry other bytes than its `init` consumer restores under the same version). This part reads
 // NuGet.org and needs the checkout's full history (release.yml fetches it).
 // candidate prints the identity a local pack of this checkout carries, `candidate.<12 hex>`: the start of the SHA-256 over the
 // package inputs (every file under src/, docs/packages/, licenses/ and tools/game-references/ but bin/, obj/ and dot-files,
@@ -58,6 +74,7 @@ using System.Net;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
 using NuGet.Versioning;
@@ -67,10 +84,11 @@ const string FlatContainer = "https://api.nuget.org/v3-flatcontainer";
 const string Registration = "https://api.nuget.org/v3/registration5-gz-semver2";
 const string VersionsFile = "toolkit-versions.json";
 const string Cli = "Valheim.Testing.Cli";
-// The valheim-test tool: it ships the DLLs of the projects it references, and its generated consumer restores their packages.
-const string Tool = "Valheim.Testing.NativeSmoke";
+const string Game = "Valheim.Testing.Game";
 // The pin a valheimCLI fork link at a full commit names: releasedCliCommit, the commit the released Cli was built from.
 const string CliCommit = "releasedCliCommit";
+// The MSBuild files every packed project imports: a change to one is a change to each package's build.
+string[] SharedBuildInputs = ["Directory.Build.props", "Directory.Build.targets", "src/Directory.Build.props", "src/Directory.Build.targets"];
 Regex ForkLink = new(@"https://github\.com/tvongaza/valheimCLI/blob/(?<version>[0-9a-f]{40})/(?<path>[^#?)\s]+)(?:#(?<anchor>[^)\s]*))?", RegexOptions.IgnoreCase);
 string root = FindRoot();
 string[] packed = Directory.GetDirectories(Path.Combine(root, "src"), "Valheim.Testing*", SearchOption.TopDirectoryOnly)
@@ -82,6 +100,8 @@ string mode = args.Length > 0 ? args[0] : "";
 if (args.Length > 1) return Usage($"unknown argument '{args[1]}'");
 return mode switch
 {
+    "bump" => await Bump(),
+    "record" => await Record(),
     "write" => Write(),
     "check" => await Check(),
     "versions" => await Versions(),
@@ -92,7 +112,7 @@ return mode switch
 
 int Usage(string problem)
 {
-    Console.Error.WriteLine($"pins: {problem}. Usage: dotnet run scripts/pins.cs -- (write | check | versions | docs | candidate)");
+    Console.Error.WriteLine($"pins: {problem}. Usage: dotnet run scripts/pins.cs -- (bump | record | write | check | versions | docs | candidate)");
     return 2;
 }
 
@@ -171,7 +191,7 @@ async Task<List<Problem>> CheckReleased(HttpClient http, Dictionary<string, stri
         problems.Add(new(VersionsFile, line, $"{id} {version} is not listed on NuGet.org: withdrawn, or its registration is not updated yet."));
     NuGetVersion? newest = listed.Where(l => !IsCandidate(l.ToString())).Max();
     if (newest != null && newest > recorded)
-        problems.Add(new(VersionsFile, line, $"{id} {version} is superseded: NuGet.org lists {newest}. Record the release here, then run `dotnet run scripts/pins.cs -- write`."));
+        problems.Add(new(VersionsFile, line, $"{id} {version} is superseded: NuGet.org lists {newest}. Run `dotnet run scripts/pins.cs -- record`."));
 
     XDocument nuspec = XDocument.Parse(nuspecText);
     if (id == Cli)
@@ -229,63 +249,226 @@ async Task<int> Versions()
     // here, so it is refused rather than passed.
     var stated = SourceVersions();
     var problems = new List<Problem>();
-    foreach (Pin pin in stated.Where(p => IsCandidate(p.Version) || p.Version.Contains("$(")))
-        problems.Add(new(pin.File, pin.Line, pin.Version.Contains("$(")
-            ? $"sets {pin.Id}'s version through a property ({pin.Version}), which this check cannot read; write the exact version."
-            : $"names the candidate version {pin.Version}. A candidate is a local build identity and is never released; " +
-              "move it to a version NuGet.org has never served before tagging."));
+    problems.AddRange(PropertyVersions(stated));
+    foreach (Pin pin in stated.Where(p => IsCandidate(p.Version)))
+        problems.Add(new(pin.File, pin.Line, $"names the candidate version {pin.Version}. A candidate is a local build identity and is never released; " +
+            "run `dotnet run scripts/pins.cs -- bump` before tagging."));
     var released = ReadReleased();
     problems.AddRange(SourceOlderThanReleased(stated, released));
-    problems.AddRange(DependentsNotBumped(stated, released));
     using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+    var published = await Published(http, stated);
+    problems.AddRange(DependentsNotBumped(stated, published));
+    problems.AddRange(await BelowNewestServed(http, stated, published));
     problems.AddRange(await ChangedCliUnderPublishedVersion(http, stated));
-    var embedded = ProjectClosure(Tool);
-    foreach (var found in await Task.WhenAll(embedded.Select(id => ChangedUnderPublishedVersion(http, stated, id))))
+    foreach (var found in await Task.WhenAll(packed.Select(id => ChangedUnderPublishedVersion(http, stated, id))))
         problems.AddRange(found);
     return Report(problems, $"No candidate version in the {stated.Count} release versions and dependencies, none older than {VersionsFile}, " +
-        $"and each package the {Tool} tool embeds ({string.Join(", ", embedded)}) is a new version or the source NuGet.org's copy was built from.");
+        "and each package is a new version or the source NuGet.org's copy was built from.");
+}
+
+// A version set through an MSBuild property cannot be read or rewritten here, so it is refused rather than passed.
+IEnumerable<Problem> PropertyVersions(List<Pin> stated) => stated.Where(p => p.Version.Contains("$("))
+    .Select(p => new Problem(p.File, p.Line, $"sets {p.Id}'s version through a property ({p.Version}), which pins.cs cannot read; write the exact version."));
+
+Pin Declared(List<Pin> stated, string id) =>
+    stated.FirstOrDefault(p => p.Declares && p.Id == id) ?? throw new InvalidOperationException($"No version is declared for {id}.");
+
+// Cutting a release (see the top of this file). Everything is decided first and every file prepared; only then is anything
+// written, so a refusal or failure leaves the checkout as it was.
+async Task<int> Bump()
+{
+    using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+    var released = ReadReleased();
+    var stated = SourceVersions();
+    var refused = SourceOlderThanReleased(stated, released).Concat(PropertyVersions(stated)).ToList();
+    if (refused.Count > 0) return Report(refused, "");
+    // Each package against the commit its published version was built from; one that cannot be compared (a shallow clone) is refused.
+    var changes = await Task.WhenAll(packed.Select(id => ChangedUnderPublishedVersion(http, stated, id)));
+    if (changes.SelectMany(found => found).Where(p => !p.Changed).ToList() is { Count: > 0 } uncompared) return Report(uncompared, "");
+    var published = await Published(http, stated);
+    if (await BelowNewestServed(http, stated, published) is { Count: > 0 } below) return Report(below, "");
+    var why = new Dictionary<string, string>(StringComparer.Ordinal);
+    string cli = Declared(stated, Cli).Version;
+    if (IsCandidate(cli)) why[Cli] = "a candidate";
+    else if ((await ChangedCliUnderPublishedVersion(http, stated)).Count > 0) why[Cli] = "cli-dependency.json names another fork commit than its published version";
+    for (int i = 0; i < packed.Length; i++)
+        if (IsCandidate(Declared(stated, packed[i]).Version)) why[packed[i]] = "a candidate";
+        else if (changes[i].Count > 0) why[packed[i]] = "its source changed since its published version was built";
+    // A published package built on one that gets or already has a version NuGet.org has never served gets a new version too
+    // (its dependency floor would stay on the old one).
+    bool New(string id) => why.ContainsKey(id) || !published.Contains(id);
+    for (bool grew = true; grew;)
+    {
+        grew = false;
+        foreach (string id in packed.Where(id => !New(id)))
+        {
+            var builtOn = ProjectClosure(id);
+            // Game's Cli PackageReference is no ProjectReference: Game, and what is built on it, builds on the Cli too.
+            string? cause = builtOn.FirstOrDefault(New) ?? (New(Cli) && (id == Game || builtOn.Contains(Game)) ? Cli : null);
+            if (cause == null) continue;
+            why[id] = $"it builds on {cause}, which has a new version";
+            grew = true;
+        }
+    }
+    if (why.Count == 0) { Console.WriteLine("No package needs a new version."); return 0; }
+    string[] ids = [.. why.Keys.OrderBy(id => id, StringComparer.Ordinal)];
+    string[] nexts = await Task.WhenAll(ids.Select(id => NextVersion(http, id, Declared(stated, id).Version)));
+    var files = new Dictionary<string, (string Text, Encoding Encoding)>(StringComparer.Ordinal);
+    foreach (var (id, next) in ids.Zip(nexts))
+    {
+        Pin pin = Declared(stated, id);
+        if (!files.TryGetValue(pin.File, out var file)) file = (ReadText(Path.Combine(root, pin.File), out Encoding encoding), encoding);
+        var declared = new Regex(id == Cli ? $@"(""packageVersion""\s*:\s*""){Regex.Escape(pin.Version)}""" : $"(<Version>){Regex.Escape(pin.Version)}</Version>");
+        if (!declared.IsMatch(file.Text)) throw new InvalidOperationException($"{pin.File}: could not find {id}'s version {pin.Version} to rewrite.");
+        files[pin.File] = (declared.Replace(file.Text, m => m.Groups[1].Value + next + (id == Cli ? "\"" : "</Version>"), 1), file.Encoding);
+        Console.WriteLine($"{pin.File}:{pin.Line} {id} {pin.Version} -> {next} ({why[id]})");
+    }
+    foreach (var (file, (text, encoding)) in files) File.WriteAllText(Path.Combine(root, file), text, encoding);
+    Console.WriteLine($"Gave {ids.Length} package(s) a new version.");
+    return 0;
+}
+
+// The packages (and the Cli) whose source version NuGet.org already serves: published, whatever toolkit-versions.json records yet.
+async Task<HashSet<string>> Published(HttpClient http, List<Pin> stated)
+{
+    string[] ids = [.. packed.Append(Cli)];
+    var nuspecs = await Task.WhenAll(ids.Select(id => PublishedNuspec(http, id, Declared(stated, id).Version)));
+    return ids.Where((_, i) => nuspecs[i] != null).ToHashSet(StringComparer.Ordinal);
+}
+
+// The nuspec NuGet.org serves for this version of a package; null for a candidate or a version it has never served.
+async Task<string?> PublishedNuspec(HttpClient http, string id, string version)
+{
+    if (IsCandidate(version) || !NuGetVersion.TryParse(version, out NuGetVersion? v)) return null;
+    string lower = id.ToLowerInvariant();
+    return await Get(http, $"{FlatContainer}/{lower}/{v.ToNormalizedString().ToLowerInvariant()}/{lower}.nuspec");
+}
+
+// A source version NuGet.org has never served that is still below the newest it has (toolkit-versions.json may lag it):
+// releasing it would go backwards. versions refuses it; bump refuses it before writing anything.
+async Task<List<Problem>> BelowNewestServed(HttpClient http, List<Pin> stated, HashSet<string> published)
+{
+    var problems = new List<Problem>();
+    foreach (string id in packed.Append(Cli).Where(id => !published.Contains(id)))
+    {
+        Pin source = Declared(stated, id);
+        if (IsCandidate(source.Version) || !NuGetVersion.TryParse(source.Version, out NuGetVersion? version)) continue;
+        if (await Served(http, id) is { Count: > 0 } served && served.Max() is { } newest && version < newest)
+            problems.Add(new(source.File, source.Line, $"{id} {source.Version} is below {newest}, the newest NuGet.org serves; give it a newer version."));
+    }
+    return problems;
+}
+
+// Every version NuGet.org has ever served of a package, unlisted ones too (not candidates).
+async Task<List<NuGetVersion>> Served(HttpClient http, string id)
+{
+    var served = new List<NuGetVersion>();
+    if (await Get(http, $"{FlatContainer}/{id.ToLowerInvariant()}/index.json") is not { } index) return served;
+    using JsonDocument doc = JsonDocument.Parse(index);
+    foreach (JsonElement v in doc.RootElement.GetProperty("versions").EnumerateArray())
+        if (v.GetString() is { } text && !IsCandidate(text) && NuGetVersion.TryParse(text, out NuGetVersion? version)) served.Add(version);
+    return served;
+}
+
+// The next prerelease number after the newest version NuGet.org has ever served (unlisted ones too) and the source's own.
+async Task<string> NextVersion(HttpClient http, string id, string current)
+{
+    var known = await Served(http, id);
+    if (!IsCandidate(current) && NuGetVersion.TryParse(current, out NuGetVersion? source)) known.Add(source);
+    if (known.Count == 0) throw new InvalidOperationException($"{id}: no version to count from; set its first version by hand.");
+    NuGetVersion newest = known.Max()!;
+    if (!newest.IsPrerelease) throw new InvalidOperationException($"{id}: NuGet.org serves the stable {newest}; choose its next version by hand.");
+    string[] labels = [.. newest.ReleaseLabels];
+    if (int.TryParse(labels[^1], out int n)) labels[^1] = (n + 1).ToString(System.Globalization.CultureInfo.InvariantCulture);
+    else labels = [.. labels, "1"];
+    return $"{newest.Major}.{newest.Minor}.{newest.Patch}-{string.Join('.', labels)}";
+}
+
+// After a release: each source version NuGet.org serves that toolkit-versions.json does not yet record is recorded (the Cli
+// with the fork commit its published nuspec names; a package's first release as a new entry), then write. A version not yet
+// served keeps its record; one older than the recorded version is refused, and then nothing is written.
+async Task<int> Record()
+{
+    var released = ReadReleased();
+    var stated = SourceVersions();
+    var problems = new List<Problem>();
+    string path = Path.Combine(root, VersionsFile);
+    JsonObject file = JsonNode.Parse(File.ReadAllText(path))!.AsObject();
+    JsonObject record = file["released"]!.AsObject();
+    using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+    foreach (string id in packed.Append(Cli))
+    {
+        Pin source = Declared(stated, id);
+        if (released.TryGetValue(id, out string? recorded) && string.Equals(recorded, source.Version, StringComparison.Ordinal)) continue;
+        // A version not published yet (a candidate on main, or a release still waiting for approval) keeps its record.
+        if (await PublishedNuspec(http, id, source.Version) is not { } nuspec)
+        {
+            Console.WriteLine($"{id} {source.Version} is not on NuGet.org; {VersionsFile} keeps {recorded ?? "no entry"}.");
+            continue;
+        }
+        if (recorded != null && NuGetVersion.TryParse(recorded, out NuGetVersion? old) && NuGetVersion.Parse(source.Version) < old)
+        {
+            problems.Add(new(source.File, source.Line, $"{id} {source.Version} is older than the recorded {recorded}; record from current main."));
+            continue;
+        }
+        if (id == Cli)
+        {
+            if (NuspecCommit(XDocument.Parse(nuspec)) is not { } commit || !Regex.IsMatch(commit, "^[0-9a-f]{40}$", RegexOptions.IgnoreCase))
+            {
+                problems.Add(new(source.File, source.Line, $"{id} {source.Version} on NuGet.org records no fork commit, so releasedCliCommit cannot be recorded."));
+                continue;
+            }
+            file[CliCommit] = commit;
+        }
+        record[id] = source.Version;
+        Console.WriteLine($"{VersionsFile} {id} {recorded ?? "(new)"} -> {source.Version}");
+    }
+    if (problems.Count > 0) return Report(problems, "");
+    File.WriteAllText(path, file.ToJsonString(new JsonSerializerOptions { WriteIndented = true, NewLine = "\n" }) + "\n");
+    ReadReleased(); // what was written reads back
+    return Write();
 }
 
 async Task<List<Problem>> ChangedCliUnderPublishedVersion(HttpClient http, List<Pin> stated)
 {
-    if (stated.FirstOrDefault(pin => pin.Id == Cli && pin.Declares) is not { } source || IsCandidate(source.Version)
-        || !NuGetVersion.TryParse(source.Version, out NuGetVersion? version)) return []; // Refused above.
-    string v = version.ToNormalizedString().ToLowerInvariant();
-    if (await Get(http, $"{FlatContainer}/valheim.testing.cli/{v}/valheim.testing.cli.nuspec") is not { } published) return []; // New version.
+    if (stated.FirstOrDefault(pin => pin.Id == Cli && pin.Declares) is not { } source
+        || await PublishedNuspec(http, Cli, source.Version) is not { } published) return []; // A candidate (refused above) or a new version.
     using JsonDocument pin = JsonDocument.Parse(File.ReadAllText(Path.Combine(root, "cli-dependency.json")));
     string wanted = pin.RootElement.GetProperty("commit").GetString()!;
     string actual = NuspecCommit(XDocument.Parse(published)) ?? "(no commit recorded)";
     if (actual.Equals(wanted, StringComparison.OrdinalIgnoreCase)) return [];
     return [new(source.File, source.Line, $"{Cli} {source.Version} is already on NuGet.org from fork commit {actual}, but cli-dependency.json pins {wanted}. " +
-        "Bump packageVersion and its Game dependency; --skip-duplicate cannot replace the published transport.")];
+        "Run `dotnet run scripts/pins.cs -- bump`; --skip-duplicate cannot replace the published transport.")];
 }
 
-// Same id, different bytes, for a package the tool embeds: when NuGet.org already serves the source version, the package's
+// Same id, different bytes: when NuGet.org already serves the source version, the package's
 // directory and those of the projects it references must equal the commit that package was built from (its nuspec's
 // repository commit). The working tree is compared, untracked files included, so an edit not yet committed counts too.
 async Task<List<Problem>> ChangedUnderPublishedVersion(HttpClient http, List<Pin> stated, string id)
 {
-    if (stated.FirstOrDefault(p => p.Declares && p.Id == id) is not { } source || IsCandidate(source.Version)
-        || !NuGetVersion.TryParse(source.Version, out NuGetVersion? version)) return []; // refused above
-    string lower = id.ToLowerInvariant(), v = version.ToNormalizedString().ToLowerInvariant();
-    if (await Get(http, $"{FlatContainer}/{lower}/{v}/{lower}.nuspec") is not { } nuspecText) return []; // a new version
+    if (stated.FirstOrDefault(p => p.Declares && p.Id == id) is not { } source
+        || await PublishedNuspec(http, id, source.Version) is not { } nuspecText) return []; // a candidate (refused above) or a new version
     Problem Refuse(string message) => new(source.File, source.Line, $"{id} {source.Version} is on NuGet.org, and {message}");
     if (NuspecCommit(XDocument.Parse(nuspecText)) is not { } commit || !Regex.IsMatch(commit, "^[0-9a-f]{40}$", RegexOptions.IgnoreCase))
-        return [Refuse("records no commit it was built from, so its source cannot be compared. Bump <Version>.")];
+        return [Refuse("records no commit it was built from, so its source cannot be compared. Run `dotnet run scripts/pins.cs -- bump`.") with { Changed = true }];
     if (Git("cat-file", "-e", commit + "^{commit}").Exit != 0)
-        return [Refuse($"was built from {commit}, which this checkout does not have. Fetch the full history (actions/checkout fetch-depth: 0); if that commit is gone, bump <Version>.")];
+        return [Refuse($"was built from {commit}, which this checkout does not have. Fetch the full history (actions/checkout fetch-depth: 0); if that commit is gone, give the package a new <Version> by hand.")];
     string[] projects = [.. ProjectClosure(id).Prepend(id)];
     // Each project's directory, and the tracked files outside it that it embeds (the root pins of the ValheimCLI bundle and the
     // BepInExPack GameSessions carries; their zips in .packages are untracked and pinned by those files' SHA-256).
-    string[] directories = [.. projects.Select(p => Path.GetDirectoryName(ProjectFile(p))!.Replace('\\', '/')).Concat(projects.SelectMany(EmbeddedOutside)).Distinct()];
+    // Also the build files every project imports. Docs a package packs (its README, LICENSE, notices) are not compared: a
+    // change only to them ships with the package's next code change, so recording a release (which rewrites README pins)
+    // does not give every package a new version.
+    string[] directories = [.. projects.Select(p => Path.GetDirectoryName(ProjectFile(p))!.Replace('\\', '/')).Concat(projects.SelectMany(EmbeddedOutside))
+        .Concat(SharedBuildInputs) // a deleted one counts as changed too
+        .Concat(projects.Contains(Game) ? ["cli-dependency.json"] : []).Distinct()]; // Game's Cli reference reads its packageVersion
     var diff = Git(["diff", "--name-only", commit, "--", .. directories]);
     var untracked = Git(["ls-files", "--others", "--exclude-standard", "--", .. directories]);
     if (diff.Exit != 0 || untracked.Exit != 0) return [Refuse($"comparing its source with {commit} failed: {diff.Error.Trim()} {untracked.Error.Trim()}")];
     string[] changed = [.. (diff.Output + untracked.Output).Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Distinct().Order(StringComparer.Ordinal)];
     if (changed.Length == 0) return [];
     return [Refuse($"its source changed since it was built ({commit[..9]}): {string.Join(", ", changed.Take(5))}{(changed.Length > 5 ? $" and {changed.Length - 5} more" : "")}. " +
-        $"The release would skip {id} while the {Tool} tool ships the changed DLL, and a consumer its `init` creates restores the published bytes " +
-        "under the same version. Bump <Version>.")];
+        $"The release would skip {id} as published, so the change would not ship. Run `dotnet run scripts/pins.cs -- bump`.") with { Changed = true }];
 }
 
 // The candidate identity of this checkout's package inputs (see the top of this file).
@@ -326,7 +509,6 @@ int Candidate()
     }
 }
 
-// The packages a project references, directly or through another, by their ProjectReference items.
 // A project's embedded resources outside its own directory that git tracks (not the .packages zips), as repository paths.
 IEnumerable<string> EmbeddedOutside(string id)
 {
@@ -340,6 +522,7 @@ IEnumerable<string> EmbeddedOutside(string id)
     }
 }
 
+// The packages a project references, directly or through another, by their ProjectReference items.
 List<string> ProjectClosure(string id)
 {
     var found = new List<string>();
@@ -375,7 +558,7 @@ static string? NuspecCommit(XDocument nuspec) =>
 List<Pin> SourceVersions()
 {
     var stated = new List<Pin>();
-    var element = new Regex(@"<Version>(?<version>[^<]+)</Version>|<PackageReference\b[^>]*>|""packageVersion"":\s*""(?<version>[^""]+)""");
+    var element = new Regex(@"<Version>(?<version>[^<]+)</Version>|<PackageReference\b[^>]*>|""packageVersion""\s*:\s*""(?<version>[^""]+)""");
     var include = new Regex(@"\bInclude=""(?<id>Valheim\.Testing[\w.]*)""");
     var reference = new Regex(@"\b(?:Version|VersionOverride)=""\[?(?<version>[^\]""]+)\]?""");
     foreach (var (id, file) in packed.Select(id => (id, ProjectFile(id))).Append((Cli, "cli-dependency.json")))
@@ -385,7 +568,8 @@ List<Pin> SourceVersions()
             foreach (Match m in element.Matches(lines[i]))
             {
                 if (m.Groups["version"].Success) { stated.Add(new Pin(file, i + 1, id, m.Groups["version"].Value, Declares: true)); continue; }
-                if (include.Match(m.Value) is not { Success: true } dependency) continue;
+                // Game's Cli reference reads cli-dependency.json's packageVersion (its one home), read here as the Cli's own version.
+                if (include.Match(m.Value) is not { Success: true } dependency || dependency.Groups["id"].Value == Cli) continue;
                 foreach (Match v in reference.Matches(m.Value)) stated.Add(new Pin(file, i + 1, dependency.Groups["id"].Value, v.Groups["version"].Value));
             }
     }
@@ -397,16 +581,15 @@ List<Pin> SourceVersions()
 // lowest version a range allows. So when a release publishes a new version of a referenced package, every package that
 // references it needs a new version too: otherwise its published floor stays on the old one, and a project with it alone
 // restores the old dependency beside the new one (v2026.10.06: Doubles 0.1.0-preview.11 kept Valheim.Testing at .12).
-IEnumerable<Problem> DependentsNotBumped(List<Pin> stated, Dictionary<string, string> released)
+IEnumerable<Problem> DependentsNotBumped(List<Pin> stated, HashSet<string> published)
 {
-    bool IsNew(string id) => stated.FirstOrDefault(p => p.Declares && p.Id == id) is { } source
-        && (!released.TryGetValue(id, out string? r) || !string.Equals(source.Version, r, StringComparison.OrdinalIgnoreCase));
+    bool IsNew(string id) => !published.Contains(id);
     foreach (string id in packed.Where(id => !IsNew(id)))
         foreach (string referenced in DirectReferences(id).Where(referenced => packed.Contains(referenced) && IsNew(referenced)))
             if (stated.FirstOrDefault(p => p.Declares && p.Id == id) is { } source)
-                yield return new Problem(source.File, source.Line, $"{id} {source.Version} is released and unchanged, but it references {referenced}, " +
+                yield return new Problem(source.File, source.Line, $"{id} {source.Version} is already on NuGet.org, but it references {referenced}, " +
                     $"whose new version this release publishes: {id}'s published dependency would keep the {referenced} it was packed against as its floor, " +
-                    $"and a project with {id} alone restores that beside the new one. Bump {id}'s <Version>.");
+                    $"and a project with {id} alone restores that beside the new one. Run `dotnet run scripts/pins.cs -- bump`.");
 }
 
 IEnumerable<string> DirectReferences(string id) =>
@@ -674,4 +857,5 @@ static string FindRoot()
 }
 
 record Pin(string File, int Line, string Id, string Version, int Index = -1, bool Declares = false);
-record Problem(string File, int Line, string Message);
+// Changed: a package's source differs from its published version's (bump gives it a new one), not a comparison that failed.
+record Problem(string File, int Line, string Message, bool Changed = false);

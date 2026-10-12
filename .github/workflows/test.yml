@@ -213,7 +213,6 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: read
-      pull-requests: read # the public-api check reads the pull request's current description
     env:
       VT_NUGET_CACHE_PATHS: |
         ~/.nuget/packages
@@ -222,7 +221,6 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          fetch-depth: 2 # a pull request's merge commit and base, for the public-api check
           persist-credentials: false
       - uses: ./.github/actions/setup
       - name: Restore the NuGet package cache
@@ -250,19 +248,12 @@ jobs:
           case "$out" in *'has no XML summary: Valheim.Testing.ITerrain'*) ;; *) echo "$out"; exit 1 ;; esac
           cp "$RUNNER_TEMP/ITerrain.yml" "$page"
           dotnet run scripts/api-docs.cs -- check-docs
-      # The committed public-api lists match the builds; a pull request that changes them says why on a line starting
-      # "public-api:" in its description, read here rather than from the event, so editing it and re-running the job is enough.
-      - name: Public API lists
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
+      # Pull requests do not regenerate the public-api lists (#683); cutting a release does, and release.yml refuses lists
+      # that differ from its build. Here every public type must still be classified (#292): surface refuses one that is not.
+      # It rewrites the lists in this runner only; they are restored below.
+      - name: Public API classification and the release's list check
         run: |
-          if [ -n "$PR_NUMBER" ]; then
-            body=$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json body --jq .body) || { echo "::error::could not read PR #$PR_NUMBER's description"; exit 1; }
-            PR_BODY=$body dotnet run scripts/api-docs.cs -- check --base HEAD^1
-          else
-            dotnet run scripts/api-docs.cs -- check
-          fi
+          dotnet run scripts/api-docs.cs -- surface
           # Negative controls, each restored after. GITHUB_ACTIONS is unset so the expected failures are not annotations.
           refused() { # $1 a pattern the refusal must match; the rest, the check's arguments
             pattern=$1; shift
@@ -272,16 +263,12 @@ jobs:
             echo "$out"
             case "$out" in *"$pattern"*) ;; *) echo "::error::api-docs check $* refused, but not with: $pattern"; return 1 ;; esac
           }
-          # A list out of step with the build (one type line removed) is refused, naming the line.
+          # A list out of step with the build (one type line removed) is refused at release, naming the line.
           list=docs/reference/public-api/Valheim.Testing.txt
           removed=$(sed -n '2p' "$list")
           sed -i '2d' "$list"
           refused "  +$removed" || exit 1
-          git checkout -- "$list"
-          # A change to the lists since a base (the empty tree: every list is new) needs the description line, and passes with it.
-          empty=$(git hash-object -t tree /dev/null)
-          PR_BODY='' refused 'no line starting "public-api:"' --base "$empty" || exit 1
-          PR_BODY='public-api: negative control' dotnet run scripts/api-docs.cs -- check --base "$empty"
+          dotnet run scripts/api-docs.cs -- surface
           # A public record an operation returns, without [ResultShape], is refused by name (#292); the rebuild after restores.
           printf 'namespace Valheim.Testing.Game;\npublic sealed record ScratchResult(int Value);\npublic static class ScratchOperation { public static ScratchResult Read() => new(1); }\n' > src/Valheim.Testing.Game/ScratchResult.cs
           dotnet build -c Release src/Valheim.Testing.Game --no-restore -v q
@@ -289,6 +276,7 @@ jobs:
           rm src/Valheim.Testing.Game/ScratchResult.cs
           dotnet build -c Release src/Valheim.Testing.Game --no-restore -v q
           dotnet run scripts/api-docs.cs -- check
+          git checkout -- docs/reference/public-api
           git diff --exit-code
   mod-example:
     name: mod example (published packages)
@@ -351,8 +339,6 @@ jobs:
           # Candidates may sit on main between releases; release.yml refuses them.
           sed -i -E 's/("packageVersion": "[^"]+)"/\1-candidate.0000000"/' cli-dependency.json
           refused versions "cli-dependency.json:[0-9]*: names the candidate version"
-          sed -i -E 's/(Include="Valheim\.Testing\.Cli" Version="\[[^]]+)\]/\1-candidate.0000000]/' src/Valheim.Testing.Game/Valheim.Testing.Game.csproj
-          refused versions "src/Valheim.Testing.Game/Valheim.Testing.Game.csproj:[0-9]*: names the candidate version"
           # A fork move cannot silently reuse the transport's published version: the package on NuGet.org keeps its old bytes.
           sed -i -E 's/("packageVersion": ")[^"]+"/\10.1.0-preview.8"/' cli-dependency.json
           refused versions "Valheim.Testing.Cli 0.1.0-preview.8 is already on NuGet.org from fork commit"
@@ -363,19 +349,29 @@ jobs:
           # the project it references exactly as the released Game was built (its nuspec's commit), versions reports nothing
           # about Game; one changed line in either is refused, naming the file.
           game=src/Valheim.Testing.Game
-          embedded=("$game" src/Valheim.Testing)
           released=$(sed -nE 's/.*"Valheim\.Testing\.Game": "([^"]+)".*/\1/p' toolkit-versions.json)
           commit=$(curl -fsS "https://api.nuget.org/v3-flatcontainer/valheim.testing.game/$released/valheim.testing.game.nuspec" | sed -nE 's/.*<repository [^>]*commit="([0-9a-f]{40})".*/\1/p')
+          # Game reads the Cli pin and the shared build files too (pins.cs SharedBuildInputs, those the commit has).
+          embedded=("$game" src/Valheim.Testing cli-dependency.json)
+          for f in Directory.Build.props Directory.Build.targets src/Directory.Build.props src/Directory.Build.targets; do
+            if git cat-file -e "$commit:$f" 2>/dev/null; then embedded+=("$f"); fi
+          done
           git checkout --no-overlay "$commit" -- "${embedded[@]}"
           out=$(env -u GITHUB_ACTIONS dotnet run scripts/pins.cs -- versions 2>&1) || true
           echo "$out"
           case "$out" in *"problem(s)."*|*"No candidate version"*) ;; *) echo "::error::pins versions did not finish"; exit 1 ;; esac
-          case "$out" in *"$game/Valheim.Testing.Game.csproj"*) echo "::error::versions refused the released Game source"; exit 1 ;; esac
+          case "$out" in *"FAIL $game/Valheim.Testing.Game.csproj:"*) echo "::error::versions refused the released Game source"; exit 1 ;; esac
           echo '// changed' >> "$game/ZonePreparation.cs"
           refused versions "Valheim.Testing.Game $released is on NuGet.org, and its source changed since it was built (*): $game/ZonePreparation.cs."
           echo '// changed' >> src/Valheim.Testing/Terrain.cs
           refused versions "Valheim.Testing.Game $released is on NuGet.org, and its source changed since it was built (*): src/Valheim.Testing/Terrain.cs."
-          git checkout --no-overlay HEAD -- "${embedded[@]}"
+          # Cutting a release (#683): bump gives the changed Game, and each package that references it, a new version; then
+          # versions refuses nothing.
+          echo '// changed' >> "$game/ZonePreparation.cs"
+          dotnet run scripts/pins.cs -- bump
+          if grep -q "<Version>$released</Version>" "$game/Valheim.Testing.Game.csproj"; then echo "::error::bump left Game at $released"; exit 1; fi
+          dotnet run scripts/pins.cs -- versions
+          git checkout --no-overlay HEAD -- src "${embedded[@]}"
           git diff --exit-code HEAD
           # A valheimCLI fork link at another commit than the released Cli's fails; write puts it back. A fork page's
           # anchor must be one of its headings at that commit.

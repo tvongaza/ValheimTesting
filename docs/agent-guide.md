@@ -45,8 +45,8 @@ For reusable synthetic ground and multi-zone height/paint state, read [Shared-wo
    ```
 
    For a public API or reference change, also run `dotnet tool restore` and `dotnet run scripts/api-docs.cs`, which
-   checks the rendered pages for machine-local paths, and `dotnet run scripts/api-docs.cs -- surface`, then commit the
-   changed `docs/reference/public-api/*.txt` and say why on a line starting `public-api:` in the PR description.
+   checks the rendered pages for machine-local paths. A pull request changes no package version, pin or public-api list
+   (a moved ValheimCLI fork pin is the one exception); cutting a release does ([CONTRIBUTING.md](../CONTRIBUTING.md#release-packages-maintainers)).
    A new public Game type is an operation, an operation's input, or a result shape marked `[ResultShape]` (any data type
    an operation returns; versioned with any JSON it is written to); the check refuses anything else ([CONTRIBUTING.md](../CONTRIBUTING.md)).
 

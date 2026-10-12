@@ -6,7 +6,9 @@ name: Publish packages
 # bumps one package leaves the others untouched.
 #
 # A release is a `v<yyyy>.<mm>.<dd>` tag on a main commit (`.2`, `.3` for a later release the same day). The
-# packages are versioned independently, so the tag names the release, not a package version. After the push,
+# packages are versioned independently, so the tag names the release, not a package version. Pull requests change no
+# version (#683): the release preparation merged before the tag gives the new versions (scripts/pins.cs bump) and the
+# public-api lists, and this workflow refuses a tag without them (CONTRIBUTING.md, release packages). After the push,
 # the github-release job creates the GitHub release for the tag: which package versions are new, those
 # packages and their checksums. A manual run on main publishes without a GitHub release. The consumer job then checks
 # the release as a mod author meets it: from NuGet.org only, once NuGet.org serves every version.
@@ -40,12 +42,18 @@ jobs:
         with:
           dotnet-version: '10.0.x'
       # A `-candidate.<sha>` version is a local build identity; NuGet.org would keep it forever. Refused before building, as is a
-      # source version older than the release recorded in toolkit-versions.json, and a change under a version NuGet.org already
-      # serves in a package the valheim-test tool embeds (it would ship other bytes than its consumer restores; needs fetch-depth: 0).
-      - name: Refuse candidate versions
+      # source version older than the release recorded in toolkit-versions.json, a package whose source changed under a version
+      # NuGet.org already serves (the push would skip it; needs fetch-depth: 0), and a dependent left on an old version: what
+      # `pins.cs bump` fixes when the release is prepared.
+      - name: Refuse candidate, stale and already-published versions
         run: dotnet run scripts/pins.cs -- versions
       - run: dotnet run scripts/bootstrap-cli.cs
       - run: dotnet run scripts/validate.cs
+      # The release preparation regenerated the public-api lists; refuse a tag whose lists differ from this build.
+      - name: Refuse a stale public API inventory
+        run: |
+          dotnet build docs/reference/ValheimTesting.Api.sln -c Release -m:1
+          dotnet run scripts/api-docs.cs -- check
       - name: Pack release packages
         run: |
           mkdir -p release
@@ -172,7 +180,7 @@ jobs:
           new=(dist/new/*.nupkg)
           docs=(dist/release/api-reference-*.tgz)
           if [ ${#new[@]} -eq 0 ]; then
-            echo "::error::No package version is new in $GITHUB_REF_NAME; bump a <Version> before tagging."
+            echo "::error::No package version is new in $GITHUB_REF_NAME; prepare the release (dotnet run scripts/pins.cs -- bump) before tagging."
             exit 1
           fi
           (cd dist/new && sha256sum *.nupkg) > dist/SHA256SUMS

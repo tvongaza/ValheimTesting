@@ -46,12 +46,12 @@ public sealed class RegressionBundleTests : IDisposable
     {
         var spec = _rig.Spec();
         spec.Toolkit.PackageId = "Valheim.Testing.GameSessions";
-        spec.Toolkit.Package = "0.1.0-preview.24";
+        spec.Toolkit.Package = BundleRig.GameSessionsVersion; // The version the run recorded: this checkout's.
         string output = _rig.Output();
 
         RegressionBundle.Create(spec, output, _rig.Sources);
 
-        Assert.Contains("<PackageReference Include=\"Valheim.Testing.GameSessions\" Version=\"[0.1.0-preview.24]\" />",
+        Assert.Contains($"<PackageReference Include=\"Valheim.Testing.GameSessions\" Version=\"[{BundleRig.GameSessionsVersion}]\" />",
             File.ReadAllText(Path.Combine(output, "ExampleRegression.csproj")));
         Assert.Contains("Valheim.Testing.GameSessions", File.ReadAllText(Path.Combine(output, "README.md")));
         RegressionBundle.Verify(output, spec);
@@ -476,13 +476,19 @@ internal sealed class BundleRig : IDisposable
 
     public void Dispose() { _regression.Remove(); Rig.Dispose(); }
 
-    /// <summary>A feed with preview.16 and preview.17 published and one known commit.</summary>
+    /// <summary>
+    /// The GameSessions version a run records: this build's (#683), as the valheim-test tool pins it. A bundle pinning that
+    /// package must name it, and the fake feed serves it.
+    /// </summary>
+    internal static readonly string GameSessionsVersion = SmokeProject.GameSessionsVersion;
+
+    /// <summary>A feed with Game preview.16 and preview.17 and this checkout's GameSessions published, and one known commit.</summary>
     internal sealed class FakeSources : IBundleSources
     {
         public IReadOnlyList<string>? PackageVersions(string id) => id switch
         {
             RegressionBundle.Package => ["0.1.0-preview.16", "0.1.0-preview.17"],
-            "Valheim.Testing.GameSessions" => ["0.1.0-preview.16", "0.1.0-preview.17", "0.1.0-preview.18", "0.1.0-preview.19", "0.1.0-preview.20", "0.1.0-preview.21", "0.1.0-preview.22", "0.1.0-preview.23", "0.1.0-preview.24"],
+            "Valheim.Testing.GameSessions" => ["0.1.0-preview.16", GameSessionsVersion],
             _ => null,
         };
         public bool HasCommit(string repository, string commit) => commit == Commit;
