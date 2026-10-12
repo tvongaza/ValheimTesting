@@ -343,7 +343,10 @@ interface Valheim.Testing.GameSessions.IGameHost
   property Valheim.Testing.GameSessions.HostShell Shell { get; }
 interface Valheim.Testing.GameSessions.IOneShotHostedScenario
   method System.Void Run(Valheim.Testing.Game.ClientRound round)
+  method virtual System.Void Run(Valheim.Testing.Game.ClientRound round, System.Object validatedInputs)
   property System.String Name { get; }
+interface Valheim.Testing.GameSessions.IOneShotScenarioPreflight
+  method System.Object ValidateInputs()
 interface Valheim.Testing.GameSessions.IOneShotServerScenario
   method System.Threading.Tasks.Task RunAsync(Valheim.Testing.GameSessions.GameSession session, Valheim.Testing.GameSessions.OneShotServerContext context)
   property System.Boolean RequiresClient { get; }
@@ -408,6 +411,8 @@ sealed class Valheim.Testing.GameSessions.ModDeclaration : System.IEquatable`1<V
   property System.String SessionTokenVariable { get; init; }
 sealed class Valheim.Testing.GameSessions.OneShotServerContext
   method System.Void .ctor()
+  method T RequireInputs<T>()
+  property System.Object ValidatedInputs { get; init; }
   property System.String WorldUid { get; init; }
   property Valheim.Testing.Game.ClientRunPlan ClientPlan { get; init; }
   property Valheim.Testing.Game.ServerRunPlan ServerPlan { get; init; }

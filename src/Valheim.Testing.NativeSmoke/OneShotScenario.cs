@@ -117,6 +117,20 @@ internal static class OneShotScenario
         return new HostedSelection(runner, Path.GetFullPath(file), hash);
     }
 
+    internal static object? ValidateInputs(object runner, string name)
+    {
+        if (runner is not IOneShotScenarioPreflight preflight) return null;
+        try
+        {
+            return preflight.ValidateInputs()
+                ?? throw new InvalidDataException("The scenario input preflight returned no validated value.");
+        }
+        catch (Exception failure) when (failure is not OperationCanceledException and not OutOfMemoryException)
+        {
+            throw new InvalidDataException($"Scenario {name} input preflight refused: {failure.Message}", failure);
+        }
+    }
+
     private static (T Runner, string Hash) LoadScenario<T>(string file, string output) where T : class
     {
         file = Path.GetFullPath(file);
