@@ -149,7 +149,7 @@ public sealed class OwnedCopiesTests : IDisposable
         using var machine = EnvironmentInventory.UseMachine(new FakeMachine(HostProfile.CurrentPlatform) { DataRoot = data });
         using var localJournal = RunJournal.UseLocalDirectory(Path.Combine(data, "journal"));
         string source = Source("server", GameLaunch.ServerWindowsExecutable);
-        var host = OperatingSystem.IsWindows() ? new LocalGameHost("local", HostShell.WindowsPowerShell) : new LocalGameHost("local", HostShell.Bash);
+        var host = new LocalGameHost("local", HostShell.ThisMachine);
         var hosts = new Dictionary<string, HostProfile> { ["local"] = new() { Kind = "local", Lock = Path.Combine(data, "lock") } };
         async Task<JournalRunStatus> Status() =>
             Assert.Single((await RunJournalStatus.InspectAsync(hosts, _ => host, TimeSpan.FromSeconds(60))).Runs, run => run.Run == RunJournal.ThisProcess.RunId);

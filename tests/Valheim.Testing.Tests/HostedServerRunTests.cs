@@ -18,10 +18,10 @@ public sealed partial class HostedServerRunTests : IDisposable
 
     private FakeServerHost NewHost(FakeOwnedServer? server = null) => new("linux-box", Mirror, server);
     private FakeOwnedServer NewServer() => new("test.mod", saveRoot: RunDirectory + "/world");
-    [Fact] public void WindowsPowerShellDedicatedServerProfileIsAcceptedBeforeAnyHostOperation()
+    [Fact] public void AWindowsPwshDedicatedServerProfileIsAcceptedBeforeAnyHostOperation()
     {
         var host = NewHost();
-        var (planPath, profilePath) = Write(host, hostPlatform: "windows", hostShell: "powershell");
+        var (planPath, profilePath) = Write(host, hostPlatform: "windows", hostShell: "pwsh");
         var profile = TestEnvironment.Read(profilePath);
         var hosted = HostedServerRun.Create(profile, ServerRunPlan.Read<ServerRunPlan>(planPath), "test", new FakeRunHooks { Host = _ => host, RunId = RunId });
         Assert.Equal("windows", hosted.HostProfile.Platform);
@@ -110,7 +110,7 @@ public sealed partial class HostedServerRunTests : IDisposable
     [Fact] public async Task APreparedWindowsProfileRefusesAChangedUnpinnedSourceFileBeforeBoot()
     {
         var host = new FakeServerHost("windows-server", Mirror, windows: true);
-        var (planPath, profilePath) = Write(host, hostPlatform: "windows", hostShell: "powershell");
+        var (planPath, profilePath) = Write(host, hostPlatform: "windows", hostShell: "pwsh");
         var plan = ServerRunPlan.Read<ServerRunPlan>(planPath);
         var environment = TestEnvironment.Read(profilePath);
         const string source = @"C:\valheim\server", owned = @"C:\vt\runs\vt-prep-profile\runtime";
@@ -130,12 +130,12 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.DoesNotContain("start", host.Scripts);
     }
 
-    [Fact] public async Task WindowsPowerShellProfileRunsTheWholeServerLifecycleAndKeepsOnlyItsEvidence()
+    [Fact] public async Task AWindowsPwshProfileRunsTheWholeServerLifecycleAndKeepsOnlyItsEvidence()
     {
         const string windowsRuns = @"C:\vt\runs";
         var server = new FakeOwnedServer("test.mod", saveRoot: windowsRuns + @"\run-test\world");
         var host = new FakeServerHost("windows-server", Mirror, server, windows: true);
-        var (plan, profile) = Write(host, hostPlatform: "windows", hostShell: "powershell");
+        var (plan, profile) = Write(host, hostPlatform: "windows", hostShell: "pwsh");
         Assert.Equal(0, await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["run", plan, Output], Options(host, server)));
         Assert.Equal(host.Claims, host.Releases);
         Assert.Contains("start", host.Scripts);
@@ -152,7 +152,7 @@ public sealed partial class HostedServerRunTests : IDisposable
     {
         var server = new FakeOwnedServer("test.mod", saveRoot: @"C:\vt\runs\run-test\world");
         var host = new FakeServerHost("windows-server", Mirror, server, windows: true);
-        var (plan, profile) = Write(host, hostPlatform: "windows", hostShell: "powershell", doorstopConfig: DoorstopMixPathsTests.Doorstop3Config);
+        var (plan, profile) = Write(host, hostPlatform: "windows", hostShell: "pwsh", doorstopConfig: DoorstopMixPathsTests.Doorstop3Config);
         Assert.Equal(1, await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["run", plan, Output], Options(host, server)));
         Assert.DoesNotContain("start", host.Scripts);
         var step = JsonDocument.Parse(File.ReadAllText(Path.Combine(Output, "result.json"))).RootElement.GetProperty("Steps").EnumerateArray()
@@ -647,8 +647,8 @@ public sealed partial class HostedServerRunTests : IDisposable
             hosts = new Dictionary<string, object>
             {
                 ["linux-box"] = new { kind = "ssh", platform = "linux", shell = "bash", destination = "tester@linux-box.example", @lock = "/var/tmp/vt/lock" },
-                ["windows-box"] = new { kind = "ssh", platform = "windows", shell = "powershell", destination = "tester@windows-box.example", @lock = @"C:\vt\lock" },
-                ["elsewhere"] = new { kind = "local", platform = other, shell = other == "windows" ? "powershell" : "bash", @lock = other == "windows" ? @"C:\vt\lock" : "/var/tmp/vt/lock" },
+                ["windows-box"] = new { kind = "ssh", platform = "windows", shell = "pwsh", destination = "tester@windows-box.example", @lock = @"C:\vt\lock" },
+                ["elsewhere"] = new { kind = "local", platform = other, shell = other == "windows" ? "pwsh" : "bash", @lock = other == "windows" ? @"C:\vt\lock" : "/var/tmp/vt/lock" },
             },
             environments = new object[]
             {
@@ -828,7 +828,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         await HostClientPreflight.CheckAsync(host, install, ClientPlatform.Windows, plan, TimeSpan.FromSeconds(5), default);
     }
 
-    [Fact] public async Task WindowsPowerShellReadsTheRemoteLoaderFilesForPreflight()
+    [Fact] public async Task WindowsPwshReadsTheRemoteLoaderFilesForPreflight()
     {
         if (!OperatingSystem.IsWindows()) return;
         string install = Path.Combine(_root, "windows-client");
@@ -837,7 +837,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         File.WriteAllText(Path.Combine(install, "winhttp.dll"), "MZ target_assembly");
         string config = Path.Combine(install, "doorstop_config.ini");
         File.WriteAllText(config, "[General]\nenabled=true\ntarget_assembly=BepInEx\\core\\BepInEx.Preloader.dll\n");
-        var host = new LocalGameHost("windows-client", HostShell.WindowsPowerShell);
+        var host = new LocalGameHost("windows-client", HostShell.Pwsh);
         var plan = new ClientRunPlan { Mode = "owned", Pinning = "none" };
         await HostClientPreflight.CheckAsync(host, install, ClientPlatform.Windows, plan, TimeSpan.FromSeconds(30), default);
         File.WriteAllText(config, "[UnityDoorstop]\nenabled=true\ntargetAssembly=BepInEx\\core\\BepInEx.Preloader.dll\n");

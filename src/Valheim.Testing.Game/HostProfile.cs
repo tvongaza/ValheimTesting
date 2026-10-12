@@ -6,11 +6,22 @@ namespace Valheim.Testing.Game;
 public sealed class HostProfile
 {
     internal static string CurrentPlatform => OperatingSystem.IsWindows() ? "windows" : OperatingSystem.IsMacOS() ? "macos" : "linux";
+    /// <summary>The one shell a host of <paramref name="platform"/> runs its scripts in: <c>pwsh</c> (PowerShell 7) on Windows, <c>bash</c> on macOS and Linux.</summary>
+    internal static string ShellFor(string platform) => platform == "windows" ? "pwsh" : "bash";
+    /// <summary>
+    /// What a Windows host without PowerShell 7 needs, in every refusal that names it: the install command, run in a desktop
+    /// terminal on that machine (the installer is refused with access denied over SSH).
+    /// </summary>
+    internal const string PwshInstall = "winget install --id Microsoft.PowerShell --source winget";
+    internal static string MissingPwsh(string host) =>
+        $"PowerShell 7 (pwsh) is not installed on {host}, or not on its PATH; a Windows host runs its scripts in pwsh. Install it in a " +
+        $"desktop terminal on that machine (over SSH the installer fails with access denied): {PwshInstall}. Then restart its OpenSSH " +
+        "server (Restart-Service sshd) or the machine, so new SSH sessions see the new PATH.";
 
     public string Kind { get; set; } = "";
     /// <summary><c>windows</c>, <c>linux</c> or <c>macos</c>: the host's own OS (a container's is linux).</summary>
     public string Platform { get; set; } = "";
-    /// <summary><c>bash</c>, <c>pwsh</c> or <c>powershell</c> (Windows PowerShell 5.1, Windows only).</summary>
+    /// <summary><c>pwsh</c> (PowerShell 7) on a Windows host, <c>bash</c> on a macOS or Linux host.</summary>
     public string Shell { get; set; } = "";
     /// <summary>The host lock's directory, an absolute path on the host. Every run takes it before touching the host.</summary>
     public string Lock { get; set; } = "";
@@ -35,9 +46,9 @@ public sealed class HostProfile
         string where = $"Host '{name}'";
         if (Kind is not ("local" or "ssh" or "container")) errors.Add($"{where}: kind must be local, ssh or container.");
         if (Platform is not ("windows" or "linux" or "macos")) errors.Add($"{where}: platform must be windows, linux or macos.");
-        if (Shell is not ("bash" or "pwsh" or "powershell")) errors.Add($"{where}: shell must be bash, pwsh or powershell.");
-        else if (Shell == "powershell" && Platform != "windows") errors.Add($"{where}: Windows PowerShell (powershell) runs only on Windows; use pwsh.");
-        else if (Shell == "bash" && Platform == "windows") errors.Add($"{where}: bash on Windows (WSL or Git Bash) sees other paths and tools; use powershell or pwsh.");
+        if (Shell is not ("bash" or "pwsh")) errors.Add($"{where}: shell must be bash or pwsh.");
+        else if (Shell == "pwsh" && Platform is ("linux" or "macos")) errors.Add($"{where}: PowerShell runs only on Windows hosts; use bash on this host.");
+        else if (Shell == "bash" && Platform == "windows") errors.Add($"{where}: bash on Windows (WSL or Git Bash) sees other paths and tools; use pwsh on this host.");
         if (Kind == "container" && Platform != "linux") errors.Add($"{where}: a container host's platform is linux.");
         if ((Kind == "ssh") == string.IsNullOrWhiteSpace(Destination)) errors.Add($"{where}: " + (Kind == "ssh" ? "an ssh host needs a destination." : "only an ssh host has a destination."));
         if ((Kind == "container") == string.IsNullOrWhiteSpace(Container)) errors.Add($"{where}: " + (Kind == "container" ? "a container host needs a container." : "only a container host has a container."));

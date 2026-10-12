@@ -18,10 +18,10 @@ internal static class HostScripts
         "printf \"\\n[vt-exit] %d\\n\" \"$r\" >&2; exit \"$r\"; fi; " +
         "rm -rf \"$d\"; echo \"vt: the script did not arrive intact\" >&2; exit 125";
 
-    // Sent as -EncodedCommand, so its length (not the script's) meets the command-line limit. Runs under Windows
-    // PowerShell 5.1 and PowerShell 7. The script's line goes to a temporary file, the secrets line only into memory (the
-    // process variable VT_SECRETS while the script runs), the rest of stdin to the upload file. Output goes through Console.Out as UTF-8, so 5.1 does not re-encode it to the
-    // OEM code page, and errors are written as plain text rather than CLIXML.
+    // Sent as -EncodedCommand, so its length (not the script's) meets the command-line limit. Runs under PowerShell 7 (pwsh)
+    // on Windows. The script's line goes to a temporary file, the secrets line only into memory (the process variable
+    // VT_SECRETS while the script runs), the rest of stdin to the upload file. Output goes through Console.Out as UTF-8, so it
+    // is not re-encoded to the console's OEM code page, and errors are written as plain text rather than CLIXML.
     public static readonly string PowerShellWrapper = """
         try { [Console]::OutputEncoding = New-Object Text.UTF8Encoding $false } catch { }
         $ErrorActionPreference = 'Stop'
@@ -52,8 +52,7 @@ internal static class HostScripts
             [void][IO.Directory]::CreateDirectory($vtDir)
             $vtScript = Join-Path $vtDir 'script.ps1'
             $vtText = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String([Text.Encoding]::ASCII.GetString($vtLine.ToArray())))
-            # With a byte order mark, so Windows PowerShell 5.1 reads the file as UTF-8.
-            [IO.File]::WriteAllText($vtScript, $vtText, (New-Object Text.UTF8Encoding $true))
+            [IO.File]::WriteAllText($vtScript, $vtText, (New-Object Text.UTF8Encoding $false))
             $env:VT_UPLOAD = Join-Path $vtDir 'upload'
             $vtFile = [IO.File]::Create($env:VT_UPLOAD)
             try { $vtFile.Write($vtBuffer, $vtRest, $vtRead - $vtRest); $vtIn.CopyTo($vtFile) } finally { $vtFile.Dispose() }
@@ -162,14 +161,8 @@ internal static class HostScripts
         if ($system -and [IO.File]::Exists((Join-Path $system 'tar.exe'))) { $tar = Join-Path $system 'tar.exe' }
         """;
 
-    // Get-FileHash is a script function of the Utility module, which Windows PowerShell 5.1 cannot load when it inherits
-    // PowerShell 7's PSModulePath (for example when pwsh is the SSH login shell), so the hash is computed with .NET.
     private const string PowerShellSha256 = """
-        function Get-VtSha256([string]$path) {
-            $stream = [IO.File]::OpenRead($path)
-            $sha = [Security.Cryptography.SHA256]::Create()
-            try { ([BitConverter]::ToString($sha.ComputeHash($stream))).Replace('-', '').ToLowerInvariant() } finally { $sha.Dispose(); $stream.Dispose() }
-        }
+        function Get-VtSha256([string]$path) { (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant() }
         """;
 
     private static readonly string PowerShellShip = (PowerShellSha256 + """

@@ -398,7 +398,7 @@ internal static class HostInstallScripts
         foreach ($path in ($paths -split "`n")) {
             if (-not $path) { continue }
             $named = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($path))
-            try { $overlap = (Test-VtInside $root $path -Fold) -or (Test-VtInside $path $root -Fold) } catch { 'VT-APART unknown ' + $named; exit 0 }
+            try { $overlap = (Test-VtInside $root $path) -or (Test-VtInside $path $root) } catch { 'VT-APART unknown ' + $named; exit 0 }
             if ($overlap) { 'VT-APART overlap ' + $named; exit 0 }
         }
         'VT-APART ok'

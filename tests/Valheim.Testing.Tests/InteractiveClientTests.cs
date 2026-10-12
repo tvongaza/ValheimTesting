@@ -36,7 +36,7 @@ public class InteractiveClientTests
     private const string LinuxInstall = "/home/steam/valheim";
     private const string LinuxLaunch = "/srv/valheim-testing/runs/run-42/client";
 
-    private static ScriptedGameHost WindowsHost(FakeLauncher fake) => new SshGameHost("gaming-pc", "tester@gaming-pc.example", HostShell.WindowsPowerShell, 0, null, null, "ssh", fake);
+    private static ScriptedGameHost WindowsHost(FakeLauncher fake) => new SshGameHost("gaming-pc", "tester@gaming-pc.example", HostShell.Pwsh, 0, null, null, "ssh", fake);
     private static ScriptedGameHost LinuxHost(FakeLauncher fake) => new SshGameHost("linux-box", "tester@linux-box.example", HostShell.Bash, 0, null, null, "ssh", fake);
     private static ScriptedGameHost MacHost(FakeLauncher fake) => new SshGameHost("mac-box", "tester@mac-box.example", HostShell.Bash, 0, null, null, "ssh", fake);
     private static string Reply(params string[] lines) => string.Join('\n', lines) + "\n";
@@ -322,7 +322,7 @@ public class InteractiveClientTests
         Assert.Contains("ValheimTesting-client-quit-example", refusal.Message);
     }
 
-    [Fact] public void DesktopQuitScriptsParseUnderWindowsPowerShell51()
+    [Fact] public void DesktopQuitScriptsParseUnderPwsh()
     {
         if (!OperatingSystem.IsWindows()) return;
         string root = Directory.CreateTempSubdirectory("vt-quit-parse-").FullName;
@@ -333,7 +333,7 @@ public class InteractiveClientTests
             {
                 string file = Path.Combine(root, index + ".ps1");
                 File.WriteAllText(file, scripts[index]);
-                var start = new ProcessStartInfo("powershell.exe")
+                var start = new ProcessStartInfo("pwsh")
                 {
                     UseShellExecute = false, RedirectStandardError = true, RedirectStandardOutput = true,
                     ArgumentList = { "-NoProfile", "-NonInteractive", "-Command",
@@ -689,7 +689,7 @@ public class InteractiveClientShellTests
         string game = CopyPing(ping, install, "valheim.exe");
         string variable = "VT_TEST_CANARY_" + Guid.NewGuid().ToString("N"), canary = "canary-" + Guid.NewGuid().ToString("N");
         var launch = GameLaunch.ForClient(install, ["-n", "600", "127.0.0.1"], hostPlatform: ClientPlatform.Windows, secretVariables: [variable], console: false);
-        var host = new LocalGameHost("here", HostShell.WindowsPowerShell);
+        var host = new LocalGameHost("here", HostShell.Pwsh);
         Environment.SetEnvironmentVariable(variable, canary);
         var started = new List<Process>();
         try

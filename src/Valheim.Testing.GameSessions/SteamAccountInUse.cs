@@ -43,21 +43,13 @@ internal static class SteamAccountInUse
     // Windows: Valheim.exe processes (a dedicated server signs in to no Steam user) whose owner is this user; one whose owner cannot
     // be read is reported as such. HKCU\Software\Valve\Steam\RunningAppID is not read: on the station (6 Oct 2026) it was readable
     // and 0 with no game running, but whether it names 892970 for a game started directly (not through Steam), as the tool starts
-    // one, was not verified. pwsh elsewhere lists this user's processes by name.
+    // one, was not verified.
     public static readonly string PowerShell = """
         $mine = @(); $unowned = @()
-        if ([Environment]::OSVersion.Platform -ne [PlatformID]::Unix) {
-            foreach ($p in @(Get-CimInstance Win32_Process -Filter "Name = 'Valheim.exe'" -ErrorAction Stop)) {
-                $owner = Invoke-CimMethod -InputObject $p -MethodName GetOwner -ErrorAction SilentlyContinue
-                if ($null -eq $owner -or $owner.ReturnValue -ne 0 -or -not $owner.User) { $unowned += [string]$p.ProcessId }
-                elseif ($owner.User -eq $env:USERNAME) { $mine += [string]$p.ProcessId }
-            }
-        } else {
-            $uid = (& id -u)
-            foreach ($line in @(& ps -axo 'pid=,uid=,comm=')) {
-                $f = ([string]$line).Trim() -split '\s+', 3
-                if ($f.Count -eq 3 -and $f[1] -eq $uid -and (Split-Path -Leaf $f[2]) -in @('Valheim', 'valheim.x86_64')) { $mine += $f[0] }
-            }
+        foreach ($p in @(Get-CimInstance Win32_Process -Filter "Name = 'Valheim.exe'" -ErrorAction Stop)) {
+            $owner = Invoke-CimMethod -InputObject $p -MethodName GetOwner -ErrorAction SilentlyContinue
+            if ($null -eq $owner -or $owner.ReturnValue -ne 0 -or -not $owner.User) { $unowned += [string]$p.ProcessId }
+            elseif ($owner.User -eq $env:USERNAME) { $mine += [string]$p.ProcessId }
         }
         if ($mine.Count -ne 0) { 'VT-PLAYING process ' + ($mine -join ',') } elseif ($unowned.Count -ne 0) { 'VT-PLAYING unowned ' + ($unowned -join ',') } else { 'VT-PLAYING no' }
         """.ReplaceLineEndings("\n");
@@ -89,7 +81,7 @@ internal static class SteamAccountInUse
 /// </summary>
 internal static class SteamSessionLogOnHost
 {
-    // How long a failed start's last look at a host's log may take, the transport's start included (SSH and Windows PowerShell take
+    // How long a failed start's last look at a host's log may take, the transport's start included (SSH and PowerShell take
     // seconds); the line, when Steam wrote it, is already there, so the look ends as soon as the follower has read it.
     internal static readonly TimeSpan FinalLook = TimeSpan.FromSeconds(10);
 
@@ -136,23 +128,17 @@ internal static class SteamSessionLogOnHost
     }
 
     // Steam's connection_log on the host and its length ("VT-STEAMLOG <bytes> <path>"): Windows finds Steam from the user's SteamPath,
-    // the machine's InstallPath, then Program Files; pwsh elsewhere and bash try the user's usual Steam directories.
+    // the machine's InstallPath, then Program Files; bash tries the user's usual Steam directories.
     // Variable: steam (an optional Steam directory to try first; tests).
     public static readonly string FindPowerShell = """
         $dirs = @()
         if ($steam) { $dirs += $steam }
-        if ([Environment]::OSVersion.Platform -ne [PlatformID]::Unix) {
-            $p = [Microsoft.Win32.Registry]::GetValue('HKEY_CURRENT_USER\Software\Valve\Steam', 'SteamPath', $null)
-            if ($p) { $dirs += [string]$p }
-            $p = [Microsoft.Win32.Registry]::GetValue('HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node\Valve\Steam', 'InstallPath', $null)
-            if ($p) { $dirs += [string]$p }
-            $x86 = [Environment]::GetFolderPath('ProgramFilesX86')
-            if ($x86) { $dirs += (Join-Path $x86 'Steam') }
-        } else {
-            $vtHome = [Environment]::GetFolderPath('UserProfile')
-            $dirs += @((Join-Path $vtHome 'Library/Application Support/Steam'), (Join-Path $vtHome '.local/share/Steam'), (Join-Path $vtHome '.steam/steam'),
-                (Join-Path $vtHome '.var/app/com.valvesoftware.Steam/.local/share/Steam'))
-        }
+        $p = [Microsoft.Win32.Registry]::GetValue('HKEY_CURRENT_USER\Software\Valve\Steam', 'SteamPath', $null)
+        if ($p) { $dirs += [string]$p }
+        $p = [Microsoft.Win32.Registry]::GetValue('HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node\Valve\Steam', 'InstallPath', $null)
+        if ($p) { $dirs += [string]$p }
+        $x86 = [Environment]::GetFolderPath('ProgramFilesX86')
+        if ($x86) { $dirs += (Join-Path $x86 'Steam') }
         foreach ($d in $dirs) {
             $f = [IO.Path]::GetFullPath([IO.Path]::Combine($d, 'logs', 'connection_log.txt'))
             if ([IO.File]::Exists($f)) { 'VT-STEAMLOG ' + (New-Object IO.FileInfo $f).Length + ' ' + $f; exit 0 }

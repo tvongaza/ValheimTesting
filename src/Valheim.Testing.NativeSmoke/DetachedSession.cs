@@ -36,7 +36,7 @@ internal static class DetachedSession
         {
             // The runner itself needs the desktop token on Windows. Otherwise its nested owned
             // server task would be created from a non-elevated session-0 S4U token and refused.
-            await InteractiveClient.RequireWindowsDesktopSessionAsync(new LocalGameHost("this machine", HostShell.WindowsPowerShell))
+            await InteractiveClient.RequireWindowsDesktopSessionAsync(new LocalGameHost("this machine", HostShell.Pwsh))
                 .ConfigureAwait(false);
             Directory.CreateDirectory(Root);
             string token = Guid.NewGuid().ToString("N");
@@ -313,7 +313,7 @@ internal static class DetachedSession
         $definition.Settings.StopIfGoingOnBatteries = $false
         $definition.Settings.ExecutionTimeLimit = 'PT0S'
         $action = $definition.Actions.Create(0)
-        $action.Path = Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell\v1.0\powershell.exe'
+        $action.Path = [Environment]::ProcessPath
         $action.Arguments = '-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + {{Ps(launch.LauncherPath)}} + '"'
         $action.WorkingDirectory = {{Ps(launch.ToolDirectory)}}
         $task = $folder.RegisterTaskDefinition({{Ps(launch.Label)}}, $definition, 2, $identity.Name, $null, $logonType) # TASK_CREATE; 1 only validates
@@ -322,7 +322,7 @@ internal static class DetachedSession
 
     private static async Task<int> RegisterWindowsTaskAsync(Launch launch)
     {
-        var start = new ProcessStartInfo("powershell.exe") { UseShellExecute = false, RedirectStandardError = true };
+        var start = new ProcessStartInfo("pwsh") { UseShellExecute = false, RedirectStandardError = true };
         start.ArgumentList.Add("-NoProfile"); start.ArgumentList.Add("-NonInteractive");
         start.ArgumentList.Add("-ExecutionPolicy"); start.ArgumentList.Add("Bypass");
         start.ArgumentList.Add("-EncodedCommand");
@@ -351,7 +351,7 @@ internal static class DetachedSession
             } elseif ([int64]$task.LastTaskResult -eq 0x41303) { 'not-started' }
             else { 'stopped ' + $task.LastTaskResult }
             """;
-        var start = new ProcessStartInfo("powershell.exe") { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true };
+        var start = new ProcessStartInfo("pwsh") { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true };
         start.ArgumentList.Add("-NoProfile"); start.ArgumentList.Add("-NonInteractive");
         start.ArgumentList.Add("-EncodedCommand");
         start.ArgumentList.Add(Convert.ToBase64String(System.Text.Encoding.Unicode.GetBytes(script)));
@@ -371,7 +371,7 @@ internal static class DetachedSession
             $service.Connect()
             $service.GetFolder('\').DeleteTask({{Ps(launch.Label)}}, 0)
             """;
-        var start = new ProcessStartInfo("powershell.exe") { UseShellExecute = false };
+        var start = new ProcessStartInfo("pwsh") { UseShellExecute = false };
         start.ArgumentList.Add("-NoProfile"); start.ArgumentList.Add("-NonInteractive");
         start.ArgumentList.Add("-EncodedCommand");
         start.ArgumentList.Add(Convert.ToBase64String(System.Text.Encoding.Unicode.GetBytes(script)));

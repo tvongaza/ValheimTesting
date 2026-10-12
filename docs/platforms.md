@@ -2,7 +2,7 @@
 
 *Assistant-written (Claude).*
 
-The usual setup is one **Windows** PC with Valheim installed through Steam: unit tests, the integration tests and the native checks all run there, with an owned dedicated server and an owned client on the same machine ([one Windows PC](packages/Valheim.Testing.Game.md#on-one-windows-pc)). Everything below is for other hosts, and none of it is needed for that setup. The toolkit itself needs only the .NET 10 SDK on every host, and CI runs bootstrap and validation on Windows, Linux and macOS.
+The usual setup is one **Windows** PC with Valheim installed through Steam: unit tests, the integration tests and the native checks all run there, with an owned dedicated server and an owned client on the same machine ([one Windows PC](packages/Valheim.Testing.Game.md#on-one-windows-pc)). Everything below is for other hosts, and none of it is needed for that setup. The toolkit itself needs only the .NET 10 SDK on every host, plus PowerShell 7 on a Windows host ([host shells](#host-shells)), and CI runs bootstrap and validation on Windows, Linux and macOS.
 
 | Host | Toolkit and tests | Game client (`GameLaunch.ForClient`, driven by ValheimCLI) | Dedicated server (native) | Server in a container | Remote server host |
 |---|---|---|---|---|---|
@@ -11,6 +11,16 @@ The usual setup is one **Windows** PC with Valheim installed through Steam: unit
 | macOS | Yes; CI | Yes, `Valheim.app`, modded either way: native arm64 by default on Apple Silicon (requires a Doorstop with an arm64 slice and a BepInEx core on MonoMod 25), or x86_64 under Rosetta when explicitly selected; Intel Macs default to x64 ([native client](#native-apple-silicon-client)) | Yes, `valheim_server/Valheim` from Steam app 896660's macOS build, native arm64; modded needs a Doorstop with an arm64 slice and a natively running BepInEx core ([macOS](#macos)) | Experimental: x86-64 emulation on Apple Silicon | SSH game host in an environment inventory; a remote server profile passed natively, and remote client profiles require the SSH user at the unlocked console with Steam signed in (joined-client check passed over SSH to localhost; a separate runner machine is unverified) |
 
 `GameLaunch.ForClient` builds a BepInEx game-client launch (Doorstop loader checks and variables, `-console`, `SteamAppId`) from a client install on its own OS, and `GameLaunch.ForServer` does the same for a dedicated server; each refuses the other's install and names the right one ([launching servers and clients](packages/Valheim.Testing.Game.md#launching-servers-and-clients)). A client needs an interactive desktop session with a display and a running Steam client, so `InteractiveClient` starts one inside a Windows, Linux or SSH Mac host's existing desktop session ([clients in a host's desktop session](packages/Valheim.Testing.GameSessions.md#clients-in-a-hosts-desktop-session)). A remote Mac's display may turn off if the computer stays awake and the console session remains unlocked; macOS Lock Screen settings determine whether that is possible.
+
+## Host shells
+
+Every script the toolkit runs on a host (this machine or one reached over SSH or in a container) runs in that OS's one shell: PowerShell 7 (`pwsh`) on Windows, `bash` on macOS and Linux. Windows PowerShell 5.1 is not used, and PowerShell is not used on macOS or Linux; an environment inventory's host names its `shell` accordingly and any other combination is refused. A Windows host needs `pwsh` on its PATH. Install it in a desktop terminal on that machine (over SSH the installer fails with access denied):
+
+```
+winget install --id Microsoft.PowerShell --source winget
+```
+
+Over SSH, restart the host's OpenSSH server (`Restart-Service sshd`) or the machine after installing, so new sessions see the new PATH. `valheim-test env preflight` and a session's host checks refuse a Windows host without `pwsh` and print that command (over SSH: from cmd.exe, the default login shell, in any language, or from an English Windows PowerShell login shell). PowerShell 7.2 or later is needed: the scheduled tasks the toolkit registers start the same `pwsh.exe` that registered them. The winget command installs the current release; on the project's Windows validation host it installed the packaged (MSIX) PowerShell, whose `pwsh.exe` those tasks start as well. This page is the one place the requirement is written; other pages link here.
 
 ## Windows
 

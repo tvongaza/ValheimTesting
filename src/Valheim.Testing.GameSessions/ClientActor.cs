@@ -131,7 +131,7 @@ internal sealed class LocalClientPlacement : IClientPlacement
     {
         if (plan.Owned && plan.InPlace)
             // Run in place: nothing is staged, so the only conflict to rule out first is a Valheim that already runs here.
-            HostedRuntimeStage.RequireStoppedAsync(new LocalGameHost("this machine", OperatingSystem.IsWindows() ? HostShell.WindowsPowerShell : HostShell.Bash),
+            HostedRuntimeStage.RequireStoppedAsync(new LocalGameHost("this machine", HostShell.ThisMachine),
                 LocalClientCopy.StepTimeout, cancellation, clientSession: true).GetAwaiter().GetResult();
         else if (plan.CopySource)
         {
@@ -159,7 +159,7 @@ internal sealed class LocalClientPlacement : IClientPlacement
             if (!OperatingSystem.IsLinux())
                 try
                 {
-                    HostedRuntimeStage.RequireStoppedAsync(new LocalGameHost("this machine", OperatingSystem.IsWindows() ? HostShell.WindowsPowerShell : HostShell.Bash),
+                    HostedRuntimeStage.RequireStoppedAsync(new LocalGameHost("this machine", HostShell.ThisMachine),
                         LocalClientCopy.StepTimeout, CancellationToken.None, runtimes: [entry.Value.Copy.LaunchRoot], clientSession: false).GetAwaiter().GetResult();
                     lock (_copies) entry.Value.Stopped[at] = () => true;
                 }

@@ -11,7 +11,7 @@ public sealed class EnvironmentInventoryTests : IDisposable
 
     private static HostProfile Host() => new()
     {
-        Kind = "ssh", Platform = "windows", Shell = "powershell", Destination = "test@example",
+        Kind = "ssh", Platform = "windows", Shell = "pwsh", Destination = "test@example",
         Lock = @"C:\locks\test.lock",
     };
 
@@ -308,7 +308,7 @@ public sealed class EnvironmentInventoryTests : IDisposable
         inventory.Environments.RemoveAt(1);
         inventory.Hosts["mac"] = new HostProfile
         {
-            Kind = "local", Platform = HostProfile.CurrentPlatform, Shell = HostProfile.CurrentPlatform == "windows" ? "powershell" : "bash",
+            Kind = "local", Platform = HostProfile.CurrentPlatform, Shell = HostProfile.CurrentPlatform == "windows" ? "pwsh" : "bash",
             Lock = HostProfile.CurrentPlatform == "windows" ? @"C:\locks\test.lock" : "/tmp/valheim-test-lock",
         };
         inventory.Environments[1].Install = HostProfile.CurrentPlatform == "windows" ? @"C:\game" : "/tmp/game";

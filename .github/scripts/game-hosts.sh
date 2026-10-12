@@ -34,7 +34,7 @@ case "${1:-}" in
     } >> "$GITHUB_ENV"
     # ssh reads a -o value like a config line, so a path with a space is quoted inside the argument.
     ssh -o BatchMode=yes -o "IdentityFile=\"$k/client_key\"" -o IdentitiesOnly=yes -o "UserKnownHostsFile=\"$k/known_hosts\"" \
-      -o StrictHostKeyChecking=yes -p 2222 "$(id -un)@127.0.0.1" 'echo "ssh to localhost works; pwsh: $(command -v pwsh)"'
+      -o StrictHostKeyChecking=yes -p 2222 "$(id -un)@127.0.0.1" 'echo "ssh to localhost works"'
 
     if ! command -v Xvfb > /dev/null; then sudo apt-get update -q && sudo apt-get install -y -q xvfb; fi
     Xvfb :99 -nolisten tcp > "$RUNNER_TEMP/xvfb.log" 2>&1 &

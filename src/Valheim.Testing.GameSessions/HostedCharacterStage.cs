@@ -252,34 +252,22 @@ internal static class HostedCharacterStage
         if [ -d "$folder" ]; then echo "VT-CHARDIR characters found $folder"; fi
         """.ReplaceLineEndings("\n");
 
+    // A Windows host's (the only one that runs PowerShell); platform is always windows here.
     internal static readonly string PowerShellDirectories = """
-        $userHomeDir = if ($userhome) { $userhome } elseif ($platform -eq 'windows' -and $env:USERPROFILE) { $env:USERPROFILE } elseif ($env:HOME) { $env:HOME } else { [Environment]::GetFolderPath('UserProfile') }
+        $userHomeDir = if ($userhome) { $userhome } elseif ($env:USERPROFILE) { $env:USERPROFILE } else { [Environment]::GetFolderPath('UserProfile') }
         $candidates = @()
-        if ($platform -eq 'windows') {
-            $steam = $steamroot
-            if (-not $steam) { try { $steam = (Get-ItemProperty -Path 'HKCU:\Software\Valve\Steam' -Name SteamPath -ErrorAction Stop).SteamPath } catch { } }
-            # Steam writes its registered path with forward slashes.
-            if ($steam) { $candidates += [IO.Path]::Combine(($steam -replace '/', '\'), 'userdata') }
-            $x86 = [Environment]::GetEnvironmentVariable('ProgramFiles(x86)')
-            if ($x86 -and -not $steamroot) { $candidates += [IO.Path]::Combine($x86, 'Steam', 'userdata') }
-        } elseif ($platform -eq 'macos') {
-            $candidates += "$userHomeDir/Library/Application Support/Steam/userdata"
-        } else {
-            $candidates += "$userHomeDir/.local/share/Steam/userdata", "$userHomeDir/.steam/steam/userdata", "$userHomeDir/.var/app/com.valvesoftware.Steam/.local/share/Steam/userdata"
-        }
+        $steam = $steamroot
+        if (-not $steam) { try { $steam = (Get-ItemProperty -Path 'HKCU:\Software\Valve\Steam' -Name SteamPath -ErrorAction Stop).SteamPath } catch { } }
+        # Steam writes its registered path with forward slashes.
+        if ($steam) { $candidates += [IO.Path]::Combine(($steam -replace '/', '\'), 'userdata') }
+        $x86 = [Environment]::GetEnvironmentVariable('ProgramFiles(x86)')
+        if ($x86 -and -not $steamroot) { $candidates += [IO.Path]::Combine($x86, 'Steam', 'userdata') }
         if ($userdata) { $candidates = @($userdata) }
-        $steamFound = $null
         foreach ($candidate in $candidates) {
             "VT-CHARDIR userdata tried $candidate"
-            if ([IO.Directory]::Exists($candidate)) { "VT-CHARDIR userdata found $candidate"; $steamFound = $candidate; break }
+            if ([IO.Directory]::Exists($candidate)) { "VT-CHARDIR userdata found $candidate"; break }
         }
-        if ($platform -eq 'windows') { $standard = [IO.Path]::Combine($userHomeDir, 'AppData', 'LocalLow', 'IronGate', 'Valheim', 'characters_local') }
-        elseif ($platform -eq 'macos') { $standard = "$userHomeDir/Library/Application Support/IronGate/Valheim/characters_local" }
-        else {
-            $flatpak = "$userHomeDir/.var/app/com.valvesoftware.Steam/"
-            $config = if ($steamFound -and $steamFound.StartsWith($flatpak)) { $flatpak + '.config' } elseif (-not $userhome -and $env:XDG_CONFIG_HOME) { $env:XDG_CONFIG_HOME } else { "$userHomeDir/.config" }
-            $standard = "$config/unity3d/IronGate/Valheim/characters_local"
-        }
+        $standard = [IO.Path]::Combine($userHomeDir, 'AppData', 'LocalLow', 'IronGate', 'Valheim', 'characters_local')
         $folder = if ($characters) { $characters } else { $standard }
         "VT-CHARDIR characters tried $folder"
         if ([IO.Directory]::Exists($folder)) { "VT-CHARDIR characters found $folder" }

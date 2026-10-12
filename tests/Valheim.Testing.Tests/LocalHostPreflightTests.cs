@@ -77,4 +77,52 @@ public sealed class LocalHostPreflightTests : IDisposable
             Assert.Single(problems, problem => problem.Input == "Steam session").Message);
         Assert.Contains(problems, problem => problem.Actor == "client" && problem.Input == "ValheimCLI port" && problem.Message == "port busy");
     }
+
+    // #703: a Windows host without PowerShell 7 is refused by preflight with the one fix: the winget command, run in a desktop
+    // terminal on that machine. A local host cannot start pwsh; a host reached over ssh hears it from its login shell (cmd.exe).
+    // Every check that reaches the host refuses the same way, so preflight never reports the host as merely busy or unknown.
+    [Theory]
+    [InlineData("local")]
+    [InlineData("ssh")]
+    public async Task AWindowsHostWithoutPwshIsRefusedWithTheInstallCommand(string kind)
+    {
+        var inventory = new EnvironmentInventory
+        {
+            Hosts = new() { ["pc"] = new HostProfile { Kind = "local", Platform = "windows", Shell = "pwsh", Lock = @"C:\vt\lock" } },
+            Environments = [new EnvironmentRecipe { Name = "server", Host = "pc", Roles = ["server"], Install = @"C:\Games\Valheim dedicated server",
+                Runtime = @"C:\vt\runs", CliPort = 5551 }],
+        };
+        var missing = new NoPwsh(kind);
+        IGameHost host = kind == "local" ? new LocalGameHost("pc", HostShell.Pwsh, missing)
+            : new SshGameHost("pc", "tester@pc.example", HostShell.Pwsh, 0, null, null, "ssh", missing);
+        var probes = new LocalHostPreflight.Probes(
+            Journals: (_, _) => Task.FromResult<IReadOnlyList<CampaignPreflightProblem>>([]), Packaged: () => null);
+
+        var problems = await LocalHostPreflight.InspectAsync(inventory,
+            inventory.Environments.Select(recipe => new LocalHostPreflight.Actor(recipe.Name, recipe)),
+            TimeSpan.FromSeconds(5), hostFactory: _ => host, probes: probes);
+
+        Assert.True(missing.Calls > 0);
+        Assert.Equal(["host lock", "session", "ValheimCLI port"], problems.Select(problem => problem.Input));
+        Assert.All(problems, problem =>
+        {
+            Assert.Contains("winget install --id Microsoft.PowerShell --source winget", problem.Message);
+            Assert.Contains("desktop terminal on that machine", problem.Message);
+        });
+    }
+
+    // Every command fails as a Windows host without pwsh fails it: locally pwsh cannot be started; over ssh cmd.exe, the OpenSSH
+    // login shell, does not know the command (exit 9009, which ssh reports as its low byte).
+    private sealed class NoPwsh(string kind) : IProcessLauncher
+    {
+        public int Calls;
+        public Task<ProcessExit> RunAsync(ProcessCall call, CancellationToken cancellation)
+        {
+            Interlocked.Increment(ref Calls);
+            return Task.FromResult(kind == "local"
+                ? new ProcessExit(ProcessEnd.NotStarted, -1, "", "could not start pwsh: The system cannot find the file specified.", TimeSpan.Zero)
+                : new ProcessExit(ProcessEnd.Exited, 9009 & 0xFF, "", "'pwsh' is not recognized as an internal or external command,\r\noperable program or batch file.\r\n", TimeSpan.Zero));
+        }
+        public IStartedProcess Start(string executable, IReadOnlyList<string> arguments) => throw new NotSupportedException();
+    }
 }

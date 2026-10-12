@@ -30,16 +30,16 @@ For a fork, transport-package or command-pack update, follow the [ValheimCLI rel
 Fork the repository, clone your fork, and make a focused branch from current `main`. Check existing edits before starting. The [setup guide](docs/getting-started.md) covers prerequisites and package consumption. From the repository root:
 
 ```sh
-sh scripts/validate.sh  # macOS/Linux: preflight, CLI bootstrap and full validation
-# Windows: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/bootstrap-cli.ps1
-#          dotnet run scripts/validate.cs
+dotnet run scripts/bootstrap-cli.cs  # every OS: build the pinned ValheimCLI into the local package feed
+dotnet run scripts/validate.cs       # every OS: full no-game validation
+# macOS/Linux alternative: sh scripts/validate.sh (host-access preflight, writable NuGet caches, then both of the above)
 
 # For a public API or documentation change, build the candidate reference too:
 dotnet tool restore
 dotnet run scripts/api-docs.cs
 ```
 
-On macOS/Linux, `sh scripts/validate.sh --preflight-only` checks the SDK file-app cache, NuGet caches and (on macOS) process and TCP-listener access without starting tests or the CLI bootstrap. The normal command refuses before the long suite if those host observations are unavailable; it chooses writable NuGet caches and converts file-based scripts to temporary projects when the SDK runfile cache is unavailable. `sh scripts/validate.sh --restricted-sandbox` runs only selected no-host tests and exits **4** after an `INCOMPLETE` result. It cannot replace a full CI or authorized-host validation. On Windows, use the two commands shown above. `-ExecutionPolicy Bypass` applies to that one PowerShell process only: the default policy on a Windows client (`Restricted`) refuses to run any `.ps1` file, and the flag changes no machine or user setting. A policy set by Group Policy overrides the flag; on such a machine ask its administrator. This is the one place the Windows bootstrap command is written out; other pages link here.
+On macOS/Linux, `sh scripts/validate.sh --preflight-only` checks the SDK file-app cache, NuGet caches and (on macOS) process and TCP-listener access without starting tests or the CLI bootstrap. The normal command refuses before the long suite if those host observations are unavailable; it chooses writable NuGet caches and converts file-based scripts to temporary projects when the SDK runfile cache is unavailable. `sh scripts/validate.sh --restricted-sandbox` runs only selected no-host tests and exits **4** after an `INCOMPLETE` result. It cannot replace a full CI or authorized-host validation. `dotnet run scripts/bootstrap-cli.cs` needs no PowerShell or execution policy, so the two commands above are the same on Windows, macOS and Linux. On Windows the tests run host scripts in PowerShell 7 (`pwsh`), as every Windows host does ([host shells](docs/platforms.md#host-shells)). This is the one place the bootstrap command is written out; other pages link here.
 
 `validate.cs` packs every package as `<Version>-candidate.<id>`, where `dotnet run scripts/pins.cs -- candidate` prints the id, a hash of the package inputs: different sources never share a version in `.packages`, other packs of these packages are removed from it, and a complete set already packed under the id is kept, so one id has one set of bytes. Its consumer check restores the candidates and the bootstrapped Cli from `.packages` (byte for byte) and everything else from NuGet.org, with a package cache under `artifacts/consumer-cache/` that keeps NuGet.org's packages between runs and drops this checkout's before each. A candidate is never released (`pins.cs versions` refuses it).
 

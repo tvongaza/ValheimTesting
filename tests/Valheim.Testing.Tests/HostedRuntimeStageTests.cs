@@ -84,13 +84,13 @@ public sealed class HostedRuntimeStageTests : IDisposable
         Assert.Equal("old core", File.ReadAllText(Path.Combine(source, "BepInEx", "core", "BepInEx.dll")));
     }
 
-    // The Windows conflicting-use check for real: it runs in Windows PowerShell and, with no Valheim here, finds the host idle
+    // The Windows conflicting-use check for real: it runs in pwsh and, with no Valheim here, finds the host idle
     // for a client session and for an owned runtime path alike.
     [Fact] public async Task WindowsProcessCheckRunsAndFindsAnIdleHostIdle()
     {
         if (!OperatingSystem.IsWindows()) return;
         if (System.Diagnostics.Process.GetProcessesByName("valheim").Length + System.Diagnostics.Process.GetProcessesByName("valheim_server").Length != 0) return; // a station with a game up
-        var host = new LocalGameHost("windows-process", HostShell.WindowsPowerShell);
+        var host = new LocalGameHost("windows-process", HostShell.Pwsh);
         await HostedRuntimeStage.RequireStoppedAsync(host, TimeSpan.FromSeconds(60), default, runtimes: [Path.Combine(_root, "runtime")], clientSession: true);
         await HostedRuntimeStage.RequireStoppedAsync(host, TimeSpan.FromSeconds(60), default, runtimes: [Path.Combine(_root, "a"), Path.Combine(_root, "b c")], clientSession: false);
         await HostedRuntimeStage.RequireStoppedAsync(host, TimeSpan.FromSeconds(60), default, clientSession: false);
@@ -115,7 +115,7 @@ public sealed class HostedRuntimeStageTests : IDisposable
         Directory.CreateDirectory(first); Directory.CreateDirectory(second);
         string standIn = Path.Combine(second, "valheim_server.exe");
         File.Copy(Path.Combine(Environment.SystemDirectory, "ping.exe"), standIn);
-        var host = new LocalGameHost("windows-process", HostShell.WindowsPowerShell);
+        var host = new LocalGameHost("windows-process", HostShell.Pwsh);
         using var running = Process.Start(new ProcessStartInfo(standIn, "-n 120 127.0.0.1") { CreateNoWindow = true, UseShellExecute = false, RedirectStandardOutput = true })!;
         try
         {
@@ -318,7 +318,7 @@ public sealed class HostedRuntimeStageTests : IDisposable
     [Fact] public async Task WindowsProfileLinksGameFilesButCopiesItsLoaderAndSelectedMod()
     {
         if (!OperatingSystem.IsWindows()) return;
-        var host = new LocalGameHost("windows-profile", HostShell.WindowsPowerShell);
+        var host = new LocalGameHost("windows-profile", HostShell.Pwsh);
         string source = Path.Combine(_root, "windows-profile-source");
         FakeInstalls.Client(source);
         File.WriteAllText(Path.Combine(source, GameLaunch.ClientWindowsExecutable), "game executable");

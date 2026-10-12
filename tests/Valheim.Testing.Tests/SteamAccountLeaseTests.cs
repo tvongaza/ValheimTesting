@@ -309,8 +309,7 @@ public class RemoteLeaseTests
         get
         {
             var kinds = new TheoryData<string>();
-            foreach (string shell in (Environment.GetEnvironmentVariable("VALHEIM_TESTING_SSH_SHELLS") ?? "bash").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-                kinds.Add("ssh-" + shell);
+            foreach (var shell in LocalGameHostShellTests.Shells) kinds.Add("ssh-" + (string)shell[0]); // the destination is this machine
             return kinds;
         }
     }

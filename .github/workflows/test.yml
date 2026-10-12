@@ -122,7 +122,6 @@ jobs:
           EOF
           dotnet run scripts/native-dependencies.cs -- resolve "$t/request.json" "$t/lock.json"
           dotnet run scripts/native-dependencies.cs -- check "$t/lock.json"
-          dotnet run scripts/pwsh-startup-stress.cs -- --starts 8 --parallel 4 --guard
           code=0; dotnet run --file tools/dev-loop/dev-loop.cs || code=$?
           if [ "$code" != 4 ]; then echo "::error::dev-loop.cs with no arguments exited $code, not 4 (usage)"; exit 1; fi
       - name: Save the NuGet package cache
@@ -180,8 +179,9 @@ jobs:
           retention-days: 14
   ci-shell:
     name: local shell integration (${{ matrix.os }})
-    # These tests start real bash/pwsh processes. They accounted for over half of the toolkit-suite wall time in a local
-    # measurement, so run them beside package validation without dropping any platform or test coverage.
+    # These tests start real shell processes: bash on Linux and macOS, pwsh on Windows, the one shell each OS's hosts run.
+    # They accounted for over half of the toolkit-suite wall time in a local measurement, so run them beside package
+    # validation without dropping any platform or test coverage.
     strategy:
       fail-fast: false
       matrix:
@@ -445,7 +445,7 @@ jobs:
   game-hosts:
     name: game hosts (ssh to localhost, container)
     # Valheim.Testing.Game's SSH and container hosts end to end, without a game: an sshd on 127.0.0.1:2222 that accepts only
-    # a key generated for this run (bash and pwsh sessions, a loopback port forward), and an Ubuntu container on the host
+    # a key generated for this run (bash sessions, a loopback port forward), and an Ubuntu container on the host
     # network driven with docker exec. An Xvfb display on :99 carries the interactive client checks (a stand-in Steam and
     # game), locally and over the ssh. All are removed at the end; .github/scripts/game-hosts.sh sets up and removes the
     # sshd and the display.
@@ -454,7 +454,6 @@ jobs:
     env:
       VALHEIM_TESTING_REQUIRE_HOSTS: '1'
       VALHEIM_TESTING_SSH_PORT: '2222'
-      VALHEIM_TESTING_SSH_SHELLS: bash,pwsh
       VALHEIM_TESTING_CONTAINER: vt-game-host
     steps:
       - uses: actions/checkout@v7

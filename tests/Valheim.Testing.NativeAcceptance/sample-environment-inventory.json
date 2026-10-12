@@ -3,14 +3,14 @@
     "first": {
       "kind": "ssh",
       "platform": "windows",
-      "shell": "powershell",
+      "shell": "pwsh",
       "destination": "operator@first-host.invalid",
       "lock": "C:\\test-locks\\first"
     },
     "second": {
       "kind": "ssh",
       "platform": "windows",
-      "shell": "powershell",
+      "shell": "pwsh",
       "destination": "operator@second-host.invalid",
       "lock": "C:\\test-locks\\second"
     }

@@ -2,7 +2,7 @@ using Valheim.Testing.Game;
 using Xunit;
 using Valheim.Testing.GameSessions;
 
-// The hosted world's scripts in a real shell (bash, Windows PowerShell, pwsh), on a folder standing for a user's worlds_local: a
+// The hosted world's scripts in a real shell (bash, or pwsh on Windows), on a folder standing for a user's worlds_local: a
 // fake host cannot show what the scripts themselves select and refuse.
 public sealed class HostedWorldOnHostShellTests : IDisposable
 {

@@ -95,7 +95,7 @@ public sealed class TargetedRegression
     // What a copy of the prepared install leaves out: everything BepInEx loads or writes besides its core.
     // ValheimCLI's own extension owners are logical command groups in the default plugin.
     private static bool OwnedByCli(string path) => path.StartsWith("valheim.", StringComparison.Ordinal) || path.StartsWith("cli.", StringComparison.Ordinal);
-    private readonly IGameHost _host = new LocalGameHost("this machine", OperatingSystem.IsWindows() ? HostShell.WindowsPowerShell : HostShell.Bash);
+    private readonly IGameHost _host = new LocalGameHost("this machine", HostShell.ThisMachine);
     private readonly RunJournal _journal = RunJournal.ThisProcess;
     private readonly string _lockPath;
     private HostLock? _hostLock;

@@ -153,7 +153,7 @@ public sealed class EnvironmentInventory
         if (local.Kind != "local") return; // A file's own host of that name that is not this machine: Validate judges it as written.
         bool windows = machine.Platform == "windows";
         if (string.IsNullOrEmpty(local.Platform)) local.Platform = machine.Platform;
-        if (string.IsNullOrEmpty(local.Shell)) local.Shell = windows ? "powershell" : "bash";
+        if (string.IsNullOrEmpty(local.Shell)) local.Shell = HostProfile.ShellFor(machine.Platform);
         if (string.IsNullOrEmpty(local.Lock)) _detected.Add("assumed host lock " + (local.Lock = HostPath.Join(machine.DataRoot, "lock")));
         if (!needed) return;
 

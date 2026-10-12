@@ -19,7 +19,7 @@ public sealed class CampaignPreflightTests : IDisposable
     // One Windows host carrying a server environment and a client environment: both actors may share it.
     private string Inventory(bool valid = true) => Write("inventory.json", new
     {
-        hosts = new { pc = new { kind = "ssh", platform = "windows", shell = "powershell", @lock = @"C:\locks\test.lock", destination = "test@pc" } },
+        hosts = new { pc = new { kind = "ssh", platform = "windows", shell = "pwsh", @lock = @"C:\locks\test.lock", destination = "test@pc" } },
         environments = new object[]
         {
             new { name = "pc-server", host = "pc", roles = new[] { "server" }, install = @"C:\game", runtime = @"C:\runs", cliPort = 5577, localCliPort = 6577, gamePort = 2456 },
@@ -119,7 +119,7 @@ public sealed class CampaignPreflightTests : IDisposable
         RunJournalStatusTests.Line(mirror, "run-left", "server", RunJournalStatusTests.Gone, JournalEntry.CopyIntended, ("runtime", "/srv/runs/left/runtime"));
         string serverOnly = Write("server-only.json", new
         {
-            hosts = new { pc = new { kind = "ssh", platform = "windows", shell = "powershell", @lock = @"C:\locks\test.lock", destination = "test@pc" } },
+            hosts = new { pc = new { kind = "ssh", platform = "windows", shell = "pwsh", @lock = @"C:\locks\test.lock", destination = "test@pc" } },
             environments = new object[] { new { name = "pc-server", host = "pc", roles = new[] { "server" }, install = @"C:\server", runtime = @"C:\runs", cliPort = 5577, gamePort = 2456 } },
         });
         using var listed = new StringWriter();
@@ -219,8 +219,8 @@ public sealed class CampaignPreflightTests : IDisposable
             hosts = new Dictionary<string, object>
             {
                 ["here"] = new { kind = "local", platform = HostProfile.CurrentPlatform,
-                    shell = OperatingSystem.IsWindows() ? "powershell" : "bash", @lock = Path.Combine(_root, "host.lock") },
-                ["elsewhere"] = new { kind = "ssh", platform = "windows", shell = "powershell",
+                    shell = OperatingSystem.IsWindows() ? "pwsh" : "bash", @lock = Path.Combine(_root, "host.lock") },
+                ["elsewhere"] = new { kind = "ssh", platform = "windows", shell = "pwsh",
                     @lock = @"C:\locks\test.lock", destination = "test@elsewhere" },
             },
             environments = new object[]
@@ -297,7 +297,7 @@ public sealed class CampaignPreflightTests : IDisposable
         string inventory = Write("local-inventory.json", new
         {
             hosts = new { here = new { kind = "local", platform = HostProfile.CurrentPlatform,
-                shell = OperatingSystem.IsWindows() ? "powershell" : "bash", @lock = Path.Combine(_root, "host.lock") } },
+                shell = OperatingSystem.IsWindows() ? "pwsh" : "bash", @lock = Path.Combine(_root, "host.lock") } },
             environments = new object[]
             {
                 new { name = "local-server", host = "here", roles = new[] { "server" }, install = Path.Combine(_root, "server"),

@@ -177,7 +177,7 @@ internal static class HostProcessProbe
         echo VT-PROC-END
         """;
     internal static readonly string Unix = "if [ \"$(uname -s)\" = Darwin ]; then\n" + Mac + "\nelse\n" + Bash + "\nfi\n";
-    // One CIM query reads every command line at once: each Get-CimInstance call costs about a second on Windows PowerShell.
+    // One CIM query reads every command line at once: each Get-CimInstance call costs about a second on Windows.
     internal static readonly string Windows = """
         $utf8 = New-Object Text.UTF8Encoding $false
         $sha = [Security.Cryptography.SHA256]::Create()

@@ -211,7 +211,7 @@ public sealed class RunRecoveryTests : IDisposable
         if (!OperatingSystem.IsWindows())
             File.CreateSymbolicLink(Path.Combine(local, "personal.fch"), Path.Combine(local, "missing-personal.fch"));
         else File.WriteAllText(Path.Combine(local, "personal.fch"), "personal");
-        var host = new LocalGameHost("this machine", OperatingSystem.IsWindows() ? HostShell.WindowsPowerShell : HostShell.Bash);
+        var host = new LocalGameHost("this machine", HostShell.ThisMachine);
 
         var listing = await HostInstall.ListCaseInsensitiveAsync(host, local, TimeSpan.FromSeconds(10),
             DisposableCharacterStore.OwnedFilePatterns("vt01", HostInstall.LiteralPattern));
@@ -732,7 +732,7 @@ public sealed class RunRecoveryTests : IDisposable
                 ["runner"] = new Dictionary<string, object> { ["machine"] = Gone.Machine, ["pid"] = Gone.Pid, ["startedUtc"] = Gone.StartedUtc.ToString("O") },
             }) + "\n");
         var hosts = new Dictionary<string, HostProfile> { ["this-machine"] = new() { Kind = "local", Lock = Path.Combine(data, "lock") } };
-        var local = OperatingSystem.IsWindows() ? new LocalGameHost("this-machine", HostShell.WindowsPowerShell) : new LocalGameHost("this-machine", HostShell.Bash);
+        var local = new LocalGameHost("this-machine", HostShell.ThisMachine);
 
         var report = await RunRecovery.RecoverAsync(hosts, _ => local, "run-dead", false, TimeSpan.FromSeconds(60));
 
@@ -893,7 +893,7 @@ public sealed class RunRecoveryTests : IDisposable
     // that holds no log of the run makes no folder. Only a prepared copy's logs are kept.
     [Fact] public async Task TheRealKeepScriptKeepsOnlyLogsWrittenSinceTheCopyWasMade()
     {
-        var local = OperatingSystem.IsWindows() ? new LocalGameHost("pc", HostShell.WindowsPowerShell) : new LocalGameHost("pc", HostShell.Bash);
+        var local = new LocalGameHost("pc", HostShell.ThisMachine);
         string runs = Path.Combine(_root, "runs", "env"), runtime = Path.Combine(runs, "vt-prep-run-real-client", "runtime");
         Directory.CreateDirectory(Path.Combine(runtime, "BepInEx"));
         File.WriteAllText(Path.Combine(runtime, "BepInEx", "LogOutput.log"), "bepinex");

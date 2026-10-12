@@ -5,11 +5,11 @@ using Valheim.Testing.GameSessions;
 
 // One rule for links, in its owners (#700): a local install's pins walk the paths a host's listing walks and refuse the same
 // links, and a remote path that must stay apart from or inside a root is decided on the host, resolving links there
-// (ProtectedPaths.BashInside and PowerShellInside), with this machine's own shell: bash, or Windows PowerShell on Windows.
+// (ProtectedPaths.BashInside and PowerShellInside), with this machine's own shell: bash, or pwsh on Windows.
 public sealed class LinkRuleTests : IDisposable
 {
     private readonly string _root = Directory.CreateTempSubdirectory("link-rule-").FullName;
-    private readonly LocalGameHost _host = new("this machine", OperatingSystem.IsWindows() ? HostShell.WindowsPowerShell : HostShell.Bash);
+    private readonly LocalGameHost _host = new("this machine", HostShell.ThisMachine);
     private static readonly TimeSpan Generous = TimeSpan.FromSeconds(60);
     public void Dispose() => DirectoryLinks.DeleteTree(_root);
 
@@ -93,7 +93,7 @@ public sealed class LinkRuleTests : IDisposable
         Assert.Equal("base.txt", Path.GetFileName(Assert.Single(Directory.GetFileSystemEntries(source))));
     }
 
-    // Every shell this machine has: bash, Windows PowerShell on Windows, and pwsh wherever it is installed (on Linux and macOS too).
+    // This machine's one shell: bash, or pwsh on Windows.
     public static TheoryData<string> Shells => LocalGameHostShellTests.Shells;
     private static LocalGameHost Shell(string shell) => new("local-" + shell, HostShell.Parse(shell));
 

@@ -73,7 +73,7 @@ public sealed class ThisMachineTests : IDisposable
         var pc = WindowsPc(out string game, out string server);
         var inventory = EnvironmentInventory.Read(null, pc);
         var local = inventory.Hosts["local"];
-        Assert.Equal(("local", "windows", "powershell", @"C:\Users\tester\AppData\Local\ValheimTesting\lock"), (local.Kind, local.Platform, local.Shell, local.Lock));
+        Assert.Equal(("local", "windows", "pwsh", @"C:\Users\tester\AppData\Local\ValheimTesting\lock"), (local.Kind, local.Platform, local.Shell, local.Lock));
         var serverRecipe = Assert.Single(inventory.Environments, recipe => recipe.Name == "local-server");
         var clientRecipe = Assert.Single(inventory.Environments, recipe => recipe.Name == "local-client");
         Assert.Equal((server, 5688, 2486, @"C:\Users\tester\AppData\Local\ValheimTesting\runs\local-server"),
@@ -193,7 +193,7 @@ public sealed class ThisMachineTests : IDisposable
         string file = Path.Combine(_root, "environments.json");
         File.WriteAllText(file, """
             {
-              "hosts": { "lab": { "kind": "ssh", "platform": "windows", "shell": "powershell", "destination": "tester@lab", "lock": "C:\\vt\\lock" } },
+              "hosts": { "lab": { "kind": "ssh", "platform": "windows", "shell": "pwsh", "destination": "tester@lab", "lock": "C:\\vt\\lock" } },
               "environments": [
                 { "name": "lab-client", "host": "lab", "roles": ["client"], "install": "C:\\Valheim", "runtime": "C:\\vt\\runs", "cliPort": 5590 },
                 { "name": "local-server", "roles": ["server"], "gamePort": 2466 },
@@ -218,7 +218,7 @@ public sealed class ThisMachineTests : IDisposable
         var pc = WindowsPc(out _, out _);
         string file = Path.Combine(_root, "environments.json");
         const string lab = """
-            "hosts": { "lab": { "kind": "ssh", "platform": "windows", "shell": "powershell", "destination": "tester@lab", "lock": "C:\\vt\\lock" } },
+            "hosts": { "lab": { "kind": "ssh", "platform": "windows", "shell": "pwsh", "destination": "tester@lab", "lock": "C:\\vt\\lock" } },
             "environments": [ { "name": "lab-client", "host": "lab", "roles": ["client"], "install": "C:\\Valheim", "runtime": "C:\\vt\\runs", "cliPort": 5590 } ]
             """;
         File.WriteAllText(file, "{" + lab + """, "leaseHost": "lab", "leaseDirectory": "C:\\vt\\leases" }""");
@@ -319,7 +319,7 @@ public sealed class ThisMachineTests : IDisposable
         string file = Path.Combine(_root, "environments.json");
         File.WriteAllText(file, """{ "hosts": { "local": { "kind": "local", "platform": null, "shell": null, "lock": null } }, "environments": [ { "name": "local-client", "roles": ["client"] } ] }""");
         var inventory = EnvironmentInventory.Read(file, pc);
-        Assert.Equal(("windows", "powershell"), (inventory.Hosts["local"].Platform, inventory.Hosts["local"].Shell));
+        Assert.Equal(("windows", "pwsh"), (inventory.Hosts["local"].Platform, inventory.Hosts["local"].Shell));
         File.WriteAllText(file, """{ "hosts": { "local": { "kind": null } }, "environments": [ { "name": "x", "roles": null } ] }""");
         var thrown = Record.Exception(() => EnvironmentInventory.Read(file, pc)); Assert.True(thrown is ArgumentException, thrown?.ToString());
     }

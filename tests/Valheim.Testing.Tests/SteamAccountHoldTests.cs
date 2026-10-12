@@ -14,7 +14,7 @@ internal static class LeaseBox
     public const string Name = "lease-box", Pool = "ci-clients", Account = "vt_client_one", Other = "vt_client_two";
     public const string SteamId = "76561197960265729", OtherSteamId = "76561197960265730";
     public static readonly TimeSpan Timeout = TimeSpan.FromSeconds(60);
-    public static string Shell => OperatingSystem.IsWindows() ? "powershell" : "bash";
+    public static string Shell => OperatingSystem.IsWindows() ? "pwsh" : "bash";
     public static IGameHost Host() => new LocalGameHost(Name, HostShell.Parse(Shell));
     // Under this test process's temp folder: the run journal goes beside the lock, on this real machine.
     public static readonly string Root = Path.Combine(Path.GetTempPath(), "vt-lease-box-" + Environment.ProcessId);
@@ -55,7 +55,7 @@ public sealed class SteamAccountProfileTests : IDisposable
             {
                 [LeaseBox.Name] = LeaseBox.Profile,
                 ["linux-box"] = new { kind = "ssh", platform = "linux", shell = "bash", destination = "tester@linux-box.example", @lock = "/var/tmp/vt/lock" },
-                ["gaming-pc"] = new { kind = "ssh", platform = "windows", shell = "powershell", destination = "tester@gaming-pc.example", @lock = @"C:\vt\lock" },
+                ["gaming-pc"] = new { kind = "ssh", platform = "windows", shell = "pwsh", destination = "tester@gaming-pc.example", @lock = @"C:\vt\lock" },
             },
             ["server"] = server,
             ["clients"] = new Dictionary<string, object> { ["player"] = player },
@@ -128,7 +128,7 @@ public sealed class SteamSignedInUserTests
     [Fact] public async Task AReplyThatDidNotCompleteIsUnknownAndNeverRepeated()
     {
         var fake = new FakeLauncher().TimesOut("VT-STEAMUSER id 76561197960265729\n");
-        var (state, id, detail) = await SteamSignedInUsers.ReadAsync(Host(fake, "powershell"), Timeout, default);
+        var (state, id, detail) = await SteamSignedInUsers.ReadAsync(Host(fake, "pwsh"), Timeout, default);
         Assert.Equal(SteamSignedInState.Unknown, state); Assert.Null(id);
         Assert.Contains("timed out", detail); Assert.DoesNotContain("7656119", detail);
     }
@@ -137,12 +137,12 @@ public sealed class SteamSignedInUserTests
     {
         var fake = new FakeLauncher().Exits(0, "VT-STEAMUSER none\n", FakeLauncher.Report(0)).Exits(0, "VT-STEAMUSER none\n", FakeLauncher.Report(0));
         await SteamSignedInUsers.ReadAsync(Host(fake, "bash"), Timeout, default);
-        await SteamSignedInUsers.ReadAsync(Host(fake, "powershell"), Timeout, default);
+        await SteamSignedInUsers.ReadAsync(Host(fake, "pwsh"), Timeout, default);
         Assert.Contains("loginusers.vdf", FakeLauncher.Script(fake.Calls[0])); Assert.DoesNotContain("ActiveProcess", FakeLauncher.Script(fake.Calls[0]));
         Assert.Contains(@"HKEY_CURRENT_USER\Software\Valve\Steam\ActiveProcess", FakeLauncher.Script(fake.Calls[1]));
     }
 
-    // A loginusers.vdf as Steam writes it, through every local shell on Linux and macOS: the MostRecent user is the second, and
+    // A loginusers.vdf as Steam writes it, through bash on Linux and macOS: the MostRecent user is the second, and
     // its other fields are not read.
     [Fact] public async Task OnLinuxAndMacOSTheMostRecentUserOfLoginusersIsRead()
     {
@@ -214,7 +214,7 @@ public sealed class SteamAccountHoldTests : IDisposable
         object role;
         if (clientHost == "gaming-pc")
         {
-            hosts[clientHost] = new { kind = "ssh", platform = "windows", shell = "powershell", destination = "tester@gaming-pc.example", @lock = @"C:\vt\lock" };
+            hosts[clientHost] = new { kind = "ssh", platform = "windows", shell = "pwsh", destination = "tester@gaming-pc.example", @lock = @"C:\vt\lock" };
             role = new { host = clientHost, install = @"C:\Games\Valheim", runtime = @"C:\vt\runs", cliPort = 5578 };
         }
         else

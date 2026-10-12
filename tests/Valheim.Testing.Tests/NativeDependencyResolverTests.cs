@@ -109,7 +109,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         };
         object Inventory(params object[] environments) => new
         {
-            hosts = hosts.Keys.ToDictionary(name => name, name => new { kind = "ssh", platform = "windows", shell = "powershell",
+            hosts = hosts.Keys.ToDictionary(name => name, name => new { kind = "ssh", platform = "windows", shell = "pwsh",
                 @lock = @"C:\locks\campaign.lock", destination = "test@" + name }),
             environments, leaseHost = "server", leaseDirectory = @"C:\leases",
         };
@@ -335,7 +335,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         {
             hosts = new Dictionary<string, object>
             {
-                ["server"] = new { kind = "ssh", platform = "windows", shell = "powershell", @lock = @"C:\locks\campaign.lock", destination = "test@server" },
+                ["server"] = new { kind = "ssh", platform = "windows", shell = "pwsh", @lock = @"C:\locks\campaign.lock", destination = "test@server" },
                 ["mac"] = new { kind = "ssh", platform = "linux", shell = "bash", @lock = "/locks/campaign.lock", destination = "test@mac" },
             },
             environments = new object[]
@@ -433,7 +433,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         string inventory = Path.Combine(_rig.Root, "six-inventory.json");
         File.WriteAllText(inventory, JsonSerializer.Serialize(new
         {
-            hosts = hosts.Keys.ToDictionary(name => name, name => new { kind = "ssh", platform = "windows", shell = "powershell", @lock = @"C:\locks\six.lock", destination = "test@" + name }),
+            hosts = hosts.Keys.ToDictionary(name => name, name => new { kind = "ssh", platform = "windows", shell = "pwsh", @lock = @"C:\locks\six.lock", destination = "test@" + name }),
             environments = new[] { Recipe("pc-server", "pc", "server", @"C:\game\server", 5577), Recipe("pc-client", "pc", "client", @"C:\game\client", 5578),
                 Recipe("laptop-client", "laptop", "client", @"C:\game\client", 5579) },
             leaseHost = "pc", leaseDirectory = @"C:\leases",
@@ -553,7 +553,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         string inventory = Path.Combine(_rig.Root, $"loader-{tag}-inventory.json");
         File.WriteAllText(inventory, JsonSerializer.Serialize(new
         {
-            hosts = new { pc = new { kind = "ssh", platform = "windows", shell = "powershell", @lock = @"C:\locks\campaign.lock", destination = "test@pc" } },
+            hosts = new { pc = new { kind = "ssh", platform = "windows", shell = "pwsh", @lock = @"C:\locks\campaign.lock", destination = "test@pc" } },
             environments = new[] { new { name = "pc-server", host = "pc", roles = new[] { "server" }, install = @"C:\game\source", runtime = @"C:\runs", cliPort = 5577, localCliPort = 6577, gamePort = 2456 } },
         }));
         string manifest = Path.Combine(_rig.Root, $"loader-{tag}.json");
@@ -624,7 +624,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         string inventory = Path.Combine(_rig.Root, "run-campaign-inventory.json");
         File.WriteAllText(inventory, JsonSerializer.Serialize(new
         {
-            hosts = new { pc = new { kind = "ssh", platform = "windows", shell = "powershell", @lock = @"C:\locks\campaign.lock", destination = "test@pc" } },
+            hosts = new { pc = new { kind = "ssh", platform = "windows", shell = "pwsh", @lock = @"C:\locks\campaign.lock", destination = "test@pc" } },
             environments = new[] { new { name = "pc-server", host = "pc", roles = new[] { "server" }, install = @"C:\game\source", runtime = @"C:\runs", cliPort = 5577, localCliPort = 6577, gamePort = 2456 } },
         }));
         string manifest = Path.Combine(_rig.Root, "run-campaign.json");
@@ -838,7 +838,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         string inventory = Path.Combine(_rig.Root, "cut-campaign-inventory.json");
         File.WriteAllText(inventory, JsonSerializer.Serialize(new
         {
-            hosts = hosts.Keys.ToDictionary(name => name, name => new { kind = "ssh", platform = "windows", shell = "powershell", @lock = @"C:\locks\campaign.lock", destination = "test@" + name }),
+            hosts = hosts.Keys.ToDictionary(name => name, name => new { kind = "ssh", platform = "windows", shell = "pwsh", @lock = @"C:\locks\campaign.lock", destination = "test@" + name }),
             environments = new[] { Environment("server", "server", 5577), Environment("client-a", "client", 5578) }, leaseHost = "server", leaseDirectory = @"C:\leases",
         }));
         string manifest = Path.Combine(_rig.Root, "cut-campaign.json");

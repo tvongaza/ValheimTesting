@@ -119,13 +119,13 @@ internal static class ProcessQuit
 
     private static (bool Sent, string Description) WindowsConsoleControl(int pid, uint controlEvent, string name, TimeSpan deadline)
     {
-        var start = new ProcessStartInfo("powershell.exe") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
+        var start = new ProcessStartInfo("pwsh") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
         foreach (string argument in new[] { "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", WindowsConsoleControlScript }) start.ArgumentList.Add(argument);
         start.Environment["VT_QUIT_PID"] = pid.ToString(CultureInfo.InvariantCulture);
         start.Environment["VT_QUIT_EVENT"] = controlEvent.ToString(CultureInfo.InvariantCulture);
         try
         {
-            using var helper = Process.Start(start) ?? throw new IOException("powershell.exe did not start");
+            using var helper = Process.Start(start) ?? throw new IOException("pwsh did not start");
             var output = helper.StandardOutput.ReadToEndAsync();
             var error = helper.StandardError.ReadToEndAsync();
             int helperWait = WindowsHelperWaitMilliseconds(deadline);
@@ -138,6 +138,11 @@ internal static class ProcessQuit
                 5 => (false, $"{name}: could not install the helper's control handler"),
                 int code => (false, $"{name} helper exited {code}: {(error.Result + output.Result).Trim()}"),
             };
+        }
+        catch (System.ComponentModel.Win32Exception failure) when (failure.NativeErrorCode == 2) // ERROR_FILE_NOT_FOUND
+        {
+            // The helper is pwsh, as every Windows host script is: without it no console event can be sent.
+            return (false, $"{name} helper could not run: {failure.Message}. {HostProfile.MissingPwsh("this machine")}");
         }
         catch (Exception failure) when (failure is IOException or System.ComponentModel.Win32Exception)
         {
