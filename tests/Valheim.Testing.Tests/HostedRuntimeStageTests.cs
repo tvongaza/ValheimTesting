@@ -415,7 +415,8 @@ public sealed class HostedRuntimeStageTests : IDisposable
             "steam_appid.txt", "valheim_server_Data/Managed/assembly_valheim.dll", "valheim_server_Data/globalgamemanagers", "output_log.txt",
         ];
         var plan = HostedRuntimeStage.PlanWindowsProfile(serverListing, HostedRuntimeStage.RuntimeSkips);
-        Assert.Equal(expectedLinks, plan.Links);
+        // Sorted, so two runs on one install record the same text.
+        Assert.Equal(expectedLinks.Order(StringComparer.Ordinal), plan.Links);
         // A case-insensitive host lists the same files in another spelling.
         var spelled = HostedRuntimeStage.PlanWindowsProfile(["TIER0_S64.DLL", "VSTDLIB_S64.dll", "Version.dll"], HostedRuntimeStage.RuntimeSkips);
         Assert.Equal(new[] { "TIER0_S64.DLL", "VSTDLIB_S64.dll" }, spelled.Links);
@@ -435,16 +436,16 @@ public sealed class HostedRuntimeStageTests : IDisposable
         ];
         var plan = HostedRuntimeStage.PlanWindowsProfile(listing, HostedRuntimeStage.RuntimeSkips);
 
-        Assert.Equal(new[] { "newsteamthing64.dll", "crash.log" }, plan.LeftOut.Select(item => item.Path).ToArray());
-        var unknown = plan.LeftOut[0];
+        Assert.Equal(new[] { "crash.log", "newsteamthing64.dll" }, plan.LeftOut.Select(item => item.Path).ToArray());
+        var unknown = plan.LeftOut[1];
         Assert.Contains("unknown root DLL", unknown.Reason);
         Assert.Contains("WindowsGameRootDlls", unknown.Reason);
-        Assert.Equal("a log file", plan.LeftOut[1].Reason);
+        Assert.Equal("a log file", plan.LeftOut[0].Reason);
         Assert.DoesNotContain("newsteamthing64.dll", plan.Links);
         Assert.Contains("valheim_server_Data/Plugins/x86_64/nested.dll", plan.Links);
         // The text a run keeps names the file and the reason.
         string evidence = HostedRuntimeStage.ProfileLeftOut.Describe(plan.LeftOut)!;
-        Assert.StartsWith("newsteamthing64.dll: an unknown root DLL", evidence);
+        Assert.StartsWith("crash.log: a log file; newsteamthing64.dll: an unknown root DLL", evidence);
         Assert.Null(HostedRuntimeStage.ProfileLeftOut.Describe(
             HostedRuntimeStage.PlanWindowsProfile(["valheim.exe", "UnityPlayer.dll", "version.dll", "winhttp.dll"], HostedRuntimeStage.RuntimeSkips).LeftOut));
     }
@@ -459,7 +460,7 @@ public sealed class HostedRuntimeStageTests : IDisposable
         Assert.Contains("crashdumps/a.dmp", stock.Links);
 
         var extended = HostedRuntimeStage.PlanWindowsProfile(listing, [.. HostedRuntimeStage.RuntimeSkips, "crashdumps"]);
-        Assert.Equal(new[] { "valheim.exe", "scratch.bin" }, extended.Links);
+        Assert.Equal(new[] { "scratch.bin", "valheim.exe" }, extended.Links);
         // A skipped root entry is reported with its reason; what lies inside a skipped folder is not listed one by one.
         var skipped = Assert.Single(extended.LeftOut);
         Assert.Equal("crashdumps", skipped.Path);

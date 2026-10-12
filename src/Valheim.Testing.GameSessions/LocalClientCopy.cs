@@ -29,7 +29,7 @@ internal sealed class LocalClientCopy
 
     // The plan as it was before it was bound, restored when the copy is retired: a plan reused later makes a new copy.
     private sealed record Unbound(string Install, InstallPins? InstallPins, Dictionary<string, string> Pins, string? CliManifest,
-        string? LoaderRoot, string? LaunchMode, string? SourceGameRoot, string? SourceGameHash);
+        string? LoaderRoot, string? LaunchMode, string? SourceGameRoot, string? SourceGameHash, string? LeftOut);
 
     private LocalClientCopy(IGameHost host, string actor, string runtime, string stage, string launchRoot, RunJournal journal, ClientRunPlan plan, Unbound unbound)
     { _host = host; _actor = actor; _runtime = runtime; _stage = stage; _launchRoot = launchRoot; _journal = journal; _plan = plan; _unbound = unbound; }
@@ -131,7 +131,7 @@ internal sealed class LocalClientCopy
                 ("files", listing.Files.Count.ToString(CultureInfo.InvariantCulture)), ("source", source),
                 ("launchMode", copyGame ? "copy" : "profile"), ("runtimeKind", "client"), ("launchRoot", gameRoot)));
             var unbound = new Unbound(plan.Install, plan.InstallPins, plan.Pins, plan.CliManifest, plan.PreparedLoaderRoot, plan.PreparedLaunchMode,
-                plan.PreparedSourceGameRoot, plan.PreparedSourceGameHash);
+                plan.PreparedSourceGameRoot, plan.PreparedSourceGameHash, plan.PreparedLeftOut);
             Bind(plan, source, gameRoot, loaderRoot, pins, manifest, manifestPath, setFolder, copyGame, leftOut);
             return new LocalClientCopy(host, actor, runtime, stage, gameRoot, journal, plan, unbound);
         }
@@ -154,7 +154,7 @@ internal sealed class LocalClientCopy
         _plan.Install = _unbound.Install; _plan.InstallPins = _unbound.InstallPins; _plan.Pins = _unbound.Pins; _plan.CliManifest = _unbound.CliManifest;
         _plan.PreparedLoaderRoot = _unbound.LoaderRoot; _plan.PreparedLaunchMode = _unbound.LaunchMode;
         _plan.PreparedSourceGameRoot = _unbound.SourceGameRoot; _plan.PreparedSourceGameHash = _unbound.SourceGameHash;
-        _plan.PreparedLeftOut = null;
+        _plan.PreparedLeftOut = _unbound.LeftOut;
         _plan.CopiedFrom = null; _plan.Prepared = false;
     }
 

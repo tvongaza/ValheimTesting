@@ -67,7 +67,7 @@ internal static partial class HostedRuntimeStage
     {
         var links = new List<string>();
         var leftOut = new List<ProfileLeftOut>();
-        foreach (string path in files)
+        foreach (string path in files.Order(StringComparer.Ordinal))
         {
             bool root = !path.Contains('/');
             string? reason = null;
@@ -91,8 +91,8 @@ internal static partial class HostedRuntimeStage
                     report = false;
                 }
                 else reason = "an unknown root DLL, so it is not linked (a proxy here would load its own chain beside this profile). " +
-                    "If the game needs it, a launch fails inside Steam or Unity start-up: add it to HostedRuntimeStage.WindowsGameRootDlls. " +
-                    "Otherwise nothing to do";
+                    "If the game needs it, a launch fails inside Steam or Unity start-up: report it so the game's root DLL list " +
+                    "(HostedRuntimeStage.WindowsGameRootDlls) gains it. Otherwise nothing to do";
             }
             if (reason == null) links.Add(path);
             else if (report) leftOut.Add(new ProfileLeftOut(path, reason));
@@ -154,7 +154,7 @@ internal static partial class HostedRuntimeStage
         var plan = windows ? PlanWindowsProfile(game.Files.Keys, RuntimeSkips) : new WindowsProfileFiles([], []);
         string[] gameLinks = [.. plan.Links];
         if (plan.LeftOut.Count != 0)
-            Console.WriteLine($"The profile on {host.Name} leaves out {ProfileLeftOut.Describe(plan.LeftOut)}.");
+            Console.WriteLine($"The profile {destination} on {host.Name} leaves out {ProfileLeftOut.Describe(plan.LeftOut)}.");
         string payload = Path.Combine(Path.GetTempPath(), "valheim-profile-stage-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(payload);
         bool shipped = false, created = false;

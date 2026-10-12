@@ -629,7 +629,6 @@ public static class PinnedServerRun
                         name => options.Hooks.CreateHost(inspection.Inputs!.Profile, name), cancellation.Token, campaignPlans, campaignRunId, PreparationCleanup(report), options.Hooks.ShippedLoaderAsync, ShippedLoaderChosen(report), options.CopyGame).ConfigureAwait(false)).ConfigureAwait(false);
                 report.Provenance["campaignLaunchModes"] = prepared!.LaunchModes(options.CopyGame);
                 prepared.RecordProfileLeftOut(report.Provenance);
-            prepared.RecordProfileLeftOut(report.Provenance);
                 if (prepared.Manifest.Server?.SteamRuntimePackage is { } steamPackagePath)
                 {
                     bool remote = prepared.Environment.Hosts[prepared.Environment.Server!.Host].Kind == "ssh";
