@@ -206,13 +206,12 @@ public sealed class FixtureBakeTests : IDisposable
     [Fact]
     public void SymlinkedOutputParentCannotReachProtectedSource()
     {
-        if (OperatingSystem.IsWindows()) return; // Creating a symlink on Windows needs developer mode or privilege.
         string source = Path.Combine(root, "protected");
         Directory.CreateDirectory(source);
         string alias = Path.Combine(root, "alias");
-        Directory.CreateSymbolicLink(alias, source);
+        DirectoryLinks.Create(alias, source);
         Assert.Equal(source, new DirectoryInfo(alias).ResolveLinkTarget(true)?.FullName);
-        Assert.Equal(FixtureBake.PhysicalPath(source), FixtureBake.PhysicalPath(alias));
+        Assert.Equal(ProtectedPaths.Resolve(source), ProtectedPaths.Resolve(alias));
         Assert.Throws<IOException>(() => FixtureBake.RefuseOutput(Path.Combine(alias, "baked"), source));
         Assert.False(Path.Exists(Path.Combine(source, "baked")));
     }
@@ -220,13 +219,12 @@ public sealed class FixtureBakeTests : IDisposable
     [Fact]
     public void ExportRechecksProtectedGameInstallBeforeCreatingItsTemporaryCopy()
     {
-        if (OperatingSystem.IsWindows()) return;
         var input = Source();
         string evidence = Evidence("2", "true");
         string install = Path.Combine(root, "game-install");
         Directory.CreateDirectory(install);
         string alias = Path.Combine(root, "game-alias");
-        Directory.CreateSymbolicLink(alias, install);
+        DirectoryLinks.Create(alias, install);
         Assert.Equal(install, new DirectoryInfo(alias).ResolveLinkTarget(true)?.FullName);
         Assert.Throws<IOException>(() => FixtureBake.Export(evidence, Path.Combine(alias, "baked"), input,
             EmptyBuild(), install));

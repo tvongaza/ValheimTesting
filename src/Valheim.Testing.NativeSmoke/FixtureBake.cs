@@ -40,44 +40,12 @@ internal static class FixtureBake
 
     internal static void RefuseOutput(string destination, params string[] protectedPaths)
     {
-        destination = PhysicalPath(destination);
         if (Path.Exists(destination)) throw new IOException("The baked fixture output must be new: " + destination);
         foreach (string path in protectedPaths)
         {
-            string source = PhysicalPath(path);
-            if (ProtectedPaths.Contains(source, destination) || ProtectedPaths.Contains(destination, source))
+            if (ProtectedPaths.Contains(path, destination) || ProtectedPaths.Contains(destination, path))
                 throw new IOException("The baked fixture output must be separate from the run output, world source and game install: " + destination);
         }
-    }
-
-    // Resolve every existing ancestor, including /tmp -> /private/tmp and Windows junctions.
-    // The final destination need not exist yet.
-    internal static string PhysicalPath(string path)
-    {
-        string full = Path.GetFullPath(path);
-        // A link can point through another link (on macOS, /var -> /private/var).
-        for (int i = 0; i < 16; i++)
-        {
-            string resolved = ResolveExistingLinks(full);
-            if (resolved == full) return resolved;
-            full = resolved;
-        }
-        throw new IOException("The output path has too many symlink levels: " + path);
-    }
-
-    private static string ResolveExistingLinks(string full)
-    {
-        string current = Path.GetPathRoot(full)!;
-        foreach (string part in full[current.Length..].Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries))
-        {
-            current = Path.Combine(current, part);
-            if (Path.Exists(current))
-            {
-                FileSystemInfo info = Directory.Exists(current) ? new DirectoryInfo(current) : new FileInfo(current);
-                current = info.ResolveLinkTarget(returnFinalTarget: true)?.FullName ?? current;
-            }
-        }
-        return Path.GetFullPath(current);
     }
 
     internal static Input Prepare(string? source, string outputRoot)
@@ -91,7 +59,7 @@ internal static class FixtureBake
         source = Path.GetFullPath(source);
         string manifestFile = Path.Combine(Path.GetFileName(source) == "worlds_local" ? Path.GetDirectoryName(source)! : source, "fixture-manifest.json");
         if (Directory.Exists(Path.Combine(source, "worlds_local"))) source = Path.Combine(source, "worlds_local");
-        if (ProtectedPaths.Contains(PhysicalPath(source), PhysicalPath(target)) || ProtectedPaths.Contains(PhysicalPath(target), PhysicalPath(source)))
+        if (ProtectedPaths.Contains(source, target) || ProtectedPaths.Contains(target, source))
             throw new IOException("The world fixture source and disposable run copy must be separate.");
         var identity = WorldIdentity.Read(source);
         var manifest = WorldFixture.Manifest(source);
@@ -147,7 +115,7 @@ internal static class FixtureBake
         params string[] protectedPaths)
     {
         cancellation.ThrowIfCancellationRequested();
-        destination = PhysicalPath(destination);
+        destination = ProtectedPaths.Resolve(destination); // write where the checks looked
         RefuseOutput(destination, new[] { input.Source, evidence }.Concat(protectedPaths).ToArray());
         using var result = JsonDocument.Parse(File.ReadAllText(Path.Combine(evidence, "result.json")));
         var root = result.RootElement;
