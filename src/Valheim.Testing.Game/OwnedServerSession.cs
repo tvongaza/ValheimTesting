@@ -73,9 +73,16 @@ public sealed class StartupEvents
     ];
     /// <summary><see cref="BepInExPluginLoadFailures"/> and <see cref="RuntimeLoadFailures"/>: what the owned server and client startups fail on.</summary>
     public static readonly IReadOnlyList<Regex> StartupFailures = [.. BepInExPluginLoadFailures, .. RuntimeLoadFailures];
-    /// <summary>A client's Steamworks login failure ends startup immediately; dedicated servers keep their own startup rules.</summary>
+    /// <summary>
+    /// A client's Steamworks login failure ends startup immediately; dedicated servers keep their own startup rules. The game
+    /// logs Steamworks.NET's <c>[Steamworks.NET] SteamAPI_Init() failed</c> through Unity, so BepInEx's log carries it on every
+    /// platform. Steam's own <c>[S_API FAIL] SteamAPI_Init() failed; connect to global user failed.</c> (Steam running with no
+    /// user signed in) is printed by Steam's native library to the process's standard error, which this watcher does not read:
+    /// in the macOS runs that hit it (#659) only the standard-error capture had it, and the Steamworks.NET line in BepInEx's
+    /// log ended startup at once. No Windows BepInEx log or Player.log has shown any <c>[S_API</c> line.
+    /// </summary>
     internal static readonly IReadOnlyList<Regex> ClientStartupFailures = [.. StartupFailures,
-        new(@"(?:\[Steamworks\.NET\] SteamAPI_Init\(\) failed|\[S_API FAIL\] SteamAPI_Init\(\) failed; connect to global user failed)", RegexOptions.CultureInvariant)];
+        new(@"\[Steamworks\.NET\] SteamAPI_Init\(\) failed", RegexOptions.CultureInvariant)];
     /// <summary>A pattern that cannot match a log line; use it to watch only for startup failures while awaiting the menu.</summary>
     internal static readonly Regex Never = new(@"(?!)", RegexOptions.CultureInvariant);
     /// <summary>
