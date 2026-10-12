@@ -321,7 +321,7 @@ internal static class RunRecovery
                             // Hash only this character's possible files, including backups. Retirement
                             // removes all of them, so an unexpected backup must block retirement.
                             try { listing = await HostInstall.ListCaseInsensitiveAsync(host, character.Fields["characters"], timeout,
-                                DisposableCharacterStore.OwnedFilePatterns(fileName), cancellation).ConfigureAwait(false); }
+                                DisposableCharacterStore.OwnedFilePatterns(fileName, HostInstall.LiteralPattern), cancellation).ConfigureAwait(false); }
                             catch (DirectoryNotFoundException) { listing = null; }
                             var owned = listing?.Files.Where(file => DisposableCharacterStore.IsCharacterFile(Path.GetFileName(file.Key), fileName)).ToArray() ?? [];
                             if (owned.Length == 0)

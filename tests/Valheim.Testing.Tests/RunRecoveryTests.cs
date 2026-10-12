@@ -214,7 +214,7 @@ public sealed class RunRecoveryTests : IDisposable
         var host = new LocalGameHost("this machine", OperatingSystem.IsWindows() ? HostShell.WindowsPowerShell : HostShell.Bash);
 
         var listing = await HostInstall.ListCaseInsensitiveAsync(host, local, TimeSpan.FromSeconds(10),
-            DisposableCharacterStore.OwnedFilePatterns("vt01"));
+            DisposableCharacterStore.OwnedFilePatterns("vt01", HostInstall.LiteralPattern));
 
         Assert.Equal(2, listing.Files.Count);
         Assert.Contains(listing.Files.Keys, name => name.Equals("vt01.fch", StringComparison.OrdinalIgnoreCase));
