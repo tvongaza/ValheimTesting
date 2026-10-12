@@ -1,0 +1,111 @@
+name: Native server build watch
+# Every four hours: asks Steam (anonymous app_info_print, no download) for the public dedicated-server build id and looks it
+# up in the record of builds that passed (the Actions cache record that native-server-checks.yml saves after a passing run).
+# A build on record ends this run green, with the build id in the summary. A build not on record starts a run of
+# native-server-checks.yml on the same ref, which runs the checks and opens or updates the tracking issue if they fail; if a run
+# this watch started for the same build is still queued or running, the watch names it instead of starting a second one (that
+# run records the build if it passes, otherwise the next watch starts a new one). A watch that cannot read the build id
+# fails red: a blind watch is a failure, not nothing to do. This workflow never builds the image or runs a check itself, so a
+# green run here means only "no new build", "checks already running" or "checks started"; the checks' own result is on their
+# run. The query job holds a read-only token; only the dispatch job holds actions: write, to start the checks. No secrets.
+# Another branch's run also sees the default branch's record, so a test passes cache_scope (the same meaning as in the checks
+# workflow) to start from a record of its own.
+on:
+  schedule:
+    - cron: '53 */4 * * *'
+  workflow_dispatch:
+    inputs:
+      cache_scope:
+        description: 'Testing the watch: a name (a-z, 0-9, -) that keeps the checked-build record apart from the scheduled runs'' record. Leave empty otherwise'
+        type: string
+        default: ''
+permissions:
+  contents: read
+concurrency:
+  group: native-server-watch-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  query:
+    name: public server build id
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      build-id: ${{ steps.query.outputs.build-id }}
+      seen: ${{ steps.seen.outputs.cache-hit }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/actions
+      - name: Checked-build record key
+        id: record
+        uses: ./.github/actions/checked-build-key
+        with:
+          cache_scope: ${{ inputs.cache_scope }}
+      - name: Install SteamCMD
+        timeout-minutes: 5
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends lib32gcc-s1 > /dev/null
+          mkdir -p "$RUNNER_TEMP/steamcmd"
+          curl -fsSL https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz | tar -xz -C "$RUNNER_TEMP/steamcmd"
+      # app_info_print reads the app's metadata only; nothing of the game is downloaded. A hung SteamCMD fails this step at its own deadline instead of holding the job.
+      - name: Ask Steam (anonymous) for the public branch's build id
+        id: query
+        timeout-minutes: 6
+        run: |
+          steamcmd="$RUNNER_TEMP/steamcmd"
+          id=""
+          # SteamCMD updates itself on its first run and may quit before the commands; retry as the image build does.
+          for _ in 1 2 3; do
+            "$steamcmd/steamcmd.sh" +login anonymous +app_info_update 1 +app_info_print 896660 +quit > "$RUNNER_TEMP/app-info.txt" 2>&1 || true
+            id=$(awk '/"branches"/ { branches = 1 } branches && /"public"/ { public = 1 }
+                      public && match($0, /"buildid"[ \t]+"[0-9]+"/) { s = substr($0, RSTART, RLENGTH); gsub(/[^0-9]/, "", s); print s; exit }' "$RUNNER_TEMP/app-info.txt")
+            [ -n "$id" ] && break
+          done
+          if [ -z "$id" ]; then
+            tail -n 30 "$RUNNER_TEMP/app-info.txt"
+            echo "::error::The watch cannot see Steam builds: no public build id for app 896660. A blind watch is a failure."
+            exit 1
+          fi
+          echo "build-id=$id" >> "$GITHUB_OUTPUT"
+          echo "Public dedicated-server build: $id" | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Was this build checked already?
+        id: seen
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ runner.temp }}/server-build-checked
+          key: ${{ steps.record.outputs.prefix }}${{ steps.query.outputs.build-id }}
+          lookup-only: true
+      - name: Build already checked; nothing to do
+        if: steps.seen.outputs.cache-hit == 'true'
+        env:
+          BUILD_ID: ${{ steps.query.outputs.build-id }}
+        run: echo "Build $BUILD_ID already checked; nothing to do." | tee -a "$GITHUB_STEP_SUMMARY"
+  dispatch:
+    name: start the checks
+    needs: query
+    if: needs.query.outputs.seen != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - name: Start the checks for the new build
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          BUILD_ID: ${{ needs.query.outputs.build-id }}
+          CACHE_SCOPE: ${{ inputs.cache_scope }}
+        run: |
+          # The run name is the one the checks workflow gives a run this watch started for this build (and scope).
+          export RUN_NAME="Native server checks: build $BUILD_ID (watch${CACHE_SCOPE:+, scope $CACHE_SCOPE})"
+          active=$(gh run list --workflow native-server-checks.yml --branch "$GITHUB_REF_NAME" --limit 100 --json status,url,displayTitle --jq '[.[] | select(.status != "completed" and .displayTitle == env.RUN_NAME)] | .[0].url // empty')
+          if [ -n "$active" ]; then
+            echo "Build $BUILD_ID is not on record as checked, but a checks run is already active: $active. The next watch looks again." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          args=(-f tracking_issue=open -f "build_id=$BUILD_ID")
+          [ -n "$CACHE_SCOPE" ] && args+=(-f "cache_scope=$CACHE_SCOPE")
+          gh workflow run native-server-checks.yml --ref "$GITHUB_REF_NAME" "${args[@]}"
+          echo "Build $BUILD_ID is not on record as checked; started a run of native-server-checks.yml on $GITHUB_REF_NAME." | tee -a "$GITHUB_STEP_SUMMARY"
