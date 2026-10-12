@@ -20,6 +20,23 @@ internal static class CopiedProgram
         cp.WaitForExit();
         if (cp.ExitCode != 0) throw new IOException($"cp {source} {target} exited {cp.ExitCode}: {error.Trim()}");
     }
+
+    /// <summary>Writes a script stub (its first line names the interpreter) that can be started at once, even while other threads of this process start programs. The owner of every test's stub (#723).</summary>
+    public static void WriteScript(string path, string content)
+    {
+        if (OperatingSystem.IsWindows()) { File.WriteAllText(path, content); return; } // Windows has no such refusal; a test that starts a stub there writes a .cmd itself.
+        // The stub is written to a scratch file this process never starts, and copied by `cp` (see Copy) to its path: this process never holds the stub open.
+        // The mode is set on the finished copy: chmod opens nothing for writing.
+        string scratch = Path.GetTempFileName();
+        try
+        {
+            File.WriteAllText(scratch, content);
+            File.Delete(path);
+            Copy(scratch, path);
+            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+        finally { File.Delete(scratch); }
+    }
 }
 
 // The forking threads would widen the same window for any other test in this process that writes a program and starts it.
@@ -38,6 +55,42 @@ public sealed class CopiedProgramTests : IDisposable
     {
         if (!OperatingSystem.IsLinux()) return; // The copy of `true` runs unsigned only here (macOS kills an unsigned copy of a system program).
         string source = File.Exists("/usr/bin/true") ? "/usr/bin/true" : "/bin/true";
+        WhileOtherThreadsStartPrograms(source, () =>
+        {
+            for (int round = 0; round < 300; round++)
+            {
+                string copy = Path.Combine(_root, "true-" + round);
+                CopiedProgram.Copy(source, copy);
+                StartAndExpectSuccess(copy);
+            }
+        });
+    }
+
+    // The same race for a script stub (#723): written in this process, the stub is "Text file busy" to a start for as long as a forked child holds its descriptor.
+    [Fact] public void AScriptStubStartsWhileOtherThreadsStartPrograms()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+        string source = File.Exists("/usr/bin/true") ? "/usr/bin/true" : "/bin/true";
+        WhileOtherThreadsStartPrograms(source, () =>
+        {
+            for (int round = 0; round < 300; round++)
+            {
+                string stub = Path.Combine(_root, "stub-" + round);
+                CopiedProgram.WriteScript(stub, "#!/bin/sh\nexit 0\n");
+                StartAndExpectSuccess(stub);
+            }
+        });
+    }
+
+    private static void StartAndExpectSuccess(string program)
+    {
+        using var running = Process.Start(new ProcessStartInfo(program) { UseShellExecute = false })!;
+        running.WaitForExit();
+        Assert.Equal(0, running.ExitCode);
+    }
+
+    private static void WhileOtherThreadsStartPrograms(string program, Action body)
+    {
         using var stop = new CancellationTokenSource();
         Exception? forkFailure = null; // a thread's exception would end the whole test host; it is rethrown here instead
         var forkers = Enumerable.Range(0, 4).Select(_ => new Thread(() =>
@@ -46,24 +99,14 @@ public sealed class CopiedProgramTests : IDisposable
             {
                 while (!stop.IsCancellationRequested)
                 {
-                    using var other = Process.Start(new ProcessStartInfo(source) { UseShellExecute = false })!;
+                    using var other = Process.Start(new ProcessStartInfo(program) { UseShellExecute = false })!;
                     other.WaitForExit();
                 }
             }
             catch (Exception failure) { forkFailure = failure; }
         })).ToArray();
         foreach (var forker in forkers) forker.Start();
-        try
-        {
-            for (int round = 0; round < 300; round++)
-            {
-                string copy = Path.Combine(_root, "true-" + round);
-                CopiedProgram.Copy(source, copy);
-                using var running = Process.Start(new ProcessStartInfo(copy) { UseShellExecute = false })!;
-                running.WaitForExit();
-                Assert.Equal(0, running.ExitCode);
-            }
-        }
+        try { body(); }
         finally { stop.Cancel(); foreach (var forker in forkers) forker.Join(); }
         Assert.Null(forkFailure);
     }

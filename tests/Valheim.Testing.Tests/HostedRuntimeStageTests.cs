@@ -33,8 +33,7 @@ public sealed class HostedRuntimeStageTests : IDisposable
         Directory.CreateDirectory(bin);
         string ps = Path.Combine(bin, "ps");
         // As ps -axo pid=,comm= prints it: the ID, then the command.
-        File.WriteAllText(ps, "#!/bin/sh\nprintf '%s\\n' '  4242 " + process + "'\n");
-        File.SetUnixFileMode(ps, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+        CopiedProgram.WriteScript(ps, "#!/bin/sh\nprintf '%s\\n' '  4242 " + process + "'\n"); // not File.WriteAllText: ETXTBSY (#723)
         var start = new ProcessStartInfo("/bin/bash") { RedirectStandardOutput = true, RedirectStandardError = true };
         start.ArgumentList.Add("-c");
         start.ArgumentList.Add(HostedRuntimeStage.BashProcessCheck);

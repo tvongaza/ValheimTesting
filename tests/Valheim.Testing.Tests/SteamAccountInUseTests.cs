@@ -143,8 +143,7 @@ public sealed class SteamAccountInUseTests : IDisposable
         Directory.CreateDirectory(bin);
         foreach (var (name, text) in new[] { ("ps", "printf '%b\\n' '" + processes + "'"), ("id", "echo 501") })
         {
-            File.WriteAllText(Path.Combine(bin, name), "#!/bin/sh\n" + text + "\n");
-            File.SetUnixFileMode(Path.Combine(bin, name), UnixFileMode.UserRead | UnixFileMode.UserExecute);
+            CopiedProgram.WriteScript(Path.Combine(bin, name), "#!/bin/sh\n" + text + "\n"); // not File.WriteAllText: ETXTBSY (#723)
         }
         var start = new ProcessStartInfo("/bin/bash") { RedirectStandardOutput = true, RedirectStandardError = true };
         start.ArgumentList.Add("-c");
