@@ -53,6 +53,8 @@ Each public type in `Valheim.Testing.Game` and `Valheim.Testing.GameSessions` is
 
 Bootstrap builds the pinned ValheimCLI transport into an ignored local package feed. Validation runs the library tests, builds all examples, executes the no-game example (SharedWorld) and packs the libraries. Neither command launches Valheim or requires Unity, Steam, a game install or a test machine. Bootstrap/restore need network access on a fresh checkout. The same lines work in any shell on Windows, macOS and Linux.
 
+**Time limits for test commands.** Every test command `validate.cs` starts, locally and in CI, has a **5-minute soft limit** and a **10-minute hard limit**. Past the soft limit the run keeps going; when it ends, a warning (a `::warning::` annotation in CI) names the command, its duration and its slowest tests: split, refactor or speed it up. Past the hard limit `validate.cs` stops the test host, kills the process tree and fails, naming the tests that started and did not finish. Do not raise either limit to make a run pass; shard or split the tests instead. (`VT_VALIDATE_SOFT_LIMIT_SECONDS` and `VT_VALIDATE_HARD_LIMIT_SECONDS` exist only so the tests of this mechanism can scale the limits down.)
+
 For a quick iteration before the full local check:
 
 ```sh
