@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text;
 
 namespace Valheim.Testing.Game;
 
@@ -24,9 +25,9 @@ internal static class OwnedScreenshot
             string image = Path.Combine(directory, "owned-" + id + ".png");
             string intent = image + ".intent.json";
             if (File.Exists(image) || File.Exists(intent)) continue;
-            if (image.Contains('"') || image.Contains('\n') || image.Contains('\r'))
-                throw new InvalidDataException("The private screenshot path cannot be passed safely to ValheimCLI.");
-            string command = "cli_screenshot \"" + image + "\"" + (supersize == 1 ? "" : " " + supersize);
+            string path64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(image))
+                .TrimEnd('=').Replace('+', '-').Replace('/', '_');
+            string command = "cli_screenshot_path64 " + path64 + (supersize == 1 ? "" : " " + supersize);
             try
             {
                 using var claim = new FileStream(intent, FileMode.CreateNew, FileAccess.Write, FileShare.Read);
