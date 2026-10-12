@@ -58,6 +58,56 @@ public class SshOptionTests
         Assert.Equal(Path.Combine(git, "ssh.exe"), SshGameHost.DefaultSshExecutable("ssh", windows: true, inSshSession: true, programFiles, "local", _ => true).Executable);
     }
 
+    // #690: the default is a bare name; on Windows "ssh.exe" and any capitalisation are the same default.
+    [Theory]
+    [InlineData("ssh")]
+    [InlineData("ssh.exe")]
+    [InlineData("SSH")]
+    [InlineData("Ssh.EXE")]
+    public void TheDefaultNameOnWindowsIsCaseInsensitiveWithOrWithoutExe(string requested)
+    {
+        string programFiles = Path.Combine("root", "Program Files");
+        string git = Path.Combine(programFiles, "Git", "usr", "bin");
+        var inSession = SshGameHost.DefaultSshExecutable(requested, windows: true, inSshSession: true, programFiles, "local", _ => true);
+        Assert.Equal(Path.Combine(git, "ssh.exe"), inSession.Executable);
+        Assert.Throws<InvalidOperationException>(() => SshGameHost.DefaultSshExecutable(requested, windows: true, inSshSession: true, programFiles, "local", _ => false));
+        var outside = SshGameHost.DefaultSshExecutable(requested, windows: true, inSshSession: false, programFiles, "local", _ => true);
+        Assert.Equal(requested, outside.Executable);
+        Assert.Contains("not in an SSH session", outside.Reason);
+    }
+
+    [Theory]
+    [InlineData(@"C:\Windows\System32\OpenSSH\ssh.exe")]
+    [InlineData(@".\ssh.exe")]
+    [InlineData("./ssh")]
+    [InlineData("bin/ssh")]
+    [InlineData("sshx")]
+    public void AnythingElseIsAnExplicitClientEvenInAnSshSession(string requested)
+    {
+        var chosen = SshGameHost.DefaultSshExecutable(requested, windows: true, inSshSession: true, Path.Combine("root", "Program Files"), "local", _ => true);
+        Assert.Equal(requested, chosen.Executable);
+        Assert.Contains("configured", chosen.Reason);
+    }
+
+    [Theory]
+    [InlineData("ssh.exe")]
+    [InlineData("SSH")]
+    public void OffWindowsOnlyTheExactBareNameIsTheDefault(string requested)
+    {
+        var chosen = SshGameHost.DefaultSshExecutable(requested, windows: false, inSshSession: true, Path.Combine("root", "Program Files"), "local", _ => true);
+        Assert.Equal(requested, chosen.Executable);
+        Assert.Contains("configured", chosen.Reason);
+    }
+
+    [Fact] public void TheSshSessionRemedyNamesAKeyFileNotAnAgentTheClientCannotOpen()
+    {
+        string programFiles = Path.Combine("root", "Program Files");
+        var selected = SshGameHost.DefaultSshExecutable("ssh", windows: true, inSshSession: true, programFiles, "local", _ => true);
+        Assert.Contains("named pipe", selected.Reason);
+        Assert.Contains("IdentityFile", selected.Reason);
+        Assert.DoesNotContain("SSH_AUTH_SOCK", selected.Reason);
+    }
+
     [Fact] public void TheChosenClientAndItsReasonAreReportedOnOneLine()
     {
         var host = new SshGameHost("box", "tester@box.example", HostShell.Bash, 0, null, null, "chosen-ssh");

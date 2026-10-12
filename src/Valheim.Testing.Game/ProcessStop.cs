@@ -84,8 +84,7 @@ internal static class ProcessQuit
         // OpenSSH's PowerShell host passes Ctrl+C-disabled state to children. Windows reports the Ctrl+C event as sent,
         // although an SSH-launched target never handles it. Ctrl+Break is not subject to that inherited setting. Choose
         // once from the runner's launch context: switching signals after a delay could interrupt a valid slow world save.
-        return !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("SSH_CONNECTION")) ||
-               !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("SSH_CLIENT"))
+        return SshSession.IsActive()
             ? WindowsCtrlBreak(process.Id, deadline) : WindowsCtrlC(process.Id, deadline);
     }
 
