@@ -68,6 +68,15 @@ jobs:
         run: test ! -e .packages/Valheim.Testing.Cli.0.1.0-preview.0.nupkg
       - name: Seed stale publish files for the packaging regression
         run: dotnet run scripts/tool-pack.cs -- seed
+      # #736 investigation, macOS only; remove it, its stop and upload steps below, .github/scripts/macos-sampler.sh and
+      # validate.cs's heartbeat when #736 closes. The macOS job has lost its runner three times inside the validate step. A
+      # sample of the machine every minute, kept beside validate.cs's transcript, shows what it was doing and which command ran.
+      - name: Sample the machine every minute (macOS, #736)
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p artifacts/ci-diagnostics
+          nohup .github/scripts/macos-sampler.sh artifacts/ci-diagnostics/samples.txt artifacts/validate/validate.log > /dev/null 2>&1 &
+          echo $! > artifacts/ci-diagnostics/sampler.pid
       # CI runs the two slower, local-shell integration classes in a separate three-OS job. Plain local validate still runs
       # them. Normal runs take 3-6 minutes. validate.cs gives every test command a 5-minute soft limit (a warning) and a 10-minute
       # hard limit (killed and failed, naming the tests in flight; #719), so the step timeout is that hard limit plus the
@@ -78,6 +87,9 @@ jobs:
       # PR Windows runs package and consume beside three toolkit jobs; other OSes retain their full non-shell validation.
       - run: dotnet run scripts/validate.cs -- ${{ matrix.os == 'windows-latest' && github.event_name != 'workflow_dispatch' && '--ci-build-only' || '--skip-ci-shell' }}
         timeout-minutes: 15
+        env:
+          # #736: macOS only; one line a minute in the job log, which reaches GitHub while the job runs.
+          VT_VALIDATE_HEARTBEAT_SECONDS: ${{ runner.os == 'macOS' && '60' || '' }}
       - name: Keep Windows test timings for CI profiling
         if: runner.os == 'Windows' && github.event_name == 'workflow_dispatch' && always()
         uses: actions/upload-artifact@v7
@@ -86,6 +98,23 @@ jobs:
           path: artifacts/validate/Valheim.Testing.Tests/timings.trx
           if-no-files-found: ignore
           retention-days: 2
+      - name: Stop the sampler (macOS, #736)
+        if: always() && runner.os == 'macOS'
+        run: |
+          kill "$(cat artifacts/ci-diagnostics/sampler.pid)" 2>/dev/null || true
+          sleep 1
+      # #736: always on macOS. A lost runner never reaches this step, so an absent artifact after a cancel says the machine, not a
+      # test, stopped; otherwise the last sample and the transcript's last "start:" line show what was running and how the machine was.
+      - name: Keep the macOS diagnostics (#736)
+        if: always() && runner.os == 'macOS'
+        uses: actions/upload-artifact@v7
+        with:
+          name: macos-diagnostics
+          path: |
+            artifacts/ci-diagnostics
+            artifacts/validate/validate.log
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Keep the validation transcript
         if: failure() || cancelled()
         uses: actions/upload-artifact@v7
