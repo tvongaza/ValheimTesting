@@ -47,7 +47,9 @@ jobs:
       - name: Refuse candidate, stale and already-published versions
         run: dotnet run scripts/pins.cs -- versions
       - run: dotnet run scripts/bootstrap-cli.cs
+      # The whole serial validation on one runner: a test command ends at its 10-minute hard limit (#719), then packaging.
       - run: dotnet run scripts/validate.cs
+        timeout-minutes: 20
       # The release preparation regenerated the public-api lists; refuse a tag whose lists differ from this build.
       - name: Refuse a stale public API inventory
         run: |

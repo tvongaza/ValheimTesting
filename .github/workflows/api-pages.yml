@@ -42,7 +42,9 @@ jobs:
         with:
           pinned-downloads: true
       - run: dotnet run scripts/bootstrap-cli.cs
+      # The whole serial validation on one runner: a test command ends at its 10-minute hard limit (#719), then packaging.
       - run: dotnet run scripts/validate.cs
+        timeout-minutes: 20
       - run: dotnet tool restore
       - run: dotnet run scripts/api-docs.cs
       - name: Add published 0.1 reference snapshots

@@ -24,7 +24,8 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    # The validate step's bound plus setup, the Linux-only script step and the cache save (see the step comment).
+    timeout-minutes: 25
     permissions:
       contents: read
     env:
@@ -68,12 +69,15 @@ jobs:
       - name: Seed stale publish files for the packaging regression
         run: dotnet run scripts/tool-pack.cs -- seed
       # CI runs the two slower, local-shell integration classes in a separate three-OS job. Plain local validate still runs
-      # them. Normal runs take 3-6 minutes; the step timeout bounds a stuck one. The transcript and test results are kept when the
-      # step fails or is cancelled (#171), and a test run with no progress for five minutes names its unfinished tests.
+      # them. Normal runs take 3-6 minutes. validate.cs gives every test command a 5-minute soft limit (a warning) and a 10-minute
+      # hard limit (killed and failed, naming the tests in flight; #719), so the step timeout is that hard limit plus the
+      # slowest measured rest of the step (about 4 minutes on macOS) and a margin: a hang ends in minutes, not at the old 30.
+      # The transcript and test results are kept when the step fails or is cancelled (#171), and a test run with no progress
+      # for five minutes names its unfinished tests.
       # A manual dispatch keeps the full Windows suite and its TRX timings to refresh ci-test-timings.json.
       # PR Windows runs package and consume beside three toolkit jobs; other OSes retain their full non-shell validation.
       - run: dotnet run scripts/validate.cs -- ${{ matrix.os == 'windows-latest' && github.event_name != 'workflow_dispatch' && '--ci-build-only' || '--skip-ci-shell' }}
-        timeout-minutes: 20
+        timeout-minutes: 15
       - name: Keep Windows test timings for CI profiling
         if: runner.os == 'Windows' && github.event_name == 'workflow_dispatch' && always()
         uses: actions/upload-artifact@v7
@@ -163,6 +167,8 @@ jobs:
           restore-keys: nuget-${{ runner.os }}-
       - run: dotnet run scripts/bootstrap-cli.cs
       - name: Run toolkit shard
+        # One test command: its 10-minute hard limit (validate.cs, #719) plus the data-root guard and the transcript.
+        timeout-minutes: 12
         run: dotnet run scripts/validate.cs -- ${{ matrix.args }}
       - name: Keep shard evidence on failure
         if: failure() || cancelled()
@@ -203,6 +209,8 @@ jobs:
           restore-keys: nuget-${{ runner.os }}-
       - run: dotnet run scripts/bootstrap-cli.cs
       - name: Run the local-shell integration tests
+        # One test command: its 10-minute hard limit (validate.cs, #719) plus the data-root guard and the transcript.
+        timeout-minutes: 12
         run: dotnet run scripts/validate.cs -- --only-ci-shell
       - name: Keep shell-test evidence on failure
         if: failure() || cancelled()
@@ -291,14 +299,16 @@ jobs:
     # Keep in step with examples/ModWithTests/.github/workflows/tests.yml. A copy outside the checkout leaves this
     # repository's NuGet.Config and local feed out of play, so packages restore from NuGet.org only, as in a mod.
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup
       - run: cp -R examples/ModWithTests "$RUNNER_TEMP/mod"
+      # Not started by validate.cs: bound at the 10-minute hard limit of a test command (#719).
       - run: dotnet test MyMod.Tests/MyMod.Tests.csproj -c Release
+        timeout-minutes: 10
         working-directory: ${{ runner.temp }}/mod
   pins:
     name: pins (toolkit-versions.json)
@@ -440,7 +450,7 @@ jobs:
     # game), locally and over the ssh. All are removed at the end; .github/scripts/game-hosts.sh sets up and removes the
     # sshd and the display.
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 15
     env:
       VALHEIM_TESTING_REQUIRE_HOSTS: '1'
       VALHEIM_TESTING_SSH_PORT: '2222'
@@ -461,7 +471,9 @@ jobs:
         # anonymous-pull limits that have stopped this job before any tests ran. Override the runner entrypoint: this
         # container is only a disposable bash host for GameHosts tests, not a self-hosted Actions runner.
         run: docker run -d --rm --name vt-game-host --network host --entrypoint /bin/sleep ghcr.io/actions/actions-runner@sha256:e5496277be5d09bc968b3d64911b74e219ac4a3f2edce956a3ecf9271bea1ef4 1800
+      # Not started by validate.cs, so the step bound is the 10-minute hard limit of a test command (#719); the whole job takes about 3 minutes.
       - run: dotnet test tests/Valheim.Testing.Tests/Valheim.Testing.Tests.csproj -c Release --filter Category=GameHosts
+        timeout-minutes: 10
       - name: Stop the sshd, the display and the container
         if: always()
         run: |
@@ -479,7 +491,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    timeout-minutes: 15
     defaults:
       run:
         shell: bash
@@ -538,7 +550,9 @@ jobs:
           grep -q 'Include="xunit.runner.console"' "$project"
           grep -q 'Valheim.TestRunners.targets' "$project"
           rm "$project.orig"
+      # Not started by validate.cs: the steps that run tests are bound at the 10-minute hard limit of a test command (#719).
       - name: Both frameworks pass
+        timeout-minutes: 10
         working-directory: ${{ runner.temp }}/mod
         run: dotnet build MyMod.Tests/MyMod.Tests.csproj -t:RunTestsOnBothFrameworks
       - name: Add a test that fails only on .NET Framework
@@ -558,6 +572,7 @@ jobs:
           }
           CS
       - name: Negative control
+        timeout-minutes: 10
         working-directory: ${{ runner.temp }}/mod
         run: |
           run() { dotnet build MyMod.Tests/MyMod.Tests.csproj -t:RunTestsOnBothFrameworks "$@" | tee "$RUNNER_TEMP/run.log"; return "${PIPESTATUS[0]}"; }
