@@ -189,11 +189,9 @@ public class SessionTests
     }
     [Fact] public void StartupFailuresKeepThePluginLoadFailures() =>
         Assert.All(StartupEvents.BepInExPluginLoadFailures, failure => Assert.Contains(failure, StartupEvents.StartupFailures));
-    [Theory]
-    [InlineData("[Error  : Unity Log] [Steamworks.NET] SteamAPI_Init() failed. Refer to Valve's documentation.")]
-    [InlineData("[S_API FAIL] SteamAPI_Init() failed; connect to global user failed")]
-    public async Task AClientSteamLoginFailureEndsStartupWithoutWaitingForTheMenu(string line)
+    [Fact] public async Task AClientSteamLoginFailureEndsStartupWithoutWaitingForTheMenu()
     {
+        string line = "[Error  : Unity Log] [Steamworks.NET] SteamAPI_Init() failed. Refer to Valve's documentation.";
         Assert.Contains(StartupEvents.ClientStartupFailures, failure => failure.IsMatch(line));
         Assert.DoesNotContain(StartupEvents.StartupFailures, failure => failure.IsMatch(line)); // a dedicated server has separate rules
         using var log = new TempLog();
@@ -203,6 +201,11 @@ public class SessionTests
             StartupEvents.CliListening, TimeSpan.FromSeconds(5), StartupEvents.ClientStartupFailures));
         Assert.Equal(line, error.LastSeen);
     }
+    // #659: Steam's native "[S_API FAIL]" line goes only to the process's standard error (seen on macOS beside the
+    // Steamworks.NET line, which BepInEx's log carried), never to the BepInEx log the watcher reads, so no pattern names it.
+    [Fact] public void SteamsNativeLoginFailureLineIsNotAWatchedPattern() =>
+        Assert.DoesNotContain(StartupEvents.ClientStartupFailures,
+            failure => failure.ToString().Contains("S_API", StringComparison.Ordinal) || failure.IsMatch("[S_API FAIL] SteamAPI_Init() failed; connect to global user failed."));
     [Fact] public async Task ASteamFailureAfterCliListeningStillEndsTheMenuWait()
     {
         using var log = new TempLog();
