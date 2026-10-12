@@ -152,15 +152,25 @@ public static class EnvironmentRuns
             copyRoots: [Path.GetDirectoryName(path)!]).ConfigureAwait(false);
         var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
         // The same copy named through a link (macOS /var and /private/var) is the same copy.
-        string resolved = OwnedCopies.Resolved(path);
-        bool Same(string other) => string.Equals(Path.TrimEndingDirectorySeparator(other), path, comparison)
-            || string.Equals(OwnedCopies.Resolved(Path.TrimEndingDirectorySeparator(other)), resolved, comparison);
-        if (report.Runs.FirstOrDefault(run => run.Items.Any(item => Same(item.What))) is { } owner)
+        string resolved = ProtectedPaths.Resolve(path);
+        // True when a journalled path is this copy, null when its links cannot be followed (it might be: refused, and said so).
+        bool? Same(string other)
+        {
+            if (string.Equals(Path.TrimEndingDirectorySeparator(other), path, comparison)) return true;
+            try { return string.Equals(ProtectedPaths.Resolve(Path.TrimEndingDirectorySeparator(other)), resolved, comparison); }
+            catch (IOException) { return null; }
+        }
+        if (report.Runs.FirstOrDefault(run => run.Items.Any(item => Same(item.What) == true)) is { } owner)
         {
             output.WriteLine($"REFUSED {path}: run {owner.Run} ({owner.State.ToString().ToUpperInvariant()}) journalled it; use valheim-test env recover|teardown --run {owner.Run}.");
             return false;
         }
-        if (!report.Unjournalled.Any(copy => Same(copy.Path)) && report.Hosts.Any(host => host.Error != null))
+        if (report.Runs.SelectMany(run => run.Items.Where(item => Same(item.What) == null).Select(item => (run.Run, item.What))).FirstOrDefault() is ({ } unsure, { } what))
+        {
+            output.WriteLine($"REFUSED {path}: run {unsure} journalled {what}, whose links cannot be followed, so whether it is this copy is unknown; see valheim-test env status.");
+            return false;
+        }
+        if (!report.Unjournalled.Any(copy => Same(copy.Path) == true) && report.Hosts.Any(host => host.Error != null))
         {
             output.WriteLine($"REFUSED {path}: a journal could not be read, so whether a run owns this copy is unknown.");
             return false;

@@ -115,6 +115,7 @@ internal sealed class FakeServerHost : IGameHost
         ("copy", [HostInstallScripts.Copy, HostInstallScripts.PowerShellCopy]),
         ("list", [HostInstallScripts.BashList, HostInstallScripts.PowerShellList]),
         ("port", [HostInstallScripts.BashPort, HostInstallScripts.PowerShellPort]),
+        ("apart", [HostInstallScripts.BashApart, HostInstallScripts.PowerShellApart]),
         ("start", [HostServerScripts.Start, HostServerScripts.WindowsStart]),
         ("keep", [HostServerScripts.Keep, HostServerScripts.WindowsKeep]),
         ("retire", [HostedRunScripts.Retire, HostedRunScripts.WindowsRetire]),
@@ -176,6 +177,12 @@ internal sealed class FakeServerHost : IGameHost
         switch (name)
         {
             case "machine-name": return Ok("VT-MACHINE " + MachineName + "\n");
+            // As the scripts: the first path that overlaps the root once links are resolved (here in the mirror, by the local rule).
+            case "apart":
+                foreach (string path in v["paths"].Split('\n', StringSplitOptions.RemoveEmptyEntries))
+                    if (ProtectedPaths.Contains(Local(v["root"]), Local(path)) || ProtectedPaths.Contains(Local(path), Local(v["root"])))
+                        return Ok("VT-APART overlap " + Convert.ToBase64String(Encoding.UTF8.GetBytes(path)) + "\n");
+                return Ok("VT-APART ok\n");
             case "mac-agent-retire": return Ok(MacAgentReply);
             case "mac-bundle": return Ok((v["repair"] == "1" ? MacBundleRepair : MacBundleInspect) + "\n");
             case "game-process": return Ok(GameActive ? $"VT-GAME busy {GameProcessIds}\n".Replace(" \n", "\n") : "VT-GAME idle\n");

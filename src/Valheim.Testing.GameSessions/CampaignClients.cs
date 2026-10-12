@@ -158,13 +158,15 @@ internal sealed class CampaignClients
         int n = Interlocked.Increment(ref _clients);
         string runDirectory = HostPath.Join(role.Runtime, RunId), launchDirectory = HostPath.Join(runDirectory, "client-" + n);
         string log = HostPath.Join(loaderRoot, HostedServerRun.BepInExLog);
-        var listing = await HostInstall.ListAsync(host, gameRoot, HostedTimeouts.Long, HostInstall.PinPaths, cancellation).ConfigureAwait(false);
+        var listing = await HostInstall.ListAsync(host, gameRoot, HostedTimeouts.Long, InstallPins.PinPaths, cancellation).ConfigureAwait(false);
         var loader = loaderRoot == gameRoot ? listing :
-            await HostInstall.ListAsync(host, loaderRoot, HostedTimeouts.Long, HostInstall.PinPaths, cancellation).ConfigureAwait(false);
+            await HostInstall.ListAsync(host, loaderRoot, HostedTimeouts.Long, InstallPins.PinPaths, cancellation).ConfigureAwait(false);
         if (plan.Pinned)
             HostInstall.CheckPins(plan.InstallPins ?? throw new ArgumentException("Pin the owned client's game build, loader and patchers in installPins, or opt out explicitly with \"pinning\": \"none\"."), listing, loader, "client install");
         await HostClientPreflight.CheckAsync(host, loaderRoot, platform, plan, HostedTimeouts.Quick, cancellation).ConfigureAwait(false);
         await HostInstall.RequirePortFreeAsync(host, role.CliPort, HostedTimeouts.Quick, cancellation).ConfigureAwait(false);
+        // The first write under the run directory: it must lie outside the install, decided on the host with links resolved there.
+        await HostInstall.RequireApartAsync(host, role.Install, [runDirectory], "the install", HostedTimeouts.Quick, cancellation).ConfigureAwait(false);
         // BepInEx rewrites its log at each start; an earlier one moves aside so the wait from offset 0 sees this start's lines only.
         var moved = (await host.RunAsync(HostedClientScripts.MoveAside(host.Shell.Kind), new Dictionary<string, string>
             { ["log"] = log, ["to"] = HostPath.Join(runDirectory, $"client-{n}.previous-LogOutput.log") }, HostedTimeouts.Quick, cancellation).ConfigureAwait(false))

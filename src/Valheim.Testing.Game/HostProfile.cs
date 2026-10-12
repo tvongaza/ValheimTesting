@@ -102,9 +102,9 @@ internal sealed class GameRole
     {
         string where = "The " + role;
         if (!host.IsAbsolutePath(Install)) errors.Add($"{where}: install must be an absolute path on host '{Host}'.");
+        // Whether the runtime lies outside the install is decided on the host, with links resolved there, when a run prepares its
+        // copy (HostInstall.RequireApartAsync): spelling alone cannot tell (#700).
         if (!host.IsAbsolutePath(Runtime)) errors.Add($"{where}: runtime must be an absolute path on host '{Host}'.");
-        else if (host.IsAbsolutePath(Install) && Inside(Runtime, Install, host.Platform == "windows"))
-            errors.Add($"{where}: runtime must be outside the install, which runs never change.");
         if (CliPort is < 1024 or > 65535) errors.Add($"{where}: cliPort must be 1024 to 65535.");
         if (LocalCliPort != 0 && LocalCliPort is < 1024 or > 65535) errors.Add($"{where}: localCliPort must be 0 or 1024 to 65535.");
         if (host.Kind is "local" or "container" && LocalCliPort != 0 && LocalCliPort != CliPort)
@@ -112,14 +112,6 @@ internal sealed class GameRole
         bool server = role == "server";
         if (server && GamePort is < 1024 or > 65534) errors.Add($"{where}: gamePort must be 1024 to 65534.");
         if (!server && GamePort != 0) errors.Add($"{where}: only the server has a gamePort.");
-    }
-
-    private static bool Inside(string path, string root, bool windows)
-    {
-        var comparison = windows ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
-        string Trim(string value) => windows ? value.Replace('\\', '/').TrimEnd('/') : value.TrimEnd('/');
-        string child = Trim(path), parent = Trim(root);
-        return child.Equals(parent, comparison) || child.StartsWith(parent + "/", comparison);
     }
 }
 

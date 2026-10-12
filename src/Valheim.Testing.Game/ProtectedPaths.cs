@@ -1,6 +1,10 @@
 namespace Valheim.Testing.Game;
 
-/// <summary>The one owner of "is this path inside that protected folder". Every output, install, source and fixture check asks here.</summary>
+/// <summary>
+/// The one owner of "is this path inside that protected folder". Every output, install, source and fixture check asks here:
+/// on this machine through <see cref="Contains"/> and <see cref="Resolve"/>, and on a game host through the script fragments
+/// <see cref="BashInside"/> and <see cref="PowerShellInside"/>, which apply the same rule there, resolving links on the host.
+/// </summary>
 internal static class ProtectedPaths
 {
     private const int MaxLinkHops = 40;
@@ -57,4 +61,111 @@ internal static class ProtectedPaths
 
     private static string[] Parts(string relative) =>
         relative.Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar], StringSplitOptions.RemoveEmptyEntries);
+
+    /// <summary>
+    /// The host side of <see cref="Contains"/> for a bash host, put in front of a host script that needs it. <c>vt_physical PATH</c>
+    /// prints PATH's physical location on the host: each link on the way (one to a file or a directory, dangling or not) is
+    /// followed to its target, an existing directory is what <c>cd -P</c> and <c>pwd -P</c> find (so <c>/tmp</c> is
+    /// <c>/private/tmp</c> on macOS), and a part that does not exist yet is kept as written. It fails on a relative path, a
+    /// <c>.</c> or <c>..</c> in the part that does not exist, a link it cannot read and more than 40 links. <c>vt_inside ROOT
+    /// PATH [fold]</c> succeeds when PATH is ROOT or lies under it once both are resolved; it returns 2 when either cannot be
+    /// resolved, which a caller treats as a refusal. With <c>fold</c> it ignores case on macOS as <see cref="Contains"/> does,
+    /// which errs toward a refusal; a caller that allows something when the path is inside (keeping or removing a file) leaves it
+    /// out, so a case-sensitive volume's other folder is never taken for the copy.
+    /// </summary>
+    internal static readonly string BashInside = """
+        vt_darwin=0; if [ "$(uname -s)" = Darwin ]; then vt_darwin=1; fi
+        vt_physical() {
+            local path=$1 rest="" hops=0 target target_parent
+            case "$path" in /*) ;; *) return 1;; esac
+            while [ "$path" != / ] && [ "${path%/}" != "$path" ]; do path=${path%/}; done
+            while :; do
+                if [ -L "$path" ]; then
+                    hops=$((hops + 1)); [ "$hops" -le 40 ] || return 1
+                    target=$(readlink -- "$path") || return 1
+                    # dirname of /tmp is /: join without doubling the slash (//private/tmp is not /private/tmp to a string compare).
+                    case "$target" in /*) path=$target;; *) target_parent=$(dirname -- "$path"); path=${target_parent%/}/$target;; esac
+                    while [ "$path" != / ] && [ "${path%/}" != "$path" ]; do path=${path%/}; done
+                    continue
+                fi
+                if [ -d "$path" ]; then path=$(cd -P -- "$path" 2> /dev/null && pwd -P) || return 1; break; fi
+                case "${path##*/}" in .|..) return 1;; esac
+                rest=/${path##*/}$rest
+                path=$(dirname -- "$path")
+            done
+            if [ "$path" = / ]; then printf '%s\n' "${rest:-/}"; else printf '%s\n' "$path$rest"; fi
+        }
+        vt_inside() {
+            local root path verdict=1 folded=0 fold=${3:-}
+            root=$(vt_physical "$1") && path=$(vt_physical "$2") || return 2
+            [ "$root" != / ] || return 0
+            shopt -q nocasematch && folded=1
+            if [ "$vt_darwin" = 1 ] && [ "$fold" = fold ]; then shopt -s nocasematch; fi
+            case "$path" in "$root"|"$root"/*) verdict=0;; esac
+            [ "$folded" = 1 ] || shopt -u nocasematch
+            return "$verdict"
+        }
+
+        """.ReplaceLineEndings("\n");
+
+    /// <summary>
+    /// The host side of <see cref="Contains"/> for a PowerShell host (Windows PowerShell 5.1 or PowerShell 7, on any platform).
+    /// <c>Get-VtPhysical $path</c> returns the path's physical location, walked from the root down as <see cref="Resolve"/> walks:
+    /// each symlink or junction met is replaced by its target (a relative one joined to the link's physical parent) and the walk
+    /// continues there, and a part that does not exist yet is kept as written. It
+    /// throws on a relative path, a link whose target it cannot read or that names a volume rather than a path, and more than
+    /// 40 links. <c>Test-VtInside $root $path [-Fold]</c> is true when the path is the root or lies under it once both are
+    /// resolved, compared ignoring case on Windows, and with <c>-Fold</c> on macOS too as <see cref="Contains"/> compares (for a
+    /// refusal only, as <see cref="BashInside"/>'s <c>fold</c>).
+    /// </summary>
+    internal static readonly string PowerShellInside = """
+        function Get-VtPhysical([string]$path) {
+            if (-not [IO.Path]::IsPathRooted($path)) { throw ('Not an absolute path: ' + $path) }
+            $separators = [char[]]@([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
+            $pending = New-Object 'Collections.Generic.Stack[string]'
+            function Push-VtParts([string]$full) {
+                $parts = @($full.Substring([IO.Path]::GetPathRoot($full).Length).Split($separators, [StringSplitOptions]::RemoveEmptyEntries))
+                for ($i = $parts.Count - 1; $i -ge 0; $i--) { $pending.Push($parts[$i]) }
+            }
+            # Windows collapses .. as text before any link is followed, so GetFullPath matches what the system opens there; elsewhere
+            # a .. after a link goes up from the link's target, so the parts are walked as given.
+            $windows = [IO.Path]::DirectorySeparatorChar -eq '\'
+            function Get-VtSpelled([string]$p) { if ($windows) { [IO.Path]::GetFullPath($p) } else { $p } }
+            # Walked from the root down, as ProtectedPaths.Resolve walks: a link's relative target is joined to its physical parent.
+            $full = Get-VtSpelled $path
+            $current = [IO.Path]::GetPathRoot($full)
+            Push-VtParts $full
+            $hops = 0
+            while ($pending.Count -gt 0) {
+                $part = $pending.Pop()
+                if ($part -eq '.') { continue }
+                if ($part -eq '..') { $up = [IO.Path]::GetDirectoryName($current); if ($up) { $current = $up }; continue }
+                $next = [IO.Path]::Combine($current, $part)
+                $attributes = $null
+                try { $attributes = [IO.File]::GetAttributes($next) } catch [IO.FileNotFoundException] { } catch [IO.DirectoryNotFoundException] { }
+                if ($null -eq $attributes -or -not ($attributes -band [IO.FileAttributes]::ReparsePoint)) { $current = $next; continue }
+                $item = Get-Item -LiteralPath $next -Force -ErrorAction Stop
+                if ($item.LinkType -ne 'SymbolicLink' -and $item.LinkType -ne 'Junction') { $current = $next; continue }
+                $target = @($item.Target)[0]
+                if (-not $target -or $target.StartsWith('\\?\') -or $target.StartsWith('Volume{')) { throw ('Cannot follow the link ' + $next) }
+                # Windows PowerShell 5.1 strips only \??\ from a link to a share, leaving UNC\server\share.
+                if ($target.StartsWith('UNC\')) { $target = '\' + $target.Substring(3) }
+                $hops++
+                if ($hops -gt 40) { throw ('More than 40 links in ' + $path + '; it may be a link loop') }
+                $full = Get-VtSpelled ([IO.Path]::Combine($current, $target))
+                $current = [IO.Path]::GetPathRoot($full)
+                Push-VtParts $full
+            }
+            return $current
+        }
+        function Test-VtInside([string]$root, [string]$path, [switch]$Fold) {
+            $sep = [IO.Path]::DirectorySeparatorChar
+            $comparison = if ($sep -eq '\' -or ($IsMacOS -and $Fold)) { [StringComparison]::OrdinalIgnoreCase } else { [StringComparison]::Ordinal }
+            $r = (Get-VtPhysical $root).TrimEnd($sep)
+            $p = (Get-VtPhysical $path).TrimEnd($sep)
+            if (-not $r) { return $true }
+            return ([string]::Equals($p, $r, $comparison) -or $p.StartsWith($r + $sep, $comparison))
+        }
+
+        """.ReplaceLineEndings("\n");
 }

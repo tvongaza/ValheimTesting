@@ -152,7 +152,7 @@ internal static class HostServerChecks
         var pins = InstallPins.Of(source.Path);
         Assert.Equal(pins.Game, HostInstall.CheckPins(pins, listing, "runtime").Game);
         Assert.Equal(ServerPlatform.Linux, HostInstall.DetectServer(listing));
-        var partial = await HostInstall.ListAsync(host, runtime, Generous, HostInstall.PinPaths);
+        var partial = await HostInstall.ListAsync(host, runtime, Generous, InstallPins.PinPaths);
         Assert.DoesNotContain(GameLaunch.ServerLinuxExecutable, partial.Files.Keys);
         Assert.Equal(pins.Loader, HostInstall.Pins(partial).Loader);
 
@@ -282,7 +282,7 @@ internal static class HostServerChecks
             var pins = InstallPins.Of(install.Path);
             var found = HostInstall.Pins(listing);
             Assert.Equal((pins.Game, pins.Loader, pins.Patchers), (found.Game, found.Loader, found.Patchers));
-            var partial = await HostInstall.ListAsync(host, install.Path, Generous, HostInstall.PinPaths);
+            var partial = await HostInstall.ListAsync(host, install.Path, Generous, InstallPins.PinPaths);
             Assert.DoesNotContain("with space é.txt", partial.Files.Keys);
             Assert.Contains("winhttp.dll", partial.Files.Keys);
             Assert.Equal((pins.Game, pins.Loader, pins.Patchers), (HostInstall.Pins(partial).Game, HostInstall.Pins(partial).Loader, HostInstall.Pins(partial).Patchers));
@@ -291,14 +291,14 @@ internal static class HostServerChecks
             {
                 File.Move(Path.Combine(install.Path, "winhttp.dll"), Path.Combine(install.Path, "real-winhttp.dll"));
                 File.CreateSymbolicLink(Path.Combine(install.Path, "winhttp.dll"), Path.Combine(install.Path, "real-winhttp.dll"));
-                var linked = await Assert.ThrowsAsync<IOException>(() => HostInstall.ListAsync(host, install.Path, Generous, HostInstall.PinPaths));
+                var linked = await Assert.ThrowsAsync<IOException>(() => HostInstall.ListAsync(host, install.Path, Generous, InstallPins.PinPaths));
                 Assert.Contains("winhttp.dll", linked.Message);
                 // A named folder that is a link is refused too, never listed as empty (the local pins refuse it alike).
                 File.Delete(Path.Combine(install.Path, "winhttp.dll"));
                 File.Move(Path.Combine(install.Path, "real-winhttp.dll"), Path.Combine(install.Path, "winhttp.dll"));
                 Directory.Move(Path.Combine(install.Path, "doorstop_libs"), Path.Combine(install.Path, "real-libs"));
                 Directory.CreateSymbolicLink(Path.Combine(install.Path, "doorstop_libs"), Path.Combine(install.Path, "real-libs"));
-                var linkedFolder = await Assert.ThrowsAsync<IOException>(() => HostInstall.ListAsync(host, install.Path, Generous, HostInstall.PinPaths));
+                var linkedFolder = await Assert.ThrowsAsync<IOException>(() => HostInstall.ListAsync(host, install.Path, Generous, InstallPins.PinPaths));
                 Assert.Contains("doorstop_libs", linkedFolder.Message);
             }
             await Assert.ThrowsAsync<DirectoryNotFoundException>(() => HostInstall.ListAsync(host, Path.Combine(install.Path, "missing"), Generous));

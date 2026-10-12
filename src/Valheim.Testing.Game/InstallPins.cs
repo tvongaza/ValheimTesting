@@ -109,7 +109,7 @@ public sealed class InstallPins
         {
             Game = GameHash(root),
             Loader = LoaderHash(root),
-            Patchers = DirectoryHash(Path.Combine(root, BepInExLoader.Patchers)),
+            Patchers = PatchersHash(root),
         };
     }
 
@@ -125,7 +125,7 @@ public sealed class InstallPins
         {
             Game = GameHash(gameRoot),
             Loader = LoaderHash(loaderRoot),
-            Patchers = DirectoryHash(Path.Combine(loaderRoot, BepInExLoader.Patchers)),
+            Patchers = PatchersHash(loaderRoot),
         };
     }
 
@@ -207,6 +207,9 @@ public sealed class InstallPins
     }
     private static bool Same(string found, string pinned) => string.Equals(found, pinned, StringComparison.OrdinalIgnoreCase);
 
+    /// <summary>The folders, relative with <c>/</c>, where an install keeps <see cref="GameAssemblyName"/>: a Windows or Linux game, a macOS client bundle, the macOS dedicated server.</summary>
+    internal static readonly string[] ManagedFolders = ["*_Data/Managed", "*.app/Contents/Resources/Data/Managed", "valheim_server/Data/Managed"];
+
     /// <summary>
     /// The game's code assembly under <paramref name="root"/>: <c>*_Data/Managed/assembly_valheim.dll</c>, in a macOS
     /// bundle <c>*.app/Contents/Resources/Data/Managed/assembly_valheim.dll</c>, or in the macOS dedicated server
@@ -215,9 +218,8 @@ public sealed class InstallPins
     public static string GameAssembly(string root)
     {
         root = Path.GetFullPath(root);
-        var found = Directory.EnumerateDirectories(root, "*_Data").Select(data => Path.Combine(data, "Managed", GameAssemblyName))
-            .Concat(Directory.EnumerateDirectories(root, "*.app").Select(bundle => Path.Combine(bundle, "Contents", "Resources", "Data", "Managed", GameAssemblyName)))
-            .Append(Path.Combine(root, "valheim_server", "Data", "Managed", GameAssemblyName))
+        // Walked as a host's listing walks them (FileHash.Named): a linked folder on the way is refused, never entered.
+        var found = ManagedFolders.SelectMany(folder => FileHash.Named(root, folder)).Select(managed => Path.Combine(managed, GameAssemblyName))
             .Where(File.Exists).Order(StringComparer.Ordinal).ToList();
         if (found.Count == 1) return found[0];
         if (found.Count == 0) throw new FileNotFoundException($"No game assembly ({GameAssemblyName} in a *_Data/Managed folder) under {root}.", root);
@@ -264,14 +266,29 @@ public sealed class InstallPins
     internal static IEnumerable<string> LoaderEntries => LoaderRootFiles.Concat(LoaderFolders);
     private static readonly string LoaderFilesText = string.Join(", ", LoaderEntries.SkipLast(1)) + " and " + LoaderEntries.Last();
 
-    /// <summary>The loader files (<see cref="IsLoaderFile"/>) under the install at <paramref name="root"/>, as full paths; a link among them is refused.</summary>
+    /// <summary>
+    /// What a listing for the pins covers, relative with <c>/</c>: the Managed folders, the loader's files and folders and
+    /// <c>BepInEx/patchers</c>. A host's listing for the pins lists these, and this machine's pins walk the same paths with the
+    /// same rule (<see cref="FileHash.Named"/>), so both refuse the same links.
+    /// </summary>
+    internal static readonly string[] PinPaths = [.. ManagedFolders, .. LoaderRootFiles, .. LoaderFolders, PatchersFolder];
+    private const string PatchersFolder = "BepInEx/patchers";
+
+    /// <summary>
+    /// The loader files (<see cref="IsLoaderFile"/>) under the install at <paramref name="root"/>, as full paths; a link among
+    /// them, or on the way to one (a linked <c>BepInEx</c>), is refused.
+    /// </summary>
     internal static IEnumerable<string> LoaderFiles(string root) =>
-        LoaderRootFiles.Concat(LoaderFolders).Select(entry => Path.Combine(root, entry.Replace('/', Path.DirectorySeparatorChar)))
-            .Where(path => File.Exists(path) || Directory.Exists(path) || new FileInfo(path).LinkTarget != null)
-            .SelectMany(path => { FileHash.RefuseLink(path); return Directory.Exists(path) ? FileHash.Files(path) : [path]; });
+        LoaderEntries.SelectMany(entry => FileHash.Named(root, entry))
+            .SelectMany(path => Directory.Exists(path) ? FileHash.Files(path) : [path]);
 
     /// <summary>The <see cref="Loader"/> value of the install at <paramref name="root"/>: the listing hash of its loader files, relative to the root.</summary>
     public static string LoaderHash(string root) => FileHash.Listing(Path.GetFullPath(root), LoaderFiles(Path.GetFullPath(root)));
+
+    // BepInEx/patchers under an install or profile, walked as its listing walks it: a linked BepInEx is refused, and an absent
+    // folder hashes the empty listing.
+    private static string PatchersHash(string root) =>
+        FileHash.Named(root, PatchersFolder) is [var patchers] ? DirectoryHash(patchers) : FileHash.Listing(root, []);
 
     /// <summary>
     /// The SHA256 of a folder's listing (<see cref="FileHash.Listing(string, IEnumerable{string})"/>); an empty or absent

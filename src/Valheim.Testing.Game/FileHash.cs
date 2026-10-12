@@ -67,14 +67,60 @@ public static class FileHash
     }
 
     /// <summary>
+    /// The entries under <paramref name="root"/> that <paramref name="pattern"/> names (relative, <c>/</c> separators, <c>*</c>
+    /// and <c>?</c> allowed in a segment), walked one segment at a time as a host's listing walks a pattern
+    /// (<c>HostInstall.ListAsync</c>): a linked directory on the way to the named entry is refused, never entered, and a named
+    /// entry that is a link is refused whether or not its target exists (<see cref="RefuseLink"/>). A link on the way that leads
+    /// nowhere has nothing to enter and names nothing. The root itself may be a link, such as <c>/tmp</c>: the rule applies below it.
+    /// </summary>
+    internal static IReadOnlyList<string> Named(string root, string pattern)
+    {
+        var current = new List<string> { root };
+        string[] segments = pattern.Split('/');
+        for (int i = 0; i < segments.Length && current.Count != 0; i++)
+        {
+            bool last = i == segments.Length - 1;
+            var next = new List<string>();
+            foreach (string directory in current)
+            {
+                IEnumerable<string> candidates = segments[i].IndexOfAny(['*', '?']) >= 0
+                    ? Directory.EnumerateFileSystemEntries(directory, segments[i]).Order(StringComparer.Ordinal)
+                    : [Path.Combine(directory, segments[i])];
+                foreach (string candidate in candidates)
+                {
+                    if (last) { RefuseLink(candidate); if (File.Exists(candidate) || Directory.Exists(candidate)) next.Add(candidate); }
+                    else if (!IsLink(candidate)) { if (Directory.Exists(candidate)) next.Add(candidate); }
+                    else if (LeadsToDirectory(candidate)) throw new IOException("Links are unsupported: " + candidate);
+                }
+            }
+            current = next;
+        }
+        return current;
+    }
+
+    /// <summary>
     /// Refuses <paramref name="path"/> when it is a link (any reparse point, a symbolic link included, whether or not its
     /// target exists), as a host's listing refuses one; a pinned file or folder is hashed as itself, never through a link.
     /// </summary>
     internal static void RefuseLink(string path)
     {
+        if (IsLink(path)) throw new IOException("Links are unsupported: " + path);
+    }
+
+    private static bool IsLink(string path)
+    {
         var info = new FileInfo(path);
-        if (info.LinkTarget != null || ((info.Exists || Directory.Exists(path)) && (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0))
-            throw new IOException("Links are unsupported: " + path);
+        return info.LinkTarget != null || ((info.Exists || Directory.Exists(path)) && (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0);
+    }
+
+    // Whether a link on the way to a named path leads to a directory, so a walk would enter it, as this platform's host listing
+    // decides it (bash's -d, PowerShell's open on Windows): a dangling link or one to a file leads nowhere to enter. A reparse
+    // point that is not a name link, or a link whose target cannot be followed (a loop), is a directory when the system says so
+    // (on Windows a junction always is, so it is refused as the listing refuses an unlistable one; a looping symlink elsewhere is not).
+    private static bool LeadsToDirectory(string link)
+    {
+        try { return new DirectoryInfo(link).ResolveLinkTarget(returnFinalTarget: true) is { } target ? target.Exists : Directory.Exists(link); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { return Directory.Exists(link); }
     }
 
     /// <summary>

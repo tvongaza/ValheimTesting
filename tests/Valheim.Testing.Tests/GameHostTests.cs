@@ -514,8 +514,6 @@ public class ResolvedEnvironmentTests
                 "\"host\": \"linux-box\", \"install\": \"/opt/valheim/client\", \"runtime\": \"/srv/vt/client\", \"cliPort\": 5577", "same ValheimCLI port 5577 on host 'linux-box'")]
     [InlineData("\"lock\": \"/var/tmp/valheim-testing.lock\"", "\"lock\": \"var/tmp/lock\"", "lock must be an absolute path")]
     [InlineData("\"lock\": \"C:\\\\ValheimTesting\\\\lock\"", "\"lock\": \"/ValheimTesting/lock\"", "lock must be an absolute path")]
-    [InlineData("\"runtime\": \"/srv/valheim-testing/runs\"", "\"runtime\": \"/opt/valheim/server/runs\"", "outside the install")]
-    [InlineData("\"runtime\": \"D:/ValheimTesting/runs\"", "\"runtime\": \"c:\\\\games\\\\valheim\\\\runs\"", "outside the install")]
     [InlineData("\"destination\": \"tester@linux-box.example\", ", "", "needs a destination")]
     [InlineData("\"shell\": \"powershell\"", "\"shell\": \"cmd\"", "shell must be")]
     [InlineData("\"kind\": \"container\", \"platform\": \"linux\", \"shell\": \"bash\"", "\"kind\": \"container\", \"platform\": \"linux\", \"shell\": \"powershell\"", "only on Windows")]

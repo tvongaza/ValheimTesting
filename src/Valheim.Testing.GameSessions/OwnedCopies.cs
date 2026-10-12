@@ -96,30 +96,15 @@ public static class OwnedCopies
     {
         var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
         // The system reports an executable's path with links resolved (on macOS /private/var/... for /var/...): match either form.
-        string[] forms = [copy + System.IO.Path.DirectorySeparatorChar, Resolved(copy) + System.IO.Path.DirectorySeparatorChar];
+        string resolved = ProtectedPaths.Resolve(copy);
+        string[] forms = [copy + System.IO.Path.DirectorySeparatorChar, resolved + System.IO.Path.DirectorySeparatorChar];
         var users = processes.Where(process => forms.Any(form => process.Executable.StartsWith(form, comparison)))
             .Select(process => process.Pid).Append(LiveOwner(copy) ?? -1)
             // The run that made the copy holds it while its process runs (this machine's journal), before any game runs from it.
-            .Append(holders.TryGetValue(copy, out int holder) || holders.TryGetValue(Resolved(copy), out holder) ? holder : -1)
+            .Append(holders.TryGetValue(copy, out int holder) || holders.TryGetValue(resolved, out holder) ? holder : -1)
             .Where(pid => pid >= 0).Distinct().Order().ToList();
         var (result, passed) = RunResult(copy, root);
         return new(copy, KindOf(copy), DiskSpace.DirectoryBytes(copy), File.GetLastWriteTimeUtc(System.IO.Path.Combine(copy, Provenance)), users, result, passed);
-    }
-
-    // The path with every linked component resolved, as the system names a running executable. Windows paths stay as given.
-    internal static string Resolved(string path, int depth = 0)
-    {
-        path = System.IO.Path.GetFullPath(path);
-        if (OperatingSystem.IsWindows() || depth > 32) return path; // 32 links deep is a loop
-        string current = System.IO.Path.GetPathRoot(path)!;
-        foreach (string part in path[current.Length..].Split(System.IO.Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries))
-        {
-            current = System.IO.Path.Combine(current, part);
-            // A link's target may itself pass through links (a link to /var/... on macOS): resolve the target in turn.
-            try { if (new FileInfo(current).ResolveLinkTarget(returnFinalTarget: true) is { } target) current = Resolved(target.FullName, depth + 1); }
-            catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
-        }
-        return current;
     }
 
     // The process that made the copy and still holds it (WorldFixture's owner record), when that process still runs: the

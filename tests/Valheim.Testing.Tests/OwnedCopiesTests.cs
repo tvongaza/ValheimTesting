@@ -8,7 +8,7 @@ public sealed class OwnedCopiesTests : IDisposable
 {
     private readonly string _root = Path.Combine(Path.GetTempPath(), "owned-copies-" + Guid.NewGuid().ToString("N"));
     private string Runs => Path.Combine(_root, "runs");
-    public void Dispose() { OwnedCopies.ProcessesOverride = null; if (Directory.Exists(_root)) Directory.Delete(_root, true); }
+    public void Dispose() { OwnedCopies.ProcessesOverride = null; if (Directory.Exists(_root)) DirectoryLinks.DeleteTree(_root); }
 
     private string Source(string name, params string[] files)
     {
@@ -120,7 +120,7 @@ public sealed class OwnedCopiesTests : IDisposable
         Assert.Contains($"run {RunJournal.ThisProcess.RunId} (LIVE) journalled it", output.ToString());
         // Named through a link (on macOS the temp folder is /var, which is /private/var), it is still that run's.
         output = new StringWriter();
-        Assert.Equal(3, await EnvCommand.RunAsync(["teardown", "--copy", OwnedCopies.Resolved(held.DirectoryPath), "--inventory", inventory], output, new StringWriter()));
+        Assert.Equal(3, await EnvCommand.RunAsync(["teardown", "--copy", ProtectedPaths.Resolve(held.DirectoryPath), "--inventory", inventory], output, new StringWriter()));
         Assert.Contains("journalled it", output.ToString());
         Assert.True(Directory.Exists(held.DirectoryPath));
 
@@ -198,19 +198,21 @@ public sealed class OwnedCopiesTests : IDisposable
         Assert.False(Directory.Exists(copy));
     }
 
-    // A copy named through a linked directory (macOS's /var is /private/var) is matched to the program running from it.
+    // A copy named through a linked directory (macOS's /var is /private/var, a junction on Windows) is matched to the program
+    // running from it: the copy's path is resolved by the one local resolver (ProtectedPaths), on every platform (#700).
     [Fact] public void ACopyReachedThroughALinkStillMatchesItsProgram()
     {
-        if (OperatingSystem.IsWindows()) return; // the system names Windows executables as given; links there need privileges
         string real = Path.Combine(_root, "real"), linked = Path.Combine(_root, "linked");
         string copy = Path.Combine(real, "valheim-test-" + new string('c', 32));
         Directory.CreateDirectory(copy);
         File.WriteAllText(Path.Combine(copy, "fixture-provenance.json"), "{}");
-        Directory.CreateSymbolicLink(linked, real);
+        DirectoryLinks.Create(linked, real);
         // The system names the executable with every link resolved, this test's temp root included.
-        OwnedCopies.ProcessesOverride = () => [(99, Path.Combine(OwnedCopies.Resolved(copy), "valheim_server.x86_64"))];
-        Assert.DoesNotContain("linked", OwnedCopies.Resolved(Path.Combine(linked, "valheim-test-" + new string('c', 32))));
-        Assert.Equal(new[] { 99 }, Assert.Single(OwnedCopies.Find(Path.Combine(linked))).InUseBy);
+        OwnedCopies.ProcessesOverride = () => [(99, Path.Combine(ProtectedPaths.Resolve(copy), "valheim_server.x86_64"))];
+        Assert.DoesNotContain("linked", ProtectedPaths.Resolve(Path.Combine(linked, "valheim-test-" + new string('c', 32))));
+        var found = Assert.Single(OwnedCopies.Find(linked));
+        Assert.StartsWith(linked, found.Path); // listed where it was looked for
+        Assert.Equal(new[] { 99 }, found.InUseBy);
     }
 
     // The real process list: a program running from inside a copy makes it in use, on every platform.
@@ -220,7 +222,7 @@ public sealed class OwnedCopiesTests : IDisposable
     {
         var comparer = OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
         var own = OwnedCopies.Processes().Where(process => process.Pid == Environment.ProcessId).ToList();
-        Assert.Equal(OwnedCopies.Resolved(Environment.ProcessPath!), OwnedCopies.Resolved(Assert.Single(own).Executable), comparer);
+        Assert.Equal(ProtectedPaths.Resolve(Environment.ProcessPath!), ProtectedPaths.Resolve(Assert.Single(own).Executable), comparer);
     }
 
     [Fact] public void AProgramRunningFromACopyMakesItInUse()
