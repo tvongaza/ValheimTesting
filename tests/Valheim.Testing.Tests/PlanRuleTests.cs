@@ -150,6 +150,22 @@ public sealed class PlanRuleTests
         plan.CheckOutput(Path.Combine(root, "world-run")); // Shares the source's name as a prefix, but is a sibling.
         plan.CheckOutput(Path.Combine(root, "runs", "new"));
     }
+    [Fact] public void OutputThroughAnAliasOfEitherPinnedSourceIsRefused()
+    {
+        var plan = Valid();
+        string root = Path.Combine(Path.GetTempPath(), "plan-rules-" + Guid.NewGuid().ToString("N"));
+        plan.Runtime.Source = Path.Combine(root, "runtime"); plan.World.Source = Path.Combine(root, "world");
+        Directory.CreateDirectory(plan.Runtime.Source); Directory.CreateDirectory(plan.World.Source);
+        try
+        {
+            string runtimeAlias = Path.Combine(root, "runtime-alias"), worldAlias = Path.Combine(root, "world-alias");
+            DirectoryLinks.Create(runtimeAlias, plan.Runtime.Source); DirectoryLinks.Create(worldAlias, plan.World.Source);
+            Assert.Throws<ArgumentException>(() => plan.CheckOutput(Path.Combine(runtimeAlias, "run")));
+            Assert.Throws<ArgumentException>(() => plan.CheckOutput(Path.Combine(worldAlias, "run")));
+            plan.CheckOutput(Path.Combine(root, "runs", "new"));
+        }
+        finally { DirectoryLinks.DeleteTree(root); }
+    }
     [Fact] public void LinuxAbsoluteSourcesAreAcceptedOnUnixHosts()
     {
         if (OperatingSystem.IsWindows()) return; // Sources are local to the runner's host; Windows has no rooted '/' form.

@@ -10,7 +10,8 @@ internal static class DirectoryLinks
         if (!OperatingSystem.IsWindows()) { Directory.CreateSymbolicLink(alias, target); return; }
         using var mklink = Process.Start(new ProcessStartInfo("cmd.exe", $"/c mklink /J \"{alias}\" \"{target}\"")
             { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false })!;
-        string output = mklink.StandardOutput.ReadToEnd() + mklink.StandardError.ReadToEnd();
+        var error = mklink.StandardError.ReadToEndAsync();
+        string output = mklink.StandardOutput.ReadToEnd() + error.GetAwaiter().GetResult();
         mklink.WaitForExit();
         if (mklink.ExitCode != 0) throw new IOException("Could not create junction " + alias + ": " + output);
     }

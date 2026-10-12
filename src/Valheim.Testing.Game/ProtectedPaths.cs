@@ -43,9 +43,9 @@ internal static class ProtectedPaths
             // A dangling link is still a link: its target may be a protected folder that is created later.
             if (!info.Exists && info.LinkTarget == null) continue;
             try { current = info.ResolveLinkTarget(returnFinalTarget: true)?.FullName ?? current; }
-            catch (IOException error)
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
             {
-                throw new IOException($"Cannot resolve the symlink or junction {current} in {given}; it may be a link loop.", error);
+                throw new IOException($"Cannot resolve the symlink or junction {current} in {given}; it may be a link loop or unreadable.", error);
             }
         }
         return Path.GetFullPath(current);

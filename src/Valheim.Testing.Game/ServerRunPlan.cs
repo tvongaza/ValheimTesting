@@ -163,14 +163,9 @@ public partial class ServerRunPlan
             .Check(runtime, "runtime");
     public void CheckOutput(string output)
     {
-        output = Path.GetFullPath(output);
-        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
         foreach (string source in new[] { Runtime.Source, World.Source })
-        {
-            string full = Path.TrimEndingDirectorySeparator(Path.GetFullPath(source));
-            if (output.Equals(full, comparison) || output.StartsWith(full + Path.DirectorySeparatorChar, comparison))
+            if (ProtectedPaths.Contains(source, output))
                 throw new ArgumentException("Output must be outside both pinned sources.");
-        }
     }
     /// <summary>The strict <c>cli_expect</c> command, or <see cref="EnvironmentPinning.None"/> for an unpinned plan (see <see cref="GameActor.VerifyEnvironment"/>).</summary>
     public string ExpectCommand => !Pinned ? EnvironmentPinning.None :
