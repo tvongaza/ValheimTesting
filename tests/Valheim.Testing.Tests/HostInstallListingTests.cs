@@ -21,7 +21,7 @@ public sealed class HostInstallListingTests : IDisposable
             File.WriteAllText(Path.Combine(_root, "save", name), name);
     }
 
-    public void Dispose() => Directory.Delete(_root, recursive: true);
+    public void Dispose() => DirectoryLinks.DeleteTree(_root);
 
     [Fact]
     public void ListingPatternsUseSlashSeparators() =>
@@ -105,5 +105,93 @@ public sealed class HostInstallListingTests : IDisposable
         var error = await Assert.ThrowsAsync<IOException>(() => HostInstall.ListCaseInsensitiveAsync(_host, _root, TimeSpan.FromSeconds(20), ["SAVE/link.FCH"]));
 
         Assert.Contains("link.fch", error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    // A link in an earlier segment is the same escape as a named link: the listing must not hash what lies outside the root.
+    // The bash walk (either case mode) and the PowerShell walk each refuse it (this machine runs its own).
+    private string LinkedDirectoryOutsideTheRoot()
+    {
+        string outside = Directory.CreateTempSubdirectory("host-listing-outside-").FullName;
+        try
+        {
+            File.WriteAllText(Path.Combine(outside, "Name.fch"), "outside");
+            DirectoryLinks.Create(Path.Combine(_root, "linked"), outside);
+            Directory.CreateDirectory(Path.Combine(_root, "a", "b"));
+            DirectoryLinks.Create(Path.Combine(_root, "a", "b", "linked"), outside);
+            return outside;
+        }
+        catch { Directory.Delete(outside, recursive: true); throw; }
+    }
+
+    // Refused wherever the link sits before the last segment, and whether or not anything lies behind it.
+    [Theory]
+    [InlineData("linked/Name.fch"), InlineData("lin*/Name.fch"), InlineData("linke?/*.fch"), InlineData("linked/missing.fch"),
+     InlineData("a/b/linked/Name.fch"), InlineData("a/*/linke?/*.fch"), InlineData("a/b/linked/missing"), InlineData("linked")]
+    public async Task APatternThroughALinkedDirectoryIsRefused(string pattern)
+    {
+        string outside = LinkedDirectoryOutsideTheRoot();
+        try
+        {
+            var sensitive = await Assert.ThrowsAsync<IOException>(() => HostInstall.ListAsync(_host, _root, TimeSpan.FromSeconds(20), [pattern]));
+            Assert.Contains("linked", sensitive.Message);
+            var insensitive = await Assert.ThrowsAsync<IOException>(() => HostInstall.ListCaseInsensitiveAsync(_host, _root, TimeSpan.FromSeconds(20), [pattern.ToUpperInvariant()]));
+            Assert.Contains("linked", insensitive.Message, StringComparison.OrdinalIgnoreCase);
+        }
+        finally { Directory.Delete(outside, recursive: true); }
+    }
+
+    [Fact]
+    public async Task ALinkIsReportedOnceHoweverManyPatternsAndFilesLieBehindIt()
+    {
+        string outside = LinkedDirectoryOutsideTheRoot();
+        try
+        {
+            for (int i = 0; i < 6; i++) File.WriteAllText(Path.Combine(outside, $"More{i}.fch"), "more");
+            var error = await Assert.ThrowsAsync<IOException>(() => HostInstall.ListAsync(_host, _root, TimeSpan.FromSeconds(20),
+                ["linked/*.fch", "linked/Name.fch", "linked/More1.fch", "linked/More2.fch", "a/b/linked/*.fch"]));
+            Assert.Equal(2, error.Message.Split("linked").Length - 1);
+        }
+        finally { Directory.Delete(outside, recursive: true); }
+    }
+
+    // A link with no directory behind it has nothing to enter, so it is not "on the way": the pattern lists what it names, as
+    // it would with no link beside it (the bash and PowerShell walks agree).
+    [Fact]
+    public async Task ADanglingDirectoryLinkBesideTheWayIsNotInTheWay()
+    {
+        string gone = Directory.CreateTempSubdirectory("host-listing-gone-").FullName;
+        DirectoryLinks.Create(Path.Combine(_root, "old"), gone);
+        Directory.Delete(gone);
+        Assert.Equal(["save/Name.fch"], (await HostInstall.ListAsync(_host, _root, TimeSpan.FromSeconds(20), ["*/Name.fch"])).Files.Keys);
+        Assert.Contains("save/Name.fch", (await HostInstall.ListAsync(_host, _root, TimeSpan.FromSeconds(20), ["*/*.fch"])).Files.Keys);
+        await AssertListsAsync(["save/Name.fch"], "*/NAME.fch");
+    }
+
+    [UnixFact]
+    public async Task AFileLinkBesideTheWayIsNotInTheWay()
+    {
+        File.CreateSymbolicLink(Path.Combine(_root, "filelink"), Path.Combine(_root, "save", "Name.fch"));
+        Assert.Equal(["save/Name.fch"], (await HostInstall.ListAsync(_host, _root, TimeSpan.FromSeconds(20), ["*/Name.fch"])).Files.Keys);
+        await AssertListsAsync(["save/Name.fch"], "*/NAME.fch");
+    }
+
+    [Fact]
+    public async Task ALinkedDirectoryIsRefusedWithNoPatternAtAll()
+    {
+        string outside = LinkedDirectoryOutsideTheRoot();
+        try { await Assert.ThrowsAsync<IOException>(() => HostInstall.ListAsync(_host, _root, TimeSpan.FromSeconds(20))); }
+        finally { Directory.Delete(outside, recursive: true); }
+    }
+
+    [Fact]
+    public async Task APatternThatDoesNotPassThroughTheLinkStillListsAlongsideIt()
+    {
+        string outside = LinkedDirectoryOutsideTheRoot();
+        try
+        {
+            Assert.Equal(["save/Name.fch"], (await HostInstall.ListAsync(_host, _root, TimeSpan.FromSeconds(20), ["save/Name.fch"])).Files.Keys);
+            await AssertListsAsync(["save/Name.fch"], "SAVE/name.fch");
+        }
+        finally { Directory.Delete(outside, recursive: true); }
     }
 }

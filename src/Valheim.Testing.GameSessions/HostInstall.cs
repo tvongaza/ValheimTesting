@@ -43,7 +43,8 @@ public static class HostInstall
 
     /// <summary>
     /// Hashes every regular file under <paramref name="root"/> on the host (links are refused, as <see cref="WorldFixture"/>
-    /// refuses them). <paramref name="paths"/> limits the listing to those subdirectories and files: relative patterns whose
+    /// refuses them; so is a pattern that passes through a linked directory on the way to a named path).
+    /// <paramref name="paths"/> limits the listing to those subdirectories and files: relative patterns whose
     /// segments are separated by <c>/</c> or <c>\</c>, with <c>*</c> allowed in a directory, for example <c>*_Data/Managed</c>,
     /// or at the file name, for example <c>save_backup_auto-*</c>. A pattern that starts with a separator or a drive, or holds an
     /// empty segment, one ending in <c>.</c> or a space (<c>..</c> included) or one starting with <c>.</c> that holds a wildcard,
@@ -357,7 +358,7 @@ internal static class HostInstallScripts
     // Variables: root, dirs (relative directory patterns and file names with "/" separators, one per line, as
     // HostInstall.ListingPatterns checked them; none lists everything), nocase (1: compare every segment ignoring case).
     // sha256sum prints each file as "<hash>  ./<path>", escaping a name with a backslash or line break. Links are refused before
-    // anything is hashed.
+    // anything is hashed, whether a link is listed itself or lies on the way to a named path.
     public static readonly string BashList = """
         set -u
         if [ ! -d "$root" ]; then echo "VT-LIST missing"; exit 0; fi
@@ -366,39 +367,48 @@ internal static class HostInstallScripts
         if [ "${nocase:-0}" = 1 ]; then shopt -s nocasematch; fi
         if command -v sha256sum > /dev/null 2>&1; then hasher=(sha256sum); else hasher=(shasum -a 256); fi
         roots=()
+        way=()
         if [ -z "$dirs" ]; then roots=(.); else
             while IFS= read -r pattern; do
                 [ -n "$pattern" ] || continue
-                if [ "${nocase:-0}" = 1 ]; then
-                    # A glob never folds the case of a segment without a wildcard, so resolve the pattern a segment at a time:
-                    # keep each entry whose name the segment, as written, matches under nocasematch ("$dir"/* never yields . or
-                    # ..). A named entry that is a link is kept for the link check below; a linked directory on the way is
-                    # entered, as the case-sensitive glob and the PowerShell listing enter it.
-                    found=(.)
-                    IFS=/ read -ra segments <<< "$pattern"
-                    for segment in "${segments[@]}"; do
-                        next=()
-                        for dir in "${found[@]}"; do
+                # A glob never folds the case of a segment without a wildcard, so resolve the pattern a segment at a time. A
+                # segment without a wildcard names its entry directly in the case-sensitive mode (the filesystem decides what
+                # equals it); any other segment keeps each entry whose name the segment, as written, matches ("$dir"/* never yields
+                # . or ..). A directory link matched before the last segment is recorded and never entered; a named entry that
+                # is a link is kept for the link check below.
+                found=(.)
+                IFS=/ read -ra segments <<< "$pattern"
+                last=$(( ${#segments[@]} - 1 )); position=0
+                for segment in "${segments[@]}"; do
+                    literal=0
+                    if [ "${nocase:-0}" != 1 ]; then case "$segment" in *[*?[]*) ;; *) literal=1;; esac; fi
+                    next=()
+                    for dir in "${found[@]}"; do
+                        candidates=()
+                        if [ "$literal" = 1 ]; then
+                            if [ -e "$dir/$segment" ] || [ -L "$dir/$segment" ]; then candidates=("$dir/$segment"); fi
+                        else
                             for entry in "$dir"/*; do
-                                case "${entry##*/}" in $segment) next+=("$entry");; esac
+                                case "${entry##*/}" in $segment) candidates+=("$entry");; esac
                             done
+                        fi
+                        for entry in ${candidates[@]+"${candidates[@]}"}; do
+                            if [ "$position" -lt "$last" ] && [ -L "$entry" ] && [ -d "$entry" ]; then way+=("$entry"); else next+=("$entry"); fi
                         done
-                        found=()
-                        if [ "${#next[@]}" -eq 0 ]; then break; fi
-                        found=("${next[@]}")
                     done
-                    if [ "${#found[@]}" -gt 0 ]; then roots+=("${found[@]}"); fi
-                    continue
-                fi
-                IFS=$'\n'
-                # A named path that is a link is kept, so the link check below refuses it rather than leave it out.
-                for d in $pattern; do if [ -e "$d" ] || [ -L "$d" ]; then roots+=("./$d"); fi; done
-                unset IFS
+                    position=$((position + 1))
+                    found=()
+                    if [ "${#next[@]}" -eq 0 ]; then break; fi
+                    found=("${next[@]}")
+                done
+                if [ "${#found[@]}" -gt 0 ]; then roots+=("${found[@]}"); fi
             done <<< "$dirs"
         fi
+        # A link on the way to a named path is a link too; nothing is hashed before the refusal. Each is listed once.
+        links=$({ for linked in ${way[@]+"${way[@]}"}; do printf '%s\n' "$linked"; done
+                  if [ "${#roots[@]}" -gt 0 ]; then find "${roots[@]}" -type l -print; fi; } | awk '!seen[$0]++' | head -n 5) || exit 3
+        if [ -n "$links" ]; then echo "VT-LIST links"; printf '%s\n' "$links"; exit 0; fi
         if [ "${#roots[@]}" -gt 0 ]; then
-            links=$(find "${roots[@]}" -type l -print | head -n 5) || exit 3
-            if [ -n "$links" ]; then echo "VT-LIST links"; printf '%s\n' "$links"; exit 0; fi
             find "${roots[@]}" -type f -exec "${hasher[@]}" {} + || exit 3
         fi
         for e in valheim_server.x86_64 valheim.x86_64 valheim_server/Valheim; do if [ -f "$e" ] && [ -x "$e" ]; then echo "VT-EXEC $e"; fi; done
@@ -431,6 +441,22 @@ internal static class HostInstallScripts
                         elseif ([IO.Directory]::Exists((Join-Path $dir $segment))) { $next += (Join-Path $dir $segment) }
                         elseif ($i -eq $segments.Count - 1 -and [IO.File]::Exists((Join-Path $dir $segment))) { $next += (Join-Path $dir $segment) }
                     }
+                    if ($i -lt $segments.Count - 1) {
+                        # A linked directory on the way to the named path is refused below, never entered (a link with nothing behind it has nothing to enter).
+                        $kept = @()
+                        foreach ($candidate in $next) {
+                            if (-not ([IO.File]::GetAttributes($candidate) -band [IO.FileAttributes]::ReparsePoint)) { $kept += $candidate; continue }
+                            # A link on the way is refused once its target opens, whatever the target holds (an empty or unlistable
+                            # one included); only a link that leads nowhere has nothing to enter and is dropped.
+                            $opens = $true
+                            try {
+                                $entries = [IO.Directory]::EnumerateFileSystemEntries($candidate).GetEnumerator()
+                                try { $null = $entries.MoveNext() } finally { $entries.Dispose() }
+                            } catch [IO.DirectoryNotFoundException] { $opens = $false } catch [IO.FileNotFoundException] { $opens = $false }
+                            if ($opens) { $links.Add($candidate) }
+                        }
+                        $next = $kept
+                    }
                     $current = $next
                 }
                 foreach ($dir in $current) {
@@ -451,7 +477,7 @@ internal static class HostInstallScripts
                 else { $files.Add($entry) }
             }
         }
-        if ($links.Count -gt 0) { 'VT-LIST links'; $links | Select-Object -First 5; exit 0 }
+        if ($links.Count -gt 0) { 'VT-LIST links'; $links | Select-Object -Unique | Select-Object -First 5; exit 0 }
         $sha = [Security.Cryptography.SHA256]::Create()
         try {
             foreach ($file in $files) {
