@@ -37,7 +37,7 @@ public sealed class LocalGameHost : ScriptedGameHost
 }
 
 /// <summary>
-/// A machine reached through OpenSSH (<c>ssh</c>, on macOS and Linux; Git for Windows' OpenSSH when installed on Windows) with key or agent authentication
+/// A machine reached through OpenSSH (<c>ssh</c> from PATH; on Windows the inbox client, or Git for Windows' client when the runner itself is in an SSH session) with key or agent authentication
 /// only: BatchMode is always on, so ssh never prompts, and nothing here accepts a password. The destination is <c>user@host</c>,
 /// <c>ssh://user@host:port</c> or an ssh-config alias; the host key must already be known (or pass <c>StrictHostKeyChecking=accept-new</c>).
 /// A bash host needs a POSIX login shell; a PowerShell host works under any login shell, including Windows' cmd.exe. Unlike a local
@@ -53,6 +53,7 @@ public sealed class SshGameHost : ScriptedGameHost
     private static readonly string[] CommandOptions = ["ProxyCommand", "KnownHostsCommand", "LocalCommand"];
     private readonly string[] _options;
     private readonly string _ssh;
+    private readonly string _sshReason;
 
     /// <param name="destination"><c>user@host</c>, <c>ssh://user@host:port</c> or an ssh-config alias. Never a password.</param>
     /// <param name="port">The ssh port; 0 leaves it to the destination or the ssh config.</param>
@@ -65,9 +66,11 @@ public sealed class SshGameHost : ScriptedGameHost
     /// RemoteCommand is refused.
     /// </param>
     /// <param name="connectTimeout">ssh's ConnectTimeout; 10 s by default.</param>
-    /// <param name="sshExecutable">The OpenSSH client. The default uses Git for Windows' matching ssh/scp pair when installed on Windows,
-    /// because Windows' inbox ssh can hang when a .NET process sends its script through redirected stdin; elsewhere it uses <c>ssh</c> from PATH.
-    /// An explicit path always wins.</param>
+    /// <param name="sshExecutable">The OpenSSH client. The default is <c>ssh</c> from PATH, which on Windows is the inbox client and reaches keys
+    /// held by the Windows ssh-agent service. When the runner itself is inside an SSH session on Windows, the default is instead Git for Windows'
+    /// matching ssh/scp pair, because the inbox ssh can hang there when a .NET process sends its script through redirected stdin; Git's client cannot
+    /// reach the Windows agent (it reads only <c>SSH_AUTH_SOCK</c>), so a host reached from such a session needs a key file or an agent that variable names.
+    /// An explicit path always wins. A run's provenance records which client was chosen and why.</param>
     public SshGameHost(string name, string destination, HostShell shell, int port = 0, IEnumerable<string>? sshOptions = null, TimeSpan? connectTimeout = null, string sshExecutable = "ssh")
         : this(name, destination, shell, port, sshOptions, connectTimeout, sshExecutable, SystemProcessLauncher.Instance) { }
 
@@ -81,27 +84,33 @@ public sealed class SshGameHost : ScriptedGameHost
         ConnectTimeout = connectTimeout ?? TimeSpan.FromSeconds(10);
         if (ConnectTimeout < TimeSpan.FromSeconds(1)) throw new ArgumentOutOfRangeException(nameof(connectTimeout), "Use a connect timeout of at least one second.");
         ArgumentException.ThrowIfNullOrWhiteSpace(sshExecutable);
-        _ssh = ReferenceEquals(launcher, SystemProcessLauncher.Instance)
+        (_ssh, _sshReason) = ReferenceEquals(launcher, SystemProcessLauncher.Instance)
             ? DefaultSshExecutable(sshExecutable, OperatingSystem.IsWindows(), Environment.GetEnvironmentVariable("SSH_CONNECTION") is { Length: > 0 },
                 Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), File.Exists)
-            : sshExecutable;
+            : (sshExecutable, "set by the caller");
         _options = (sshOptions ?? []).Select(option => OptionArgument(SshChecks.CheckOption(option))).ToArray();
     }
 
-    internal static string DefaultSshExecutable(string requested, bool windows, bool inSshSession, string programFiles, string localAppData,
+    /// <summary>The ssh client and why it was chosen, one line. Reported in the run's provenance.</summary>
+    internal string SshClientChoice => _ssh + " (" + _sshReason + ")";
+
+    // One owner of the choice. Git for Windows' client only when the runner is itself in an SSH session (where the inbox client hangs on
+    // redirected stdin, #635): Git's msys ssh cannot use the Windows ssh-agent pipe, so choosing it elsewhere breaks agent-held keys (#661).
+    internal static (string Executable, string Reason) DefaultSshExecutable(string requested, bool windows, bool inSshSession, string programFiles, string localAppData,
         Func<string, bool> exists)
     {
-        if (!windows || requested != "ssh") return requested;
+        if (requested != "ssh") return (requested, "the host's configured ssh path");
+        if (!windows) return (requested, "ssh from PATH");
+        if (!inSshSession) return (requested, "the inbox ssh from PATH: this runner is not in an SSH session, and keys in the Windows ssh-agent work only with it");
         foreach (string root in new[] { Path.Combine(programFiles, "Git"), Path.Combine(localAppData, "Programs", "Git") })
         {
             string ssh = Path.Combine(root, "usr", "bin", "ssh.exe");
             string scp = Path.Combine(root, "usr", "bin", "scp.exe");
-            if (exists(ssh) && exists(scp)) return ssh;
+            if (exists(ssh) && exists(scp))
+                return (ssh, "Git for Windows' ssh: this runner is in an SSH session, where the inbox ssh can hang; Git's client cannot use the Windows ssh-agent, so the host needs a key file or an SSH_AUTH_SOCK agent");
         }
-        if (inSshSession)
-            throw new InvalidOperationException("Windows' inbox ssh can hang while receiving a ValheimTesting script from a .NET runner in an SSH session. " +
-                "Install Git for Windows (its ssh.exe and scp.exe are used together), or set this host's ssh field to a tested OpenSSH client path before staging.");
-        return requested;
+        throw new InvalidOperationException("Windows' inbox ssh can hang while receiving a ValheimTesting script from a .NET runner in an SSH session. " +
+            "Install Git for Windows (its ssh.exe and scp.exe are used together), or set this host's ssh field to a tested OpenSSH client path before staging.");
     }
 
     public override GameHostKind Kind => GameHostKind.Ssh;

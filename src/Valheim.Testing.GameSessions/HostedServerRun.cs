@@ -148,6 +148,7 @@ internal sealed class HostedServerRun : IServerPlacement
     {
         provenance["serverHost"] = Role.Host;
         provenance["serverHostKind"] = Host.Kind.ToString();
+        if (Host is SshGameHost ssh) provenance["serverHostSshClient"] = ssh.SshClientChoice;
         provenance["hostRunDirectory"] = RunDirectory;
         provenance["runtimeSource"] = Role.Host + ":" + (Role.PreparedSourceRoot ?? Role.Install);
     }

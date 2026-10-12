@@ -7,16 +7,29 @@ using Valheim.Testing.GameSessions;
 // written out by hand from those rules; the ssh-to-localhost job checks the same values against a real ssh.
 public class SshOptionTests
 {
-    [Fact] public void WindowsDefaultUsesOneGitSshAndScpPair()
+    [Fact] public void WindowsSshSessionDefaultUsesOneGitSshAndScpPair()
     {
         string programFiles = Path.Combine("root", "Program Files");
         string git = Path.Combine(programFiles, "Git", "usr", "bin");
         string ssh = Path.Combine(git, "ssh.exe"), scp = Path.Combine(git, "scp.exe");
         var checkedPaths = new List<string>();
-        string selected = SshGameHost.DefaultSshExecutable("ssh", windows: true, inSshSession: true, programFiles, "local",
+        var selected = SshGameHost.DefaultSshExecutable("ssh", windows: true, inSshSession: true, programFiles, "local",
             path => { checkedPaths.Add(path); return path == ssh || path == scp; });
-        Assert.Equal(ssh, selected);
+        Assert.Equal(ssh, selected.Executable);
         Assert.Equal([ssh, scp], checkedPaths);
+        Assert.Contains("SSH session", selected.Reason);
+        Assert.Contains("ssh-agent", selected.Reason);
+    }
+
+    [Fact] public void WindowsDefaultOutsideAnSshSessionKeepsTheInboxClientEvenWhenGitIsInstalled()
+    {
+        string programFiles = Path.Combine("root", "Program Files");
+        var checkedPaths = new List<string>();
+        var selected = SshGameHost.DefaultSshExecutable("ssh", windows: true, inSshSession: false, programFiles, "local",
+            path => { checkedPaths.Add(path); return true; });
+        Assert.Equal("ssh", selected.Executable);
+        Assert.Contains("not in an SSH session", selected.Reason);
+        Assert.Empty(checkedPaths);
     }
 
     [Fact] public void MissingOrIncompleteGitSshRefusesBeforeAWindowsSshSessionStagesAnything()
@@ -26,15 +39,29 @@ public class SshOptionTests
         var error = Assert.Throws<InvalidOperationException>(() => SshGameHost.DefaultSshExecutable("ssh", windows: true,
             inSshSession: true, programFiles, "local", path => path == gitSsh));
         Assert.Contains("ssh.exe and scp.exe", error.Message);
-        Assert.Equal("ssh", SshGameHost.DefaultSshExecutable("ssh", windows: true, inSshSession: false, programFiles, "local", _ => false));
+        Assert.Throws<InvalidOperationException>(() => SshGameHost.DefaultSshExecutable("ssh", windows: true,
+            inSshSession: true, programFiles, "local", _ => false));
+        Assert.Equal("ssh", SshGameHost.DefaultSshExecutable("ssh", windows: true, inSshSession: false, programFiles, "local", _ => false).Executable);
     }
 
     [Fact] public void AnExplicitClientAndOtherPlatformsKeepTheirSelection()
     {
-        Assert.Equal("chosen-ssh", SshGameHost.DefaultSshExecutable("chosen-ssh", windows: true, inSshSession: true,
-            "programs", "local", _ => false));
-        Assert.Equal("ssh", SshGameHost.DefaultSshExecutable("ssh", windows: false, inSshSession: true,
-            "programs", "local", _ => false));
+        string programFiles = Path.Combine("root", "Program Files");
+        string git = Path.Combine(programFiles, "Git", "usr", "bin");
+        foreach (bool inSshSession in new[] { true, false })
+        {
+            var chosen = SshGameHost.DefaultSshExecutable("chosen-ssh", windows: true, inSshSession, programFiles, "local", _ => true);
+            Assert.Equal("chosen-ssh", chosen.Executable);
+            Assert.Contains("configured", chosen.Reason);
+            Assert.Equal("ssh", SshGameHost.DefaultSshExecutable("ssh", windows: false, inSshSession, programFiles, "local", _ => true).Executable);
+        }
+        Assert.Equal(Path.Combine(git, "ssh.exe"), SshGameHost.DefaultSshExecutable("ssh", windows: true, inSshSession: true, programFiles, "local", _ => true).Executable);
+    }
+
+    [Fact] public void TheChosenClientAndItsReasonAreReportedOnOneLine()
+    {
+        var host = new SshGameHost("box", "tester@box.example", HostShell.Bash, 0, null, null, "chosen-ssh");
+        Assert.Equal("chosen-ssh (the host's configured ssh path)", host.SshClientChoice);
     }
 
     [Theory]
