@@ -1,0 +1,21 @@
+name: Checked-build record key
+description: The one home of the checked-build record's cache key prefix, shared by native-server-checks.yml (saves the record) and native-server-watch.yml (looks it up). The key is the prefix followed by the build id.
+inputs:
+  cache_scope:
+    description: 'Empty, or a name of a-z, 0-9 and - (at most 40) that keeps a test run''s record apart from the scheduled runs'' record.'
+    required: false
+    default: ''
+outputs:
+  prefix:
+    description: 'native-server-build- plus the scope and a dash when there is one; append the build id.'
+    value: ${{ steps.prefix.outputs.prefix }}
+runs:
+  using: composite
+  steps:
+    - id: prefix
+      shell: bash
+      env:
+        CACHE_SCOPE: ${{ inputs.cache_scope }}
+      run: |
+        if ! [[ "$CACHE_SCOPE" =~ ^[a-z0-9-]{0,40}$ ]]; then echo "::error::cache_scope may hold only a-z, 0-9 and -, at most 40."; exit 1; fi
+        echo "prefix=native-server-build-${CACHE_SCOPE:+$CACHE_SCOPE-}" >> "$GITHUB_OUTPUT"
