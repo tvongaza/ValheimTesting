@@ -62,4 +62,18 @@ public sealed class HostedCampaignProfileChoiceTests
         }
         finally { Directory.Delete(output, recursive: true); }
     }
+
+    // The root files an actor's profile left out reach the run's provenance, one entry per actor (#689).
+    [Fact]
+    public void CampaignRecordsEachActorsLeftOutRootFilesAsRunEvidence()
+    {
+        var campaign = new PreparedHostedCampaign(new HostedCampaignManifest(), new ResolvedEnvironment(),
+            new Dictionary<string, HostListing>(), new Dictionary<string, HostListing>(), new Dictionary<string, HostedRuntimeFile[]>(),
+            [], [], null, TimeSpan.FromSeconds(5), new RunJournal("left-out"),
+            new Dictionary<string, string> { ["server"] = "other.dll: an unknown root DLL" });
+        var provenance = new Dictionary<string, string>();
+        campaign.RecordProfileLeftOut(provenance);
+        Assert.Equal("other.dll: an unknown root DLL", Assert.Single(provenance).Value);
+        Assert.Equal("serverProfileLeftOut", Assert.Single(provenance).Key);
+    }
 }

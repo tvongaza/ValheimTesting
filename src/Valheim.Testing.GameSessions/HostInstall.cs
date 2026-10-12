@@ -147,12 +147,6 @@ public static class HostInstall
     public static Task CopyAsync(IGameHost host, string source, string destination, TimeSpan timeout, CancellationToken cancellation = default) =>
         CopyAsync(host, source, destination, timeout, [], cancellation);
 
-    /// <summary>
-    /// The top-level directories a dedicated server's runtime copy leaves out: <c>logs</c>, where Steam writes the server's own
-    /// runtime output (<c>connection_log_*.txt</c>, <c>stats_log.txt</c>), none of it the game's or the loader's files (#257).
-    /// </summary>
-    internal static readonly string[] ServerRuntimeSkips = ["logs"];
-
     /// <summary><paramref name="files"/> (a manifest or listing) without what lies under a skipped top-level directory.</summary>
     internal static Dictionary<string, string> WithoutSkipped(IReadOnlyDictionary<string, string> files, IReadOnlyCollection<string> skip, StringComparer names) =>
         files.Where(file => !Skipped(file.Key, skip, names)).ToDictionary(file => file.Key, file => file.Value, names);

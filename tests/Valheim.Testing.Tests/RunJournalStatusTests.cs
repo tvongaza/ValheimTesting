@@ -416,7 +416,7 @@ public sealed class RunJournalStatusTests : IDisposable
             Directory.CreateDirectory(Path.GetDirectoryName(file)!);
             File.WriteAllText(file, text);
         }
-        await HostInstall.CopyAsync(local, install, runtime, TimeSpan.FromSeconds(60), HostInstall.ServerRuntimeSkips, default);
+        await HostInstall.CopyAsync(local, install, runtime, TimeSpan.FromSeconds(60), HostedRuntimeStage.RuntimeSkips, default);
         Assert.Equal(new[] { "valheim_server.x86_64", ".hidden", "BepInEx/logs/kept.txt" }.Order(StringComparer.Ordinal),
             WorldFixture.Manifest(runtime).Keys.Select(key => key.Replace('\\', '/')).Order(StringComparer.Ordinal));
         Assert.Equal(5, WorldFixture.Manifest(install).Count);

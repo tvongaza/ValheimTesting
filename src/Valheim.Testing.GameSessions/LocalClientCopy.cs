@@ -29,7 +29,7 @@ internal sealed class LocalClientCopy
 
     // The plan as it was before it was bound, restored when the copy is retired: a plan reused later makes a new copy.
     private sealed record Unbound(string Install, InstallPins? InstallPins, Dictionary<string, string> Pins, string? CliManifest,
-        string? LoaderRoot, string? LaunchMode, string? SourceGameRoot, string? SourceGameHash);
+        string? LoaderRoot, string? LaunchMode, string? SourceGameRoot, string? SourceGameHash, string? LeftOut);
 
     private LocalClientCopy(IGameHost host, string actor, string runtime, string stage, string launchRoot, RunJournal journal, ClientRunPlan plan, Unbound unbound)
     { _host = host; _actor = actor; _runtime = runtime; _stage = stage; _launchRoot = launchRoot; _journal = journal; _plan = plan; _unbound = unbound; }
@@ -103,6 +103,7 @@ internal sealed class LocalClientCopy
             HostListing listing;
             InstallPins pins;
             string gameRoot, loaderRoot;
+            string? leftOut = null;
             try
             {
                 if (copyGame)
@@ -117,6 +118,7 @@ internal sealed class LocalClientCopy
                         selection, StepTimeout, cancellation, loaderPackage).ConfigureAwait(false);
                     listing = profile.Loader; pins = profile.Pins;
                     gameRoot = profile.GameRoot; loaderRoot = profile.LoaderRoot;
+                    leftOut = HostedRuntimeStage.ProfileLeftOut.Describe(profile.LeftOut);
                 }
             }
             catch (Exception error) when (error is not AggregateException)
@@ -129,8 +131,8 @@ internal sealed class LocalClientCopy
                 ("files", listing.Files.Count.ToString(CultureInfo.InvariantCulture)), ("source", source),
                 ("launchMode", copyGame ? "copy" : "profile"), ("runtimeKind", "client"), ("launchRoot", gameRoot)));
             var unbound = new Unbound(plan.Install, plan.InstallPins, plan.Pins, plan.CliManifest, plan.PreparedLoaderRoot, plan.PreparedLaunchMode,
-                plan.PreparedSourceGameRoot, plan.PreparedSourceGameHash);
-            Bind(plan, source, gameRoot, loaderRoot, pins, manifest, manifestPath, setFolder, copyGame);
+                plan.PreparedSourceGameRoot, plan.PreparedSourceGameHash, plan.PreparedLeftOut);
+            Bind(plan, source, gameRoot, loaderRoot, pins, manifest, manifestPath, setFolder, copyGame, leftOut);
             return new LocalClientCopy(host, actor, runtime, stage, gameRoot, journal, plan, unbound);
         }
         finally { if (config != null) File.Delete(config); }
@@ -152,6 +154,7 @@ internal sealed class LocalClientCopy
         _plan.Install = _unbound.Install; _plan.InstallPins = _unbound.InstallPins; _plan.Pins = _unbound.Pins; _plan.CliManifest = _unbound.CliManifest;
         _plan.PreparedLoaderRoot = _unbound.LoaderRoot; _plan.PreparedLaunchMode = _unbound.LaunchMode;
         _plan.PreparedSourceGameRoot = _unbound.SourceGameRoot; _plan.PreparedSourceGameHash = _unbound.SourceGameHash;
+        _plan.PreparedLeftOut = _unbound.LeftOut;
         _plan.CopiedFrom = null; _plan.Prepared = false;
     }
 
@@ -202,12 +205,13 @@ internal sealed class LocalClientCopy
     // The plan, bound to its copy: the copy's install and install pins, its plugin pins with the staged set's in place of any
     // ValheimCLI pin the plan carried (each file's MD5, as the session derives them), and the staged set's manifest.
     private static void Bind(ClientRunPlan plan, string source, string gameRoot, string loaderRoot, InstallPins runtimePins,
-        CliCapabilityManifest manifest, string manifestPath, string setFolder, bool copyGame)
+        CliCapabilityManifest manifest, string manifestPath, string setFolder, bool copyGame, string? leftOut)
     {
         plan.CopiedFrom = copyGame ? source : null;
         plan.Install = gameRoot;
         plan.PreparedLoaderRoot = gameRoot == loaderRoot ? null : loaderRoot;
         plan.PreparedLaunchMode = copyGame ? "copy" : "profile";
+        plan.PreparedLeftOut = leftOut;
         plan.PreparedSourceGameRoot = copyGame ? null : source;
         plan.PreparedSourceGameHash = copyGame ? null : runtimePins.Game;
         if (plan.Pinned)

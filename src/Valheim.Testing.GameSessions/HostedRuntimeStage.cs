@@ -231,7 +231,7 @@ internal static partial class HostedRuntimeStage
                     throw new IOException($"The staged file {relative} on {host.Name} differs from the reviewed local file.");
             copied = true;
             // A server's copy leaves out Steam's own runtime output in the install (logs/), which is not the game's or the loader's.
-            var skip = kind == HostedRuntimeKind.Server ? HostInstall.ServerRuntimeSkips : [];
+            var skip = kind == HostedRuntimeKind.Server ? RuntimeSkips : [];
             await HostInstall.CopyAsync(host, source, destination, timeout, skip, cancellation).ConfigureAwait(false);
             var copy = await HostInstall.ListAsync(host, destination, timeout, cancellation: cancellation).ConfigureAwait(false);
             var sourceFiles = HostInstall.WithoutSkipped(sourceListing.Files, skip, sourceListing.Names);

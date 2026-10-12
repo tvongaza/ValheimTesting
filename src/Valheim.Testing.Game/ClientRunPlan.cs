@@ -63,6 +63,8 @@ public sealed class ClientRunPlan
     [JsonIgnore] internal string LoaderRoot => PreparedLoaderRoot ?? Install;
     /// <summary>The owned staging choice recorded in run evidence. Never read from a plan file.</summary>
     [JsonIgnore] internal string? PreparedLaunchMode { get; set; }
+    /// <summary>The root files of the game install an owned profile left out, as run evidence (<c>HostedRuntimeStage.ProfileLeftOut</c>); null when none worth a line. Never read from a plan file.</summary>
+    [JsonIgnore] internal string? PreparedLeftOut { get; set; }
     /// <summary>The immutable source game of an owned profile; checked again immediately before launch.</summary>
     [JsonIgnore] internal string? PreparedSourceGameRoot { get; set; }
     [JsonIgnore] internal string? PreparedSourceGameHash { get; set; }

@@ -194,10 +194,10 @@ internal sealed class HostedServerRun : IServerPlacement
             await JournalAsync(Host, Role.Host, "server", CopyIntended(RuntimeDirectory, "runtime"), cancellation).ConfigureAwait(false);
             _runtimeIntended = true;
             // Steam's own runtime output in the install (logs/) is not the runtime's: the copy leaves it out, and the pins never count it.
-            await HostInstall.CopyAsync(Host, Role.Install, RuntimeDirectory, HostedTimeouts.Long, HostInstall.ServerRuntimeSkips, cancellation).ConfigureAwait(false);
+            await HostInstall.CopyAsync(Host, Role.Install, RuntimeDirectory, HostedTimeouts.Long, HostedRuntimeStage.RuntimeSkips, cancellation).ConfigureAwait(false);
             _runtime = await HostInstall.ListAsync(Host, RuntimeDirectory, HostedTimeouts.Long, null, cancellation).ConfigureAwait(false);
             _loader = _runtime;
-            if (verified) HostInstall.RequireSame(HostInstall.WithoutSkipped(plan.Runtime.Sha256, HostInstall.ServerRuntimeSkips, _runtime.Names), _runtime, "runtime copy");
+            if (verified) HostInstall.RequireSame(HostInstall.WithoutSkipped(plan.Runtime.Sha256, HostedRuntimeStage.RuntimeSkips, _runtime.Names), _runtime, "runtime copy");
             await JournalAsync(Host, Role.Host, "server", CopyDone(RuntimeDirectory, _runtime), cancellation).ConfigureAwait(false);
         }).ConfigureAwait(false);
     }

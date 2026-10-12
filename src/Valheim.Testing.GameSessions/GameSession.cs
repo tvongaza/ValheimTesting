@@ -153,6 +153,7 @@ public sealed class GameSession : IAsyncDisposable
                 "profile" => $"source game: {plan.Install}; owned loader profile: {plan.PreparedLoaderRoot ?? plan.Install}",
                 _ => $"in place: {plan.Install}",
             };
+            if (plan.PreparedLeftOut != null) Report.Provenance[prefix + "ProfileLeftOut"] = plan.PreparedLeftOut;
         }
     }
     private readonly List<ClientActor> _opened = [];
