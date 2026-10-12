@@ -14,7 +14,8 @@ namespace Valheim.Testing.GameSessions;
 /// </summary>
 public sealed class LocalGameHost : ScriptedGameHost
 {
-    public LocalGameHost(string name, HostShell shell) : this(name, shell, SystemProcessLauncher.Instance) { }
+    /// <exception cref="ArgumentException">PowerShell on macOS or Linux: those hosts run bash.</exception>
+    public LocalGameHost(string name, HostShell shell) : this(name, UnixBash(shell, !OperatingSystem.IsWindows(), "this machine"), SystemProcessLauncher.Instance) { }
     internal LocalGameHost(string name, HostShell shell, IProcessLauncher launcher) : base(name, shell, launcher) { }
     public override GameHostKind Kind => GameHostKind.Local;
     internal override (string Executable, IReadOnlyList<string> Arguments) WrapperCommand() => (Shell.Executable, WrapperArguments(Shell));
@@ -122,10 +123,12 @@ public sealed class SshGameHost : ScriptedGameHost
 
     internal override (string Executable, IReadOnlyList<string> Arguments) WrapperCommand() => (_ssh, SshArguments(forward: false, ["-T"], RemoteCommand(Shell)));
     internal override bool IsTransportFailure(ProcessExit exit) => exit.ExitCode == 255;
-    // The login shell's own words for a command it cannot find: cmd.exe (OpenSSH's default on Windows), Windows PowerShell, or a
-    // POSIX shell. English only: a localised Windows reports it in its own language, and the outcome stays a plain unknown.
-    internal override bool ShellNotFound(ProcessExit exit) => exit.End == ProcessEnd.Exited && Regex.IsMatch(exit.Stderr,
-        "'" + Regex.Escape(Shell.Executable) + "' is not recognized as|" + Regex.Escape(Shell.Executable) + ": (command )?not found", RegexOptions.CultureInvariant);
+    // The login shell could not find the command: cmd.exe (OpenSSH's default on Windows) exits 9009, which an ssh client on macOS
+    // or Linux reports as its low byte, 49; a POSIX shell exits 127. Either way the wrapper never ran, so it wrote nothing. The
+    // English words cover Windows PowerShell as the login shell (exit 1) too; a localised one is caught by its exit code alone.
+    internal override bool ShellNotFound(ProcessExit exit) => exit.End == ProcessEnd.Exited && (Regex.IsMatch(exit.Stderr,
+        "'" + Regex.Escape(Shell.Executable) + "' is not recognized as|" + Regex.Escape(Shell.Executable) + ": (command )?not found", RegexOptions.CultureInvariant) ||
+        (exit.ExitCode is 9009 or 9009 % 256 or 127 && exit.Stdout.Length == 0));
 
     /// <summary>
     /// Forwards a local loopback port to the host's loopback-only ValheimCLI port (<c>ssh -N -L 127.0.0.1:local:127.0.0.1:host</c>
@@ -275,8 +278,9 @@ public sealed class ContainerGameHost : ScriptedGameHost
     /// <param name="container">The container's name or id.</param>
     /// <param name="user">The user scripts run as (<c>docker exec --user</c>); the container's default when null.</param>
     /// <param name="dockerExecutable">The Docker CLI; <c>docker</c> from PATH by default.</param>
+    /// <exception cref="ArgumentException">A PowerShell shell: a container is a Linux host, which runs bash.</exception>
     public ContainerGameHost(string name, string container, HostShell shell, string? user = null, string dockerExecutable = "docker")
-        : this(name, container, shell, user, dockerExecutable, SystemProcessLauncher.Instance) { }
+        : this(name, container, UnixBash(shell, true, "a container"), user, dockerExecutable, SystemProcessLauncher.Instance) { }
 
     internal ContainerGameHost(string name, string container, HostShell shell, string? user, string dockerExecutable, IProcessLauncher launcher) : base(name, shell, launcher)
     {

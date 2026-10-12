@@ -8,6 +8,14 @@ public sealed class HostProfile
     internal static string CurrentPlatform => OperatingSystem.IsWindows() ? "windows" : OperatingSystem.IsMacOS() ? "macos" : "linux";
     /// <summary>The one shell a host of <paramref name="platform"/> runs its scripts in: <c>pwsh</c> (PowerShell 7) on Windows, <c>bash</c> on macOS and Linux.</summary>
     internal static string ShellFor(string platform) => platform == "windows" ? "pwsh" : "bash";
+    /// <summary>
+    /// What a Windows host without PowerShell 7 needs, in every refusal that names it: the install command, run in a desktop
+    /// terminal on that machine (the installer is refused with access denied over SSH).
+    /// </summary>
+    internal const string PwshInstall = "winget install --id Microsoft.PowerShell --source winget";
+    internal static string MissingPwsh(string host) =>
+        $"PowerShell 7 (pwsh) is not installed on {host}, or not on its PATH; a Windows host runs its scripts in pwsh. Install it in a " +
+        $"desktop terminal on that machine (over SSH the installer fails with access denied): {PwshInstall}";
 
     public string Kind { get; set; } = "";
     /// <summary><c>windows</c>, <c>linux</c> or <c>macos</c>: the host's own OS (a container's is linux).</summary>

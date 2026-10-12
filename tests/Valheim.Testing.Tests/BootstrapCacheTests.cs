@@ -23,6 +23,8 @@ public sealed class BootstrapCacheTests
             if (windows)
             {
                 start.ArgumentList.Add("-NoProfile");
+                start.ArgumentList.Add("-ExecutionPolicy");
+                start.ArgumentList.Add("Bypass");
                 start.ArgumentList.Add("-File");
                 start.ArgumentList.Add(Path.Combine(root, "scripts", "bootstrap-cli.ps1"));
             }

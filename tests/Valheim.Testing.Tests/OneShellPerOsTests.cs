@@ -33,18 +33,38 @@ public sealed class OneShellPerOsTests
         Assert.Equal(OperatingSystem.IsWindows() ? "pwsh" : "bash", HostProfile.ShellFor(HostProfile.CurrentPlatform));
     }
 
+    // A host that is known not to be Windows (this macOS or Linux machine, any container) refuses PowerShell when it is made.
+    [Fact] public void AHostThatCannotBeWindowsRefusesPowerShell()
+    {
+        Assert.Contains("a container runs bash", Assert.Throws<ArgumentException>(() => new ContainerGameHost("ctr", "vt-server", HostShell.Pwsh)).Message);
+        _ = new ContainerGameHost("ctr", "vt-server", HostShell.Bash);
+        if (OperatingSystem.IsWindows()) _ = new LocalGameHost("here", HostShell.Pwsh);
+        else Assert.Contains("this machine runs bash", Assert.Throws<ArgumentException>(() => new LocalGameHost("here", HostShell.Pwsh)).Message);
+    }
+
     // Nothing the toolkit builds, runs or tests names Windows PowerShell 5.1 any more; the docs (Markdown, and the public-api
     // lists a release regenerates) may.
     [Fact] public void NoSourceNamesWindowsPowerShell()
     {
         string root = FixtureProjects.RepositoryRoot();
         string[] kinds = [".cs", ".ps1", ".sh", ".yml", ".yaml", ".json", ".csproj", ".props", ".targets"];
-        string[] skipped = ["docs", "bin", "obj", "artifacts", ".git", ".packages", "TestResults"];
         string self = Path.Combine("tests", "Valheim.Testing.Tests", nameof(OneShellPerOsTests) + ".cs");
-        var files = Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories).Select(file => Path.GetRelativePath(root, file))
-            .Where(file => kinds.Contains(Path.GetExtension(file), StringComparer.OrdinalIgnoreCase) && file != self &&
-                !file.Split(Path.DirectorySeparatorChar).SkipLast(1).Any(part => skipped.Contains(part, StringComparer.OrdinalIgnoreCase)))
-            .Select(file => file.Replace('\\', '/')).ToList();
+        // The source folders only: build output, caches and other checkouts (a dot folder, other than .github and .config) are not walked.
+        var files = new List<string>();
+        var pending = new Stack<string>([root]);
+        while (pending.Count != 0)
+        {
+            string directory = pending.Pop();
+            foreach (string child in Directory.EnumerateDirectories(directory))
+            {
+                string name = Path.GetFileName(child);
+                if (name is "docs" or "bin" or "obj" or "artifacts" or "TestResults" || (name.StartsWith('.') && name is not (".github" or ".config"))) continue;
+                pending.Push(child);
+            }
+            files.AddRange(Directory.EnumerateFiles(directory).Select(file => Path.GetRelativePath(root, file))
+                .Where(file => kinds.Contains(Path.GetExtension(file), StringComparer.OrdinalIgnoreCase) && file != self));
+        }
+        files = files.Select(file => file.Replace('\\', '/')).ToList();
         Assert.Contains("src/Valheim.Testing.GameSessions/GameHost.cs", files);
         var found = files.Where(file => File.Exists(Path.Combine(root, file)))
             .SelectMany(file => File.ReadLines(Path.Combine(root, file)).Select((line, index) => (file, line, index)))

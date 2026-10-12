@@ -231,7 +231,7 @@ public class LocalGameHostShellTests
 /// <summary>
 /// Runs only where the environment names an ssh destination (the game-hosts CI job starts a throwaway sshd on localhost):
 /// VALHEIM_TESTING_SSH_DESTINATION, optional VALHEIM_TESTING_SSH_PORT, VALHEIM_TESTING_SSH_OPTIONS (one Name=value per line)
-/// and VALHEIM_TESTING_SSH_SHELLS (comma separated, bash by default). The destination must be this machine.
+/// The destination must be this machine, so the shell is this machine's one shell (bash, or pwsh on Windows).
 /// </summary>
 public sealed class SshTheoryAttribute : TheoryAttribute
 {
@@ -251,15 +251,7 @@ public sealed class ContainerTheoryAttribute : TheoryAttribute
 [Trait("Category", "GameHosts")]
 public class SshGameHostIntegrationTests
 {
-    public static TheoryData<string> Shells
-    {
-        get
-        {
-            var shells = new TheoryData<string>();
-            foreach (string shell in (Environment.GetEnvironmentVariable("VALHEIM_TESTING_SSH_SHELLS") ?? "bash").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)) shells.Add(shell);
-            return shells;
-        }
-    }
+    public static TheoryData<string> Shells => LocalGameHostShellTests.Shells;
     private static IGameHost Host(string shell) => new SshGameHost("ssh-" + shell, Environment.GetEnvironmentVariable("VALHEIM_TESTING_SSH_DESTINATION")!, HostShell.Parse(shell),
         int.TryParse(Environment.GetEnvironmentVariable("VALHEIM_TESTING_SSH_PORT"), out int port) ? port : 0,
         (Environment.GetEnvironmentVariable("VALHEIM_TESTING_SSH_OPTIONS") ?? "").Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));

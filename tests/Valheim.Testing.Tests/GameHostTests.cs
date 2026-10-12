@@ -69,6 +69,7 @@ public class GameHostTests
     [InlineData("ssh", "'pwsh' is not recognized as an internal or external command,\r\noperable program or batch file.\r\n")]
     [InlineData("ssh", "pwsh : The term 'pwsh' is not recognized as the name of a cmdlet, function, script file, or operable program.\r\n")]
     [InlineData("ssh", "bash: line 1: pwsh: command not found\n")]
+    [InlineData("ssh", "'pwsh' n'est pas reconnu en tant que commande interne\r\nou externe, un programme executable ou un fichier de commandes.\r\n")]
     public async Task AWindowsHostWithoutPwshIsRefusedWithTheInstallCommand(string kind, string said)
     {
         var fake = new FakeLauncher().Reply(_ => kind == "local"

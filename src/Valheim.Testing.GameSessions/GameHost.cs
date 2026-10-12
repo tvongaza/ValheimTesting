@@ -23,14 +23,6 @@ public sealed class HostShell
     public static HostShell Pwsh { get; } = new(HostShellKind.PowerShell, "pwsh");
     /// <summary>This machine's shell: pwsh on Windows, bash elsewhere.</summary>
     public static HostShell ThisMachine => Parse(HostProfile.ShellFor(HostProfile.CurrentPlatform));
-    /// <summary>
-    /// What a Windows host without PowerShell 7 needs, in every refusal that names it: the install command, run in a desktop
-    /// terminal on that machine (the installer is refused with access denied over SSH).
-    /// </summary>
-    internal const string PwshInstall = "winget install --id Microsoft.PowerShell --source winget";
-    internal static string MissingPwsh(string host) =>
-        $"PowerShell 7 (pwsh) is not installed on {host}, or not on its PATH; a Windows host runs its scripts in pwsh. Install it in a " +
-        $"desktop terminal on that machine (over SSH the installer fails with access denied): {PwshInstall}";
     public HostShellKind Kind { get; }
     public string Executable { get; }
     public HostShell(HostShellKind kind, string executable)
@@ -306,6 +298,10 @@ public abstract class ScriptedGameHost : IGameHost
         "PSScriptRoot", "PSSenderInfo", "PSUICulture", "PSVersionTable", "PWD", "Sender", "ShellId", "StackTrace", "switch", "this", "true",
     };
     private protected readonly IProcessLauncher Launcher;
+
+    // PowerShell runs only on Windows hosts (#703): a host known to be macOS or Linux takes bash.
+    private protected static HostShell UnixBash(HostShell shell, bool unix, string what) =>
+        unix && shell?.Kind == HostShellKind.PowerShell ? throw new ArgumentException($"PowerShell runs only on Windows hosts; {what} runs bash.", nameof(shell)) : shell!;
 
     private protected ScriptedGameHost(string name, HostShell shell, IProcessLauncher launcher)
     {
@@ -684,7 +680,7 @@ public abstract class ScriptedGameHost : IGameHost
     // one place a missing PowerShell 7 is recognised, so every check and start path that reaches the host (preflight first)
     // refuses with the same fix.
     private string? MissingShell(ProcessExit exit) => Shell.Kind == HostShellKind.PowerShell && ShellNotFound(exit)
-        ? (exit.Stderr.Replace("\r", "").Trim() + "\n" + HostShell.MissingPwsh(Name)).TrimStart() : null;
+        ? (exit.Stderr.Replace("\r", "").Trim() + "\n" + HostProfile.MissingPwsh(Name)).TrimStart() : null;
 
     private static readonly Regex ClixmlRecord = new(@"<S S=""(\w+)"">(.*?)</S>", RegexOptions.Singleline | RegexOptions.CultureInvariant);
     private static readonly Regex ClixmlEscape = new("_x([0-9A-Fa-f]{4})_", RegexOptions.CultureInvariant);
