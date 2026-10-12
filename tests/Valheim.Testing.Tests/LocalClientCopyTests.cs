@@ -2,10 +2,10 @@ using Valheim.Testing.Game;
 using Xunit;
 using Valheim.Testing.GameSessions;
 
-// #296 step 3: every owned client runs from a disposable copy of its install, made by the one copy owner (HostedRuntimeStage on
-// this machine), with the run's ValheimCLI set staged into the copy and the static check always run; inPlace (--in-place)
-// runs the install as it is and writes nothing into it. The copy tests run the real copy, stage and retire scripts on this
-// machine's shell, on a fake install; nothing launches.
+// #296 step 3: every owned client runs from a disposable loader profile of its install, made by the one stage owner
+// (HostedRuntimeStage on this machine), with the run's ValheimCLI set staged into the profile and the static check always run;
+// inPlace (--in-place) runs the install as it is and writes nothing into it. The profile tests run the real seed, stage and
+// retire scripts on this machine's shell, on a fake install; nothing launches.
 public sealed class LocalClientCopyTests : IDisposable
 {
     private readonly RegressionRig _rig = new();
@@ -53,7 +53,7 @@ public sealed class LocalClientCopyTests : IDisposable
         Assert.False(plan.Prepared);
     }
 
-    [Fact] public async Task AnOwnedClientRunsFromACopyWithTheSetStagedAndTheInstallUnchanged()
+    [Fact] public async Task AnOwnedClientRunsFromAProfileWithTheSetStagedAndTheInstallUnchanged()
     {
         string source = _rig.Game;
         _rig.Write("game/BepInEx/plugins/valheimCLI.dll", System.Text.Encoding.UTF8.GetBytes("an older ValheimCLI core")); // another build, by name
@@ -69,20 +69,21 @@ public sealed class LocalClientCopyTests : IDisposable
         string data = Path.Combine(_rig.Root, "data");
         using var journalDirectory = RunJournal.UseLocalDirectory(Path.Combine(data, "journal"));
         using var run = RunJournal.UseRun("run-localcopy-" + Guid.NewGuid().ToString("N")[..8]);
-        var copy = await LocalClientCopy.PrepareAsync("client", plan, default, data, ThisMachine(), loader: (_, _) => null, copyGame: true);
+        var copy = await LocalClientCopy.PrepareAsync("client", plan, default, data, ThisMachine(), loader: (_, _) => null);
 
-        // Bound to the copy: its install, its pins (the staged core's MD5 in place of the plan's) and the staged set's manifest.
+        // Bound to the profile: its game and loader roots, its pins (the staged core's MD5 in place of the plan's) and the staged
+        // set's manifest. Windows launches from the profile's own folder; macOS and Linux launch the source game.
         Assert.True(plan.Prepared);
         Assert.False(plan.CopySource);
-        Assert.Equal(source, plan.CopiedFrom);
-        Assert.Equal(copy.Runtime, plan.Install);
+        Assert.Equal(OperatingSystem.IsWindows() ? copy.Runtime : source, plan.Install);
+        Assert.Equal(copy.Runtime, plan.LoaderRoot);
         Assert.StartsWith(Path.Combine(data, "runs", "local-clients", "vt-prep-"), copy.Runtime);
         Assert.Equal(FileHash.Md5(Path.Combine(_rig.Root, "cli", "valheimCLI.dll")), plan.Pins["valheimCLI.valheimCLI"]);
         Assert.DoesNotContain("valheimCLI.standard", plan.Pins.Keys);
         Assert.Equal("absent", plan.Pins["example.unrelated"]);
         Assert.Equal(manifest, plan.CliManifest);
-        Assert.Equal(InstallPins.Of(copy.Runtime).Game, plan.InstallPins!.Game);
-        // The copy holds the install's own plugins and config, the staged set instead of its ValheimCLI, and ValheimCLI's port.
+        Assert.Equal(InstallPins.Of(plan.Install, plan.LoaderRoot).Game, plan.InstallPins!.Game);
+        // The profile holds the install's own plugins and config, the staged set instead of its ValheimCLI, and ValheimCLI's port.
         Assert.Equal(FileHash.Sha256(Path.Combine(_rig.Root, "cli", "valheimCLI.dll")), FileHash.Sha256(Path.Combine(copy.Runtime, "BepInEx", "plugins", "valheimCLI.dll")));
         Assert.False(File.Exists(Path.Combine(copy.Runtime, "BepInEx", "plugins", "Valheim.Cli.Standard.dll")));
         Assert.True(File.Exists(Path.Combine(copy.Runtime, "BepInEx", "plugins", "Unrelated.dll")));
@@ -90,7 +91,7 @@ public sealed class LocalClientCopyTests : IDisposable
         string cliConfig = File.ReadAllText(Path.Combine(copy.Runtime, "BepInEx", "config", "valheimCLI.valheimCLI.cfg"));
         Assert.Contains("Port = 5556", cliConfig);
         Assert.Contains("AllowOnServerClients = true", cliConfig);
-        // The static check runs on the copy: exactly the staged set, by SHA256.
+        // The static check runs on the profile: exactly the staged set, by SHA256.
         Assert.Single(plan.CheckCliManifest()!.Files);
         // Nothing in the install changed.
         Assert.Equal(before, Tree(source));
@@ -100,7 +101,7 @@ public sealed class LocalClientCopyTests : IDisposable
 
         await copy.RetireAsync();
         Assert.False(Directory.Exists(copy.Runtime));
-        // The plan is as it was: a run that reuses it makes a new copy.
+        // The plan is as it was: a run that reuses it makes a new profile.
         Assert.True(plan.CopySource);
         Assert.Equal(source, plan.Install);
         Assert.Equal(manifest, plan.CliManifest);
@@ -177,7 +178,7 @@ public sealed class LocalClientCopyTests : IDisposable
         plan.CliManifest = CliSet();
         string data = Path.Combine(_rig.Root, "data");
         using var journalDirectory = RunJournal.UseLocalDirectory(Path.Combine(data, "journal"));
-        var copy = await LocalClientCopy.PrepareAsync("client", plan, default, data, ThisMachine(), loader: (_, _) => null, copyGame: true);
+        var copy = await LocalClientCopy.PrepareAsync("client", plan, default, data, ThisMachine(), loader: (_, _) => null);
         Assert.Equal(chosen, File.ReadAllText(Path.Combine(copy.Runtime, "BepInEx", "config", "valheimCLI.valheimCLI.cfg")));
         Assert.Equal(before, Tree(_rig.Game));
         await copy.RetireAsync();
@@ -226,15 +227,15 @@ public sealed class LocalClientCopyTests : IDisposable
         plan.CliManifest = CliSet();
         string data = Path.Combine(_rig.Root, "data");
         using var journalDirectory = RunJournal.UseLocalDirectory(Path.Combine(data, "journal"));
-        var copy = await LocalClientCopy.PrepareAsync("client", plan, default, data, ThisMachine(), loader: (_, _) => null, copyGame: true);
+        var copy = await LocalClientCopy.PrepareAsync("client", plan, default, data, ThisMachine(), loader: (_, _) => null);
         Assert.Equal(chosen, File.ReadAllText(Path.Combine(copy.Runtime, "BepInEx", "config", "valheimCLI.valheimCLI.cfg")));
         Assert.Equal(before, Tree(_rig.Game));
         await copy.RetireAsync();
     }
 
-    // An install whose Doorstop pair does not match takes the shipped BepInExPack in its copy: the pack's own files (its
+    // An install whose Doorstop pair does not match takes the shipped BepInExPack in its profile: the pack's own files (its
     // BepInEx.cfg among them) replace the install's, which an install that ran once always has. Windows: the pack is Windows'.
-    [Fact] public async Task AShippedLoaderReplacesTheInstallsLoaderFilesInTheCopy()
+    [Fact] public async Task AShippedLoaderReplacesTheInstallsLoaderFilesInTheProfile()
     {
         if (!OperatingSystem.IsWindows()) return;
         string pack = Path.Combine(_rig.Root, "pack");
@@ -251,7 +252,7 @@ public sealed class LocalClientCopyTests : IDisposable
         var before = Tree(_rig.Game);
         string data = Path.Combine(_rig.Root, "data");
         using var journalDirectory = RunJournal.UseLocalDirectory(Path.Combine(data, "journal"));
-        var copy = await LocalClientCopy.PrepareAsync("client", plan, default, data, ThisMachine(), loader: (_, _) => new ShippedLoader.Choice(package, "test"), copyGame: true);
+        var copy = await LocalClientCopy.PrepareAsync("client", plan, default, data, ThisMachine(), loader: (_, _) => new ShippedLoader.Choice(package, "test"));
         Assert.Contains("shipped = true", File.ReadAllText(Path.Combine(copy.Runtime, "BepInEx", "config", "BepInEx.cfg")));
         Assert.Equal(BepInExLoaderPackage.Read(package).Loader, plan.InstallPins!.Loader);
         Assert.Equal(before, Tree(_rig.Game));

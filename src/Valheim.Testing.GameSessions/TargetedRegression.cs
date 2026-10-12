@@ -68,7 +68,7 @@ public sealed class StagedArm
 /// <list type="number">
 /// <item>The fixture root must hold exactly one world with the manifest's UID (<see cref="FixtureLayout"/>).</item>
 /// <item>Every staged file must be its pinned SHA256; the manifest records every arm's source hash and the chosen arm is staged.</item>
-/// <item>The shared hosted-runtime stage makes a fresh disposable copy per arm with <c>BepInEx/plugins</c>, <c>patchers</c>,
+/// <item>The shared hosted-runtime stage makes a fresh disposable loader profile per arm with <c>BepInEx/plugins</c>, <c>patchers</c>,
 /// <c>config</c> and <c>scripts</c> rebuilt from the allowlist only: the default ValheimCLI plugin, the mod plugins, the probe and one arm.</item>
 /// <item>Every hard <c>[BepInDependency]</c> any staged plugin declares must be met by a staged plugin's own
 /// <c>[BepInPlugin]</c> (with its minimum version), no <c>[BepInIncompatibility]</c> may be staged, every plugin must load in
@@ -76,7 +76,7 @@ public sealed class StagedArm
 /// <item>The plan's own <see cref="ClientRunPlan.Validate"/> and <see cref="ClientRunPlan.Preflight(IEnumerable{string})"/> run on the
 /// staged install, including the static ValheimCLI capability check against <see cref="RegressionCli.Manifest"/> when set.</item>
 /// </list>
-/// Nothing launches. <see cref="Run"/> stages a fresh copy for one arm, refuses any file outside the allowlist right before
+/// Nothing launches. <see cref="Run"/> stages a fresh profile for one arm, refuses any file outside the allowlist right before
 /// the launch, and keeps <see cref="ClientRounds"/>' live capability check and strict per-command pins as the second gate.
 /// </summary>
 public sealed class TargetedRegression
@@ -109,21 +109,10 @@ public sealed class TargetedRegression
     public RegressionInputs Inputs { get; }
     /// <summary>The client environment the run uses (<see cref="EnvironmentRecipe.Name"/>) and why.</summary>
     public string ClientEnvironment { get; }
-    /// <summary>The prepared Valheim install the disposable copy is made from: the client environment's install. Only read.</summary>
+    /// <summary>The prepared Valheim install the disposable profile launches: the client environment's install. Only read.</summary>
     public string Game { get; }
-    /// <summary>The disposable loader profile or full game copy this runner owns in the client environment's runtime.</summary>
+    /// <summary>The disposable loader profile this runner owns in the client environment's runtime.</summary>
     public string Install { get; }
-    private bool _copyGame;
-    /// <summary>Opt in to a full disposable game copy before the first arm. By default the run stages a disposable loader profile.</summary>
-    public bool CopyGame
-    {
-        get => _copyGame;
-        set
-        {
-            if (_prepared) throw new InvalidOperationException("Cannot change launch mode while a regression arm is staged; remove the prepared arm first.");
-            _copyGame = value;
-        }
-    }
     /// <summary>The client's ValheimCLI port: the client environment's.</summary>
     public int Port { get; }
     /// <summary>The client environment's loader package, when it names one.</summary>
@@ -137,7 +126,7 @@ public sealed class TargetedRegression
     // The client's save root (worlds_local, characters_local): this user's by default; tests replace it.
     internal string? SaveDirectory { get; init; }
     // Synthetic test installs are not notarized Steam apps; production always uses the real macOS assessment.
-    internal Func<string, bool, TimeSpan, MacBundleInspection.Verdict>? BundleInspection { get; init; }
+    internal Func<string, TimeSpan, MacBundleInspection.Verdict>? BundleInspection { get; init; }
     /// <summary>
     /// The ValheimCLI capabilities the run uses: <see cref="CliCapabilities.HostedRounds"/> and the scenario's own whose owner is
     /// ValheimCLI's (<c>valheim.*</c> or <c>cli.*</c>). They are checked against <see cref="RegressionCli.Manifest"/> before
@@ -244,18 +233,18 @@ public sealed class TargetedRegression
         if (env.Probe != null && Read(env.Probe.File).Plugins.Count == 0)
             throw new InvalidOperationException($"probe: {env.Probe.File} declares no [BepInPlugin]; a probe is a plugin.");
 
-        // A direct regression.json consumer gets the same refusal as valheim-test start, before its large game copy.
+        // A direct regression.json consumer gets the same refusal as valheim-test start, before anything is staged.
         ClientArchitectureChoice.Require(Game, Architecture, LoaderPackage);
         // Check the signed source app before staging through HostedRuntimeStage:
         // otherwise an old preloader log inside the source bundle becomes a Gatekeeper "damaged" dialog at launch.
         if (OperatingSystem.IsMacOS() && Directory.Exists(Path.Combine(Game, GameLaunch.ClientMacBundle)))
         {
-            var verdict = BundleInspection?.Invoke(Game, false, TimeSpan.FromSeconds(Inputs.Client.StartSeconds))
+            var verdict = BundleInspection?.Invoke(Game, TimeSpan.FromSeconds(Inputs.Client.StartSeconds))
                 ?? MacBundleInspection.Inspect(Game, TimeSpan.FromSeconds(Inputs.Client.StartSeconds));
             string? refusal = MacBundleInspection.SourceRefusal(verdict);
             if (refusal != null) throw new InvalidOperationException(refusal);
         }
-        // HostedRuntimeStage is the one owner of the disposable copy, its loader and the Mac bundle repair.
+        // HostedRuntimeStage is the one owner of the disposable profile and its loader.
         // Select exactly this regression's allowlist; LocalClientCopy selects a broader installed set through the
         // same stage. No source plugin is inherited merely because it happens to be in the prepared game.
         var placements = new List<(string Role, string Source, string Sha256, string Relative, PluginAssembly Metadata)>();
@@ -304,9 +293,9 @@ public sealed class TargetedRegression
             var plan = new ClientRunPlan
             {
                 Mode = "owned", Install = gameRoot, PreparedLoaderRoot = gameRoot == install ? null : install,
-                PreparedLaunchMode = CopyGame ? "copy" : "profile",
-                PreparedSourceGameRoot = CopyGame ? null : Path.GetFullPath(Game),
-                PreparedSourceGameHash = CopyGame ? null : installPins.Game,
+                PreparedLaunchMode = "profile",
+                PreparedSourceGameRoot = Path.GetFullPath(Game),
+                PreparedSourceGameHash = installPins.Game,
                 Port = Port, Character = env.Client.Character,
                 Architecture = Architecture,
                 LaunchArguments = env.Client.LaunchArguments, Environment = env.Client.Environment,
@@ -394,7 +383,6 @@ public sealed class TargetedRegression
             afterStaged?.Invoke();
             var staged = stagedArm!;
             staged.Record(report.Provenance);
-            report.Provenance["launchMode"] = CopyGame ? "copy" : "profile";
             if (_activeLeftOut != null) report.Provenance["profileLeftOut"] = _activeLeftOut;
             report.Provenance["disposableStageSeconds"] = _lastStageSeconds.ToString("F3", System.Globalization.CultureInfo.InvariantCulture);
             File.WriteAllText(Path.Combine(output, "run-manifest.json"), JsonSerializer.Serialize(staged.Manifest, ManifestJson));
@@ -539,41 +527,22 @@ public sealed class TargetedRegression
         RequireStopped(null, clientSession: true);
         string parent = Path.GetDirectoryName(Install)!;
         Directory.CreateDirectory(Path.GetDirectoryName(parent)!);
-        if (CopyGame)
-        {
-            var capacity = HostCopyCapacityProbe.InspectAsync(_host, source, Path.GetDirectoryName(parent)!, LocalClientCopy.StepTimeout).GetAwaiter().GetResult();
-            HostCopyCapacityProbe.RequireCombined(_host.Name, [(Inputs.Name, capacity)]);
-        }
         string actor = "regression-" + Inputs.Name;
         _journal.AppendLocal(actor, JournalEntry.Of(JournalEntry.CopyIntended,
-            ("runtime", Install), ("stage", _stage), ("parent", parent), ("launchMode", CopyGame ? "copy" : "profile")));
+            ("runtime", Install), ("stage", _stage), ("parent", parent), ("runtimeKind", "client")));
         try
         {
-            Func<IGameHost, string, TimeSpan, CancellationToken, Task<MacBundleInspection.Verdict>>? repair = BundleInspection == null
-                ? null : (_, install, timeout, _) => Task.FromResult(BundleInspection(install, true, timeout));
-            var copyClock = Stopwatch.StartNew();
-            HostListing listing;
-            if (CopyGame)
-            {
-                listing = HostedRuntimeStage.PrepareAsync(_host, HostedRuntimeKind.Client, source, Install, _stage,
-                    selected, LocalClientCopy.StepTimeout, loaderPackage: package, repairMac: repair).GetAwaiter().GetResult();
-                _activeGameRoot = Install;
-                _activePins = HostInstall.Pins(listing);
-            }
-            else
-            {
-                var profile = HostedRuntimeStage.PrepareProfileAsync(_host, HostedRuntimeKind.Client, source, Install, _stage,
-                    selected, LocalClientCopy.StepTimeout, loaderPackage: package,
-                    inspectMac: BundleInspection == null ? null : (_, install, timeout, _) => Task.FromResult(BundleInspection(install, false, timeout))).GetAwaiter().GetResult();
-                listing = profile.Loader;
-                _activeGameRoot = profile.GameRoot;
-                _activePins = profile.Pins;
-                _activeLeftOut = HostedRuntimeStage.ProfileLeftOut.Describe(profile.LeftOut);
-            }
-            _lastStageSeconds = copyClock.Elapsed.TotalSeconds;
+            var stageClock = Stopwatch.StartNew();
+            var profile = HostedRuntimeStage.PrepareProfileAsync(_host, HostedRuntimeKind.Client, source, Install, _stage,
+                selected, LocalClientCopy.StepTimeout, loaderPackage: package,
+                inspectMac: BundleInspection == null ? null : (_, install, timeout, _) => Task.FromResult(BundleInspection(install, timeout))).GetAwaiter().GetResult();
+            _activeGameRoot = profile.GameRoot;
+            _activePins = profile.Pins;
+            _activeLeftOut = HostedRuntimeStage.ProfileLeftOut.Describe(profile.LeftOut);
+            _lastStageSeconds = stageClock.Elapsed.TotalSeconds;
             _journal.AppendLocal(actor, JournalEntry.Of(JournalEntry.CopyDone, ("runtime", Install),
-                ("files", listing.Files.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)), ("source", source),
-                ("launchMode", CopyGame ? "copy" : "profile")));
+                ("files", profile.Loader.Files.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)), ("source", source),
+                ("runtimeKind", "client")));
             _prepared = true;
         }
         catch (Exception error) when (error is not AggregateException)

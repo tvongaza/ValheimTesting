@@ -115,7 +115,7 @@ internal interface IClientPlacement
 
 /// <summary>
 /// A client on this machine: launched, or attached to the operator's, as the plan's mode says. An owned client is launched
-/// from its disposable copy (<see cref="LocalClientCopy"/>), made at its plan's first open and kept for the placement's later
+/// from its disposable loader profile (<see cref="LocalClientCopy"/>), made at its plan's first open and kept for the placement's later
 /// opens of the same plan (a client that leaves and rejoins between rounds), or, with <see cref="ClientRunPlan.InPlace"/>, from
 /// its install as it is. <see cref="RetireAsync"/> removes the copies once their clients are closed.
 /// </summary>
@@ -135,7 +135,7 @@ internal sealed class LocalClientPlacement : IClientPlacement
                 LocalClientCopy.StepTimeout, cancellation, clientSession: true).GetAwaiter().GetResult();
         else if (plan.CopySource)
         {
-            var made = (PrepareCopy ?? ((actor, client, token) => LocalClientCopy.PrepareAsync(actor, client, token, copyGame: client.CopyGame)))(name, plan, cancellation).GetAwaiter().GetResult();
+            var made = (PrepareCopy ?? ((actor, client, token) => LocalClientCopy.PrepareAsync(actor, client, token)))(name, plan, cancellation).GetAwaiter().GetResult();
             bool closed;
             lock (_copies) { closed = _closed; if (!closed) _copies.Add((made, plan, [])); }
             if (closed)

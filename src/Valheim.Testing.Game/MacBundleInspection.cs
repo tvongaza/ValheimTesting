@@ -3,7 +3,7 @@ using System.Text;
 
 namespace Valheim.Testing.Game;
 
-/// <summary>Shared macOS bundle assessment used by local one-shot runs and hosted copies.</summary>
+/// <summary>Shared, read-only macOS bundle assessment of a source install, used by local one-shot runs and hosted profiles.</summary>
 internal static class MacBundleInspection
 {
     internal enum State { None, Accepted, Fixable, Broken, Rejected, Unknown }
@@ -11,17 +11,16 @@ internal static class MacBundleInspection
 
     // The one-shot runner does not use IGameHost. Run the same bounded assessment that hosted preparation sends
     // to a Mac host; pass paths through the environment, never through shell interpolation.
-    internal static Verdict Inspect(string install, TimeSpan timeout) => Run(install, repair: false, timeout);
-    internal static Verdict Repair(string install, TimeSpan timeout) => Run(install, repair: true, timeout);
+    internal static Verdict Inspect(string install, TimeSpan timeout) => Run(install, timeout);
 
     internal static string? SourceRefusal(Verdict verdict) => verdict.State switch
     {
         State.Accepted or State.Fixable => null,
-        State.Broken => $"a copy of this {GameLaunch.ClientMacBundle} would not launch without a macOS dialog ({Describe(verdict)}). " +
+        State.Broken => $"this {GameLaunch.ClientMacBundle} would not launch without a macOS dialog ({Describe(verdict)}). " +
             "Verify the game's files in Steam (Properties, Installed Files), which restores changed or missing files; the run never repairs the source install.",
-        State.Rejected => $"macOS rejects this {GameLaunch.ClientMacBundle} even with nothing added to it ({Describe(verdict)}), so no copy of it " +
-            "launches without a dialog. Use Steam's own signed and notarized build; the run never re-signs or repairs the source install.",
-        _ => $"macOS's verdict on this {GameLaunch.ClientMacBundle} cannot be read ({Describe(verdict)}), so the run cannot show that a copy " +
+        State.Rejected => $"macOS rejects this {GameLaunch.ClientMacBundle} even with nothing added to it ({Describe(verdict)}), so it does not " +
+            "launch without a dialog. Use Steam's own signed and notarized build; the run never re-signs or repairs the source install.",
+        _ => $"macOS's verdict on this {GameLaunch.ClientMacBundle} cannot be read ({Describe(verdict)}), so the run cannot show that it " +
             "launches without a dialog. codesign and spctl ship with macOS in /usr/bin; check that the host's shell finds them.",
     };
 
@@ -78,7 +77,7 @@ internal static class MacBundleInspection
             : "the bundle check returned no verdict; host output: " + diagnostics);
     }
 
-    private static Verdict Run(string install, bool repair, TimeSpan timeout)
+    private static Verdict Run(string install, TimeSpan timeout)
     {
         if (!OperatingSystem.IsMacOS()) return new(State.None, 0, "not macOS");
         string app = Path.Combine(install, GameLaunch.ClientMacBundle);
@@ -91,7 +90,6 @@ internal static class MacBundleInspection
         process.StartInfo.ArgumentList.Add("-c");
         process.StartInfo.ArgumentList.Add(Bash);
         process.StartInfo.Environment["app"] = app;
-        process.StartInfo.Environment["repair"] = repair ? "1" : "";
         process.Start();
         using var deadline = new CancellationTokenSource(timeout);
         Task<string> outputTask = process.StandardOutput.ReadToEndAsync(deadline.Token);
@@ -108,48 +106,31 @@ internal static class MacBundleInspection
         return ParseReport(output, error);
     }
 
-    internal static readonly string Bash = "set -u\n" + ProtectedPaths.BashInside + """
+    internal static readonly string Bash = """
+        set -u
         if [ "$(uname -s)" != Darwin ] || [ ! -d "$app" ]; then echo "VT-BUNDLE none"; exit 0; fi
         command -v codesign > /dev/null && command -v spctl > /dev/null || { echo "VT-BUNDLE tools"; exit 0; }
         # codesign names files by their physical path (/tmp is /private/tmp), so compare against that.
         app=$(cd "$app" && pwd -P) || { echo "VT-BUNDLE none"; exit 0; }
         b64() { base64 | tr -d '\n'; }
-        added=""; other=""; initial_valid=0
+        added=""; other=""
         if ! report=$(codesign --verify --deep --strict -vvvv "$app" 2>&1); then
           added=$(printf '%s\n' "$report" | sed -n 's/^file added: //p')
-          # Anything but added files (a changed or missing sealed file, a nested component's signature) no repair can fix.
+          # Anything but added files (a changed or missing sealed file, a nested component's signature) Steam must restore.
           other=$(printf '%s\n' "$report" | grep -vE '^(file added: |--prepared:|--validated:)|: a sealed resource is missing or invalid$' | grep . || true)
           [ -n "$added" ] || [ -n "$other" ] || other=$report
-        else
-          initial_valid=1
         fi
         if [ -n "$other" ]; then echo "VT-BUNDLE broken $(printf '%s\n' "$other" | grep -c .) $(printf '%s\n' "$other" | head -20 | b64)"; exit 0; fi
-        removed=0
-        if [ -n "${repair:-}" ]; then
-          xattr -dr com.apple.quarantine "$app" 2> /dev/null || true
-          while IFS= read -r file; do
-            [ -n "$file" ] || continue
-            case "$file" in "$app"/*) ;; *) continue;; esac
-            # A linked parent could make a textual path inside the app point outside the disposable copy (ProtectedPaths.BashInside).
-            vt_inside "$app" "$(dirname -- "$file")" || continue
-            if [ -f "$file" ] && [ ! -L "$file" ]; then rm -f -- "$file" && removed=$((removed + 1)); fi
-          done <<< "$added"
-        elif [ -n "$added" ]; then
+        if [ -n "$added" ]; then
           relative=""
           while IFS= read -r file; do relative+="${file#"$app"/}"$'\n'; done <<< "$added"
           echo "VT-BUNDLE fixable $(printf '%s\n' "$added" | grep -c .) $(printf '%s' "$relative" | head -20 | b64)"; exit 0
         fi
-        # The first verification already proved an unchanged bundle. Recheck only after removing added files.
-        verify=""
-        if [ "$initial_valid" -eq 0 ] || [ "$removed" -ne 0 ]; then
-          if ! verify=$(codesign --verify --deep --strict "$app" 2>&1); then
-            echo "VT-BUNDLE rejected $removed $(printf '%s' "$verify" | head -20 | b64)"; exit 0
-          fi
-        fi
+        # The verification above proved an unchanged bundle; Gatekeeper's own assessment decides the rest.
         if assess=$(spctl -a -t exec -vv "$app" 2>&1); then
-          echo "VT-BUNDLE accepted $removed $(printf '%s' "${assess:-}" | b64)"
+          echo "VT-BUNDLE accepted 0 $(printf '%s' "${assess:-}" | b64)"
         else
-          echo "VT-BUNDLE rejected $removed $(printf '%s\n%s\n' "${verify:-}" "${assess:-}" | head -20 | b64)"
+          echo "VT-BUNDLE rejected 0 $(printf '%s\n' "${assess:-}" | head -20 | b64)"
         fi
         """.ReplaceLineEndings("\n");
 }

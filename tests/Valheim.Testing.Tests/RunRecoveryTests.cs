@@ -641,7 +641,7 @@ public sealed class RunRecoveryTests : IDisposable
         Directory.CreateDirectory(_host.Local(Prep + "/runtime"));
         Line(_host, run, "client-a", Gone, JournalEntry.CopyIntended,
             ("runtime", Prep + "/runtime"), ("stage", Prep + "/staging"), ("parent", Prep),
-            ("launchMode", "profile"), ("launchRoot", source));
+            ("runtimeKind", "client"), ("launchRoot", source));
         _host.GameActive = true;
 
         var report = await RecoverAsync(run);
@@ -660,9 +660,9 @@ public sealed class RunRecoveryTests : IDisposable
         Directory.CreateDirectory(_host.Local(runtime));
         Line(_host, run, "server", Gone, JournalEntry.CopyIntended,
             ("runtime", runtime), ("stage", Prep + "/staging"), ("parent", Prep),
-            ("launchMode", "profile"), ("runtimeKind", "client"), ("launchRoot", "/source/game"));
+            ("runtimeKind", "client"), ("launchRoot", "/source/game"));
         Line(_host, run, "server", Gone, JournalEntry.CopyDone,
-            ("runtime", runtime), ("launchMode", "profile"), ("runtimeKind", "client"), ("launchRoot", runtime));
+            ("runtime", runtime), ("runtimeKind", "client"), ("launchRoot", runtime));
         _host.GameActive = true;
 
         var report = await RecoverAsync(run);
@@ -681,9 +681,9 @@ public sealed class RunRecoveryTests : IDisposable
         Directory.CreateDirectory(_host.Local(runtime));
         Line(_host, run, "server", Gone, JournalEntry.CopyIntended,
             ("runtime", runtime), ("stage", Prep + "/staging"), ("parent", Prep),
-            ("launchMode", "profile"), ("runtimeKind", "server"), ("launchRoot", "/source/server"));
+            ("runtimeKind", "server"), ("launchRoot", "/source/server"));
         Line(_host, run, "server", Gone, JournalEntry.CopyDone,
-            ("runtime", runtime), ("launchMode", "profile"), ("runtimeKind", "server"), ("launchRoot", "/source/server"));
+            ("runtime", runtime), ("runtimeKind", "server"), ("launchRoot", "/source/server"));
 
         var report = await RecoverAsync(run);
 

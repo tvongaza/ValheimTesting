@@ -61,7 +61,7 @@ The test finds its environment by convention, with no setting: `session.json` be
 
 ## Owned or attached client
 
-- **`owned`**: the run launches the client (a disposable copy of `client.install`) and stops that process, and only that process, when the scenario ends, whether it passed or failed. It refuses before launching if something already listens on the client's CLI port, if no Steam client is running, or if the join password variable is missing from its own environment (the client inherits it). Run the test **in the desktop session where Steam is running and signed in**, with a display: a client started from a service, a scheduled task without a desktop, or a plain SSH session cannot open a window or reach Steam.
+- **`owned`**: the run launches the client (`client.install` with a disposable loader profile) and stops that process, and only that process, when the scenario ends, whether it passed or failed. It refuses before launching if something already listens on the client's CLI port, if no Steam client is running, or if the join password variable is missing from its own environment (the client inherits it). Run the test **in the desktop session where Steam is running and signed in**, with a display: a client started from a service, a scheduled task without a desktop, or a plain SSH session cannot open a window or reach Steam.
 - **`attach`**: you launch the client and sign in yourself, then run the test; it connects to the client's ValheimCLI port, leaves the world at the end and never touches the process.
 
 Either way the server is always owned: the run copies the fixtures, starts that copy, proves by the adapter's identity handshake that it is talking to the process it started, and stops only that process.

@@ -162,13 +162,27 @@ public sealed class NativeDependencyResolverTests : IDisposable
         Assert.Equal((@"C:\Users\tester\AppData\LocalLow\IronGate\Valheim\characters_local", @"C:\Program Files (x86)\Steam\userdata"),
             (clientC.CharactersDirectory, clientC.SteamUserDataDirectory));
         Assert.Equal(@"C:\save\characters_local", resolvedReport.Actors.Single(actor => actor.Name == "client-a").CharactersDirectory);
+        // Every actor gets an owned profile: only selected loader files are shipped, every source-game byte stays as it was,
+        // and all four owned profiles are retired.
+        static string SourceSnapshot(FakeServerHost host)
+        {
+            string source = host.Local(@"C:\game\source");
+            return string.Join("\n", Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories)
+                .Select(file => Path.GetRelativePath(source, file).Replace('\\', '/') + " " + FileHash.Sha256(file))
+                .OrderBy(line => line, StringComparer.Ordinal));
+        }
+        var originalSources = hosts.ToDictionary(pair => pair.Key, pair => SourceSnapshot(pair.Value));
         var overlap = new Overlap();
         foreach (var host in hosts.Values) host.BeforeShip = overlap.EnterAsync;
         string output = Path.Combine(_rig.Root, "prepared");
         string[] prepared;
-        await using (var campaign = await HostedCampaignPreparation.PrepareAsync(manifestFile, output, TimeSpan.FromSeconds(30), copyGame: true, hostFactory: name => hosts[name]))
+        await using (var campaign = await HostedCampaignPreparation.PrepareAsync(manifestFile, output, TimeSpan.FromSeconds(30), name => hosts[name]))
         {
             var profile = campaign.Environment;
+            Assert.NotNull(profile.Server!.PreparedSourceFiles);
+            Assert.All(profile.Clients.Values, role => Assert.NotNull(role.PreparedSourceFiles));
+            Assert.Equal(4, hosts.Values.Sum(host => host.Scripts.Count(script => script == "profile-seed")));
+            Assert.DoesNotContain(hosts.Values, host => host.Scripts.Contains("copy"));
             prepared = [profile.Server!.Install, profile.Clients["client-a"].Install,
                 profile.Clients["client-b"].Install, profile.Clients["client-c"].Install];
             Assert.Equal(4, campaign.Listings.Count);
@@ -202,7 +216,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
             Assert.True(File.Exists(hosts["client-c"].Local(@"C:\Users\tester\AppData\LocalLow\IronGate\Valheim\characters_local\vt-three.fch")));
             Assert.All(new[] { "server", "client-a", "client-b", "client-c" }, name => Assert.NotEmpty(hosts[name].Claims));
         }
-        Assert.True(overlap.Seen, "Independent actors should stage concurrently, not wait for each prior actor's copy.");
+        Assert.True(overlap.Seen, "Independent actors should stage concurrently, not wait for each prior actor's profile.");
         foreach (string name in hosts.Keys)
         {
             Assert.True(File.Exists(Path.Combine(hosts[name].Local(@"C:\game\source"), "BepInEx", "core", "BepInEx.dll")));
@@ -217,34 +231,10 @@ public sealed class NativeDependencyResolverTests : IDisposable
         Assert.False(File.Exists(hosts["client-c"].Local(@"C:\Users\tester\AppData\LocalLow\IronGate\Valheim\characters_local\vt-three.fch")));
         Assert.False(File.Exists(Path.Combine(output, "profile.json"))); // The prepared environment, with the observed Steam IDs, stays in memory.
 
-        // The same SSH hosts now take the profile path by default. It ships only selected loader files,
-        // leaves every source-game byte alone, and retires all four owned profiles.
-        static string SourceSnapshot(FakeServerHost host)
-        {
-            string source = host.Local(@"C:\game\source");
-            return string.Join("\n", Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories)
-                .Select(file => Path.GetRelativePath(source, file).Replace('\\', '/') + " " + FileHash.Sha256(file))
-                .OrderBy(line => line, StringComparer.Ordinal));
-        }
-        var originalSources = hosts.ToDictionary(pair => pair.Key, pair => SourceSnapshot(pair.Value));
-        int copiesBeforeProfiles = hosts.Values.Sum(host => host.Scripts.Count(script => script == "copy"));
-        string profileOutput = Path.Combine(_rig.Root, "remote-profile-prepared");
-        string[] profileRuntimes;
-        await using (var campaign = await HostedCampaignPreparation.PrepareAsync(manifestFile, profileOutput, TimeSpan.FromSeconds(30), name => hosts[name]))
-        {
-            profileRuntimes = [campaign.Environment.Server!.Install, .. campaign.Environment.Clients.Values.Select(role => role.Install)];
-            Assert.All(new[] { "server", "client-a", "client-b", "client-c" }, name =>
-                Assert.Contains(name + ":profile", campaign.LaunchModes(copyGame: false)));
-            Assert.NotNull(campaign.Environment.Server!.PreparedSourceFiles);
-            Assert.All(campaign.Environment.Clients.Values, role => Assert.NotNull(role.PreparedSourceFiles));
-            Assert.Equal(copiesBeforeProfiles, hosts.Values.Sum(host => host.Scripts.Count(script => script == "copy")));
-            Assert.Equal(4, hosts.Values.Sum(host => host.Scripts.Count(script => script == "profile-seed")));
-        }
         Assert.All(hosts, pair => Assert.Equal(originalSources[pair.Key], SourceSnapshot(pair.Value)));
-        Assert.All(profileRuntimes, runtime => Assert.DoesNotContain(hosts.Values, host => Directory.Exists(host.Local(runtime))));
 
         // A dedicated server and one client may share a machine. Their installs are separate, but setup should
-        // still overlap under one host claim rather than serialising two full game copies.
+        // still overlap under one host claim rather than serialising two profiles.
         var sharedHost = hosts["server"];
         string sharedClientSource = sharedHost.Local(@"C:\game\client-source");
         FakeInstalls.Client(sharedClientSource);
@@ -265,7 +255,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         sharedHost.BeforeShip = sharedOverlap.EnterAsync;
         int claimsBefore = sharedHost.Claims.Count, checksBefore = 0;
         await using (var campaign = await HostedCampaignPreparation.PrepareAsync(sameHostManifestFile,
-            Path.Combine(_rig.Root, "shared-host-prepared"), TimeSpan.FromSeconds(30), copyGame: true, hostFactory: name => hosts[name]))
+            Path.Combine(_rig.Root, "shared-host-prepared"), TimeSpan.FromSeconds(30), name => hosts[name]))
         {
             Assert.Equal(claimsBefore + 1, sharedHost.Claims.Count);
             Assert.True(sharedOverlap.Seen, "Server and client setup on one host should overlap under its single claim.");
@@ -282,7 +272,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         // A game can exit while its Mac GUI agent stays loaded. That host's character and profile
         // must remain journalled until recovery proves the agent was removed.
         var blockedCampaign = await HostedCampaignPreparation.PrepareAsync(sameHostManifestFile,
-            Path.Combine(_rig.Root, "blocked-agent-prepared"), TimeSpan.FromSeconds(30), copyGame: true, hostFactory: name => hosts[name]);
+            Path.Combine(_rig.Root, "blocked-agent-prepared"), TimeSpan.FromSeconds(30), name => hosts[name]);
         string blockedRuntime = blockedCampaign.Copies.Single(copy => copy.Actor == "client-a").Runtime;
         var blocked = await new RunRetirement(null, "").CampaignAsync(blockedCampaign, ["server"], blockedHosts: ["server"]);
         Assert.Single(blocked);
@@ -296,7 +286,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         // VALHEIM_TESTING_KEEP_RUNTIME=1 keeps every actor's install (the disposable characters still go), and a second retire
         // by the same owner touches nothing, not even what the first one kept.
         var keptCampaign = await HostedCampaignPreparation.PrepareAsync(sameHostManifestFile, Path.Combine(_rig.Root, "kept-prepared"),
-            TimeSpan.FromSeconds(30), copyGame: true, hostFactory: name => hosts[name]);
+            TimeSpan.FromSeconds(30), name => hosts[name]);
         var retirement = new RunRetirement(null, "");
         RunRetirement.KeepOverride.Value = true;
         try { Assert.Empty(await retirement.CampaignAsync(keptCampaign, [])); }
@@ -312,10 +302,10 @@ public sealed class NativeDependencyResolverTests : IDisposable
     }
 
     // Run A (#258): a run never makes macOS show a dialog. A macOS client's source bundle with a changed sealed file is refused
-    // in the preflight; one with files only added inside it is fine, and its copy is repaired; a copy macOS would still reject
-    // fails preparation, is retired, and nothing launches. The bundle check is a bash script (MacAppBundle.Bash), answered here
-    // by the fake host; the real script runs on CI's macOS leg (MacAppBundleTests).
-    [Fact] public async Task AMacClientsCopyMustBeOneMacOSLaunchesWithoutADialog()
+    // in the preflight; one with files only added inside it is fine, since the profile launches that install, which macOS already
+    // let run. The bundle check is a read-only bash script (MacAppBundle.Bash), answered here by the fake host; the real script
+    // runs on CI's macOS leg (MacAppBundleTests).
+    [Fact] public async Task AMacClientsSourceMustBeOneMacOSLaunchesWithoutADialog()
     {
         string serverMod = _rig.Write("mac-campaign/Server.dll", RegressionRig.Assembly("Server", new("example.server")));
         string clientMod = _rig.Write("mac-campaign/Client.dll", RegressionRig.Assembly("Client", new("example.client")));
@@ -370,33 +360,21 @@ public sealed class NativeDependencyResolverTests : IDisposable
         var refusal = Assert.Single(broken.Problems, problem => problem.Actor == "player" && problem.Input == "macOS app bundle");
         Assert.Contains("Info.plist", refusal.Message);
         Assert.Contains("Verify the game's files in Steam", refusal.Message);
-        Assert.DoesNotContain(mac.Runs, run => run.Script == "mac-bundle" && run.Variables["repair"] == "1");
 
         // Files only added inside it (BepInEx preloader logs): fixable; the preflight passes.
         mac.MacBundleInspect = "VT-BUNDLE fixable 2 " + Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes("Contents/MacOS/preloader_1.log\nContents/MacOS/preloader_2.log"));
         var fixable = await HostedCampaignPreparation.InspectAsync(manifestFile, TimeSpan.FromSeconds(30), name => hosts[name]);
         Assert.True(fixable.Ready, string.Join("; ", fixable.Problems.Select(problem => problem.Message)));
 
-        // A copy macOS still rejects after repair: preparation fails, the copy is retired, nothing launches.
-        mac.MacBundleRepair = "VT-BUNDLE rejected 2 " + Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes("Valheim.app: rejected\nsource=no usable signature"));
-        var rejected = await Assert.ThrowsAnyAsync<Exception>(() => HostedCampaignPreparation.PrepareAsync(manifestFile, Path.Combine(_rig.Root, "mac-rejected"),
-            TimeSpan.FromSeconds(30), copyGame: true, hostFactory: name => hosts[name]));
-        Assert.Contains("macOS would refuse the disposable copy of Valheim.app at /runs/", rejected.ToString());
-        Assert.Single(mac.Runs, run => run.Script == "mac-bundle" && run.Variables["repair"] == "1");
-        Assert.DoesNotContain(mac.Scripts, script => script is "client-start" or "start");
-        Assert.False(Directory.Exists(mac.Local("/runs")) && Directory.EnumerateFiles(mac.Local("/runs"), "Valheim", SearchOption.AllDirectories).Any(),
-            "The rejected copy is retired.");
-
-        // Accepted after repair: prepared, the repair ran on the copy (never the source), and the source is unchanged.
-        mac.MacBundleRepair = "VT-BUNDLE accepted 2 -";
-        await using (var campaign = await HostedCampaignPreparation.PrepareAsync(manifestFile, Path.Combine(_rig.Root, "mac-accepted"), TimeSpan.FromSeconds(30), copyGame: true, hostFactory: name => hosts[name]))
+        // Prepared: the profile launches the source bundle, which is only ever read, and nothing is copied into a new bundle.
+        await using (var campaign = await HostedCampaignPreparation.PrepareAsync(manifestFile, Path.Combine(_rig.Root, "mac-accepted"), TimeSpan.FromSeconds(30), name => hosts[name]))
         {
-            var repair = mac.Runs.Last(run => run.Script == "mac-bundle" && run.Variables["repair"] == "1");
-            Assert.StartsWith("/runs/", repair.Variables["app"]);
-            Assert.EndsWith("/Valheim.app", repair.Variables["app"]);
+            Assert.Equal("/game/source", campaign.Environment.Clients["player"].PreparedGameRoot);
             Assert.Contains("Valheim.app/Contents/MacOS/Valheim", campaign.Listings["player"].Files.Keys);
+            Assert.DoesNotContain("Valheim.app/Contents/MacOS/Valheim", campaign.LoaderListings["player"].Files.Keys);
         }
-        Assert.All(mac.Runs.Where(run => run.Script == "mac-bundle" && run.Variables["repair"] != "1"), run => Assert.Equal("/game/source/Valheim.app", run.Variables["app"]));
+        Assert.All(mac.Runs.Where(run => run.Script == "mac-bundle"), run => Assert.Equal("/game/source/Valheim.app", run.Variables["app"]));
+        Assert.DoesNotContain("copy", mac.Scripts);
         Assert.Equal("game", File.ReadAllText(Path.Combine(macSource, "Valheim.app/Contents/MacOS/Valheim")));
     }
 
@@ -664,7 +642,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         bool scenarioRan = false;
         var options = new PinnedServerRunOptions<SitePlan>
         {
-            Name = "campaign-smoke", CopyGame = true, ReadPlan = _ => throw new InvalidOperationException("A campaign plan is in memory."),
+            Name = "campaign-smoke", ReadPlan = _ => throw new InvalidOperationException("A campaign plan is in memory."),
             Mod = new("test.mod/session", "TEST_SESSION_TOKEN"),
             Scenario = (session, _) => { scenarioRan = true; Assert.NotNull(session.Server!.Host); return Task.CompletedTask; },
             Hooks = new FakeRunHooks { Host = _ => host, Connect = _ => server.Connect(), StateWaits = false, RunId = "run-test" },
@@ -716,13 +694,14 @@ public sealed class NativeDependencyResolverTests : IDisposable
         Assert.Equal(FileHash.Sha256(inventory), result.GetProperty("Provenance").GetProperty("inventorySha256").GetString());
         Assert.Equal(host.Claims.Count, host.Releases.Count);
         Assert.Empty(Directory.GetDirectories(host.Local(@"C:\runs"), "vt-prep-*")); // The prepared install was retired.
-        // One copy of the server install (#257): the campaign's prepared install is the runtime, verified in place, not copied again.
-        Assert.Single(host.Scripts, script => script == "copy");
+        // One owned profile for the server (#257): the campaign's prepared install is the runtime, verified in place, never copied.
+        Assert.Single(host.Scripts, script => script == "profile-seed");
+        Assert.DoesNotContain("copy", host.Scripts);
         Assert.Equal("Setup", steps["verify the prepared runtime on the server host"]);
         Assert.DoesNotContain("copy and verify pinned runtime on the server host", steps.Keys);
         Assert.Contains("vt-prep-", result.GetProperty("Provenance").GetProperty("runtimeCopy").GetString());
         // The run journal (#257): one run id for the campaign; on the host, beside its lock, each copy was journalled before it
-        // was made (the first journal entry precedes the first copy script), then done, retired, and the run's end.
+        // was made (the first journal entry precedes the profile seed), then done, retired, and the run's end.
         string runId = result.GetProperty("Provenance").GetProperty("runId").GetString()!;
         var journal = await RunJournalOnHost.ReadAsync(host, @"C:\locks\journal", runId, TimeSpan.FromSeconds(5));
         Assert.Equal([JournalEntry.CopyIntended, JournalEntry.CopyDone, JournalEntry.CopyRetired],
@@ -736,7 +715,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         Assert.Contains($"vt-prep-{runId}-server", journal.First(record => record.Entry.Kind == JournalEntry.CopyIntended).Entry.Fields["runtime"]);
         var ended = Assert.Single(journal, record => record.Entry.Kind == JournalEntry.RunEnded);
         Assert.Equal(("passed", "true"), (ended.Entry.Fields["state"], ended.Entry.Fields["cleanupVerified"]));
-        Assert.True(host.Scripts.ToList().IndexOf("journal") < host.Scripts.ToList().IndexOf("copy"));
+        Assert.True(host.Scripts.ToList().IndexOf("journal") < host.Scripts.ToList().IndexOf("profile-seed"));
 
         // A server that may still run (its start reply was lost) keeps the prepared install it may run from, named, and the
         // host's lock; the one retire owner removes nothing it cannot prove unused.
@@ -772,13 +751,13 @@ public sealed class NativeDependencyResolverTests : IDisposable
         Assert.Equal(2, Directory.GetDirectories(host.Local(@"C:\runs"), "vt-prep-*").Count(directory => Directory.Exists(Path.Combine(directory, "runtime"))));
         Assert.DoesNotContain(failedRetire.GetProperty("Steps").EnumerateArray(), step => step.GetProperty("Name").GetString()!.StartsWith("remove the prepared install ", StringComparison.Ordinal));
 
-        // A journal entry that cannot be written stops the run before its effect: no copy is made that the journal does not name.
-        int copiesBefore = host.Scripts.Count(script => script == "copy");
+        // A journal entry that cannot be written stops the run before its effect: no profile is made that the journal does not name.
+        int copiesBefore = host.Scripts.Count(script => script == "profile-seed");
         host.Failures["journal"] = new HostResult(HostOutcome.Exited, 4, "", "No space left on device", TimeSpan.Zero, false);
         string unjournalledOutput = Path.Combine(_rig.Root, "run-campaign-unjournalled");
         Assert.Equal(1, await PinnedServerRun.RunCampaignAsync(manifest, Plan("example.server", "secret"), NoClients, unjournalledOutput, options));
         host.Failures.Remove("journal");
-        Assert.Equal(copiesBefore, host.Scripts.Count(script => script == "copy"));
+        Assert.Equal(copiesBefore, host.Scripts.Count(script => script == "profile-seed"));
         var unjournalled = JsonDocument.Parse(File.ReadAllText(Path.Combine(unjournalledOutput, "result.json"))).RootElement;
         var prepare = unjournalled.GetProperty("Steps").EnumerateArray().Single(step => step.GetProperty("Name").GetString() == "check the hosts and prepare every actor's disposable install");
         Assert.False(prepare.GetProperty("Passed").GetBoolean());
@@ -822,11 +801,11 @@ public sealed class NativeDependencyResolverTests : IDisposable
         return (result.GetProperty("CleanupVerified").GetBoolean(), (int)suite.Attribute("tests")!, (int)suite.Attribute("failures")!);
     }
 
-    // #257: a Ctrl+C while one actor's copy script runs (the server's, which then hangs until cancelled) cancels the campaign's
-    // preparation, but the sibling actor's copy, already under way and not interruptible, settles first: only then are the
-    // preparation's copies cleaned up and its end journalled. Every journalled vt-prep copy and staging folder is gone, each host
-    // journals the run's end with its cleanup verified, and the run fails.
-    [Fact] public async Task ACtrlCWhileOneActorsCopyRunsLetsTheSiblingSettleThenRemovesEveryPreparedCopy()
+    // #257: a Ctrl+C while one actor's profile seed runs (the server's, which then hangs until cancelled) cancels the campaign's
+    // preparation, but the sibling actor's seed, already under way and not interruptible, settles first: only then are the
+    // preparation's profiles cleaned up and its end journalled. Every journalled vt-prep profile and staging folder is gone, each
+    // host journals the run's end with its cleanup verified, and the run fails.
+    [Fact] public async Task ACtrlCWhileOneActorsSeedRunsLetsTheSiblingSettleThenRemovesEveryPreparedProfile()
     {
         string serverDll = _rig.Write("cut-campaign/Server.dll", RegressionRig.Assembly("Server", new("example.server")));
         string clientDll = _rig.Write("cut-campaign/Client.dll", RegressionRig.Assembly("Client", new("example.client")));
@@ -881,7 +860,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         var serverReleased = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var journalledAfterServerReleased = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         bool serverWasCopying = false, serverDoneWhileSiblingCopied = false, journalledBeforeSiblingSettled = false;
-        hosts["server"].Hang.Add("copy");
+        hosts["server"].Hang.Add("profile-seed");
         // The fake host answers at once; a real ship takes time. Yielding here lets client-a's preparation run beside the server's
         // instead of inside the call that starts it, so nothing but the preparation itself makes the cleanup wait for it.
         hosts["client-a"].BeforeShip = async () => await Task.Yield();
@@ -890,15 +869,15 @@ public sealed class NativeDependencyResolverTests : IDisposable
         void Observe(string host, string name)
         {
             events.Enqueue(host + ":" + name);
-            if (name == "copy" && host == "server") serverCopying.TrySetResult();
+            if (name == "profile-seed" && host == "server") serverCopying.TrySetResult();
             if (name == "journal" && serverReleased.Task.IsCompleted) journalledAfterServerReleased.TrySetResult();
         }
         hosts["server"].BeforeScript = name => Observe("server", name);
         hosts["client-a"].BeforeScript = name =>
         {
             Observe("client-a", name);
-            if (name != "copy") return;
-            // The Ctrl+C comes while the server's copy runs; this copy goes on to its end, as a copy already under way does.
+            if (name != "profile-seed") return;
+            // The Ctrl+C comes while the server's seed runs; this seed goes on to its end, as a host script already under way does.
             // Gates, not sleeps, order the steps (thread scheduling differs per runner): the cancelled server preparation removes
             // its partial copy and releases its host while this copy still runs.
             serverWasCopying = serverCopying.Task.Wait(TimeSpan.FromSeconds(20));
@@ -911,7 +890,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         };
         var options = new PinnedServerRunOptions<SitePlan>
         {
-            Name = "cut-campaign", CopyGame = true, ReadPlan = _ => throw new InvalidOperationException("A campaign plan is in memory."),
+            Name = "cut-campaign", ReadPlan = _ => throw new InvalidOperationException("A campaign plan is in memory."),
             Mod = new("test.mod/session", "TEST_SESSION_TOKEN"),
             Scenario = (_, _) => throw new InvalidOperationException("The scenario must not run after a cancelled preparation."),
             Hooks = new FakeRunHooks { Host = name => hosts[name], Connect = _ => server.Connect(), StateWaits = false, Cancellation = interrupt },
@@ -1497,7 +1476,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         bool scenarioRan = false;
         var options = new HostedRunOptions<Dictionary<string, ClientRunPlan>>
         {
-            Name = "hosted-campaign", CopyGame = true, ReadPlan = _ => throw new InvalidOperationException("A campaign plan is in memory."), Host = plan => plan["host"],
+            Name = "hosted-campaign", ReadPlan = _ => throw new InvalidOperationException("A campaign plan is in memory."), Host = plan => plan["host"],
             Mod = new("test.mod/session", "TEST_SESSION_TOKEN"),
             Scenario = async (session, _) =>
             {

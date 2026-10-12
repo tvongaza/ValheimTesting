@@ -149,7 +149,6 @@ public sealed class GameSession : IAsyncDisposable
             Report.Provenance[prefix + "LaunchMode"] = mode;
             Report.Provenance[prefix + "Install"] = mode switch
             {
-                "copy" => $"disposable copy of {plan.CopiedFrom} ({plan.Install})",
                 "profile" => $"source game: {plan.Install}; owned loader profile: {plan.PreparedLoaderRoot ?? plan.Install}",
                 _ => $"in place: {plan.Install}",
             };

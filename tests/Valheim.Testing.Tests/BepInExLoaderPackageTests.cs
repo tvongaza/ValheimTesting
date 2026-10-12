@@ -8,7 +8,7 @@ public sealed class BepInExLoaderPackageTests : IDisposable
     private readonly RegressionRig _rig = new();
     public void Dispose() => _rig.Dispose();
 
-    [Fact] public void AReviewedPackageReplacesTheCopiedGamesLoaderWithoutChangingTheSource()
+    [Fact] public void AReviewedPackageIsTheProfilesLoaderWithoutChangingTheSource()
     {
         var package = Package();
         string manifest = Path.Combine(_rig.Root, "loader.json");
@@ -20,12 +20,11 @@ public sealed class BepInExLoaderPackageTests : IDisposable
         var environment = _rig.Manifest();
         _rig.LoaderPackage = manifest;
         var regression = _rig.Regression(environment);
-        regression.CopyGame = true;
         var staged = regression.Stage("parent");
         Assert.Equal(package.Files["BepInEx/core/BepInEx.dll"], FileHash.Sha256(Path.Combine(_rig.Install, "BepInEx", "core", "BepInEx.dll")));
         Assert.Equal(changed, FileHash.Sha256(sourceCore));
-        // One loader identity: the install the package was applied to has the package's loader pin, which its identity names.
-        Assert.Equal(package.Loader, InstallPins.Of(_rig.Install).Loader);
+        // One loader identity: the profile the package was applied to has the package's loader pin, which its identity names.
+        Assert.Equal(package.Loader, InstallPins.Of(staged.Plan.Install, staged.Plan.LoaderRoot).Loader);
         Assert.EndsWith("(" + package.Loader + ")", package.Identity);
         staged.Verify();
         regression.Stage("candidate").Verify(); // The package remains selected across arms.
