@@ -9,7 +9,7 @@ public sealed class FixtureBakeTests : IDisposable
     private readonly string root = Path.Combine(Path.GetTempPath(), "fixture-bake-test-" + Guid.NewGuid().ToString("N"));
 
     public FixtureBakeTests() => Directory.CreateDirectory(root);
-    public void Dispose() => Directory.Delete(root, recursive: true);
+    public void Dispose() => DirectoryLinks.DeleteTree(root);
 
     [Fact]
     public void AConfirmedSaveAndCleanStopExportAnAtomicPinnedFixture()

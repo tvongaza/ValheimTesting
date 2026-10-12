@@ -20,13 +20,27 @@ internal static class DirectoryLinks
     {
         if (OperatingSystem.IsWindows()) Directory.Delete(alias); else File.Delete(alias);
     }
+
+    /// <summary>
+    /// Deletes a test folder that holds links: each link goes first, so a junction whose target is already deleted
+    /// (or a link loop) cannot fail the recursive delete.
+    /// </summary>
+    public static void DeleteTree(string root)
+    {
+        foreach (string entry in Directory.EnumerateFileSystemEntries(root))
+        {
+            if (new FileInfo(entry).LinkTarget != null) Remove(entry);
+            else if (Directory.Exists(entry)) DeleteTree(entry);
+        }
+        Directory.Delete(root, recursive: true);
+    }
 }
 
 // The one owner of "is this path inside that protected folder" resolves links, so every protected-output check refuses an alias.
 public sealed class ProtectedPathsTests : IDisposable
 {
     private readonly string _root = Directory.CreateTempSubdirectory("protected-paths-").FullName;
-    public void Dispose() => Directory.Delete(_root, recursive: true);
+    public void Dispose() => DirectoryLinks.DeleteTree(_root);
 
     private string Folder(string name)
     {
