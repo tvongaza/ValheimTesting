@@ -23,7 +23,7 @@ The session reports complete when the world is ready and `modReady` is true; `ac
 
 ## Remaining helpers
 
-ValheimCLI owns the game-side extension API: registration and instance tokens, command roles, the devcommands and joined-client rules, the mutation gate, cancellation, cleanup and quiescence probes, result limits and `cli_extensions` discovery. Its reference is ValheimCLI's [extension API guide](https://github.com/tvongaza/valheimCLI/blob/0a732d33eb75a318be49f7a2c55193eb666af1ee/docs/testing-toolkit.md#extension-api-v1), at the commit the released `Valheim.Testing.Cli` was built from; this repository does not keep a copy. What the toolkit adds:
+ValheimCLI owns the game-side extension API: registration and instance tokens, command roles, the devcommands and joined-client rules, the mutation gate, cancellation, cleanup and quiescence probes, result limits and `cli_extensions` discovery. Its reference is ValheimCLI's [extension API guide](https://github.com/tvongaza/valheimCLI/blob/e596a7d984feaaa695f5c2999964b64e23fbfd92/docs/testing-toolkit.md#extension-api-v1), at the commit the released `Valheim.Testing.Cli` was built from; this repository does not keep a copy. What the toolkit adds:
 
 | Helper | Purpose |
 |---|---|

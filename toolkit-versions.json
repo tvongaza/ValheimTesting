@@ -2,14 +2,14 @@
   "schema": 1,
   "released": {
     "Valheim.Testing": "0.1.0-preview.14",
-    "Valheim.Testing.Game": "0.1.0-preview.57",
-    "Valheim.Testing.GameSessions": "0.1.0-preview.17",
-    "Valheim.Testing.Cli": "0.1.0-preview.17",
+    "Valheim.Testing.Game": "0.1.0-preview.59",
+    "Valheim.Testing.GameSessions": "0.1.0-preview.19",
+    "Valheim.Testing.Cli": "0.1.0-preview.18",
     "Valheim.Testing.Doubles": "0.1.0-preview.15",
     "Valheim.Testing.Adapter": "0.1.0-preview.9",
     "Valheim.Testing.Bindings": "0.1.0-preview.3",
     "Valheim.Testing.Bindings.Tool": "0.1.0-preview.3",
-    "Valheim.Testing.NativeSmoke": "0.1.0-preview.23"
+    "Valheim.Testing.NativeSmoke": "0.1.0-preview.26"
   },
-  "releasedCliCommit": "0a732d33eb75a318be49f7a2c55193eb666af1ee"
+  "releasedCliCommit": "e596a7d984feaaa695f5c2999964b64e23fbfd92"
 }
