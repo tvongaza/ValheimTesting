@@ -46,7 +46,8 @@ public static class HostInstall
     /// refuses them). <paramref name="paths"/> limits the listing to those subdirectories and files: relative patterns whose
     /// segments are separated by <c>/</c> or <c>\</c>, with <c>*</c> allowed in a directory, for example <c>*_Data/Managed</c>,
     /// or at the file name, for example <c>save_backup_auto-*</c>. A pattern that starts with a separator or a drive, or holds an
-    /// empty segment or one ending in <c>.</c> or a space (<c>..</c> included), is refused before anything runs on the host.
+    /// empty segment, one ending in <c>.</c> or a space (<c>..</c> included) or one starting with <c>.</c> that holds a wildcard,
+    /// is refused before anything runs on the host.
     /// Null lists everything. The patcher entries and executables are always read.
     /// </summary>
     public static Task<HostListing> ListAsync(IGameHost host, string root, TimeSpan timeout, IReadOnlyList<string>? paths = null,
@@ -80,15 +81,17 @@ public static class HostInstall
 
     /// <summary>
     /// The listing patterns as both listing scripts receive them, with <c>/</c> separators: refuses a pattern that is blank,
-    /// holds a control character, starts with a separator or a drive (<c>C:</c>), or has an empty segment or one ending in
-    /// <c>.</c> or a space (<c>.</c>, <c>..</c>, and names Windows trims), each of which a bash and a PowerShell host would read
-    /// differently or outside the root.
+    /// holds a control character, starts with a separator or a drive (<c>C:</c>), or has an empty segment, one ending in
+    /// <c>.</c> or a space (<c>.</c>, <c>..</c>, and names Windows trims) or one starting with <c>.</c> that holds a wildcard
+    /// (a glob such as <c>.*</c>, which bash before 5.2 expands to <c>..</c>), each of which a bash and a PowerShell host would
+    /// read differently or outside the root.
     /// </summary>
     internal static string[] ListingPatterns(IEnumerable<string> paths) => paths.Select(path =>
     {
         string pattern = (path ?? "").Replace('\\', '/');
         if (string.IsNullOrWhiteSpace(pattern) || pattern.Any(char.IsControl) || pattern.StartsWith('/') || Drive.IsMatch(pattern) ||
-            pattern.Split('/').Any(segment => segment.Length == 0 || segment[^1] is '.' or ' '))
+            pattern.Split('/').Any(segment => segment.Length == 0 || segment[^1] is '.' or ' ' ||
+                (segment[0] == '.' && segment.IndexOfAny(['*', '?', '[']) >= 0)))
             throw new ArgumentException($"'{path}' is not a relative path inside the root.", nameof(paths));
         return pattern;
     }).ToArray();
@@ -374,8 +377,9 @@ internal static class HostInstallScripts
                 [ -n "$pattern" ] || continue
                 if [ "${nocase:-0}" = 1 ]; then
                     # A glob never folds the case of a segment without a wildcard, so resolve the pattern a segment at a time:
-                    # keep each entry whose name the segment, as written, matches under nocasematch. A linked directory on the
-                    # way is followed, as a glob follows it; a named entry that is a link is kept for the link check below.
+                    # keep each entry whose name the segment, as written, matches under nocasematch ("$dir"/* never yields . or
+                    # ..). A named entry that is a link is kept for the link check below; a linked directory on the way is
+                    # entered, as the case-sensitive glob and the PowerShell listing enter it.
                     found=(.)
                     IFS=/ read -ra segments <<< "$pattern"
                     for segment in "${segments[@]}"; do
