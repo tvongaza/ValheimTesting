@@ -20,9 +20,14 @@ jobs:
           persist-credentials: false
       - name: Fetch the pinned Ubuntu base from GHCR
         run: bash docker/linux-server/pull-ubuntu-base.sh
+      # Fetches and checks the pinned BepInExPack into .packages (reused from the cache when it is there); the image takes it from there.
+      - uses: ./.github/actions/setup
+        with:
+          pinned-downloads: true
+      - run: dotnet run scripts/bootstrap-cli.cs
       - name: Build the private image (never pushed)
         timeout-minutes: 30
-        run: docker build --pull -t valheimtesting-linux-server:ci docker/linux-server
+        run: bash docker/linux-server/build.sh --pull -t valheimtesting-linux-server:ci
       - name: Boot the dedicated server once with BepInEx
         timeout-minutes: 20
         run: |
