@@ -236,7 +236,7 @@ try
     exitCode = passed ? 0 : 1;
     outcome = $": hosted fixture, {selectedMods.Count} selected mod(s), {inputs.Mod.Arms.Count} arm(s); private evidence in {output}";
 }
-catch (Exception failure) when (failure is ArgumentException or IOException or InvalidDataException or InvalidOperationException or UnauthorizedAccessException or FormatException or OperationCanceledException)
+catch (Exception failure) when (failure is ArgumentException or IOException or InvalidDataException or InvalidOperationException or UnauthorizedAccessException or FormatException or OperationCanceledException or PlatformNotSupportedException)
 {
     Console.Error.WriteLine("REFUSED: " + failure.Message);
     if (outputChecked) SmokeOutput.MarkRefused(output, "start", [failure.Message]);

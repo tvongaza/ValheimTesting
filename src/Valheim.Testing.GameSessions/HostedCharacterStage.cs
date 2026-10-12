@@ -13,14 +13,14 @@ public sealed class HostedCampaignCharacter
     public string FileName { get; set; } = "";
     /// <summary>
     /// Optional: the client host user's <c>characters_local</c>. Left out, the client host's standard folder for its platform,
-    /// resolved on that host (Windows <c>%USERPROFILE%\AppData\LocalLow\IronGate\Valheim\characters_local</c>, Linux
-    /// <c>~/.config/unity3d/IronGate/Valheim/characters_local</c>, macOS <c>~/Library/Application Support/IronGate/Valheim/characters_local</c>).
+    /// resolved on that host (Windows <c>%USERPROFILE%\AppData\LocalLow\IronGate\Valheim\characters_local</c>,
+    /// macOS <c>~/Library/Application Support/IronGate/Valheim/characters_local</c>).
     /// </summary>
     public string CharactersLocalDirectory { get; set; } = "";
     /// <summary>
     /// Optional: the client host's Steam <c>userdata</c>, searched for a same-named Steam Cloud character. Left out, the first that
-    /// exists on that host: Windows Steam's registered <c>SteamPath</c>, then <c>Program Files (x86)\Steam</c>; Linux
-    /// <c>~/.local/share/Steam</c>, <c>~/.steam/steam</c>, then the Flatpak's; macOS <c>~/Library/Application Support/Steam</c>.
+    /// exists on that host: Windows Steam's registered <c>SteamPath</c>, then <c>Program Files (x86)\Steam</c>; macOS
+    /// <c>~/Library/Application Support/Steam</c>.
     /// </summary>
     public string SteamUserDataDirectory { get; set; } = "";
 
@@ -58,17 +58,17 @@ internal static class HostedCharacterStage
 
     /// <summary>
     /// Resolves the character's folders on its client host: each given one as given, each left out from the host's standard
-    /// paths for <paramref name="platform"/> (<c>windows</c>, <c>linux</c> or <c>macos</c>). <see cref="CharacterDirectories.Missing"/>
+    /// paths (a Windows or a macOS host's). <see cref="CharacterDirectories.Missing"/>
     /// names the folder and every path tried when one does not exist. <paramref name="userHome"/> replaces the host user's home
     /// in controlled tests.
     /// </summary>
-    internal static async Task<CharacterDirectories> ResolveDirectoriesAsync(IGameHost host, string platform, HostedCampaignCharacter input,
+    internal static async Task<CharacterDirectories> ResolveDirectoriesAsync(IGameHost host, HostedCampaignCharacter input,
         TimeSpan timeout, CancellationToken cancellation, string userHome = "", string steamRoot = "")
     {
         var reply = await host.RunAsync(host.Shell.Kind == HostShellKind.PowerShell ? PowerShellDirectories : BashDirectories,
             new Dictionary<string, string>
             {
-                ["platform"] = platform, ["characters"] = input.CharactersLocalDirectory, ["userdata"] = input.SteamUserDataDirectory,
+                ["characters"] = input.CharactersLocalDirectory, ["userdata"] = input.SteamUserDataDirectory,
                 ["userhome"] = userHome, ["steamroot"] = steamRoot,
             }, timeout, cancellation).ConfigureAwait(false);
         reply.EnsureSuccess($"Resolving the character folders on {host.Name}");
@@ -220,39 +220,24 @@ internal static class HostedCharacterStage
 
         """;
 
-    // Variables: platform, characters, userdata, userhome and steamroot (each may be empty; userhome and steamroot only for
-    // controlled tests). One "found" or "tried" line per path considered. Steam's userdata is searched in the order the signed-in
-    // identity is read (SteamSignedInUsers); Valheim's characters_local is the one beside it: a Flatpak Steam's game keeps its
-    // saves inside the Flatpak's own home.
+    // A macOS host's (the only one that runs bash for a client). Variables: characters, userdata, userhome and steamroot (each may be
+    // empty; userhome and steamroot only for controlled tests). One "found" or "tried" line per path considered.
     internal static readonly string BashDirectories = """
         set -u
         home=${userhome:-$HOME}
-        if [ "$platform" = macos ]; then
-          set -- "$home/Library/Application Support/Steam/userdata"
-        else
-          set -- "$home/.local/share/Steam/userdata" "$home/.steam/steam/userdata" "$home/.var/app/com.valvesoftware.Steam/.local/share/Steam/userdata"
-        fi
+        set -- "$home/Library/Application Support/Steam/userdata"
         if [ -n "$userdata" ]; then set -- "$userdata"; fi
-        steamfound=""
         for folder in "$@"; do
           echo "VT-CHARDIR userdata tried $folder"
-          if [ -d "$folder" ]; then echo "VT-CHARDIR userdata found $folder"; steamfound=$folder; break; fi
+          if [ -d "$folder" ]; then echo "VT-CHARDIR userdata found $folder"; break; fi
         done
-        if [ "$platform" = macos ]; then
-          standard="$home/Library/Application Support/IronGate/Valheim/characters_local"
-        else
-          case "$steamfound" in
-            "$home/.var/app/com.valvesoftware.Steam/"*) config="$home/.var/app/com.valvesoftware.Steam/.config" ;;
-            *) if [ -n "$userhome" ]; then config="$home/.config"; else config="${XDG_CONFIG_HOME:-$home/.config}"; fi ;;
-          esac
-          standard="$config/unity3d/IronGate/Valheim/characters_local"
-        fi
+        standard="$home/Library/Application Support/IronGate/Valheim/characters_local"
         folder=${characters:-$standard}
         echo "VT-CHARDIR characters tried $folder"
         if [ -d "$folder" ]; then echo "VT-CHARDIR characters found $folder"; fi
         """.ReplaceLineEndings("\n");
 
-    // A Windows host's (the only one that runs PowerShell); platform is always windows here.
+    // A Windows host's (the only one that runs PowerShell).
     internal static readonly string PowerShellDirectories = """
         $userHomeDir = if ($userhome) { $userhome } elseif ($env:USERPROFILE) { $env:USERPROFILE } else { [Environment]::GetFolderPath('UserProfile') }
         $candidates = @()

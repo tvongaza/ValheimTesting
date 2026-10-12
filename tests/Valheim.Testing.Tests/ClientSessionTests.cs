@@ -90,7 +90,7 @@ public sealed class ClientSessionTests : IDisposable
         Assert.Equal(1, process.Stops);
     }
 
-    [Fact] public void AFailureSnapshotRequiresTheExactOwnedProcessAndKeepsLogTails()
+    [ClientHostFact] public void AFailureSnapshotRequiresTheExactOwnedProcessAndKeepsLogTails()
     {
         using var current = System.Diagnostics.Process.GetCurrentProcess();
         var plan = Plan(); plan.Install = _output; plan.Port = 1; // No unrelated CLI service is probed by this local-process fixture.
@@ -298,9 +298,9 @@ public sealed class ClientSessionTests : IDisposable
         Assert.False(File.Exists(Path.Combine(_output, "client-process.json")));
     }
 
-    [Theory] [InlineData(ClientPlatform.Windows)] [InlineData(ClientPlatform.Linux)]
-    public void AnArm64PlanForAWindowsOrLinuxClientIsRefusedAndX64IsUnchanged(ClientPlatform platform)
+    [Fact] public void AnArm64PlanForAWindowsClientIsRefusedAndX64IsUnchanged()
     {
+        const ClientPlatform platform = ClientPlatform.Windows;
         using var install = ClientLaunchTests.Install.For(platform);
         var error = Assert.Throws<ArgumentException>(() => Owned(install.Root, "arm64").Validate());
         Assert.Contains($"this {platform} client is x64 only", error.Message);
@@ -438,7 +438,7 @@ public sealed class ClientSessionTests : IDisposable
         Assert.False(started);
     }
 
-    [Fact] public void JoinPasswordComesFromTheRunnerEnvironmentWithoutEnteringPlanData()
+    [ClientHostFact] public void JoinPasswordComesFromTheRunnerEnvironmentWithoutEnteringPlanData()
     {
         string variable = "VT_JOIN_PASSWORD_" + Guid.NewGuid().ToString("N");
         const string secret = "private-test-password";
@@ -499,7 +499,6 @@ public sealed class ClientSessionTests : IDisposable
 
     [Theory]
     [InlineData(ClientPlatform.Windows, "AppData", "LocalLow", "IronGate", "Valheim", "Player.log")]
-    [InlineData(ClientPlatform.Linux, ".config", "unity3d", "IronGate", "Valheim", "Player.log")]
     [InlineData(ClientPlatform.MacOS, "Library", "Logs", "IronGate", "Valheim", "Player.log")]
     public void UnityWritesTheClientsPlayerLogUnderTheUsersProfile(ClientPlatform platform, params string[] under) =>
         Assert.Equal(Path.Combine(new[] { Environment.GetFolderPath(Environment.SpecialFolder.UserProfile) }.Concat(under).ToArray()), ClientSession.PlayerLog(platform));

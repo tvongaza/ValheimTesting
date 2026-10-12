@@ -14,7 +14,7 @@ public sealed class OwnedRunPreflightTests : IDisposable
 
     // ---- plugin builds and ScriptEngine (a hand-typed file or hash; ValheimCLI in scripts without LoadOnStart) ----
 
-    [Fact] public void APassingInstallPassesThePreflight()
+    [ClientHostFact] public void APassingInstallPassesThePreflight()
     {
         using var install = PreflightInstall.Create();
         var plan = install.Plan();
@@ -22,7 +22,7 @@ public sealed class OwnedRunPreflightTests : IDisposable
         plan.Preflight();
     }
 
-    [Fact] public void APinnedBuildThatIsNotInstalledIsRefusedNamingTheFileThatIs()
+    [ClientHostFact] public void APinnedBuildThatIsNotInstalledIsRefusedNamingTheFileThatIs()
     {
         using var install = PreflightInstall.Create();
         install.Add("BepInEx/plugins/Jotunn.dll", "the fix build");
@@ -36,7 +36,7 @@ public sealed class OwnedRunPreflightTests : IDisposable
         plan.Preflight();
     }
 
-    [Fact] public void ABuildInstalledTwiceIsRefused()
+    [ClientHostFact] public void ABuildInstalledTwiceIsRefused()
     {
         using var install = PreflightInstall.Create();
         install.Add("BepInEx/scripts/valheimCLI.dll", PreflightInstall.CliBuild);
@@ -45,7 +45,7 @@ public sealed class OwnedRunPreflightTests : IDisposable
         Assert.Contains("BepInEx/scripts/valheimCLI.dll", error.Message);
     }
 
-    [Fact] public void AMistypedCandidateFileIsRefusedWithWhatTheFolderHolds()
+    [ClientHostFact] public void AMistypedCandidateFileIsRefusedWithWhatTheFolderHolds()
     {
         using var install = PreflightInstall.Create();
         install.Add("BepInEx/plugins/Jotunn.dll", "the fix build");
@@ -57,7 +57,7 @@ public sealed class OwnedRunPreflightTests : IDisposable
         Assert.Equal("absent", pins["ProceduralRoads"]);
     }
 
-    [Fact] public void APluginPinCannotReadAFileOutsideTheInstall()
+    [ClientHostFact] public void APluginPinCannotReadAFileOutsideTheInstall()
     {
         using var install = PreflightInstall.Create();
         var outside = Path.Combine(Path.GetDirectoryName(install.Root)!, "outside.dll");
@@ -71,7 +71,7 @@ public sealed class OwnedRunPreflightTests : IDisposable
         finally { File.Delete(outside); }
     }
 
-    [Fact] public void ACliInScriptsNeedsScriptEngineLoadingAtStart()
+    [ClientHostFact] public void ACliInScriptsNeedsScriptEngineLoadingAtStart()
     {
         using var install = PreflightInstall.Create(cliIn: "scripts");
         install.Add("BepInEx/plugins/ScriptEngine.dll", "script engine");
@@ -91,7 +91,7 @@ public sealed class OwnedRunPreflightTests : IDisposable
         plan.Preflight();
     }
 
-    [Fact] public void ScriptEngineCannotLoadItselfFromScripts()
+    [ClientHostFact] public void ScriptEngineCannotLoadItselfFromScripts()
     {
         using var install = PreflightInstall.Create(cliIn: "scripts");
         install.Add("BepInEx/scripts/ScriptEngine.dll", "script engine");
@@ -130,7 +130,7 @@ public sealed class OwnedRunPreflightTests : IDisposable
         Assert.Equal(8, StandingPins.Parse(line.Split(' '), "f").Count); // The same pins, one per line, parse.
     }
 
-    [Fact] public void AMalformedStandingFileRefusesTheLaunchBeforeAnythingStarts()
+    [ClientHostFact] public void AMalformedStandingFileRefusesTheLaunchBeforeAnythingStarts()
     {
         using var install = PreflightInstall.Create();
         var plan = install.Plan();
@@ -146,7 +146,7 @@ public sealed class OwnedRunPreflightTests : IDisposable
         plan.Preflight();
     }
 
-    [Fact] public void AStandingFileThatWouldRefuseTheRunIsRefused()
+    [ClientHostFact] public void AStandingFileThatWouldRefuseTheRunIsRefused()
     {
         using var install = PreflightInstall.Create();
         var plan = install.Plan();
@@ -249,7 +249,7 @@ public sealed class OwnedRunPreflightTests : IDisposable
         }
     }
 
-    [Fact] public void TheBepInExDeadlineIsBounded()
+    [ClientHostFact] public void TheBepInExDeadlineIsBounded()
     {
         using var install = PreflightInstall.Create();
         var plan = install.Plan();

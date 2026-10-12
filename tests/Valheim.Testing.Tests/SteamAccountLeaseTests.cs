@@ -78,7 +78,7 @@ public class SteamAccountPoolTests
     {
         var pool = TestEnvironment.Pool(Sample);
         var fake = new FakeLauncher().Exits(0, Reply("VT-LEASE claimed vt_client_two 7"), FakeLauncher.Report(0));
-        var lease = await pool.AcquireAsync(Host(fake), "run-42 on ci", Timeout, clientHost: "linux-gpu", run: "run-42");
+        var lease = await pool.AcquireAsync(Host(fake), "run-42 on ci", Timeout, clientHost: "mac-gpu", run: "run-42");
         Assert.Equal("vt_client_two", lease.Account); Assert.Equal("valheim-clients", lease.Pool); Assert.Equal("run-42 on ci", lease.Owner); Assert.Equal("run-42", lease.Run);
         Assert.Matches("^[0-9a-f]{32}$", lease.LeaseId);
         Assert.Equal("lease-box", lease.LeaseHostName);

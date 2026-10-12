@@ -24,14 +24,11 @@ public sealed partial class HostedServerRunTests
     [Fact] public async Task ACtrlCWhileAClientWaitsForItsStartupEndsTheWaitAtOnceAndCleansUpTheRun()
     {
         var server = NewServer(); var host = NewHost(server);
-        var clientHost = new FakeServerHost("linux-gpu", Path.Combine(_root, "gpu"), tunnelPort: 15578);
-        string clientInstall = clientHost.Local("/home/tester/valheim");
-        Directory.CreateDirectory(Path.Combine(clientInstall, "BepInEx", "core"));
-        FakeInstalls.Client(clientInstall);
-        File.WriteAllText(Path.Combine(clientInstall, GameLaunch.ClientLinuxExecutable), "client");
-        FakeInstalls.LinuxLoader(clientInstall);
+        var clientHost = new FakeServerHost("mac-gpu", Path.Combine(_root, "gpu"), tunnelPort: 15578);
+        string clientInstall = clientHost.Local("/Users/tester/valheim");
+        FakeInstalls.MacClient(clientInstall);
         var (plan, profile) = Write(host, withClient: true);
-        var client = new ClientRunPlan { Mode = "owned", Install = _root, Port = 5578, Pinning = "none", StartSeconds = 120, BepInExSeconds = 120 };
+        var client = new ClientRunPlan { Mode = "owned", Architecture = "x64", Install = _root, Port = 5578, Pinning = "none", StartSeconds = 120, BepInExSeconds = 120 };
         using var interrupt = new RunCancellation();
         // The wait hangs until its token is cancelled; the Ctrl+C comes while it is in progress.
         clientHost.Hang.Add("follow");
@@ -63,8 +60,12 @@ public sealed partial class HostedServerRunTests
         var ended = Assert.Single(await RunJournalOnHost.ReadAsync(host, "/var/tmp/vt/journal", RunId, TimeSpan.FromSeconds(5)), record => record.Entry.Kind == JournalEntry.RunEnded);
         Assert.Equal(("failed", "true"), (ended.Entry.Fields["state"], ended.Entry.Fields["cleanupVerified"]));
         // The client's process was journalled before its start and after it; nothing of the run is left for env recover.
-        var clientJournal = await RunJournalOnHost.ReadAsync(clientHost, "/home/tester/journal", RunId, TimeSpan.FromSeconds(5));
-        Assert.Equal([JournalEntry.ProcessIntended, JournalEntry.ProcessStarted], clientJournal.Where(record => record.Actor == "player").Select(record => record.Entry.Kind));
+        var clientJournal = await RunJournalOnHost.ReadAsync(clientHost, "/Users/tester/journal", RunId, TimeSpan.FromSeconds(5));
+        var playerKinds = clientJournal.Where(record => record.Actor == "player").Select(record => record.Entry.Kind).ToList();
+        Assert.Equal([JournalEntry.ProcessIntended, JournalEntry.ProcessStarted], playerKinds.Where(kind => kind is JournalEntry.ProcessIntended or JournalEntry.ProcessStarted));
+        // The Mac GUI agent journalled before the start is retired again: no live agent is left for env recover.
+        Assert.Equal(playerKinds.Count(kind => kind == JournalEntry.MacAgentIntended), playerKinds.Count(kind => kind == JournalEntry.MacAgentRetired));
+        Assert.Contains(JournalEntry.MacAgentIntended, playerKinds);
     }
 
     // Gap 3: a standalone run's runtime copy and world copy on the server host are each journalled before their script runs,

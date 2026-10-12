@@ -6,14 +6,12 @@ using Xunit;
 public sealed class ProfileLaunchEnvironmentTests
 {
     [Theory]
-    [InlineData(false, false)]
-    [InlineData(false, true)]
-    [InlineData(true, false)]
-    [InlineData(true, true)]
-    public void LinuxLaunchDropsInheritedLibraryPathOnlyWhenTheSpecUnsetsIt(bool client, bool profile)
+    [InlineData(false)]
+    [InlineData(true)]
+    public void LinuxServerLaunchDropsInheritedLibraryPathOnlyWhenTheSpecUnsetsIt(bool profile)
     {
         if (OperatingSystem.IsWindows()) return;
-        string source = client ? InteractiveScripts.LinuxStart : HostServerScripts.Start;
+        string source = HostServerScripts.Start;
         const string begin = "unsets=(); removed=(); sets=(); args=()";
         const string end = "done <<< \"$spec\"";
         int first = source.IndexOf(begin, StringComparison.Ordinal);

@@ -45,7 +45,7 @@ public sealed class TargetedRegressionTests : IDisposable
         Assert.False(Directory.Exists(_rig.Install));
     }
 
-    [Theory]
+    [ClientHostTheory]
     [InlineData(true, 1)]
     [InlineData(false, 0)]
     public void ADesktopOrNonWindowsPreflightCanStage(bool windows, int sessionId)
@@ -156,7 +156,7 @@ public sealed class TargetedRegressionTests : IDisposable
         Assert.False(Directory.Exists(runner.Install));
     }
 
-    [Fact] public void ATargetedRunValidatesItsExpectedErrorLinesBeforeStaging()
+    [ClientHostFact] public void ATargetedRunValidatesItsExpectedErrorLinesBeforeStaging()
     {
         var manifest = _rig.Manifest();
         manifest.LogScan[LogScanner.UnknownError] = new()
@@ -169,7 +169,7 @@ public sealed class TargetedRegressionTests : IDisposable
         Assert.Contains("exact expected BepInEx Error or Fatal header", Assert.Throws<ArgumentException>(() => _rig.Regression(manifest)).Message);
     }
 
-    [Fact] public async Task DirectRegressionHoldsTheHostLockUntilItsCopyIsRetired()
+    [ClientHostFact] public async Task DirectRegressionHoldsTheHostLockUntilItsCopyIsRetired()
     {
         var inventory = _rig.Inventory();
         var runner = new TargetedRegression(_rig.Manifest(), inventory: inventory)
@@ -190,7 +190,7 @@ public sealed class TargetedRegressionTests : IDisposable
         Assert.False(File.Exists(Path.Combine(lockPath, "owner")));
     }
 
-    [Fact] public void AValidManifestStagesOnlyTheAllowlistThenPreflightsEveryArm()
+    [ClientHostFact] public void AValidManifestStagesOnlyTheAllowlistThenPreflightsEveryArm()
     {
         var regression = _rig.Regression(_rig.Manifest(), ["example.probe/read"]);
         var parent = regression.Stage("parent");
@@ -226,7 +226,7 @@ public sealed class TargetedRegressionTests : IDisposable
         Assert.Equal(arms[0].Plan.Pins.Where(pin => pin.Key != "example.mod"), arms[1].Plan.Pins.Where(pin => pin.Key != "example.mod"));
     }
 
-    [Fact] public void ARegressionCarriesOnlyItsDeclaredClientVariablesIntoTheOwnedPlan()
+    [ClientHostFact] public void ARegressionCarriesOnlyItsDeclaredClientVariablesIntoTheOwnedPlan()
     {
         var inputs = _rig.Manifest();
         inputs.Client.Environment["PROCEDURALROADS_GENERATE_ROADS_ON_LOAD"] = "0";
@@ -249,7 +249,7 @@ public sealed class TargetedRegressionTests : IDisposable
 
     // ---- the fixture: nesting and identity ----
 
-    [Theory]
+    [ClientHostTheory]
     [InlineData("world-folder", "is a world folder itself", "Point fixture.root at its parent")]
     [InlineData("worlds_local", "holds a worlds_local/ wrapper", "Copy only the one world folder")]
     [InlineData("two-worlds", "holds 2 worlds (Other, SealFixture)", "Copy only the world under test")]
@@ -270,7 +270,7 @@ public sealed class TargetedRegressionTests : IDisposable
         Assert.False(Directory.Exists(_rig.Install)); // Refused before the install is created.
     }
 
-    [Fact] public void AFixtureHoldingAnotherUidIsRefusedNamingTheUidItHolds()
+    [ClientHostFact] public void AFixtureHoldingAnotherUidIsRefusedNamingTheUidItHolds()
     {
         var error = Assert.Throws<InvalidOperationException>(() => _rig.Regression(_rig.Manifest(worldUid: "450017353")).Stage("parent"));
         Assert.Contains("hostWorld.worldUid is 450017353", error.Message);
@@ -281,7 +281,7 @@ public sealed class TargetedRegressionTests : IDisposable
 
     // ---- dependencies: declared by the manifest and by the mod's own metadata ----
 
-    [Fact] public void AnOmittedDependencyTheModDeclaresIsRefusedNamingThePluginToStage()
+    [ClientHostFact] public void AnOmittedDependencyTheModDeclaresIsRefusedNamingThePluginToStage()
     {
         var manifest = _rig.Manifest();
         manifest.Plugins.Clear(); // The JsonDotNET detector shape: the mod's [BepInDependency] is met by nothing staged.
@@ -290,7 +290,7 @@ public sealed class TargetedRegressionTests : IDisposable
         Assert.Contains("Add the DLL that declares [BepInPlugin(\"example.dependency\")] to plugins in the manifest", error.Message);
     }
 
-    [Fact] public void ADependencyIsMetByWhatADllDeclaresNeverByItsFileName()
+    [ClientHostFact] public void ADependencyIsMetByWhatADllDeclaresNeverByItsFileName()
     {
         // A file named like the dependency that declares no plugin does not meet it.
         string impostor = _rig.Write("impostor/Dependency.dll", RegressionRig.Assembly("Dependency", null));
@@ -309,7 +309,7 @@ public sealed class TargetedRegressionTests : IDisposable
         Assert.Contains("needs example.dependency 1.2.0 or newer, and the staged BepInEx/plugins/Dependency.dll declares 1.1.0", error.Message);
     }
 
-    [Fact] public void AnAssemblyNothingStagedProvidesIsRefusedUnlessDeclaredOptional()
+    [ClientHostFact] public void AnAssemblyNothingStagedProvidesIsRefusedUnlessDeclaredOptional()
     {
         string uses = _rig.Write("uses/Library.dll", RegressionRig.Assembly("UsesLibrary", null, reference: typeof(FactAttribute)));
         var manifest = _rig.Manifest();
@@ -327,7 +327,7 @@ public sealed class TargetedRegressionTests : IDisposable
         regression.Stage("parent");
     }
 
-    [Fact] public void IncompatibleServerOnlyAndDuplicatePluginsAreRefused()
+    [ClientHostFact] public void IncompatibleServerOnlyAndDuplicatePluginsAreRefused()
     {
         var manifest = _rig.Manifest();
         string server = _rig.Write("server/ServerOnly.dll", RegressionRig.Assembly("ServerOnly", new("example.serveronly") { Processes = ["valheim_server.exe"] }));
@@ -342,7 +342,7 @@ public sealed class TargetedRegressionTests : IDisposable
 
     // ---- the allowlist and the disposable install ----
 
-    [Fact] public void AnExtraPluginOutsideTheAllowlistIsRefusedBeforeTheLaunch()
+    [ClientHostFact] public void AnExtraPluginOutsideTheAllowlistIsRefusedBeforeTheLaunch()
     {
         var regression = _rig.Regression(_rig.Manifest());
         var staged = regression.Stage("parent");
@@ -357,7 +357,7 @@ public sealed class TargetedRegressionTests : IDisposable
         Assert.False(File.Exists(Path.Combine(_rig.Install, "BepInEx", "plugins", "Extra.dll")));
     }
 
-    [Fact] public void AnInstallThisToolDidNotCreateIsNeverChanged()
+    [ClientHostFact] public void AnInstallThisToolDidNotCreateIsNeverChanged()
     {
         Directory.CreateDirectory(Path.Combine(_rig.Install, "BepInEx", "plugins"));
         File.WriteAllText(Path.Combine(_rig.Install, "BepInEx", "plugins", "Valued.dll"), "someone's install");
@@ -375,7 +375,7 @@ public sealed class TargetedRegressionTests : IDisposable
         Assert.Contains("overlap", Assert.Throws<ArgumentException>(() => _rig.Regression(_rig.Manifest())).Message);
     }
 
-    [Fact] public void RemovingTheInstallIsTheLastArmsCleanupStep()
+    [ClientHostFact] public void RemovingTheInstallIsTheLastArmsCleanupStep()
     {
         var regression = _rig.Regression(_rig.Manifest());
         regression.Stage("parent");
@@ -409,7 +409,7 @@ public sealed class TargetedRegressionTests : IDisposable
     // Found on a Windows station: a disposable install reused across arms kept a mod manager's old Doorstop proxy. Every arm
     // stages a fresh profile, so nothing an earlier arm left in it survives, and a mod manager's Doorstop marker in the game
     // (not a loader file) never reaches a profile at all.
-    [Fact] public void EachArmGetsAFreshProfile()
+    [ClientHostFact] public void EachArmGetsAFreshProfile()
     {
         _rig.Write("game/.doorstop_version", Encoding.UTF8.GetBytes("4.4.0"));
         var regression = _rig.Regression(_rig.Manifest());
@@ -426,7 +426,7 @@ public sealed class TargetedRegressionTests : IDisposable
         regression.Remove();
     }
 
-    [Fact] public void ADefaultArmUsesAnOwnedProfileWithoutChangingTheSourceInstall()
+    [ClientHostFact] public void ADefaultArmUsesAnOwnedProfileWithoutChangingTheSourceInstall()
     {
         if (OperatingSystem.IsWindows())
             _rig.Write("game/version.dll", Encoding.UTF8.GetBytes("another mod manager's proxy"));
@@ -471,7 +471,7 @@ public sealed class TargetedRegressionTests : IDisposable
         }
     }
 
-    [Fact] public void AMissingCharacterIsRefusedBeforeTheLaunch()
+    [ClientHostFact] public void AMissingCharacterIsRefusedBeforeTheLaunch()
     {
         var manifest = _rig.Manifest();
         manifest.Client.Character = "nobody";
@@ -480,7 +480,7 @@ public sealed class TargetedRegressionTests : IDisposable
         Assert.Contains("Stage the disposable local character", error.Message);
     }
 
-    [Fact] public void ARegisteredCharacterCanBePreflightedWithoutTouchingTheLiveCharacterFolder()
+    [ClientHostFact] public void ARegisteredCharacterCanBePreflightedWithoutTouchingTheLiveCharacterFolder()
     {
         string local = Path.Combine(_rig.Save, "characters_local");
         string source = Path.Combine(local, "smoketest.fch");
@@ -539,7 +539,7 @@ public sealed class TargetedRegressionTests : IDisposable
 
     // ---- the ValheimCLI set (#124's capability manifest) ----
 
-    [Fact] public void AStaleOrIncompleteValheimCliSetIsRefusedByItsCapabilityManifest()
+    [ClientHostFact] public void AStaleOrIncompleteValheimCliSetIsRefusedByItsCapabilityManifest()
     {
         var manifest = _rig.Manifest();
         manifest.Cli.Manifest = _rig.CliManifest(save: true);
@@ -568,7 +568,7 @@ public sealed class TargetedRegressionTests : IDisposable
 
     // ---- the arms ----
 
-    [Fact] public void AWrongCandidateHashIsRefusedNamingTheCommitToRebuild()
+    [ClientHostFact] public void AWrongCandidateHashIsRefusedNamingTheCommitToRebuild()
     {
         var manifest = _rig.Manifest();
         manifest.Mod.Arms["candidate"].Sha256 = new string('c', 64);
@@ -579,7 +579,7 @@ public sealed class TargetedRegressionTests : IDisposable
         Assert.Contains("Build commit c1, or correct the path", Assert.Throws<FileNotFoundException>(() => _rig.Regression(manifest).Stage("parent")).Message);
     }
 
-    [Fact] public void TwoArmsWithOneInstalledHashAreRefusedUnlessARepeatabilityRun()
+    [ClientHostFact] public void TwoArmsWithOneInstalledHashAreRefusedUnlessARepeatabilityRun()
     {
         var manifest = _rig.Manifest();
         manifest.Mod.Arms["candidate"] = new() { File = _rig.Parent, Sha256 = FileHash.Sha256(_rig.Parent), Commit = "c1" };
@@ -590,7 +590,7 @@ public sealed class TargetedRegressionTests : IDisposable
         Assert.True(_rig.Regression(manifest).Stage("candidate").Manifest.Repeatability);
     }
 
-    [Fact] public void AnUnpinnedFileIsRefusedWithTheHashToReview()
+    [ClientHostFact] public void AnUnpinnedFileIsRefusedWithTheHashToReview()
     {
         var manifest = _rig.Manifest();
         manifest.Plugins[0].Sha256 = "";
@@ -598,7 +598,7 @@ public sealed class TargetedRegressionTests : IDisposable
         Assert.Contains($"plugins[0]: pin {manifest.Plugins[0].File} by its SHA256. It is {FileHash.Sha256(manifest.Plugins[0].File)}", error.Message);
     }
 
-    [Fact] public void ArmsOfDifferentModsAreRefused()
+    [ClientHostFact] public void ArmsOfDifferentModsAreRefused()
     {
         var manifest = _rig.Manifest();
         string other = _rig.Write("other/Other.dll", RegressionRig.Assembly("Other", new("example.other")));
@@ -635,7 +635,7 @@ public sealed class TargetedRegressionTests : IDisposable
     }
 
     // A run's inputs read back on the machine recorded beside them, or on this machine when nothing is.
-    [Fact] public void ReadUsesTheRecordedMachineOrThisOne()
+    [ClientHostFact] public void ReadUsesTheRecordedMachineOrThisOne()
     {
         string run = Path.Combine(_rig.Root, "run");
         Directory.CreateDirectory(run);
@@ -646,7 +646,7 @@ public sealed class TargetedRegressionTests : IDisposable
         if (machine.Platform == "windows") machine.SteamPath = steam;
         machine.Directories.Add(steam);
         string detected = machine.App(steam, "892970", "Valheim", machine.Platform switch
-            { "windows" => GameLaunch.ClientWindowsExecutable, "macos" => "Valheim.app/Contents/MacOS/Valheim", _ => GameLaunch.ClientLinuxExecutable });
+            { "windows" => GameLaunch.ClientWindowsExecutable, "macos" => "Valheim.app/Contents/MacOS/Valheim", _ => throw new PlatformNotSupportedException(GameLaunch.LinuxClientRefusal) });
         using (EnvironmentInventory.UseMachine(machine))
             Assert.Equal((detected, "local-client"), (TargetedRegression.Read(inputs).Game, TargetedRegression.Read(inputs).ClientEnvironment));
         File.WriteAllText(Path.Combine(run, "environments.json"), System.Text.Json.JsonSerializer.Serialize(new
@@ -724,8 +724,11 @@ internal sealed class RegressionRig : IDisposable
     {
         _journalScope = RunJournal.UseLocalDirectory(Path.Combine(Root, "journal"));
         Runtime = Path.Combine(Root, "runs");
-        var platform = GameLaunch.CurrentClientHost;
+        // A Linux machine runs no client (#708): its rig holds a Windows-layout install, which plans validate from any machine,
+        // plus the Linux Doorstop library its dedicated-server tests load.
+        var platform = GameLaunch.CurrentClientHost == ClientPlatform.Linux ? ClientPlatform.Windows : GameLaunch.CurrentClientHost;
         var game = ClientLaunchTests.Install.For(platform);
+        if (GameLaunch.CurrentClientHost == ClientPlatform.Linux) game.Add("doorstop_libs/libdoorstop_x64.so");
         CopyTree(game.Root, Game);
         game.Dispose();
         string managed = platform == ClientPlatform.MacOS ? "Valheim.app/Contents/Resources/Data/Managed" : "valheim_Data/Managed";

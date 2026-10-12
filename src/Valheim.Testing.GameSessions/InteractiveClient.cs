@@ -9,9 +9,9 @@ namespace Valheim.Testing.GameSessions;
 [ResultShape]
 public enum InteractiveRefusal
 {
-    /// <summary>The host user has no desktop session there (Windows), or the display does not exist or refuses the user (Linux).</summary>
+    /// <summary>The host user has no desktop session there.</summary>
     NoSession,
-    /// <summary>The session has no Steam client running as the host user (on the display, for Linux).</summary>
+    /// <summary>The session has no Steam client running as the host user.</summary>
     NoSteam,
 }
 
@@ -21,40 +21,6 @@ public sealed class InteractiveSessionException(InteractiveRefusal reason, strin
 {
     public InteractiveRefusal Reason { get; } = reason;
     public string HostName { get; } = hostName;
-}
-
-/// <summary>
-/// The existing desktop session of a Linux host: an X display (<c>:N</c>, a socket in <c>/tmp/.X11-unix</c>), optionally a Wayland
-/// socket in the runtime directory, and the X authority file. The host's user must be the one logged in to it. Valheim draws
-/// through X, so a Wayland session needs its XWayland display too.
-/// </summary>
-public sealed class LinuxDisplay
-{
-    private static readonly Regex DisplayName = new(@"^:[0-9]{1,4}(\.[0-9]{1,2})?$", RegexOptions.CultureInvariant);
-    private static readonly Regex SocketName = new("^[A-Za-z0-9][A-Za-z0-9_.-]*$", RegexOptions.CultureInvariant);
-
-    /// <param name="display">The local X display, <c>:0</c> by default. Remote (TCP) displays are refused.</param>
-    /// <param name="waylandDisplay">The Wayland socket's name (for example <c>wayland-0</c>), passed on as WAYLAND_DISPLAY when given.</param>
-    /// <param name="runtimeDirectory">XDG_RUNTIME_DIR; <c>/run/user/&lt;uid&gt;</c> is used when it exists and this is null.</param>
-    /// <param name="xAuthority">XAUTHORITY; otherwise <c>$XDG_RUNTIME_DIR/gdm/Xauthority</c> or <c>~/.Xauthority</c>, whichever exists.</param>
-    public LinuxDisplay(string display = ":0", string? waylandDisplay = null, string? runtimeDirectory = null, string? xAuthority = null)
-    {
-        if (!DisplayName.IsMatch(display ?? "")) throw new ArgumentException("A display is a local X display such as :0 or :1.0; remote displays are not supported.", nameof(display));
-        if (waylandDisplay != null && !SocketName.IsMatch(waylandDisplay)) throw new ArgumentException("A Wayland display is a socket name such as wayland-0.", nameof(waylandDisplay));
-        CheckPath(runtimeDirectory, nameof(runtimeDirectory));
-        CheckPath(xAuthority, nameof(xAuthority));
-        Display = display!; WaylandDisplay = waylandDisplay; RuntimeDirectory = runtimeDirectory; XAuthority = xAuthority;
-    }
-
-    public string Display { get; }
-    public string? WaylandDisplay { get; }
-    public string? RuntimeDirectory { get; }
-    public string? XAuthority { get; }
-
-    private static void CheckPath(string? path, string name)
-    {
-        if (path != null && (!path.StartsWith('/') || path.Any(char.IsControl))) throw new ArgumentException(name + " must be an absolute path on the host.", name);
-    }
 }
 
 /// <summary>What stopping an interactive client found: it was killed, had gone already, or quit by itself when asked.</summary>
@@ -69,11 +35,10 @@ public enum InteractiveStop { Stopped, AlreadyGone, Quit }
 /// (an interactive token, never a stored password), under a unique name for this launch. Starting it runs a small launcher in the
 /// user's desktop session, which starts the game and records its process ID and start time. The task is always removed again,
 /// whatever happened.</item>
-/// <item>Linux (a bash host): the game starts in its own session (setsid) with the <see cref="LinuxDisplay"/>'s DISPLAY,
-/// WAYLAND_DISPLAY, XDG_RUNTIME_DIR, XAUTHORITY and session bus. The host user must be the display's user.</item>
 /// <item>macOS: an SSH host bootstraps a run-owned LaunchAgent into its unlocked console user's GUI session;
 /// the agent starts the selected native or Rosetta slice and is removed after the exact client process stops.</item>
 /// </list>
+/// A Linux host runs the dedicated server only; a Linux client is refused (<see cref="PlatformNotSupportedException"/>).
 /// The host refuses before anything starts when the user has no desktop session there (on Windows, also when it has more than one),
 /// when no Steam client runs as the user in it, when a required install file is missing or when the launch directory exists.
 /// </summary>
@@ -85,7 +50,7 @@ public static class InteractiveClient
     /// <summary>
     /// Checks, without creating a task or a launch directory, that this Windows host has exactly one desktop session for its
     /// user and Steam is running in that session. Call this before staging a large disposable install for a one-shot run;
-    /// <see cref="StartAsync(IGameHost, GameLaunch, string, TimeSpan, LinuxDisplay, CancellationToken)"/> checks again at launch.
+    /// <see cref="StartAsync(IGameHost, GameLaunch, string, TimeSpan, CancellationToken)"/> checks again at launch.
     /// </summary>
     internal static async Task RequireWindowsDesktopAsync(IGameHost host, CancellationToken cancellation = default)
     {
@@ -131,12 +96,12 @@ public static class InteractiveClient
     /// <param name="timeout">How long the start may take, at least 15 s. A reply lost past it is an unknown outcome: a client (and, on
     /// Windows, its task) may exist, named in the exception.</param>
     public static Task<InteractiveClientProcess> StartAsync(IGameHost host, GameLaunch launch, string launchDirectory, TimeSpan timeout,
-        LinuxDisplay? display = null, CancellationToken cancellation = default) =>
-        StartAsync(host, launch, launchDirectory, timeout, display, cancellation, null);
+        CancellationToken cancellation = default) =>
+        StartAsync(host, launch, launchDirectory, timeout, cancellation, null);
 
     // Journal intent after local validation but immediately before asking the host to start a process.
     internal static async Task<InteractiveClientProcess> StartAsync(IGameHost host, GameLaunch launch, string launchDirectory, TimeSpan timeout,
-        LinuxDisplay? display, CancellationToken cancellation, Action? beforeLaunch)
+        CancellationToken cancellation, Action? beforeLaunch)
     {
         ArgumentNullException.ThrowIfNull(host);
         ArgumentNullException.ThrowIfNull(launch);
@@ -146,8 +111,7 @@ public static class InteractiveClient
         bool windows = launch.Platform == ClientPlatform.Windows;
         if (windows != (host.Shell.Kind == HostShellKind.PowerShell))
             throw new ArgumentException(windows ? $"A Windows client starts through a PowerShell host; {host.Name} runs {host.Shell}."
-                : $"A Linux or macOS client starts through a bash host; {host.Name} runs {host.Shell}.", nameof(host));
-        if (launch.Platform != ClientPlatform.Linux && display != null) throw new ArgumentException("A display belongs to a Linux client.", nameof(display));
+                : $"A macOS client starts through a bash host; {host.Name} runs {host.Shell}.", nameof(host));
         launchDirectory = CheckDirectory(host, launchDirectory, windows);
 
         var secretValues = new List<string>();
@@ -174,7 +138,7 @@ public static class InteractiveClient
             ["files"] = string.Join('\n', launch.RequiredFiles),
         };
         if (windows) { variables["task"] = task!; variables["launcher"] = InteractiveScripts.WindowsLauncher; }
-        else if (launch.Platform == ClientPlatform.MacOS)
+        else
         {
             variables["exe"] = "Valheim.app/Contents/MacOS/Valheim";
             variables["arch"] = launch.MacArchitecture == ClientArchitecture.Arm64 ? "arm64" : "x86_64";
@@ -182,19 +146,7 @@ public static class InteractiveClient
             variables["label"] = InteractiveScripts.MacLabelPrefix + Guid.NewGuid().ToString("N");
             variables["plist"] = InteractiveScripts.MacPlist(variables["label"], launchDirectory);
         }
-        else
-        {
-            display ??= new LinuxDisplay();
-            variables["exe"] = GameLaunch.ClientLinuxExecutable;
-            variables["display"] = display.Display; variables["wayland"] = display.WaylandDisplay ?? "";
-            variables["runtime"] = display.RuntimeDirectory ?? ""; variables["xauthority"] = display.XAuthority ?? "";
-        }
-        string script = launch.Platform switch
-        {
-            ClientPlatform.Windows => InteractiveScripts.WindowsStart,
-            ClientPlatform.MacOS => InteractiveScripts.MacStart,
-            _ => InteractiveScripts.LinuxStart,
-        };
+        string script = windows ? InteractiveScripts.WindowsStart : InteractiveScripts.MacStart;
         beforeLaunch?.Invoke();
         var result = Redact(await (host is ScriptedGameHost scripted
             ? scripted.RunWithSecretsAsync(script, variables, secretTokens, timeout, cancellation)
@@ -203,17 +155,17 @@ public static class InteractiveClient
     }
 
     /// <summary>
-    /// <see cref="StartAsync(IGameHost, GameLaunch, string, TimeSpan, LinuxDisplay, CancellationToken)"/> on the leased Steam
+    /// <see cref="StartAsync(IGameHost, GameLaunch, string, TimeSpan, CancellationToken)"/> on the leased Steam
     /// account <paramref name="account"/>: refused before anything runs on the host unless its lease is live, was taken for a client
     /// on this host, and passed the signed-in check when the profile asks for one.
     /// </summary>
     public static Task<InteractiveClientProcess> StartAsync(SteamAccountHold account, IGameHost host, GameLaunch launch, string launchDirectory, TimeSpan timeout,
-        LinuxDisplay? display = null, CancellationToken cancellation = default)
+        CancellationToken cancellation = default)
     {
         ArgumentNullException.ThrowIfNull(account);
         ArgumentNullException.ThrowIfNull(host);
         account.RequireReady(host.Name);
-        return StartAsync(host, launch, launchDirectory, timeout, display, cancellation);
+        return StartAsync(host, launch, launchDirectory, timeout, cancellation);
     }
 
     internal static async Task<InteractiveClientProcess> ReadStartAsync(IGameHost host, ClientPlatform platform, string launchDirectory, string? task, HostResult result)
@@ -779,94 +731,6 @@ internal static partial class InteractiveScripts
     private const string LinuxStarted = """
         started() { local s; s=$(cat "/proc/$1/stat" 2> /dev/null) || return 1; s=${s##*) }; set -- $s; [ "$1" != Z ] && echo "${20}"; }
         """;
-
-    // Variables: install, files, exe, dir, spec, display, wayland, runtime, xauthority, seconds; secrets arrive in VT_SECRETS
-    // (base64 NAME=value tokens, space separated), which the wrapper keeps in memory and this script clears at once. Steam is a process named
-    // steam running as this user, on the display when its environment says. The game runs under a small recorder in its own
-    // session (setsid), so the SSH session's end does not reach it; the recorder writes the game's PID (env execs the game in
-    // place, so it is the game's) and start identity to the pid file, which is all an interrupted run's recovery has to go on
-    // (#257), then its exit code.
-    public static readonly string LinuxStart = ("set -u\nsecrets=${VT_SECRETS:-}\nunset VT_SECRETS\n" + LinuxStarted + "\n" + """
-        if [ "$(uname -s)" != Linux ]; then echo "VT-INTERACTIVE unsupported this host runs $(uname -s); a Linux client needs a Linux host"; exit 0; fi
-        while IFS= read -r f; do
-            if [ -n "$f" ]; then
-                case "$f" in /*) needed="$f" ;; *) needed="$install/$f" ;; esac
-                if [ ! -f "$needed" ]; then echo "VT-INTERACTIVE missing $f"; exit 0; fi
-            fi
-        done <<< "$files"
-        if [ ! -x "$install/$exe" ]; then echo "VT-INTERACTIVE missing $exe is not executable"; exit 0; fi
-        if [ -e "$dir" ]; then echo "VT-INTERACTIVE exists"; exit 0; fi
-        uid=$(id -u) || exit 3
-        user=$(id -un 2> /dev/null || echo "uid $uid")
-        screen=${display#:}; screen=${screen%%.*}
-        socket="/tmp/.X11-unix/X$screen"
-        if [ ! -S "$socket" ]; then echo "VT-INTERACTIVE no-session no X server on display $display here ($socket does not exist); start the desktop session first"; exit 0; fi
-        if [ -z "$runtime" ] && [ -d "/run/user/$uid" ]; then runtime="/run/user/$uid"; fi
-        if [ -n "$wayland" ] && { [ -z "$runtime" ] || [ ! -S "$runtime/$wayland" ]; }; then echo "VT-INTERACTIVE no-session no Wayland socket $wayland in ${runtime:-XDG_RUNTIME_DIR}"; exit 0; fi
-        if [ -z "$xauthority" ]; then
-            if [ -n "$runtime" ] && [ -f "$runtime/gdm/Xauthority" ]; then xauthority="$runtime/gdm/Xauthority"
-            elif [ -n "${HOME:-}" ] && [ -f "$HOME/.Xauthority" ]; then xauthority="$HOME/.Xauthority"; fi
-        fi
-        if command -v xdpyinfo > /dev/null 2>&1; then
-            if ! ( export DISPLAY="$display"; if [ -n "$xauthority" ]; then export XAUTHORITY="$xauthority"; fi; timeout 10 xdpyinfo ) > /dev/null 2>&1; then
-                echo "VT-INTERACTIVE no-session display $display refuses $user (xdpyinfo failed; check XAUTHORITY or xhost)"; exit 0
-            fi
-        fi
-        want=${display%.*}
-        steam=
-        for p in /proc/[0-9]*; do
-            [ "$(cat "$p/comm" 2> /dev/null)" = steam ] || continue
-            [ "$(stat -c %u "$p" 2> /dev/null)" = "$uid" ] || continue
-            d=$(tr '\0' '\n' < "$p/environ" 2> /dev/null | sed -n 's/^DISPLAY=//p' | head -n 1)
-            if [ -n "$d" ] && [ "${d%.*}" != "$want" ]; then continue; fi
-            steam=${p#/proc/}; break
-        done
-        if [ -z "$steam" ]; then echo "VT-INTERACTIVE no-steam no Steam client (a process named steam) runs as $user on display $display"; exit 0; fi
-
-        mkdir -p -- "$(dirname -- "$dir")" && mkdir -- "$dir" || exit 3
-        decode() { printf '%s' "$1" | base64 -d && printf x; }
-        export DISPLAY="$display"
-        if [ -n "$wayland" ]; then export WAYLAND_DISPLAY="$wayland"; fi
-        if [ -n "$runtime" ]; then export XDG_RUNTIME_DIR="$runtime"; fi
-        if [ -n "$xauthority" ]; then export XAUTHORITY="$xauthority"; fi
-        if [ -n "$runtime" ] && [ -S "$runtime/bus" ]; then export DBUS_SESSION_BUS_ADDRESS="unix:path=$runtime/bus"; fi
-        # The launch's own variables (the loader's among them) reach only the game, through env as it execs the game: LD_PRELOAD
-        # must not load Doorstop into the shells in between. They are evidence, not secrets.
-        unsets=(); removed=(); sets=(); args=()
-        while IFS=' ' read -r kind value; do
-            [ -n "$kind" ] || continue
-            text=$(decode "$value") || exit 3
-            text=${text%x}
-            case "$kind" in
-                unset) unsets+=(-u "$text"); removed+=("$text") ;;
-                env) sets+=("$text") ;;
-                prepend) name=${text%%=*}; entry=${text#*=}; current=${!name:-}
-                    for dropped in ${removed[@]+"${removed[@]}"}; do
-                        if [ "$dropped" = "$name" ]; then current=; fi
-                    done
-                    for pair in ${sets[@]+"${sets[@]}"}; do case "$pair" in "$name="*) current=${pair#*=} ;; esac; done
-                    if [ -n "$current" ]; then sets+=("$name=$entry:$current"); else sets+=("$name=$entry"); fi ;;
-                arg) args+=("$text") ;;
-            esac
-        done <<< "$spec"
-        # Secrets are exported here from memory, never written to a file or put on a command line; every process from here to
-        # the game inherits them.
-        for value in $secrets; do
-            text=$(decode "$value") || exit 3
-            export "${text%x}"
-        done
-        cd -- "$install" || exit 3
-        setsid bash -c 'p=$1; x=$2; shift 2; "$@" & g=$!; s=$(cat "/proc/$g/stat" 2> /dev/null); s=${s##*) }; set -- $s; printf "%s %s\n" "$g" "${20:-}" > "$p.tmp" && mv -f -- "$p.tmp" "$p"; wait "$g"; printf "%s\n" "$?" > "$x.tmp" && mv -f -- "$x.tmp" "$x"' \
-            vt-client "$dir/pid" "$dir/exit" env ${unsets[@]+"${unsets[@]}"} ${sets[@]+"${sets[@]}"} "$install/$exe" ${args[@]+"${args[@]}"} \
-            > "$dir/game.stdout.log" 2> "$dir/game.stderr.log" < /dev/null &
-        i=0
-        while [ ! -s "$dir/pid" ] && [ "$i" -lt $((seconds * 10)) ]; do sleep 0.1; i=$((i + 1)); done
-        if [ ! -s "$dir/pid" ]; then echo "VT-INTERACTIVE failed no game process within $seconds s"; exit 0; fi
-        read -r game _ < "$dir/pid"
-        start=$(started "$game")
-        if [ -z "$start" ]; then echo "VT-INTERACTIVE failed the game exited at once: $(tail -c 300 "$dir/game.stderr.log" 2> /dev/null | tr '\n' ' ')"; exit 0; fi
-        echo "VT-INTERACTIVE started $game $start"
-        """).ReplaceLineEndings("\n");
 
     // Variables: game, start, seconds, quit, signal. With quit > 0 the game is first sent the signal (INT or TERM) and given
     // quit seconds to exit by itself ("quit"); only then, or with quit 0, is it killed ("stopped").

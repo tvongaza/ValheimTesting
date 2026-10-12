@@ -10,14 +10,11 @@ public sealed partial class HostedServerRunTests
     [Fact] public async Task AClientTheScenarioLeftOpenIsClosedAtTeardownBeforeItsServerStops()
     {
         var server = NewServer(); var host = NewHost(server);
-        var clientHost = new FakeServerHost("linux-gpu", Path.Combine(_root, "gpu"), tunnelPort: 15578);
-        string clientInstall = clientHost.Local("/home/tester/valheim");
-        Directory.CreateDirectory(Path.Combine(clientInstall, "BepInEx", "core"));
-        FakeInstalls.Client(clientInstall);
-        File.WriteAllText(Path.Combine(clientInstall, GameLaunch.ClientLinuxExecutable), "client");
-        FakeInstalls.LinuxLoader(clientInstall);
+        var clientHost = new FakeServerHost("mac-gpu", Path.Combine(_root, "gpu"), tunnelPort: 15578);
+        string clientInstall = clientHost.Local("/Users/tester/valheim");
+        FakeInstalls.MacClient(clientInstall);
         var (plan, profile) = Write(host, withClient: true);
-        var client = new ClientRunPlan { Mode = "owned", Install = _root, Port = 5578, Pinning = "none", StartSeconds = 30, LaunchArguments = ["+connect", "linux-box:2456"] };
+        var client = new ClientRunPlan { Mode = "owned", Architecture = "x64", Install = _root, Port = 5578, Pinning = "none", StartSeconds = 30, LaunchArguments = ["+connect", "linux-box:2456"] };
         int code = await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["run", plan, Output], Options(host, server, run =>
         {
             run.OpenClient(client); // Never closed: the scenario fails first.

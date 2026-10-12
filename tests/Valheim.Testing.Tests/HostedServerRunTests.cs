@@ -165,7 +165,7 @@ public sealed partial class HostedServerRunTests : IDisposable
     // The host's install (the runtime the plan pins) and a local world; returns the plan and the profile.
     private (string Plan, string Profile) Write(FakeServerHost host, int planPort = 5577, string hostPlatform = "linux", string hostShell = "bash", bool withClient = false, bool unpinned = false,
         bool crossplay = false, string portOption = "-port", string gamePort = "2456", object? steamAccounts = null, string? steamAccount = null,
-        string doorstopConfig = DoorstopMixPathsTests.Doorstop4Config)
+        string doorstopConfig = DoorstopMixPathsTests.Doorstop4Config, string clientPlatform = "macos")
     {
         bool windows = hostPlatform == "windows";
         string hostInstall = windows ? @"C:\valheim\server" : Install;
@@ -204,8 +204,8 @@ public sealed partial class HostedServerRunTests : IDisposable
         var clients = new Dictionary<string, object>();
         if (withClient)
         {
-            hosts["linux-gpu"] = new { kind = "ssh", platform = "linux", shell = "bash", destination = "tester@linux-gpu.example", @lock = "/home/tester/lock" };
-            var player = new Dictionary<string, object> { ["host"] = "linux-gpu", ["install"] = "/home/tester/valheim", ["runtime"] = "/home/tester/runs", ["cliPort"] = 5578 };
+            hosts["mac-gpu"] = new { kind = "ssh", platform = clientPlatform, shell = "bash", destination = "tester@mac-gpu.example", @lock = "/Users/tester/lock" };
+            var player = new Dictionary<string, object> { ["host"] = "mac-gpu", ["install"] = "/Users/tester/valheim", ["runtime"] = "/Users/tester/runs", ["cliPort"] = 5578 };
             if (steamAccount != null) player["steamAccount"] = steamAccount;
             clients["player"] = player;
         }
@@ -682,16 +682,13 @@ public sealed partial class HostedServerRunTests : IDisposable
     [Fact] public async Task AProfileClientStartsInItsHostsDesktopSessionAndStopsOnlyThatClient()
     {
         var server = NewServer(); var host = NewHost(server);
-        var clientHost = new FakeServerHost("linux-gpu", Path.Combine(_root, "gpu"), tunnelPort: 15578);
-        string clientInstall = clientHost.Local("/home/tester/valheim");
-        Directory.CreateDirectory(Path.Combine(clientInstall, "BepInEx", "core"));
-        FakeInstalls.Client(clientInstall);
-        File.WriteAllText(Path.Combine(clientInstall, GameLaunch.ClientLinuxExecutable), "client");
-        FakeInstalls.LinuxLoader(clientInstall);
+        var clientHost = new FakeServerHost("mac-gpu", Path.Combine(_root, "gpu"), tunnelPort: 15578);
+        string clientInstall = clientHost.Local("/Users/tester/valheim");
+        FakeInstalls.MacClient(clientInstall);
         File.WriteAllText(Path.Combine(clientInstall, "BepInEx", "LogOutput.log"), "an earlier run's log\n");
         var (plan, profile) = Write(host, withClient: true);
         var clientTransport = new ScriptedTransport();
-        var client = new ClientRunPlan { Mode = "owned", Install = _root, Port = 5578, Pinning = "none", StartSeconds = 30, LaunchArguments = ["+connect", "linux-box:2456"] };
+        var client = new ClientRunPlan { Mode = "owned", Architecture = "x64", Install = _root, Port = 5578, Pinning = "none", StartSeconds = 30, LaunchArguments = ["+connect", "linux-box:2456"] };
         int? pid = null;
         int code = await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["run", plan, Output], Options(host, server, run =>
         {
@@ -705,18 +702,20 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.Equal(77, pid);
         // The launch used the profile's install and a launch directory in this run's directory on the client's host.
         var start = Assert.Single(clientHost.Runs, run => run.Script == "client-start");
-        Assert.Equal("/home/tester/valheim", start.Variables["install"]);
-        Assert.Equal("/home/tester/runs/" + RunId + "/client-1", start.Variables["dir"]);
+        Assert.Equal("/Users/tester/valheim", start.Variables["install"]);
+        Assert.Equal("/Users/tester/runs/" + RunId + "/client-1", start.Variables["dir"]);
         Assert.Contains(FakeServerHost.Spec(start.Variables["spec"]), line => line.Kind == "arg" && line.Text == "+connect");
         // The client host's journal (#257): its lock held and released, the client journalled before its start, then its process.
-        var clientJournal = await RunJournalOnHost.ReadAsync(clientHost, "/home/tester/journal", RunId, TimeSpan.FromSeconds(5));
-        Assert.Equal([JournalEntry.ProcessIntended, JournalEntry.ProcessStarted], clientJournal.Where(record => record.Actor == "player").Select(record => record.Entry.Kind));
+        var clientJournal = await RunJournalOnHost.ReadAsync(clientHost, "/Users/tester/journal", RunId, TimeSpan.FromSeconds(5));
+        // A Mac client's GUI agent is journalled around its process: intended before the start, retired once the client is stopped.
+        Assert.Equal([JournalEntry.ProcessIntended, JournalEntry.MacAgentIntended, JournalEntry.ProcessStarted, JournalEntry.MacAgentRetired],
+            clientJournal.Where(record => record.Actor == "player").Select(record => record.Entry.Kind));
         Assert.Equal("77", clientJournal.Single(record => record.Entry.Kind == JournalEntry.ProcessStarted).Entry.Fields["pid"]);
         Assert.Equal(FakeServerHost.CommandLineSha256("77"), clientJournal.Single(record => record.Entry.Kind == JournalEntry.ProcessStarted).Entry.Fields["commandLineSha256"]);
         Assert.Equal([JournalEntry.LockHeld, JournalEntry.LockReleased], clientJournal.Where(record => record.Actor == "run").Select(record => record.Entry.Kind));
         Assert.True(JournalIndex(clientHost, JournalEntry.ProcessIntended) < clientHost.Runs.ToList().FindIndex(run => run.Script == "client-start"));
         // The earlier log moved aside first, the new one was awaited from its start; only that client was stopped.
-        Assert.Equal("/home/tester/runs/" + RunId + "/client-1.previous-LogOutput.log", Assert.Single(clientHost.Runs, run => run.Script == "move-aside").Variables["to"]);
+        Assert.Equal("/Users/tester/runs/" + RunId + "/client-1.previous-LogOutput.log", Assert.Single(clientHost.Runs, run => run.Script == "move-aside").Variables["to"]);
         Assert.Equal(2, clientHost.Runs.Count(run => run.Script == "follow")); // fresh BepInEx line, then ValheimCLI listening
         Assert.All(clientHost.Runs.Where(run => run.Script == "follow"), run => Assert.Equal("0", run.Variables["offset"]));
         Assert.Equal(new[] { ("77", "555") }, clientHost.Stops);
@@ -724,7 +723,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.True(Assert.Single(clientHost.Tunnels).Stopped);
         // The client's host was locked for the run and released at teardown; its logs were scanned with the server's.
         Assert.Equal(clientHost.Claims, clientHost.Releases); Assert.Single(clientHost.Claims);
-        Assert.Contains("release client host linux-gpu's lock", StepNames());
+        Assert.Contains("release client host mac-gpu's lock", StepNames());
         Assert.Contains(Result().GetProperty("Logs").EnumerateArray(), log => log.GetProperty("Role").GetString() == "client-1 BepInEx log");
     }
 
@@ -737,19 +736,16 @@ public sealed partial class HostedServerRunTests : IDisposable
     public async Task AClientSteamSignsOutAsItStartsFailsAtOnceNamingTheOtherComputer(bool signedOut)
     {
         var server = NewServer(); var host = NewHost(server);
-        var clientHost = new FakeServerHost("linux-gpu", Path.Combine(_root, "gpu"), tunnelPort: 15578) { SteamLog = "/home/tester/.local/share/Steam/logs/connection_log.txt" };
-        string clientInstall = clientHost.Local("/home/tester/valheim");
-        Directory.CreateDirectory(Path.Combine(clientInstall, "BepInEx", "core"));
-        FakeInstalls.Client(clientInstall);
-        File.WriteAllText(Path.Combine(clientInstall, GameLaunch.ClientLinuxExecutable), "client");
-        FakeInstalls.LinuxLoader(clientInstall);
+        var clientHost = new FakeServerHost("mac-gpu", Path.Combine(_root, "gpu"), tunnelPort: 15578) { SteamLog = "/Users/tester/Library/Application Support/Steam/logs/connection_log.txt" };
+        string clientInstall = clientHost.Local("/Users/tester/valheim");
+        FakeInstalls.MacClient(clientInstall);
         string steamLog = clientHost.Local(clientHost.SteamLog);
         Directory.CreateDirectory(Path.GetDirectoryName(steamLog)!);
         File.WriteAllText(steamLog, SteamAccountInUseTests.Healthy + SteamAccountInUseTests.SteamDup1 + SteamAccountInUseTests.Healthy);
         long before = new FileInfo(steamLog).Length;
         clientHost.BeforeScript = name => { if (name == "client-start") File.AppendAllText(steamLog, signedOut ? SteamAccountInUseTests.SteamDup2 : SteamAccountInUseTests.Healthy); };
         var (plan, profile) = Write(host, withClient: true);
-        var client = new ClientRunPlan { Mode = "owned", Install = _root, Port = 5578, Pinning = "none", StartSeconds = 30, LaunchArguments = ["+connect", "linux-box:2456"] };
+        var client = new ClientRunPlan { Mode = "owned", Architecture = "x64", Install = _root, Port = 5578, Pinning = "none", StartSeconds = 30, LaunchArguments = ["+connect", "linux-box:2456"] };
         Exception? failed = null;
         int code = await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["run", plan, Output], Options(host, server, run =>
         {
@@ -763,31 +759,9 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.Contains(runs, run => run.Script == "follow" && run.Variables["log"] == clientHost.SteamLog && run.Variables["offset"] == before.ToString());
         if (!signedOut) { Assert.Null(failed); return; }
         var error = Assert.IsType<SteamLoggedInElsewhereException>(failed);
-        Assert.Equal(SteamSessionLog.Message(null, "linux-gpu"), error.Message);
+        Assert.Equal(SteamSessionLog.Message(null, "mac-gpu"), error.Message);
         Assert.DoesNotContain("12345678", error.Message);
         Assert.Equal(new[] { ("77", "555") }, clientHost.Stops); // the started client was stopped
-    }
-
-    // #248's remaining half: a remote Linux client's loader is checked before launch, as a Windows client's is. Through the run:
-    // the client's host is never asked to start a game without its Doorstop library.
-    [Fact] public async Task ARemoteLinuxClientWithoutItsDoorstopLibraryIsRefusedBeforeLaunch()
-    {
-        var server = NewServer(); var host = NewHost(server);
-        var clientHost = new FakeServerHost("linux-gpu", Path.Combine(_root, "gpu"), tunnelPort: 15578);
-        string clientInstall = clientHost.Local("/home/tester/valheim");
-        FakeInstalls.Client(clientInstall);
-        File.WriteAllText(Path.Combine(clientInstall, GameLaunch.ClientLinuxExecutable), "client");
-        var (plan, profile) = Write(host, withClient: true);
-        var client = new ClientRunPlan { Mode = "owned", Install = _root, Port = 5578, Pinning = "none", StartSeconds = 30, LaunchArguments = ["+connect", "linux-box:2456"] };
-        Exception? refused = null;
-        int code = await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["run", plan, Output], Options(host, server, run =>
-        {
-            refused = Record.Exception(() => run.OpenClient(client));
-            return Task.CompletedTask;
-        }, clientHost, new ScriptedTransport()));
-        Assert.Contains("doorstop_libs/libdoorstop_x64.so", Assert.IsType<FileNotFoundException>(refused).Message);
-        Assert.DoesNotContain(clientHost.Runs, run => run.Script == "client-start");
-        Assert.Equal(0, code); // The scenario recorded the refusal; nothing else in the run failed.
     }
 
     [Fact] public async Task ARemoteWindowsClientRefusesMixedLoaderAndInheritedStandingPinsBeforeLaunch()
@@ -846,35 +820,18 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.Contains("Doorstop 4", error.Message);
     }
 
-    // The bash existence script for real: a Linux client's loader files are found, and a missing Doorstop library is named.
-    [Fact] public async Task BashChecksTheRemoteLoaderFilesForPreflight()
-    {
-        if (OperatingSystem.IsWindows()) return;
-        string install = Path.Combine(_root, "linux client"); // A space in the path, as a host install may have.
-        FakeInstalls.Client(install);
-        var host = new LocalGameHost("linux-client", HostShell.Bash);
-        var plan = new ClientRunPlan { Mode = "owned", Pinning = "none" };
-        Assert.Contains("doorstop_libs/libdoorstop_x64.so", (await Assert.ThrowsAsync<FileNotFoundException>(() =>
-            HostClientPreflight.CheckAsync(host, install, ClientPlatform.Linux, plan, TimeSpan.FromSeconds(30), default))).Message);
-        FakeInstalls.LinuxLoader(install);
-        await HostClientPreflight.CheckAsync(host, install, ClientPlatform.Linux, plan, TimeSpan.FromSeconds(30), default);
-    }
-
     // A client that started but never reached its menu (here its pins do not hold) is stopped; its fetched logs are still scanned.
     [Fact] public async Task AProfileClientWhoseStartupFailsStillHasItsLogsScannedAndListed()
     {
         var server = NewServer(); var host = NewHost(server);
-        var clientHost = new FakeServerHost("linux-gpu", Path.Combine(_root, "gpu"), tunnelPort: 15578);
-        string clientInstall = clientHost.Local("/home/tester/valheim");
-        Directory.CreateDirectory(Path.Combine(clientInstall, "BepInEx", "core"));
-        FakeInstalls.Client(clientInstall);
-        File.WriteAllText(Path.Combine(clientInstall, GameLaunch.ClientLinuxExecutable), "client");
-        FakeInstalls.LinuxLoader(clientInstall);
+        var clientHost = new FakeServerHost("mac-gpu", Path.Combine(_root, "gpu"), tunnelPort: 15578);
+        string clientInstall = clientHost.Local("/Users/tester/valheim");
+        FakeInstalls.MacClient(clientInstall);
         var (plan, profile) = Write(host, withClient: true);
         // Strict, so the menu pins are checked; the scripted client does not hold them.
         var client = new ClientRunPlan
         {
-            Mode = "owned", Install = _root, Port = 5578, StartSeconds = 30, Pins = new() { ["valheimCLI.valheimCLI"] = new string('a', 32) }, InstallPins = InstallPins.Of(clientInstall),
+            Mode = "owned", Architecture = "x64", Install = _root, Port = 5578, StartSeconds = 30, Pins = new() { ["valheimCLI.valheimCLI"] = new string('a', 32) }, InstallPins = InstallPins.Of(clientInstall),
         };
         Exception? failed = null;
         Assert.Equal(0, await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["run", plan, Output], Options(host, server, run =>
@@ -893,14 +850,11 @@ public sealed partial class HostedServerRunTests : IDisposable
     [Fact] public async Task AProfileClientWithoutAFreshBepInExLogFailsAtTheLoaderDeadline()
     {
         var server = NewServer(); var host = NewHost(server);
-        var clientHost = new FakeServerHost("linux-gpu", Path.Combine(_root, "gpu"), tunnelPort: 15578) { ClientWritesBepInExLog = false };
-        string clientInstall = clientHost.Local("/home/tester/valheim");
-        Directory.CreateDirectory(Path.Combine(clientInstall, "BepInEx", "core"));
-        FakeInstalls.Client(clientInstall);
-        File.WriteAllText(Path.Combine(clientInstall, GameLaunch.ClientLinuxExecutable), "client");
-        FakeInstalls.LinuxLoader(clientInstall);
+        var clientHost = new FakeServerHost("mac-gpu", Path.Combine(_root, "gpu"), tunnelPort: 15578) { ClientWritesBepInExLog = false };
+        string clientInstall = clientHost.Local("/Users/tester/valheim");
+        FakeInstalls.MacClient(clientInstall);
         var (plan, profile) = Write(host, withClient: true);
-        var client = new ClientRunPlan { Mode = "owned", Install = _root, Port = 5578, Pinning = "none", StartSeconds = 300, BepInExSeconds = 30 };
+        var client = new ClientRunPlan { Mode = "owned", Architecture = "x64", Install = _root, Port = 5578, Pinning = "none", StartSeconds = 300, BepInExSeconds = 30 };
         Exception? failure = null;
         Assert.Equal(1, await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["run", plan, Output], Options(host, server, run =>
         {
@@ -921,17 +875,14 @@ public sealed partial class HostedServerRunTests : IDisposable
     public async Task APreloaderCrashLogExplainsAClientThatNeverLoggedAndAnOlderOneIsNamedAsStale(bool fresh)
     {
         var server = NewServer(); var host = NewHost(server);
-        var clientHost = new FakeServerHost("linux-gpu", Path.Combine(_root, "gpu"), tunnelPort: 15578) { ClientWritesBepInExLog = false };
-        string clientInstall = clientHost.Local("/home/tester/valheim");
-        Directory.CreateDirectory(Path.Combine(clientInstall, "BepInEx", "core"));
-        FakeInstalls.Client(clientInstall);
-        File.WriteAllText(Path.Combine(clientInstall, GameLaunch.ClientLinuxExecutable), "client");
-        FakeInstalls.LinuxLoader(clientInstall);
+        var clientHost = new FakeServerHost("mac-gpu", Path.Combine(_root, "gpu"), tunnelPort: 15578) { ClientWritesBepInExLog = false };
+        string clientInstall = clientHost.Local("/Users/tester/valheim");
+        FakeInstalls.MacClient(clientInstall);
         static string B(string text) => Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(text));
         clientHost.PreloaderReply = (fresh ? $"VT-PRELOADER fresh {B("preloader_20261005_190000.log")} {B("[Fatal  :   BepInEx] Could not find BepInEx.Preloader.Core")}\n" : "") +
             $"VT-PRELOADER stale {B("preloader_20260101_000000.log")} -\nVT-PRELOADER-END\n";
         var (plan, profile) = Write(host, withClient: true);
-        var client = new ClientRunPlan { Mode = "owned", Install = _root, Port = 5578, Pinning = "none", StartSeconds = 300, BepInExSeconds = 30 };
+        var client = new ClientRunPlan { Mode = "owned", Architecture = "x64", Install = _root, Port = 5578, Pinning = "none", StartSeconds = 300, BepInExSeconds = 30 };
         Exception? failure = null;
         await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["run", plan, Output], Options(host, server, run =>
         {
@@ -948,19 +899,20 @@ public sealed partial class HostedServerRunTests : IDisposable
         else Assert.Contains("check winhttp.dll, doorstop_config.ini and BepInEx/core", message);
     }
 
-    [Fact] public async Task AnArm64ProfileClientIsRefusedBeforeItsHostIsLockedOrAnythingStarts()
+    // Linux hosts run the dedicated server only (#708): a client the profile puts on one is refused before its host is locked or touched.
+    [Fact] public async Task AProfileClientOnALinuxHostIsRefusedBeforeItsHostIsLockedOrAnythingStarts()
     {
         var server = NewServer(); var host = NewHost(server);
-        var clientHost = new FakeServerHost("linux-gpu", Path.Combine(_root, "gpu"), tunnelPort: 15578);
-        var (plan, profile) = Write(host, withClient: true);
-        var client = new ClientRunPlan { Mode = "owned", Install = _root, Port = 5578, Pinning = "none", StartSeconds = 30, Architecture = "arm64" };
+        var clientHost = new FakeServerHost("mac-gpu", Path.Combine(_root, "gpu"), tunnelPort: 15578);
+        var (plan, profile) = Write(host, withClient: true, clientPlatform: "linux");
+        var client = new ClientRunPlan { Mode = "owned", Architecture = "x64", Install = _root, Port = 5578, Pinning = "none", StartSeconds = 30 };
         Exception? refused = null;
         Assert.Equal(0, await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["run", plan, Output], Options(host, server, run =>
         {
             refused = Record.Exception(() => run.OpenClient(client));
             return Task.CompletedTask;
         }, clientHost, new ScriptedTransport())));
-        Assert.Contains("architecture arm64 is for a macOS client", Assert.IsType<ArgumentException>(refused).Message);
+        Assert.Equal("Linux hosts run the dedicated server only; start the client on Windows or macOS.", Assert.IsType<PlatformNotSupportedException>(refused).Message);
         Assert.Empty(clientHost.Claims); Assert.Empty(clientHost.Runs); Assert.Empty(clientHost.Tunnels);
     }
 }

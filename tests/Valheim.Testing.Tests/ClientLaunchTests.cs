@@ -16,16 +16,29 @@ public class ClientLaunchTests
         var expected = OperatingSystem.IsWindows() ? ClientPlatform.Windows : OperatingSystem.IsMacOS() ? ClientPlatform.MacOS : ClientPlatform.Linux;
         Assert.Equal(expected, GameLaunch.CurrentClientHost);
     }
-    [Fact] public void LinuxHostClientUsesItsSourceGameAndOwnedLoaderProfile()
+    // Linux hosts run the dedicated server only (#708); #707 tracks a return. Every way of asking for a Linux client gets the one message.
+    [Fact] public void ALinuxClientIsRefusedWhereverItIsAsked()
     {
-        var launch = GameLaunch.ForClientWithLoader("/game/valheim", "/owned/profile", [], null,
-            ClientPlatform.Linux, ClientArchitecture.X64);
-        Assert.Equal("/game/valheim/valheim.x86_64", launch.Executable);
-        Assert.Equal("/owned/profile/BepInEx/core/BepInEx.Preloader.dll", launch.Environment["DOORSTOP_TARGET_ASSEMBLY"]);
-        Assert.Equal("/owned/profile/doorstop_libs", launch.Prepended["LD_LIBRARY_PATH"]);
-        Assert.Contains("/owned/profile/doorstop_libs/libdoorstop_x64.so", launch.RequiredFiles);
+        const string refusal = "Linux hosts run the dedicated server only; start the client on Windows or macOS.";
+        using var install = Install.Linux();
+        var errors = new[]
+        {
+            Assert.Throws<PlatformNotSupportedException>(() => GameLaunch.ForClient("/home/steam/valheim", [], hostPlatform: ClientPlatform.Linux)),
+            Assert.Throws<PlatformNotSupportedException>(() => GameLaunch.ForClientWithLoader("/game/valheim", "/owned/profile", [], null, ClientPlatform.Linux, ClientArchitecture.X64)),
+            Assert.Throws<PlatformNotSupportedException>(() => GameLaunch.LocalClient(install.Root, [], null, ClientArchitecture.X64, true, ClientPlatform.Linux)),
+            Assert.Throws<PlatformNotSupportedException>(() => GameLaunch.RequireClientExecutable(install.Root, ClientPlatform.Linux)),
+            // An install holding the Linux client is refused on any host.
+            Assert.Throws<PlatformNotSupportedException>(() => GameLaunch.DetectClient(install.Root)),
+            Assert.Throws<PlatformNotSupportedException>(() => GameLaunch.RequireClientExecutable(install.Root, ClientPlatform.Windows)),
+            Assert.Throws<PlatformNotSupportedException>(() => GameLaunch.LocalClient(install.Root, [], null, ClientArchitecture.X64, true, ClientPlatform.MacOS)),
+            Assert.Throws<PlatformNotSupportedException>(() => ClientSession.PlayerLog(ClientPlatform.Linux)),
+            Assert.Throws<PlatformNotSupportedException>(() => HostedWorld.DefaultSaveDirectory(ClientPlatform.Linux)),
+        };
+        Assert.All(errors, error => Assert.Equal(refusal, error.Message));
+        // A server is not a client: the same Linux host builds its dedicated-server launch.
+        Assert.Equal(ClientPlatform.Linux, GameLaunch.ForServer("/srv/rt", [], hostPlatform: ServerPlatform.Linux).Platform);
     }
-    [Theory] [InlineData(ClientPlatform.Windows)] [InlineData(ClientPlatform.Linux)] [InlineData(ClientPlatform.MacOS)]
+    [Theory] [InlineData(ClientPlatform.Windows)] [InlineData(ClientPlatform.MacOS)]
     public void EachClientIsDetectedFromItsInstall(ClientPlatform platform)
     {
         using var install = Install.For(platform);
@@ -60,13 +73,13 @@ public class ClientLaunchTests
         var error = Assert.Throws<InvalidOperationException>(() => GameLaunch.DetectClient(install.Root));
         Assert.Contains("dedicated-server runtime", error.Message);
         Assert.Contains("GameLaunch.ForServer", error.Message);
-        foreach (var host in Enum.GetValues<ClientPlatform>())
+        foreach (var host in new[] { ClientPlatform.Windows, ClientPlatform.MacOS })
             Assert.Throws<InvalidOperationException>(() => GameLaunch.LocalClient(install.Root, [], null, ClientArchitecture.X64, true, host).ToStartInfo());
     }
     [Fact] public void ClientExecutableWinsOverAServerBesideIt()
     {
-        using var install = Install.Linux(); install.Add("valheim_server.x86_64");
-        Assert.Equal(ClientPlatform.Linux, GameLaunch.DetectClient(install.Root));
+        using var install = Install.Windows(); install.Add("valheim_server.exe");
+        Assert.Equal(ClientPlatform.Windows, GameLaunch.DetectClient(install.Root));
     }
     [Fact] public void MacBundleItselfIsRefusedWithTheDirectoryToPass()
     {
@@ -83,9 +96,7 @@ public class ClientLaunchTests
     }
 
     [Theory]
-    [InlineData(ClientPlatform.Windows, ClientPlatform.Linux)] [InlineData(ClientPlatform.Windows, ClientPlatform.MacOS)]
-    [InlineData(ClientPlatform.Linux, ClientPlatform.Windows)] [InlineData(ClientPlatform.Linux, ClientPlatform.MacOS)]
-    [InlineData(ClientPlatform.MacOS, ClientPlatform.Windows)] [InlineData(ClientPlatform.MacOS, ClientPlatform.Linux)]
+    [InlineData(ClientPlatform.Windows, ClientPlatform.MacOS)] [InlineData(ClientPlatform.MacOS, ClientPlatform.Windows)]
     public void ClientRunsOnlyOnItsOwnOperatingSystem(ClientPlatform platform, ClientPlatform host)
     {
         using var install = Install.For(platform, executable: false);
@@ -96,10 +107,10 @@ public class ClientLaunchTests
         Assert.Contains($"This {host} host cannot run the {platform} Valheim client", error.Message);
         Assert.Throws<PlatformNotSupportedException>(() => GameLaunch.LocalClient(install.Root, [], null, ClientArchitecture.X64, true, host).ToStartInfo());
     }
-    [Theory] [InlineData(ClientPlatform.Linux)] [InlineData(ClientPlatform.MacOS)]
-    public void ExecuteBitIsRequiredOnUnixHosts(ClientPlatform platform)
+    [Fact] public void ExecuteBitIsRequiredOnUnixHosts()
     {
         if (OperatingSystem.IsWindows()) return; // Real file modes are needed.
+        const ClientPlatform platform = ClientPlatform.MacOS;
         using var install = Install.For(platform, executable: false);
         var error = Assert.Throws<InvalidOperationException>(() => GameLaunch.RequireClientExecutable(install.Root, platform));
         Assert.Contains("chmod u+x", error.Message);
@@ -184,46 +195,13 @@ public class ClientLaunchTests
         Assert.Contains("Other.Preloader.dll", error.Message);
     }
     // Set in this process, as a parent shell would: only the loader values GameLaunch.ForClient sets itself may reach the game.
-    [Theory] [InlineData(ClientPlatform.Windows)] [InlineData(ClientPlatform.Linux)]
+    [Theory] [InlineData(ClientPlatform.Windows)] [InlineData(ClientPlatform.MacOS)]
     public void InheritedLoaderVariablesNeverReachTheClient(ClientPlatform platform)
     {
         using var install = Install.For(platform);
         Environment.SetEnvironmentVariable("DOORSTOP_DISABLE", "1");
         try { Assert.False(GameLaunch.LocalClient(install.Root, [], null, ClientArchitecture.X64, true, platform).ToStartInfo().Environment.ContainsKey("DOORSTOP_DISABLE")); }
         finally { Environment.SetEnvironmentVariable("DOORSTOP_DISABLE", null); }
-    }
-
-    [Fact] public void LinuxLaunchEnablesDoorstopAndPrependsToCallerLibraryPaths()
-    {
-        using var install = Install.Linux();
-        var start = GameLaunch.LocalClient(install.Root, ["-windowed"], new Dictionary<string, string>
-        {
-            ["LD_LIBRARY_PATH"] = "/opt/extra/lib:/opt/other/lib", ["LD_PRELOAD"] = "libcaller.so", ["DISPLAY"] = ":0",
-        }, ClientArchitecture.X64, true, ClientPlatform.Linux).ToStartInfo();
-        Assert.Equal(install.Executable, start.FileName);
-        Assert.Equal(install.Root, start.WorkingDirectory);
-        Assert.Equal(new[] { "-console", "-windowed" }, start.ArgumentList);
-        Assert.Equal("1", start.Environment["DOORSTOP_ENABLED"]);
-        Assert.Equal(Path.Combine(install.Root, "BepInEx", "core", "BepInEx.Preloader.dll"), start.Environment["DOORSTOP_TARGET_ASSEMBLY"]);
-        // The game script adds only doorstop_libs; linux64 is the dedicated server's addition.
-        Assert.Equal(Path.Combine(install.Root, "doorstop_libs") + ":/opt/extra/lib:/opt/other/lib", start.Environment["LD_LIBRARY_PATH"]);
-        Assert.Equal("libdoorstop_x64.so:libcaller.so", start.Environment["LD_PRELOAD"]);
-        Assert.Equal(":0", start.Environment["DISPLAY"]);
-        Assert.Equal("892970", start.Environment["SteamAppId"]);
-    }
-
-    [Fact] public void LinuxProfileLoadsOnlyFromItsSeparateLoaderRoot()
-    {
-        using var game = Install.Linux(name: "game");
-        using var profile = Install.Linux(name: "profile");
-        var launch = GameLaunch.LocalClient(game.Root, [], null, ClientArchitecture.X64, true, ClientPlatform.Linux, profile.Root);
-        var start = launch.ToStartInfo();
-        Assert.Equal(game.Executable, start.FileName);
-        Assert.Equal(game.Root, start.WorkingDirectory);
-        Assert.Equal(Path.Combine(profile.Root, "BepInEx", "core", "BepInEx.Preloader.dll"), start.Environment["DOORSTOP_TARGET_ASSEMBLY"]);
-        Assert.StartsWith(Path.Combine(profile.Root, "doorstop_libs"), start.Environment["LD_LIBRARY_PATH"]);
-        Assert.Contains(Path.Combine(profile.Root, "doorstop_libs", "libdoorstop_x64.so"), launch.RequiredFiles);
-        Assert.DoesNotContain(launch.RequiredFiles, file => file.StartsWith(Path.Combine(game.Root, "BepInEx"), StringComparison.Ordinal));
     }
 
     [Fact] public void MacProfileKeepsTheRealBundleAndInsertsOnlyItsOwnDoorstop()
@@ -247,14 +225,6 @@ public class ClientLaunchTests
             ClientArchitecture.X64, true, ClientPlatform.Windows, profile.Root));
         Assert.Contains("beside the client executable", error.Message);
     }
-    [Fact] public void EmptyLibraryPathsAddNoEmptyEntry()
-    {
-        using var install = Install.Linux();
-        var start = GameLaunch.LocalClient(install.Root, [], new Dictionary<string, string> { ["LD_LIBRARY_PATH"] = "", ["LD_PRELOAD"] = "" }, ClientArchitecture.X64, true, ClientPlatform.Linux).ToStartInfo();
-        Assert.Equal(Path.Combine(install.Root, "doorstop_libs"), start.Environment["LD_LIBRARY_PATH"]);
-        Assert.Equal("libdoorstop_x64.so", start.Environment["LD_PRELOAD"]);
-    }
-
     [Fact] public void MacLaunchStartsTheBundleThroughArchWithThePackLibrary()
     {
         using var install = Install.Mac();
@@ -383,9 +353,9 @@ public class ClientLaunchTests
         Assert.Contains("no x86_64 or arm64 Mach-O slice", error.Message);
         Assert.Empty(GameLaunch.ClientLaunchArchitectures(install.Root));
     }
-    [Theory] [InlineData(ClientPlatform.Windows)] [InlineData(ClientPlatform.Linux)]
-    public void Arm64IsRefusedForWindowsAndLinuxClients(ClientPlatform platform)
+    [Fact] public void Arm64IsRefusedForWindowsClients()
     {
+        const ClientPlatform platform = ClientPlatform.Windows;
         using var install = Install.For(platform);
         Assert.Throws<ArgumentException>(() => GameLaunch.LocalClient(install.Root, [], null, ClientArchitecture.Arm64, true, platform).ToStartInfo());
         Assert.Equal(new[] { ClientArchitecture.X64 }, GameLaunch.ClientLaunchArchitectures(install.Root));
@@ -393,14 +363,13 @@ public class ClientLaunchTests
 
     [Theory]
     [InlineData(ClientPlatform.Windows, "DOORSTOP_DISABLE")] [InlineData(ClientPlatform.Windows, "doorstop_disable")]
-    [InlineData(ClientPlatform.Linux, "DOORSTOP_ENABLED")] [InlineData(ClientPlatform.Linux, "DOORSTOP_TARGET_ASSEMBLY")]
     [InlineData(ClientPlatform.MacOS, "DOORSTOP_ENABLED")] [InlineData(ClientPlatform.MacOS, "DOORSTOP_DISABLE")]
     public void CallerCannotDisableOrRedirectTheLoader(ClientPlatform platform, string name)
     {
         using var install = Install.For(platform);
         Assert.Throws<ArgumentException>(() => GameLaunch.LocalClient(install.Root, [], new Dictionary<string, string> { [name] = "0" }, ClientArchitecture.X64, true, platform).ToStartInfo());
     }
-    [Theory] [InlineData(ClientPlatform.Windows)] [InlineData(ClientPlatform.Linux)] [InlineData(ClientPlatform.MacOS)]
+    [Theory] [InlineData(ClientPlatform.Windows)] [InlineData(ClientPlatform.MacOS)]
     public void DoorstopArgumentsAreRefused(ClientPlatform platform)
     {
         using var install = Install.For(platform);
@@ -408,7 +377,7 @@ public class ClientLaunchTests
         Assert.Contains("--doorstop-enabled", error.Message);
         Assert.Throws<ArgumentException>(() => GameLaunch.LocalClient(install.Root, ["-windowed", null!], null, ClientArchitecture.X64, true, platform).ToStartInfo());
     }
-    [Theory] [InlineData(ClientPlatform.Windows)] [InlineData(ClientPlatform.Linux)] [InlineData(ClientPlatform.MacOS)]
+    [Theory] [InlineData(ClientPlatform.Windows)] [InlineData(ClientPlatform.MacOS)]
     public void CallerSteamAppIdIsKept(ClientPlatform platform)
     {
         using var install = Install.For(platform);
@@ -418,7 +387,6 @@ public class ClientLaunchTests
     [Theory]
     [InlineData(ClientPlatform.Windows, "BepInEx/core/BepInEx.Preloader.dll")] [InlineData(ClientPlatform.Windows, "BepInEx/core/BepInEx.dll")]
     [InlineData(ClientPlatform.Windows, "winhttp.dll")] [InlineData(ClientPlatform.Windows, "doorstop_config.ini")]
-    [InlineData(ClientPlatform.Linux, "BepInEx/core/BepInEx.Preloader.dll")] [InlineData(ClientPlatform.Linux, "doorstop_libs/libdoorstop_x64.so")]
     [InlineData(ClientPlatform.MacOS, "BepInEx/core/BepInEx.Preloader.dll")] [InlineData(ClientPlatform.MacOS, "doorstop_libs/libdoorstop_x64.dylib")]
     public void MissingBepInExLoaderIsRefusedRatherThanStartingVanilla(ClientPlatform platform, string missing)
     {
@@ -426,16 +394,24 @@ public class ClientLaunchTests
         File.Delete(Path.Combine(install.Root, missing));
         Assert.Throws<FileNotFoundException>(() => GameLaunch.LocalClient(install.Root, [], null, ClientArchitecture.X64, true, platform).ToStartInfo());
     }
-    [Theory] [InlineData(ClientPlatform.Linux, "client:copy")] [InlineData(ClientPlatform.Linux, "client;copy")] [InlineData(ClientPlatform.MacOS, "client:copy")]
-    public void InstallPathThatCannotBeListedIsRefused(ClientPlatform platform, string name)
+    [Fact] public void InstallPathThatCannotBeListedIsRefused()
     {
         if (OperatingSystem.IsWindows()) return; // Such names are not valid Windows paths.
-        using var install = Install.For(platform, name: name);
+        const ClientPlatform platform = ClientPlatform.MacOS;
+        using var install = Install.For(platform, name: "client:copy");
         Assert.Throws<ArgumentException>(() => GameLaunch.LocalClient(install.Root, [], null, ClientArchitecture.X64, true, platform).ToStartInfo());
     }
     [Fact] public void PublicOverloadsUseTheCurrentHost()
     {
         var host = GameLaunch.CurrentClientHost;
+        if (host == ClientPlatform.Linux)
+        {
+            // A Linux machine runs the dedicated server only.
+            using var linux = Install.Linux();
+            Assert.Throws<PlatformNotSupportedException>(() => GameLaunch.RequireClientExecutable(linux.Root));
+            Assert.Throws<PlatformNotSupportedException>(() => GameLaunch.ForClient(linux.Root, []));
+            return;
+        }
         bool appleSilicon = host == ClientPlatform.MacOS &&
             System.Runtime.InteropServices.RuntimeInformation.OSArchitecture == System.Runtime.InteropServices.Architecture.Arm64;
         using (var own = appleSilicon ? Install.Mac(universalDoorstop: true, core: NativeDetour) : Install.For(host))
@@ -449,7 +425,7 @@ public class ClientLaunchTests
                 Assert.Equal("-x86_64", GameLaunch.ForClient(own.Root, [], architecture: ClientArchitecture.X64).ToStartInfo().ArgumentList[0]);
             }
         }
-        using var other = Install.For(host == ClientPlatform.Windows ? ClientPlatform.Linux : ClientPlatform.Windows);
+        using var other = Install.For(host == ClientPlatform.Windows ? ClientPlatform.MacOS : ClientPlatform.Windows);
         Assert.Throws<PlatformNotSupportedException>(() => GameLaunch.ForClient(other.Root, []).ToStartInfo());
     }
 
@@ -482,13 +458,13 @@ public class ClientLaunchTests
     }
     // ---- GameLaunch.ForClient: one builder for this machine and for a host ----
 
-    [Theory] [InlineData(ClientPlatform.Windows)] [InlineData(ClientPlatform.Linux)]
-    public void ALaunchHereAndALaunchOnAHostOfOnePlatformFollowTheSameRules(ClientPlatform platform)
+    [Fact] public void ALaunchHereAndALaunchOnAHostOfOnePlatformFollowTheSameRules()
     {
+        const ClientPlatform platform = ClientPlatform.Windows;
         using var install = Install.For(platform);
         var environment = new Dictionary<string, string> { ["MY_MOD_TOKEN"] = "abc" };
         var here = GameLaunch.LocalClient(install.Root, ["+connect", "a b"], environment, ClientArchitecture.X64, true, platform);
-        var there = GameLaunch.ForClient(platform == ClientPlatform.Windows ? @"C:\Games\Valheim" : "/home/steam/valheim", ["+connect", "a b"], environment, platform,
+        var there = GameLaunch.ForClient(@"C:\Games\Valheim", ["+connect", "a b"], environment, platform,
             secretVariables: ["VT_JOIN_PASSWORD"]);
         Assert.Equal(new[] { "-console", "+connect", "a b" }, there.Arguments);
         Assert.Equal(here.Arguments, there.Arguments);
@@ -510,19 +486,14 @@ public class ClientLaunchTests
     [Fact] public void AHostClientLaunchKeepsTheHostsRules()
     {
         // Only macOS has another slice, and a macOS client cannot be started from another machine.
-        Assert.Throws<ArgumentException>(() => GameLaunch.ForClient("/home/steam/valheim", [], hostPlatform: ClientPlatform.Linux, architecture: ClientArchitecture.Arm64));
+        Assert.Throws<ArgumentException>(() => GameLaunch.ForClient(@"C:\Games\Valheim", [], hostPlatform: ClientPlatform.Windows, architecture: ClientArchitecture.Arm64));
         // The client runs with the user's own credentials in the desktop session, so a share is an install.
         Assert.Equal(@"\\nas\games\Valheim\valheim.exe", GameLaunch.ForClient(@"\\nas\games\Valheim", [], hostPlatform: ClientPlatform.Windows).Executable);
         // A Windows client's arguments are one quoted command line: a line break fits, NUL never does.
         Assert.Equal("two\nlines", GameLaunch.ForClient(@"C:\Games\Valheim", ["two\nlines"], hostPlatform: ClientPlatform.Windows).Arguments[1]);
         Assert.Throws<ArgumentException>(() => GameLaunch.ForClient(@"C:\Games\Valheim", ["nul\0"], hostPlatform: ClientPlatform.Windows));
         Assert.Throws<ArgumentException>(() => GameLaunch.ForClient(@"C:\Games\""Valheim""", [], hostPlatform: ClientPlatform.Windows));
-        Assert.Throws<ArgumentException>(() => GameLaunch.ForClient("/home/steam/valheim", [], new Dictionary<string, string> { ["NOT A NAME"] = "x" }, ClientPlatform.Linux));
-        // A Windows install on a Linux host is a bad path for a client, as it always was (a server's says the platform is wrong).
-        Assert.Throws<ArgumentException>(() => GameLaunch.ForClient(@"C:\Games\Valheim", [], hostPlatform: ClientPlatform.Linux));
-        // On Linux the executable is what the start script runs, "$install/$exe", so the journalled command line matches the process.
-        var launch = GameLaunch.ForClient("/home/steam/valheim/", [], hostPlatform: ClientPlatform.Linux);
-        Assert.Equal(launch.WorkingDirectory + "/" + GameLaunch.ClientLinuxExecutable, launch.Executable);
+        Assert.Throws<ArgumentException>(() => GameLaunch.ForClient(@"C:\Games\Valheim", [], new Dictionary<string, string> { ["NOT A NAME"] = "x" }, ClientPlatform.Windows));
     }
 
     internal static byte[] Fat(params int[] cpus)

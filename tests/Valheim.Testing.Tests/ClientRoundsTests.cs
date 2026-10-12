@@ -455,7 +455,7 @@ public sealed class ClientRoundsTests : IDisposable
         ? ["stop only the owned client", "move the hosted world from the client's local worlds into the evidence"]
         : ["stop only the owned client"];
 
-    [Theory] [MemberData(nameof(JoinedAndHosted))]
+    [ClientHostTheory] [MemberData(nameof(JoinedAndHosted))]
     public void APassingRunClosesTheClientOnceThenReleasesTheWorld(bool hosted)
     {
         var report = new ScenarioReport("teardown");
@@ -465,7 +465,7 @@ public sealed class ClientRoundsTests : IDisposable
         Assert.Equal(1, _process.Stops);
     }
 
-    [Theory] [MemberData(nameof(JoinedAndHosted))]
+    [ClientHostTheory] [MemberData(nameof(JoinedAndHosted))]
     public void AFailedMeasurementClosesTheClientTheSameWay(bool hosted)
     {
         var report = new ScenarioReport("teardown");
@@ -477,7 +477,7 @@ public sealed class ClientRoundsTests : IDisposable
         if (hosted) Assert.Empty(OurWorldFiles());
     }
 
-    [Theory] [MemberData(nameof(JoinedAndHosted))]
+    [ClientHostTheory] [MemberData(nameof(JoinedAndHosted))]
     public void AFailedSaveStopsBeforeTheLeaveAndTheRestart(bool hosted)
     {
         _saves = false;
@@ -490,7 +490,7 @@ public sealed class ClientRoundsTests : IDisposable
         if (hosted) Assert.Equal(1, game.Transport.Count("cli_start_host_world"));
     }
 
-    [Theory] [MemberData(nameof(JoinedAndHosted))]
+    [ClientHostTheory] [MemberData(nameof(JoinedAndHosted))]
     public void AFailedCloseFailsAPassingRun(bool hosted)
     {
         _process.StopFailure = () => new TimeoutException("client did not stop");
@@ -503,7 +503,7 @@ public sealed class ClientRoundsTests : IDisposable
         Assert.Equal(Closed(hosted), After(report, hosted ? "after-restart: the host leaves to its menu" : "after-restart: the client leaves to its menu"));
     }
 
-    [Theory] [MemberData(nameof(JoinedAndHosted))]
+    [ClientHostTheory] [MemberData(nameof(JoinedAndHosted))]
     public void AFailedCloseNeverHidesTheFailureBeforeIt(bool hosted)
     {
         _process.StopFailure = () => new TimeoutException("client did not stop");
@@ -529,7 +529,7 @@ public sealed class ClientRoundsTests : IDisposable
     }
 
     public static TheoryData<string> JoinedOnly => new() { "OwnedServer", "Lobby", "Arrival", "ArriveStep", "WorldUid" };
-    [Theory] [MemberData(nameof(JoinedOnly))]
+    [ClientHostTheory] [MemberData(nameof(JoinedOnly))]
     public void AHostingClientRefusesWhatOnlyAJoiningClientUses(string option)
     {
         var plan = HostPlan(); var report = new ScenarioReport("host");
@@ -550,7 +550,7 @@ public sealed class ClientRoundsTests : IDisposable
         Assert.True(same.Passed, string.Join("; ", Failed(same)));
     }
 
-    [Fact] public void AHostingClientCanLeaveProtectionOff()
+    [ClientHostFact] public void AHostingClientCanLeaveProtectionOff()
     {
         var game = new Game(Worlds); var report = new ScenarioReport("host");
         using (new FakeClientDataDirectory(Save))
@@ -563,7 +563,7 @@ public sealed class ClientRoundsTests : IDisposable
 
     // ---- A client that hosts its own world ----
 
-    [Fact] public void TwoRoundsHostSaveRestartAndMoveTheWorldIntoTheEvidence()
+    [ClientHostFact] public void TwoRoundsHostSaveRestartAndMoveTheWorldIntoTheEvidence()
     {
         var game = new Game(Worlds); var report = new ScenarioReport("host");
         var placedDuringRun = new List<bool>();
@@ -615,7 +615,7 @@ public sealed class ClientRoundsTests : IDisposable
         Assert.True(File.Exists(Path.Combine(Output, "first-reading.json"))); Assert.True(File.Exists(Path.Combine(Output, "after-restart-reading.json")));
     }
 
-    [Fact] public void HostingClientCannotAdvertiseWorldPinsBeforeItsFixtureLoads()
+    [ClientHostFact] public void HostingClientCannotAdvertiseWorldPinsBeforeItsFixtureLoads()
     {
         var plan = HostPlan();
         string worldPins = Path.Combine(Output, OwnedClientCommandLease.WorldPins);
@@ -633,7 +633,7 @@ public sealed class ClientRoundsTests : IDisposable
         Assert.False(File.Exists(worldPins));
     }
 
-    [Theory] [InlineData(Name + ".fwl")] [InlineData(Name + "_backup_auto-20260929.db")] [InlineData("hostfixture.db")]
+    [ClientHostTheory] [InlineData(Name + ".fwl")] [InlineData(Name + "_backup_auto-20260929.db")] [InlineData("hostfixture.db")]
     public void AWorldAlreadyNamedLikeTheFixtureIsNeverOverwrittenOrUsed(string existing)
     {
         // Negative control: the same run passes without this file (the first test).
@@ -647,7 +647,7 @@ public sealed class ClientRoundsTests : IDisposable
         Assert.Equal(new[] { existing }, Directory.EnumerateFiles(Worlds).Select(Path.GetFileName).Where(f => !f!.StartsWith("MyWorld", StringComparison.Ordinal)));
     }
 
-    [Fact] public void AHostStartTheGameRefusesStopsBeforeAnyWaitAndStillCleansUp()
+    [ClientHostFact] public void AHostStartTheGameRefusesStopsBeforeAnyWaitAndStillCleansUp()
     {
         var game = new Game(Worlds) { StartReply = "ERROR: Main menu is not available" }; var report = new ScenarioReport("host");
         var error = Assert.Throws<InvalidOperationException>(() => RunHosted(report, HostPlan(), game, Measure()));
@@ -661,7 +661,7 @@ public sealed class ClientRoundsTests : IDisposable
         Assert.False(report.Provenance.ContainsKey("hostRoundsCompleted"));
     }
 
-    [Fact] public void AStartThatLoadsAnotherWorldFailsUnprotected()
+    [ClientHostFact] public void AStartThatLoadsAnotherWorldFailsUnprotected()
     {
         // What the game does when the named world is missing: it creates a fresh one, with another UID.
         var game = new Game(Worlds) { LoadedUid = "999" }; var report = new ScenarioReport("host");
@@ -671,7 +671,7 @@ public sealed class ClientRoundsTests : IDisposable
         Assert.Equal(1, _process.Stops);
     }
 
-    [Fact] public void ACrossplayHostStartsWithCrossplayAndRequiresThePlayFabBackend()
+    [ClientHostFact] public void ACrossplayHostStartsWithCrossplayAndRequiresThePlayFabBackend()
     {
         var game = new Game(Worlds); var report = new ScenarioReport("host");
         RunHosted(report, HostPlan(crossplay: true), game, Measure());
@@ -716,7 +716,7 @@ public sealed class ClientRoundsTests : IDisposable
     }
 
     // The preflight (#117): a wrong fixture or install stops the run before the fixture is copied or the client opened.
-    [Fact] public void AFixtureWithAnotherUidStopsBeforeItIsCopiedOrTheClientOpens()
+    [ClientHostFact] public void AFixtureWithAnotherUidStopsBeforeItIsCopiedOrTheClientOpens()
     {
         var plan = HostPlan(); plan.HostWorld!.WorldUid = "450017353"; // Another snapshot's UID behind the same world name.
         var game = new Game(Worlds); var report = new ScenarioReport("host");
@@ -761,10 +761,9 @@ public sealed class ClientRoundsTests : IDisposable
         HostedWorld.RequireNativeSaveDirectory(ClientPlatform.MacOS, null, [], defaultPath);
         HostedWorld.RequireNativeSaveDirectory(ClientPlatform.MacOS, defaultPath, [], defaultPath);
         HostedWorld.RequireNativeSaveDirectory(ClientPlatform.Windows, customPath, ["-savedir", customPath], defaultPath);
-        HostedWorld.RequireNativeSaveDirectory(ClientPlatform.Linux, customPath, [], defaultPath);
     }
 
-    [Fact] public void AnInstallThatFailsThePreflightStopsBeforeTheFixtureIsCopied()
+    [ClientHostFact] public void AnInstallThatFailsThePreflightStopsBeforeTheFixtureIsCopied()
     {
         _install.Standing("expect.txt", $"valheimCLI.valheimCLI={_install.CliMd5} my.mod=absent\n"); // Two pins on one line.
         var game = new Game(Worlds); var report = new ScenarioReport("host");
@@ -778,7 +777,7 @@ public sealed class ClientRoundsTests : IDisposable
         Assert.Equal("preflight the fixture world, before it is copied", attached.Steps[0].Name);
     }
 
-    [Fact] public void AHostWithoutTheSessionCommandsStopsBeforeTheWorldRound()
+    [ClientHostFact] public void AHostWithoutTheSessionCommandsStopsBeforeTheWorldRound()
     {
         var game = new Game(Worlds, leaveOffered: false); var report = new ScenarioReport("host");
         var error = Assert.Throws<InvalidOperationException>(() => RunHosted(report, HostPlan(), game, Measure()));

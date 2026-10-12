@@ -23,7 +23,7 @@ public sealed class HostedRuntimeStageTests : IDisposable
     [InlineData("ordinary-helper", "/owned", true, "VT-GAME idle")]
     // One check for every copy on a host (#257): a game running from any of them is busy, from none of them idle.
     [InlineData("/second/valheim_server.x86_64", "/first\n/second", false, "VT-GAME busy 4242")]
-    [InlineData("/first/valheim.x86_64", "/first\n/second", false, "VT-GAME busy 4242")]
+    [InlineData("/first/Valheim.app/Contents/MacOS/Valheim", "/first\n/second", false, "VT-GAME busy 4242")]
     [InlineData("/second2/valheim_server.x86_64", "/first\n/second", false, "VT-GAME idle")]
     [InlineData("valheim_server", "/first\n/second", false, "VT-GAME unknown")]
     public async Task BashProcessCheckRefusesConflictingUse(string process, string runtime, bool clientSession, string expected)
@@ -647,9 +647,9 @@ public sealed class HostedRuntimeStageTests : IDisposable
             @"C:\runs\server\runtime", @"C:\runs\server\staging", files, TimeSpan.FromSeconds(30)));
     }
 
-    // The source inspection every campaign preparation starts with: an unrecognised Windows proxy and a Linux install without
-    // its Doorstop library are refused before anything is copied, each naming what it found.
-    [Fact] public async Task SourceInspectionRefusesAnUnrecognisedProxyAndAnIncompleteLinuxLoader()
+    // The source inspection every campaign preparation starts with: an unrecognised Windows proxy and a Linux client install
+    // (Linux hosts run the dedicated server only) are refused before anything is copied, each naming what it found.
+    [Fact] public async Task SourceInspectionRefusesAnUnrecognisedProxyAndALinuxClient()
     {
         var windows = new FakeServerHost("windows-client", Path.Combine(_root, "windows-source"), windows: true);
         string winSource = windows.Local(@"C:\game\source");
@@ -676,11 +676,10 @@ public sealed class HostedRuntimeStageTests : IDisposable
         string linuxSource = linux.Local("/game/source");
         FakeInstalls.Client(linuxSource);
         File.WriteAllText(Path.Combine(linuxSource, GameLaunch.ClientLinuxExecutable), "game");
-        var incomplete = await Assert.ThrowsAsync<FileNotFoundException>(() =>
-            HostedRuntimeStage.InspectSourceAsync(linux, HostedRuntimeKind.Client, "/game/source", null, TimeSpan.FromSeconds(30)));
-        Assert.Contains("doorstop_libs/libdoorstop_x64.so", incomplete.Message);
         FakeInstalls.LinuxLoader(linuxSource);
-        await HostedRuntimeStage.InspectSourceAsync(linux, HostedRuntimeKind.Client, "/game/source", null, TimeSpan.FromSeconds(30));
+        var linuxClient = await Assert.ThrowsAsync<PlatformNotSupportedException>(() =>
+            HostedRuntimeStage.InspectSourceAsync(linux, HostedRuntimeKind.Client, "/game/source", null, TimeSpan.FromSeconds(30)));
+        Assert.Equal("Linux hosts run the dedicated server only; start the client on Windows or macOS.", linuxClient.Message);
         // A macOS install loads BepInEx through either Doorstop library: BepInExPack's own x64 one is enough.
         var mac = new FakeServerHost("mac-client", Path.Combine(_root, "mac-source"), kind: GameHostKind.Local);
         string macSource = mac.Local("/game/mac");

@@ -203,7 +203,7 @@ public sealed class HostingClientActorTests : IDisposable
         Assert.True(report.Passed, string.Join("; ", report.Steps.Where(s => !s.Passed).Select(s => s.Name + ": " + s.Error)));
     }
 
-    [Fact] public async Task ARestartReHostsTheSameWorldInTheSameProcess()
+    [ClientHostFact] public async Task ARestartReHostsTheSameWorldInTheSameProcess()
     {
         var report = new ScenarioReport("hosted");
         using var data = new FakeClientDataDirectory(Save);
@@ -219,7 +219,7 @@ public sealed class HostingClientActorTests : IDisposable
         Assert.Equal(0, _hostProcess.Stops); // A host's restart is the same process.
     }
 
-    [Fact] public async Task TeardownClosesThePeerThenTheHostThenCollectsTheWorld()
+    [ClientHostFact] public async Task TeardownClosesThePeerThenTheHostThenCollectsTheWorld()
     {
         var report = new ScenarioReport("hosted");
         using var data = new FakeClientDataDirectory(Save);
@@ -239,7 +239,7 @@ public sealed class HostingClientActorTests : IDisposable
         foreach (string file in new[] { Name + ".fwl", Name + ".db", Name + ".db.old" }) Assert.True(File.Exists(Path.Combine(report.Provenance["hostWorldEvidence"], file)), file);
     }
 
-    [Fact] public async Task AnOwnedHostThatDoesNotStopLeavesItsWorldInPlace()
+    [ClientHostFact] public async Task AnOwnedHostThatDoesNotStopLeavesItsWorldInPlace()
     {
         // The world is collected only after the host stopped: a failed stop after a failure (no leave) means it may still host it.
         _hostProcess.StopFailure = () => new IOException("the stop could not be proven");

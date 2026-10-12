@@ -12,7 +12,7 @@ public sealed class RegressionBundleTests : IDisposable
     private readonly BundleRig _rig = new();
     public void Dispose() => _rig.Dispose();
 
-    [Fact] public void ACleanRunMakesASmallBundleThatVerifies()
+    [ClientHostFact] public void ACleanRunMakesASmallBundleThatVerifies()
     {
         string output = _rig.Output();
         var manifest = RegressionBundle.Create(_rig.Spec(), output, _rig.Sources);
@@ -42,7 +42,7 @@ public sealed class RegressionBundleTests : IDisposable
         Assert.Empty(Directory.EnumerateDirectories(Path.GetDirectoryName(output)!, Path.GetFileName(output) + ".incomplete-*"));
     }
 
-    [Fact] public void ACurrentBundlePinsThePackageContainingTargetedRegression()
+    [ClientHostFact] public void ACurrentBundlePinsThePackageContainingTargetedRegression()
     {
         var spec = _rig.Spec();
         spec.Toolkit.PackageId = "Valheim.Testing.GameSessions";
@@ -57,7 +57,7 @@ public sealed class RegressionBundleTests : IDisposable
         RegressionBundle.Verify(output, spec);
     }
 
-    [Fact] public void AnExistingIncompleteDirectoryIsNeverDeleted()
+    [ClientHostFact] public void AnExistingIncompleteDirectoryIsNeverDeleted()
     {
         string output = _rig.Output();
         string existing = output + ".incomplete";
@@ -72,7 +72,7 @@ public sealed class RegressionBundleTests : IDisposable
 
     // ---- names and paths of the environment ----
 
-    [Fact] public void AnUnrelatedAbsentPinIsRefusedWithItsFileAndLine()
+    [ClientHostFact] public void AnUnrelatedAbsentPinIsRefusedWithItsFileAndLine()
     {
         _rig.Scenario("        [\"ProceduralRoads\"] = \"absent\", // a station-only plugin");
         string output = _rig.Output();
@@ -82,7 +82,7 @@ public sealed class RegressionBundleTests : IDisposable
         Assert.Empty(Directory.EnumerateDirectories(Path.GetDirectoryName(output)!, Path.GetFileName(output) + ".incomplete-*"));
     }
 
-    [Fact] public void APluginTheNativeRunPinnedOutsideTheAllowlistCannotBeNamedAnywhere()
+    [ClientHostFact] public void APluginTheNativeRunPinnedOutsideTheAllowlistCannotBeNamedAnywhere()
     {
         _rig.Evidence("parent", pass: false, extraPins: " warpalicious.More_World_Locations_AIO=absent");
         _rig.Evidence("candidate", pass: true, extraPins: " warpalicious.More_World_Locations_AIO=absent");
@@ -94,7 +94,7 @@ public sealed class RegressionBundleTests : IDisposable
         Assert.Contains(manifest.Omitted, omission => omission.What.StartsWith("1 plugin pin(s) of the native run outside the allowlist", StringComparison.Ordinal));
     }
 
-    [Theory]
+    [ClientHostTheory]
     [InlineData(@"        // Built in C:\Users\someone\mods\EpicLoot.", "a Windows machine path")]
     [InlineData("        // Copied from /Users/someone/Documents/run.", "a machine path")]
     [InlineData("        // Steam account 76561198000000001.", "a Steam account ID")]
@@ -110,7 +110,7 @@ public sealed class RegressionBundleTests : IDisposable
 
     // ---- the toolkit pin ----
 
-    [Fact] public void AnObsoleteOrUnavailableToolkitIsRefused()
+    [ClientHostFact] public void AnObsoleteOrUnavailableToolkitIsRefused()
     {
         var spec = _rig.Spec();
         spec.Toolkit.Package = "0.1.0-preview.16"; // Published, but older than the run's.
@@ -130,7 +130,7 @@ public sealed class RegressionBundleTests : IDisposable
         Assert.Contains($"git -C ValheimTesting checkout {BundleRig.Commit}", File.ReadAllText(Path.Combine(output, "README.md")));
     }
 
-    [Fact] public void PackageVersionsCompareAsNuGetOrdersThem()
+    [ClientHostFact] public void PackageVersionsCompareAsNuGetOrdersThem()
     {
         Assert.True(RegressionBundle.CompareVersions("0.1.0-preview.9", "0.1.0-preview.10") < 0);
         Assert.True(RegressionBundle.CompareVersions("0.1.0", "0.1.0-preview.17") > 0);
@@ -140,7 +140,7 @@ public sealed class RegressionBundleTests : IDisposable
 
     // ---- the bundle's own files ----
 
-    [Fact] public void AWrongFileCountIsRefused()
+    [ClientHostFact] public void AWrongFileCountIsRefused()
     {
         string output = _rig.Output();
         RegressionBundle.Create(_rig.Spec(), output, _rig.Sources);
@@ -156,7 +156,7 @@ public sealed class RegressionBundleTests : IDisposable
         Assert.Contains("says the bundle holds 6 files, and it holds 5", error.Message);
     }
 
-    [Fact] public void AnEditedBundleFileOrChangedEvidenceIsRefused()
+    [ClientHostFact] public void AnEditedBundleFileOrChangedEvidenceIsRefused()
     {
         string output = _rig.Output();
         RegressionBundle.Create(_rig.Spec(), output, _rig.Sources);
@@ -172,7 +172,7 @@ public sealed class RegressionBundleTests : IDisposable
 
     // ---- the result and its evidence ----
 
-    [Fact] public void ATamperedResultIsRefused()
+    [ClientHostFact] public void ATamperedResultIsRefused()
     {
         string result = Path.Combine(_rig.Root, "evidence", "parent", "result.json");
         string original = File.ReadAllText(result);
@@ -211,7 +211,7 @@ public sealed class RegressionBundleTests : IDisposable
         Assert.Contains("client-commands.jsonl is missing", Assert.Throws<InvalidOperationException>(() => RegressionBundle.Create(_rig.Spec(), _rig.Output(), _rig.Sources)).Message);
     }
 
-    [Fact] public void OnlyTheModMayDifferBetweenTheArms()
+    [ClientHostFact] public void OnlyTheModMayDifferBetweenTheArms()
     {
         string trace = Path.Combine(_rig.Root, "evidence", "candidate", "client-commands.jsonl");
         string dependency = FileHash.Md5(Path.Combine(_rig.Root, "deps", "Dependency.dll"));
@@ -227,7 +227,7 @@ public sealed class RegressionBundleTests : IDisposable
 
     // ---- a run made before environment manifests, ported to the template ----
 
-    [Fact] public void ARetainedRunIsBundledFromATemplateAndAPortHoldingTheNativeAssertions()
+    [ClientHostFact] public void ARetainedRunIsBundledFromATemplateAndAPortHoldingTheNativeAssertions()
     {
         foreach (string arm in new[] { "parent", "candidate" }) _rig.Retain(arm);
         string native = _rig.NativeRunner("        public static void Measure(ClientRound round) => round.Step(\"the mod marks the ground\", () => { });");
@@ -263,7 +263,7 @@ public sealed class RegressionBundleTests : IDisposable
         Assert.Contains("neither run-manifest.json nor the environment records the build's source commit", Assert.Throws<InvalidOperationException>(() => RegressionBundle.Create(spec, _rig.Output(), _rig.Sources)).Message);
     }
 
-    [Fact] public void TheSampleBundleSpecNamesOnlyKnownFields()
+    [ClientHostFact] public void TheSampleBundleSpecNamesOnlyKnownFields()
     {
         string sample = File.ReadAllText(Path.Combine(FixtureProjects.RepositoryRoot(), "tools", "regression-bundle", "bundle.sample.json"));
         var read = JsonSerializer.Deserialize<BundleSpec>(sample, new JsonSerializerOptions
@@ -274,7 +274,7 @@ public sealed class RegressionBundleTests : IDisposable
         Assert.Equal("fail", read.Arms["parent"].Expect);
     }
 
-    [Fact] public void TheGamePackageHoldsNoBundleTypesAndNoHttpClient()
+    [ClientHostFact] public void TheGamePackageHoldsNoBundleTypesAndNoHttpClient()
     {
         // The bundler is a maintainer tool (tools/regression-bundle); the package a mod's tests reference keeps none of it.
         var game = typeof(WorldFixture).Assembly;
@@ -321,7 +321,9 @@ public sealed class NetworkFactAttribute : FactAttribute
 
     public NetworkFactAttribute()
     {
-        if (Reason.Value is { } reason) Skip = "Builds against NuGet.org; skipped: " + reason;
+        // Its rig stages a local client, which a Linux machine does not run (#708).
+        if (OperatingSystem.IsLinux()) Skip = "Linux hosts run the dedicated server only; the rig stages a client";
+        else if (Reason.Value is { } reason) Skip = "Builds against NuGet.org; skipped: " + reason;
     }
 }
 

@@ -14,17 +14,14 @@ public sealed partial class HostedServerRunTests
 
     private static object Accounts(bool check = false) => new { pool = "steam-accounts.json", leaseHost = LeaseBox.Name, checkSignedIn = check };
 
-    // The server host, a Linux client host with an install, and the plan and profile.
+    // The server host, a macOS client host with an install, and the plan and profile.
     private (FakeServerHost Host, FakeOwnedServer Server, FakeServerHost Client, string Plan, string Profile) WithClient(object? steamAccounts, string mirror = "gpu", string server = "host")
     {
         var fixture = NewServer();
         var host = new FakeServerHost("linux-box", Path.Combine(_root, server), fixture);
-        var client = new FakeServerHost("linux-gpu", Path.Combine(_root, mirror), tunnelPort: 15578);
-        string install = client.Local("/home/tester/valheim");
-        Directory.CreateDirectory(Path.Combine(install, "BepInEx", "core"));
-        FakeInstalls.Client(install);
-        File.WriteAllText(Path.Combine(install, GameLaunch.ClientLinuxExecutable), "client");
-        FakeInstalls.LinuxLoader(install);
+        var client = new FakeServerHost("mac-gpu", Path.Combine(_root, mirror), tunnelPort: 15578);
+        string install = client.Local("/Users/tester/valheim");
+        FakeInstalls.MacClient(install);
         var (plan, profile) = Write(host, withClient: true, steamAccounts: steamAccounts);
         return (host, fixture, client, plan, profile);
     }
@@ -32,7 +29,7 @@ public sealed partial class HostedServerRunTests
     private static ScriptedTransport SignedInClientTransport(string id = LeaseBox.SteamId) =>
         new ScriptedTransport().On("cli_multiplayer_identity", _ => ScriptedTransport.Ok("OK: steamId=" + id + ", playFabLoginState=NotLoggedIn, playFabId=none, backend=Steam, gameState=main_menu, connectionStatus=None, isServer=False, isOpenServer=False, server="));
 
-    private ClientRunPlan OwnedClient() => new() { Mode = "owned", Install = _root, Port = 5578, Pinning = "none", StartSeconds = 30, LaunchArguments = ["+connect", "linux-box:2456"] };
+    private ClientRunPlan OwnedClient() => new() { Mode = "owned", Architecture = "x64", Install = _root, Port = 5578, Pinning = "none", StartSeconds = 30, LaunchArguments = ["+connect", "linux-box:2456"] };
 
     private static JsonElement ResultIn(string output) => JsonDocument.Parse(File.ReadAllText(Path.Combine(output, "result.json"))).RootElement;
     private static List<string> StepNamesIn(string output) => ResultIn(output).GetProperty("Steps").EnumerateArray().Select(step => step.GetProperty("Name").GetString()!).ToList();
@@ -50,7 +47,7 @@ public sealed partial class HostedServerRunTests
         Assert.Equal(new[] { "enough free disk space for the copies", "take the server host's lock", "copy and verify pinned runtime on the server host", "copy and verify pinned world", "ship and verify the world copy on the server host",
                 "copied runtime has the plan's server executable", "copied runtime is the pinned game build, loader and patchers",
                 "CLI port is free on the server host", "open the loopback CLI tunnel to the server host", "start and verify owned dedicated fixture", "stop only owned server",
-                "fetch the server host's world copy", "remove the server host's runtime copy, keeping what the run changed", "close the CLI tunnel", "release client host linux-gpu's lock", "release the server host's lock", "scan run logs" }, StepNamesIn(plainOutput));
+                "fetch the server host's world copy", "remove the server host's runtime copy, keeping what the run changed", "close the CLI tunnel", "release client host mac-gpu's lock", "release the server host's lock", "scan run logs" }, StepNamesIn(plainOutput));
         var plainProvenance = ResultIn(plainOutput).GetProperty("Provenance").EnumerateObject().Select(entry => entry.Name).ToList();
         Assert.DoesNotContain(plainProvenance, name => name.StartsWith("steamAccount", StringComparison.Ordinal));
 
@@ -70,8 +67,10 @@ public sealed partial class HostedServerRunTests
         Assert.Equal(plainProvenance, provenance.EnumerateObject().Select(entry => entry.Name).Where(name => !name.StartsWith("steamAccount", StringComparison.Ordinal)));
         Assert.Equal(LeaseBox.Account, provenance.GetProperty("steamAccount.player").GetString());
         Assert.Equal(LeaseBox.Pool, provenance.GetProperty("steamAccountPool.player").GetString());
-        var start = Assert.Single(plain.Client.Runs, run => run.Script == "client-start").Variables;
-        Assert.Equal(start, Assert.Single(leased.Client.Runs, run => run.Script == "client-start").Variables);
+        // A Mac launch names its GUI agent uniquely, so those two variables differ between runs.
+        IReadOnlyDictionary<string, string> Launch(FakeServerHost client) => Assert.Single(client.Runs, run => run.Script == "client-start").Variables
+            .Where(variable => variable.Key is not ("label" or "plist")).ToDictionary(variable => variable.Key, variable => variable.Value);
+        Assert.Equal(Launch(plain.Client), Launch(leased.Client));
         Assert.Equal(plain.Client.Runs.Select(run => run.Script), leased.Client.Runs.Select(run => run.Script));
         Assert.Equal(SteamAccountState.Free, (await LeaseBox.StatusAsync(PoolFile)).State);
         // The lease host's journal (#257): the account held for the client, then released, with its holder.
@@ -119,7 +118,7 @@ public sealed partial class HostedServerRunTests
         Assert.Contains($"{LeaseBox.Account} is held by another-runner run-x client player until it is released; if run run-x is over, valheim-test env recover --run run-x releases it",
             step.GetProperty("Error").GetString());
         // Nothing ran on the client's host and its lock was never taken; there is no lease of this run's to release.
-        Assert.Empty(run.Client.Runs); Assert.Empty(run.Client.Claims);
+        Assert.All(run.Client.Runs, entry => Assert.StartsWith("mac-", entry.Script)); Assert.Empty(run.Client.Claims); // only the read-only Mac console and slice checks ran
         Assert.DoesNotContain("release client player's Steam account lease", StepNames());
         Assert.Equal("another-runner run-x client player", (await LeaseBox.StatusAsync(PoolFile)).Holder);
     }
@@ -148,7 +147,7 @@ public sealed partial class HostedServerRunTests
         Assert.Equal(3, await PinnedServerRun.MainAsync(TestEnvironment.Read(run.Profile), ["run", run.Plan, Output], Options(run.Host, run.Server, context =>
         {
             var session = context.OpenClient(OwnedClient());
-            run.Client.Failures["stop"] = new HostResult(HostOutcome.Unknown, null, "", "", TimeSpan.FromSeconds(45), true);
+            run.Client.Failures["mac-client-stop"] = new HostResult(HostOutcome.Unknown, null, "", "", TimeSpan.FromSeconds(45), true);
             session.Dispose();
             return Task.CompletedTask;
         }, run.Client, new ScriptedTransport(), LeaseBox.Host())));
@@ -161,14 +160,14 @@ public sealed partial class HostedServerRunTests
         // The lease host's journal says it was kept, and why: never released while its client may run.
         var journal = (await RunJournalOnHost.ReadAsync(LeaseBox.Host(), LeaseBox.Journal, RunId, TimeSpan.FromSeconds(30))).Where(record => record.Actor == "player").ToList();
         Assert.Equal([JournalEntry.LeaseHeld, JournalEntry.LeaseKept], journal.Select(record => record.Entry.Kind));
-        Assert.Equal("its client may still run", journal[1].Entry.Fields["why"]);
+        Assert.Equal("its Mac GUI agent was not proven removed", journal[1].Entry.Fields["why"]); // a Mac client also has a GUI agent to prove removed
     }
 
     [Theory]
     [InlineData("VT-STEAMUSER id 76561197960265729", null)]
     [InlineData("VT-STEAMUSER account 1", null)]
     [InlineData("VT-STEAMUSER id 76561197960265730", "reported another account than vt_client_one")]
-    [InlineData("VT-STEAMUSER none", "account check on linux-gpu found no account")]
+    [InlineData("VT-STEAMUSER none", "account check on mac-gpu found no account")]
     [InlineData("VT-STEAMUSER unreadable the host user has no loginusers.vdf in its Steam directories", "is inconclusive (the host user has no loginusers.vdf")]
     [InlineData("", "is inconclusive (unexpected reply")]
     public async Task TheSignedInCheckPassesOnlyTheLeasedAccount(string reply, string? refusal)
@@ -182,7 +181,7 @@ public sealed partial class HostedServerRunTests
             return Task.CompletedTask;
         }, run.Client, SignedInClientTransport(), LeaseBox.Host()));
         var check = Step("client player's host is signed in to Steam account vt_client_one (signed-in check)");
-        Assert.Equal("steam-user", run.Client.Runs[0].Script); // Before anything else on the client's host.
+        Assert.Equal("steam-user", run.Client.Runs.First(entry => !entry.Script.StartsWith("mac-", StringComparison.Ordinal)).Script); // Before anything but the Mac console and slice checks.
         if (refusal == null)
         {
             Assert.Equal(0, code); Assert.True(check.GetProperty("Passed").GetBoolean());
@@ -217,7 +216,7 @@ public sealed partial class HostedServerRunTests
         }, run.Client, SignedInClientTransport(gameId), LeaseBox.Host()));
         Assert.Equal(1, code);
         Assert.False(exercised);
-        Assert.Contains(run.Client.Runs, entry => entry.Script == "stop");
+        Assert.Contains(run.Client.Runs, entry => entry.Script == "mac-client-stop");
         Assert.Equal(SteamAccountState.Free, (await LeaseBox.StatusAsync(PoolFile)).State);
         Assert.DoesNotContain("7656119", File.ReadAllText(Path.Combine(Output, "result.json")));
     }

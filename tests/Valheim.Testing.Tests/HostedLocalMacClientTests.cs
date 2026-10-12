@@ -76,7 +76,9 @@ public sealed partial class HostedServerRunTests
         });
         Directory.CreateDirectory(Output);
         Assert.ThrowsAny<Exception>(() => Open(hosted, client));
-        Assert.False(launched); Assert.Empty(macHost.Claims); Assert.Empty(macHost.Runs);
+        Assert.False(launched); Assert.Empty(macHost.Claims);
+        // A remote Mac answers only read-only checks (console, slices, loader files); nothing is started or copied on it.
+        Assert.DoesNotContain(macHost.Runs, run => run.Script is "client-start" or "move-aside" or "copy" or "profile-seed");
     }
 
     [Theory]

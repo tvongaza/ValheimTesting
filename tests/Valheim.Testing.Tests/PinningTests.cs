@@ -31,10 +31,17 @@ internal static class FakeInstalls
         Keep(Path.Combine(root, "BepInEx", "core", "BepInEx.dll"), "bepinex 5.4.23");
         Keep(Path.Combine(root, "BepInEx", "core", "BepInEx.Preloader.dll"), "bepinex preloader 5.4.23");
     }
-    /// <summary>A Linux install's Doorstop library, which a BepInEx launch needs beside the core.</summary>
+    /// <summary>A Linux dedicated-server runtime's Doorstop library, which a BepInEx launch needs beside the core.</summary>
     public static void LinuxLoader(string root) => Keep(Path.Combine(root, "doorstop_libs", "libdoorstop_x64.so"), "doorstop 4");
     /// <summary>A macOS install's Doorstop library at its root.</summary>
     public static void MacLoader(string root) => Keep(Path.Combine(root, "libdoorstop.dylib"), "doorstop 4");
+    /// <summary>A macOS client install: its bundle's game and managed folder, BepInEx's core and a Doorstop library at the root.</summary>
+    public static void MacClient(string root)
+    {
+        Keep(Path.Combine(root, GameLaunch.ClientMacBundle, "Contents", "MacOS", "Valheim"), "client");
+        Write(root, Path.Combine(GameLaunch.ClientMacBundle, "Contents", "Resources", "Data", "Managed"));
+        MacLoader(root);
+    }
     private static void Keep(string path, string text)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);

@@ -149,11 +149,11 @@ public sealed class ThisMachineTests : IDisposable
         var error = Assert.Throws<ArgumentException>(() => EnvironmentInventory.Read(null, new FakeMachine()));
         Assert.Contains("This machine has none", error.Message);
         Assert.Contains("Steam was not found", error.Message);
-        var inventory = Assert.Throws<ArgumentException>(() => EnvironmentInventory.Read(null, new FakeMachine("linux")));
+        var inventory = Assert.Throws<ArgumentException>(() => EnvironmentInventory.Read(null, new FakeMachine("macos")));
         Assert.Contains("Valheim (Steam app 892970)", inventory.Message);
     }
 
-    // A Linux host and a Mac both find their own dedicated server and client through Steam.
+    // A Linux host finds its dedicated server only (it runs no client, even one a Steam install has); a Mac finds both through Steam.
     [Fact] public void LinuxAndMacInstallsAreDetectedToo()
     {
         var linux = new FakeMachine("linux");
@@ -161,7 +161,8 @@ public sealed class ThisMachineTests : IDisposable
         linux.App("/home/tester/.steam/steam", "892970", "Valheim", "valheim.x86_64");
         linux.App("/home/tester/.steam/steam", "896660", "Valheim dedicated server", "valheim_server.x86_64");
         var inventory = EnvironmentInventory.Read(null, linux);
-        Assert.Equal(["local-server", "local-client"], inventory.Environments.Select(recipe => recipe.Name));
+        Assert.Equal(["local-server"], inventory.Environments.Select(recipe => recipe.Name));
+        Assert.Contains("Linux hosts run the dedicated server only; start the client on Windows or macOS.", inventory.Missing);
         Assert.Equal("bash", inventory.Hosts["local"].Shell);
 
         var mac = new FakeMachine("macos") { OsArchitecture = Architecture.Arm64 };

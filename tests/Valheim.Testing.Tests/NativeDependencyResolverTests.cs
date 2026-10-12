@@ -41,7 +41,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         Assert.Equal(mod, Assert.Single(resolved.Mods).File);
     }
 
-    [Fact] public void HardPluginAndLibraryClosureArePinnedFromExplicitRoots()
+    [ClientHostFact] public void HardPluginAndLibraryClosureArePinnedFromExplicitRoots()
     {
         var request = Request(_rig.Parent);
         var plan = NativeDependencyResolver.Resolve(request);
@@ -336,12 +336,12 @@ public sealed class NativeDependencyResolverTests : IDisposable
             hosts = new Dictionary<string, object>
             {
                 ["server"] = new { kind = "ssh", platform = "windows", shell = "pwsh", @lock = @"C:\locks\campaign.lock", destination = "test@server" },
-                ["mac"] = new { kind = "ssh", platform = "linux", shell = "bash", @lock = "/locks/campaign.lock", destination = "test@mac" },
+                ["mac"] = new { kind = "ssh", platform = "macos", shell = "bash", @lock = "/locks/campaign.lock", destination = "test@mac" },
             },
             environments = new object[]
             {
                 new { name = "server", host = "server", roles = new[] { "server" }, install = @"C:\game\source", runtime = @"C:\runs", cliPort = 5577, localCliPort = 6577, gamePort = 2456 },
-                new { name = "mac-client", host = "mac", roles = new[] { "client" }, install = "/game/source", runtime = "/runs", cliPort = 5578, localCliPort = 6578 },
+                new { name = "mac-client", host = "mac", roles = new[] { "client" }, install = "/game/source", runtime = "/runs", cliPort = 5578, localCliPort = 6578, architecture = "x64" },
             },
             leaseHost = "server", leaseDirectory = @"C:\leases",
         }));
@@ -1358,7 +1358,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
             before.RequireSameExceptRemovedMod(after, _rig.Parent)).Message);
     }
 
-    // #258 step 8b, run B's shape with fakes: a campaign without a dedicated server, the hosting client on one Linux host and its
+    // #258 step 8b, run B's shape with fakes: a campaign without a dedicated server, the hosting client on one macOS host and its
     // peer on another. The fixture is placed in the host user's own worlds_local (beside the characters_local its character was
     // staged in), journalled first; the peer joins the host by its Steam ID; teardown closes the peer, the host leaves and stops,
     // and the world is moved out of the user's worlds into the run's folder on that host and fetched into the evidence. Nothing
@@ -1380,31 +1380,29 @@ public sealed class NativeDependencyResolverTests : IDisposable
             var host = new FakeServerHost(name, Path.Combine(_rig.Root, "hosted-mirror-" + name), tunnelPort: port) { SteamUserReply = $"VT-STEAMUSER account {account}\n" };
             hosts[name] = host;
             string source = host.Local("/game/client");
-            FakeInstalls.Client(source);
-            File.WriteAllText(Path.Combine(source, GameLaunch.ClientLinuxExecutable), "game");
-            FakeInstalls.LinuxLoader(source);
+            FakeInstalls.MacClient(source);
             Directory.CreateDirectory(Path.Combine(source, "BepInEx", "plugins"));
-            Directory.CreateDirectory(host.Local("/home/t/.config/unity3d/IronGate/Valheim/characters_local"));
-            Directory.CreateDirectory(host.Local("/home/t/userdata"));
+            Directory.CreateDirectory(host.Local("/Users/t/Library/Application Support/IronGate/Valheim/characters_local"));
+            Directory.CreateDirectory(host.Local("/Users/t/userdata"));
         }
         // The host user's own world beside where the fixture goes: never touched.
-        Directory.CreateDirectory(hosts["pc"].Local("/home/t/.config/unity3d/IronGate/Valheim/worlds_local"));
-        File.WriteAllText(hosts["pc"].Local("/home/t/.config/unity3d/IronGate/Valheim/worlds_local/MyWorld.fwl"), "the user's world");
+        Directory.CreateDirectory(hosts["pc"].Local("/Users/t/Library/Application Support/IronGate/Valheim/worlds_local"));
+        File.WriteAllText(hosts["pc"].Local("/Users/t/Library/Application Support/IronGate/Valheim/worlds_local/MyWorld.fwl"), "the user's world");
         string inventory = Path.Combine(_rig.Root, "hosted-inventory.json");
         File.WriteAllText(inventory, JsonSerializer.Serialize(new
         {
-            hosts = hosts.Keys.ToDictionary(name => name, name => new { kind = "ssh", platform = "linux", shell = "bash", @lock = "/locks/run.lock", destination = "test@" + name }),
+            hosts = hosts.Keys.ToDictionary(name => name, name => new { kind = "ssh", platform = "macos", shell = "bash", @lock = "/locks/run.lock", destination = "test@" + name }),
             environments = new[]
             {
-                new { name = "pc-client", host = "pc", roles = new[] { "client" }, install = "/game/client", runtime = "/runs", cliPort = 5578, localCliPort = 6578 },
-                new { name = "laptop-client", host = "laptop", roles = new[] { "client" }, install = "/game/client", runtime = "/runs", cliPort = 5579, localCliPort = 6579 },
+                new { name = "pc-client", host = "pc", roles = new[] { "client" }, install = "/game/client", runtime = "/runs", cliPort = 5578, localCliPort = 6578, architecture = "x64" },
+                new { name = "laptop-client", host = "laptop", roles = new[] { "client" }, install = "/game/client", runtime = "/runs", cliPort = 5579, localCliPort = 6579, architecture = "x64" },
             },
             leaseHost = "pc", leaseDirectory = "/leases",
         }));
         object Character(string store, string registered, string file) => new
         {
             store, registeredName = registered, fileName = file,
-            charactersLocalDirectory = "/home/t/.config/unity3d/IronGate/Valheim/characters_local", steamUserDataDirectory = "/home/t/userdata",
+            charactersLocalDirectory = "/Users/t/Library/Application Support/IronGate/Valheim/characters_local", steamUserDataDirectory = "/Users/t/userdata",
         };
         string manifest = Path.Combine(_rig.Root, "hosted-campaign.json");
         File.WriteAllText(manifest, JsonSerializer.Serialize(new
@@ -1421,7 +1419,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
 
         // The host: at its menu until it hosts; an open Steam server while it does. The peer joins it by its Steam ID.
         bool hosting = false, joined = false; int readings = 0;
-        string worlds = "/home/t/.config/unity3d/IronGate/Valheim/worlds_local";
+        string worlds = "/Users/t/Library/Application Support/IronGate/Valheim/worlds_local";
         bool placedWhileHosting = false;
         var hostTransport = new ScriptedTransport()
             .ClientAccess(() => hosting, () => hosting)
@@ -1468,7 +1466,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
             .On("cli_set_player_safety true", _ => ScriptedTransport.Ok("OK: playerSafety enabled=True god=True ghost=True debugMode=True cheats=True ghostReplicated=True"));
         ClientRunPlan Section(bool host) => new()
         {
-            Mode = "owned", Install = "/bound", Port = 5578, Character = "bound", StartSeconds = 30, JoinSeconds = 10,
+            Mode = "owned", Architecture = "x64", Install = "/bound", Port = 5578, Character = "bound", StartSeconds = 30, JoinSeconds = 10,
             Pins = new() { ["example.client"] = "<md5>" },
             JoinsHost = !host, HostWorld = host ? new() { World = new() { Source = world }, WorldUid = "4242" } : null,
         };

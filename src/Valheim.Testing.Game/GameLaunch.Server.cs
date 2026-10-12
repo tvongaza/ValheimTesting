@@ -57,7 +57,7 @@ public sealed partial class GameLaunch
             throw new PlatformNotSupportedException($"{runtime} is the macOS Valheim game client ({ClientMacBundle}), not a dedicated server; GameLaunch.ForClient builds its launch. " + MacServerHint);
         string? client = new[] { ClientWindowsExecutable, ClientLinuxExecutable }.FirstOrDefault(name => File.Exists(Path.Combine(runtime, name)));
         throw new FileNotFoundException($"Runtime contains none of {ServerWindowsExecutable}, {ServerLinuxExecutable} or {ServerMacExecutable} (with {MacServerData})." +
-            (client == null ? "" : $" It holds the game client {client}; launch it with GameLaunch.ForClient."), runtime);
+            (client == null ? "" : client == ClientLinuxExecutable ? $" It holds the Linux game client {client}, which this toolkit does not run: {LinuxClientRefusal}" : $" It holds the game client {client}; launch it with GameLaunch.ForClient."), runtime);
     }
 
     /// <summary>

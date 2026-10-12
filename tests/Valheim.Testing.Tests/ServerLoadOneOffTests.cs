@@ -131,7 +131,7 @@ public sealed class ServerLoadOneOffTests : IDisposable
         Assert.Contains("Choose --adapter", error);
     }
 
-    [Fact]
+    [ClientHostFact]
     public async Task ScenarioWithTheWrongClientShapeRefusesBeforeCampaign()
     {
         string output = Path.Combine(_rig.Root, "wrong-client-shape");
@@ -199,11 +199,11 @@ public sealed class ServerLoadOneOffTests : IDisposable
         machine.Directories.Add(steam);
         machine.Directories.Add(HostPath.Join(steam, "userdata"));
         game = machine.App(steam, "892970", "Valheim", machine.Platform switch
-            { "windows" => GameLaunch.ClientWindowsExecutable, "macos" => "Valheim.app/Contents/MacOS/Valheim", _ => GameLaunch.ClientLinuxExecutable });
+            { "windows" => GameLaunch.ClientWindowsExecutable, "macos" => "Valheim.app/Contents/MacOS/Valheim", _ => throw new PlatformNotSupportedException(GameLaunch.LinuxClientRefusal) });
         return machine;
     }
 
-    [Fact]
+    [ClientHostFact]
     public async Task NamedInventoryChoiceIsFrozenForTheDerivedCampaign()
     {
         var machine = WithValheim(out string clientInstall);
@@ -262,7 +262,7 @@ public sealed class ServerLoadOneOffTests : IDisposable
         WorldFixture.Verify(Path.Combine(output, "world-source", "worlds_local"), hashes);
     }
 
-    [Fact]
+    [ClientHostFact]
     public async Task JoinedClientCanPrepareACustomPinnedWorldWithAnUnvisitedDisposableCharacter()
     {
         string source = Path.Combine(_rig.Root, "joined-world");
@@ -427,7 +427,7 @@ public sealed class ServerLoadOneOffTests : IDisposable
         Assert.Contains("another build", refusal);
     }
 
-    [Fact] public async Task TheDefaultIsAServerAndOneCleanClientAsADerivedCampaign()
+    [ClientHostFact] public async Task TheDefaultIsAServerAndOneCleanClientAsADerivedCampaign()
     {
         string output = Path.Combine(_rig.Root, "one-off");
         string? campaignFile = null; ServerRunPlan? plan = null; IReadOnlyDictionary<string, ClientRunPlan>? clients = null;
@@ -482,7 +482,7 @@ public sealed class ServerLoadOneOffTests : IDisposable
     }
 
     // No client install: refused with the reason and --server-only, never run without its client.
-    [Fact] public async Task AClientThatCannotRunIsRefusedNeverDropped()
+    [ClientHostFact] public async Task AClientThatCannotRunIsRefusedNeverDropped()
     {
         bool ran = false;
         string output = Path.Combine(_rig.Root, "no-client");
@@ -643,7 +643,7 @@ public sealed class ServerLoadOneOffTests : IDisposable
         Assert.Equal(("local-server", "mac-client", "server.lan:2486"), (choice.Server.Name, choice.Client!.Name, choice.Join));
     }
 
-    [Fact] public void ConflictingOptionsAreRefusedBeforeAnything()
+    [ClientHostFact] public void ConflictingOptionsAreRefusedBeforeAnything()
     {
         foreach (string[] args in new string[][]
         {
@@ -734,7 +734,7 @@ public sealed class ServerLoadOneOffTests : IDisposable
 
     // start's client is the inventory's: this machine's Valheim, --game and --loader-package as its override, or a file's
     // (--client-env picks one). It must be on this machine, and the chosen one is recorded beside the run's inputs.
-    [Fact] public void StartTakesItsClientFromTheInventoryAndRecordsIt()
+    [ClientHostFact] public void StartTakesItsClientFromTheInventoryAndRecordsIt()
     {
         string output = Path.Combine(_rig.Root, "start");
         string game;
@@ -783,7 +783,7 @@ public sealed class ServerLoadOneOffTests : IDisposable
         Assert.Contains("--steam-userdata", Assert.Throws<DirectoryNotFoundException>(() => SmokeInputs.SteamUserdata(new Dictionary<string, string>())).Message);
     }
 
-    [Fact] public void StartRefusesAnUnavailableGuiBeforeRecordingOrInspectingTheLoader()
+    [ClientHostFact] public void StartRefusesAnUnavailableGuiBeforeRecordingOrInspectingTheLoader()
     {
         string output = Path.Combine(_rig.Root, "locked-mac-start");
         bool inspectedLoader = false;
@@ -796,7 +796,7 @@ public sealed class ServerLoadOneOffTests : IDisposable
         Assert.False(Directory.Exists(output));
     }
 
-    [Fact] public void StartCanDeferRecordingUntilOutputPassesSourceProtection()
+    [ClientHostFact] public void StartCanDeferRecordingUntilOutputPassesSourceProtection()
     {
         string output = Path.Combine(_rig.Game, "accidental-output");
         string inventoryFile = Path.Combine(_rig.Root, "client-inventory.json");

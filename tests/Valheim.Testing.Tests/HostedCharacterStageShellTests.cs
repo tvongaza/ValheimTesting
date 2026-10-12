@@ -2,7 +2,7 @@ using Valheim.Testing.Game;
 using Xunit;
 using Valheim.Testing.GameSessions;
 
-// The hosted character stage's own scripts in this machine's real shell (bash on macOS and Linux, pwsh on
+// The hosted character stage's own scripts in this machine's real shell (bash on macOS, pwsh on
 // Windows), checked against the one character-file rule they get as variables
 // (DisposableCharacterStore.IsCharacterFile): a fake host cannot show that a script applies the rule the C# path applies.
 public sealed class HostedCharacterStageShellTests : IDisposable

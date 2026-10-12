@@ -1,6 +1,6 @@
 # ValheimTesting
 
-Reusable test inputs, fixtures and assertions for Valheim mods. Most tests run without Valheim, Unity, Steam or a dedicated server; native checks drive disposable game sessions through ValheimCLI on supported Windows, macOS and Linux hosts.
+Reusable test inputs, fixtures and assertions for Valheim mods. Most tests run without Valheim, Unity, Steam or a dedicated server; native checks drive disposable game sessions through ValheimCLI on supported Windows and macOS hosts (game clients) and Windows, macOS and Linux hosts (dedicated servers).
 
 > Unofficial community tooling; not affiliated with or endorsed by Iron Gate or Coffee Stain. Valheim is a trademark of Iron Gate AB.
 

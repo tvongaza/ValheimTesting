@@ -134,7 +134,7 @@ public sealed class CliCapabilityManifestTests : IDisposable
 
     // ---- the static check of an owned install ----
 
-    [Fact] public void ACoherentSetPassesTheStaticCheckAndThenTheLiveCheck()
+    [ClientHostFact] public void ACoherentSetPassesTheStaticCheckAndThenTheLiveCheck()
     {
         var builds = new Builds();
         using var install = Staged(builds, (Core, builds.Core), ("valheimCLI/" + Standard, builds.Standard), (WorldTools, builds.WorldTools));
@@ -169,7 +169,7 @@ public sealed class CliCapabilityManifestTests : IDisposable
         Assert.Contains("mymod.testing/markers", error.Message);
     }
 
-    [Fact] public void TheJotunnRunsMonolithicValheimCliFailsBeforeLaunchNamingTheMissingPack()
+    [ClientHostFact] public void TheJotunnRunsMonolithicValheimCliFailsBeforeLaunchNamingTheMissingPack()
     {
         var builds = new Builds();
         using var install = Staged(builds, (Core, builds.Monolithic));
@@ -190,7 +190,7 @@ public sealed class CliCapabilityManifestTests : IDisposable
         Assert.Contains("valheim.session comes from the default valheimCLI.dll", own.Message);
     }
 
-    [Fact] public void TheEpicLootRunsStaleCoreAndPackFailBeforeTheClientStarts()
+    [ClientHostFact] public void TheEpicLootRunsStaleCoreAndPackFailBeforeTheClientStarts()
     {
         var builds = new Builds();
         // The right file names and plugin GUIDs, from an older generation whose Standard pack had no valheim.session.
@@ -248,7 +248,7 @@ public sealed class CliCapabilityManifestTests : IDisposable
         Assert.Contains("remove all old pack DLLs", refusal);
     }
 
-    [Fact] public void AMixedSetIsRefusedAsAnotherBuildOfThePack()
+    [ClientHostFact] public void AMixedSetIsRefusedAsAnotherBuildOfThePack()
     {
         var builds = new Builds();
         using var install = Staged(builds, (Core, builds.Core), (Standard, builds.OlderStandard), (WorldTools, builds.WorldTools));
@@ -266,7 +266,7 @@ public sealed class CliCapabilityManifestTests : IDisposable
         plan.Preflight(CliCapabilities.HostedRounds); // Negative control: the manifest's set passes.
     }
 
-    [Fact] public void ReplacingAnyDeclaredDllWithoutItsHashInvalidatesTheManifest()
+    [ClientHostFact] public void ReplacingAnyDeclaredDllWithoutItsHashInvalidatesTheManifest()
     {
         var builds = new Builds();
         using var install = Staged(builds, (Core, builds.Core), (Standard, builds.Standard), (WorldTools, builds.WorldTools));
@@ -283,7 +283,7 @@ public sealed class CliCapabilityManifestTests : IDisposable
         Assert.Contains("BepInEx/plugins/Valheim.Cli.WorldTools.dll has SHA256", Assert.Throws<InvalidOperationException>(() => plan.Preflight(CliCapabilities.HostedRounds)).Message);
     }
 
-    [Fact] public void AMissingOrDuplicatedPackFileIsNamed()
+    [ClientHostFact] public void AMissingOrDuplicatedPackFileIsNamed()
     {
         var builds = new Builds();
         using var install = Staged(builds, (Core, builds.Core), (Standard, builds.Standard));
@@ -299,7 +299,7 @@ public sealed class CliCapabilityManifestTests : IDisposable
 
     // The one static check of a ValheimCLI set (#296): each wrong shape is one message, from CliCapabilityManifest.Locate,
     // whether an owned client's install, a dependency lock or the check itself asks.
-    [Theory]
+    [ClientHostTheory]
     [InlineData("missing")]
     [InlineData("twice")]
     [InlineData("another build")]
@@ -357,7 +357,7 @@ public sealed class CliCapabilityManifestTests : IDisposable
         Assert.Contains("not a one-plugin build", refusal);
     }
 
-    [Fact] public void AManifestPackInScriptsMustLoadAtStartupEvenWhenItIsNotSeparatelyPinned()
+    [ClientHostFact] public void AManifestPackInScriptsMustLoadAtStartupEvenWhenItIsNotSeparatelyPinned()
     {
         var builds = new Builds();
         using var install = Staged(builds, (Core, builds.Core), (WorldTools, builds.WorldTools));
@@ -375,7 +375,7 @@ public sealed class CliCapabilityManifestTests : IDisposable
 
     // ---- the policy without a manifest, and for attached clients ----
 
-    [Fact] public void InPlaceWithoutAManifestOnlyTheLiveCheckRunsAndTheReportSaysSo()
+    [ClientHostFact] public void InPlaceWithoutAManifestOnlyTheLiveCheckRunsAndTheReportSaysSo()
     {
         var builds = new Builds();
         using var install = Staged(builds, (Core, builds.Monolithic)); // Nothing statically checks it without a manifest.
