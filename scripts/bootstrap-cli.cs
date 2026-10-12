@@ -101,7 +101,8 @@ using (JsonDocument loaderPin = JsonDocument.Parse(File.ReadAllText(Path.Combine
         Path.Combine(feed, "bepinexpack-valheim.zip"), loaderPin.RootElement.GetProperty("url").GetString()!, loaderPin.RootElement.GetProperty("sha256").GetString()!);
 return 0;
 
-// A pinned download into the feed, kept only when it has the pinned SHA-256; one already there with that hash is reused.
+// A pinned download into the feed, kept only when it has the pinned SHA-256; one already there with that hash is reused. CI restores
+// these files from its cache before this runs (.github/actions/setup, pinned-downloads); this check stays the authority.
 static async Task FetchPinned(string what, string file, string url, string sha256)
 {
     sha256 = sha256.ToLowerInvariant();

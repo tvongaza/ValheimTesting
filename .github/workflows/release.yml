@@ -38,9 +38,8 @@ jobs:
             echo "::error::Tag $GITHUB_REF_NAME points at $GITHUB_SHA, which is not on main."
             exit 1
           fi
-      - uses: actions/setup-dotnet@v6
-        with:
-          dotnet-version: '10.0.x'
+      # No pinned-downloads cache here: this job holds the publishing credentials, and a release fetches the two pins once.
+      - uses: ./.github/actions/setup
       # A `-candidate.<sha>` version is a local build identity; NuGet.org would keep it forever. Refused before building, as is a
       # source version older than the release recorded in toolkit-versions.json, a package whose source changed under a version
       # NuGet.org already serves (the push would skip it; needs fetch-depth: 0), and a dependent left on an old version: what

@@ -38,9 +38,9 @@ jobs:
         with:
           persist-credentials: false
           ref: main # Branch dispatches intentionally rebuild main; previews do not deploy to Pages.
-      - uses: actions/setup-dotnet@v6
+      - uses: ./.github/actions/setup
         with:
-          dotnet-version: '10.0.x'
+          pinned-downloads: true
       - run: dotnet run scripts/bootstrap-cli.cs
       - run: dotnet run scripts/validate.cs
       - run: dotnet tool restore

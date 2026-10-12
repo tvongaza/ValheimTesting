@@ -42,6 +42,8 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup
+        with:
+          pinned-downloads: true
       # Packages from NuGet.org, reused across runs. Never this repository's own packages (Valheim.Testing*, and the CLI
       # transport bootstrap builds): validate packs those at versions it reuses and checks that consumers restore exactly what
       # it packed, which a cached copy of an earlier build would defeat. A restored entry is trusted as NuGet's global
@@ -152,6 +154,8 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup
+        with:
+          pinned-downloads: true
       - uses: actions/cache/restore@v6
         with:
           path: ${{ env.VT_NUGET_CACHE_PATHS }}
@@ -190,6 +194,8 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup
+        with:
+          pinned-downloads: true
       - uses: actions/cache/restore@v6
         with:
           path: ${{ env.VT_NUGET_CACHE_PATHS }}
@@ -223,6 +229,8 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup
+        with:
+          pinned-downloads: true
       - name: Restore the NuGet package cache
         uses: actions/cache/restore@v6
         with:
@@ -443,6 +451,8 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup
+        with:
+          pinned-downloads: true
       - run: dotnet run scripts/bootstrap-cli.cs
       - name: Start a throwaway sshd on 127.0.0.1:2222 and a virtual X display
         run: bash .github/scripts/game-hosts.sh start

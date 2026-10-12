@@ -3,7 +3,7 @@
 A local Ubuntu 24.04 image for owned native checks against the **Linux** Valheim dedicated server. It contains:
 
 - the Valheim dedicated server (Steam app 896660) in `/opt/valheim/server`, installed with anonymous SteamCMD while the image is built; its Steam build ID is in `/opt/valheim/server-buildid.txt`;
-- [BepInExPack_Valheim](https://thunderstore.io/c/valheim/p/denikson/BepInExPack_Valheim/) 5.4.2350 extracted over that directory, after its SHA-256 is verified;
+- [BepInExPack_Valheim](https://thunderstore.io/c/valheim/p/denikson/BepInExPack_Valheim/) at the version `loader-dependency.json` pins, taken from the zip in `.packages` rather than downloaded by the build, extracted over that directory after its SHA-256 is verified;
 - the .NET 10 SDK (Microsoft's `dotnet-install.sh`, channel `10.0`) in `/opt/dotnet`;
 - a non-root `valheim` user that owns `/opt/valheim`.
 - git, for `scripts/bootstrap-cli.cs`.
@@ -18,21 +18,24 @@ The image and every layer, export or saved tarball of it contain Valheim's game 
 
 ## Build
 
-From the repository root:
+From the repository root. The build takes the BepInExPack from the repository's pin, so fetch it first (it is also what the checks and the tests use; BuildKit, Docker 23 or later, is needed):
 
 ```sh
-docker build -t valheimtesting-linux-server:local docker/linux-server
+sh scripts/bootstrap-cli.sh
+bash docker/linux-server/build.sh -t valheimtesting-linux-server:local
 ```
+
+`build.sh` passes `.packages/bepinexpack-valheim.zip` to `docker build` as the context `pinned` and the SHA-256 from [`loader-dependency.json`](../../loader-dependency.json) as `BEPINEX_PACK_SHA256`; every other argument goes to `docker build`. On Windows, fetch the pack with the command in [CONTRIBUTING.md](../../CONTRIBUTING.md) and run `build.sh` in Git Bash or WSL.
 
 The image is x86-64 only: the Dockerfile pins `FROM --platform=linux/amd64`, because the server, SteamCMD and Doorstop have no arm64 builds.
 
-The build context is this directory only; no repository source enters the image. Each build downloads the current public dedicated-server build, so record `server-buildid.txt` with any result. The plain Ubuntu base is pinned by digest in the Dockerfile; SteamCMD and the .NET SDK are not pinned to exact builds. The BepInEx pack is pinned by version and hash, and its launch script is checked for the loader variables `GameLaunch.ForServer` reproduces.
+The build context is this directory only; no repository source enters the image (the pinned BepInExPack zip is a second, named context that `build.sh` stages, mounted for one step and never copied into a layer). Each build downloads the current public dedicated-server build, so record `server-buildid.txt` with any result. The plain Ubuntu base is pinned by digest in the Dockerfile; SteamCMD and the .NET SDK are not pinned to exact builds. The BepInEx pack is the repository's pin (version and hash in `loader-dependency.json`), checked against that hash again inside the build, and its launch script is checked for the loader variables `GameLaunch.ForServer` reproduces.
 
 ### Plain Ubuntu base mirror
 
 Only the **unmodified Ubuntu 24.04 amd64 base** is mirrored at `ghcr.io/tvongaza/valheimtesting-ubuntu-base`. The [source record](ubuntu-base.json) names Canonical's ECR Public manifest digest, its one compressed layer (29,765,758 bytes), and the GHCR package. The mirror workflow copies that exact OCI manifest without building a new layer and verifies the copied digest and architecture. It contains no Valheim, BepInEx, credentials or private assets. The private server image above is still built and discarded on each runner.
 
-The two native workflows pull this public digest from GHCR with a named error if it is unavailable, then build the private image. A fresh or repeated native run therefore fetches its **base image** only from GHCR, even with `docker build --pull`; neither run contacts ECR Public or Docker Hub for an image layer. The build's ordinary `RUN` steps still fetch Ubuntu packages, the .NET installer, BepInEx and the dedicated server from their own services.
+The two native workflows pull this public digest from GHCR with a named error if it is unavailable, then build the private image. A fresh or repeated native run therefore fetches its **base image** only from GHCR, even with `docker build --pull`; neither run contacts ECR Public or Docker Hub for an image layer. The build's ordinary `RUN` steps still fetch Ubuntu packages, the .NET installer and the dedicated server from their own services; the BepInEx pack comes from `.packages`, which CI restores from the Actions cache.
 
 Refresh deliberately:
 
@@ -71,7 +74,7 @@ var process = new DirectServerProcess(start, logPrefix, Path.Combine(runtime, "B
 A Mac can run the macOS dedicated server natively (see [getting started](../../docs/getting-started.md)); this image is for the Linux one, which `GameLaunch.ForServer` refuses to launch on a macOS host. On an Apple Silicon Mac, Docker runs arm64 Linux, so this image only runs under x86-64 emulation. This path is **experimental and unverified**: no pass has been recorded on a Mac. Inside the container `GameLaunch.ForServer` sees a Linux host, so runners work unchanged.
 
 ```sh
-docker build --platform linux/amd64 -t valheimtesting-linux-server:local docker/linux-server
+bash docker/linux-server/build.sh --platform linux/amd64 -t valheimtesting-linux-server:local
 docker run --platform linux/amd64 --rm -it -v "$PWD:/src:ro" valheimtesting-linux-server:local bash
 ```
 
@@ -97,7 +100,7 @@ The supported Mac workflows are a Mac game client (launched through ValheimCLI, 
 
 **Negative controls**, by hand, are expected to fail and never post an issue: `negative_control: plugin-pin` pins a wrong MD5 for the mod, so the pinned run refuses the server before the scenario; `bepinex-hash` builds the image with a wrong BepInExPack hash, so the build stops.
 
-**What it does not cover.** There is no game client and no Steam login: nothing about joining, what a client sees, crossplay or the Windows server. It checks the current public server build with the pinned BepInExPack; a new BepInExPack is picked up by updating the pin here. A pass shows the server path works on that build, not that every mod or world does.
+**What it does not cover.** There is no game client and no Steam login: nothing about joining, what a client sees, crossplay or the Windows server. It checks the current public server build with the pinned BepInExPack; a new BepInExPack is picked up by updating `loader-dependency.json`. A pass shows the server path works on that build, not that every mod or world does.
 
 **Game files.** The image is built with `--no-cache`, never pushed, saved or cached, and removed with the runner. The runtime copies, the world, the publicized assemblies and the plan (it holds the throwaway server password) stay in the containers; the upload step refuses anything but `.json`, `.jsonl`, `.xml`, `.log`, `.absent` and `server-buildid.txt` files and anything over 20 MB. No secrets are used. The logs can contain the runner's network details.
 

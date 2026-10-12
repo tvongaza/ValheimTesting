@@ -1,5 +1,11 @@
 name: Set up a .NET runner
-description: The .NET 10 SDK on every OS and, on a throwaway Windows runner, no real-time malware scanning. Every job in test.yml uses it after its checkout.
+description: The .NET 10 SDK on every OS, on a throwaway Windows runner no real-time malware scanning, and for a job that runs scripts/bootstrap-cli.cs the pinned downloads it reuses. Used after the checkout.
+inputs:
+  pinned-downloads:
+    description: >-
+      'true' in a job that runs scripts/bootstrap-cli.cs: restore the two files it downloads before the job's steps and save them
+      after the job succeeds. Leave it out in any other job.
+    default: 'false'
 runs:
   using: composite
   steps:
@@ -7,6 +13,19 @@ runs:
     - uses: actions/setup-dotnet@v6
       with:
         dotnet-version: '10.0.x'
+    # The BepInExPack (Thunderstore) and the ValheimCLI plugin bundle that bootstrap-cli.cs fetches into .packages, reused across
+    # jobs and runs so a CI run does not fetch them again in every job. One step restores them here and saves them when the job
+    # ends (a cache entry is never overwritten, so only a job that finds none saves). The key follows the pins: a new pin
+    # fetches once. Exactly these two files, never the folder: it also holds the packages the job builds. A restored file is not
+    # trusted: FetchPinned in bootstrap-cli.cs checks its SHA-256 and fetches again when it differs. Needs the checkout first.
+    - name: Reuse the pinned downloads
+      if: inputs.pinned-downloads == 'true'
+      uses: actions/cache@v6
+      with:
+        path: |
+          .packages/bepinexpack-valheim.zip
+          .packages/valheimcli-bundle.zip
+        key: pinned-downloads-${{ runner.os }}-${{ hashFiles('loader-dependency.json', 'cli-dependency.json') }}
     # Real-time malware scanning of every file restore and build write made Windows the slowest leg (its package restores
     # took 55 s against 11-14 s on Linux and macOS). The runner is discarded after the job. A warning, not a failure, if
     # an image ever refuses the change.

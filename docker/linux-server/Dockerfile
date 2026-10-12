@@ -12,8 +12,10 @@ FROM --platform=linux/amd64 ghcr.io/tvongaza/valheimtesting-ubuntu-base@sha256:a
 
 ARG DOTNET_CHANNEL=10.0
 ARG VALHEIM_SERVER_APP=896660
-ARG BEPINEX_PACK_VERSION=5.4.2350
-ARG BEPINEX_PACK_SHA256=37a91c000b4e88f2ed7a4bd7d812239852d2e36cbf0ff0a9f5faacfba46b105f
+# The BepInExPack is not downloaded here: build.sh passes the repository's pinned zip (.packages/bepinexpack-valheim.zip, fetched
+# and checked by scripts/bootstrap-cli.cs) as the build context "pinned" and its SHA-256 from loader-dependency.json as this
+# argument. It has no default: a build without it fails instead of trusting a file. Build with build.sh, not a plain `docker build`.
+ARG BEPINEX_PACK_SHA256
 
 ENV DEBIAN_FRONTEND=noninteractive \
     DOTNET_ROOT=/opt/dotnet \
@@ -59,11 +61,12 @@ RUN set -eu; \
     sed -n 's/.*"buildid"[[:space:]]*"\([0-9]*\)".*/\1/p' "$manifest" | head -n 1 > /opt/valheim/server-buildid.txt; \
     echo "Valheim dedicated server build $(cat /opt/valheim/server-buildid.txt)"
 
-# BepInExPack_Valheim, verified by SHA-256 before anything is extracted. Its launch script is checked for
-# the variables GameLaunch.ForServer reproduces, so a pack with a different loader contract fails here.
-RUN set -eu; \
-    curl -fsSL -o /tmp/bepinex.zip \
-      "https://thunderstore.io/package/download/denikson/BepInExPack_Valheim/${BEPINEX_PACK_VERSION}/"; \
+# BepInExPack_Valheim from the build context "pinned" (a read-only mount: no layer holds the zip), verified by SHA-256 again before
+# anything is extracted. Its launch script is checked for the variables GameLaunch.ForServer reproduces, so a pack with a
+# different loader contract fails here.
+RUN --mount=type=bind,from=pinned,source=bepinexpack-valheim.zip,target=/tmp/bepinex.zip \
+    set -eu; \
+    test -n "${BEPINEX_PACK_SHA256}"; \
     echo "${BEPINEX_PACK_SHA256}  /tmp/bepinex.zip" | sha256sum -c -; \
     mkdir /tmp/bepinex; \
     unzip -q /tmp/bepinex.zip -d /tmp/bepinex; \
@@ -75,7 +78,7 @@ RUN set -eu; \
     grep -q 'LD_PRELOAD="libdoorstop_x64.so:' "$script"; \
     grep -q '^export SteamAppId=892970' "$script"; \
     cp -R /tmp/bepinex/BepInExPack_Valheim/. /opt/valheim/server/; \
-    rm -rf /tmp/bepinex /tmp/bepinex.zip; \
+    rm -rf /tmp/bepinex; \
     chmod u+x,g+x /opt/valheim/server/valheim_server.x86_64 /opt/valheim/server/doorstop_libs/libdoorstop_x64.so; \
     test -f /opt/valheim/server/BepInEx/core/BepInEx.Preloader.dll; \
     test ! -e /opt/valheim/server/BepInEx/LogOutput.log
