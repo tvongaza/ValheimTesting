@@ -53,8 +53,7 @@ public sealed class WorldFixture : IDisposable
     private static WorldFixture CopyFixture(string source, string outputParent, IReadOnlyDictionary<string, string>? expectedHashes)
     {
         source = Path.GetFullPath(source); outputParent = Path.GetFullPath(outputParent);
-        var pathComparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
-        if (outputParent.Equals(source, pathComparison) || outputParent.StartsWith(source + Path.DirectorySeparatorChar, pathComparison)) throw new ArgumentException("Output must be outside source.");
+        if (ProtectedPaths.Contains(source, outputParent)) throw new ArgumentException("Output must be outside source.");
         var directories = new List<string>();
         var actual = Hashes(source, directories);
         if (expectedHashes != null)
@@ -137,8 +136,7 @@ public sealed class WorldFixture : IDisposable
     {
         if (_disposed) throw new ObjectDisposedException(nameof(WorldFixture), "The copy was already removed.");
         keepIn = Path.GetFullPath(keepIn);
-        var pathComparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
-        if (keepIn.Equals(DirectoryPath, pathComparison) || keepIn.StartsWith(DirectoryPath + Path.DirectorySeparatorChar, pathComparison))
+        if (ProtectedPaths.Contains(DirectoryPath, keepIn))
             throw new ArgumentException("Keep the changes outside the copy that is removed.", nameof(keepIn));
         var added = new List<string>(); var changed = new List<string>(); var links = new List<string>(); var seen = new HashSet<string>(StringComparer.Ordinal);
         long bytesFreed = 0;

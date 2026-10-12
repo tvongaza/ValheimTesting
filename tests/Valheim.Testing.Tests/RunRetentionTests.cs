@@ -9,7 +9,7 @@ public sealed class RunRetentionTests : IDisposable
     private readonly string _root = Path.Combine(Path.GetTempPath(), "retention-" + Guid.NewGuid().ToString("N"));
     private string Source => Path.Combine(_root, "source");
     private string Output => Path.Combine(_root, "out");
-    public void Dispose() { if (Directory.Exists(_root)) Directory.Delete(_root, true); }
+    public void Dispose() { if (Directory.Exists(_root)) DirectoryLinks.DeleteTree(_root); }
 
     // A small install: an executable, a managed assembly and a config the run will rewrite.
     private WorldFixture CopyOfInstall()
@@ -20,6 +20,26 @@ public sealed class RunRetentionTests : IDisposable
         File.WriteAllText(Path.Combine(Source, "BepInEx", "config", "mod.cfg"), "before");
         File.WriteAllText(Path.Combine(Source, "unused.txt"), "the run deletes this");
         return WorldFixture.Copy(Source, Output, WorldFixture.Manifest(Source));
+    }
+
+    [Fact] public void RetireRefusesToKeepChangesInsideTheCopyThroughAnAlias()
+    {
+        var copy = CopyOfInstall();
+        string alias = Path.Combine(_root, "copy-alias");
+        DirectoryLinks.Create(alias, copy.DirectoryPath);
+        Assert.Throws<ArgumentException>(() => copy.Retire(Path.Combine(alias, "kept")));
+        Assert.True(Directory.Exists(copy.DirectoryPath));
+        DirectoryLinks.Remove(alias);
+        copy.Dispose();
+    }
+
+    [Fact] public void CopyRefusesAnOutputThroughAnAliasOfItsSource()
+    {
+        using (CopyOfInstall()) { }
+        string alias = Path.Combine(_root, "source-alias");
+        DirectoryLinks.Create(alias, Source);
+        Assert.Throws<ArgumentException>(() => WorldFixture.Copy(Source, alias, WorldFixture.Manifest(Source)));
+        Assert.Empty(Directory.EnumerateDirectories(Source, "valheim-test-*"));
     }
 
     [Fact] public void RetireKeepsOnlyWhatTheRunAddedOrChangedAndRemovesTheCopy()
