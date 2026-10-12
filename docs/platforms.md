@@ -20,7 +20,7 @@ Every script the toolkit runs on a host (this machine or one reached over SSH or
 winget install --id Microsoft.PowerShell --source winget
 ```
 
-Over SSH, restart the host's OpenSSH server (`Restart-Service sshd`) or the machine after installing, so new sessions see the new PATH. `valheim-test env preflight` and a session's host checks refuse a Windows host without `pwsh` and print that command (over SSH: from cmd.exe, the default login shell, in any language, or from an English Windows PowerShell login shell). The winget command installs the MSI package of a current PowerShell 7; 7.2 or later is needed, because the scheduled tasks the toolkit registers start the same `pwsh.exe` that registered them. A Microsoft Store install, whose executable lives in a packaged folder, is not tested. This page is the one place the requirement is written; other pages link here.
+Over SSH, restart the host's OpenSSH server (`Restart-Service sshd`) or the machine after installing, so new sessions see the new PATH. `valheim-test env preflight` and a session's host checks refuse a Windows host without `pwsh` and print that command (over SSH: from cmd.exe, the default login shell, in any language, or from an English Windows PowerShell login shell). PowerShell 7.2 or later is needed: the scheduled tasks the toolkit registers start the same `pwsh.exe` that registered them. The winget command installs the current release; on the project's Windows validation host it installed the packaged (MSIX) PowerShell, whose `pwsh.exe` those tasks start as well. This page is the one place the requirement is written; other pages link here.
 
 ## Windows
 
