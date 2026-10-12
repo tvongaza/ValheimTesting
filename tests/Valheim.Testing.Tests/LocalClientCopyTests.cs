@@ -53,7 +53,7 @@ public sealed class LocalClientCopyTests : IDisposable
         Assert.False(plan.Prepared);
     }
 
-    [Fact] public async Task AnOwnedClientRunsFromAProfileWithTheSetStagedAndTheInstallUnchanged()
+    [ClientHostFact] public async Task AnOwnedClientRunsFromAProfileWithTheSetStagedAndTheInstallUnchanged()
     {
         string source = _rig.Game;
         _rig.Write("game/BepInEx/plugins/valheimCLI.dll", System.Text.Encoding.UTF8.GetBytes("an older ValheimCLI core")); // another build, by name
@@ -109,7 +109,7 @@ public sealed class LocalClientCopyTests : IDisposable
         Assert.Equal(before, Tree(source));
     }
 
-    [Fact] public async Task AnOwnedClientDefaultsToAProfileAndKeepsItsSourceUnchanged()
+    [ClientHostFact] public async Task AnOwnedClientDefaultsToAProfileAndKeepsItsSourceUnchanged()
     {
         string source = _rig.Game;
         var plan = Plan(source);
@@ -137,7 +137,7 @@ public sealed class LocalClientCopyTests : IDisposable
         Assert.Null(plan.PreparedLaunchMode);
     }
 
-    [Theory]
+    [ClientHostTheory]
     [InlineData("[Server]\nEnabled = true\nPort = 5556\n")]
     [InlineData("[Server]\nEnabled = true\nAllowOnServerClients = false\nPort = 5556\n")]
     [InlineData("[Other]\nAllowOnServerClients = true\n[Server]\nEnabled = true\nPort = 5556\n")]
@@ -165,7 +165,7 @@ public sealed class LocalClientCopyTests : IDisposable
     }
 
     // AllowOnServerClients governs a client joined to someone else's server; a client hosting its own world needs no such setting.
-    [Fact] public async Task AnExplicitConfigWithoutMutationAccessRunsForAClientThatHostsItsOwnWorld()
+    [ClientHostFact] public async Task AnExplicitConfigWithoutMutationAccessRunsForAClientThatHostsItsOwnWorld()
     {
         string config = Path.Combine(_rig.Game, "BepInEx", "config", "valheimCLI.valheimCLI.cfg");
         Directory.CreateDirectory(Path.GetDirectoryName(config)!);
@@ -193,7 +193,7 @@ public sealed class LocalClientCopyTests : IDisposable
         Assert.True(CliServerConfig.RequiresClientMutations(null)); // An unknown plan is treated as joined.
     }
 
-    [Theory]
+    [ClientHostTheory]
     [InlineData(true)]
     [InlineData(false)]
     public void AnExplicitConfigIsCheckedOnlyWhenTheRoleNeedsMutationAccess(bool requireClientMutations)
@@ -207,7 +207,7 @@ public sealed class LocalClientCopyTests : IDisposable
     }
 
     // With no config of the actor's own, every role gets the same generated file.
-    [Fact] public void AGeneratedConfigIsTheSameForEveryRole()
+    [ClientHostFact] public void AGeneratedConfigIsTheSameForEveryRole()
     {
         string joined = Path.Combine(_rig.Root, "joined.cfg"), hosting = Path.Combine(_rig.Root, "hosting.cfg");
         CliServerConfig.Stage([], "client", 5556, joined, requireClientMutations: true);
@@ -216,7 +216,7 @@ public sealed class LocalClientCopyTests : IDisposable
         Assert.Contains("AllowOnServerClients = true", File.ReadAllText(joined));
     }
 
-    [Fact] public async Task AnExplicitClientConfigWithMutationAccessIsStagedUnchanged()
+    [ClientHostFact] public async Task AnExplicitClientConfigWithMutationAccessIsStagedUnchanged()
     {
         string config = Path.Combine(_rig.Game, "BepInEx", "config", "valheimCLI.valheimCLI.cfg");
         Directory.CreateDirectory(Path.GetDirectoryName(config)!);
@@ -260,7 +260,7 @@ public sealed class LocalClientCopyTests : IDisposable
     }
 
     // A copy whose named set is not complete, or a build with no pinned bundle and no named set, is refused before anything is copied.
-    [Fact] public async Task ACopyWithoutACompleteSetToStageIsRefusedBeforeAnythingIsCopied()
+    [ClientHostFact] public async Task ACopyWithoutACompleteSetToStageIsRefusedBeforeAnythingIsCopied()
     {
         string data = Path.Combine(_rig.Root, "data");
         var plan = Plan(_rig.Game);
@@ -280,7 +280,7 @@ public sealed class LocalClientCopyTests : IDisposable
 
     // ---- the plan's three states: the source of a copy, a bound copy, an install run in place ----
 
-    [Fact] public void TheSourceOfACopyIsNeverLaunchedAndItsSetIsCheckedOnTheCopy()
+    [ClientHostFact] public void TheSourceOfACopyIsNeverLaunchedAndItsSetIsCheckedOnTheCopy()
     {
         using var install = PreflightInstall.Create();
         var plan = install.Plan();
@@ -302,7 +302,7 @@ public sealed class LocalClientCopyTests : IDisposable
         Assert.Contains("names no staged ValheimCLI manifest", Assert.Throws<InvalidOperationException>(() => plan.CheckCliManifest()).Message);
     }
 
-    [Fact] public void AnInstallRunInPlaceMustHoldBepInExAndValheimCliAndGetsNothingStaged()
+    [ClientHostFact] public void AnInstallRunInPlaceMustHoldBepInExAndValheimCliAndGetsNothingStaged()
     {
         using var install = PreflightInstall.Create();
         var plan = install.Plan(); // inPlace

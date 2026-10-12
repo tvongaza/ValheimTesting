@@ -284,13 +284,11 @@ public sealed class ClientSession : IDisposable
     /// <summary>Where Unity writes the game client's Player.log on <paramref name="platform"/> (company IronGate, product Valheim).</summary>
     internal static string PlayerLog(ClientPlatform platform)
     {
+        GameLaunch.RequireClientHost(platform);
         string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        return platform switch
-        {
-            ClientPlatform.Windows => Path.Combine(home, "AppData", "LocalLow", "IronGate", "Valheim", "Player.log"),
-            ClientPlatform.MacOS => Path.Combine(home, "Library", "Logs", "IronGate", "Valheim", "Player.log"),
-            _ => Path.Combine(home, ".config", "unity3d", "IronGate", "Valheim", "Player.log"),
-        };
+        return platform == ClientPlatform.Windows
+            ? Path.Combine(home, "AppData", "LocalLow", "IronGate", "Valheim", "Player.log")
+            : Path.Combine(home, "Library", "Logs", "IronGate", "Valheim", "Player.log");
     }
 
     /// <summary>

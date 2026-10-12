@@ -2,18 +2,15 @@ using Valheim.Testing.Game;
 using Xunit;
 using Valheim.Testing.GameSessions;
 
-// #254 through the host's real shell (bash on macOS and Linux, pwsh on Windows): a preloader crash log the
+// #254 through the host's real shell (bash on macOS, pwsh on Windows): a preloader crash log the
 // launch wrote is read and kept; one from before the launch is only named.
 public sealed class HostedClientEvidenceShellTests : IDisposable
 {
     private readonly string _root = Directory.CreateTempSubdirectory("client-evidence-").FullName;
     public void Dispose() => Directory.Delete(_root, recursive: true);
 
-    [Theory]
-    [InlineData(ClientPlatform.MacOS, "Library/Logs/IronGate/Valheim/Player.log")]
-    [InlineData(ClientPlatform.Linux, ".config/unity3d/IronGate/Valheim/Player.log")]
-    public void RemoteUnixClientsUseTheirPlatformPlayerLog(ClientPlatform platform, string expected) =>
-        Assert.Equal(expected, HostedClientScripts.UnixPlayerLogRelative(platform));
+    [Fact] public void RemoteUnixClientsAreMacsAndUseTheirPlayerLog() =>
+        Assert.Equal("Library/Logs/IronGate/Valheim/Player.log", HostedClientScripts.MacPlayerLogRelative);
 
     [Fact] public async Task AFreshPreloaderLogIsReadAndKeptAndAnOlderOneIsOnlyNamed()
     {

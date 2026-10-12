@@ -926,13 +926,12 @@ public sealed class RunRecoveryTests : IDisposable
     }
 
     [Theory]
-    [InlineData(HostShellKind.PowerShell, "windows", "")]
-    [InlineData(HostShellKind.Bash, "macos", "Library/Logs/IronGate/Valheim/Player.log")]
-    [InlineData(HostShellKind.Bash, "linux", ".config/unity3d/IronGate/Valheim/Player.log")]
-    public void RecoverySelectsTheHostPlatformPlayerLog(HostShellKind shell, string platform, string expected)
+    [InlineData(HostShellKind.PowerShell, "")]
+    [InlineData(HostShellKind.Bash, "Library/Logs/IronGate/Valheim/Player.log")]
+    public void RecoverySelectsTheHostPlatformPlayerLog(HostShellKind shell, string expected)
     {
-        Assert.Equal(expected, RunRecovery.PlayerLogArgument(shell, platform, ""));
-        Assert.Equal("/explicit/Player.log", RunRecovery.PlayerLogArgument(shell, platform, "/explicit/Player.log"));
+        Assert.Equal(expected, RunRecovery.PlayerLogArgument(shell, ""));
+        Assert.Equal("/explicit/Player.log", RunRecovery.PlayerLogArgument(shell, "/explicit/Player.log"));
     }
 
     [Fact] public async Task TheCommandLineRequiresARunAndSaysWhatItRefused()

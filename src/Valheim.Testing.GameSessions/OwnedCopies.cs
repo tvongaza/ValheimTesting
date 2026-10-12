@@ -131,7 +131,7 @@ public static class OwnedCopies
     {
         bool Has(string relative) => File.Exists(System.IO.Path.Combine(copy, relative)) || Directory.Exists(System.IO.Path.Combine(copy, relative));
         if (Has(GameLaunch.ServerWindowsExecutable) || Has(GameLaunch.ServerLinuxExecutable) || Has(GameLaunch.ServerMacExecutable)) return OwnedCopyKind.ServerRuntime;
-        if (Has(GameLaunch.ClientWindowsExecutable) || Has(GameLaunch.ClientLinuxExecutable) || Has(GameLaunch.ClientMacBundle)) return OwnedCopyKind.ClientRuntime;
+        if (Has(GameLaunch.ClientWindowsExecutable) || Has(GameLaunch.ClientMacBundle)) return OwnedCopyKind.ClientRuntime;
         // A world: a save directory, or world files in either layout the game loads (the older .fwl/.db pair, or 1.0's
         // chunked <name>/_main.N.fwl2 and .db2), at the top or one directory down.
         var options = new EnumerationOptions { RecurseSubdirectories = true, MaxRecursionDepth = 1, AttributesToSkip = FileAttributes.ReparsePoint, IgnoreInaccessible = true };

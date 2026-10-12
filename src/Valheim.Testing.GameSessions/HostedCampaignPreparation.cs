@@ -509,6 +509,12 @@ public static class HostedCampaignPreparation
             }
             await Task.WhenAll(group.Select(async item =>
             {
+                // Linux hosts run the dedicated server only (#708): nothing else about a client there is worth checking.
+                if (item.Name != "server" && inputs.Profile.Hosts[group.Key].Platform == "linux")
+                {
+                    failures.Add(new(item.Name, "client host", GameLaunch.LinuxClientRefusal));
+                    return;
+                }
                 if (!localHost)
                     try
                     {
@@ -579,7 +585,7 @@ public static class HostedCampaignPreparation
                     try
                     {
                         // Given folders are checked, left-out ones resolved, on the client's own host.
-                        var directories = await HostedCharacterStage.ResolveDirectoriesAsync(host, inputs.Profile.Hosts[group.Key].Platform,
+                        var directories = await HostedCharacterStage.ResolveDirectoriesAsync(host,
                             selection.Input, timeout, cancellation).ConfigureAwait(false);
                         if (directories.Missing != null) failures.Add(new(item.Name, "character folders", directories.Missing));
                         else characterDirectories[item.Name] = directories;

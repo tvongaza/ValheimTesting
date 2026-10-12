@@ -154,16 +154,15 @@ internal sealed class LocalClientPlacement : IClientPlacement
         try { session = ClientSession.Open(plan, output, cancellation); }
         catch
         {
-            // A failed launch stops its process; where the system names a game by its path, that is confirmed and the copy can
-            // go. Elsewhere (Linux), or if a game still runs from it, the copy is kept for env recover.
-            if (!OperatingSystem.IsLinux())
-                try
-                {
-                    HostedRuntimeStage.RequireStoppedAsync(new LocalGameHost("this machine", HostShell.ThisMachine),
-                        LocalClientCopy.StepTimeout, CancellationToken.None, runtimes: [entry.Value.Copy.LaunchRoot], clientSession: false).GetAwaiter().GetResult();
-                    lock (_copies) entry.Value.Stopped[at] = () => true;
-                }
-                catch (Exception error) when (error is InvalidOperationException or HostOperationException or IOException) { }
+            // A failed launch stops its process; that is confirmed and the copy can go. If a game still runs from it, the copy
+            // is kept for env recover.
+            try
+            {
+                HostedRuntimeStage.RequireStoppedAsync(new LocalGameHost("this machine", HostShell.ThisMachine),
+                    LocalClientCopy.StepTimeout, CancellationToken.None, runtimes: [entry.Value.Copy.LaunchRoot], clientSession: false).GetAwaiter().GetResult();
+                lock (_copies) entry.Value.Stopped[at] = () => true;
+            }
+            catch (Exception error) when (error is InvalidOperationException or HostOperationException or IOException) { }
             throw;
         }
         lock (_copies) entry.Value.Stopped[at] = () => session.Closed && (session.Stopped != null || !session.Owned);

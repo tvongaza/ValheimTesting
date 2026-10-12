@@ -43,8 +43,7 @@ internal static class ClientFailureEvidence
             catch (System.ComponentModel.Win32Exception) { facts["process"] = "process facts unavailable to this runner"; }
 
         Tail(Path.Combine(plan.LoaderRoot, "BepInEx", "LogOutput.log"), Path.Combine(output, "client-failure-bepinex-tail.log"), facts, "bepInExTail");
-        ClientPlatform platform = OperatingSystem.IsWindows() ? ClientPlatform.Windows : OperatingSystem.IsMacOS() ? ClientPlatform.MacOS : ClientPlatform.Linux;
-        Tail(ClientSession.PlayerLog(platform), Path.Combine(output, "client-failure-player-tail.log"), facts, "playerTail");
+        Tail(ClientSession.PlayerLog(GameLaunch.CurrentClientHost), Path.Combine(output, "client-failure-player-tail.log"), facts, "playerTail");
         File.WriteAllText(Path.Combine(output, "client-failure-diagnostic.json"), JsonSerializer.Serialize(facts, new JsonSerializerOptions { WriteIndented = true }));
         string place = facts.TryGetValue("sessionId", out object? session) ? $"session {session}" : facts["process"]?.ToString() ?? "unknown process";
         string window = facts.TryGetValue("windowHandle", out object? handle) && Convert.ToInt64(handle) != 0 ? "window present" : "no window";

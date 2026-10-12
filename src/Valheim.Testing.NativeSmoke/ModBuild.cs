@@ -40,7 +40,7 @@ internal static partial class ModBuild
             Console.WriteLine("Use --mod " + record.Mod + " --build-inputs " + Path.Combine(input.Output, "build-inputs.json") + " for the native run.");
             return 0;
         }
-        catch (Exception error) when (error is ArgumentException or IOException or InvalidDataException or InvalidOperationException or UnauthorizedAccessException or OperationCanceledException)
+        catch (Exception error) when (error is ArgumentException or IOException or InvalidDataException or InvalidOperationException or UnauthorizedAccessException or OperationCanceledException or PlatformNotSupportedException)
         {
             Console.Error.WriteLine("REFUSED: " + error.Message);
             Console.Error.WriteLine("Usage: " + Usage);

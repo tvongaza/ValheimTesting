@@ -386,8 +386,7 @@ internal static class RunRecovery
                         }
                         // The game's logs go with the copy: kept first, so a copy whose logs could not be kept stays (#412).
                         RecoveredLogs logs;
-                        try { logs = await KeepLogsAsync(host, copy.What, runId, copy.Actor, copy.SinceUtc, timeout, cancellation,
-                            platform: hosts[group.Key].Platform).ConfigureAwait(false); }
+                        try { logs = await KeepLogsAsync(host, copy.What, runId, copy.Actor, copy.SinceUtc, timeout, cancellation).ConfigureAwait(false); }
                         catch (Exception error) when (error is not OperationCanceledException)
                         {
                             throw new IOException($"its game logs could not be kept, so it stays ({error.Message}); recover again once they can be, or remove it by hand", error);
@@ -501,7 +500,7 @@ internal static class RunRecovery
     /// only named. Throws when a log could not be kept.
     /// </summary>
     internal static async Task<RecoveredLogs> KeepLogsAsync(IGameHost host, string runtime, string runId, string actor, DateTime copiedUtc,
-        TimeSpan timeout, CancellationToken cancellation = default, string playerLog = "", string platform = "linux")
+        TimeSpan timeout, CancellationToken cancellation = default, string playerLog = "")
     {
         string parent = HostedRuntimeStage.RequirePrepared(host, runtime, runId);
         int at = parent.LastIndexOfAny(['/', '\\']);
@@ -511,7 +510,7 @@ internal static class RunRecovery
         var result = (await host.RunAsync(host.Shell.Kind == HostShellKind.PowerShell ? WindowsKeepLogs : BashKeepLogs, new Dictionary<string, string>
         {
             ["runtime"] = runtime, ["keep"] = folder, ["client"] = actor == "server" ? "false" : "true",
-            ["playerlog"] = PlayerLogArgument(host.Shell.Kind, platform, playerLog),
+            ["playerlog"] = PlayerLogArgument(host.Shell.Kind, playerLog),
             ["since"] = new DateTimeOffset(copiedUtc.ToUniversalTime()).ToUnixTimeSeconds().ToString(CultureInfo.InvariantCulture),
         }, timeout, cancellation).ConfigureAwait(false)).EnsureSuccess($"Keeping the game logs of {runtime} on {host.Name}");
         if (InteractiveClient.Line(result.Stdout, "VT-LOGS-DONE") == null) throw new HostOperationException($"Unexpected reply while keeping the game logs of {runtime} on {host.Name}", result);
@@ -520,11 +519,10 @@ internal static class RunRecovery
         return new(folder, Named("VT-LOG-KEPT"), Named("VT-LOG-OLDER"));
     }
 
-    // PowerShell's empty argument selects the Windows LocalLow path in its script. Unix hosts
-    // need the platform-specific path relative to the remote account's home directory.
-    internal static string PlayerLogArgument(HostShellKind shell, string platform, string supplied) =>
-        supplied.Length != 0 || shell == HostShellKind.PowerShell ? supplied
-        : HostedClientScripts.UnixPlayerLogRelative(platform == "macos" ? ClientPlatform.MacOS : ClientPlatform.Linux);
+    // PowerShell's empty argument selects the Windows LocalLow path in its script. A bash host is a Mac (the only Unix client),
+    // whose path is relative to the remote account's home directory.
+    internal static string PlayerLogArgument(HostShellKind shell, string supplied) =>
+        supplied.Length != 0 || shell == HostShellKind.PowerShell ? supplied : HostedClientScripts.MacPlayerLogRelative;
 
     // Variables: runtime, keep, since (Unix seconds: when the copy was made), client (true: the host user's Player.log too),
     // playerlog (absolute or relative to that user's home). Each log written since the copy was made is copied into keep with its time, and named;
@@ -545,7 +543,7 @@ internal static class RunRecovery
           for f in "$runtime"/preloader_*.log; do save "$f" "$(basename -- "$f")"; done
         fi
         if [ "$client" = "true" ]; then
-          playerlog="${playerlog:-.config/unity3d/IronGate/Valheim/Player.log}"
+          playerlog="${playerlog:-Library/Logs/IronGate/Valheim/Player.log}"
           case "$playerlog" in /*) ;; *) playerlog="${HOME:-/nonexistent}/$playerlog" ;; esac
           save "$playerlog" "Player.log"
         fi

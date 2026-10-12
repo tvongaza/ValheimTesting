@@ -3,12 +3,13 @@ using System.Reflection;
 
 namespace Valheim.Testing.Game;
 
-// Also the host type: a client runs only on its own OS, so a host is the platform it can launch.
-// Other Unix hosts behave as Linux. The host is injectable so every host's branches are tested on any OS.
+// Also the host type: a client runs only on its own OS, so a host is the platform it can launch. Linux is a host type for
+// the dedicated server alone; a client on it is refused (RequireClientHost). Other Unix hosts behave as Linux. The host is
+// injectable so every host's branches are tested on any OS.
 [ResultShape]
 public enum ClientPlatform { Windows, Linux, MacOS }
 
-// Windows and Linux clients are x64 only. The macOS client is universal, so its slice is chosen at launch and the Doorstop
+// The Windows client is x64 only. The macOS client is universal, so its slice is chosen at launch and the Doorstop
 // library inserted into it must contain the same one. X64 runs under Rosetta on Apple Silicon, with BepInExPack_Valheim's own
 // loader and core: the compatibility path. Arm64 runs natively, with a Doorstop library that has an arm64 slice and a
 // BepInEx core whose MonoMod can hook on arm64. Both are modded paths; Apple Silicon defaults to arm64.
@@ -20,7 +21,10 @@ public enum ClientArchitecture { X64, Arm64 }
 public sealed partial class GameLaunch
 {
     public const string ClientWindowsExecutable = "valheim.exe";
-    public const string ClientLinuxExecutable = "valheim.x86_64";
+    // Only to recognise a Linux client install and refuse it; no Linux client is launched.
+    internal const string ClientLinuxExecutable = "valheim.x86_64";
+    /// <summary>The one refusal of a Linux game client, whichever way it is asked for.</summary>
+    internal const string LinuxClientRefusal = "Linux hosts run the dedicated server only; start the client on Windows or macOS.";
     public const string ClientMacBundle = "Valheim.app";
     public const string ConsoleArgument = "-console";
     // A SIP-protected system binary: the kernel strips DYLD_* from its environment, so they are passed with -e.
@@ -37,13 +41,20 @@ public sealed partial class GameLaunch
     internal static readonly string MacNativeDetour = Path.Combine("BepInEx", "core", "MonoMod.RuntimeDetour.dll");
     internal const int MacNativeDetourMajor = 25;
 
+    /// <summary>The one place a Linux client is refused: Linux hosts run the dedicated server only.</summary>
+    internal static void RequireClientHost(ClientPlatform host)
+    {
+        if (host == ClientPlatform.Linux) throw new PlatformNotSupportedException(LinuxClientRefusal);
+    }
+
     internal static ClientPlatform CurrentClientHost =>
         OperatingSystem.IsWindows() ? ClientPlatform.Windows : OperatingSystem.IsMacOS() ? ClientPlatform.MacOS : ClientPlatform.Linux;
 
     /// <summary>
-    /// Decides the platform from the install's contents, never from the host: <c>valheim.exe</c>, <c>valheim.x86_64</c>
-    /// or a <c>Valheim.app</c> bundle. Refuses an install holding more than one, an empty one, the bundle itself instead
-    /// of the directory holding it, and a dedicated-server runtime (which <see cref="GameLaunch.ForServer"/> launches).
+    /// Decides the platform from the install's contents, never from the host: <c>valheim.exe</c> or a <c>Valheim.app</c> bundle.
+    /// Refuses an install holding more than one, an empty one, the bundle itself instead of the directory holding it, a
+    /// dedicated-server runtime (which <see cref="GameLaunch.ForServer"/> launches) and a Linux client (<c>valheim.x86_64</c>) with
+    /// <see cref="PlatformNotSupportedException"/>: Linux hosts run the dedicated server only.
     /// </summary>
     public static ClientPlatform DetectClient(string installDirectory)
     {
@@ -52,26 +63,26 @@ public sealed partial class GameLaunch
         bool mac = FindMacBundle(install) != null;
         if ((windows ? 1 : 0) + (linux ? 1 : 0) + (mac ? 1 : 0) > 1)
             throw new InvalidOperationException($"Install contains more than one of {ClientWindowsExecutable}, {ClientLinuxExecutable} and {ClientMacBundle}; refusing to guess its platform.");
+        if (linux) RequireClientHost(ClientPlatform.Linux);
         if (windows) return ClientPlatform.Windows;
-        if (linux) return ClientPlatform.Linux;
         if (mac) return ClientPlatform.MacOS;
         if (Path.GetExtension(install).Equals(".app", StringComparison.OrdinalIgnoreCase) || File.Exists(Path.Combine(install, MacClientExecutable)))
             throw new ArgumentException($"{install} is the {ClientMacBundle} bundle itself; pass the directory that holds it and BepInEx.", nameof(installDirectory));
         string? server = new[] { ServerWindowsExecutable, ServerLinuxExecutable, ServerMacExecutable }.FirstOrDefault(name => File.Exists(Path.Combine(install, name)));
         if (server != null)
             throw new InvalidOperationException($"{install} is a dedicated-server runtime ({server}), not a game client; launch it with GameLaunch.ForServer.");
-        throw new FileNotFoundException($"Install contains none of {ClientWindowsExecutable}, {ClientLinuxExecutable} or {ClientMacBundle}.", install);
+        throw new FileNotFoundException($"Install contains none of {ClientWindowsExecutable} or {ClientMacBundle}.", install);
     }
 
     /// <summary>
     /// Returns the detected client executable's full path (inside the bundle on macOS). A client runs only on its own OS:
-    /// another host refuses with <see cref="PlatformNotSupportedException"/>. On Linux and macOS it must carry the user-execute bit.
+    /// another host refuses with <see cref="PlatformNotSupportedException"/>, a Linux one too (Linux hosts run the dedicated server only). On macOS it must carry the user-execute bit.
     /// </summary>
     public static string RequireClientExecutable(string installDirectory) => RequireClientExecutable(installDirectory, CurrentClientHost);
     internal static string RequireClientExecutable(string installDirectory, ClientPlatform host) => ResolveClient(FullInstall(installDirectory), host).Executable;
 
     /// <summary>
-    /// The architectures this install can be launched as, host aside: x64 for Windows and Linux; on macOS, the slices
+    /// The architectures this install can be launched as, host aside: x64 for Windows; on macOS, the slices
     /// both the game executable and one of the install's Doorstop libraries contain, arm64 only when that core also runs
     /// natively (<see cref="GameLaunch.ForClient"/> explains the rule). Empty when no Doorstop library matches.
     /// </summary>
@@ -101,13 +112,11 @@ public sealed partial class GameLaunch
 
     internal static (ClientPlatform Platform, string Executable) ResolveClient(string install, ClientPlatform host)
     {
+        RequireClientHost(host);
         var platform = DetectClient(install);
-        string executable = platform switch
-        {
-            ClientPlatform.Windows => Path.Combine(install, ClientWindowsExecutable),
-            ClientPlatform.Linux => Path.Combine(install, ClientLinuxExecutable),
-            _ => Path.Combine(FindMacBundle(install)!, MacClientExecutable),
-        };
+        string executable = platform == ClientPlatform.Windows
+            ? Path.Combine(install, ClientWindowsExecutable)
+            : Path.Combine(FindMacBundle(install)!, MacClientExecutable);
         // Refused before any file mode is read: exec of another OS's binary fails with an opaque error.
         if (platform != host)
             throw new PlatformNotSupportedException($"This {host} host cannot run the {platform} Valheim client {executable}; " +

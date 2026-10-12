@@ -161,8 +161,10 @@ public sealed class EnvironmentInventory
         if (steam.Root != null && machine.DirectoryExists(HostPath.Join(steam.Root, "userdata"))) SteamUserData = HostPath.Join(steam.Root, "userdata");
         _detected.Add(steam.Root == null ? "Steam: not found (tried " + string.Join(", ", steam.RootsTried) + ")"
             : $"Steam: {steam.Root} (from {steam.RootRule}); libraries {string.Join(", ", steam.Libraries)}");
-        string? game = Installed(machine, steam, SteamDetection.GameApp, windows ? GameLaunch.ClientWindowsExecutable
-            : machine.Platform == "macos" ? GameLaunch.ClientMacBundle + "/Contents/MacOS/Valheim" : GameLaunch.ClientLinuxExecutable, "Valheim", out string? noGame);
+        // A Linux machine has no client environment: Linux hosts run the dedicated server only.
+        string? noGame = GameLaunch.LinuxClientRefusal;
+        string? game = machine.Platform == "linux" ? null : Installed(machine, steam, SteamDetection.GameApp, windows ? GameLaunch.ClientWindowsExecutable
+            : GameLaunch.ClientMacBundle + "/Contents/MacOS/Valheim", "Valheim", out noGame);
         string? server = Installed(machine, steam, SteamDetection.DedicatedServerApp,
             windows ? GameLaunch.ServerWindowsExecutable : machine.Platform == "macos" ? GameLaunch.ServerMacExecutable : GameLaunch.ServerLinuxExecutable,
             "Valheim Dedicated Server", out string? noServer);

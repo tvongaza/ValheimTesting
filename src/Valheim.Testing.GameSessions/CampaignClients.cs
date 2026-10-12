@@ -130,6 +130,7 @@ internal sealed class CampaignClients
         if (!Profile.Clients.TryGetValue(name, out var role)) throw new ArgumentException($"No client '{name}' in the environment.", nameof(name));
         var hostProfile = Profile.Hosts[role.Host];
         var platform = hostProfile.Platform switch { "windows" => ClientPlatform.Windows, "linux" => ClientPlatform.Linux, _ => ClientPlatform.MacOS };
+        GameLaunch.RequireClientHost(platform);
         // A plan without a slice follows the assigned client's host, not the machine driving this campaign.
         // An unknown remote Mac prefers arm64; x64/Rosetta is an explicit choice.
         if (plan.Owned && plan.Architecture.Length == 0)
@@ -184,7 +185,6 @@ internal sealed class CampaignClients
         try
         {
             string local = Path.Combine(output, "client-" + n);
-            var display = platform != ClientPlatform.Linux ? null : new LinuxDisplay();
             var start = HostedTimeouts.ClientStart(plan);
             var session = ClientSession.Launch(plan, output,
                 () =>
@@ -206,8 +206,8 @@ internal sealed class CampaignClients
                             ("launchDirectory", launchDirectory)), cancellation).GetAwaiter().GetResult();
                         lock (_clientState) _pendingMacAgents[name] = role.Host;
                     }
-                    var started = account == null ? InteractiveClient.StartAsync(host, launch, launchDirectory, start, display, cancellation)
-                        : InteractiveClient.StartAsync(account.Hold, host, launch, launchDirectory, start, display, cancellation);
+                    var started = account == null ? InteractiveClient.StartAsync(host, launch, launchDirectory, start, cancellation)
+                        : InteractiveClient.StartAsync(account.Hold, host, launch, launchDirectory, start, cancellation);
                     InteractiveClientProcess client;
                     try { client = started.GetAwaiter().GetResult(); }
                     catch (Exception error) when (platform == ClientPlatform.MacOS && InteractiveClient.NeverStarted(error))
@@ -240,8 +240,7 @@ internal sealed class CampaignClients
                             NoteAsync(host, role.Host, name, JournalEntry.Of(JournalEntry.MacAgentRetired,
                                 ("launchDirectory", launchDirectory))).GetAwaiter().GetResult();
                             lock (_clientState) _pendingMacAgents.Remove(name);
-                        } : null,
-                        platform);
+                        } : null);
                     if (account != null) account.Process = process; // Its lease is released only once this process is gone.
                     return process;
                 },

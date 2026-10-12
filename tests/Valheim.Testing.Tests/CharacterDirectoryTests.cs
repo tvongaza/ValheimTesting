@@ -23,49 +23,35 @@ public sealed class CharacterDirectoryTests : IDisposable
     }
 
     private Task<CharacterDirectories> Resolve(string shell, string platform, HostedCampaignCharacter character, string steamRoot = "") =>
-        HostedCharacterStage.ResolveDirectoriesAsync(new LocalGameHost("client", HostShell.Parse(shell)), platform, character, Timeout, default, _home.Path, steamRoot);
+        HostedCharacterStage.ResolveDirectoriesAsync(new LocalGameHost("client", HostShell.Parse(shell)), character, Timeout, default, _home.Path, steamRoot);
 
     private static string Standard(string platform) => platform switch
     {
         "windows" => "AppData/LocalLow/IronGate/Valheim/characters_local",
-        "macos" => "Library/Application Support/IronGate/Valheim/characters_local",
-        _ => ".config/unity3d/IronGate/Valheim/characters_local",
+        _ => "Library/Application Support/IronGate/Valheim/characters_local",
     };
 
-    // Each platform's search through the shell its hosts run, where this machine has it: pwsh for a Windows host, bash for Linux
-    // and macOS.
+    // Each platform's search through the shell its hosts run, where this machine has it: pwsh for a Windows host, bash for macOS.
+    // Linux hosts run the dedicated server only, so they have no client character folders.
     public static TheoryData<string, string> Platforms => OperatingSystem.IsWindows()
         ? new() { { "pwsh", "windows" } }
-        : new() { { "bash", "linux" }, { "bash", "macos" } };
+        : new() { { "bash", "macos" } };
 
     [Theory, MemberData(nameof(Platforms))]
     public async Task LeftOutFoldersResolveToThePlatformsStandardPaths(string shell, string platform)
     {
         string characters = Make(Standard(platform));
-        // Linux: the second standard place, so the search order is exercised. Windows: Steam's registered SteamPath, written with
+        // Windows: Steam's registered SteamPath, written with
         // forward slashes as Steam writes it (the registry value itself is this machine's, so the test passes it as steamroot).
         string steam = Make("Program Files/Steam");
         string userdata = platform switch
         {
-            "macos" => Make("Library/Application Support/Steam/userdata"), "linux" => Make(".steam/steam/userdata"), _ => Make("Program Files/Steam/userdata"),
+            "macos" => Make("Library/Application Support/Steam/userdata"), _ => Make("Program Files/Steam/userdata"),
         };
         var resolved = await Resolve(shell, platform, Character(), platform == "windows" ? steam.Replace('\\', '/') : "");
         Assert.Null(resolved.Missing);
         Assert.Equal(Path.GetFullPath(characters), Path.GetFullPath(resolved.Characters!));
         Assert.Equal(Path.GetFullPath(userdata), Path.GetFullPath(resolved.UserData!));
-    }
-
-    // A Flatpak Steam's game keeps its saves inside the Flatpak's own home: the characters_local beside the userdata found.
-    [Theory, MemberData(nameof(Platforms))]
-    public async Task AFlatpakSteamsCharactersAreItsOwn(string shell, string platform)
-    {
-        if (platform != "linux") return;
-        Make(".config/unity3d/IronGate/Valheim/characters_local"); // A non-Flatpak leftover that must not win.
-        string userdata = Make(".var/app/com.valvesoftware.Steam/.local/share/Steam/userdata");
-        string characters = Make(".var/app/com.valvesoftware.Steam/.config/unity3d/IronGate/Valheim/characters_local");
-        var resolved = await Resolve(shell, platform, Character());
-        Assert.Null(resolved.Missing);
-        Assert.Equal((Path.GetFullPath(characters), Path.GetFullPath(userdata)), (Path.GetFullPath(resolved.Characters!), Path.GetFullPath(resolved.UserData!)));
     }
 
     [Theory, MemberData(nameof(Platforms))]
@@ -77,9 +63,7 @@ public sealed class CharacterDirectoryTests : IDisposable
         Assert.Contains("characters_local (tried " + _home.Path, resolved.Missing);
         Assert.Contains("characters_local", resolved.Missing);
         Assert.Contains("Steam userdata (tried ", resolved.Missing);
-        if (platform == "linux")
-            foreach (string tried in new[] { ".local/share/Steam/userdata", ".steam/steam/userdata", ".var/app/com.valvesoftware.Steam/.local/share/Steam/userdata" })
-                Assert.Contains(_home.Path + "/" + tried, resolved.Missing);
+        if (platform == "macos") Assert.Contains(_home.Path + "/Library/Application Support/Steam/userdata", resolved.Missing);
     }
 
     [Theory, MemberData(nameof(Platforms))]

@@ -36,7 +36,7 @@ public sealed class HostWorldPlan
     }
     /// <summary>
     /// The client's data directory, which holds <c>worlds_local</c>. Default: this user's Valheim data directory for the
-    /// client's platform (<see cref="HostedWorld.DefaultSaveDirectory"/>). Set it when a Windows or Linux client runs as
+    /// client's platform (<see cref="HostedWorld.DefaultSaveDirectory"/>). Set it when a Windows client runs as
     /// another user. A native macOS hosted client must use its signed-in user's default; Valheim 1.0.16 ignored -savedir.
     /// </summary>
     public string? SaveDirectory { get; set; }
@@ -185,17 +185,15 @@ public sealed class HostedWorld : IDisposable
     public static string DefaultSaveDirectory(ClientPlatform platform)
     {
         if (SimulatedClientData.Value is { } simulated) return simulated.Directory;
+        GameLaunch.RequireClientHost(platform);
         string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        return platform switch
-        {
-            ClientPlatform.Windows => Path.Combine(home, "AppData", "LocalLow", "IronGate", "Valheim"),
-            ClientPlatform.MacOS => Path.Combine(home, MacSaveRelative),
-            _ => Path.Combine(home, ".config", "unity3d", "IronGate", "Valheim"),
-        };
+        return platform == ClientPlatform.Windows
+            ? Path.Combine(home, "AppData", "LocalLow", "IronGate", "Valheim")
+            : Path.Combine(home, MacSaveRelative);
     }
 
     /// <summary>This machine's platform, for an attached client (whose install the runner does not read).</summary>
-    public static ClientPlatform CurrentPlatform => OperatingSystem.IsWindows() ? ClientPlatform.Windows : OperatingSystem.IsMacOS() ? ClientPlatform.MacOS : ClientPlatform.Linux;
+    public static ClientPlatform CurrentPlatform => GameLaunch.CurrentClientHost;
 
     // Valheim 1.0.16 on macOS ignored -savedir for a hosted client and read worlds_local from the signed-in user's
     // default data directory. Check before Place creates or copies anything; a world with the same name can have another UID.

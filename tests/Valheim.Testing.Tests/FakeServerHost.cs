@@ -8,8 +8,8 @@ using Xunit;
 using Valheim.Testing.GameSessions;
 
 /// <summary>
-/// A host that keeps its directories in a local mirror and answers the server, install and client scripts the way a Linux host
-/// does, without a shell: the full remote lifecycle runs against it. Every script run is recorded with its variables.
+/// A host that keeps its directories in a local mirror and answers the server, install and client scripts the way a Linux server
+/// host or a macOS client host does, without a shell: the full remote lifecycle runs against it. Every script run is recorded with its variables.
 /// </summary>
 internal sealed class FakeServerHost : IGameHost
 {
@@ -90,6 +90,11 @@ internal sealed class FakeServerHost : IGameHost
     /// <summary>What the macOS bundle check answers on a source install (read only, MacAppBundle).</summary>
     public string MacBundleInspect { get; set; } = "VT-BUNDLE accepted 0 -";
     public string MacAgentReply { get; set; } = "VT-AGENT removed\n";
+    /// <summary>What a Mac client host's console check reads: a user at the console with an unlocked GUI session.</summary>
+    public string MacDesktopReply { get; set; } = "VT-MAC-USER tester\nVT-MAC-CONSOLE tester\nVT-MAC-GUI ready\n" +
+        "\"IOConsoleUsers\" = ({\"kCGSSessionOnConsoleKey\"=Yes,\"kCGSessionLoginDoneKey\"=Yes,\"kCGSSessionUserNameKey\"=\"tester\"})\nVT-MAC-REGISTRY-END\n";
+    /// <summary>The slices the Mac game and its Doorstop library hold, as the host's lipo reports them.</summary>
+    public string MacSlices { get; set; } = "x86_64 arm64";
     /// <summary>A process this host reports as running until it is stopped; for journal tests.</summary>
     public void Running(int pid, string start)
     {
@@ -131,10 +136,14 @@ internal sealed class FakeServerHost : IGameHost
         ("game-process", [HostedRuntimeStage.WindowsProcessCheck, HostedRuntimeStage.BashProcessCheck]),
         ("party", [CrossplayLibraryScripts.Check]),
         ("server-logon", [HostServerScripts.WindowsServerLogonCheck]),
-        ("wait", [InteractiveScripts.LinuxWait, InteractiveScripts.WindowsWait]),
+        ("wait", [InteractiveScripts.LinuxWait, InteractiveScripts.WindowsWait, InteractiveScripts.MacWait]),
         ("stop", [InteractiveScripts.LinuxStop, HostServerScripts.WindowsStop, RunRecovery.MacStop]),
+        ("mac-client-stop", [InteractiveScripts.MacStop]),
         ("mac-agent-retire", [InteractiveScripts.MacAgentRetire]),
-        ("client-start", [InteractiveScripts.LinuxStart]),
+        ("mac-desktop", [RemoteMacClientPreflight.Desktop]),
+        ("mac-game", [RemoteMacClientPreflight.GameSlice]),
+        ("mac-loader", [RemoteMacClientPreflight.LoaderSlice]),
+        ("client-start", [InteractiveScripts.MacStart]),
         ("client-keep", [HostedClientScripts.BashKeep]),
         ("preloader", [HostedClientScripts.BashPreloader, HostedClientScripts.PowerShellPreloader]),
         ("move-aside", [HostedClientScripts.BashMoveAside]),
@@ -183,6 +192,9 @@ internal sealed class FakeServerHost : IGameHost
                         return Ok("VT-APART overlap " + Convert.ToBase64String(Encoding.UTF8.GetBytes(path)) + "\n");
                 return Ok("VT-APART ok\n");
             case "mac-agent-retire": return Ok(MacAgentReply);
+            case "mac-desktop": return Ok(MacDesktopReply);
+            case "mac-game": return Ok("VT-MAC-GAME " + MacSlices + "\n");
+            case "mac-loader": return Ok("VT-MAC-DOORSTOPS libdoorstop.dylib|" + MacSlices + ";\n");
             case "mac-bundle": return Ok(MacBundleInspect + "\n");
             case "game-process": return Ok(GameActive ? $"VT-GAME busy {GameProcessIds}\n".Replace(" \n", "\n") : "VT-GAME idle\n");
             case "server-logon": return Ok("VT-LOGON " + ServerTaskLogon + "\n");
@@ -282,14 +294,13 @@ internal sealed class FakeServerHost : IGameHost
             case "character-folders":
             {
                 // The scripts' search, on this mirror (CharacterDirectoryTests runs the real scripts): a Windows host's user is
-                // C:\Users\tester with Steam in Program Files and no registered SteamPath, a Linux host's /home/tester (no Flatpak
-                // pairing here), a macOS host's /Users/tester.
-                string home = v["userhome"].Length != 0 ? v["userhome"] : Windows ? @"C:\Users\tester" : v["platform"] == "macos" ? "/Users/tester" : "/home/tester";
+                // C:\Users\tester with Steam in Program Files and no registered SteamPath, a macOS host's /Users/tester.
+                string home = v["userhome"].Length != 0 ? v["userhome"] : Windows ? @"C:\Users\tester" : "/Users/tester";
                 string Join(params string[] parts) => Windows ? string.Join('\\', parts) : string.Join('/', parts);
                 string characters = v["characters"].Length != 0 ? v["characters"] : Windows ? Join(home, "AppData", "LocalLow", "IronGate", "Valheim", "characters_local")
-                    : v["platform"] == "macos" ? home + "/Library/Application Support/IronGate/Valheim/characters_local" : home + "/.config/unity3d/IronGate/Valheim/characters_local";
+                    : home + "/Library/Application Support/IronGate/Valheim/characters_local";
                 string[] userdata = v["userdata"].Length != 0 ? [v["userdata"]] : Windows ? [@"C:\Program Files (x86)\Steam\userdata"]
-                    : v["platform"] == "macos" ? [home + "/Library/Application Support/Steam/userdata"] : [home + "/.local/share/Steam/userdata", home + "/.steam/steam/userdata", home + "/.var/app/com.valvesoftware.Steam/.local/share/Steam/userdata"];
+                    : [home + "/Library/Application Support/Steam/userdata"];
                 var reply = new StringBuilder();
                 if (Directory.Exists(Local(characters))) reply.Append("VT-CHARDIR characters found " + characters + "\n");
                 reply.Append("VT-CHARDIR characters tried " + characters + "\n");
@@ -474,22 +485,25 @@ internal sealed class FakeServerHost : IGameHost
                 return Ok($"VT-WAIT exited {await process.Exit(cancellation)}\n");
             }
             case "stop":
+            case "mac-client-stop":
             {
+                // A Mac client's stop also reports its run-owned GUI agent removed.
+                string agent = name == "mac-client-stop" ? MacAgentReply : "";
                 lock (_sync) Stops.Add((v["game"], v["start"]));
                 (string Start, Func<CancellationToken, Task<int>> Exit, Action Stop) process;
-                lock (_sync) if (!_processes.TryGetValue(int.Parse(v["game"]), out process) || process.Start != v["start"]) return Ok("VT-STOP gone\n");
+                lock (_sync) if (!_processes.TryGetValue(int.Parse(v["game"]), out process) || process.Start != v["start"]) return Ok(agent + "VT-STOP gone\n");
                 process.Stop();
                 if (v.TryGetValue("quit", out string? quit) && quit != "0" && !IgnoreQuit)
                 {
                     // The game quits by itself. A server's shutdown retires its boot's lobby, as 1.0.16 logs it; a client host has no server runtime.
-                    if (_runtime == null) return Ok("VT-STOP quit\n");
+                    if (_runtime == null) return Ok(agent + "VT-STOP quit\n");
                     string log = Path.Combine(Local(_runtime), "BepInEx", "LogOutput.log");
                     string text = File.Exists(log) ? File.ReadAllText(log) : "";
                     File.AppendAllText(log, "[Info   : Unity Log] Unregister PlayFab server \"MyModTest\" and leaving network \"n\"\n" +
                         string.Concat(CrossplayServer.LobbyCreated.Matches(text).Select(m => $"[Info   : Unity Log] Deactivated PlayFab lobby {m.Groups["lobby"].Value}\n")));
-                    return Ok("VT-STOP quit\n");
+                    return Ok(agent + "VT-STOP quit\n");
                 }
-                return Ok("VT-STOP stopped\n");
+                return Ok(agent + "VT-STOP stopped\n");
             }
             case "keep":
             {

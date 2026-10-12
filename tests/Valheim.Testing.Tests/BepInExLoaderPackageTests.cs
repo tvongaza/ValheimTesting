@@ -8,7 +8,7 @@ public sealed class BepInExLoaderPackageTests : IDisposable
     private readonly RegressionRig _rig = new();
     public void Dispose() => _rig.Dispose();
 
-    [Fact] public void AReviewedPackageIsTheProfilesLoaderWithoutChangingTheSource()
+    [ClientHostFact] public void AReviewedPackageIsTheProfilesLoaderWithoutChangingTheSource()
     {
         var package = Package();
         string manifest = Path.Combine(_rig.Root, "loader.json");
@@ -43,7 +43,7 @@ public sealed class BepInExLoaderPackageTests : IDisposable
         Assert.False(Directory.Exists(_rig.Install));
     }
 
-    [Fact] public void APlainGameWithoutBepInExCanUseAnExplicitLoaderPackage()
+    [ClientHostFact] public void APlainGameWithoutBepInExCanUseAnExplicitLoaderPackage()
     {
         var package = Package();
         string manifest = Path.Combine(_rig.Root, "loader.json");
@@ -79,7 +79,7 @@ public sealed class BepInExLoaderPackageTests : IDisposable
         Assert.False(Directory.Exists(_rig.Install));
     }
 
-    [Fact] public void ANewPinnedPackageInvalidatesAndRebuildsTheDisposableInstall()
+    [ClientHostFact] public void ANewPinnedPackageInvalidatesAndRebuildsTheDisposableInstall()
     {
         var package = Package();
         string manifest = Path.Combine(_rig.Root, "loader.json");
@@ -98,7 +98,7 @@ public sealed class BepInExLoaderPackageTests : IDisposable
         Assert.Equal(package.Files["BepInEx/core/BepInEx.dll"], FileHash.Sha256(Path.Combine(_rig.Install, "BepInEx", "core", "BepInEx.dll")));
     }
 
-    [Fact] public void GamePinsNameThePackagesLoaderWhenOneIsSelected()
+    [ClientHostFact] public void GamePinsNameThePackagesLoaderWhenOneIsSelected()
     {
         var package = Package();
         string manifest = Path.Combine(_rig.Root, "loader.json");

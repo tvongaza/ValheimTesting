@@ -82,7 +82,7 @@ public sealed class SteamAccountProfileTests : IDisposable
         {
             "lease host" => Write(Section(leaseHost: "nowhere")),
             "unknown account" => Write(Section(), "vt_nobody"),
-            "no account for the host" => Write(Section(), null, [new { name = LeaseBox.Account, host = "linux-gpu" }]),
+            "no account for the host" => Write(Section(), null, [new { name = LeaseBox.Account, host = "mac-gpu" }]),
             "check without steamId" => Write(Section(check: true), null, [new { name = LeaseBox.Account }]),
             "account without leases" => Write(null, LeaseBox.Account),
             "server account" => Write(Section(), serverAccount: true),
@@ -219,8 +219,8 @@ public sealed class SteamAccountHoldTests : IDisposable
         }
         else
         {
-            hosts[clientHost] = new { kind = "ssh", platform = "linux", shell = "bash", destination = "tester@linux-gpu.example", @lock = "/home/tester/lock" };
-            role = new { host = clientHost, install = "/home/tester/valheim", runtime = "/home/tester/runs", cliPort = 5578 };
+            hosts[clientHost] = new { kind = "ssh", platform = "macos", shell = "bash", destination = "tester@mac-gpu.example", @lock = "/Users/tester/lock" };
+            role = new { host = clientHost, install = "/Users/tester/valheim", runtime = "/Users/tester/runs", cliPort = 5578 };
         }
         string path = Path.Combine(_root.Path, $"environment-{client}.json");
         File.WriteAllText(path, JsonSerializer.Serialize(new
@@ -239,7 +239,7 @@ public sealed class SteamAccountHoldTests : IDisposable
     [Fact] public async Task TwoProfilesOnDifferentHostsNeverHoldOneAccount()
     {
         LeaseBox.WritePool(_root.Path, Leases, [new { name = LeaseBox.Account }]);
-        var pc = Profile("gaming-pc", "player"); var gpu = Profile("linux-gpu", "tester");
+        var pc = Profile("gaming-pc", "player"); var gpu = Profile("mac-gpu", "tester");
         // Six runs at once, alternating between the two profiles: exactly one gets the account.
         var attempts = await Task.WhenAll(Enumerable.Range(0, 6).Select(i => i % 2 == 0 ? TryAcquireAsync(pc, "player", "run-" + i + " pc") : TryAcquireAsync(gpu, "tester", "run-" + i + " gpu")));
         var winner = Assert.Single(attempts.OfType<SteamAccountHold>());
@@ -248,13 +248,13 @@ public sealed class SteamAccountHoldTests : IDisposable
         Assert.Contains($"{LeaseBox.Account} is held by {winner.Owner}", refused.Message);
         await winner.ReleaseAsync();
         await using var next = await SteamAccountHold.AcquireAsync(gpu, "tester", "run-after", LeaseBox.Host());
-        Assert.Equal(("tester", "linux-gpu", LeaseBox.Account), (next.Client, next.ClientHost, next.Account));
+        Assert.Equal(("tester", "mac-gpu", LeaseBox.Account), (next.Client, next.ClientHost, next.Account));
     }
 
     [Fact] public async Task ACrashedRunsLeaseNeverLapsesAndOnlyTheEscapeHatchHandsItToTheNextRun()
     {
         LeaseBox.WritePool(_root.Path, Leases, [new { name = LeaseBox.Account }]);
-        var pc = Profile("gaming-pc", "player"); var gpu = Profile("linux-gpu", "tester");
+        var pc = Profile("gaming-pc", "player"); var gpu = Profile("mac-gpu", "tester");
         // The crashed run never releases. No timer ends its lease (#257).
         var crashed = await SteamAccountHold.AcquireAsync(pc, "player", "runner run-crashed client player", LeaseBox.Host(), "run-crashed");
         await Task.Delay(TimeSpan.FromSeconds(2));
@@ -317,9 +317,9 @@ public sealed class SteamAccountHoldTests : IDisposable
         LeaseBox.WritePool(_root.Path, Leases);
         await using var held = await SteamAccountHold.AcquireAsync(Profile("gaming-pc", "player"), "player", "run-4", LeaseBox.Host());
         var fake = new FakeLauncher();
-        var elsewhere = new SshGameHost("linux-gpu", "tester@linux-gpu.example", HostShell.Bash, 0, null, null, "ssh", fake);
-        var launch = GameLaunch.ForClient("/home/tester/valheim", [], hostPlatform: ClientPlatform.Linux);
-        var error = await Assert.ThrowsAsync<ArgumentException>(() => InteractiveClient.StartAsync(held, elsewhere, launch, "/home/tester/runs/run-4/client-1", LeaseBox.Timeout));
+        var elsewhere = new SshGameHost("mac-gpu", "tester@mac-gpu.example", HostShell.Bash, 0, null, null, "ssh", fake);
+        var launch = GameLaunch.ForClientWithLoader("/Users/tester/valheim", "/Users/tester/profile", [], null, ClientPlatform.MacOS, ClientArchitecture.Arm64, macDoorstop: "libdoorstop.dylib");
+        var error = await Assert.ThrowsAsync<ArgumentException>(() => InteractiveClient.StartAsync(held, elsewhere, launch, "/Users/tester/runs/run-4/client-1", LeaseBox.Timeout));
         Assert.Contains("leased for the client player on host 'gaming-pc'", error.Message);
         Assert.Empty(fake.Calls);
     }

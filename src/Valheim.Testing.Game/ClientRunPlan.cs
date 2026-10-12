@@ -81,7 +81,7 @@ public sealed class ClientRunPlan
     /// <c>arm64</c> on Apple Silicon and <c>x64</c> elsewhere. Select <c>x64</c> explicitly for Rosetta on Apple Silicon.
     /// The native path needs a Doorstop library with an arm64 slice and a
     /// BepInEx core built on MonoMod 25 or later, and the launch refuses one without them rather than fall back to Rosetta.
-    /// Windows and Linux clients are x64 only, so <c>arm64</c> is refused for them. <see cref="Validate"/> runs the launch's slice
+    /// A Windows client is x64 only, so <c>arm64</c> is refused for it. <see cref="Validate"/> runs the launch's slice
     /// and core check on a <c>Valheim.app</c> install on this machine, so a runner refuses such a plan before it starts anything.
     /// Recorded in <c>client-process.json</c>.
     /// </summary>
@@ -224,12 +224,11 @@ public sealed class ClientRunPlan
 
     private ClientArchitecture DefaultArchitectureForInstall()
     {
-        // A plan with a visible Windows/Linux install uses that host's rule even when read on a Mac.
+        // A plan with a visible Windows install uses that host's rule even when read on a Mac.
         // Campaigns bind an otherwise unknown remote install to its assigned host before opening it.
         string platform = InstallPlatform() switch
         {
             ClientPlatform.Windows => "windows",
-            ClientPlatform.Linux => "linux",
             ClientPlatform.MacOS => "macos",
             _ => EnvironmentInventory.ThisMachine.Platform,
         };
@@ -311,7 +310,8 @@ public sealed class ClientRunPlan
     }
 
     // The owned install's platform where the plan shows it: the install on this machine, or a Windows-style path to another
-    // machine. A POSIX path that is not here stays unknown until the launch, which refuses arm64 for a Linux client too.
+    // machine. A POSIX path that is not here stays unknown until the launch. A Linux client install is refused by DetectClient with
+    // PlatformNotSupportedException, which is the refusal and is not caught here.
     private ClientPlatform? InstallPlatform()
     {
         if (Directory.Exists(Install))

@@ -117,16 +117,13 @@ internal sealed class LocalClientCopy
 
     /// <summary>
     /// Removes the profile once every client launched from it was stopped (the game's logs were kept beside the evidence then),
-    /// journals it retired and restores the plan as it was before it was bound. Once only. Where the system names a running
-    /// game by its path (Windows, macOS), a game still running from the profile's launch root is refused first, which leaves it
-    /// to <c>env recover</c>.
+    /// journals it retired and restores the plan as it was before it was bound. Once only. A game still running from the
+    /// profile's launch root is refused first, which leaves it to <c>env recover</c>.
     /// </summary>
     internal async Task RetireAsync()
     {
         if (Interlocked.Exchange(ref _retired, 1) != 0) return;
-        // Linux's process list names a game without its path, so there the caller's proven stop is the check.
-        if (!OperatingSystem.IsLinux())
-            await HostedRuntimeStage.RequireStoppedAsync(_host, StepTimeout, runtimes: [_launchRoot], clientSession: false).ConfigureAwait(false);
+        await HostedRuntimeStage.RequireStoppedAsync(_host, StepTimeout, runtimes: [_launchRoot], clientSession: false).ConfigureAwait(false);
         await HostedRuntimeStage.RetireAsync(_host, _runtime, _stage, StepTimeout).ConfigureAwait(false);
         _journal.AppendLocal(_actor, JournalEntry.Of(JournalEntry.CopyRetired, ("runtime", _runtime)));
         _plan.Install = _unbound.Install; _plan.InstallPins = _unbound.InstallPins; _plan.Pins = _unbound.Pins; _plan.CliManifest = _unbound.CliManifest;

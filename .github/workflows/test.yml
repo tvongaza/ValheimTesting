@@ -475,9 +475,8 @@ jobs:
     name: game hosts (ssh to localhost, container)
     # Valheim.Testing.Game's SSH and container hosts end to end, without a game: an sshd on 127.0.0.1:2222 that accepts only
     # a key generated for this run (bash sessions, a loopback port forward), and an Ubuntu container on the host
-    # network driven with docker exec. An Xvfb display on :99 carries the interactive client checks (a stand-in Steam and
-    # game), locally and over the ssh. All are removed at the end; .github/scripts/game-hosts.sh sets up and removes the
-    # sshd and the display.
+    # network driven with docker exec. Both are removed at the end; .github/scripts/game-hosts.sh sets up and removes the
+    # sshd.
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -492,7 +491,7 @@ jobs:
         with:
           pinned-downloads: true
       - run: dotnet run scripts/bootstrap-cli.cs
-      - name: Start a throwaway sshd on 127.0.0.1:2222 and a virtual X display
+      - name: Start a throwaway sshd on 127.0.0.1:2222
         run: bash .github/scripts/game-hosts.sh start
       - name: Start a throwaway container on the host network
         # Use GitHub's public Ubuntu 24.04 runner image. Its immutable digest avoids the Docker Hub and ECR Public
@@ -502,7 +501,7 @@ jobs:
       # Not started by validate.cs, so the step bound is the 10-minute hard limit of a test command (#719); the whole job takes about 3 minutes.
       - run: dotnet test tests/Valheim.Testing.Tests/Valheim.Testing.Tests.csproj -c Release --filter Category=GameHosts
         timeout-minutes: 10
-      - name: Stop the sshd, the display and the container
+      - name: Stop the sshd and the container
         if: always()
         run: |
           docker rm -f vt-game-host || true

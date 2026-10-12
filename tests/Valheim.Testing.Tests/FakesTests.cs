@@ -59,7 +59,7 @@ public class FakesTests
     }
     [Fact] public void AFakeClientDataDirectoryIsTheDefaultOnEveryPlatformOnlyInsideItsScope()
     {
-        var platforms = new[] { ClientPlatform.Windows, ClientPlatform.MacOS, ClientPlatform.Linux };
+        var platforms = new[] { ClientPlatform.Windows, ClientPlatform.MacOS };
         var real = platforms.Select(HostedWorld.DefaultSaveDirectory).ToArray();
         string outer = Path.Combine(Path.GetTempPath(), "fake-client-outer"), inner = Path.Combine(Path.GetTempPath(), "fake-client-inner");
         using (var first = new FakeClientDataDirectory(outer))
