@@ -606,5 +606,7 @@ public sealed class RecordingTransport : IGameTransport, IGameThreadStatusTransp
         }
         _writer.WriteLine(record);
     }
+    internal void RecordEvidence(object value) => _writer.WriteLine(JsonSerializer.Serialize(new
+    { utc = DateTime.UtcNow, evidence = value }));
     public void Dispose() { try { _inner.Dispose(); } finally { _writer.Dispose(); } }
 }

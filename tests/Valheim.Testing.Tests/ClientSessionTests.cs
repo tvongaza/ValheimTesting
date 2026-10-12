@@ -41,7 +41,7 @@ public sealed class ClientSessionTests : IDisposable
                 Assert.Null(actor); // Capture process facts and log tails only; no screenshot or other game command.
             }));
         Assert.True(capturedWhileRunning);
-        Assert.DoesNotContain(transport.Commands, command => command.StartsWith("cli_screenshot ", StringComparison.Ordinal));
+        Assert.DoesNotContain(transport.Commands, command => command.StartsWith("cli_screenshot_path64 ", StringComparison.Ordinal));
         Assert.Equal(1, process.Stops);
     }
 
@@ -55,7 +55,7 @@ public sealed class ClientSessionTests : IDisposable
             () => new FakeOwnedProcess(99), () => transport, (_, _) => Task.CompletedTask,
             default, null, null, failureEvidence: (_, actor, _) => diagnosticActor = actor));
         Assert.Null(diagnosticActor);
-        Assert.DoesNotContain(transport.Commands, command => command.StartsWith("cli_screenshot ", StringComparison.Ordinal));
+        Assert.DoesNotContain(transport.Commands, command => command.StartsWith("cli_screenshot_path64 ", StringComparison.Ordinal));
     }
 
     [Fact] public void AFailedWorldRoundCapturesEvidenceOnlyOnceBeforeStopping()
@@ -86,7 +86,7 @@ public sealed class ClientSessionTests : IDisposable
             session.CaptureFailure();
         }
         Assert.Null(diagnosticActor);
-        Assert.DoesNotContain(transport.Commands, command => command.StartsWith("cli_screenshot ", StringComparison.Ordinal));
+        Assert.DoesNotContain(transport.Commands, command => command.StartsWith("cli_screenshot_path64 ", StringComparison.Ordinal));
         Assert.Equal(1, process.Stops);
     }
 
@@ -111,17 +111,17 @@ public sealed class ClientSessionTests : IDisposable
         ClientFailureEvidence.CaptureLocal(new ExactProcess(current.Id, "1"), null, plan, mismatch);
         Assert.Contains("different launch", File.ReadAllText(Path.Combine(mismatch, "client-failure-diagnostic.json")));
 
-        var transport = new ScriptedTransport().OnPrefix("cli_screenshot ", _ => ScriptedTransport.Ok("That command is a cheat"));
+        var transport = new ScriptedTransport().OnPrefix("cli_screenshot_path64 ", _ => ScriptedTransport.Ok("That command is a cheat"));
         using var actor = transport.Actor();
         string refused = Path.Combine(_output, "cheat-refused");
         ClientFailureEvidence.CaptureLocal(new ExactProcess(current.Id, start), actor, plan, refused);
         Assert.Contains("CLI refused", File.ReadAllText(Path.Combine(refused, "client-failure-diagnostic.json")));
-        Assert.Single(transport.Commands.Where(command => command.StartsWith("cli_screenshot ", StringComparison.Ordinal)));
+        Assert.Single(transport.Commands.Where(command => command.StartsWith("cli_screenshot_path64 ", StringComparison.Ordinal)));
 
         actor.VerifyEnvironment(EnvironmentPinning.None);
         string unpinned = Path.Combine(_output, "unpinned");
         ClientFailureEvidence.CaptureLocal(new ExactProcess(current.Id, start), actor, plan, unpinned);
-        Assert.Single(transport.Commands.Where(command => command.StartsWith("cli_screenshot ", StringComparison.Ordinal)));
+        Assert.Single(transport.Commands.Where(command => command.StartsWith("cli_screenshot_path64 ", StringComparison.Ordinal)));
         Assert.Contains("not attempted", File.ReadAllText(Path.Combine(unpinned, "client-failure-diagnostic.json")));
     }
 
