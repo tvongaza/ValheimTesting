@@ -82,7 +82,7 @@ public sealed class TargetedRegressionTests : IDisposable
         var runner = new TargetedRegression(_rig.Manifest(), inventory: _rig.Inventory())
         {
             SaveDirectory = _rig.Save,
-            BundleInspection = (_, _, _) => new(MacBundleInspection.State.Broken, 1, "changed signed game file"),
+            BundleInspection = (_, _) => new(MacBundleInspection.State.Broken, 1, "changed signed game file"),
         };
         Assert.Contains("Verify the game's files in Steam", Assert.Throws<InvalidOperationException>(() => runner.Stage("parent")).Message);
         Assert.False(Directory.Exists(runner.Install));
@@ -175,7 +175,7 @@ public sealed class TargetedRegressionTests : IDisposable
         var runner = new TargetedRegression(_rig.Manifest(), inventory: inventory)
         {
             SaveDirectory = _rig.Save,
-            BundleInspection = (_, _, _) => new(MacBundleInspection.State.Accepted, 0, "synthetic test install"),
+            BundleInspection = (_, _) => new(MacBundleInspection.State.Accepted, 0, "synthetic test install"),
             ProcessCheck = (_, _) => Task.CompletedTask,
         };
         string lockPath = inventory.Hosts["local"].Lock;
@@ -407,11 +407,14 @@ public sealed class TargetedRegressionTests : IDisposable
     }
 
     // Found on a Windows station: a disposable install reused across arms kept a mod manager's old Doorstop proxy. Every arm
-    // stages a fresh profile, so nothing an earlier arm left in it survives.
+    // stages a fresh profile, so nothing an earlier arm left in it survives, and a mod manager's Doorstop marker in the game
+    // (not a loader file) never reaches a profile at all.
     [Fact] public void EachArmGetsAFreshProfile()
     {
+        _rig.Write("game/.doorstop_version", Encoding.UTF8.GetBytes("4.4.0"));
         var regression = _rig.Regression(_rig.Manifest());
         regression.Stage("parent");
+        Assert.False(File.Exists(Path.Combine(_rig.Install, ".doorstop_version")));
         string earlier = Path.Combine(_rig.Install, "from-the-first-profile.txt");
         File.WriteAllText(earlier, "only in the disposable profile");
         regression.Stage("candidate").Verify();
@@ -757,7 +760,7 @@ internal sealed class RegressionRig : IDisposable
             SaveDirectory = Save, SteamUserData = SteamUserData,
             // This rig stages fake files without a desktop. Tests of the SSH refusal override this explicitly.
             DirectClientSession = () => (OperatingSystem.IsWindows(), 1),
-            BundleInspection = (_, _, _) => new(MacBundleInspection.State.Accepted, 0, "synthetic test install"),
+            BundleInspection = (_, _) => new(MacBundleInspection.State.Accepted, 0, "synthetic test install"),
             ProcessCheck = (_, _) => Task.CompletedTask,
             SkipHostLockForTest = true,
         };

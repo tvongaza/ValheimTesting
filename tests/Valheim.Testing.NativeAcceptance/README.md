@@ -178,7 +178,7 @@ the lock selects the mod, its hard dependencies and one pinned default ValheimCL
 WorldTools because the two-peer checkpoint calls `cli_peers`: the plan pins `valheimCLI.worldtools`, and `campaign check`
 refuses a plugin the plan pins but the role's lock does not select, before the game starts. If the source install's loader is unsuitable, set `loaderPackage` on that campaign role to a reviewed
 `BepInExLoaderPackage` manifest. The existing package API captures and validates its files and hashes; campaign preparation
-applies them only to the disposable copy. Do not repair the live source install or copy individual Doorstop files by hand.
+applies them only to the disposable profile. Do not repair the live source install or copy individual Doorstop files by hand.
 A nested `BepInEx/core/core` can make the preloader load Harmony twice and abort before writing its main log.
 
 The [environment inventory template](sample-environment-inventory.json) lists the reusable machines

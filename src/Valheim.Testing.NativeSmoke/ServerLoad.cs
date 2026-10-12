@@ -142,8 +142,8 @@ internal static class ServerLoad
     // the hint would name the very option that caused it.
     private static string LoaderHint(CampaignPreflightProblem problem, string? serverLoader, string? clientLoader) =>
         problem.Input != "game and loader" ? "" // an unreadable --loader-package is the "loader" input
-            : problem.Actor == "server" && serverLoader == null ? " (--loader-package FILE gives the server's disposable copy a reviewed loader)"
-            : problem.Actor == "client" && clientLoader == null ? " (--client-loader-package FILE gives the client's disposable copy a reviewed loader)" : "";
+            : problem.Actor == "server" && serverLoader == null ? " (--loader-package FILE gives the server's disposable profile a reviewed loader)"
+            : problem.Actor == "client" && clientLoader == null ? " (--client-loader-package FILE gives the client's disposable profile a reviewed loader)" : "";
     // --output, or a new timestamped directory under ValheimTesting's data root. Never an existing one.
     private static string Output(Arguments parsed)
         => SmokeCommandOptions.Output(parsed.Options);

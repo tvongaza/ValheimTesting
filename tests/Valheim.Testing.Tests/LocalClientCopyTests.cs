@@ -292,7 +292,7 @@ public sealed class LocalClientCopyTests : IDisposable
         // What the runner needs before the copy exists is checked on the copy before its launch.
         Assert.Superset(new HashSet<string>(CliCapabilities.HostedRounds.Where(CliCapabilities.IsBuiltInCapability)), plan.StaticCapabilities);
         var launch = Assert.Throws<InvalidOperationException>(() => ClientSession.Launch(plan, install.Root));
-        Assert.Contains("runs from a disposable copy", launch.Message);
+        Assert.Contains("runs from a disposable loader profile", launch.Message);
         Assert.Contains("inPlace (--in-place)", launch.Message);
         // A named set must already offer them; a bound copy must name its set.
         plan.CliManifest = CliSet();

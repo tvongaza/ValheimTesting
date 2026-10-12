@@ -407,7 +407,7 @@ public sealed class ClientRunPlan
             return null;
         }
         if (CliManifest == null)
-            return InPlace ? null : throw new InvalidOperationException("This owned client's disposable copy names no staged ValheimCLI manifest; its copy owner binds one.");
+            return InPlace ? null : throw new InvalidOperationException("This owned client's disposable profile names no staged ValheimCLI manifest; its profile owner binds one.");
         return CliCapabilityManifest.Read(CliManifest).Check(LoaderRoot, wanted);
     }
 
