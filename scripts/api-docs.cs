@@ -7,12 +7,12 @@
 //   dotnet run scripts/validate.cs
 //   dotnet run scripts/api-docs.cs                       the DocFX reference (docs/reference/_site, not committed)
 //   dotnet run scripts/api-docs.cs -- surface            write docs/reference/public-api/<Package>.txt from the release builds
-//   dotnet run scripts/api-docs.cs -- check [--base REV] CI: the committed lists match the builds; with --base, a change to
-//                                                        them since REV needs a line starting "public-api:" in PR_BODY
+//   dotnet run scripts/api-docs.cs -- check              release.yml: the committed lists match the builds
 //   dotnet run scripts/api-docs.cs -- check-docs          CI: selected 0.1 entrypoint pages and members have summaries
 //
 // The public-api lists are the reviewed public surface (#292, #135): every public or protected type and member of each
-// package, one per line. A pull request that changes one says why in its description, on a line starting "public-api:".
+// package, one per line. Pull requests do not regenerate them (#683): cutting a release does, so the release preparation's
+// diff reviews the surface since the last release, and release.yml refuses lists that do not match its build.
 // In Valheim.Testing.Game every public type is an operation, a result shape or an input an operation takes. A result shape
 // declares no operation, carries the internal [ResultShape] attribute, is listed as "[result shape]" and is versioned with
 // any JSON it is written to. Both commands refuse a type that breaks this (Classify below).
@@ -53,14 +53,9 @@ if (args is ["surface"])
     Console.Error.WriteLine("Label or internalize the types named above, rebuild (validate.cs), then run this again.");
     return 1;
 }
-if (args.Length > 0 && args[0] == "check")
-{
-    string? baseRevision = args is ["check", "--base", var revision] ? revision : args is ["check"] ? null
-        : throw new ArgumentException("usage: dotnet run scripts/api-docs.cs -- check [--base REV]");
-    return CheckLists(baseRevision);
-}
+if (args is ["check"]) return CheckLists();
 if (args is ["check-docs"]) return CheckDocumentedEntrypoints();
-if (args.Length != 0) throw new ArgumentException("usage: dotnet run scripts/api-docs.cs [-- surface | -- check [--base REV] | -- check-docs]");
+if (args.Length != 0) throw new ArgumentException("usage: dotnet run scripts/api-docs.cs [-- surface | -- check | -- check-docs]");
 
 PreparePackagePages();
 var info = new ProcessStartInfo("dotnet")
@@ -243,8 +238,8 @@ void PreparePackagePages()
     }
 }
 
-// The committed lists against the builds; then, given the base revision a pull request starts from, its description.
-int CheckLists(string? baseRevision)
+// The committed lists against the builds.
+int CheckLists()
 {
     bool classified = Classify(), differs = false;
     var expected = packages.ToDictionary(package => package.Package + ".txt", package => ApiList(package.Package, Path.Combine(root, package.Assembly), package.Namespace));
@@ -266,22 +261,11 @@ int CheckLists(string? baseRevision)
     if (!classified)
         Console.Error.WriteLine("Each type named above needs [ResultShape] or internal (CONTRIBUTING.md, public API); rebuild and run this check again.");
     if (differs)
-        Console.Error.WriteLine("The public API changed: run `dotnet run scripts/api-docs.cs -- surface`, review the diff, commit it, and add a line " +
-            "starting \"public-api:\" to the pull request description saying why.");
+        Console.Error.WriteLine("The public API changed since the lists were written: prepare the release first " +
+            "(`dotnet run scripts/api-docs.cs -- surface` after a build; CONTRIBUTING.md, release packages), review the diff and commit it.");
     if (!classified || differs) return 1;
     Console.WriteLine($"Public API lists match the builds ({packages.Length} packages).");
-    if (baseRevision == null) return 0;
-    string changed = Git("diff", "--name-only", baseRevision, "--", "docs/reference/public-api");
-    if (changed.Length == 0) { Console.WriteLine($"No public API change since {baseRevision}."); return 0; }
-    string body = Environment.GetEnvironmentVariable("PR_BODY") ?? "";
-    if (Regex.IsMatch(body, @"(?m)^\s*public-api:\s*\S"))
-    {
-        Console.WriteLine($"The public API changed since {baseRevision} ({changed.Replace('\n', ' ')}); the description says why.");
-        return 0;
-    }
-    Console.Error.WriteLine($"This change alters the public API ({changed.Replace('\n', ' ')}) and its pull request description has no line " +
-        "starting \"public-api:\". Add one that says why each type or member is public (or leaves), then re-run this check.");
-    return 1;
+    return 0;
 }
 
 // #292: in a classified package, the baseline review asks one question per type: "result shape or operation". An operation
