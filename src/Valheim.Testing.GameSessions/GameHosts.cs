@@ -70,7 +70,7 @@ public sealed class SshGameHost : ScriptedGameHost
     /// held by the Windows ssh-agent service. When the runner itself is inside an SSH session on Windows, the default is instead Git for Windows'
     /// matching ssh/scp pair, because the inbox ssh can hang there when a .NET process sends its script through redirected stdin. Git's msys ssh cannot
     /// open the named pipe that carries a forwarded agent in a Win32-OpenSSH session, so a host reached from such a session needs a key file (<c>IdentityFile=</c>).
-    /// A path (a name with a directory separator) is an explicit choice and always wins. On Windows <c>ssh</c>, <c>ssh.exe</c> and any capitalisation of either are the default, so
+    /// Anything but the bare default name, a path above all, is an explicit choice and always wins. On Windows <c>ssh</c>, <c>ssh.exe</c> and any capitalisation of either are the default, so
     /// forcing the inbox client from inside an SSH session takes its full path. A run's provenance records which client was chosen and why.</param>
     public SshGameHost(string name, string destination, HostShell shell, int port = 0, IEnumerable<string>? sshOptions = null, TimeSpan? connectTimeout = null, string sshExecutable = "ssh")
         : this(name, destination, shell, port, sshOptions, connectTimeout, sshExecutable, SystemProcessLauncher.Instance) { }
@@ -96,7 +96,7 @@ public sealed class SshGameHost : ScriptedGameHost
     internal string SshClientChoice => _ssh + " (" + _sshReason + ")";
 
     // The bare client name, which asks for the default rather than a client: "ssh", and on Windows also "ssh.exe", in any case (the file
-    // system and the command search are case-insensitive there). Anything with a directory separator names a file, so it is a choice.
+    // system and the command search are case-insensitive there). Anything else (a path above all) is an explicit choice.
     private static bool IsDefaultSshName(string requested, bool windows) =>
         string.Equals(requested, "ssh", windows ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal) ||
         windows && string.Equals(requested, "ssh.exe", StringComparison.OrdinalIgnoreCase);
@@ -117,7 +117,8 @@ public sealed class SshGameHost : ScriptedGameHost
                 return (ssh, "Git for Windows' ssh: this runner is in an SSH session, where the inbox ssh can hang; Git's client cannot use the Windows ssh-agent (a forwarded agent in a Win32-OpenSSH session is a named pipe it cannot open), so the host needs a key file (IdentityFile)");
         }
         throw new InvalidOperationException("Windows' inbox ssh can hang while receiving a ValheimTesting script from a .NET runner in an SSH session. " +
-            "Install Git for Windows (its ssh.exe and scp.exe are used together), or set this host's ssh field to a tested OpenSSH client path before staging.");
+            "Install Git for Windows (its ssh.exe and scp.exe are used together), or set this host's ssh field to a tested OpenSSH client path before staging. " +
+            "Either way, Git's client cannot open the named pipe that carries a forwarded agent in a Win32-OpenSSH session, so give the host a key file (IdentityFile=).");
     }
 
     public override GameHostKind Kind => GameHostKind.Ssh;

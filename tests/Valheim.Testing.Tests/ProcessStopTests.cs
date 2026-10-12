@@ -252,13 +252,47 @@ public sealed class WindowsSshQuitSignalTests
         }
     }
 
-    [Fact] public void AnSshLaunchedChildReceivesCtrlBreakBeforeTheQuitDeadline()
+    // #690: the host's default ssh choice reads the same predicate as the quit signal, so SSH_CLIENT alone moves it off the inbox client
+    // (to Git's pair, or a refusal when Git is absent), and neither variable keeps the inbox client.
+    [Theory]
+    [InlineData(null, null, false)]
+    [InlineData("test-runner-over-ssh", null, true)]
+    [InlineData(null, "test-runner-over-ssh", true)]
+    [InlineData("  ", "  ", false)]
+    public void TheHostsDefaultSshChoiceReadsTheSameSessionTestAsTheQuitSignal(string? connection, string? client, bool inSession)
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        string? previousConnection = Environment.GetEnvironmentVariable("SSH_CONNECTION"), previousClient = Environment.GetEnvironmentVariable("SSH_CLIENT");
+        Environment.SetEnvironmentVariable("SSH_CONNECTION", connection);
+        Environment.SetEnvironmentVariable("SSH_CLIENT", client);
+        try
+        {
+            string? choice;
+            try { choice = new Valheim.Testing.GameSessions.SshGameHost("box", "tester@box.example", Valheim.Testing.GameSessions.HostShell.Bash).SshClientChoice; }
+            catch (InvalidOperationException refusal) { choice = refusal.Message; }
+            Assert.Equal(inSession, !choice.Contains("not in an SSH session", StringComparison.Ordinal));
+            if (!inSession) Assert.StartsWith("ssh (", choice, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("SSH_CONNECTION", previousConnection);
+            Environment.SetEnvironmentVariable("SSH_CLIENT", previousClient);
+        }
+    }
+
+    // SSH_CLIENT alone is a session too (#690): both variables are read by the one predicate.
+    [Theory]
+    [InlineData("SSH_CONNECTION")]
+    [InlineData("SSH_CLIENT")]
+    public void AnSshLaunchedChildReceivesCtrlBreakBeforeTheQuitDeadline(string variable)
     {
         if (!OperatingSystem.IsWindows()) return;
         using var dir = new TempDirectory();
         string marker = Path.Combine(dir.Path, "control-event.txt");
-        string? previousSsh = Environment.GetEnvironmentVariable("SSH_CONNECTION");
-        Environment.SetEnvironmentVariable("SSH_CONNECTION", "test-runner-over-ssh");
+        string? previousConnection = Environment.GetEnvironmentVariable("SSH_CONNECTION"), previousClient = Environment.GetEnvironmentVariable("SSH_CLIENT");
+        Environment.SetEnvironmentVariable("SSH_CONNECTION", null);
+        Environment.SetEnvironmentVariable("SSH_CLIENT", null);
+        Environment.SetEnvironmentVariable(variable, "test-runner-over-ssh");
         try
         {
             var start = new ProcessStartInfo("dotnet") { CreateNoWindow = true };
@@ -275,7 +309,11 @@ public sealed class WindowsSshQuitSignalTests
             Assert.Equal("ControlBreak", File.ReadAllText(marker));
             Assert.True(stop.Elapsed < TimeSpan.FromSeconds(25), stop.ToString());
         }
-        finally { Environment.SetEnvironmentVariable("SSH_CONNECTION", previousSsh); }
+        finally
+        {
+            Environment.SetEnvironmentVariable("SSH_CONNECTION", previousConnection);
+            Environment.SetEnvironmentVariable("SSH_CLIENT", previousClient);
+        }
     }
 }
 

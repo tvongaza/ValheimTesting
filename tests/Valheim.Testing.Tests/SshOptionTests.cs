@@ -39,6 +39,8 @@ public class SshOptionTests
         var error = Assert.Throws<InvalidOperationException>(() => SshGameHost.DefaultSshExecutable("ssh", windows: true,
             inSshSession: true, programFiles, "local", path => path == gitSsh));
         Assert.Contains("ssh.exe and scp.exe", error.Message);
+        Assert.Contains("named pipe", error.Message);
+        Assert.Contains("IdentityFile", error.Message);
         Assert.Throws<InvalidOperationException>(() => SshGameHost.DefaultSshExecutable("ssh", windows: true,
             inSshSession: true, programFiles, "local", _ => false));
         Assert.Equal("ssh", SshGameHost.DefaultSshExecutable("ssh", windows: true, inSshSession: false, programFiles, "local", _ => false).Executable);
