@@ -451,7 +451,18 @@ internal sealed class FakeServerHost : IGameHost
                 int id; lock (_sync) id = _nextClient++;
                 Directory.CreateDirectory(Local(v["dir"]));
                 if (ClientWritesBepInExLog)
-                    File.WriteAllText(Path.Combine(Local(v["install"]), "BepInEx", "LogOutput.log"), "[Info   :valheimCLI] Command server listening on 127.0.0.1:5578\n");
+                {
+                    // As BepInEx does: its log goes to the BepInEx folder Doorstop loads, the owned profile's when the launch names
+                    // one (a Unix profile runs the game from its install with the profile's preloader), else the install's.
+                    const string preloader = "/" + BepInExLoader.CorePreloader;
+                    string? target = Spec(v["spec"]).Where(line => line.Kind == "env" && line.Text.StartsWith("DOORSTOP_TARGET_ASSEMBLY=", StringComparison.Ordinal))
+                        .Select(line => line.Text["DOORSTOP_TARGET_ASSEMBLY=".Length..]).SingleOrDefault();
+                    string loaderRoot = target != null && target.StartsWith('/') && target.EndsWith(preloader, StringComparison.Ordinal)
+                        ? target[..^preloader.Length] : v["install"];
+                    string log = Path.Combine(Local(loaderRoot), "BepInEx", "LogOutput.log");
+                    Directory.CreateDirectory(Path.GetDirectoryName(log)!);
+                    File.WriteAllText(log, "[Info   :valheimCLI] Command server listening on 127.0.0.1:5578\n");
+                }
                 lock (_sync) _processes[id] = ("555", ct => exit.Task.WaitAsync(ct), () => exit.TrySetResult(137));
                 return Ok($"VT-INTERACTIVE started {id} 555\n");
             }
