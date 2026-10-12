@@ -104,6 +104,7 @@ public sealed class TargetedRegression
     private double _lastStageSeconds;
     private string? _activeGameRoot;
     private InstallPins? _activePins;
+    private string? _activeLeftOut; // the profile's left-out root files, as run evidence
 
     public RegressionInputs Inputs { get; }
     /// <summary>The client environment the run uses (<see cref="EnvironmentRecipe.Name"/>) and why.</summary>
@@ -394,6 +395,7 @@ public sealed class TargetedRegression
             var staged = stagedArm!;
             staged.Record(report.Provenance);
             report.Provenance["launchMode"] = CopyGame ? "copy" : "profile";
+            if (_activeLeftOut != null) report.Provenance["profileLeftOut"] = _activeLeftOut;
             report.Provenance["disposableStageSeconds"] = _lastStageSeconds.ToString("F3", System.Globalization.CultureInfo.InvariantCulture);
             File.WriteAllText(Path.Combine(output, "run-manifest.json"), JsonSerializer.Serialize(staged.Manifest, ManifestJson));
             new ClientRounds { Client = staged.Plan, Report = report, Output = output, Rounds = rounds, Cancellation = cancellation }.Run(() =>
@@ -566,6 +568,7 @@ public sealed class TargetedRegression
                 listing = profile.Loader;
                 _activeGameRoot = profile.GameRoot;
                 _activePins = profile.Pins;
+                _activeLeftOut = HostedRuntimeStage.ProfileLeftOut.Describe(profile.LeftOut);
             }
             _lastStageSeconds = copyClock.Elapsed.TotalSeconds;
             _journal.AppendLocal(actor, JournalEntry.Of(JournalEntry.CopyDone, ("runtime", Install),
@@ -590,6 +593,7 @@ public sealed class TargetedRegression
         _prepared = false;
         _activeGameRoot = null;
         _activePins = null;
+        _activeLeftOut = null;
     }
 
     private void RequireStopped(IReadOnlyCollection<string>? runtimes, bool clientSession)

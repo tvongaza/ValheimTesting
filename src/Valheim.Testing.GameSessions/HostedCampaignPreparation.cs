@@ -114,15 +114,18 @@ public sealed class PreparedHostedCampaign : IAsyncDisposable
     private readonly IReadOnlyList<(string Host, string Actor, HostedCampaignCharacter Character)> _characters;
     private readonly Func<string, IGameHost>? _hostFactory;
     private readonly TimeSpan _timeout;
+    // Per actor: the root files its profile left out of the game install, as run evidence.
+    private readonly IReadOnlyDictionary<string, string> _profileLeftOut;
 
     internal PreparedHostedCampaign(HostedCampaignManifest manifest, ResolvedEnvironment profile, IReadOnlyDictionary<string, HostListing> listings,
         IReadOnlyDictionary<string, HostListing> loaderListings,
         IReadOnlyDictionary<string, HostedRuntimeFile[]> selections,
         IReadOnlyList<(string Host, string Actor, string Runtime, string Stage)> copies,
         IReadOnlyList<(string Host, string Actor, HostedCampaignCharacter Character)> characters, Func<string, IGameHost>? hostFactory, TimeSpan timeout,
-        RunJournal journal)
+        RunJournal journal, IReadOnlyDictionary<string, string>? profileLeftOut = null)
     {
         Journal = journal;
+        _profileLeftOut = profileLeftOut ?? new Dictionary<string, string>();
         Manifest = manifest; _profile = profile; Listings = listings; LoaderListings = loaderListings; Selections = selections;
         _copies = copies; _characters = characters; _hostFactory = hostFactory; _timeout = timeout;
     }
@@ -138,6 +141,11 @@ public sealed class PreparedHostedCampaign : IAsyncDisposable
         return string.Join(", ", actors.OrderBy(actor => actor.Name, StringComparer.Ordinal)
             .Select(actor => actor.Name + ":" +
                 (HostedCampaignPreparation.UseProfile(_profile.Hosts[actor.Host], copyGame) ? "profile" : "copy")));
+    }
+    /// <summary>Records, as <c>&lt;actor&gt;ProfileLeftOut</c>, the root files each actor's profile left out of its game install (see <c>HostedRuntimeStage.ProfileLeftOut</c>).</summary>
+    internal void RecordProfileLeftOut(IDictionary<string, string> provenance)
+    {
+        foreach (var (actor, text) in _profileLeftOut.OrderBy(pair => pair.Key, StringComparer.Ordinal)) provenance[actor + "ProfileLeftOut"] = text;
     }
     public IReadOnlyDictionary<string, HostListing> Listings { get; }
     internal IReadOnlyDictionary<string, HostListing> LoaderListings { get; }
@@ -950,6 +958,7 @@ public static class HostedCampaignPreparation
         var stagedCharacters = new ConcurrentBag<(string Host, string Actor, HostedCampaignCharacter Character)>();
         var listings = new ConcurrentDictionary<string, HostListing>(StringComparer.Ordinal);
         var loaderListings = new ConcurrentDictionary<string, HostListing>(StringComparer.Ordinal);
+        var profileLeftOut = new ConcurrentDictionary<string, string>(StringComparer.Ordinal);
         try
         {
             // A host has one claim for the whole preparation. Independent actors prepare concurrently, including
@@ -995,6 +1004,7 @@ public static class HostedCampaignPreparation
                             loader, readiness.SourceListings[name], steamRuntimePackage: steamRuntime).ConfigureAwait(false);
                         listings[name] = prepared.Game;
                         loaderListings[name] = prepared.Loader;
+                        if (HostedRuntimeStage.ProfileLeftOut.Describe(prepared.LeftOut) is { } leftOut) profileLeftOut[name] = leftOut;
                         role.PreparedSourceRoot = prepared.Source.Root;
                         if (profile.Hosts[hostName].Kind != "local")
                             role.PreparedSourceFiles = prepared.Source.Files;
@@ -1043,12 +1053,12 @@ public static class HostedCampaignPreparation
                     role.Install = runtime;
                 })).ConfigureAwait(false);
             })).ConfigureAwait(false);
-            return new PreparedHostedCampaign(manifest, profile, listings, loaderListings, selections, copies.ToArray(), stagedCharacters.ToArray(), hostFactory, timeout, journal);
+            return new PreparedHostedCampaign(manifest, profile, listings, loaderListings, selections, copies.ToArray(), stagedCharacters.ToArray(), hostFactory, timeout, journal, profileLeftOut);
         }
         catch (Exception original)
         {
             Func<Task> remove = () => new PreparedHostedCampaign(manifest, profile, listings, loaderListings, selections, copies.ToArray(),
-                stagedCharacters.ToArray(), hostFactory, timeout, journal).DisposeAsync().AsTask();
+                stagedCharacters.ToArray(), hostFactory, timeout, journal, profileLeftOut).DisposeAsync().AsTask();
             try
             {
                 await (cleanupStep?.Invoke("remove the failed preparation's copies and characters", remove) ?? remove()).ConfigureAwait(false);

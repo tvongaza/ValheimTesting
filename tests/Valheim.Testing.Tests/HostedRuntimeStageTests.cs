@@ -362,6 +362,7 @@ public sealed class HostedRuntimeStageTests : IDisposable
         File.WriteAllText(Path.Combine(source, GameLaunch.ClientWindowsExecutable), "game executable");
         StageLoader(source);
         File.WriteAllText(Path.Combine(source, "version.dll"), "another mod manager proxy");
+        File.WriteAllText(Path.Combine(source, "newsteamthing64.dll"), "a root DLL the profile does not know");
         File.WriteAllText(Path.Combine(source, "tier0_s64.dll"), "steam runtime");
         File.WriteAllText(Path.Combine(source, "vstdlib_s64.dll"), "steam runtime");
         string originalMod = Path.Combine(source, "BepInEx", "plugins", "original.dll");
@@ -383,6 +384,10 @@ public sealed class HostedRuntimeStageTests : IDisposable
         Assert.Equal(FileHash.Sha256(selected), prepared.Loader.Files["BepInEx/plugins/selected.dll"]);
         Assert.False(prepared.Loader.Files.ContainsKey("BepInEx/plugins/original.dll"));
         Assert.False(prepared.Loader.Files.ContainsKey("version.dll"));
+        Assert.False(prepared.Loader.Files.ContainsKey("newsteamthing64.dll"));
+        var unknown = Assert.Single(prepared.LeftOut);
+        Assert.Equal("newsteamthing64.dll", unknown.Path);
+        Assert.Contains("unknown root DLL", unknown.Reason);
         Assert.Equal(FileHash.Sha256(Path.Combine(source, "tier0_s64.dll")), prepared.Loader.Files["tier0_s64.dll"]);
         Assert.Equal(FileHash.Sha256(Path.Combine(source, "vstdlib_s64.dll")), prepared.Loader.Files["vstdlib_s64.dll"]);
         Assert.Equal(before, WorldFixture.Manifest(source));
@@ -409,11 +414,58 @@ public sealed class HostedRuntimeStageTests : IDisposable
             "valheim_server.exe", "UnityPlayer.dll", "steam_api64.dll", "steamclient64.dll", "tier0_s64.dll", "vstdlib_s64.dll",
             "steam_appid.txt", "valheim_server_Data/Managed/assembly_valheim.dll", "valheim_server_Data/globalgamemanagers", "output_log.txt",
         ];
-        Assert.Equal(expectedLinks, serverListing.Where(HostedRuntimeStage.IsWindowsProfileGameLink).ToArray());
+        var plan = HostedRuntimeStage.PlanWindowsProfile(serverListing, HostedRuntimeStage.RuntimeSkips);
+        Assert.Equal(expectedLinks, plan.Links);
         // A case-insensitive host lists the same files in another spelling.
-        Assert.True(HostedRuntimeStage.IsWindowsProfileGameLink("TIER0_S64.DLL"));
-        Assert.True(HostedRuntimeStage.IsWindowsProfileGameLink("VSTDLIB_S64.dll"));
-        Assert.False(HostedRuntimeStage.IsWindowsProfileGameLink("Version.dll"));
+        var spelled = HostedRuntimeStage.PlanWindowsProfile(["TIER0_S64.DLL", "VSTDLIB_S64.dll", "Version.dll"], HostedRuntimeStage.RuntimeSkips);
+        Assert.Equal(new[] { "TIER0_S64.DLL", "VSTDLIB_S64.dll" }, spelled.Links);
+        Assert.Empty(spelled.LeftOut);
+    }
+
+    // A root DLL the profile does not know is left out of the launch folder, and the run says so with what to do about it:
+    // a DLL the game needs and the profile dropped fails inside Steam or Unity start-up with no other hint (#651, #689).
+    [Fact] public void WindowsProfileRecordsAnUnknownRootDllAndStaysSilentAboutProxiesAndLoaderFiles()
+    {
+        string[] listing =
+        [
+            "valheim_server.exe", "UnityPlayer.dll", "steam_api64.dll", "valheim_server_Data/Managed/assembly_valheim.dll",
+            "version.dll", "WINMM.dll", "winhttp.dll", "doorstop_config.ini", ".doorstop_version", "doorstop_libs/x64/winhttp.dll",
+            "BepInEx/core/BepInEx.dll", "newsteamthing64.dll", "crash.log", "logs/server.log",
+            "valheim_server_Data/Plugins/x86_64/nested.dll",
+        ];
+        var plan = HostedRuntimeStage.PlanWindowsProfile(listing, HostedRuntimeStage.RuntimeSkips);
+
+        Assert.Equal(new[] { "newsteamthing64.dll", "crash.log" }, plan.LeftOut.Select(item => item.Path).ToArray());
+        var unknown = plan.LeftOut[0];
+        Assert.Contains("unknown root DLL", unknown.Reason);
+        Assert.Contains("WindowsGameRootDlls", unknown.Reason);
+        Assert.Equal("a log file", plan.LeftOut[1].Reason);
+        Assert.DoesNotContain("newsteamthing64.dll", plan.Links);
+        Assert.Contains("valheim_server_Data/Plugins/x86_64/nested.dll", plan.Links);
+        // The text a run keeps names the file and the reason.
+        string evidence = HostedRuntimeStage.ProfileLeftOut.Describe(plan.LeftOut)!;
+        Assert.StartsWith("newsteamthing64.dll: an unknown root DLL", evidence);
+        Assert.Null(HostedRuntimeStage.ProfileLeftOut.Describe(
+            HostedRuntimeStage.PlanWindowsProfile(["valheim.exe", "UnityPlayer.dll", "version.dll", "winhttp.dll"], HostedRuntimeStage.RuntimeSkips).LeftOut));
+    }
+
+    // The skip list has one definition, HostedRuntimeStage.RuntimeSkips, and the profile takes its skips from the list it is
+    // given: an entry added there stops a profile from linking it, as a full copy no longer copies it (#689).
+    [Fact] public void WindowsProfileTakesItsSkipsFromTheRuntimeSkipList()
+    {
+        string[] listing = ["valheim.exe", "logs/steam.txt", "crashdumps/a.dmp", "crashdumps", "scratch.bin"];
+        var stock = HostedRuntimeStage.PlanWindowsProfile(listing, HostedRuntimeStage.RuntimeSkips);
+        Assert.DoesNotContain("logs/steam.txt", stock.Links);
+        Assert.Contains("crashdumps/a.dmp", stock.Links);
+
+        var extended = HostedRuntimeStage.PlanWindowsProfile(listing, [.. HostedRuntimeStage.RuntimeSkips, "crashdumps"]);
+        Assert.Equal(new[] { "valheim.exe", "scratch.bin" }, extended.Links);
+        // A skipped root entry is reported with its reason; what lies inside a skipped folder is not listed one by one.
+        var skipped = Assert.Single(extended.LeftOut);
+        Assert.Equal("crashdumps", skipped.Path);
+        Assert.Contains("RuntimeSkips", skipped.Reason);
+        // The copy arm's skip test is the same one.
+        Assert.True(HostInstall.Skipped("logs/steam.txt", HostedRuntimeStage.RuntimeSkips, StringComparer.Ordinal));
     }
 
     // One disposable install per actor, prepared on a fake host (HostedRuntimeStage.PrepareAsync): a copy, the selected files, the loader.

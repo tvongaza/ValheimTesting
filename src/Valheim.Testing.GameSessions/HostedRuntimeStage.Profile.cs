@@ -5,12 +5,36 @@ namespace Valheim.Testing.GameSessions;
 
 internal static partial class HostedRuntimeStage
 {
-    /// <summary>The immutable game and the disposable profile prepared for one launch.</summary>
-    internal sealed record PreparedProfile(HostListing Source, HostListing Game, HostListing Loader, InstallPins Pins)
+    /// <summary>
+    /// The immutable game and the disposable profile prepared for one launch. <see cref="LeftOut"/> is what the profile did not
+    /// take from the game's root that a reader of the run should know about (<see cref="ProfileLeftOut"/>).
+    /// </summary>
+    internal sealed record PreparedProfile(HostListing Source, HostListing Game, HostListing Loader, InstallPins Pins,
+        IReadOnlyList<ProfileLeftOut> LeftOut)
     {
         internal string GameRoot => Game.Root;
         internal string LoaderRoot => Loader.Root;
     }
+
+    /// <summary>One root file of the game install that a profile does not use, and why.</summary>
+    internal sealed record ProfileLeftOut(string Path, string Reason)
+    {
+        public override string ToString() => $"{Path}: {Reason}";
+
+        /// <summary>The run-evidence text for <paramref name="leftOut"/> (one line); null when nothing was left out.</summary>
+        internal static string? Describe(IEnumerable<ProfileLeftOut> leftOut)
+        {
+            var items = leftOut.Select(item => item.ToString()).ToArray();
+            return items.Length == 0 ? null : string.Join("; ", items);
+        }
+    }
+
+    /// <summary>
+    /// The top-level entries of an install that a launch folder never takes from it: <c>logs</c>, where Steam writes a dedicated
+    /// server's own runtime output (<c>connection_log_*.txt</c>, <c>stats_log.txt</c>), none of it the game's or the loader's
+    /// files (#257). The one definition: a full copy's skips and the profile's links both take it from here.
+    /// </summary>
+    internal static readonly string[] RuntimeSkips = ["logs"];
 
     /// <summary>
     /// The DLLs at a Windows game root (client or dedicated server) that the game itself needs: Unity's player and the
@@ -22,19 +46,59 @@ internal static partial class HostedRuntimeStage
         ["UnityPlayer.dll", "steam_api64.dll", "steamclient64.dll", "tier0_s64.dll", "vstdlib_s64.dll"];
 
     /// <summary>
-    /// Whether the Windows profile's launch folder hard-links <paramref name="path"/> (relative, <c>/</c> separators) from
-    /// the game install: game files only, never the loader (the profile gets its own), logs, or a root DLL outside
-    /// <see cref="WindowsGameRootDlls"/>.
+    /// Root DLLs that mod managers and injectors use as a proxy (Windows loads them from the executable directory in place of
+    /// the system's). The profile leaves them out without a word: they are expected beside a modded install.
     /// </summary>
-    internal static bool IsWindowsProfileGameLink(string path) =>
-        !path.StartsWith("BepInEx/", StringComparison.OrdinalIgnoreCase) &&
-        !path.StartsWith("logs/", StringComparison.OrdinalIgnoreCase) &&
-        !path.EndsWith(".log", StringComparison.OrdinalIgnoreCase) &&
-        !InstallPins.IsLoaderFile(path, StringComparison.OrdinalIgnoreCase) &&
-        (path.Contains('/') || !path.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) ||
-            WindowsGameRootDlls.Contains(path, StringComparer.OrdinalIgnoreCase)) &&
-        !path.StartsWith(".doorstop", StringComparison.OrdinalIgnoreCase) &&
-        !path.StartsWith("doorstop", StringComparison.OrdinalIgnoreCase);
+    internal static readonly string[] KnownProxyDlls =
+        ["version.dll", "winmm.dll", "dinput8.dll", "dxgi.dll", "d3d9.dll", "xinput1_3.dll"];
+
+    /// <summary>The files of a game install a Windows profile hard-links, and the root files it leaves out that are worth a line of evidence.</summary>
+    internal sealed record WindowsProfileFiles(IReadOnlyList<string> Links, IReadOnlyList<ProfileLeftOut> LeftOut);
+
+    /// <summary>
+    /// Sorts <paramref name="files"/> (relative, <c>/</c> separators) of a Windows game install into what the profile's launch
+    /// folder hard-links: game files only, never the loader (the profile gets its own), a top-level entry in
+    /// <paramref name="skips"/> (<see cref="RuntimeSkips"/>), logs, or a root DLL outside <see cref="WindowsGameRootDlls"/>.
+    /// A root file left out is reported unless it is the loader's or a known proxy (<see cref="KnownProxyDlls"/>), which are
+    /// expected; an unknown root DLL gets an actionable reason, because a DLL the game needs and the profile dropped fails
+    /// inside Steam or Unity start-up with no other hint (#651).
+    /// </summary>
+    internal static WindowsProfileFiles PlanWindowsProfile(IEnumerable<string> files, IReadOnlyCollection<string> skips)
+    {
+        var links = new List<string>();
+        var leftOut = new List<ProfileLeftOut>();
+        foreach (string path in files)
+        {
+            bool root = !path.Contains('/');
+            string? reason = null;
+            bool report = root;
+            if (path.StartsWith("BepInEx/", StringComparison.OrdinalIgnoreCase) ||
+                InstallPins.IsLoaderFile(path, StringComparison.OrdinalIgnoreCase) ||
+                path.StartsWith(".doorstop", StringComparison.OrdinalIgnoreCase) ||
+                path.StartsWith("doorstop", StringComparison.OrdinalIgnoreCase))
+            {
+                reason = "loader file";
+                report = false;
+            }
+            else if (HostInstall.Skipped(path, skips, StringComparer.OrdinalIgnoreCase)) reason = "a runtime skip (HostedRuntimeStage.RuntimeSkips)";
+            else if (path.EndsWith(".log", StringComparison.OrdinalIgnoreCase)) reason = "a log file";
+            else if (root && path.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) &&
+                !WindowsGameRootDlls.Contains(path, StringComparer.OrdinalIgnoreCase))
+            {
+                if (KnownProxyDlls.Contains(path, StringComparer.OrdinalIgnoreCase))
+                {
+                    reason = "a mod manager's proxy";
+                    report = false;
+                }
+                else reason = "an unknown root DLL, so it is not linked (a proxy here would load its own chain beside this profile). " +
+                    "If the game needs it, a launch fails inside Steam or Unity start-up: add it to HostedRuntimeStage.WindowsGameRootDlls. " +
+                    "Otherwise nothing to do";
+            }
+            if (reason == null) links.Add(path);
+            else if (report) leftOut.Add(new ProfileLeftOut(path, reason));
+        }
+        return new WindowsProfileFiles(links, leftOut);
+    }
 
     /// <summary>
     /// Stage a client's or server's loader and selected files without copying the game. The caller journals
@@ -87,7 +151,10 @@ internal static partial class HostedRuntimeStage
         // A mod manager may have placed another proxy beside valheim.exe (for example version.dll). Linking
         // arbitrary root DLLs into our launch folder would load that manager's chain alongside this profile.
         // Keep only the game's known root dependencies; every other source file stays untouched and out of the run.
-        var gameLinks = windows ? game.Files.Keys.Where(IsWindowsProfileGameLink).ToArray() : [];
+        var plan = windows ? PlanWindowsProfile(game.Files.Keys, RuntimeSkips) : new WindowsProfileFiles([], []);
+        string[] gameLinks = [.. plan.Links];
+        if (plan.LeftOut.Count != 0)
+            Console.WriteLine($"The profile on {host.Name} leaves out {ProfileLeftOut.Describe(plan.LeftOut)}.");
         string payload = Path.Combine(Path.GetTempPath(), "valheim-profile-stage-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(payload);
         bool shipped = false, created = false;
@@ -177,7 +244,7 @@ internal static partial class HostedRuntimeStage
                 throw new IOException($"The profile loader on {host.Name} is not the reviewed package's loader.");
             var freshSource = await HostInstall.ListAsync(host, source, timeout, cancellation: cancellation).ConfigureAwait(false);
             HostInstall.RequireSame(game.Files, freshSource, "source game after profile preparation");
-            return new PreparedProfile(game, windows ? profile : game, profile, pins);
+            return new PreparedProfile(game, windows ? profile : game, profile, pins, plan.LeftOut);
         }
         catch (Exception original)
         {

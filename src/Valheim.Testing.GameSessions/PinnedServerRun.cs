@@ -451,6 +451,7 @@ public static class PinnedServerRun
                 prepared = await HostedCampaignPreparation.PrepareAsync(inspection, preparedDirectory, CampaignTimeout,
                     name => options.Hooks.CreateHost(inspection.Inputs!.Profile, name), cancellation.Token, named, runId, PreparationCleanup(report), options.Hooks.ShippedLoaderAsync, ShippedLoaderChosen(report), options.CopyGame).ConfigureAwait(false)).ConfigureAwait(false);
             report.Provenance["campaignLaunchModes"] = prepared!.LaunchModes(options.CopyGame);
+            prepared.RecordProfileLeftOut(report.Provenance);
             string hostName = null!;
             report.Step(StepPhase.Setup, "bind the prepared actors to the plan", () =>
             {
@@ -627,6 +628,8 @@ public static class PinnedServerRun
                     prepared = await HostedCampaignPreparation.PrepareAsync(inspection, Path.Combine(output, "prepared"), CampaignTimeout,
                         name => options.Hooks.CreateHost(inspection.Inputs!.Profile, name), cancellation.Token, campaignPlans, campaignRunId, PreparationCleanup(report), options.Hooks.ShippedLoaderAsync, ShippedLoaderChosen(report), options.CopyGame).ConfigureAwait(false)).ConfigureAwait(false);
                 report.Provenance["campaignLaunchModes"] = prepared!.LaunchModes(options.CopyGame);
+                prepared.RecordProfileLeftOut(report.Provenance);
+            prepared.RecordProfileLeftOut(report.Provenance);
                 if (prepared.Manifest.Server?.SteamRuntimePackage is { } steamPackagePath)
                 {
                     bool remote = prepared.Environment.Hosts[prepared.Environment.Server!.Host].Kind == "ssh";
