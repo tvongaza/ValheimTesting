@@ -121,15 +121,35 @@ public sealed class GameActor : IDisposable
         return scope;
     }
 
+    // The shortest time a world-entry command may be given to start, and the one place that decides it. Every command and
+    // pin check sent inside a busy-read scope asks here, so time spent by an earlier round trip (the capability listing, a
+    // pin check) is counted wherever the decision falls. Below it a command only expires before it starts, and would be
+    // reported as a stalled game thread; the deadline has passed.
+    private static readonly TimeSpan MinimumReadTime = TimeSpan.FromMilliseconds(25);
+    private const string DeadlinePassedText = "The world-entry deadline passed before another session read could start.";
+    private const string DeadlineData = "valheim-testing.world-entry-deadline";
+    private static WaitTimeoutException DeadlinePassed(string target)
+    {
+        var error = new WaitTimeoutException(target, TimeSpan.Zero, DeadlinePassedText);
+        error.Data[DeadlineData] = true;
+        return error;
+    }
+    /// <summary>True for the timeout that a read refused for lack of time left raises, so a wait can add the last state it saw.</summary>
+    internal static bool IsDeadlinePassed(WaitTimeoutException error) => error.Data.Contains(DeadlineData);
+
+    // The time left for a command started now, or null outside a busy-read scope. Read once, so the check and the
+    // timeout it grants cannot disagree.
+    private TimeSpan? ReadTimeLeft(string target)
+    {
+        if (_busyReads is not { } scope) return null;
+        var left = scope.Left;
+        return left > MinimumReadTime ? left : throw DeadlinePassed(target);
+    }
+
     // Session waits and their read retries must use the same deadline. Re-applying the original timeout
     // after capability or pin round trips leaves a window of 1 ms reads after the retry budget expires.
-    internal TimeSpan BusyReadTimeLeft(string target)
-    {
-        var left = _busyReads?.Left ?? throw new InvalidOperationException("No busy-read scope is active.");
-        if (left <= TimeSpan.FromMilliseconds(25))
-            throw new WaitTimeoutException(target, TimeSpan.Zero, "The world-entry deadline passed before another session read could start.");
-        return left;
-    }
+    internal TimeSpan BusyReadTimeLeft(string target) =>
+        _busyReads == null ? throw new InvalidOperationException("No busy-read scope is active.") : ReadTimeLeft(target)!.Value;
 
     private CommandResult ReadOnlyCommand(string command)
     {
@@ -149,14 +169,10 @@ public sealed class GameActor : IDisposable
         }
     }
 
-    private TimeSpan EffectiveTimeout()
-    {
-        var left = _busyReads?.Left;
-        // An in-flight read can consume the deadline. The caller's wait should report its last valid state;
-        // no new read is started after expiry by ObservedWait.
-        if (left <= TimeSpan.Zero) return TimeSpan.FromMilliseconds(1);
-        return left is { } time && time < CommandTimeout ? time : CommandTimeout;
-    }
+    // The timeout for the next command or pin check. Inside a busy-read scope it is the time left, or the deadline's end
+    // (WaitTimeoutException) when too little is left to start anything: an in-flight read or pin check can use up the time.
+    private TimeSpan EffectiveTimeout() =>
+        ReadTimeLeft("the world-entry read") is { } time && time < CommandTimeout ? time : CommandTimeout;
 
     private void WaitForResponsiveThread(InvalidOperationException timeout)
     {
@@ -240,6 +256,11 @@ public sealed class GameActor : IDisposable
                     // The CLI explicitly says the pin check never ran. A world-entry read scope can
                     // verify game-thread liveness and retry the read without relaxing the pins.
                     _verified = true;
+                    throw;
+                }
+                catch (WaitTimeoutException error) when (IsDeadlinePassed(error))
+                {
+                    _verified = true; // No pin check was sent: the pins that held before still hold.
                     throw;
                 }
             }

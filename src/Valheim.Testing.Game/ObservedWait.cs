@@ -97,7 +97,14 @@ public static class ObservedWait
             if (hasLast && timeout - clock.Elapsed <= minimumReadTime)
                 throw new WaitTimeoutException(target, clock.Elapsed, describe(last));
             // A value observed is judged even if the deadline passes meanwhile: a match may own a resource.
-            T value = await observe(timeout - clock.Elapsed, cancellation).ConfigureAwait(false);
+            T value;
+            try { value = await observe(timeout - clock.Elapsed, cancellation).ConfigureAwait(false); }
+            catch (WaitTimeoutException error) when (GameActor.IsDeadlinePassed(error))
+            {
+                // The actor refused the read: the deadline went (for example to the read's own pin check) before it could start.
+                // End as the loop's own deadline does, naming this wait and the last state it saw.
+                throw new WaitTimeoutException(target, clock.Elapsed, hasLast ? describe(last) : error.LastSeen);
+            }
             last = value; hasLast = true;
             if (fails?.Invoke(value) is string reason) throw new WaitFailedException(target, reason, clock.Elapsed, describe(value));
             if (matches(value)) return new(value, clock.Elapsed);
