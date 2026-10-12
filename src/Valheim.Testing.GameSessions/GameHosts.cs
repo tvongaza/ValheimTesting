@@ -70,7 +70,7 @@ public sealed class SshGameHost : ScriptedGameHost
     /// held by the Windows ssh-agent service. When the runner itself is inside an SSH session on Windows, the default is instead Git for Windows'
     /// matching ssh/scp pair, because the inbox ssh can hang there when a .NET process sends its script through redirected stdin; Git's client cannot
     /// reach the Windows agent (it reads only <c>SSH_AUTH_SOCK</c>), so a host reached from such a session needs a key file or an agent that variable names.
-    /// An explicit path always wins. A run's provenance records which client was chosen and why.</param>
+    /// An explicit path always wins; the bare name <c>ssh</c> is the default, so forcing the inbox client from inside an SSH session takes its full path. A run's provenance records which client was chosen and why.</param>
     public SshGameHost(string name, string destination, HostShell shell, int port = 0, IEnumerable<string>? sshOptions = null, TimeSpan? connectTimeout = null, string sshExecutable = "ssh")
         : this(name, destination, shell, port, sshOptions, connectTimeout, sshExecutable, SystemProcessLauncher.Instance) { }
 
@@ -101,7 +101,7 @@ public sealed class SshGameHost : ScriptedGameHost
     {
         if (requested != "ssh") return (requested, "the host's configured ssh path");
         if (!windows) return (requested, "ssh from PATH");
-        if (!inSshSession) return (requested, "the inbox ssh from PATH: this runner is not in an SSH session, and keys in the Windows ssh-agent work only with it");
+        if (!inSshSession) return (requested, "ssh from PATH, the inbox client unless PATH puts another first: this runner is not in an SSH session, and keys in the Windows ssh-agent work only with it");
         foreach (string root in new[] { Path.Combine(programFiles, "Git"), Path.Combine(localAppData, "Programs", "Git") })
         {
             string ssh = Path.Combine(root, "usr", "bin", "ssh.exe");
