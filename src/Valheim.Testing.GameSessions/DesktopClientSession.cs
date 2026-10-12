@@ -42,7 +42,7 @@ internal static class DesktopClientSession
     {
         if (!NeedsDesktopTask(currentSessionId)) return Task.CompletedTask;
         if (s_preflightForTest.Value is { } substitute) return substitute(cancellation);
-        return InteractiveClient.RequireWindowsDesktopAsync(new LocalGameHost("this machine", HostShell.WindowsPowerShell), cancellation);
+        return InteractiveClient.RequireWindowsDesktopAsync(new LocalGameHost("this machine", HostShell.Pwsh), cancellation);
     }
 
     /// <summary>Launches the plan's pinned disposable install in the desktop session and waits for its menu.</summary>
@@ -59,7 +59,7 @@ internal static class DesktopClientSession
         if (!NeedsDesktopTask(Process.GetCurrentProcess().SessionId))
             return ClientSession.Open(plan, output, logs, cancellation, processIntended, processStarted);
         plan.CheckOwnedInstall();
-        var host = new LocalGameHost("this machine", HostShell.WindowsPowerShell);
+        var host = new LocalGameHost("this machine", HostShell.Pwsh);
         var quick = TimeSpan.FromSeconds(30);
         InteractiveClient.RequireWindowsDesktopAsync(host, cancellation).GetAwaiter().GetResult();
         HostInstall.RequirePortFreeAsync(host, plan.Port, quick, cancellation).GetAwaiter().GetResult();

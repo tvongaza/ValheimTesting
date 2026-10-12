@@ -14,14 +14,23 @@ public enum GameHostKind { Local, Ssh, Container }
 public enum HostShellKind { Bash, PowerShell }
 
 /// <summary>
-/// The shell a host runs scripts in, found on the host's PATH (or an absolute path without spaces). <see cref="WindowsPowerShell"/>
-/// is Windows PowerShell 5.1 (<c>powershell</c>), the one every Windows host has; <see cref="Pwsh"/> is PowerShell 7 on any OS.
+/// The shell a host runs scripts in, found on the host's PATH (or an absolute path without spaces): <see cref="Pwsh"/>
+/// (PowerShell 7) on a Windows host, <see cref="Bash"/> on a macOS or Linux host. Nothing else runs host scripts.
 /// </summary>
 public sealed class HostShell
 {
     public static HostShell Bash { get; } = new(HostShellKind.Bash, "bash");
-    public static HostShell WindowsPowerShell { get; } = new(HostShellKind.PowerShell, "powershell");
     public static HostShell Pwsh { get; } = new(HostShellKind.PowerShell, "pwsh");
+    /// <summary>This machine's shell: pwsh on Windows, bash elsewhere.</summary>
+    public static HostShell ThisMachine => Parse(HostProfile.ShellFor(HostProfile.CurrentPlatform));
+    /// <summary>
+    /// What a Windows host without PowerShell 7 needs, in every refusal that names it: the install command, run in a desktop
+    /// terminal on that machine (the installer is refused with access denied over SSH).
+    /// </summary>
+    internal const string PwshInstall = "winget install --id Microsoft.PowerShell --source winget";
+    internal static string MissingPwsh(string host) =>
+        $"PowerShell 7 (pwsh) is not installed on {host}, or not on its PATH; a Windows host runs its scripts in pwsh. Install it in a " +
+        $"desktop terminal on that machine (over SSH the installer fails with access denied): {PwshInstall}";
     public HostShellKind Kind { get; }
     public string Executable { get; }
     public HostShell(HostShellKind kind, string executable)
@@ -31,11 +40,11 @@ public sealed class HostShell
             throw new ArgumentException("The shell executable must be a name or a path without spaces or quotes.", nameof(executable));
         Kind = kind; Executable = executable!;
     }
-    /// <summary><c>bash</c>, <c>pwsh</c> or <c>powershell</c> (Windows PowerShell 5.1).</summary>
+    /// <summary><c>bash</c> or <c>pwsh</c>.</summary>
     public static HostShell Parse(string name) => name switch
     {
-        "bash" => Bash, "pwsh" => Pwsh, "powershell" => WindowsPowerShell,
-        _ => throw new ArgumentException($"Unknown shell '{name}'; use bash, pwsh or powershell.", nameof(name)),
+        "bash" => Bash, "pwsh" => Pwsh,
+        _ => throw new ArgumentException($"Unknown shell '{name}'; use bash or pwsh.", nameof(name)),
     };
     public override string ToString() => Executable;
 }
@@ -311,12 +320,10 @@ public abstract class ScriptedGameHost : IGameHost
 
     /// <summary>The executable and arguments that start the wrapper in the host's shell.</summary>
     internal abstract (string Executable, IReadOnlyList<string> Arguments) WrapperCommand();
-    /// <summary>Variables for the local process <see cref="WrapperCommand"/> starts; none unless a host sets the wrapper's own environment.</summary>
-    internal virtual IReadOnlyDictionary<string, string> WrapperEnvironment() => new Dictionary<string, string>();
-    /// <summary>The local wrapper's working directory, when it must differ from the caller's.</summary>
-    internal virtual string? WrapperWorkingDirectory() => null;
     /// <summary>Whether a command that ended without the exit report failed in its transport rather than on the host.</summary>
     internal abstract bool IsTransportFailure(ProcessExit exit);
+    /// <summary>Whether the host's shell itself was not found (only asked when the command ended without the exit report).</summary>
+    internal virtual bool ShellNotFound(ProcessExit exit) => false;
     public abstract Task<CliTunnel> OpenCliTunnelAsync(int hostPort, TimeSpan readyTimeout, int localPort = 0, CancellationToken cancellation = default);
 
     /// <summary>
@@ -324,8 +331,8 @@ public abstract class ScriptedGameHost : IGameHost
     /// any shell: bash <c>name='value'</c>, PowerShell <c>$name = 'value'</c>. A PowerShell script runs with
     /// <c>$ErrorActionPreference = 'Stop'</c>, from its own temporary .ps1 file, and ends with its <c>exit N</c>, 0 when it falls off
     /// its end, or 1 for an uncaught error. A bash script's CRLF line endings become LF; its exit status is bash's. Its standard
-    /// input is empty. The working directory is the ssh user's home, the container's working directory, or this process's;
-    /// local macOS PowerShell starts from a temporary directory so Documents privacy checks cannot stall its startup.
+    /// input is empty. The working directory is the ssh user's home, the container's working directory, or this process's.
+    /// A Windows host without PowerShell 7 ends as <see cref="HostOutcome.TransportFailed"/>, its error naming the install command.
     /// </summary>
     public Task<HostResult> RunAsync(string script, IReadOnlyDictionary<string, string>? variables, TimeSpan timeout, CancellationToken cancellation = default) =>
         RunCoreAsync(script, variables, null, null, timeout, cancellation);
@@ -593,8 +600,7 @@ public abstract class ScriptedGameHost : IGameHost
         string secrets = "")
     {
         var (executable, arguments) = WrapperCommand();
-        return new(executable, arguments, Payload(Compose(Shell.Kind, script, variables), secrets), upload, output, lines, timeout)
-        { Environment = WrapperEnvironment(), WorkingDirectory = WrapperWorkingDirectory() };
+        return new(executable, arguments, Payload(Compose(Shell.Kind, script, variables), secrets), upload, output, lines, timeout);
     }
 
     /// <summary>The full script the host runs: preferences (PowerShell), variables as literals, the script and (PowerShell) a final <c>exit 0</c>.</summary>
@@ -648,18 +654,6 @@ public abstract class ScriptedGameHost : IGameHost
         : ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", EncodedPowerShellWrapper];
     internal static string EncodedPowerShellWrapper => Convert.ToBase64String(Encoding.Unicode.GetBytes(HostScripts.PowerShellWrapper));
 
-    /// <summary>
-    /// The variable that keeps a PowerShell 7 wrapper off its startup JIT profile, and its value. pwsh records which methods it
-    /// compiled at startup in one file per user (<c>StartupProfileData-NonInteractive</c> in its cache directory) and reads it on the
-    /// next start; pwsh processes starting at once corrupt that file, and every later start that reads it can fail: an invalid
-    /// assembly or culture name, a stack overflow or a segmentation fault (PowerShell/PowerShell#26528, dotnet/runtime#121977;
-    /// #133 here: 11 of 3000 parallel starts on macOS, 1 of 3000 on Linux, pwsh 7.6.6 on .NET 10). The runtime uses multi-core JIT
-    /// (which reads and writes that file) only with at least <c>MultiCoreJitMinNumCpus</c> processors; the value is hexadecimal, so
-    /// FFFF turns it off. pwsh then neither reads nor writes the file and starts a little slower. Windows PowerShell 5.1 runs on
-    /// .NET Framework and ignores it. Processes the script starts inherit it, which only affects .NET programs' startup.
-    /// A workaround: #145 tracks the upstream fixes and when to remove it (<c>scripts/pwsh-startup-stress.cs</c> checks the race).
-    /// </summary>
-    internal static readonly KeyValuePair<string, string> NoStartupJitProfile = new("DOTNET_MultiCoreJitMinNumCpus", "FFFF");
 
     /// <summary>
     /// Maps a command's end to an outcome. The wrapper's report (the last <c>[vt-exit] N</c> line on stderr) is the script's exit
@@ -669,7 +663,7 @@ public abstract class ScriptedGameHost : IGameHost
     internal HostResult Interpret(ProcessExit exit)
     {
         string stdout = exit.Stdout.Replace("\r", ""), stderr = exit.Stderr.Replace("\r", "");
-        if (exit.End == ProcessEnd.NotStarted) return new HostResult(HostOutcome.TransportFailed, null, stdout, stderr, exit.Elapsed, false);
+        if (exit.End == ProcessEnd.NotStarted) return new HostResult(HostOutcome.TransportFailed, null, stdout, MissingShell(exit) ?? stderr, exit.Elapsed, false);
         if (exit.End != ProcessEnd.Exited) return new HostResult(HostOutcome.Unknown, null, stdout, ReadableStderr(stderr), exit.Elapsed, exit.End == ProcessEnd.TimedOut);
         int at = stderr.LastIndexOf("\n" + ExitMarker, StringComparison.Ordinal);
         if (at >= 0)
@@ -682,8 +676,15 @@ public abstract class ScriptedGameHost : IGameHost
                 return new HostResult(HostOutcome.Exited, code, stdout, ReadableStderr(rest), exit.Elapsed, false);
             }
         }
+        if (MissingShell(exit) is { } missing) return new HostResult(HostOutcome.TransportFailed, null, stdout, missing, exit.Elapsed, false);
         return new HostResult(IsTransportFailure(exit) ? HostOutcome.TransportFailed : HostOutcome.Unknown, null, stdout, ReadableStderr(stderr), exit.Elapsed, false);
     }
+
+    // A Windows host without pwsh: what the transport said, then what to install (last, so a shortened report keeps it). The
+    // one place a missing PowerShell 7 is recognised, so every check and start path that reaches the host (preflight first)
+    // refuses with the same fix.
+    private string? MissingShell(ProcessExit exit) => Shell.Kind == HostShellKind.PowerShell && ShellNotFound(exit)
+        ? (exit.Stderr.Replace("\r", "").Trim() + "\n" + HostShell.MissingPwsh(Name)).TrimStart() : null;
 
     private static readonly Regex ClixmlRecord = new(@"<S S=""(\w+)"">(.*?)</S>", RegexOptions.Singleline | RegexOptions.CultureInvariant);
     private static readonly Regex ClixmlEscape = new("_x([0-9A-Fa-f]{4})_", RegexOptions.CultureInvariant);

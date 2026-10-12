@@ -236,40 +236,13 @@ internal static class SteamSignedInUsers
         ' "$found"
         """.ReplaceLineEndings("\n");
 
-    // Windows: Steam's ActiveUser (the signed-in account id, 0 when none) in the host user's registry. pwsh on Linux or macOS reads
-    // loginusers.vdf as the bash script does. [Environment]::OSVersion, because Windows PowerShell 5.1 has no $IsWindows.
+    // Windows: Steam's ActiveUser (the signed-in account id, 0 when none) in the host user's registry.
     public static readonly string PowerShell = ShellPhases.PowerShell + """
-        if ([Environment]::OSVersion.Platform -ne [PlatformID]::Unix) {
-            $active = [Microsoft.Win32.Registry]::GetValue('HKEY_CURRENT_USER\Software\Valve\Steam\ActiveProcess', 'ActiveUser', $null)
-            if ($null -eq $active) { 'VT-STEAMUSER unreadable the host user has no ActiveUser under HKCU\Software\Valve\Steam\ActiveProcess (Steam has not run for it)'; exit 0 }
-            $n = [long]0
-            if (-not [long]::TryParse([string]$active, [Globalization.NumberStyles]::AllowLeadingSign, [Globalization.CultureInfo]::InvariantCulture, [ref]$n)) { 'VT-STEAMUSER unreadable ActiveUser is not a number'; exit 0 }
-            if ($n -lt 0) { $n += 4294967296 }
-            if ($n -eq 0) { 'VT-STEAMUSER none' } else { 'VT-STEAMUSER account ' + $n.ToString([Globalization.CultureInfo]::InvariantCulture) }
-            exit 0
-        }
-        $vtHome = [Environment]::GetFolderPath('UserProfile')
-        $candidates = @()
-        if ($steam) { $candidates += (Join-Path $steam 'config/loginusers.vdf') }
-        $candidates += @((Join-Path $vtHome 'Library/Application Support/Steam/config/loginusers.vdf'), (Join-Path $vtHome '.local/share/Steam/config/loginusers.vdf'),
-            (Join-Path $vtHome '.steam/steam/config/loginusers.vdf'), (Join-Path $vtHome '.var/app/com.valvesoftware.Steam/.local/share/Steam/config/loginusers.vdf'))
-        $found = $null
-        foreach ($candidate in $candidates) { if ([IO.File]::Exists($candidate)) { $found = $candidate; break } }
-        if ($null -eq $found) { 'VT-STEAMUSER unreadable the host user has no loginusers.vdf in its Steam directories'; exit 0 }
-        try { $lines = [IO.File]::ReadAllLines($found) } catch { 'VT-STEAMUSER unreadable the host user cannot read its loginusers.vdf'; exit 0 }
-        $id = ''; $marked = $false; $recent = ''; $users = 0; $best = [long]0; $newest = ''; $tie = $false
-        foreach ($line in $lines) {
-            $l = $line.Trim().ToLowerInvariant()
-            if ($l -cmatch '^"([0-9]+)"$') { $id = $Matches[1]; $users++ }
-            elseif ($l -cmatch '^"mostrecent"\s') { $marked = $true; if ($l -cmatch '^"mostrecent"\s+"1"' -and $id -and -not $recent) { $recent = $id } }
-            elseif ($l -cmatch '^"timestamp"\s+"([0-9]+)"' -and $id) {
-                $t = [long]$Matches[1]
-                if ($t -gt $best) { $best = $t; $newest = $id; $tie = $false } elseif ($t -eq $best) { $tie = $true }
-            }
-        }
-        if ($marked) { if ($recent) { 'VT-STEAMUSER id ' + $recent } else { 'VT-STEAMUSER none' }; exit 0 }
-        if ($users -eq 0) { 'VT-STEAMUSER none'; exit 0 }
-        if (-not $newest -or $tie) { 'VT-STEAMUSER unreadable loginusers.vdf marks no MostRecent user and has no single newest Timestamp'; exit 0 }
-        'VT-STEAMUSER id ' + $newest
+        $active = [Microsoft.Win32.Registry]::GetValue('HKEY_CURRENT_USER\Software\Valve\Steam\ActiveProcess', 'ActiveUser', $null)
+        if ($null -eq $active) { 'VT-STEAMUSER unreadable the host user has no ActiveUser under HKCU\Software\Valve\Steam\ActiveProcess (Steam has not run for it)'; exit 0 }
+        $n = [long]0
+        if (-not [long]::TryParse([string]$active, [Globalization.NumberStyles]::AllowLeadingSign, [Globalization.CultureInfo]::InvariantCulture, [ref]$n)) { 'VT-STEAMUSER unreadable ActiveUser is not a number'; exit 0 }
+        if ($n -lt 0) { $n += 4294967296 }
+        if ($n -eq 0) { 'VT-STEAMUSER none' } else { 'VT-STEAMUSER account ' + $n.ToString([Globalization.CultureInfo]::InvariantCulture) }
         """.ReplaceLineEndings("\n");
 }

@@ -127,7 +127,7 @@ public sealed class DetachedSessionTests : IDisposable
         {
             string file = Path.Combine(_root, Guid.NewGuid().ToString("N") + ".ps1");
             File.WriteAllText(file, script);
-            var start = new ProcessStartInfo("powershell.exe") { RedirectStandardError = true, UseShellExecute = false };
+            var start = new ProcessStartInfo("pwsh") { RedirectStandardError = true, UseShellExecute = false };
             start.ArgumentList.Add("-NoProfile"); start.ArgumentList.Add("-NonInteractive");
             start.ArgumentList.Add("-Command");
             start.ArgumentList.Add("$tokens=$null;$errors=$null;[void][System.Management.Automation.Language.Parser]::ParseFile('" +

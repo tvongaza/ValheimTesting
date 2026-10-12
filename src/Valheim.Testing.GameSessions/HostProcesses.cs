@@ -13,13 +13,7 @@ internal sealed record ProcessExit(ProcessEnd End, int ExitCode, string Stdout, 
 /// One local process run: <see cref="Input"/> then <see cref="Upload"/> on stdin, which is then closed. Stdout goes raw to
 /// <see cref="Output"/>, line by line to <see cref="Lines"/> (returning true stops the process), or is captured as text.
 /// </summary>
-internal sealed record ProcessCall(string Executable, IReadOnlyList<string> Arguments, byte[] Input, Stream? Upload, Stream? Output, Func<string, bool>? Lines, TimeSpan Timeout)
-{
-    /// <summary>Variables set for this process on top of the inherited environment.</summary>
-    public IReadOnlyDictionary<string, string> Environment { get; init; } = new Dictionary<string, string>();
-    /// <summary>An optional working directory for the wrapper process; never changes the game's working directory.</summary>
-    public string? WorkingDirectory { get; init; }
-}
+internal sealed record ProcessCall(string Executable, IReadOnlyList<string> Arguments, byte[] Input, Stream? Upload, Stream? Output, Func<string, bool>? Lines, TimeSpan Timeout);
 
 // The seam between a game host and the executables it drives (ssh, docker, a local shell, git). Tests replace it with fakes,
 // so argument composition, escaping and outcome mapping run without any of them.
@@ -48,8 +42,6 @@ internal sealed class SystemProcessLauncher : IProcessLauncher
     public Task<ProcessExit> RunAsync(ProcessCall call, CancellationToken cancellation)
     {
         var start = StartInfo(call.Executable, call.Arguments);
-        foreach (var (name, value) in call.Environment) start.Environment[name] = value;
-        if (call.WorkingDirectory != null) start.WorkingDirectory = call.WorkingDirectory;
         return ProcessRunner.RunAsync(start, call.Input, call.Upload, call.Output, call.Lines, call.Timeout, cancellation);
     }
     public IStartedProcess Start(string executable, IReadOnlyList<string> arguments) => new OwnedProcess(StartInfo(executable, arguments));

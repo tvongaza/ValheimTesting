@@ -105,7 +105,7 @@ public sealed class HostServerTests : IDisposable
         Assert.Same(HostServerScripts.WindowsKeep, host.Runs[2].Script);
     }
 
-    // The logon decision itself, in Windows PowerShell, with the facts behind their seams: an elevated token gets the session-0
+    // The logon decision itself, in pwsh, with the facts behind their seams: an elevated token gets the session-0
     // S4U task; a UAC-filtered one in its own single desktop session gets the task in that session; otherwise a reason.
     [Theory]
     [InlineData("true", "0", "0", "s4u")]
@@ -115,8 +115,8 @@ public sealed class HostServerTests : IDisposable
     [InlineData("false", "1", "2", "unsupported")]
     public async Task TheServerTaskLogsOnAsTheTokenAllows(string elevated, string session, string desktops, string expected)
     {
-        if (!OperatingSystem.IsWindows()) return; // Windows PowerShell and the Task Scheduler's rules; station and windows-latest run it
-        var host = new LocalGameHost("windows-logon", HostShell.WindowsPowerShell);
+        if (!OperatingSystem.IsWindows()) return; // pwsh and the Task Scheduler's rules; station and windows-latest run it
+        var host = new LocalGameHost("windows-logon", HostShell.Pwsh);
         var result = (await host.RunAsync(HostServerScripts.WindowsServerLogonCheck,
             new Dictionary<string, string> { ["elevated"] = elevated, ["session"] = session, ["desktops"] = desktops }, TimeSpan.FromSeconds(30))).EnsureSuccess("logon check");
         string verdict = InteractiveClient.Line(result.Stdout, "VT-LOGON ")!;
@@ -188,7 +188,7 @@ public sealed class HostServerTests : IDisposable
     [Fact] public async Task WindowsServerTaskStartsTheLauncherFromAPathWithSpacesAndStopsByIdentity()
     {
         if (!OperatingSystem.IsWindows()) return;
-        var host = new LocalGameHost("windows-task-check", HostShell.WindowsPowerShell);
+        var host = new LocalGameHost("windows-task-check", HostShell.Pwsh);
         // A non-elevated process outside a desktop session (SSH as an ordinary user) has no server task; the station (an
         // administrator) and windows-latest (elevated, in a desktop session) always have one.
         try { await HostServer.RequireTaskLogonAsync(host, TimeSpan.FromSeconds(30)); }
@@ -214,7 +214,7 @@ public sealed class HostServerTests : IDisposable
             using var child = System.Diagnostics.Process.GetProcessById(process.Id);
             Assert.False(child.HasExited);
             Assert.True(File.Exists(Path.Combine(boot, "launcher.started")), "the launcher records that the task reached it");
-            // #257: the command line the run journals before the start is the one Windows PowerShell's Process.Start gave the
+            // #257: the command line the run journals before the start is the one pwsh's Process.Start gave the
             // server, and the boot's pid file names it, through the real pid-file read: a run killed in between can prove it its own.
             var probed = (await HostProcessProbe.ProbeAsync(host, [(process.Id, process.StartIdentity)], TimeSpan.FromSeconds(30)))[(process.Id, process.StartIdentity)];
             Assert.Equal(ProbedState.Same, probed.State);
@@ -255,7 +255,7 @@ public sealed class HostServerTests : IDisposable
     [Fact] public async Task WindowsHostCopiesAndRetiresOnlyThisRunsRuntime()
     {
         if (!OperatingSystem.IsWindows()) return;
-        var host = new LocalGameHost("windows-copy", HostShell.WindowsPowerShell);
+        var host = new LocalGameHost("windows-copy", HostShell.Pwsh);
         string install = Path.Combine(_root, "install"), run = Path.Combine(_root, "run-test");
         string runtime = Path.Combine(run, "runtime"), keep = Path.Combine(run, "runtime-changes");
         Directory.CreateDirectory(install);
@@ -339,7 +339,7 @@ public sealed class HostServerTests : IDisposable
         Assert.NotNull(HostedServerRun.UnknownOutcome(new InvalidOperationException("wrapped", lost)));
         Assert.Null(HostedServerRun.UnknownOutcome(new HostOperationException("failed", Reply("") with { ExitCode = 3 })));
         // A PowerShell host is refused before anything runs.
-        var windows = new QueueHost(HostShell.WindowsPowerShell);
+        var windows = new QueueHost(HostShell.Pwsh);
         await Assert.ThrowsAsync<PlatformNotSupportedException>(() => HostServer.StartAsync(windows, launch, "/srv/boot", TimeSpan.FromSeconds(30)));
         Assert.Empty(windows.Runs);
     }

@@ -26,7 +26,7 @@ public static class ReviewCaptureScenario
 {
     private static readonly string[] Ids = ["first", "second"];
     /// <summary>The runner's own machine runs the client in this scenario, so its shell decides the host path rules.</summary>
-    private static HostShell LocalShell => OperatingSystem.IsWindows() ? HostShell.WindowsPowerShell : HostShell.Bash;
+    private static HostShell LocalShell => HostShell.ThisMachine;
 
     /// <summary>The two stills a run under <paramref name="output"/> captures, as the library validates and takes them.</summary>
     private static IEnumerable<ReviewCapturePlan> Shots(AcceptancePlan plan, string output) => Ids.Select(id =>

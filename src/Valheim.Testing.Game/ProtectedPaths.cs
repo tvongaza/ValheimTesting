@@ -109,14 +109,13 @@ internal static class ProtectedPaths
         """.ReplaceLineEndings("\n");
 
     /// <summary>
-    /// The host side of <see cref="Contains"/> for a PowerShell host (Windows PowerShell 5.1 or PowerShell 7, on any platform).
+    /// The host side of <see cref="Contains"/> for a Windows host's PowerShell 7 (pwsh).
     /// <c>Get-VtPhysical $path</c> returns the path's physical location, walked from the root down as <see cref="Resolve"/> walks:
     /// each symlink or junction met is replaced by its target (a relative one joined to the link's physical parent) and the walk
     /// continues there, and a part that does not exist yet is kept as written. It
     /// throws on a relative path, a link whose target it cannot read or that names a volume rather than a path, and more than
-    /// 40 links. <c>Test-VtInside $root $path [-Fold]</c> is true when the path is the root or lies under it once both are
-    /// resolved, compared ignoring case on Windows, and with <c>-Fold</c> on macOS too as <see cref="Contains"/> compares (for a
-    /// refusal only, as <see cref="BashInside"/>'s <c>fold</c>).
+    /// 40 links. <c>Test-VtInside $root $path</c> is true when the path is the root or lies under it once both are resolved,
+    /// compared ignoring case as Windows does.
     /// </summary>
     internal static readonly string PowerShellInside = """
         function Get-VtPhysical([string]$path) {
@@ -127,12 +126,9 @@ internal static class ProtectedPaths
                 $parts = @($full.Substring([IO.Path]::GetPathRoot($full).Length).Split($separators, [StringSplitOptions]::RemoveEmptyEntries))
                 for ($i = $parts.Count - 1; $i -ge 0; $i--) { $pending.Push($parts[$i]) }
             }
-            # Windows collapses .. as text before any link is followed, so GetFullPath matches what the system opens there; elsewhere
-            # a .. after a link goes up from the link's target, so the parts are walked as given.
-            $windows = [IO.Path]::DirectorySeparatorChar -eq '\'
-            function Get-VtSpelled([string]$p) { if ($windows) { [IO.Path]::GetFullPath($p) } else { $p } }
+            # Windows collapses .. as text before any link is followed, so GetFullPath matches what the system opens.
             # Walked from the root down, as ProtectedPaths.Resolve walks: a link's relative target is joined to its physical parent.
-            $full = Get-VtSpelled $path
+            $full = [IO.Path]::GetFullPath($path)
             $current = [IO.Path]::GetPathRoot($full)
             Push-VtParts $full
             $hops = 0
@@ -148,19 +144,19 @@ internal static class ProtectedPaths
                 if ($item.LinkType -ne 'SymbolicLink' -and $item.LinkType -ne 'Junction') { $current = $next; continue }
                 $target = @($item.Target)[0]
                 if (-not $target -or $target.StartsWith('\\?\') -or $target.StartsWith('Volume{')) { throw ('Cannot follow the link ' + $next) }
-                # Windows PowerShell 5.1 strips only \??\ from a link to a share, leaving UNC\server\share.
+                # A link to a share can read as UNC\server\share once \??\ is stripped.
                 if ($target.StartsWith('UNC\')) { $target = '\' + $target.Substring(3) }
                 $hops++
                 if ($hops -gt 40) { throw ('More than 40 links in ' + $path + '; it may be a link loop') }
-                $full = Get-VtSpelled ([IO.Path]::Combine($current, $target))
+                $full = [IO.Path]::GetFullPath([IO.Path]::Combine($current, $target))
                 $current = [IO.Path]::GetPathRoot($full)
                 Push-VtParts $full
             }
             return $current
         }
-        function Test-VtInside([string]$root, [string]$path, [switch]$Fold) {
+        function Test-VtInside([string]$root, [string]$path) {
             $sep = [IO.Path]::DirectorySeparatorChar
-            $comparison = if ($sep -eq '\' -or ($IsMacOS -and $Fold)) { [StringComparison]::OrdinalIgnoreCase } else { [StringComparison]::Ordinal }
+            $comparison = [StringComparison]::OrdinalIgnoreCase
             $r = (Get-VtPhysical $root).TrimEnd($sep)
             $p = (Get-VtPhysical $path).TrimEnd($sep)
             if (-not $r) { return $true }

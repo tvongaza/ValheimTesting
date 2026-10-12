@@ -70,7 +70,7 @@ internal sealed class LocalClientCopy
             throw new InvalidDataException($"The ValheimCLI set to stage ({manifestPath}) is not complete: {string.Join("; ", location.Problems.Select(problem => problem.Message))}.");
 
         string data = dataRoot ?? CliBundle.DataRoot;
-        host ??= new LocalGameHost("this machine", OperatingSystem.IsWindows() ? HostShell.WindowsPowerShell : HostShell.Bash);
+        host ??= new LocalGameHost("this machine", HostShell.ThisMachine);
         var journal = RunJournal.ThisProcess;
         string root = Path.Combine(data, "runs", "local-clients");
         // One folder per profile: a run may prepare two plans for one client name (a client opened without its mod, then with it).

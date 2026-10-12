@@ -408,13 +408,9 @@ internal static class LeaseScripts
         esac
         """.Replace("VT_NEVER", Never).ReplaceLineEndings("\n");
 
-    // On Windows the claim is [IO.File]::Move, a no-replace rename that refuses an existing destination. On Unix .NET's Move
-    // checks that the destination is absent and then renames, which replaces a claim another run created in between: both runs
-    // then held one account (four leases from three accounts in CI). There the claim is a hard link, as in bash, which link(2)
-    // refuses to make over an existing file. [Environment]::OSVersion, because Windows PowerShell 5.1 has no $IsWindows.
+    // The claim is [IO.File]::Move, which on Windows is a no-replace rename that refuses an existing destination.
     public static readonly string PowerShell = ShellPhases.PowerShell + """
         $utf8 = New-Object Text.UTF8Encoding $false
-        $vtUnix = [Environment]::OSVersion.Platform -eq [PlatformID]::Unix
         $root = Join-Path $directory $pool
         function Get-VtName([long]$n) { 'claim-' + $n.ToString('000000000', [Globalization.CultureInfo]::InvariantCulture) }
         function Get-VtHighest([string]$d) {
@@ -452,16 +448,9 @@ internal static class LeaseScripts
                 $t = Join-Path $d ('.new-' + $lease)
                 [IO.File]::WriteAllText($t, $lease + "`n" + 'VT_NEVER' + "`n" + $owner + "`n" + $run + "`n", $utf8)
                 $won = $false
-                if ($vtUnix) {
-                    & ln -- $t $f 2> $null
-                    $won = $LASTEXITCODE -eq 0
-                    [IO.File]::Delete($t)
-                    if (-not $won -and -not [IO.File]::Exists($f)) { throw ('could not create ' + $f + '; the lease directory needs hard links') }
-                } else {
-                    try { [IO.File]::Move($t, $f); $won = $true }
-                    catch { if (-not [IO.File]::Exists($f)) { throw } }
-                    finally { if ([IO.File]::Exists($t)) { [IO.File]::Delete($t) } }
-                }
+                try { [IO.File]::Move($t, $f); $won = $true }
+                catch { if (-not [IO.File]::Exists($f)) { throw } }
+                finally { if ([IO.File]::Exists($t)) { [IO.File]::Delete($t) } }
                 if (-not $won) { [void]$report.Append('taken ' + $account + "`n"); continue }
                 if ((Get-VtHighest $d) -ne $next) { [IO.File]::Delete($f); [void]$report.Append('taken ' + $account + "`n"); continue }
                 foreach ($old in [IO.Directory]::GetFiles($d, 'claim-*')) {

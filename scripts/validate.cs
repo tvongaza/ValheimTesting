@@ -89,11 +89,6 @@ if (restrictedSandbox)
     return 4;
 }
 
-// On macOS a PowerShell wrapper inherited from a checkout under Documents can wait for a privacy prompt without showing
-// one to the test runner. Prove that pwsh and its .NET runtime start from a safe directory before many shell tests time out.
-if (OperatingSystem.IsMacOS() && (onlyCiShell || (!skipCiShell && !ciMainTests && !ciBuildOnly && ciTimed == 0)))
-    CheckMacPowerShell();
-
 if (onlyCiShell)
 {
     Test("tests/Valheim.Testing.Tests/Valheim.Testing.Tests.csproj", "--filter", "Category=CiShell", "--", "RunConfiguration.TreatNoTestsAsError=true");
@@ -201,40 +196,6 @@ Note(skipCiShell || ciBuildOnly ? "CI validation passed; toolkit shards run in s
 return 0;
 
 static string ScriptPath([CallerFilePath] string path = "") => path;
-
-void CheckMacPowerShell()
-{
-    bool onPath = (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
-        .Any(directory => File.Exists(Path.Combine(directory, "pwsh")));
-    if (!onPath) { Note("macOS PowerShell preflight: pwsh is not installed; optional pwsh shell cases will be skipped."); return; }
-    var start = new ProcessStartInfo("pwsh")
-    {
-        UseShellExecute = false, WorkingDirectory = Path.GetTempPath(), RedirectStandardOutput = true, RedirectStandardError = true,
-    };
-    // Keep the same JIT-profile guard as GameHosts: the upstream PowerShell/.NET startup race can otherwise
-    // corrupt the user's startup profile before the guarded shell tests even begin (issue #145).
-    start.Environment["DOTNET_MultiCoreJitMinNumCpus"] = "FFFF";
-    foreach (string argument in new[] { "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "'VT-PWSH ready ' + $env:DOTNET_MultiCoreJitMinNumCpus" }) start.ArgumentList.Add(argument);
-    Process launched;
-    try { launched = Process.Start(start) ?? throw new InvalidOperationException("pwsh returned no process."); }
-    catch (System.ComponentModel.Win32Exception startupError)
-    {
-        throw new InvalidOperationException("macOS PowerShell preflight could not start pwsh from a temporary directory. Check its installation, DOTNET_ROOT and macOS directory access.", startupError);
-    }
-    using var process = launched;
-    if (!process.WaitForExit(10_000))
-    {
-        try { if (!process.HasExited) process.Kill(entireProcessTree: true); }
-        catch (InvalidOperationException) { /* It exited between the check and kill. */ }
-        process.WaitForExit(2_000);
-        throw new InvalidOperationException("macOS PowerShell preflight: pwsh did not start within 10 seconds from the temporary directory. Check its .NET runtime (DOTNET_ROOT) and macOS directory access before validation.");
-    }
-    string output = process.StandardOutput.ReadToEnd();
-    string error = process.StandardError.ReadToEnd();
-    if (process.ExitCode != 0 || !output.Contains("VT-PWSH ready FFFF", StringComparison.Ordinal))
-        throw new InvalidOperationException($"macOS PowerShell preflight: pwsh exited {process.ExitCode} before shell tests. Check DOTNET_ROOT and the installed .NET runtime; {error.Trim()}");
-    Note("macOS PowerShell preflight passed from a temporary working directory.");
-}
 
 // The repository root holds cli-dependency.json. Search upward from the working directory first:
 // CI path mapping can rewrite the compile-time source path CallerFilePath reports.
@@ -387,12 +348,12 @@ void SoftLimitWarning(string command, TimeSpan elapsed, string testResults)
 }
 
 // Stops every test host that the process tree under rootPid runs and returns how many. The process table comes from
-// ps (macOS, Linux) or Windows PowerShell's CIM (no wmic: newer Windows lacks it).
+// ps (macOS, Linux) or pwsh's CIM on Windows (no wmic: newer Windows lacks it).
 static int StopTestHosts(int rootPid)
 {
     var table = new Dictionary<int, (int Parent, string Command)>();
     var start = OperatingSystem.IsWindows()
-        ? new ProcessStartInfo("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command",
+        ? new ProcessStartInfo("pwsh", ["-NoProfile", "-NonInteractive", "-Command",
             "Get-CimInstance Win32_Process | ForEach-Object { '{0} {1} {2}' -f $_.ProcessId, $_.ParentProcessId, $_.CommandLine }"])
         : new ProcessStartInfo("ps", ["-ww", "-A", "-o", "pid=,ppid=,args="]);
     start.RedirectStandardOutput = true;

@@ -7,7 +7,7 @@ using Xunit;
 public sealed class HostInstallListingTests : IDisposable
 {
     private readonly string _root = Directory.CreateTempSubdirectory("host-listing-").FullName;
-    private readonly LocalGameHost _host = new("this machine", OperatingSystem.IsWindows() ? HostShell.WindowsPowerShell : HostShell.Bash);
+    private readonly LocalGameHost _host = new("this machine", HostShell.ThisMachine);
 
     public HostInstallListingTests()
     {

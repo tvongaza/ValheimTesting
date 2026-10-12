@@ -105,7 +105,7 @@ public sealed class SteamAccountInUseTests : IDisposable
     [Fact]
     public async Task TheHostWatchSeesASignOutWrittenAfterTheMark()
     {
-        var host = OperatingSystem.IsWindows() ? new LocalGameHost("client", HostShell.WindowsPowerShell) : new LocalGameHost("client", HostShell.Bash);
+        var host = new LocalGameHost("client", HostShell.ThisMachine);
         string steam = Path.Combine(_root, "Steam");
         Directory.CreateDirectory(Path.Combine(steam, "logs"));
         string log = Path.Combine(steam, "logs", "connection_log.txt");
@@ -122,7 +122,7 @@ public sealed class SteamAccountInUseTests : IDisposable
     [Fact]
     public async Task TheRealPlayingCheckAnswersOnThisMachine()
     {
-        var host = OperatingSystem.IsWindows() ? new LocalGameHost("here", HostShell.WindowsPowerShell) : new LocalGameHost("here", HostShell.Bash);
+        var host = new LocalGameHost("here", HostShell.ThisMachine);
         var (playing, processes) = await SteamAccountInUse.ReadAsync(host, TimeSpan.FromSeconds(60), default);
         // No test launches Valheim; a person's game on this machine would be named by its process ids.
         if (playing == SteamAccountInUse.Playing.No) Assert.Empty(processes); else Assert.Matches("^[0-9]+(,[0-9]+)*$", processes);
@@ -160,7 +160,7 @@ public sealed class SteamAccountInUseTests : IDisposable
 
     private static HostProfile Host() => new()
     {
-        Kind = "ssh", Platform = "windows", Shell = "powershell", Destination = "test@example", Lock = @"C:\locks\test.lock",
+        Kind = "ssh", Platform = "windows", Shell = "pwsh", Destination = "test@example", Lock = @"C:\locks\test.lock",
     };
 
     private static EnvironmentRecipe Recipe(string name, string host, string kind, int port) => new()

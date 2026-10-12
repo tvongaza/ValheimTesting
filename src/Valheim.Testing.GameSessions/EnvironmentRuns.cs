@@ -227,7 +227,7 @@ public static class EnvironmentRuns
             string name = hosts.ContainsKey(ThisMachineHost) ? ThisMachineHost + "-" + Guid.NewGuid().ToString("N")[..6] : ThisMachineHost;
             hosts[name] = new HostProfile
             {
-                Kind = "local", Platform = HostProfile.CurrentPlatform, Shell = OperatingSystem.IsWindows() ? "powershell" : "bash",
+                Kind = "local", Platform = HostProfile.CurrentPlatform, Shell = HostProfile.ShellFor(HostProfile.CurrentPlatform),
                 Lock = Path.Combine(Path.GetDirectoryName(RunJournal.LocalDirectory)!, "lock"),
             };
         }

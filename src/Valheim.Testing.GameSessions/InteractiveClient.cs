@@ -576,7 +576,7 @@ internal static partial class InteractiveScripts
             $settings.MultipleInstances = 2
             $settings.Hidden = $true
             $action = $definition.Actions.Create(0)
-            $action.Path = Join-Path $system 'WindowsPowerShell\v1.0\powershell.exe'
+            $action.Path = [Environment]::ProcessPath
             $action.Arguments = '-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $launcherFile + '"'
             $action.WorkingDirectory = $dir
             # 2: create only (never replace a task); 3: interactive token, so no password is given or stored.
@@ -624,7 +624,7 @@ internal static partial class InteractiveScripts
         $verdict
         """).ReplaceLineEndings("\n");
 
-    // Runs in the desktop session (Windows PowerShell 5.1, started by the task). It reads the spec, takes the secrets from their
+    // Runs in the desktop session (pwsh, started by the task). It reads the spec, takes the secrets from their
     // file and deletes it, starts the game and records its ID and start time, or the error (each moved into place, so the file is complete).
     // Its directory is its own ($PSScriptRoot), never an argument: the task's command line carries only the quoted -File path.
     public static readonly string WindowsLauncher = """
@@ -723,7 +723,7 @@ internal static partial class InteractiveScripts
                     $definition.Settings.AllowDemandStart = $true
                     $definition.Settings.ExecutionTimeLimit = 'PT1M'
                     $action = $definition.Actions.Create(0)
-                    $action.Path = Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell\v1.0\powershell.exe'
+                    $action.Path = [Environment]::ProcessPath
                     $action.Arguments = '-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand ' + $encoded
                     $registered = $folder.RegisterTaskDefinition($quitTask, $definition, 2, $definition.Principal.UserId, $null, 3)
                     [void]$registered.Run($null)

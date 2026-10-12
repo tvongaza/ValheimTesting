@@ -29,7 +29,7 @@ internal sealed class FakeServerHost : IGameHost
     public string ServerTaskLogon { get; set; } = "s4u";
     public GameHostKind Kind => _kind;
     public bool Windows { get; }
-    public HostShell Shell => Windows ? HostShell.WindowsPowerShell : HostShell.Bash;
+    public HostShell Shell => Windows ? HostShell.Pwsh : HostShell.Bash;
     public int TunnelPort { get; }
     public List<(string Script, IReadOnlyDictionary<string, string> Variables)> Runs { get; } = [];
     public List<string> Claims { get; } = [];

@@ -33,8 +33,6 @@ public class GameHostTests
         await Host("local", fake, HostShell.Pwsh).RunAsync("'hi'", null, Timeout);
         Assert.Equal("pwsh", fake.Calls[1].Executable);
         Assert.Equal(new[] { "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", ScriptedGameHost.EncodedPowerShellWrapper }, fake.Calls[1].Arguments);
-        Assert.Equal(OperatingSystem.IsMacOS() ? Path.GetTempPath() : null, fake.Calls[1].WorkingDirectory);
-        Assert.Null(fake.Calls[0].WorkingDirectory);
     }
 
     [Fact] public async Task AnSshHostSetsItsFixedOptionsFirstAndTheCommandAfterTheDestination()
@@ -63,20 +61,38 @@ public class GameHostTests
         _ = new SshGameHost("box", "ssh://tester@box:2222", HostShell.Bash, 0, ["StrictHostKeyChecking=accept-new"], null, "ssh", fake);
     }
 
-    // #133: a PowerShell 7 wrapper starts without the shared startup JIT profile that parallel pwsh processes corrupt. A local
-    // host sets the variable on the shell it starts, a container host on its docker exec; a bash shell gets nothing.
-    [Fact] public async Task APowerShellWrapperStartsOffTheSharedStartupJitProfile()
+    // #703: a Windows host without PowerShell 7. Locally pwsh cannot be started; over ssh the login shell (cmd.exe by default,
+    // Windows PowerShell, or a POSIX shell) says it has no such command. Either way the result names the install command and
+    // where to run it, and the script did not run.
+    [Theory]
+    [InlineData("local", "could not start pwsh: No such file or directory")]
+    [InlineData("ssh", "'pwsh' is not recognized as an internal or external command,\r\noperable program or batch file.\r\n")]
+    [InlineData("ssh", "pwsh : The term 'pwsh' is not recognized as the name of a cmdlet, function, script file, or operable program.\r\n")]
+    [InlineData("ssh", "bash: line 1: pwsh: command not found\n")]
+    public async Task AWindowsHostWithoutPwshIsRefusedWithTheInstallCommand(string kind, string said)
     {
-        var guard = new KeyValuePair<string, string>("DOTNET_MultiCoreJitMinNumCpus", "FFFF");
-        var local = new FakeLauncher().Exits(0, "", FakeLauncher.Report(0)).Exits(0, "", FakeLauncher.Report(0));
-        await Host("local", local, HostShell.Pwsh).RunAsync("exit 0", null, Timeout);
-        await Host("local", local, HostShell.Bash).RunAsync("true", null, Timeout);
-        Assert.Equal(new[] { guard }, local.Calls[0].Environment);
-        Assert.Empty(local.Calls[1].Environment);
-        var container = new FakeLauncher().Exits(0, "", FakeLauncher.Report(0));
-        await Host("container", container, HostShell.Pwsh).RunAsync("exit 0", null, Timeout);
-        Assert.Equal(new[] { "exec", "-i", "--user", "valheim", "-e", "DOTNET_MultiCoreJitMinNumCpus=FFFF", "vt-server", "pwsh" }, container.Calls[0].Arguments.Take(8));
-        Assert.Empty(container.Calls[0].Environment); // docker itself is not a .NET program
+        var fake = new FakeLauncher().Reply(_ => kind == "local"
+            ? new ProcessExit(ProcessEnd.NotStarted, -1, "", said, TimeSpan.FromMilliseconds(5))
+            : FakeLauncher.Exit(9009 & 0xFF, "", said));
+        var result = await Host(kind, fake, HostShell.Pwsh).RunAsync("exit 0", null, Timeout);
+        Assert.Equal(HostOutcome.TransportFailed, result.Outcome);
+        Assert.Contains("winget install --id Microsoft.PowerShell --source winget", result.Stderr);
+        Assert.Contains("desktop terminal on that machine", result.Stderr);
+        Assert.Contains("winget install --id Microsoft.PowerShell --source winget", result.Describe());
+    }
+
+    // The control: the same transport failures for a bash host, a missing ssh client, and a pwsh host whose script itself ran and
+    // reported, say nothing about installing PowerShell.
+    [Fact] public async Task OnlyAMissingPwshNamesTheInstallCommand()
+    {
+        var bash = new FakeLauncher().Reply(_ => new ProcessExit(ProcessEnd.NotStarted, -1, "", "could not start bash", TimeSpan.Zero));
+        Assert.DoesNotContain("winget", (await Host("local", bash).RunAsync("true", null, Timeout)).Stderr);
+        var ssh = new FakeLauncher().Reply(_ => new ProcessExit(ProcessEnd.NotStarted, -1, "", "could not start ssh", TimeSpan.Zero));
+        Assert.DoesNotContain("winget", (await Host("ssh", ssh, HostShell.Pwsh).RunAsync("exit 0", null, Timeout)).Stderr);
+        var ran = new FakeLauncher().Exits(1, "", "'pwsh' is not recognized as a word the script printed" + FakeLauncher.Report(1));
+        var reported = await Host("ssh", ran, HostShell.Pwsh).RunAsync("exit 1", null, Timeout);
+        Assert.Equal((HostOutcome.Exited, (int?)1), (reported.Outcome, reported.ExitCode));
+        Assert.DoesNotContain("winget", reported.Stderr);
     }
 
     [Fact] public async Task AContainerHostExecsTheWrapperAsItsUser()
@@ -201,10 +217,10 @@ public class GameHostTests
         var fake = new FakeLauncher().Exits(0, "", FakeLauncher.Report(0)).Exits(0, "", FakeLauncher.Report(0));
         await Host("ssh", fake).RunAsync("printf %s \"$value\"\r\n", new Dictionary<string, string> { ["value"] = value }, Timeout);
         Assert.Equal("value='it'\\''s $HOME `id` \"q\" \u2018typo\u2019\nline 2 %PATH%'\nprintf %s \"$value\"\n", FakeLauncher.Script(fake.Calls[0]));
-        await Host("ssh", fake, HostShell.WindowsPowerShell).RunAsync("$value", new Dictionary<string, string> { ["value"] = value }, Timeout);
+        await Host("ssh", fake, HostShell.Pwsh).RunAsync("$value", new Dictionary<string, string> { ["value"] = value }, Timeout);
         Assert.Equal("$ErrorActionPreference = 'Stop'\n$ProgressPreference = 'SilentlyContinue'\n$value = 'it''s $HOME `id` \"q\" \u2018\u2018typo\u2019\u2019\nline 2 %PATH%'\n$value\nexit 0\n",
             FakeLauncher.Script(fake.Calls[1]));
-        Assert.StartsWith("powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand ", fake.Calls[1].Arguments.Last());
+        Assert.StartsWith("pwsh -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand ", fake.Calls[1].Arguments.Last());
     }
 
     [Fact] public async Task ReservedOrInvalidVariablesAreRefusedBeforeAnythingStarts()
@@ -317,7 +333,7 @@ public class GameHostTests
                 Assert.Contains("$uploadName = 'vt-upload-", script);
                 return FakeLauncher.Exit(0, "VT-SHIP shipped " + hash + "\n", FakeLauncher.Report(0));
             });
-        var shipment = await Host("ssh", fake, HostShell.WindowsPowerShell)
+        var shipment = await Host("ssh", fake, HostShell.Pwsh)
             .ShipFilesAsync(source.Path, "C:\\pcstage\\runtime", Timeout);
         Assert.Equal(hash, shipment.Sha256);
         Assert.Equal(2, fake.Calls.Count);
@@ -328,7 +344,7 @@ public class GameHostTests
         using var source = new TempDirectory();
         File.WriteAllText(Path.Combine(source.Path, "payload.txt"), "a test payload");
         var fake = new FakeLauncher().Exits(1, "", "transfer failed");
-        var error = await Assert.ThrowsAsync<IOException>(() => Host("ssh", fake, HostShell.WindowsPowerShell)
+        var error = await Assert.ThrowsAsync<IOException>(() => Host("ssh", fake, HostShell.Pwsh)
             .ShipFilesAsync(source.Path, "C:\\pcstage\\runtime", Timeout));
         Assert.Contains("not proven", error.Message);
         Assert.Single(fake.Calls);
@@ -340,7 +356,7 @@ public class GameHostTests
         string archive = Path.Combine(source.Path, "archive.tar");
         File.WriteAllText(archive, "test");
         var fake = new FakeLauncher().Exits(0);
-        var host = new SshGameHost("box", "ssh://tester@box.example:2222", HostShell.WindowsPowerShell,
+        var host = new SshGameHost("box", "ssh://tester@box.example:2222", HostShell.Pwsh,
             0, null, null, "ssh", fake);
         await host.UploadArchiveAsync(archive, "vt-upload-" + new string('a', 32) + ".tar", Timeout, default);
         Assert.Equal("scp", fake.Calls[0].Executable);
@@ -472,7 +488,7 @@ public class ResolvedEnvironmentTests
           "hosts": {
             "linux-box": { "kind": "ssh", "platform": "linux", "shell": "bash", "destination": "tester@linux-box.example", "port": 2222,
                            "sshOptions": ["IdentityFile=~/.ssh/valheim_tests"], "lock": "/var/tmp/valheim-testing.lock" },
-            "windows-pc": { "kind": "ssh", "platform": "windows", "shell": "powershell", "destination": "tester@windows-pc.example",
+            "windows-pc": { "kind": "ssh", "platform": "windows", "shell": "pwsh", "destination": "tester@windows-pc.example",
                             "lock": "C:\\ValheimTesting\\lock" },
             "server-ctr": { "kind": "container", "platform": "linux", "shell": "bash", "container": "valheim-server", "user": "valheim",
                             "lock": "/home/valheim/lock" }
@@ -490,7 +506,7 @@ public class ResolvedEnvironmentTests
         var server = Assert.IsType<SshGameHost>(profile.CreateServerHost());
         Assert.Equal("tester@linux-box.example", server.Destination); Assert.Equal(2222, server.Port); Assert.Equal(HostShellKind.Bash, server.Shell.Kind);
         var client = Assert.IsType<SshGameHost>(profile.CreateClientHost("player"));
-        Assert.Same(HostShell.WindowsPowerShell, client.Shell);
+        Assert.Same(HostShell.Pwsh, client.Shell);
         var container = Assert.IsType<ContainerGameHost>(profile.CreateHost("server-ctr"));
         Assert.Equal("valheim-server", container.Container); Assert.Equal("valheim", container.User);
         Assert.Equal(15578, profile.Clients["player"].LocalCliPort);
@@ -499,7 +515,7 @@ public class ResolvedEnvironmentTests
     [Fact] public void ALocalHostMustBeThisMachinesPlatform()
     {
         string json = """{ "hosts": { "here": { "kind": "local", "platform": "PLATFORM", "shell": "SHELL", "lock": "LOCK" } }, "clients": { "me": { "host": "here", "install": "INSTALL", "runtime": "RUNTIME", "cliPort": 5578 } } }""";
-        string Fill(string platform) => json.Replace("PLATFORM", platform).Replace("SHELL", platform == "windows" ? "powershell" : "bash")
+        string Fill(string platform) => json.Replace("PLATFORM", platform).Replace("SHELL", platform == "windows" ? "pwsh" : "bash")
             .Replace("LOCK", platform == "windows" ? "C:/vt/lock" : "/tmp/vt/lock").Replace("INSTALL", platform == "windows" ? "C:/Games/Valheim" : "/games/valheim")
             .Replace("RUNTIME", platform == "windows" ? "C:/vt/runs" : "/tmp/vt/runs");
         Assert.IsType<LocalGameHost>(TestEnvironment.Parse(Fill(Platform)).CreateHost("here"));
@@ -515,12 +531,15 @@ public class ResolvedEnvironmentTests
     [InlineData("\"lock\": \"/var/tmp/valheim-testing.lock\"", "\"lock\": \"var/tmp/lock\"", "lock must be an absolute path")]
     [InlineData("\"lock\": \"C:\\\\ValheimTesting\\\\lock\"", "\"lock\": \"/ValheimTesting/lock\"", "lock must be an absolute path")]
     [InlineData("\"destination\": \"tester@linux-box.example\", ", "", "needs a destination")]
-    [InlineData("\"shell\": \"powershell\"", "\"shell\": \"cmd\"", "shell must be")]
-    [InlineData("\"kind\": \"container\", \"platform\": \"linux\", \"shell\": \"bash\"", "\"kind\": \"container\", \"platform\": \"linux\", \"shell\": \"powershell\"", "only on Windows")]
+    [InlineData("\"shell\": \"pwsh\"", "\"shell\": \"cmd\"", "shell must be bash or pwsh")]
+    // #703: Windows PowerShell 5.1 is no shell any more, and PowerShell runs only on Windows hosts.
+    [InlineData("\"shell\": \"pwsh\"", "\"shell\": \"powershell\"", "shell must be bash or pwsh")]
+    [InlineData("\"kind\": \"container\", \"platform\": \"linux\", \"shell\": \"bash\"", "\"kind\": \"container\", \"platform\": \"linux\", \"shell\": \"pwsh\"", "use bash on this host")]
+    [InlineData("\"kind\": \"ssh\", \"platform\": \"linux\", \"shell\": \"bash\"", "\"kind\": \"ssh\", \"platform\": \"macos\", \"shell\": \"pwsh\"", "use bash on this host")]
     [InlineData("\"gamePort\": 2456", "\"gamePort\": 0", "gamePort must be")]
     [InlineData("\"localCliPort\": 15578", "\"localCliPort\": 15578, \"gamePort\": 2458", "only the server has a gamePort")]
     [InlineData("\"user\": \"valheim\",", "\"user\": \"valheim\", \"port\": 22,", "belong to an ssh host")]
-    [InlineData("\"platform\": \"windows\", \"shell\": \"powershell\"", "\"platform\": \"windows\", \"shell\": \"bash\"", "bash on Windows")]
+    [InlineData("\"platform\": \"windows\", \"shell\": \"pwsh\"", "\"platform\": \"windows\", \"shell\": \"bash\"", "use pwsh on this host")]
     [InlineData("\"destination\": \"tester@linux-box.example\", \"port\": 2222", "\"destination\": \"ssh://tester@linux-box.example:2200\", \"port\": 2222", "give the port once")]
     [InlineData("\"destination\": \"tester@windows-pc.example\"", "\"destination\": \"tester:secret@windows-pc.example\"", "Passwords are never accepted")]
     [InlineData("[\"IdentityFile=~/.ssh/valheim_tests\"]", "[\"LocalForward=0.0.0.0:1 127.0.0.1:2\"]", "LocalForward is refused")]
@@ -536,7 +555,7 @@ public class ResolvedEnvironmentTests
     [Fact] public void ALocalHostAndAHostNetworkContainerNeverShareACliPort()
     {
         // Both are reached on this machine's own loopback, so one port would reach whichever answered first.
-        string shell = Platform == "windows" ? "powershell" : "bash", root = Platform == "windows" ? "C:/vt" : "/tmp/vt";
+        string shell = Platform == "windows" ? "pwsh" : "bash", root = Platform == "windows" ? "C:/vt" : "/tmp/vt";
         string json = $$"""
             { "hosts": { "here": { "kind": "local", "platform": "{{Platform}}", "shell": "{{shell}}", "lock": "{{root}}/lock" },
                          "ctr": { "kind": "container", "platform": "linux", "shell": "bash", "container": "vt-server", "lock": "/home/valheim/lock" },

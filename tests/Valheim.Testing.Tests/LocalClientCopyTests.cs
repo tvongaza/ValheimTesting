@@ -29,7 +29,7 @@ public sealed class LocalClientCopyTests : IDisposable
 
     private static IGameHost ThisMachine()
     {
-        var local = new LocalGameHost("this machine", OperatingSystem.IsWindows() ? HostShell.WindowsPowerShell : HostShell.Bash);
+        var local = new LocalGameHost("this machine", HostShell.ThisMachine);
         // A fake Valheim.app is unsigned, so the real macOS bundle check would refuse it (MacAppBundleTests covers that check).
         return new BundleAcceptingHost(local, assumeNoGame: true);
     }

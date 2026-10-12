@@ -183,7 +183,7 @@ public sealed class TargetedRegressionTests : IDisposable
         {
             runner.Stage("parent");
             Assert.True(File.Exists(Path.Combine(lockPath, "owner")));
-            var host = new LocalGameHost("test", OperatingSystem.IsWindows() ? HostShell.WindowsPowerShell : HostShell.Bash);
+            var host = new LocalGameHost("test", HostShell.ThisMachine);
             Assert.Equal(HostLockState.HeldByOther, (await host.CheckLockAsync(lockPath, "a different run", TimeSpan.FromSeconds(10))).State);
         }
         finally { runner.Remove(); }
@@ -747,7 +747,7 @@ internal sealed class RegressionRig : IDisposable
     /// <summary>The inventory of this machine as the rig has it: one client environment, the prepared game.</summary>
     public EnvironmentInventory Inventory() => new()
     {
-        Hosts = new() { ["local"] = new HostProfile { Kind = "local", Platform = HostProfile.CurrentPlatform, Shell = OperatingSystem.IsWindows() ? "powershell" : "bash", Lock = Path.Combine(Root, "lock") } },
+        Hosts = new() { ["local"] = new HostProfile { Kind = "local", Platform = HostProfile.CurrentPlatform, Shell = OperatingSystem.IsWindows() ? "pwsh" : "bash", Lock = Path.Combine(Root, "lock") } },
         // The synthetic Mac install uses the stock x64-only Doorstop. Select Rosetta explicitly, as a real consumer must.
         Environments = [new EnvironmentRecipe { Name = "rig-client", Host = "local", Roles = ["client"], Install = Game, Runtime = Runtime, CliPort = 5560, LoaderPackage = LoaderPackage, Architecture = "x64" }],
         LeaseHost = "local", LeaseDirectory = Path.Combine(Root, "leases"),

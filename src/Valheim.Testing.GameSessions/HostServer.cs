@@ -4,7 +4,7 @@ using Valheim.Testing.Game;
 namespace Valheim.Testing.GameSessions;
 
 /// <summary>
-/// Starts an owned dedicated server on a Linux/bash, macOS/bash or Windows/PowerShell host and returns it identified by
+/// Starts an owned dedicated server on a Linux/bash, macOS/bash or Windows/pwsh host and returns it identified by
 /// process ID and start time, the identity an owned session checks against its adapter's reported process ID. Linux uses
 /// a <c>setsid</c> recorder, macOS a detached supervisor, and both keep stdout and stderr in the boot directory. Windows
 /// uses a short-lived headless task to start the server independently of SSH, then removes that task.
@@ -288,7 +288,7 @@ internal static partial class HostServerScripts
             $env:VT_QUIT_PID = $game
             $env:VT_QUIT_EVENT = '1'
             $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($quitHelper))
-            & (Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell\v1.0\powershell.exe') -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $encoded | Out-Null
+            & ([Environment]::ProcessPath) -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $encoded | Out-Null
             if ($LASTEXITCODE -eq 0 -and $process.WaitForExit([int]$quit * 1000)) { 'VT-STOP quit'; exit 0 }
         }
         try { $process.Kill() } catch { if (-not $process.HasExited) { throw } }
@@ -366,7 +366,7 @@ internal static partial class HostServerScripts
             $definition.Settings.StopIfGoingOnBatteries = $false
             $definition.Settings.ExecutionTimeLimit = 'PT5M'
             $action = $definition.Actions.Create(0)
-            $action.Path = Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell\v1.0\powershell.exe'
+            $action.Path = [Environment]::ProcessPath
             # The launcher finds its directory itself ($PSScriptRoot): the only argument is the quoted script path.
             $action.Arguments = '-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $launcherFile + '"'
             $action.WorkingDirectory = $dir
@@ -413,7 +413,7 @@ internal static partial class HostServerScripts
         $verdict
         """).ReplaceLineEndings("\n");
 
-    // Runs in the task's session (Windows PowerShell 5.1). Its directory is its own ($PSScriptRoot), never an argument: a path
+    // Runs in the task's session (pwsh, the same PowerShell 7 that registered the task). Its directory is its own ($PSScriptRoot), never an argument: a path
     // with spaces, as a user's profile has, is then only ever the quoted -File path.
     public static readonly string WindowsLauncher = """
         $ErrorActionPreference = 'Stop'

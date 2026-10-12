@@ -52,7 +52,7 @@ internal sealed class LocalClientJournal(ClientRunPlan plan, string evidence, bo
 
     private static ProbedProcess Probe(int pid)
     {
-        var host = new LocalGameHost("this machine", OperatingSystem.IsWindows() ? HostShell.WindowsPowerShell : HostShell.Bash);
+        var host = new LocalGameHost("this machine", HostShell.ThisMachine);
         return HostProcessProbe.ProbeAsync(host, [(pid, "")], TimeSpan.FromSeconds(30), settle: true)
             .GetAwaiter().GetResult()[(pid, "")];
     }

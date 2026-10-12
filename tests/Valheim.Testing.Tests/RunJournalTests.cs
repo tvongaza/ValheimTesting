@@ -2,15 +2,14 @@ using Valheim.Testing.Game;
 using Xunit;
 using Valheim.Testing.GameSessions;
 
-// The journal's real scripts (#257): bash on macOS and Linux, Windows PowerShell on Windows. A fake host cannot catch a
+// The journal's real scripts (#257): bash on macOS and Linux, pwsh on Windows. A fake host cannot catch a
 // shell's quoting or a BSD-tool option mismatch.
 public sealed class RunJournalTests : IDisposable
 {
     private readonly string _root = Directory.CreateTempSubdirectory("run-journal-").FullName;
     public void Dispose() => Directory.Delete(_root, recursive: true);
 
-    private static LocalGameHost Host() => OperatingSystem.IsWindows()
-        ? new LocalGameHost("journal-host", HostShell.WindowsPowerShell) : new LocalGameHost("journal-host", HostShell.Bash);
+    private static LocalGameHost Host() => new("journal-host", HostShell.ThisMachine);
 
     [Fact] public async Task AnUnfinishedMacLaunchIsNotMistakenForTheGame()
     {

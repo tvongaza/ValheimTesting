@@ -119,13 +119,13 @@ internal static class ProcessQuit
 
     private static (bool Sent, string Description) WindowsConsoleControl(int pid, uint controlEvent, string name, TimeSpan deadline)
     {
-        var start = new ProcessStartInfo("powershell.exe") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
+        var start = new ProcessStartInfo("pwsh") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
         foreach (string argument in new[] { "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", WindowsConsoleControlScript }) start.ArgumentList.Add(argument);
         start.Environment["VT_QUIT_PID"] = pid.ToString(CultureInfo.InvariantCulture);
         start.Environment["VT_QUIT_EVENT"] = controlEvent.ToString(CultureInfo.InvariantCulture);
         try
         {
-            using var helper = Process.Start(start) ?? throw new IOException("powershell.exe did not start");
+            using var helper = Process.Start(start) ?? throw new IOException("pwsh did not start");
             var output = helper.StandardOutput.ReadToEndAsync();
             var error = helper.StandardError.ReadToEndAsync();
             int helperWait = WindowsHelperWaitMilliseconds(deadline);

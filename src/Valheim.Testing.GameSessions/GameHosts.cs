@@ -9,7 +9,7 @@ using Valheim.Testing.Game;
 namespace Valheim.Testing.GameSessions;
 
 /// <summary>
-/// This machine. Scripts run in a local shell process (bash, pwsh or Windows PowerShell), so the same lock, ship, log and fetch
+/// This machine. Scripts run in a local shell process (pwsh on Windows, bash elsewhere), so the same lock, ship, log and fetch
 /// scripts run as on a remote host. The only transport failure is a shell that cannot be started.
 /// </summary>
 public sealed class LocalGameHost : ScriptedGameHost
@@ -18,12 +18,9 @@ public sealed class LocalGameHost : ScriptedGameHost
     internal LocalGameHost(string name, HostShell shell, IProcessLauncher launcher) : base(name, shell, launcher) { }
     public override GameHostKind Kind => GameHostKind.Local;
     internal override (string Executable, IReadOnlyList<string> Arguments) WrapperCommand() => (Shell.Executable, WrapperArguments(Shell));
-    internal override IReadOnlyDictionary<string, string> WrapperEnvironment() => Shell.Kind == HostShellKind.PowerShell
-        ? new Dictionary<string, string> { [NoStartupJitProfile.Key] = NoStartupJitProfile.Value }
-        : base.WrapperEnvironment();
-    internal override string? WrapperWorkingDirectory() => OperatingSystem.IsMacOS() && Shell.Kind == HostShellKind.PowerShell
-        ? Path.GetTempPath() : null;
     internal override bool IsTransportFailure(ProcessExit exit) => false;
+    // The shell is the process started here: one that cannot be started is not there.
+    internal override bool ShellNotFound(ProcessExit exit) => exit.End == ProcessEnd.NotStarted;
 
     /// <summary>The host's loopback is this machine's: nothing is started and the endpoint is the ValheimCLI port itself.</summary>
     public override Task<CliTunnel> OpenCliTunnelAsync(int hostPort, TimeSpan readyTimeout, int localPort = 0, CancellationToken cancellation = default)
@@ -40,10 +37,7 @@ public sealed class LocalGameHost : ScriptedGameHost
 /// A machine reached through OpenSSH (<c>ssh</c> from PATH; on Windows the inbox client, or Git for Windows' client when the runner itself is in an SSH session) with key or agent authentication
 /// only: BatchMode is always on, so ssh never prompts, and nothing here accepts a password. The destination is <c>user@host</c>,
 /// <c>ssh://user@host:port</c> or an ssh-config alias; the host key must already be known (or pass <c>StrictHostKeyChecking=accept-new</c>).
-/// A bash host needs a POSIX login shell; a PowerShell host works under any login shell, including Windows' cmd.exe. Unlike a local
-/// or container host, the remote pwsh does not get <see cref="ScriptedGameHost.NoStartupJitProfile"/>: ssh passes no variables to
-/// it (the server's AcceptEnv decides), so a host that starts many pwsh processes at once can still hit pwsh's corrupted startup
-/// profile (#133) unless its own environment sets the variable.
+/// A bash host needs a POSIX login shell; a Windows host's pwsh works under any login shell, including Windows' cmd.exe.
 /// ssh exit 255 without the host's exit report is a transport failure.
 /// </summary>
 public sealed class SshGameHost : ScriptedGameHost
@@ -128,6 +122,10 @@ public sealed class SshGameHost : ScriptedGameHost
 
     internal override (string Executable, IReadOnlyList<string> Arguments) WrapperCommand() => (_ssh, SshArguments(forward: false, ["-T"], RemoteCommand(Shell)));
     internal override bool IsTransportFailure(ProcessExit exit) => exit.ExitCode == 255;
+    // The login shell's own words for a command it cannot find: cmd.exe (OpenSSH's default on Windows), Windows PowerShell, or a
+    // POSIX shell. English only: a localised Windows reports it in its own language, and the outcome stays a plain unknown.
+    internal override bool ShellNotFound(ProcessExit exit) => exit.End == ProcessEnd.Exited && Regex.IsMatch(exit.Stderr,
+        "'" + Regex.Escape(Shell.Executable) + "' is not recognized as|" + Regex.Escape(Shell.Executable) + ": (command )?not found", RegexOptions.CultureInvariant);
 
     /// <summary>
     /// Forwards a local loopback port to the host's loopback-only ValheimCLI port (<c>ssh -N -L 127.0.0.1:local:127.0.0.1:host</c>
@@ -162,7 +160,7 @@ public sealed class SshGameHost : ScriptedGameHost
         }
     }
 
-    /// <summary>Uploads one archive into the SSH user's home using SFTP/SCP, avoiding Windows PowerShell's binary stdin pipe.</summary>
+    /// <summary>Uploads one archive into the SSH user's home using SFTP/SCP, avoiding the binary stdin pipe some Windows SSH sessions stop reading.</summary>
     internal async Task UploadArchiveAsync(string archive, string remoteName, TimeSpan timeout, CancellationToken cancellation)
     {
         if (!Regex.IsMatch(remoteName, @"^vt-upload-[0-9a-f]{32}\.tar$", RegexOptions.CultureInvariant))
@@ -296,8 +294,6 @@ public sealed class ContainerGameHost : ScriptedGameHost
     {
         var arguments = new List<string> { "exec", "-i" };
         if (User != null) arguments.AddRange(["--user", User]);
-        // The same startup-profile guard as a local host's (NoStartupJitProfile), set for the shell inside the container.
-        if (Shell.Kind == HostShellKind.PowerShell) arguments.AddRange(["-e", NoStartupJitProfile.Key + "=" + NoStartupJitProfile.Value]);
         arguments.AddRange([Container, Shell.Executable]);
         arguments.AddRange(WrapperArguments(Shell));
         return (_docker, arguments);

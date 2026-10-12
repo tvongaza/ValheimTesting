@@ -148,7 +148,7 @@ internal static class GameHostChecks
         var failed = await host.WaitForLogAsync(log, offset, success, failures, Generous);
         Assert.Equal(HostLogOutcome.FailureMatched, failed.Outcome); Assert.Equal("[Fatal] Could not load [MyMod]", failed.Line);
 
-        // The deadline counts the shell's start too: long enough for a cold pwsh on a busy runner (over 3 s on macOS) to read the lines already there.
+        // The deadline counts the shell's start too: long enough for a cold pwsh on a busy Windows runner to read the lines already there.
         var expired = await host.WaitForLogAsync(log, offset, new Regex("never written"), null, TimeSpan.FromSeconds(10));
         Assert.Equal(HostLogOutcome.TimedOut, expired.Outcome); Assert.Equal("[Info] Command server listening on 5577", expired.LastLine);
 
@@ -206,63 +206,13 @@ internal static class GameHostChecks
     }
 }
 
-// Every local shell this machine has: bash on macOS and Linux, Windows PowerShell on Windows, pwsh wherever it is installed.
+// This machine's one shell: pwsh on Windows, bash on macOS and Linux.
 [Trait("Category", "CiShell")]
 public class LocalGameHostShellTests
 {
-    public static TheoryData<string> Shells
-    {
-        get
-        {
-            var shells = new TheoryData<string>();
-            if (!OperatingSystem.IsWindows()) shells.Add("bash");
-            else shells.Add("powershell");
-            if (OnPath(OperatingSystem.IsWindows() ? "pwsh.exe" : "pwsh")) shells.Add("pwsh");
-            return shells;
-        }
-    }
+    public static TheoryData<string> Shells => new() { OperatingSystem.IsWindows() ? "pwsh" : "bash" };
     private static IGameHost Host(string shell) => new LocalGameHost("local-" + shell, HostShell.Parse(shell));
     private static string Parent => Path.GetTempPath();
-    private static bool OnPath(string name) =>
-        (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries).Any(dir => File.Exists(Path.Combine(dir, name)));
-
-    [Fact] public async Task AMacPowerShellWrapperStartsFromATemporaryDirectory()
-    {
-        if (!OperatingSystem.IsMacOS() || !OnPath("pwsh")) return;
-        string probe = "vt-pwsh-cwd-" + Guid.NewGuid().ToString("N");
-        string marker = Path.Combine(Path.GetTempPath(), probe);
-        try
-        {
-            var result = await Host("pwsh").RunAsync($"[IO.File]::WriteAllText('{probe}', 'ready')", null, GameHostChecks.Generous);
-            Assert.True(result.Succeeded, result.Describe() + " " + result.Stderr);
-            Assert.Equal("ready", File.ReadAllText(marker));
-        }
-        finally { File.Delete(marker); }
-    }
-
-    // #133, with the real pwsh: a local pwsh host neither reads nor writes pwsh's startup JIT profile. Its cache directory is a
-    // fresh one (XDG_CACHE_HOME, Linux and macOS). The control, a pwsh started the same way without the guard, writes the profile
-    // there, so the check can see it.
-    [Fact] public async Task APwshHostLeavesTheStartupJitProfileAlone()
-    {
-        if (OperatingSystem.IsWindows() || !OnPath("pwsh")) return;
-        using var guarded = new TempDirectory();
-        using var control = new TempDirectory();
-        var host = new LocalGameHost("local-pwsh", HostShell.Pwsh, new CacheLauncher(guarded.Path));
-        var result = await host.RunAsync("$null = [System.Collections.Concurrent.ConcurrentDictionary[string,int]]::new()", null, GameHostChecks.Generous);
-        Assert.True(result.Succeeded, result.Describe());
-        var unguarded = await new CacheLauncher(control.Path).RunAsync(new ProcessCall("pwsh", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "exit 0"], [], null, null, null, GameHostChecks.Generous), default);
-        Assert.Equal(0, unguarded.ExitCode);
-        Assert.Contains(Directory.EnumerateFiles(control.Path, "StartupProfileData-*", SearchOption.AllDirectories), _ => true);
-        Assert.Empty(Directory.EnumerateFiles(guarded.Path, "StartupProfileData-*", SearchOption.AllDirectories));
-    }
-    // Starts processes as the system does, with pwsh's cache directory moved to a test directory.
-    private sealed class CacheLauncher(string cache) : IProcessLauncher
-    {
-        public Task<ProcessExit> RunAsync(ProcessCall call, CancellationToken cancellation) =>
-            SystemProcessLauncher.Instance.RunAsync(call with { Environment = new Dictionary<string, string>(call.Environment) { ["XDG_CACHE_HOME"] = cache } }, cancellation);
-        public IStartedProcess Start(string executable, IReadOnlyList<string> arguments) => SystemProcessLauncher.Instance.Start(executable, arguments);
-    }
 
     [Theory, MemberData(nameof(Shells))] public Task RunPassesValuesLiterallyAndReportsTheExitCode(string shell) => GameHostChecks.RunPassesValuesLiterallyAndReportsTheExitCode(Host(shell));
     [Theory, MemberData(nameof(Shells))] public Task ATimeoutIsUnknown(string shell) => GameHostChecks.ATimeoutIsUnknown(Host(shell));

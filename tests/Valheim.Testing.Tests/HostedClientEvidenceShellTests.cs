@@ -2,7 +2,7 @@ using Valheim.Testing.Game;
 using Xunit;
 using Valheim.Testing.GameSessions;
 
-// #254 through the host's real shell (bash on macOS and Linux, Windows PowerShell on Windows): a preloader crash log the
+// #254 through the host's real shell (bash on macOS and Linux, pwsh on Windows): a preloader crash log the
 // launch wrote is read and kept; one from before the launch is only named.
 public sealed class HostedClientEvidenceShellTests : IDisposable
 {
@@ -17,7 +17,7 @@ public sealed class HostedClientEvidenceShellTests : IDisposable
 
     [Fact] public async Task AFreshPreloaderLogIsReadAndKeptAndAnOlderOneIsOnlyNamed()
     {
-        var host = OperatingSystem.IsWindows() ? new LocalGameHost("client", HostShell.WindowsPowerShell) : new LocalGameHost("client", HostShell.Bash);
+        var host = new LocalGameHost("client", HostShell.ThisMachine);
         string install = Path.Combine(_root, "game dir"), launch = Path.Combine(_root, "run", "client-1");
         Directory.CreateDirectory(install); Directory.CreateDirectory(launch);
         string player = Path.Combine(_root, "Library", "Logs", "IronGate", "Valheim", "Player.log");

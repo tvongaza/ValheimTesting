@@ -121,10 +121,9 @@ internal sealed class HostedServerRun : IServerPlacement
     /// <summary>Why a server environment cannot run <paramref name="plan"/>, or null: its host's platform and shell, and the plan's ports.</summary>
     internal static string? Refusal(HostProfile hostProfile, GameRole role, ServerRunPlan plan)
     {
-        if (!((hostProfile.Platform == "linux" && HostShell.Parse(hostProfile.Shell).Kind == HostShellKind.Bash) ||
-              (hostProfile.Platform == "macos" && hostProfile.Kind is ("local" or "ssh") && HostShell.Parse(hostProfile.Shell).Kind == HostShellKind.Bash) ||
-              (hostProfile.Platform == "windows" && HostShell.Parse(hostProfile.Shell).Kind == HostShellKind.PowerShell)))
-            return $"it is {hostProfile.Platform} with {hostProfile.Shell}; a hosted dedicated server needs Linux/bash, macOS/bash on a local or SSH host, or Windows/PowerShell.";
+        if (hostProfile.Platform is not ("linux" or "macos" or "windows") || hostProfile.Shell != HostProfile.ShellFor(hostProfile.Platform) ||
+            (hostProfile.Platform == "macos" && hostProfile.Kind is not ("local" or "ssh")))
+            return $"it is {hostProfile.Platform} with {hostProfile.Shell}; a hosted dedicated server needs Linux/bash, macOS/bash on a local or SSH host, or Windows/pwsh.";
         if (hostProfile.Kind == "local" && hostProfile.Platform != HostProfile.CurrentPlatform)
             return $"it is a local {hostProfile.Platform} host, but this machine is {HostProfile.CurrentPlatform}.";
         // The plan's runtime names its platform by its server executable; a pinned manifest lists it.
@@ -806,7 +805,7 @@ internal static class HostedRunScripts
             $kept += $size
         }
         # The copy's size and its removal never pass through a link in it (as du and rm -rf on a bash host): a link counts nothing
-        # and is removed as a link first, so the recursive delete meets no junction (Windows PowerShell 5.1's refuses one).
+        # and is removed as a link first, so the recursive delete meets no junction and never follows one.
         $bytes = [long]0
         $links = @()
         $walk = New-Object 'Collections.Generic.Stack[string]'

@@ -386,7 +386,7 @@ public class WindowsSshServerIntegrationTests
         if (destination == null || parent == null) return;
         string[] options = (Environment.GetEnvironmentVariable("VALHEIM_TESTING_SSH_WINDOWS_OPTIONS") ?? "")
             .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        var host = new SshGameHost("windows-server", destination, HostShell.WindowsPowerShell, sshOptions: options);
+        var host = new SshGameHost("windows-server", destination, HostShell.Pwsh, sshOptions: options);
         string root = HostPath.Join(parent, "windows-host-check-" + Guid.NewGuid().ToString("N"));
         string install = HostPath.Join(root, "install"), runtime = HostPath.Join(root, "run", "runtime");
         bool stopped = false;
@@ -443,7 +443,7 @@ public class WindowsSshServerIntegrationTests
         if (destination == null || parent == null || install == null) return;
         string[] options = (Environment.GetEnvironmentVariable("VALHEIM_TESTING_SSH_WINDOWS_OPTIONS") ?? "")
             .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        var host = new SshGameHost("windows-server", destination, HostShell.WindowsPowerShell, sshOptions: options);
+        var host = new SshGameHost("windows-server", destination, HostShell.Pwsh, sshOptions: options);
         string root = HostPath.Join(parent, "windows-game-check-" + Guid.NewGuid().ToString("N"));
         string runtime = HostPath.Join(root, "runtime"), boot = HostPath.Join(root, "boot-1");
         bool stopped = false;

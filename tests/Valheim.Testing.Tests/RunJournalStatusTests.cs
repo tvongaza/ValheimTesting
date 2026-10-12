@@ -392,11 +392,11 @@ public sealed class RunJournalStatusTests : IDisposable
         Assert.Empty(_host.Stops);
     }
 
-    // The pid-file read and the server copy's top-level skip through this machine's own shell (bash, or Windows PowerShell);
+    // The pid-file read and the server copy's top-level skip through this machine's own shell (bash, or pwsh on Windows);
     // on Linux, also the command line a game started the Linux launchers' way (env executing it) has, as the probe hashes it.
     [Fact] public async Task ThePidFileReadAndTheServerCopysSkipRunThroughThisMachinesShell()
     {
-        var local = OperatingSystem.IsWindows() ? new LocalGameHost("local", HostShell.WindowsPowerShell) : new LocalGameHost("local", HostShell.Bash);
+        var local = new LocalGameHost("local", HostShell.ThisMachine);
         string Dir(string name) { string path = Path.Combine(_root, "launches", name); Directory.CreateDirectory(path); return path; }
         string windows = Dir("windows client"), linux = Dir("linux client"), empty = Dir("empty"), missing = Path.Combine(_root, "launches", "never made");
         File.WriteAllText(Path.Combine(windows, "pid"), "91152 134357104986630869");
@@ -545,7 +545,7 @@ public sealed class RunJournalStatusTests : IDisposable
         using var machine = EnvironmentInventory.UseMachine(new FakeMachine(HostProfile.CurrentPlatform) { DataRoot = data });
         using var localJournal = RunJournal.UseLocalDirectory(Path.Combine(data, "journal"));
         File.WriteAllText(file, JsonSerializer.Serialize(new { hosts = new { local = new { kind = "local", @lock = Path.Combine(data, "lock") } }, leaseHost = "local", leaseDirectory = leases }));
-        var local = OperatingSystem.IsWindows() ? new LocalGameHost("local", HostShell.WindowsPowerShell) : new LocalGameHost("local", HostShell.Bash);
+        var local = new LocalGameHost("local", HostShell.ThisMachine);
         SteamAccountPool Pool(string account) => new() { Pool = "steam-clients", LeaseDirectory = leases, Accounts = [new SteamPoolAccount { Name = account }] };
         // The gone run's lease names its run; another run's lease stays; a still-going run (this test is its runner) is refused.
         var gone = await Pool("steam_gone").AcquireAsync(local, "runner run-gone client player", TimeSpan.FromSeconds(30), run: "run-gone");
@@ -587,7 +587,7 @@ public sealed class RunJournalStatusTests : IDisposable
         using var localJournal = RunJournal.UseLocalDirectory(Path.Combine(data, "journal"));
         // Only the host: a journal needs no install or environment.
         File.WriteAllText(file, JsonSerializer.Serialize(new { hosts = new { local = new { kind = "local", @lock = Path.Combine(data, "lock") } } }));
-        var local = OperatingSystem.IsWindows() ? new LocalGameHost("local", HostShell.WindowsPowerShell) : new LocalGameHost("local", HostShell.Bash);
+        var local = new LocalGameHost("local", HostShell.ThisMachine);
         var journal = new RunJournal("run-20261005T180000Z-0badc0de");
         await journal.AppendAsync(local, Path.Combine(data, "journal"), "player", JournalEntry.Of(JournalEntry.CopyIntended, ("runtime", Path.Combine(data, "runs", "x"))), TimeSpan.FromSeconds(30));
 

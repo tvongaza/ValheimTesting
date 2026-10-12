@@ -13,7 +13,7 @@ public sealed class BootstrapCacheTests
         try
         {
             bool windows = OperatingSystem.IsWindows();
-            var start = new ProcessStartInfo(windows ? (FixtureProjects.OnPath("pwsh.exe") ? "pwsh" : "powershell.exe") : "sh")
+            var start = new ProcessStartInfo(windows ? "pwsh" : "sh")
             {
                 WorkingDirectory = root,
                 UseShellExecute = false,
@@ -22,10 +22,7 @@ public sealed class BootstrapCacheTests
             };
             if (windows)
             {
-                // PowerShell 7 is optional; without it the built-in Windows PowerShell 5.1 runs the script, and its default policy refuses .ps1 files.
                 start.ArgumentList.Add("-NoProfile");
-                start.ArgumentList.Add("-ExecutionPolicy");
-                start.ArgumentList.Add("Bypass");
                 start.ArgumentList.Add("-File");
                 start.ArgumentList.Add(Path.Combine(root, "scripts", "bootstrap-cli.ps1"));
             }

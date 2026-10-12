@@ -32,25 +32,11 @@ public sealed class CharacterDirectoryTests : IDisposable
         _ => ".config/unity3d/IronGate/Valheim/characters_local",
     };
 
-    // Every platform's search through every shell this machine has: Windows PowerShell or pwsh for a Windows host, bash or pwsh
-    // for Linux and macOS.
-    public static TheoryData<string, string> Platforms
-    {
-        get
-        {
-            var rows = new TheoryData<string, string>();
-            foreach (var shell in LocalGameHostShellTests.Shells)
-            {
-                string name = (string)shell[0];
-                // The Windows search only on Windows: it turns Steam's forward slashes into the platform's backslashes.
-                if (name != "bash" && OperatingSystem.IsWindows()) rows.Add(name, "windows");
-                if (OperatingSystem.IsWindows() && name == "powershell") continue; // Windows PowerShell runs only the Windows search here.
-                rows.Add(name, "linux");
-                rows.Add(name, "macos");
-            }
-            return rows;
-        }
-    }
+    // Each platform's search through the shell its hosts run, where this machine has it: pwsh for a Windows host, bash for Linux
+    // and macOS.
+    public static TheoryData<string, string> Platforms => OperatingSystem.IsWindows()
+        ? new() { { "pwsh", "windows" } }
+        : new() { { "bash", "linux" }, { "bash", "macos" } };
 
     [Theory, MemberData(nameof(Platforms))]
     public async Task LeftOutFoldersResolveToThePlatformsStandardPaths(string shell, string platform)
