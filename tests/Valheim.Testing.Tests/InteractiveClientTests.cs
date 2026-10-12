@@ -823,7 +823,7 @@ public class InteractiveClientDisplayTests
 
             // A stand-in Steam on the display: a copy of sleep, whose process name is then steam.
             string steam = Path.Combine(root.Path, "steam");
-            File.Copy("/bin/sleep", steam);
+            CopiedProgram.Copy("/bin/sleep", steam); // not File.Copy: a parallel test's fork would make the start fail with ETXTBSY (#720)
             File.SetUnixFileMode(steam, UnixFileMode.UserRead | UnixFileMode.UserExecute);
             var steamStart = new ProcessStartInfo(steam, "600") { UseShellExecute = false };
             steamStart.Environment["DISPLAY"] = display;
