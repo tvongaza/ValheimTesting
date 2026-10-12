@@ -590,8 +590,7 @@ public class InteractiveClientShellTests
         {
             string game = Path.Combine(install, "Valheim.app/Contents/MacOS/Valheim");
             Directory.CreateDirectory(Path.GetDirectoryName(game)!);
-            File.WriteAllText(game, "#!/bin/sh\nexec /bin/sleep 600\n");
-            File.SetUnixFileMode(game, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            CopiedProgram.WriteScript(game, "#!/bin/sh\nexec /bin/sleep 600\n"); // not File.WriteAllText: ETXTBSY (#723)
             foreach (string path in new[] { "BepInEx/core/BepInEx.Preloader.dll", "BepInEx/core/BepInEx.dll" })
             {
                 string file = Path.Combine(install, path);
@@ -639,8 +638,7 @@ public class InteractiveClientShellTests
         }
         // The stand-in game records its arguments, then becomes a long sleep: the same process ID, environment and start time.
         string game = Path.Combine(install, "valheim.x86_64");
-        File.WriteAllText(game, "#!/bin/sh\nprintf '%s\\n' \"$@\" > '" + argumentsFile + "'\nexec sleep 600\n");
-        if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(game, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        CopiedProgram.WriteScript(game, "#!/bin/sh\nprintf '%s\\n' \"$@\" > '" + argumentsFile + "'\nexec sleep 600\n"); // not File.WriteAllText: ETXTBSY (#723)
         return install;
     }
 

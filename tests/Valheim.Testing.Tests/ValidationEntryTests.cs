@@ -109,9 +109,7 @@ public sealed class ValidationEntryTests : IDisposable
     private void WriteExecutable(string name, string body)
     {
         string path = Path.Combine(_root, "bin", name);
-        File.WriteAllText(path, "#!/bin/sh\n" + body + "\n");
-        if (!OperatingSystem.IsWindows())
-            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        CopiedProgram.WriteScript(path, "#!/bin/sh\n" + body + "\n"); // not File.WriteAllText: ETXTBSY (#723)
     }
 
     private (int ExitCode, string Output) Run(string command)
