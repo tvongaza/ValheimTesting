@@ -362,6 +362,8 @@ public sealed class HostedRuntimeStageTests : IDisposable
         File.WriteAllText(Path.Combine(source, GameLaunch.ClientWindowsExecutable), "game executable");
         StageLoader(source);
         File.WriteAllText(Path.Combine(source, "version.dll"), "another mod manager proxy");
+        File.WriteAllText(Path.Combine(source, "tier0_s64.dll"), "steam runtime");
+        File.WriteAllText(Path.Combine(source, "vstdlib_s64.dll"), "steam runtime");
         string originalMod = Path.Combine(source, "BepInEx", "plugins", "original.dll");
         Directory.CreateDirectory(Path.GetDirectoryName(originalMod)!);
         File.WriteAllText(originalMod, "unselected");
@@ -381,11 +383,37 @@ public sealed class HostedRuntimeStageTests : IDisposable
         Assert.Equal(FileHash.Sha256(selected), prepared.Loader.Files["BepInEx/plugins/selected.dll"]);
         Assert.False(prepared.Loader.Files.ContainsKey("BepInEx/plugins/original.dll"));
         Assert.False(prepared.Loader.Files.ContainsKey("version.dll"));
+        Assert.Equal(FileHash.Sha256(Path.Combine(source, "tier0_s64.dll")), prepared.Loader.Files["tier0_s64.dll"]);
+        Assert.Equal(FileHash.Sha256(Path.Combine(source, "vstdlib_s64.dll")), prepared.Loader.Files["vstdlib_s64.dll"]);
         Assert.Equal(before, WorldFixture.Manifest(source));
         Assert.False(Directory.Exists(Path.Combine(parent, "staging")));
         await HostedRuntimeStage.RetireAsync(host, prepared.LoaderRoot, Path.Combine(parent, "staging"), TimeSpan.FromSeconds(45));
         Assert.False(Directory.Exists(parent));
         Assert.Equal(before, WorldFixture.Manifest(source));
+    }
+
+    // The Windows profile links the game's own root dependencies from a client or a dedicated-server install and nothing a
+    // mod manager or the loader put there. Pure: it runs on every platform, unlike the profile preparation above.
+    [Fact] public void WindowsProfileLinksTheDedicatedServersSteamRuntimeDllsButNotProxiesOrLoader()
+    {
+        string[] serverListing =
+        [
+            "valheim_server.exe", "UnityPlayer.dll", "steam_api64.dll", "steamclient64.dll", "tier0_s64.dll", "vstdlib_s64.dll",
+            "steam_appid.txt", "valheim_server_Data/Managed/assembly_valheim.dll", "valheim_server_Data/globalgamemanagers",
+            // A mod manager's proxies, Doorstop's and BepInEx's own files, logs, and an unrelated root DLL.
+            "version.dll", "winhttp.dll", "dinput8.dll", "doorstop_config.ini", ".doorstop_version", "doorstop_libs/x64/winhttp.dll",
+            "BepInEx/core/BepInEx.dll", "BepInEx/plugins/mod.dll", "output_log.txt", "logs/server.log", "other.dll",
+        ];
+        string[] expectedLinks =
+        [
+            "valheim_server.exe", "UnityPlayer.dll", "steam_api64.dll", "steamclient64.dll", "tier0_s64.dll", "vstdlib_s64.dll",
+            "steam_appid.txt", "valheim_server_Data/Managed/assembly_valheim.dll", "valheim_server_Data/globalgamemanagers", "output_log.txt",
+        ];
+        Assert.Equal(expectedLinks, serverListing.Where(HostedRuntimeStage.IsWindowsProfileGameLink).ToArray());
+        // A case-insensitive host lists the same files in another spelling.
+        Assert.True(HostedRuntimeStage.IsWindowsProfileGameLink("TIER0_S64.DLL"));
+        Assert.True(HostedRuntimeStage.IsWindowsProfileGameLink("VSTDLIB_S64.dll"));
+        Assert.False(HostedRuntimeStage.IsWindowsProfileGameLink("Version.dll"));
     }
 
     // One disposable install per actor, prepared on a fake host (HostedRuntimeStage.PrepareAsync): a copy, the selected files, the loader.
