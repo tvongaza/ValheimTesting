@@ -31,7 +31,7 @@ public sealed class HostInstallListingTests : IDisposable
     [Theory]
     [InlineData("/save"), InlineData(@"\save"), InlineData("C:/save"), InlineData("c:save"), InlineData("save/../x"), InlineData(@"save\..\x"),
      InlineData(".."), InlineData("."), InlineData("./save"), InlineData("save//x"), InlineData(@"save\\x"), InlineData("save/"), InlineData(@"save\"),
-     InlineData(""), InlineData(" "), InlineData("save\nx")]
+     InlineData(""), InlineData(" "), InlineData("save\nx"), InlineData("save "), InlineData("save."), InlineData(".. "), InlineData("save/. /x")]
     public async Task APatternOutsideTheRootIsRefusedBeforeTheHostIsAsked(string pattern)
     {
         Assert.Throws<ArgumentException>(() => HostInstall.ListingPatterns([pattern]));

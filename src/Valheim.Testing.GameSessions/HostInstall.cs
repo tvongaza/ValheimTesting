@@ -46,14 +46,15 @@ public static class HostInstall
     /// refuses them). <paramref name="paths"/> limits the listing to those subdirectories and files: relative patterns whose
     /// segments are separated by <c>/</c> or <c>\</c>, with <c>*</c> allowed in a directory, for example <c>*_Data/Managed</c>,
     /// or at the file name, for example <c>save_backup_auto-*</c>. A pattern that starts with a separator or a drive, or holds an
-    /// empty, <c>.</c> or <c>..</c> segment, is refused before anything runs on the host. Null lists everything. The patcher
-    /// entries and executables are always read.
+    /// empty segment or one ending in <c>.</c> or a space (<c>..</c> included), is refused before anything runs on the host.
+    /// Null lists everything. The patcher entries and executables are always read.
     /// </summary>
     public static Task<HostListing> ListAsync(IGameHost host, string root, TimeSpan timeout, IReadOnlyList<string>? paths = null,
         CancellationToken cancellation = default) => ListCoreAsync(host, root, timeout, paths, cancellation, ignoreCase: false);
 
     /// <summary>
-    /// <see cref="ListAsync"/> with every segment of every pattern compared ignoring case, on a bash host as on Windows. The
+    /// <see cref="ListAsync"/> with every segment of every pattern compared ignoring case (on a bash host as its locale folds
+    /// letters, ASCII letters at least; on Windows as the filesystem does). The
     /// patterns are globs, used as written: <c>*</c> matches any run of characters within a segment and <c>?</c> one character
     /// (on a bash host <c>[</c> opens a character class). A caller that names a literal file passes the name through
     /// <see cref="LiteralPattern"/> first.
@@ -79,14 +80,15 @@ public static class HostInstall
 
     /// <summary>
     /// The listing patterns as both listing scripts receive them, with <c>/</c> separators: refuses a pattern that is blank,
-    /// holds a control character, starts with a separator or a drive (<c>C:</c>), or has an empty, <c>.</c> or <c>..</c>
-    /// segment, each of which a bash and a PowerShell host would read differently or outside the root.
+    /// holds a control character, starts with a separator or a drive (<c>C:</c>), or has an empty segment or one ending in
+    /// <c>.</c> or a space (<c>.</c>, <c>..</c>, and names Windows trims), each of which a bash and a PowerShell host would read
+    /// differently or outside the root.
     /// </summary>
     internal static string[] ListingPatterns(IEnumerable<string> paths) => paths.Select(path =>
     {
         string pattern = (path ?? "").Replace('\\', '/');
         if (string.IsNullOrWhiteSpace(pattern) || pattern.Any(char.IsControl) || pattern.StartsWith('/') || Drive.IsMatch(pattern) ||
-            pattern.Split('/').Any(segment => segment is "" or "." or ".."))
+            pattern.Split('/').Any(segment => segment.Length == 0 || segment[^1] is '.' or ' '))
             throw new ArgumentException($"'{path}' is not a relative path inside the root.", nameof(paths));
         return pattern;
     }).ToArray();
@@ -405,7 +407,8 @@ internal static class HostInstallScripts
         echo "VT-LIST done"
         """.ReplaceLineEndings("\n");
 
-    // Variables: root, dirs. Hashes with .NET (see HostScripts' note on Get-FileHash); names travel as base64.
+    // Variables: root, dirs (as the bash listing's; names compare ignoring case, so nocase changes nothing). Hashes with .NET
+    // (see HostScripts' note on Get-FileHash); names travel as base64.
     public static readonly string PowerShellList = """
         $utf8 = New-Object Text.UTF8Encoding $false
         if (-not [IO.Directory]::Exists($root)) { 'VT-LIST missing'; exit 0 }
@@ -418,7 +421,7 @@ internal static class HostInstallScripts
             foreach ($pattern in ($dirs -split "`n")) {
                 if (-not $pattern) { continue }
                 $current = @($full)
-                $segments = @($pattern -split '[\\/]' | Where-Object { $_ })
+                $segments = @($pattern -split '/')
                 for ($i = 0; $i -lt $segments.Count; $i++) {
                     $segment = $segments[$i]
                     $next = @()
