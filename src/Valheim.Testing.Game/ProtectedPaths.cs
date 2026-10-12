@@ -3,7 +3,7 @@ namespace Valheim.Testing.Game;
 /// <summary>The one owner of "is this path inside that protected folder". Every output, install, source and fixture check asks here.</summary>
 internal static class ProtectedPaths
 {
-    private const int MaxLinkDepth = 16;
+    private const int MaxLinkHops = 40;
 
     /// <summary>True when <paramref name="path"/> is <paramref name="root"/> or lies under it, after both are resolved to their physical locations.</summary>
     internal static bool Contains(string root, string path)
@@ -17,37 +17,42 @@ internal static class ProtectedPaths
     }
 
     /// <summary>
-    /// The physical location of a path: every existing ancestor is resolved through symlinks and junctions
-    /// (<c>/tmp</c> to <c>/private/tmp</c>, a symlinked folder inside an install), a link may point through further links
-    /// up to a bound, and the final path need not exist yet. A link loop or too deep a chain throws <see cref="IOException"/>.
+    /// The physical location of a path, walked component by component: each existing link (symlink or junction) is replaced
+    /// by its target and the walk continues there, so <c>/tmp</c> becomes <c>/private/tmp</c>, a symlinked folder inside an install is
+    /// the install, and a <c>..</c> after a link goes up from the link's target. The final path need not exist yet. More than
+    /// <see cref="MaxLinkHops"/> links in one path, which includes any link loop, throws <see cref="IOException"/>.
     /// </summary>
     internal static string Resolve(string path)
     {
-        string full = Path.GetFullPath(path);
-        for (int i = 0; i < MaxLinkDepth; i++)
+        // GetFullPath would collapse "link/.." lexically, before the link is followed.
+        string raw = Path.IsPathFullyQualified(path) ? path : Path.GetFullPath(path);
+        string current = Path.GetPathRoot(raw)!;
+        var pending = new Stack<string>(Parts(raw[current.Length..]).Reverse());
+        int hops = 0;
+        while (pending.Count > 0)
         {
-            string resolved = ResolveExistingLinks(full, path);
-            if (resolved == full) return resolved;
-            full = resolved;
-        }
-        throw new IOException("The path has too many symlink or junction levels, or a link loop: " + path);
-    }
-
-    private static string ResolveExistingLinks(string full, string given)
-    {
-        string current = Path.GetPathRoot(full)!;
-        foreach (string part in full[current.Length..].Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries))
-        {
-            current = Path.Combine(current, part);
-            FileSystemInfo info = Directory.Exists(current) ? new DirectoryInfo(current) : new FileInfo(current);
+            string part = pending.Pop();
+            if (part == ".") continue;
+            if (part == "..") { current = Directory.GetParent(current)?.FullName ?? current; continue; }
+            string next = Path.Combine(current, part);
+            FileSystemInfo info = Directory.Exists(next) ? new DirectoryInfo(next) : new FileInfo(next);
             // A dangling link is still a link: its target may be a protected folder that is created later.
-            if (!info.Exists && info.LinkTarget == null) continue;
-            try { current = info.ResolveLinkTarget(returnFinalTarget: true)?.FullName ?? current; }
+            if (!info.Exists && info.LinkTarget == null) { current = next; continue; }
+            FileSystemInfo? target;
+            try { target = info.ResolveLinkTarget(returnFinalTarget: false); }
             catch (Exception error) when (error is IOException or UnauthorizedAccessException)
             {
-                throw new IOException($"Cannot resolve the symlink or junction {current} in {given}; it may be a link loop or unreadable.", error);
+                throw new IOException($"Cannot read the symlink or junction {next} in {path}.", error);
             }
+            if (target == null) { current = next; continue; }
+            if (++hops > MaxLinkHops)
+                throw new IOException($"The path {path} passes through more than {MaxLinkHops} symlinks or junctions; it may be a link loop.");
+            current = Path.GetPathRoot(target.FullName)!;
+            foreach (string again in Parts(target.FullName[current.Length..]).Reverse()) pending.Push(again);
         }
-        return Path.GetFullPath(current);
+        return current;
     }
+
+    private static string[] Parts(string relative) =>
+        relative.Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar], StringSplitOptions.RemoveEmptyEntries);
 }

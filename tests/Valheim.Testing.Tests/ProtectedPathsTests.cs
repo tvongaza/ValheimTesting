@@ -81,6 +81,20 @@ public sealed class ProtectedPathsTests : IDisposable
     }
 
     [Fact]
+    public void ADotDotAfterALinkGoesUpFromTheLinksTarget()
+    {
+        string real = Folder("protected");
+        string inner = Path.Combine(real, "inner");
+        Directory.CreateDirectory(inner);
+        string alias = Alias("alias", inner);
+        // Lexically alias/../run is a sibling of the alias; physically it is inside the protected folder.
+        string output = Path.Combine(alias, "..", "run");
+        Assert.Equal(Path.Combine(ProtectedPaths.Resolve(real), "run"), ProtectedPaths.Resolve(output));
+        Assert.True(ProtectedPaths.Contains(real, output));
+        Assert.False(ProtectedPaths.Contains(real, Path.Combine(_root, "run")));
+    }
+
+    [Fact]
     public void ALinkThatPointsThroughAnotherLinkIsFollowedToTheEnd()
     {
         string real = Folder("protected");
