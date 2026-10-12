@@ -155,18 +155,51 @@ public sealed class OwnedScreenshotTests : IDisposable
         Assert.Equal([1, 2, 3], File.ReadAllBytes(existing));
     }
 
+    // Cancellation is ordered by Capture's own events, never by a timer: a timer's callback runs on the thread pool, and
+    // a pool busy with other tests delayed it past the whole write deadline (#732), so Capture ran out its deadline and
+    // returned an incomplete result normally, which is correct for a token nobody had cancelled yet. Here the token is
+    // cancelled inside Capture's wait window (its check found no image and it is about to wait), the deadline is a margin
+    // that is reached only if the cancellation goes unnoticed, and the write never happens.
     [Fact]
     public void AnInterruptedWriteLeavesOnlyAPrivateIntentAndIncompleteResult()
     {
         using var cancel = new CancellationTokenSource();
-        using var actor = new ScriptedTransport().OnPrefix("cli_screenshot_path64 ", command =>
-        {
-            cancel.CancelAfter(50);
-            return ScriptedTransport.Ok("OK: screenshot queued path=" + CommandPath(command) + " size=1x1");
-        }).Actor();
+        using var actor = QueuedOnly();
         Assert.Throws<OperationCanceledException>(() => OwnedScreenshot.Capture(actor, _root,
-            "cli_screenshot interrupted", 1, TimeSpan.FromSeconds(2), cancel.Token));
+            "cli_screenshot interrupted", 1, Limit, cancel.Token, aboutToWait: cancel.Cancel));
+        AssertOnlyIntentAndInterruptedResult();
+    }
+
+    // The same interruption while Capture is parked in its wait: a dedicated thread cancels once Capture reports that it
+    // is about to wait, so the wake comes from the token and not from a re-check or the deadline.
+    [Fact]
+    public void AnInterruptionWhileWaitingWakesCaptureAtOnce()
+    {
+        using var cancel = new CancellationTokenSource();
+        using var waiting = new SemaphoreSlim(0);
+        var canceller = new Thread(() =>
+        {
+            if (waiting.Wait(Limit)) cancel.Cancel();
+        }) { IsBackground = true };
+        canceller.Start();
+        using var actor = QueuedOnly();
+        var started = System.Diagnostics.Stopwatch.StartNew();
+        Assert.Throws<OperationCanceledException>(() => OwnedScreenshot.Capture(actor, _root,
+            "cli_screenshot parked", 1, Limit, cancel.Token, aboutToWait: () => waiting.Release(),
+            recheck: TimeSpan.FromSeconds(20)));
+        // Neither the 20 s re-check nor the 30 s deadline can have ended the wait, whatever the host's speed.
+        Assert.True(started.Elapsed < TimeSpan.FromSeconds(15), "Capture was not woken by the cancellation: " + started.Elapsed);
+        Assert.True(canceller.Join(Limit));
+        AssertOnlyIntentAndInterruptedResult();
+    }
+
+    private GameActor QueuedOnly() => new ScriptedTransport().OnPrefix("cli_screenshot_path64 ", command =>
+        ScriptedTransport.Ok("OK: screenshot queued path=" + CommandPath(command) + " size=1x1")).Actor();
+
+    private void AssertOnlyIntentAndInterruptedResult()
+    {
         Assert.Single(Directory.GetFiles(Path.Combine(_root, "screenshots"), "*.intent.json"));
+        Assert.Empty(Directory.GetFiles(Path.Combine(_root, "screenshots"), "*.png"));
         Assert.Contains("interrupted", File.ReadAllText(Assert.Single(
             Directory.GetFiles(Path.Combine(_root, "screenshots"), "*.result.json"))));
     }
