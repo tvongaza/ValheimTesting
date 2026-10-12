@@ -297,7 +297,7 @@ internal static partial class HostedRuntimeStage
             $to = Join-Path $runtime $relative
             [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($to))
             try { New-Item -ItemType HardLink -Path $to -Target $from -ErrorAction Stop | Out-Null }
-            catch { throw "The source game and disposable launch folder must support hard links on one volume. Put the environment's runtime folder on the game's NTFS volume; a volume without hard links cannot hold a profile. $($_.Exception.Message)" }
+            catch { throw "The source game and disposable launch folder must support hard links on one volume: move the folder that holds the profile ($runtime) onto the NTFS volume of $source. A volume without hard links cannot hold a profile; an owned client can instead run its install as it is (inPlace, --in-place). $($_.Exception.Message)" }
         }
         foreach ($line in ($files -split "`n")) {
             if (-not $line) { continue }
