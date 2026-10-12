@@ -100,30 +100,15 @@ internal static class ClientFailureEvidence
 
     private static string Screenshot(GameActor actor, string output)
     {
-        string name = "vt-failure-" + Guid.NewGuid().ToString("N");
         TimeSpan previous = actor.CommandTimeout;
         try
         {
             actor.CommandTimeout = TimeSpan.FromSeconds(3);
-            var reply = actor.Execute("cli_screenshot " + name, requireAccepted: false);
-            if (!reply.Accepted) return "CLI refused or did not answer within 3 s: " + (reply.Refusal ?? reply.ErrorCode ?? reply.Message ?? "no accepted reply");
-            string? line = reply.Line("OK: screenshot queued path=");
-            if (line == null) return "CLI replied but did not name a screenshot path";
-            string path = line["OK: screenshot queued path=".Length..].Split(" size=", 2, StringSplitOptions.None)[0];
-            if (!Path.IsPathRooted(path)) return "CLI named a non-absolute screenshot path";
-            string destination = Path.Combine(output, "client-failure-screenshot.png");
-            if (!File.Exists(path))
-            {
-                string? directory = Path.GetDirectoryName(path);
-                if (directory == null || !Directory.Exists(directory)) return "screenshot queued but its directory did not appear before teardown";
-                using var watcher = new FileSystemWatcher(directory, Path.GetFileName(path)) { EnableRaisingEvents = true };
-                if (!File.Exists(path)) watcher.WaitForChanged(WatcherChangeTypes.Created | WatcherChangeTypes.Changed, 2000);
-            }
-            if (!File.Exists(path)) return "screenshot queued but CLI did not write it within 2 s";
-            File.Copy(path, destination);
-            return "captured: " + Path.GetFileName(destination);
+            var capture = OwnedScreenshot.Capture(actor, output, "cli_screenshot", 1, TimeSpan.FromSeconds(2));
+            return capture.Complete ? "captured: " + capture.RelativeImage + " sha256=" + capture.Sha256
+                : "CLI refused or screenshot unavailable: " + capture.Status;
         }
-        catch (Exception error) when (error is IOException or InvalidOperationException or TimeoutException or UnauthorizedAccessException)
+        catch (Exception error) when (error is IOException or InvalidOperationException or TimeoutException or UnauthorizedAccessException or ArgumentException)
         { return "CLI unresponsive or screenshot unavailable within the bounded attempt: " + error.Message; }
         finally { actor.CommandTimeout = previous; }
     }
