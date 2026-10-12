@@ -117,6 +117,8 @@ try
         if (!Directory.Exists(path)) throw new DirectoryNotFoundException(name + " directory does not exist: " + path);
     var custom = options.TryGetValue("--scenario", out string? scenarioFile)
         ? OneShotScenario.LoadHosted(scenarioFile, output) : null;
+    object? validatedScenarioInputs = custom == null ? null
+        : OneShotScenario.ValidateInputs(custom.Runner, custom.Runner.Name);
     SmokeInputs.RecordClient(inventory, client, output);
     foreach (var (name, path) in selectedMods.Select(path => ("--mod", path)).Append(("--cli-manifest", cliManifest)))
         if (!File.Exists(path)) throw new FileNotFoundException(name + " file does not exist: " + path, path);
@@ -185,7 +187,7 @@ try
         var report = runner.Run(arm, armOutput, custom?.Runner.Name ?? "selected plugin loads in a hosted fixture",
             ["first"], round =>
             {
-                custom?.Runner.Run(round);
+                custom?.Runner.Run(round, validatedScenarioInputs);
                 if (holdRequested && arm == inputs.Mod.Arms.Keys.Last())
                     round.Step("keep the owned client running until finish", () =>
                         ForegroundHold.HoldAsync(runId, armOutput, cancel.Token,

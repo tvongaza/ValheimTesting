@@ -20,6 +20,45 @@ public sealed class ServerLoadOneOffTests : IDisposable
 
     private static readonly CampaignPreflightReport Ready = new([]);
     [Fact]
+    public async Task ScenarioInputRefusalHappensBeforeFixtureOrCampaignPreparation()
+    {
+        string output = Path.Combine(_rig.Root, "missing-scenario-input");
+        bool inspected = false;
+        SampleOneShotServerScenario.InputSetting = "";
+        try
+        {
+            int result = await ServerLoad.RunAsync(Arguments(output, "--server-only", "--scenario",
+                typeof(SampleOneShotServerScenario).Assembly.Location),
+                new ServerLoad.Seams(Inspect: _ => { inspected = true; return Task.FromResult(Ready); },
+                    Campaign: (_, _, _, _, _) => throw new Xunit.Sdk.XunitException("A refused scenario started the campaign.")));
+            Assert.Equal(3, result);
+            Assert.False(inspected);
+            Assert.False(File.Exists(Path.Combine(output, "campaign.json")));
+            Assert.False(Directory.Exists(Path.Combine(output, "world-source")));
+            Assert.Contains("Set VT_TEST_SCENARIO_INPUT", File.ReadAllText(Path.Combine(output, "REFUSED.txt")));
+        }
+        finally { SampleOneShotServerScenario.InputSetting = null; }
+    }
+
+    [Fact]
+    public void ScenarioPreflightReturnsOneValueForServerAndHostedRuns()
+    {
+        SampleOneShotServerScenario.InputSetting = "chosen";
+        try
+        {
+            var server = new SampleOneShotServerScenario();
+            object? value = OneShotScenario.ValidateInputs(server, server.Name);
+            Assert.Same(SampleOneShotServerScenario.LastValidated, value);
+            var context = new OneShotServerContext { ServerPlan = null!, WorldUid = "1", ValidatedInputs = value };
+            Assert.Same(value, context.RequireInputs<SampleOneShotServerScenario.Validated>());
+            var hosted = new SampleOneShotHostedScenario();
+            object? hostedValue = OneShotScenario.ValidateInputs(hosted, hosted.Name);
+            ((IOneShotHostedScenario)hosted).Run(null!, hostedValue);
+            Assert.Same(hostedValue, hosted.Received);
+        }
+        finally { SampleOneShotServerScenario.InputSetting = null; }
+    }
+    [Fact]
     public async Task ModOwnedScenarioUsesThePreparedCampaignWithoutAnotherCopy()
     {
         string output = Path.Combine(_rig.Root, "mod-scenario");
@@ -780,12 +819,21 @@ public sealed class ServerLoadOneOffTests : IDisposable
     }
 }
 
-public sealed class SampleOneShotServerScenario : IOneShotServerScenario
+public sealed class SampleOneShotServerScenario : IOneShotServerScenario, IOneShotScenarioPreflight
 {
+    public sealed record Validated(string Value);
+    public static string? InputSetting { get; set; }
+    public static Validated? LastValidated { get; private set; }
     public string Name => "sample-one-shot";
     public bool RequiresClient => false;
+    public object ValidateInputs()
+    {
+        if (InputSetting == "") throw new InvalidDataException("Set VT_TEST_SCENARIO_INPUT before server-load.");
+        return LastValidated = new Validated(InputSetting ?? "default");
+    }
     public Task RunAsync(GameSession session, OneShotServerContext context)
     {
+        _ = context.RequireInputs<Validated>();
         session.Report.Step("sample fixture UID is pinned", () =>
         {
             if (string.IsNullOrWhiteSpace(context.WorldUid)) throw new InvalidDataException("Missing fixture world UID.");
@@ -794,9 +842,16 @@ public sealed class SampleOneShotServerScenario : IOneShotServerScenario
     }
 }
 
-public sealed class SampleOneShotHostedScenario : IOneShotHostedScenario
+public sealed class SampleOneShotHostedScenario : IOneShotHostedScenario, IOneShotScenarioPreflight
 {
+    public object? Received { get; private set; }
     public string Name => "sample-hosted-one-shot";
+    public object ValidateInputs() => new object();
+    public void Run(ClientRound round, object? validatedInputs)
+    {
+        Received = validatedInputs;
+        if (round != null) Run(round);
+    }
     public void Run(ClientRound round) => round.Step("hosted fixture UID is pinned", () =>
     {
         if (string.IsNullOrWhiteSpace(round.WorldUid)) throw new InvalidDataException("Missing fixture world UID.");

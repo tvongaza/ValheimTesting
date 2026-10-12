@@ -23,9 +23,28 @@ public interface IOneShotServerScenario
     Task RunAsync(GameSession session, OneShotServerContext context);
 }
 
+/// <summary>
+/// Optional input check for a one-shot server or hosted-client scenario. The toolkit calls this once
+/// before it stages a fixture or starts a game, then passes the exact returned value to the scenario.
+/// Read settings and local files here; do not change a game install, save or shared state.
+/// Throw an actionable exception when an input is missing or invalid.
+/// </summary>
+public interface IOneShotScenarioPreflight
+{
+    /// <summary>Returns the validated, preferably immutable inputs to use during the run.</summary>
+    object ValidateInputs();
+}
+
 /// <summary>The strict plans and fixture identity prepared for a mod-owned one-shot server scenario.</summary>
 public sealed class OneShotServerContext
 {
+    /// <summary>The exact object returned by <see cref="IOneShotScenarioPreflight.ValidateInputs"/>, if implemented.</summary>
+    public object? ValidatedInputs { get; init; }
+
+    /// <summary>Gets the scenario's validated input without rereading the original settings.</summary>
+    public T RequireInputs<T>() where T : class => ValidatedInputs as T
+        ?? throw new InvalidOperationException($"The scenario did not preflight inputs of type {typeof(T).Name}.");
+
     /// <summary>The owned server's validated plan.</summary>
     public required ServerRunPlan ServerPlan { get; init; }
     /// <summary>The prepared clean client plan, or null for <c>--server-only</c>.</summary>
@@ -47,4 +66,11 @@ public interface IOneShotHostedScenario
 
     /// <summary>Exercise and assert within the prepared hosted world.</summary>
     void Run(ClientRound round);
+
+    /// <summary>
+    /// Receives the exact preflight value when the scenario also implements <see cref="IOneShotScenarioPreflight"/>.
+    /// Existing scenarios use <see cref="Run(ClientRound)"/> by default; a scenario with inputs can override
+    /// this overload and avoid reading its settings a second time.
+    /// </summary>
+    void Run(ClientRound round, object? validatedInputs) => Run(round);
 }

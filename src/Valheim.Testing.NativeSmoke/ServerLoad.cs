@@ -286,6 +286,8 @@ internal static class ServerLoad
             throw new ArgumentException(custom.Runner.RequiresClient
                 ? $"Scenario {custom.Runner.Name} needs the clean client; leave out --server-only."
                 : $"Scenario {custom.Runner.Name} uses only the server; give --server-only.");
+        object? validatedScenarioInputs = custom == null ? null
+            : OneShotScenario.ValidateInputs(custom.Runner, custom.Runner.Name);
         // A scenario/client-shape mismatch is a pure input error. Refuse it before probing the
         // host: an unrelated slow or transient desktop/Steam check must not mask that reason.
         // The output is already protected above, and no adapter, fixture or campaign was written.
@@ -522,7 +524,8 @@ internal static class ServerLoad
                         {
                             await Scenario(session, null, clock, false, worldUid, false, null, null, null, null).ConfigureAwait(false);
                             await custom.Runner.RunAsync(session, new OneShotServerContext
-                            { ServerPlan = plan, ClientPlan = clientPlan, WorldUid = worldUid }).ConfigureAwait(false);
+                            { ServerPlan = plan, ClientPlan = clientPlan, WorldUid = worldUid,
+                                ValidatedInputs = validatedScenarioInputs }).ConfigureAwait(false);
                         },
                 }).ConfigureAwait(false);
         }
