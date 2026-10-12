@@ -50,10 +50,22 @@ internal static class OwnedCliCommand
             // A separate invocation is outside the runner's connection log. Open its own create-new record before
             // any pin check or game command, so a mutating diagnostic cannot succeed without private evidence.
             string commandLog = Path.Combine(evidence, "owned-cli-command-" + Guid.NewGuid().ToString("N") + ".jsonl");
-            using var actor = new GameActor("owned diagnostic client",
-                new RecordingTransport(new CliTransport("127.0.0.1", lease.Port), commandLog))
+            var recording = new RecordingTransport(new CliTransport("127.0.0.1", lease.Port), commandLog);
+            using var actor = new GameActor("owned diagnostic client", recording)
             { CommandTimeout = TimeSpan.FromSeconds(values.TryGetValue("--timeout-seconds", out string? limit) ? int.Parse(limit, CultureInfo.InvariantCulture) : 5) };
             actor.VerifyEnvironment(expected);
+            if (ScreenshotSupersize(values["--command"]) is { } supersize)
+            {
+                var capture = OwnedScreenshot.Capture(actor, evidence, values["--command"], supersize,
+                    TimeSpan.FromSeconds(15));
+                recording.RecordEvidence(new { kind = "owned-screenshot", capture.Status, capture.Complete,
+                    capture.RelativeImage, capture.Sha256, capture.ResultFile });
+                output.WriteLine("Private screenshot evidence: " + capture.ResultFile);
+                output.WriteLine("Private command evidence: " + commandLog);
+                if (capture.Complete) return 0;
+                error.WriteLine("REFUSED: " + capture.Status);
+                return 1;
+            }
             var reply = actor.Execute(values["--command"], requireAccepted: false); // One command, never retried.
             foreach (string line in reply.Output) output.WriteLine(line);
             output.WriteLine("Private command evidence: " + commandLog);
@@ -63,6 +75,18 @@ internal static class OwnedCliCommand
         }
         catch (Exception failure) when (failure is IOException or ArgumentException or InvalidOperationException or JsonException or TimeoutException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
         { error.WriteLine("REFUSED: " + failure.Message); return 3; }
+    }
+
+    // Only the built-in screenshot is redirected into private evidence. A malformed invocation is
+    // refused before it can write an arbitrary file selected by the caller.
+    internal static int? ScreenshotSupersize(string command)
+    {
+        string[] parts = command.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length == 0 || parts[0] != "cli_screenshot") return null;
+        if (parts.Length > 3 || parts.Length == 3 &&
+            (!int.TryParse(parts[2], NumberStyles.None, CultureInfo.InvariantCulture, out int size) || size is < 1 or > 4))
+            throw new ArgumentException("cli_screenshot accepts an optional name and supersize 1..4; the owned runner writes it to private evidence.");
+        return parts.Length == 3 ? int.Parse(parts[2], CultureInfo.InvariantCulture) : 1;
     }
 
     internal static bool IsExactProcess(Process process, OwnedClientCommandLease lease) =>
