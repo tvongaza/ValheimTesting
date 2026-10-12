@@ -20,10 +20,12 @@ From a ValheimTesting checkout, create a private request such as:
 Paths may be relative to the request file. Generate the ValheimCLI manifest for one pinned default-plugin build with `CliCapabilityManifest.Generate(...)`, or use the manifest shipped with that build. The resolver selects the default plugin and checks its hash and requested commands against that manifest. Include the commands your scenario needs as well as the runner's session commands.
 
 ```sh
-sh scripts/bootstrap-cli.sh  # macOS/Linux; on Windows: powershell -NoProfile -File scripts/bootstrap-cli.ps1
+sh scripts/bootstrap-cli.sh  # macOS/Linux; on Windows: see CONTRIBUTING.md
 dotnet run scripts/native-dependencies.cs -- resolve /private/test/request.json /private/test/dependency-lock.json
 dotnet run scripts/native-dependencies.cs -- check /private/test/dependency-lock.json
 ```
+
+The Windows bootstrap command is in [CONTRIBUTING.md](../CONTRIBUTING.md#set-up-and-validate-locally).
 
 `resolve` writes a private, editable lock even when it finds a gap, then exits nonzero and names the missing or ambiguous DLL. Add a search root or choose an exact file and run it again. An assembly referenced by a soft integration is a **candidate**, not automatically optional: add its assembly name to `optionalReferences` only after confirming the mod guards that use when the integration is absent. The lock records each selected path, SHA256 and reason. `check` verifies those pins on later runs without rediscovery; it refuses a changed file.
 
