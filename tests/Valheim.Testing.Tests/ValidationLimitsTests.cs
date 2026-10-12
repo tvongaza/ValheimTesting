@@ -86,15 +86,11 @@ public sealed class ValidationLimitsTests : IClassFixture<ValidationLimitsTests.
             _script = Path.Combine(Path.GetTempPath(), "vt-validate-limits-probe", "validate.cs");
             Directory.CreateDirectory(Path.GetDirectoryName(_script)!);
             File.Copy(Path.Combine(FixtureProjects.RepositoryRoot(), "scripts", "validate.cs"), _script, overwrite: true);
-            // Restore and compile now, so the scaled limits below measure the test run and not the first build.
-            (await FixtureProjects.Dotnet(project, ["build", "-c", "Release"], timeoutMinutes: 4)).AssertSucceeded();
-            // Run the project once as validate.cs will, so a first-run effect of the fixture itself (the macOS runner failed to
-            // load xunit.abstractions in the first test run after a build) is settled here and not blamed on the limits. A second
-            // attempt is allowed for that; a project that cannot run twice fails the whole class with its own output.
-            BuildRun warmUp = await FixtureProjects.Dotnet(project, ["test", "-c", "Release", "-m:1", "--filter", "FullyQualifiedName~PassesQuickly"], timeoutMinutes: 4);
-            if (warmUp.ExitCode != 0)
-                warmUp = await FixtureProjects.Dotnet(project, ["test", "-c", "Release", "-m:1", "--filter", "FullyQualifiedName~PassesQuickly"], timeoutMinutes: 4);
-            warmUp.AssertSucceeded();
+            // Restore and compile now, so the scaled limits below measure the test run and not the first build. The project is
+            // named by the very path validate.cs will pass to dotnet test (not found from the working directory, which a temp
+            // folder behind a symbolic link such as macOS's /var spells differently): another spelling is another project to
+            // NuGet, so the first test run restored again and the runner then failed to load xunit.abstractions (macOS CI).
+            (await FixtureProjects.Dotnet(project, ["build", _project, "-c", "Release", "-m:1"], timeoutMinutes: 4)).AssertSucceeded();
         }
 
         public Task DisposeAsync()
