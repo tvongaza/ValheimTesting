@@ -163,6 +163,58 @@ public sealed class LocalClientCopyTests : IDisposable
         Assert.Equal(before, Tree(_rig.Game));
     }
 
+    // AllowOnServerClients governs a client joined to someone else's server; a client hosting its own world needs no such setting.
+    [Fact] public async Task AnExplicitConfigWithoutMutationAccessRunsForAClientThatHostsItsOwnWorld()
+    {
+        string config = Path.Combine(_rig.Game, "BepInEx", "config", "valheimCLI.valheimCLI.cfg");
+        Directory.CreateDirectory(Path.GetDirectoryName(config)!);
+        const string chosen = "[Server]\nEnabled = true\nPort = 5556\n";
+        File.WriteAllText(config, chosen);
+        var before = Tree(_rig.Game);
+        var plan = Plan(_rig.Game);
+        plan.Join = "";
+        plan.HostWorld = new HostWorldPlan { WorldUid = "fixture-uid" };
+        plan.CliManifest = CliSet();
+        string data = Path.Combine(_rig.Root, "data");
+        using var journalDirectory = RunJournal.UseLocalDirectory(Path.Combine(data, "journal"));
+        var copy = await LocalClientCopy.PrepareAsync("client", plan, default, data, ThisMachine(), loader: (_, _) => null, copyGame: true);
+        Assert.Equal(chosen, File.ReadAllText(Path.Combine(copy.Runtime, "BepInEx", "config", "valheimCLI.valheimCLI.cfg")));
+        Assert.Equal(before, Tree(_rig.Game));
+        await copy.RetireAsync();
+    }
+
+    [Fact] public void OnlyAClientThatHostsNoWorldOfItsOwnNeedsMutationAccess()
+    {
+        Assert.True(CliServerConfig.RequiresClientMutations(Plan(_rig.Game)));
+        Assert.True(CliServerConfig.RequiresClientMutations(new ClientRunPlan { JoinsHost = true }));
+        Assert.True(CliServerConfig.RequiresClientMutations(new ClientRunPlan { Crossplay = true }));
+        Assert.False(CliServerConfig.RequiresClientMutations(new ClientRunPlan { HostWorld = new HostWorldPlan() }));
+        Assert.True(CliServerConfig.RequiresClientMutations(null)); // An unknown plan is treated as joined.
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void AnExplicitConfigIsCheckedOnlyWhenTheRoleNeedsMutationAccess(bool requireClientMutations)
+    {
+        string selected = Path.Combine(_rig.Root, "selected.cfg"), generated = Path.Combine(_rig.Root, "generated.cfg");
+        File.WriteAllText(selected, "[Server]\nEnabled = true\nPort = 5556\n");
+        var files = new[] { new HostedRuntimeFile(selected, CliServerConfig.RelativePath) };
+        if (requireClientMutations) Assert.Throws<InvalidDataException>(() => CliServerConfig.Stage(files, "actor", 5556, generated, true));
+        else Assert.Equal(selected, Assert.Single(CliServerConfig.Stage(files, "actor", 5556, generated, false)).Source);
+        Assert.False(File.Exists(generated)); // An explicit config is kept as selected, never rewritten.
+    }
+
+    // With no config of the actor's own, every role gets the same generated file.
+    [Fact] public void AGeneratedConfigIsTheSameForEveryRole()
+    {
+        string joined = Path.Combine(_rig.Root, "joined.cfg"), hosting = Path.Combine(_rig.Root, "hosting.cfg");
+        CliServerConfig.Stage([], "client", 5556, joined, requireClientMutations: true);
+        CliServerConfig.Stage([], "host", 5556, hosting, requireClientMutations: false);
+        Assert.Equal(File.ReadAllText(joined), File.ReadAllText(hosting));
+        Assert.Contains("AllowOnServerClients = true", File.ReadAllText(joined));
+    }
+
     [Fact] public async Task AnExplicitClientConfigWithMutationAccessIsStagedUnchanged()
     {
         string config = Path.Combine(_rig.Game, "BepInEx", "config", "valheimCLI.valheimCLI.cfg");

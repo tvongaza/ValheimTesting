@@ -449,7 +449,7 @@ public static class PinnedServerRun
             phase = StepPhase.Setup; // From here the hosts are written to.
             await report.StepAsync(StepPhase.Setup, "check the hosts and prepare every actor's disposable install", async () =>
                 prepared = await HostedCampaignPreparation.PrepareAsync(inspection, preparedDirectory, CampaignTimeout,
-                    name => options.Hooks.CreateHost(inspection.Inputs!.Profile, name), cancellation.Token, runId, PreparationCleanup(report), options.Hooks.ShippedLoaderAsync, ShippedLoaderChosen(report), options.CopyGame).ConfigureAwait(false)).ConfigureAwait(false);
+                    name => options.Hooks.CreateHost(inspection.Inputs!.Profile, name), cancellation.Token, named, runId, PreparationCleanup(report), options.Hooks.ShippedLoaderAsync, ShippedLoaderChosen(report), options.CopyGame).ConfigureAwait(false)).ConfigureAwait(false);
             report.Provenance["campaignLaunchModes"] = prepared!.LaunchModes(options.CopyGame);
             string hostName = null!;
             report.Step(StepPhase.Setup, "bind the prepared actors to the plan", () =>
@@ -625,7 +625,7 @@ public static class PinnedServerRun
                 phase = StepPhase.Setup; // From here the hosts are written to.
                 await report.StepAsync(StepPhase.Setup, "check the hosts and prepare every actor's disposable install", async () =>
                     prepared = await HostedCampaignPreparation.PrepareAsync(inspection, Path.Combine(output, "prepared"), CampaignTimeout,
-                        name => options.Hooks.CreateHost(inspection.Inputs!.Profile, name), cancellation.Token, campaignRunId, PreparationCleanup(report), options.Hooks.ShippedLoaderAsync, ShippedLoaderChosen(report), options.CopyGame).ConfigureAwait(false)).ConfigureAwait(false);
+                        name => options.Hooks.CreateHost(inspection.Inputs!.Profile, name), cancellation.Token, campaignPlans, campaignRunId, PreparationCleanup(report), options.Hooks.ShippedLoaderAsync, ShippedLoaderChosen(report), options.CopyGame).ConfigureAwait(false)).ConfigureAwait(false);
                 report.Provenance["campaignLaunchModes"] = prepared!.LaunchModes(options.CopyGame);
                 if (prepared.Manifest.Server?.SteamRuntimePackage is { } steamPackagePath)
                 {

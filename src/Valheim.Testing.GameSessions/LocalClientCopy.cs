@@ -196,7 +196,7 @@ internal sealed class LocalClientCopy
             selection.Add(new HostedRuntimeFile(found.Path, "BepInEx/plugins/" + found.File.File));
         // ValheimCLI's port, as a session writes it, when the install has no config of its own for it.
         config = Path.Combine(Path.GetTempPath(), "vt-local-client-" + Guid.NewGuid().ToString("N") + ".cfg");
-        return CliServerConfig.Stage(selection, "Client", plan.Port, config);
+        return CliServerConfig.Stage(selection, "Client", plan.Port, config, CliServerConfig.RequiresClientMutations(plan));
     }
 
     // The plan, bound to its copy: the copy's install and install pins, its plugin pins with the staged set's in place of any
