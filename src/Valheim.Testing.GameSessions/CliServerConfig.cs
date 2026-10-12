@@ -1,4 +1,5 @@
 using System.Globalization;
+using Valheim.Testing.Game;
 
 namespace Valheim.Testing.GameSessions;
 
@@ -8,10 +9,18 @@ internal static class CliServerConfig
 {
     internal const string RelativePath = "BepInEx/config/valheimCLI.valheimCLI.cfg";
 
+    // Whether a client needs ValheimCLI's mutation access is decided here, once, from its role. AllowOnServerClients governs
+    // a client joined to someone else's server (a dedicated server's, or a hosting client's as that host's peer), where
+    // protection and arrival are refused without it. A client hosting its own world is not joined, and a dedicated server
+    // has no client at all. A caller that does not know its client's plan (a campaign prepared from its manifest alone,
+    // before the plan names who hosts) passes null and is treated as joined: the setting is required rather than assumed absent.
+    internal static bool RequiresClientMutations(ClientRunPlan? plan) => plan?.HostWorld == null;
+
     // The single decision point for a disposable actor's selected ValheimCLI config. An explicit config is kept as
-    // selected; a client scenario needing protection or arrival refuses insufficient access before copying.
+    // selected; a joined client (requireClientMutations, from RequiresClientMutations) refuses insufficient access before
+    // copying. Every caller states the role: there is no default.
     internal static List<HostedRuntimeFile> Stage(IEnumerable<HostedRuntimeFile> selected, string actor, int port,
-        string generatedPath, bool requireClientMutations = true)
+        string generatedPath, bool requireClientMutations)
     {
         var files = selected.ToList();
         var chosen = files.SingleOrDefault(file => file.RelativePath.Equals(RelativePath, StringComparison.OrdinalIgnoreCase));

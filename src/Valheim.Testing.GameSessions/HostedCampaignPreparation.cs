@@ -916,10 +916,13 @@ public static class HostedCampaignPreparation
     /// (<see cref="RunJournal"/>).
     /// </summary>
     /// <remarks>A failed preparation removes what it made before it throws; <paramref name="cleanupStep"/> (the runner's report, as a
-    /// Cleanup step) records that removal, so the result and the journal's <c>run-ended</c> judge the same cleanup (#424).</remarks>
+    /// Cleanup step) records that removal, so the result and the journal's <c>run-ended</c> judge the same cleanup (#424).
+    /// <paramref name="plans"/> are the runner's client plans by name: a client whose plan hosts its own world needs no ValheimCLI
+    /// mutation access (<see cref="CliServerConfig.RequiresClientMutations"/>); a client with no plan here is treated as joined.</remarks>
     internal static async Task<PreparedHostedCampaign> PrepareAsync(Inspection inspection, string outputDirectory, TimeSpan timeout,
         Func<string, IGameHost>? hostFactory, CancellationToken cancellation, string? runId = null, Func<string, Func<Task>, Task>? cleanupStep = null,
-        ShippedLoader.Rule? shippedLoader = null, Action<string, string>? loaderChosen = null, bool copyGame = false)
+        ShippedLoader.Rule? shippedLoader = null, Action<string, string>? loaderChosen = null, bool copyGame = false,
+        IReadOnlyDictionary<string, ClientRunPlan>? plans = null)
     {
         inspection.Report.RequireReady();
         var readiness = await InspectHostsAsync(inspection, timeout, hostFactory, cancellation, shippedLoader, copyGame: copyGame).ConfigureAwait(false);
@@ -937,8 +940,9 @@ public static class HostedCampaignPreparation
         foreach (var (name, role, _) in roles)
         {
             string config = Path.Combine(output, "inputs", name, "valheimCLI.valheimCLI.cfg");
+            // The dedicated server has no client; a client's need follows its plan's role (a hosting client does not join).
             selections[name] = CliServerConfig.Stage(selections[name], name, role.CliPort, config,
-                requireClientMutations: name != "server").ToArray();
+                requireClientMutations: name != "server" && CliServerConfig.RequiresClientMutations(plans?.GetValueOrDefault(name))).ToArray();
         }
         var journal = new RunJournal(runId ?? RunJournal.NewRunId());
         string id = journal.RunId;
