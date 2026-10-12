@@ -88,6 +88,13 @@ public sealed class ValidationLimitsTests : IClassFixture<ValidationLimitsTests.
             File.Copy(Path.Combine(FixtureProjects.RepositoryRoot(), "scripts", "validate.cs"), _script, overwrite: true);
             // Restore and compile now, so the scaled limits below measure the test run and not the first build.
             (await FixtureProjects.Dotnet(project, ["build", "-c", "Release"], timeoutMinutes: 4)).AssertSucceeded();
+            // Run the project once as validate.cs will, so a first-run effect of the fixture itself (the macOS runner failed to
+            // load xunit.abstractions in the first test run after a build) is settled here and not blamed on the limits. A second
+            // attempt is allowed for that; a project that cannot run twice fails the whole class with its own output.
+            BuildRun warmUp = await FixtureProjects.Dotnet(project, ["test", "-c", "Release", "-m:1", "--filter", "FullyQualifiedName~PassesQuickly"], timeoutMinutes: 4);
+            if (warmUp.ExitCode != 0)
+                warmUp = await FixtureProjects.Dotnet(project, ["test", "-c", "Release", "-m:1", "--filter", "FullyQualifiedName~PassesQuickly"], timeoutMinutes: 4);
+            warmUp.AssertSucceeded();
         }
 
         public Task DisposeAsync()
