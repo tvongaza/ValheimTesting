@@ -16,7 +16,7 @@ using Valheim.Testing.GameSessions;
 internal static class ServerLoad
 {
     internal static readonly string Usage = "valheim-test server-load [--mod DLL ... | --project MOD.csproj] [--scenario TEST.dll | --scenario-project TEST.csproj] [--adapter DLL | --adapter-project ADAPTER.csproj] [--adapter-property NAME={mod}|{cli} ...] [--session-capability OWNER/session --session-token-variable NAME] [--dependency NAME=DLL ...] [--output NEW_DIR] [--inventory FILE | --server DIR] [--client DIR] " +
-        $"[--server-env NAME] [--client-env NAME] [--client-architecture x64|arm64] [--server-only] [--server-startup-seconds 1..{ServerRunPlan.MaximumStartupSeconds}] [--world-fixture DIR] [--bake-fixture NEW_DIR] [--before-save-command TEXT --before-save-line PREFIX] [--assert-command TEXT --assert-line PREFIX] [--join HOST:PORT] [--join-seconds 10..900] [--preflight-only] [--hold] [--copy-game] [--loader-package FILE] [--steam-runtime-package FILE] [--client-loader-package FILE] " +
+        $"[--server-env NAME] [--client-env NAME] [--client-architecture x64|arm64] [--server-only] [--server-startup-seconds 1..{ServerRunPlan.MaximumStartupSeconds}] [--world-fixture DIR] [--bake-fixture NEW_DIR] [--before-save-command TEXT --before-save-line PREFIX] [--assert-command TEXT --assert-line PREFIX] [--join HOST:PORT] [--join-seconds 10..900] [--preflight-only] [--hold] [--loader-package FILE] [--steam-runtime-package FILE] [--client-loader-package FILE] " +
         "[--build-inputs FILE] [--cli-manifest FILE --cli-files DIR] [--search-root DIR|DLL ...] [--config FILE ...] [--plugin-file FILE ...] [--plugin-dir DIR ...] " +
         "[--optional-reference ASSEMBLY ...] [--expected-log-error EXACT_HEADER --expected-log-reason REASON]";
     private static readonly string[] Session = ["valheim.session/state", "valheim.session/join", "valheim.session/leave"];
@@ -142,8 +142,8 @@ internal static class ServerLoad
     // the hint would name the very option that caused it.
     private static string LoaderHint(CampaignPreflightProblem problem, string? serverLoader, string? clientLoader) =>
         problem.Input != "game and loader" ? "" // an unreadable --loader-package is the "loader" input
-            : problem.Actor == "server" && serverLoader == null ? " (--loader-package FILE gives the server's disposable copy a reviewed loader)"
-            : problem.Actor == "client" && clientLoader == null ? " (--client-loader-package FILE gives the client's disposable copy a reviewed loader)" : "";
+            : problem.Actor == "server" && serverLoader == null ? " (--loader-package FILE gives the server's disposable profile a reviewed loader)"
+            : problem.Actor == "client" && clientLoader == null ? " (--client-loader-package FILE gives the client's disposable profile a reviewed loader)" : "";
     // --output, or a new timestamped directory under ValheimTesting's data root. Never an existing one.
     private static string Output(Arguments parsed)
         => SmokeCommandOptions.Output(parsed.Options);
@@ -243,8 +243,8 @@ internal static class ServerLoad
             ? Path.GetFullPath(requestedSteam) : null;
         if (steamRuntimePackage != null)
         {
-            if (parsed.Switches.Contains("--copy-game") || choice.Inventory.Hosts[server.Host].Platform != "macos")
-                throw new InvalidDataException("--steam-runtime-package requires a Mac dedicated server profile, without --copy-game.");
+            if (choice.Inventory.Hosts[server.Host].Platform != "macos")
+                throw new InvalidDataException("--steam-runtime-package requires a Mac dedicated server profile.");
             _ = MacSteamRuntimePackage.Read(steamRuntimePackage);
         }
         if (seams.FrozenServerLoader is { } frozen)
@@ -465,7 +465,7 @@ internal static class ServerLoad
 
         // The read-only host checks, before anything is copied: a client that cannot run is refused with the reason, never dropped.
         var report = await (seams.Inspect ?? (file => HostedCampaignPreparation.InspectAfterLocalPreflightAsync(file,
-            HostedTimeouts.Quick, cancellation, copyGame: parsed.Switches.Contains("--copy-game"))))(campaignFile).ConfigureAwait(false);
+            HostedTimeouts.Quick, cancellation)))(campaignFile).ConfigureAwait(false);
         foreach (var actor in report.Actors.Where(actor => actor.CharactersDirectory != null))
             Console.WriteLine($"{actor.Name}: characters_local {actor.CharactersDirectory}; Steam userdata {actor.SteamUserDataDirectory}");
         if (!report.Ready)
@@ -494,7 +494,6 @@ internal static class ServerLoad
                 new PinnedServerRunOptions<ServerRunPlan>
                 {
                     Name = "native-smoke-server-load",
-                    CopyGame = parsed.Switches.Contains("--copy-game"),
                     RunStarted = DetachedSession.SignalRun,
                     CleanupBudget = bakeDestination == null ? null : TimeSpan.FromMinutes(10),
                     ReadPlan = _ => throw new InvalidOperationException("The one-off's plan is in memory."),

@@ -86,9 +86,6 @@ public sealed class LinkRuleTests : IDisposable
         File.WriteAllText(plugin, "plugin");
         HostedRuntimeFile[] files = [new(plugin, "BepInEx/plugins/selected.dll")];
 
-        var copy = await Assert.ThrowsAsync<ArgumentException>(() => HostedRuntimeStage.PrepareAsync(_host, HostedRuntimeKind.Server, source,
-            Path.Combine(run, "runtime"), Path.Combine(run, "staging"), files, Generous));
-        Assert.Contains("overlaps the source install", copy.Message);
         var profile = await Assert.ThrowsAsync<ArgumentException>(() => HostedRuntimeStage.PrepareProfileAsync(_host, HostedRuntimeKind.Server, source,
             Path.Combine(run, "runtime"), Path.Combine(run, "staging"), files, Generous));
         Assert.Contains("overlaps the source install", profile.Message);

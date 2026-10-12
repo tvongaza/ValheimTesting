@@ -467,15 +467,17 @@ public sealed class ClientSessionTests : IDisposable
         finally { Environment.SetEnvironmentVariable(variable, null); }
     }
 
-    [Fact] public void AFullCopyFallbackIsOnlyForOwnedClientsThatAreNotInPlace()
+    // Copy mode is gone (#641): "copyGame" in a client plan is an unknown field, refused by the plan reader like any other.
+    [Fact] public void CopyGameIsAnUnknownPlanField()
     {
-        var owned = Plan(); owned.CopyGame = true;
-        Assert.True(owned.CopySource);
-        owned.InPlace = true;
-        Assert.Contains("inPlace or copyGame", Assert.Throws<ArgumentException>(() => owned.Validate()).Message);
-
-        var attached = Plan(); attached.Mode = "attach"; attached.CopyGame = true;
-        Assert.Contains("copyGame", Assert.Throws<ArgumentException>(() => attached.Validate()).Message);
+        string file = Path.GetTempFileName();
+        try
+        {
+            File.WriteAllText(file, "{\"client\":{\"mode\":\"owned\",\"copyGame\":true}}");
+            var error = Assert.Throws<System.Text.Json.JsonException>(() => ServerRunPlan.Read<CrossplayPlanTests.ClientPlan>(file));
+            Assert.Contains("copyGame", error.Message);
+        }
+        finally { File.Delete(file); }
     }
 
     [Fact] public void AnExitBeforeBepInExWroteItsLogSaysWhereToLook()

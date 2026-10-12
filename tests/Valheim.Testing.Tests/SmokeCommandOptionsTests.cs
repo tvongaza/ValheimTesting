@@ -46,21 +46,17 @@ public sealed class SmokeCommandOptionsTests
         Assert.True(ServerLoad.TryRead([.. options, "--loader-package", "server.json"], out _, out _));
     }
 
+    // Copy mode is gone (#641): --copy-game is an unknown option like any other, through the one parser, with no message of its own.
     [Fact]
-    public void FullGameCopyIsAnExplicitOneShotChoice()
+    public void CopyGameIsAnUnknownOption()
     {
-        Assert.True(StartArguments.TryRead(["--mod", "mod.dll", "--copy-game"], out var start,
-            out _, out _, out _, out string startError), startError);
-        Assert.Equal("true", start!["--copy-game"]);
-        Assert.False(StartArguments.TryRead(["--mod", "mod.dll", "--copy-game", "--copy-game"],
-            out _, out _, out _, out _, out _));
-        Assert.True(ServerLoad.TryRead(["--mod", "mod.dll", "--copy-game"], out var server,
-            out string serverError), serverError);
-        Assert.Contains("--copy-game", server!.Switches);
-        Assert.True(SmokeCommandOptions.TryRead(["--mod", "mod.dll", "--mod", "other.dll",
-            "--remove-mod", "other.dll", "--output", "new-run", "--copy-game"], SmokeCommandOptions.Command.ServerLoadAb,
-            allowImplicitMod: false, out var comparison, out string comparisonError), comparisonError);
-        Assert.Contains("--copy-game", comparison!.Switches);
+        Assert.False(StartArguments.TryRead(["--mod", "mod.dll", "--copy-game"], out _, out _, out _, out _, out string startError));
+        Assert.Equal("Unknown option: --copy-game", startError);
+        Assert.False(ServerLoad.TryRead(["--mod", "mod.dll", "--copy-game"], out _, out string serverError));
+        Assert.Equal(startError, serverError);
+        Assert.False(SmokeCommandOptions.TryRead(["--mod", "mod.dll", "--mod", "other.dll", "--remove-mod", "other.dll", "--output", "new-run",
+            "--copy-game"], SmokeCommandOptions.Command.ServerLoadAb, allowImplicitMod: false, out _, out string comparisonError));
+        Assert.Equal(startError, comparisonError);
     }
 
     [Fact]

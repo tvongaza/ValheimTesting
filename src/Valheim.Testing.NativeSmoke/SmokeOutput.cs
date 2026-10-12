@@ -34,11 +34,4 @@ internal static class SmokeOutput
                 throw new ArgumentException($"--output must be outside the prepared install and account directories: {Path.GetFullPath(source)}");
         }
     }
-
-    // A server-load copies the server once (the staged runtime, which the run then runs from) and the client once, all
-    // inside --output. Refuse before the first copy when they do not fit.
-    public static void RequireSpace(string output, string server, string? client) =>
-        Valheim.Testing.Game.DiskSpace.Require(output,
-            Valheim.Testing.Game.DiskSpace.DirectoryBytes(server) + (client == null ? 0 : Valheim.Testing.Game.DiskSpace.DirectoryBytes(client)),
-            client == null ? "the staged server copy" : "the staged server copy and the staged clean client");
 }

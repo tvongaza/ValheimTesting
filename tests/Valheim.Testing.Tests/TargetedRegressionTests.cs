@@ -82,7 +82,7 @@ public sealed class TargetedRegressionTests : IDisposable
         var runner = new TargetedRegression(_rig.Manifest(), inventory: _rig.Inventory())
         {
             SaveDirectory = _rig.Save,
-            BundleInspection = (_, _, _) => new(MacBundleInspection.State.Broken, 1, "changed signed game file"),
+            BundleInspection = (_, _) => new(MacBundleInspection.State.Broken, 1, "changed signed game file"),
         };
         Assert.Contains("Verify the game's files in Steam", Assert.Throws<InvalidOperationException>(() => runner.Stage("parent")).Message);
         Assert.False(Directory.Exists(runner.Install));
@@ -112,40 +112,47 @@ public sealed class TargetedRegressionTests : IDisposable
         Assert.False(Directory.Exists(runner.Install));
     }
 
-    [Fact] public void ARejectedMacCopyIsRemovedBeforeAnyClientLaunch()
+    // The profile launches the source bundle, so a source macOS rejects is refused before anything is staged.
+    [Fact] public void ARejectedMacSourceIsRefusedBeforeAnyProfileIsStaged()
     {
         if (!OperatingSystem.IsMacOS()) return;
         var runner = new TargetedRegression(_rig.Manifest(), inventory: _rig.Inventory())
         {
-            CopyGame = true,
             SaveDirectory = _rig.Save,
-            BundleInspection = (_, repair, _) => repair
-                ? new(MacBundleInspection.State.Rejected, 0, "Gatekeeper refused the copy")
-                : new(MacBundleInspection.State.Fixable, 1, "old preloader log"),
+            BundleInspection = (_, _) => new(MacBundleInspection.State.Rejected, 0, "Gatekeeper refused the source"),
             ProcessCheck = (_, _) => Task.CompletedTask,
             SkipHostLockForTest = true,
         };
-        Assert.Contains("it is not launched", Assert.Throws<IOException>(() => runner.Stage("parent")).Message);
+        Assert.Contains("notarized", Assert.Throws<InvalidOperationException>(() => runner.Stage("parent")).Message);
         Assert.False(Directory.Exists(runner.Install));
         Assert.True(Directory.Exists(_rig.Game));
     }
 
-    [Fact] public void EachMacArmCopyIsAssessedBeforeLaunch()
+    [Fact] public void EachMacArmAssessesItsSourceBeforeStaging()
     {
         if (!OperatingSystem.IsMacOS()) return;
-        int repairs = 0;
+        int inspections = 0;
+        bool reject = false;
         var runner = new TargetedRegression(_rig.Manifest(), inventory: _rig.Inventory())
         {
-            CopyGame = true,
             SaveDirectory = _rig.Save,
-            BundleInspection = (_, repair, _) => !repair || ++repairs == 1
-                ? new(MacBundleInspection.State.Accepted, 0, "")
-                : new(MacBundleInspection.State.Rejected, 0, "copy changed after first arm"),
+            BundleInspection = (_, _) =>
+            {
+                inspections++;
+                return reject ? new(MacBundleInspection.State.Rejected, 0, "source changed after the first arm") : new(MacBundleInspection.State.Accepted, 0, "");
+            },
             ProcessCheck = (_, _) => Task.CompletedTask,
         };
-        runner.Stage("parent");
-        Assert.Contains("it is not launched", Assert.Throws<IOException>(() => runner.Stage("candidate")).Message);
-        Assert.Equal(2, repairs);
+        try
+        {
+            runner.Stage("parent");
+            int perArm = inspections;
+            Assert.True(perArm >= 1);
+            reject = true;
+            Assert.Contains("notarized", Assert.Throws<InvalidOperationException>(() => runner.Stage("candidate")).Message);
+            Assert.Equal(perArm + 1, inspections); // refused at its first look, before the candidate is staged
+        }
+        finally { runner.Remove(); }
         Assert.False(Directory.Exists(runner.Install));
     }
 
@@ -168,7 +175,7 @@ public sealed class TargetedRegressionTests : IDisposable
         var runner = new TargetedRegression(_rig.Manifest(), inventory: inventory)
         {
             SaveDirectory = _rig.Save,
-            BundleInspection = (_, _, _) => new(MacBundleInspection.State.Accepted, 0, "synthetic test install"),
+            BundleInspection = (_, _) => new(MacBundleInspection.State.Accepted, 0, "synthetic test install"),
             ProcessCheck = (_, _) => Task.CompletedTask,
         };
         string lockPath = inventory.Hosts["local"].Lock;
@@ -399,30 +406,24 @@ public sealed class TargetedRegressionTests : IDisposable
         Assert.Contains("leave it out when it is not known", Assert.Throws<ArgumentException>(() => arm.Validate("mod.arms.parent")).Message);
     }
 
-    [Fact] public void EachArmGetsAFreshCopyThatReflectsTheGamesLoader()
+    // Found on a Windows station: a disposable install reused across arms kept a mod manager's old Doorstop proxy. Every arm
+    // stages a fresh profile, so nothing an earlier arm left in it survives, and a mod manager's Doorstop marker in the game
+    // (not a loader file) never reaches a profile at all.
+    [Fact] public void EachArmGetsAFreshProfile()
     {
-        // Found on a Windows station: the prepared game held a mod manager's Doorstop proxy, which the preflight refused.
-        // Restoring the game's own proxy changed neither the game build nor BepInEx's core, and the reused copy kept the old one.
         _rig.Write("game/.doorstop_version", Encoding.UTF8.GetBytes("4.4.0"));
         var regression = _rig.Regression(_rig.Manifest());
-        regression.CopyGame = true;
         regression.Stage("parent");
-        string earlier = Path.Combine(_rig.Install, "from-the-first-copy.txt");
-        File.WriteAllText(earlier, "only in the disposable install");
-        regression.Stage("candidate");
-        Assert.False(File.Exists(earlier)); // Every arm gets the same verified hosted copy path.
-        _rig.Write("game/.doorstop_version", Encoding.UTF8.GetBytes("3.4.0"));
-        regression.Stage("candidate").Verify();
-        Assert.Equal("3.4.0", File.ReadAllText(Path.Combine(_rig.Install, ".doorstop_version")));
-        Assert.False(File.Exists(earlier)); // Copied again from the game.
-
-        // Removing a loader file must also invalidate the copy. Otherwise an old proxy can survive in the install.
-        string stale = Path.Combine(_rig.Install, "from-the-second-copy.txt");
-        File.WriteAllText(stale, "only in the disposable install");
-        File.Delete(Path.Combine(_rig.Game, ".doorstop_version"));
-        regression.Stage("candidate").Verify();
         Assert.False(File.Exists(Path.Combine(_rig.Install, ".doorstop_version")));
-        Assert.False(File.Exists(stale));
+        string earlier = Path.Combine(_rig.Install, "from-the-first-profile.txt");
+        File.WriteAllText(earlier, "only in the disposable profile");
+        regression.Stage("candidate").Verify();
+        Assert.False(File.Exists(earlier));
+        string later = Path.Combine(_rig.Install, "from-the-second-profile.txt");
+        File.WriteAllText(later, "only in the disposable profile");
+        regression.Stage("candidate").Verify();
+        Assert.False(File.Exists(later));
+        regression.Remove();
     }
 
     [Fact] public void ADefaultArmUsesAnOwnedProfileWithoutChangingTheSourceInstall()
@@ -435,7 +436,6 @@ public sealed class TargetedRegressionTests : IDisposable
 
         var arm = regression.Stage("parent");
         Assert.Equal("profile", arm.Plan.PreparedLaunchMode);
-        Assert.Throws<InvalidOperationException>(() => regression.CopyGame = true);
         Assert.Equal(OperatingSystem.IsWindows() ? regression.Install : _rig.Game, arm.Plan.Install);
         Assert.True(File.Exists(Path.Combine(regression.Install, "BepInEx", "plugins", "ExampleMod.dll")));
         if (OperatingSystem.IsWindows()) Assert.False(File.Exists(Path.Combine(regression.Install, "version.dll")));
@@ -760,7 +760,7 @@ internal sealed class RegressionRig : IDisposable
             SaveDirectory = Save, SteamUserData = SteamUserData,
             // This rig stages fake files without a desktop. Tests of the SSH refusal override this explicitly.
             DirectClientSession = () => (OperatingSystem.IsWindows(), 1),
-            BundleInspection = (_, _, _) => new(MacBundleInspection.State.Accepted, 0, "synthetic test install"),
+            BundleInspection = (_, _) => new(MacBundleInspection.State.Accepted, 0, "synthetic test install"),
             ProcessCheck = (_, _) => Task.CompletedTask,
             SkipHostLockForTest = true,
         };

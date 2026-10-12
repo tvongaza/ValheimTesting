@@ -5,7 +5,7 @@ using Valheim.Testing.GameSessions;
 /// <summary>
 /// A session file (<c>session.json</c>: the actors, their locks, characters and the world, placed from the inventory): <c>check</c>
 /// reports every independent problem with its inputs and actor assignment without contacting a host, and with <c>--hosts</c> also
-/// runs the read-only host checks (installs, loaders, conflicting use, signed-in Steam accounts, copy space, run journals).
+/// runs the read-only host checks (installs, loaders, conflicting use, signed-in Steam accounts, run journals).
 /// Mutable state is checked again under the leases before launch.
 /// </summary>
 internal static class SessionCommand

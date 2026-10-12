@@ -133,15 +133,6 @@ public sealed class PreparedHostedCampaign : IAsyncDisposable
     internal HostedCampaignManifest Manifest { get; }
     /// <summary>The resolved environment the runner places the server and clients with; never written to a file.</summary>
     internal ResolvedEnvironment Environment => _profile;
-    internal string LaunchModes(bool copyGame)
-    {
-        var actors = _profile.Server == null
-            ? _profile.Clients.Select(pair => (Name: pair.Key, Host: pair.Value.Host))
-            : new[] { (Name: "server", Host: _profile.Server.Host) }.Concat(_profile.Clients.Select(pair => (Name: pair.Key, Host: pair.Value.Host)));
-        return string.Join(", ", actors.OrderBy(actor => actor.Name, StringComparer.Ordinal)
-            .Select(actor => actor.Name + ":" +
-                (HostedCampaignPreparation.UseProfile(_profile.Hosts[actor.Host], copyGame) ? "profile" : "copy")));
-    }
     /// <summary>Records, as <c>&lt;actor&gt;ProfileLeftOut</c>, the root files each actor's profile left out of its game install (see <c>HostedRuntimeStage.ProfileLeftOut</c>).</summary>
     internal void RecordProfileLeftOut(IDictionary<string, string> provenance)
     {
@@ -292,11 +283,6 @@ public sealed class PreparedHostedCampaign : IAsyncDisposable
 /// <summary>One command's setup half: reviewed inputs become pinned, separate disposable server/client installs.</summary>
 public static class HostedCampaignPreparation
 {
-    // Windows needs an owned launch folder for its proxy; Unix launches the source executable
-    // against the separate owned profile. The same stage owner handles local and remote hosts.
-    internal static bool UseProfile(HostProfile host, bool copyGame) =>
-        !copyGame && (host.Kind is "local" or "ssh" or "container") &&
-        (host.Platform is "windows" or "linux" || host.Platform == "macos" && host.Kind is ("local" or "ssh"));
     internal sealed record Inputs(HostedCampaignManifest Manifest, ResolvedEnvironment Profile,
         List<(string Name, GameRole Role, HostedCampaignRole Input)> Roles,
         Dictionary<string, HostedRuntimeFile[]> Selections, Dictionary<string, HostedCharacterSelection> Characters);
@@ -310,26 +296,21 @@ public static class HostedCampaignPreparation
     /// </summary>
     public static async Task<CampaignPreflightReport> InspectAsync(string manifestFile, TimeSpan timeout,
         Func<string, IGameHost>? hostFactory = null, CancellationToken cancellation = default)
-        => await InspectAsync(manifestFile, timeout, copyGame: false, hostFactory, cancellation).ConfigureAwait(false);
-
-    /// <summary>Inspect the hosts for the chosen profile or full-copy preparation mode before staging.</summary>
-    public static async Task<CampaignPreflightReport> InspectAsync(string manifestFile, TimeSpan timeout,
-        bool copyGame, Func<string, IGameHost>? hostFactory = null, CancellationToken cancellation = default)
     {
         var inspection = InspectInputs(manifestFile);
         // Real hosts get the real shipped-loader rule; a caller's own hosts (tests) are read as they are.
         return (await InspectHostsAsync(inspection, timeout, hostFactory, cancellation,
-            hostFactory == null ? ShippedLoader.OnHostAsync : null, copyGame: copyGame).ConfigureAwait(false)).Report;
+            hostFactory == null ? ShippedLoader.OnHostAsync : null).ConfigureAwait(false)).Report;
     }
 
     // The one-shot checked its local host before writing an adapter or fixture. Inspect remote actors here; preparation
     // rechecks local conditions immediately before staging. This avoids a third local process/port/desktop probe.
     internal static async Task<CampaignPreflightReport> InspectAfterLocalPreflightAsync(string manifestFile, TimeSpan timeout,
-        CancellationToken cancellation = default, bool copyGame = false)
+        CancellationToken cancellation = default)
     {
         var inspection = InspectInputs(manifestFile);
         return (await InspectHostsAsync(inspection, timeout, null, cancellation, ShippedLoader.OnHostAsync,
-            skipLocalChecks: true, copyGame: copyGame).ConfigureAwait(false)).Report;
+            skipLocalChecks: true).ConfigureAwait(false)).Report;
     }
 
     private sealed record HostInspection(CampaignPreflightReport Report,
@@ -455,15 +436,12 @@ public static class HostedCampaignPreparation
 
     private static async Task<HostInspection> InspectHostsAsync(Inspection inspection, TimeSpan timeout,
         Func<string, IGameHost>? hostFactory, CancellationToken cancellation, ShippedLoader.Rule? shippedLoader = null,
-        bool skipLocalChecks = false, bool copyGame = false)
+        bool skipLocalChecks = false)
     {
         if (inspection.Inputs == null) return new HostInspection(inspection.Report,
             new Dictionary<string, string>(), new Dictionary<string, HostListing>(), new Dictionary<string, CharacterDirectories>());
         var inputs = inspection.Inputs!;
         var failures = new ConcurrentBag<CampaignPreflightProblem>(inspection.Report.Problems);
-        if (copyGame)
-            foreach (var role in inputs.Roles.Where(role => role.Input.SteamRuntimePackage != null))
-                failures.Add(new(role.Name, "Mac Steam runtime", "steamRuntimePackage requires a disposable server profile; leave out --copy-game."));
         var observedSteamIds = new ConcurrentDictionary<string, string>(StringComparer.Ordinal);
         var sourceListings = new ConcurrentDictionary<string, HostListing>(StringComparer.Ordinal);
         var characterDirectories = new ConcurrentDictionary<string, CharacterDirectories>(StringComparer.Ordinal);
@@ -529,7 +507,6 @@ public static class HostedCampaignPreparation
                     catch (Exception error) when (HostCheckRefusal(error))
                     { failures.Add(new("server", "Mac server host", error.Message)); }
             }
-            var capacities = new ConcurrentBag<(string Actor, HostCopyCapacity Capacity)>();
             await Task.WhenAll(group.Select(async item =>
             {
                 if (!localHost)
@@ -539,14 +516,6 @@ public static class HostedCampaignPreparation
                     }
                     catch (Exception error) when (HostCheckRefusal(error))
                     { failures.Add(new(item.Name, "ValheimCLI port", error.Message)); }
-                if (!UseProfile(inputs.Profile.Hosts[group.Key], copyGame))
-                    try
-                    {
-                        capacities.Add((item.Name, await HostCopyCapacityProbe.InspectAsync(host, item.Role.Install,
-                            item.Role.Runtime, timeout, cancellation).ConfigureAwait(false)));
-                    }
-                    catch (Exception error) when (HostCheckRefusal(error))
-                    { failures.Add(new(item.Name, "copy space", error.Message)); }
                 if (!inspection.Report.Problems.Any(problem => problem.Actor == item.Name && problem.Input == "loader"))
                 {
                     try
@@ -590,7 +559,7 @@ public static class HostedCampaignPreparation
                     }
                     catch (Exception error) when (HostCheckRefusal(error))
                     { failures.Add(new(item.Name, "game and loader", error.Message)); }
-                    // A run never makes macOS show a dialog: a copy of a bundle macOS would call damaged is refused here, read only.
+                    // A run never makes macOS show a dialog: a bundle macOS would call damaged is refused here, read only.
                     if (item.Name != "server" && sourceListings.TryGetValue(item.Name, out var listed) && MacAppBundle.IsMacClient(listed))
                         try
                         {
@@ -630,8 +599,6 @@ public static class HostedCampaignPreparation
                 { failures.Add(new(item.Name, "Steam identity", error.Message)); }
                 await folders.ConfigureAwait(false);
             })).ConfigureAwait(false);
-            try { HostCopyCapacityProbe.RequireCombined(group.Key, capacities); }
-            catch (Exception error) when (HostCheckRefusal(error)) { failures.Add(new(group.Key, "copy space", error.Message)); }
         });
         var hostsChecked = Task.WhenAll(hostChecks);
         var inUse = InspectAccountsInUseAsync(inputs, observedSteamIds, hostsChecked, failures, timeout, hostFactory, cancellation);
@@ -894,15 +861,10 @@ public static class HostedCampaignPreparation
         profile.Validate();
     }
 
-    /// <summary>Prepare a hosted campaign using loader profiles on supported hosts.</summary>
+    /// <summary>Prepare a hosted campaign: every actor gets an owned loader profile on its host.</summary>
     public static Task<PreparedHostedCampaign> PrepareAsync(string manifestFile, string outputDirectory, TimeSpan timeout,
         Func<string, IGameHost>? hostFactory = null, CancellationToken cancellation = default) =>
         PrepareAsync(InspectInputs(manifestFile), outputDirectory, timeout, hostFactory, cancellation, plans: null);
-
-    /// <summary>Prepare a hosted campaign, optionally making full disposable game copies for every actor.</summary>
-    public static Task<PreparedHostedCampaign> PrepareAsync(string manifestFile, string outputDirectory, TimeSpan timeout,
-        bool copyGame, Func<string, IGameHost>? hostFactory = null, CancellationToken cancellation = default) =>
-        PrepareAsync(InspectInputs(manifestFile), outputDirectory, timeout, hostFactory, cancellation, plans: null, copyGame: copyGame);
 
     // A preparation that failed ends its run in the journal of every host it was to touch, best effort: the entry is a record,
     // and the preparation's own failure is the one to report.
@@ -930,10 +892,10 @@ public static class HostedCampaignPreparation
     internal static async Task<PreparedHostedCampaign> PrepareAsync(Inspection inspection, string outputDirectory, TimeSpan timeout,
         Func<string, IGameHost>? hostFactory, CancellationToken cancellation, IReadOnlyDictionary<string, ClientRunPlan>? plans,
         string? runId = null, Func<string, Func<Task>, Task>? cleanupStep = null,
-        ShippedLoader.Rule? shippedLoader = null, Action<string, string>? loaderChosen = null, bool copyGame = false)
+        ShippedLoader.Rule? shippedLoader = null, Action<string, string>? loaderChosen = null)
     {
         inspection.Report.RequireReady();
-        var readiness = await InspectHostsAsync(inspection, timeout, hostFactory, cancellation, shippedLoader, copyGame: copyGame).ConfigureAwait(false);
+        var readiness = await InspectHostsAsync(inspection, timeout, hostFactory, cancellation, shippedLoader).ConfigureAwait(false);
         foreach (var (actor, choice) in readiness.Loaders.OrderBy(pair => pair.Key, StringComparer.Ordinal)) loaderChosen?.Invoke(actor, choice.Reason);
         readiness.Report.RequireReady();
         var inputs = inspection.Inputs!;
@@ -972,10 +934,6 @@ public static class HostedCampaignPreparation
                 await using var claim = await host.AcquireLockAsync(profile.Hosts[hostName].Lock,
                     "campaign-prepare " + id + " " + hostName, timeout, cancellation).ConfigureAwait(false);
                 await HostedRuntimeStage.RequireStoppedAsync(host, timeout, cancellation, clientSession: group.Any(item => item.Name != "server")).ConfigureAwait(false);
-                var capacities = await Task.WhenAll(group.Where(item => !UseProfile(profile.Hosts[hostName], copyGame)).Select(async item =>
-                    (item.Name, Capacity: await HostCopyCapacityProbe.InspectAsync(host, item.Role.Install,
-                        item.Role.Runtime, timeout, cancellation).ConfigureAwait(false)))).ConfigureAwait(false);
-                HostCopyCapacityProbe.RequireCombined(hostName, capacities.Select(item => (Actor: item.Name, item.Capacity)));
                 string journalDirectory = RunJournal.DirectoryFor(profile.Hosts[hostName]);
                 await Task.WhenAll(group.Select(async item =>
                 {
@@ -983,13 +941,11 @@ public static class HostedCampaignPreparation
                     string parent = HostPath.Join(role.Runtime, "vt-prep-" + id + "-" + name);
                     string runtime = HostPath.Join(parent, "runtime"), stage = HostPath.Join(parent, "staging");
                     var kind = name == "server" ? HostedRuntimeKind.Server : HostedRuntimeKind.Client;
-                    bool profileLaunch = UseProfile(profile.Hosts[hostName], copyGame);
-                    // Journalled before the copy: an interrupted preparation leaves a record of every path it may own.
+                    // Journalled before the profile: an interrupted preparation leaves a record of every path it may own.
                     await journal.AppendAsync(host, journalDirectory, name, JournalEntry.Of(JournalEntry.CopyIntended,
                         ("runtime", runtime), ("stage", stage), ("parent", parent),
-                        ("launchMode", profileLaunch ? "profile" : "copy"),
                         ("runtimeKind", kind == HostedRuntimeKind.Server ? "server" : "client"),
-                        ("launchRoot", profileLaunch ? role.Install : runtime)), timeout, cancellation).ConfigureAwait(false);
+                        ("launchRoot", role.Install)), timeout, cancellation).ConfigureAwait(false);
                     // Owned from here: a failed preparation retires a partial copy too (idempotent where nothing was made), so its
                     // run-ended entry says cleanup was verified only when no copy of it remains, not when the copy's own cleanup failed.
                     copies.Add((hostName, name, runtime, stage));
@@ -997,41 +953,29 @@ public static class HostedCampaignPreparation
                     var steamRuntime = item.Input.SteamRuntimePackage == null ? null :
                         profile.Hosts[role.Host].Kind == "ssh" ? MacSteamRuntimePackage.ReadRemote(item.Input.SteamRuntimePackage)
                             : MacSteamRuntimePackage.Read(item.Input.SteamRuntimePackage);
-                    if (profileLaunch)
+                    var prepared = await HostedRuntimeStage.PrepareProfileAsync(host, kind,
+                        role.Install, runtime, stage, selections[name], timeout, cancellation,
+                        loader, readiness.SourceListings[name], steamRuntimePackage: steamRuntime).ConfigureAwait(false);
+                    listings[name] = prepared.Game;
+                    loaderListings[name] = prepared.Loader;
+                    if (HostedRuntimeStage.ProfileLeftOut.Describe(prepared.LeftOut) is { } leftOut) profileLeftOut[name] = leftOut;
+                    role.PreparedSourceRoot = prepared.Source.Root;
+                    if (profile.Hosts[hostName].Kind != "local")
+                        role.PreparedSourceFiles = prepared.Source.Files;
+                    if (prepared.GameRoot != prepared.LoaderRoot)
                     {
-                        var prepared = await HostedRuntimeStage.PrepareProfileAsync(host, kind,
-                            role.Install, runtime, stage, selections[name], timeout, cancellation,
-                            loader, readiness.SourceListings[name], steamRuntimePackage: steamRuntime).ConfigureAwait(false);
-                        listings[name] = prepared.Game;
-                        loaderListings[name] = prepared.Loader;
-                        if (HostedRuntimeStage.ProfileLeftOut.Describe(prepared.LeftOut) is { } leftOut) profileLeftOut[name] = leftOut;
-                        role.PreparedSourceRoot = prepared.Source.Root;
-                        if (profile.Hosts[hostName].Kind != "local")
-                            role.PreparedSourceFiles = prepared.Source.Files;
-                        if (prepared.GameRoot != prepared.LoaderRoot)
-                        {
-                            role.PreparedGameRoot = prepared.GameRoot;
-                            role.PreparedLoaderRoot = prepared.LoaderRoot;
-                        }
-                        if (steamRuntime != null)
-                        {
-                            role.PreparedSteamRuntimePackage = steamRuntime;
-                            role.PreparedSteamRuntimeRoot = HostPath.Join(prepared.LoaderRoot, "steam-runtime");
-                            role.PreparedSteamRuntimeFiles = prepared.Loader.Files
-                                .Where(file => file.Key.StartsWith("steam-runtime/", StringComparison.Ordinal))
-                                .ToDictionary(file => file.Key["steam-runtime/".Length..], file => file.Value, StringComparer.Ordinal);
-                            if (role.PreparedSteamRuntimeFiles.Count != steamRuntime.Files.Count)
-                                throw new IOException("The signed Mac Steam runtime is incomplete in the prepared server profile.");
-                        }
+                        role.PreparedGameRoot = prepared.GameRoot;
+                        role.PreparedLoaderRoot = prepared.LoaderRoot;
                     }
-                    else
+                    if (steamRuntime != null)
                     {
-                        if (steamRuntime != null)
-                            throw new InvalidDataException("A Mac Steam runtime package requires a disposable profile; leave out --copy-game.");
-                        listings[name] = await HostedRuntimeStage.PrepareWithInspectedSourceAsync(host, kind,
-                            role.Install, runtime, stage, selections[name], timeout, cancellation,
-                            loader, readiness.SourceListings[name]).ConfigureAwait(false);
-                        loaderListings[name] = listings[name];
+                        role.PreparedSteamRuntimePackage = steamRuntime;
+                        role.PreparedSteamRuntimeRoot = HostPath.Join(prepared.LoaderRoot, "steam-runtime");
+                        role.PreparedSteamRuntimeFiles = prepared.Loader.Files
+                            .Where(file => file.Key.StartsWith("steam-runtime/", StringComparison.Ordinal))
+                            .ToDictionary(file => file.Key["steam-runtime/".Length..], file => file.Value, StringComparer.Ordinal);
+                        if (role.PreparedSteamRuntimeFiles.Count != steamRuntime.Files.Count)
+                            throw new IOException("The signed Mac Steam runtime is incomplete in the prepared server profile.");
                     }
                     await journal.AppendAsync(host, journalDirectory, name, JournalEntry.Of(JournalEntry.CopyDone,
                         ("runtime", runtime), ("files", listings[name].Files.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)),

@@ -173,26 +173,4 @@ public sealed class RunRetentionTests : IDisposable
         Assert.Equal(0, DiskSpace.DirectoryBytes(Path.Combine(_root, "missing")));
         Assert.Equal("812 MB", DiskSpace.Format(812L << 20)); Assert.Equal("2.5 GB", DiskSpace.Format(5L << 29));
     }
-
-    // A server-load holds the staged server (which the run runs from) and the staged client at once.
-    [Fact] public void ANativeSmokeChecksRoomForOneServerCopyAndTheClient()
-    {
-        string server = Path.Combine(_root, "server"), client = Path.Combine(_root, "client");
-        Directory.CreateDirectory(server); Directory.CreateDirectory(client);
-        File.WriteAllBytes(Path.Combine(server, "valheim_server.exe"), new byte[1000]);
-        File.WriteAllBytes(Path.Combine(client, "valheim.exe"), new byte[500]);
-        long needed = 0;
-        DiskSpace.AvailableOverride = _ => needed;
-        try
-        {
-            needed = 1500 + DiskSpace.Headroom(1500) - 1;
-            Assert.Contains("the staged server copy and the staged clean client",
-                Assert.Throws<IOException>(() => SmokeOutput.RequireSpace(Output, server, client)).Message);
-            needed++;
-            SmokeOutput.RequireSpace(Output, server, client);
-            needed = 1000 + DiskSpace.Headroom(1000);
-            SmokeOutput.RequireSpace(Output, server, null);
-        }
-        finally { DiskSpace.AvailableOverride = null; }
-    }
 }

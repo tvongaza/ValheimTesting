@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Text;
 using System.Text.RegularExpressions;
 using Valheim.Testing.Game;
 
@@ -13,17 +12,17 @@ public sealed record HostedRuntimeFile(string Source, string RelativePath);
 internal enum HostedRuntimeKind { Server, Client }
 
 /// <summary>
-/// Builds a disposable modded runtime on a game host. The source install is read only: copy mode makes a fresh
-/// game copy, while profile mode keeps the executable in place on Unix or uses an owned hard-link launch folder on
-/// Windows. Both modes select the same BepInEx plugin, script, config, patcher and loader content here. The caller
-/// owns the host lock and the resulting runtime's cleanup.
+/// Builds a disposable modded runtime (an owned loader profile) on a game host. The source install is read only: the
+/// profile keeps the executable in place on Unix or uses an owned hard-link launch folder on Windows, and selects the
+/// BepInEx plugin, script, config, patcher and loader content here. The caller owns the host lock and the resulting
+/// runtime's cleanup.
 /// </summary>
 internal static partial class HostedRuntimeStage
 {
     private static readonly StringComparer HostNames = StringComparer.OrdinalIgnoreCase;
     private static readonly Regex SafePath = new(@"^[A-Za-z0-9_. -]+(?:/[A-Za-z0-9_. -]+)*$", RegexOptions.CultureInvariant);
 
-    // The copy and profile modes share this exact selection and loader-package policy.
+    // The profile's selection and loader-package policy.
     private static (Dictionary<string, (string Source, string Sha)> Files, bool ExplicitSettings) SelectPayload(
         IReadOnlyList<HostedRuntimeFile> files, BepInExLoaderPackage? loaderPackage, HostShellKind shell)
     {
@@ -140,7 +139,7 @@ internal static partial class HostedRuntimeStage
         return selected.Values.ToArray();
     }
 
-    /// <summary>Read-only source-install eligibility, shared by campaign preflight and the later copy.</summary>
+    /// <summary>Read-only source-install eligibility, shared by campaign preflight and the later profile staging.</summary>
     internal static async Task<HostListing> InspectSourceAsync(IGameHost host, HostedRuntimeKind kind, string source,
         BepInExLoaderPackage? loaderPackage, TimeSpan timeout, CancellationToken cancellation = default)
     {
@@ -170,7 +169,7 @@ internal static partial class HostedRuntimeStage
             }
             : host.Shell.Kind == HostShellKind.PowerShell ? ClientPlatform.Windows
             : sourceListing.Files.ContainsKey("Valheim.app/Contents/MacOS/Valheim") ? ClientPlatform.MacOS : ClientPlatform.Linux;
-        // A reviewed package replaces the copied loader, so it, not the source, must be this platform's complete loader.
+        // A reviewed package replaces the source loader, so it, not the source, must be this platform's complete loader.
         if (loaderPackage != null) loaderPackage.RequireFor(platform, $"reviewed loader package for {host.Name}");
         else
         {
@@ -181,128 +180,6 @@ internal static partial class HostedRuntimeStage
                 await HostClientPreflight.RequireWindowsLoaderAsync(host, source, $"source install on {host.Name}", timeout, cancellation).ConfigureAwait(false);
         }
         return sourceListing;
-    }
-
-    public static Task<HostListing> PrepareAsync(IGameHost host, HostedRuntimeKind kind, string source, string destination, string staging,
-        IReadOnlyList<HostedRuntimeFile> files, TimeSpan timeout, CancellationToken cancellation = default,
-        BepInExLoaderPackage? loaderPackage = null,
-        Func<IGameHost, string, TimeSpan, CancellationToken, Task<MacBundleInspection.Verdict>>? repairMac = null) =>
-        PrepareWithInspectedSourceAsync(host, kind, source, destination, staging, files, timeout, cancellation, loaderPackage, null, repairMac);
-
-    internal static async Task<HostListing> PrepareWithInspectedSourceAsync(IGameHost host, HostedRuntimeKind kind,
-        string source, string destination, string staging, IReadOnlyList<HostedRuntimeFile> files, TimeSpan timeout,
-        CancellationToken cancellation, BepInExLoaderPackage? loaderPackage, HostListing? inspectedSource,
-        Func<IGameHost, string, TimeSpan, CancellationToken, Task<MacBundleInspection.Verdict>>? repairMac = null)
-    {
-        await RequireStagePathsAsync(host, kind, source, destination, staging, files, timeout, cancellation).ConfigureAwait(false);
-
-        var (selected, explicitlySelectedSettings) = SelectPayload(files, loaderPackage, host.Shell.Kind);
-        // Check this before shipping anything; a reviewed loader package fixes only the disposable copy.
-        if (inspectedSource != null && (inspectedSource.HostName != host.Name || inspectedSource.Root != source))
-            throw new ArgumentException("The inspected source belongs to a different host or install.", nameof(inspectedSource));
-        // A shared campaign preflight already hashed and inspected this source. Reuse that exact listing, then compare
-        // the copied runtime against it: if the source changed before or during the copy, the mismatch is refused.
-        var sourceListing = inspectedSource ?? await InspectSourceAsync(host, kind, source, loaderPackage, timeout, cancellation).ConfigureAwait(false);
-        const string settings = BepInExSettings.RelativePath;
-        // Clearing config must not discard the source loader's entrypoint settings. An explicit staged
-        // config or a reviewed loader package takes precedence over the source file.
-        bool preserveSourceSettings = BepInExSettings.Choose(
-            sourceListing.Files.ContainsKey(settings),
-            loaderPackage?.Files.ContainsKey(settings) == true,
-            explicitlySelectedSettings) == BepInExSettingsOrigin.Source;
-        string payload = Path.Combine(Path.GetTempPath(), "valheim-host-stage-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(payload);
-        bool shipped = false, copied = false;
-        try
-        {
-            foreach (var (relative, value) in selected)
-            {
-                string target = Path.Combine(payload, relative.Replace('/', Path.DirectorySeparatorChar));
-                Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-                File.Copy(value.Source, target);
-                if (!FileHash.Sha256(target).Equals(value.Sha, StringComparison.OrdinalIgnoreCase))
-                    throw new IOException("The local staging copy changed: " + relative);
-            }
-            shipped = true;
-            await host.ShipFilesAsync(payload, staging, timeout, cancellation).ConfigureAwait(false);
-            var shippedListing = await HostInstall.ListAsync(host, staging, timeout, cancellation: cancellation).ConfigureAwait(false);
-            foreach (var (relative, value) in selected)
-                if (!shippedListing.Files.TryGetValue(relative, out string? hash) || !hash.Equals(value.Sha, StringComparison.OrdinalIgnoreCase))
-                    throw new IOException($"The staged file {relative} on {host.Name} differs from the reviewed local file.");
-            copied = true;
-            // A server's copy leaves out Steam's own runtime output in the install (logs/), which is not the game's or the loader's.
-            var skip = kind == HostedRuntimeKind.Server ? RuntimeSkips : [];
-            await HostInstall.CopyAsync(host, source, destination, timeout, skip, cancellation).ConfigureAwait(false);
-            var copy = await HostInstall.ListAsync(host, destination, timeout, cancellation: cancellation).ConfigureAwait(false);
-            var sourceFiles = HostInstall.WithoutSkipped(sourceListing.Files, skip, sourceListing.Names);
-            if (sourceFiles.Count != copy.Files.Count || sourceFiles.Any(file =>
-                !copy.Files.TryGetValue(file.Key, out string? hash) || !hash.Equals(file.Value, StringComparison.OrdinalIgnoreCase)))
-                throw new IOException($"The disposable copy on {host.Name} differs from the pinned source install.");
-            // A macOS client copy must be one macOS launches without a dialog (#258 run A): the files added inside its bundle are
-            // removed and codesign and Gatekeeper must accept it, or preparation fails here and nothing launches it.
-            if (kind == HostedRuntimeKind.Client && MacAppBundle.IsMacClient(copy))
-            {
-                var bundle = await (repairMac ?? MacAppBundle.RepairAsync)(host, destination, timeout, cancellation).ConfigureAwait(false);
-                if (bundle.State != MacBundleInspection.State.Accepted)
-                    throw new IOException($"macOS would refuse the disposable copy of {GameLaunch.ClientMacBundle} at {destination} on {host.Name} " +
-                        $"({MacBundleInspection.Describe(bundle)}), so it is not launched: a launch would make macOS call it damaged and kill it.");
-                if (bundle.Count != 0)
-                    Console.WriteLine($"Removed {bundle.Count} file(s) added inside the copy's {GameLaunch.ClientMacBundle} on {host.Name}, so macOS accepts its signature (the source install is unchanged).");
-            }
-            string names = string.Join('\n', selected.Keys.Select(name => Convert.ToBase64String(Encoding.UTF8.GetBytes(name))));
-            var result = await host.RunAsync(host.Shell.Kind == HostShellKind.PowerShell ? WindowsApply : BashApply,
-                new Dictionary<string, string> { ["runtime"] = destination, ["stage"] = staging, ["files"] = names,
-                    ["loader"] = loaderPackage == null ? "" : string.Join('\n', InstallPins.LoaderEntries),
-                    ["preserveConfig"] = preserveSourceSettings ? "true" : "false" }, timeout, cancellation).ConfigureAwait(false);
-            result.EnsureSuccess($"Staging selected plugins on {host.Name}");
-            if (InteractiveClient.Line(result.Stdout, "VT-STAGED") == null)
-                throw new HostOperationException($"Unexpected reply while staging plugins on {host.Name}", result);
-            var runtime = await HostInstall.ListAsync(host, destination, timeout, cancellation: cancellation).ConfigureAwait(false);
-            foreach (var (relative, value) in selected)
-                if (!runtime.Files.TryGetValue(relative, out string? hash) || !hash.Equals(value.Sha, StringComparison.OrdinalIgnoreCase))
-                    throw new IOException($"The prepared runtime file {relative} on {host.Name} differs from its pinned source.");
-            if (preserveSourceSettings && (!runtime.Files.TryGetValue(settings, out string? configHash) ||
-                !configHash.Equals(sourceListing.Files[settings], StringComparison.OrdinalIgnoreCase)))
-                throw new IOException($"The prepared runtime's {settings} on {host.Name} differs from its pinned source.");
-            foreach (string directory in new[] { "plugins", "scripts", "config", "patchers" })
-            {
-                string prefix = "BepInEx/" + directory + "/";
-                var expected = selected.Keys.Where(name => name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)).ToHashSet(HostNames);
-                if (directory == "config" && preserveSourceSettings) expected.Add(settings);
-                if (runtime.Files.Keys.Where(name => name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)).Any(name => !expected.Contains(name)))
-                    throw new IOException($"The prepared runtime on {host.Name} retained an unselected {directory} file.");
-            }
-            var pins = HostInstall.Pins(runtime);
-            // The one loader identity: the prepared runtime's loader is the package's, every loader file and no other.
-            if (loaderPackage != null && !pins.Loader.Equals(loaderPackage.Loader, StringComparison.OrdinalIgnoreCase))
-                throw new IOException($"The prepared runtime's loader on {host.Name} ({pins.Loader}) is not the reviewed package's ({loaderPackage.Loader}): " +
-                    "a loader file outside the package survived preparation, or a package file is missing.");
-            return runtime;
-        }
-        catch (Exception original)
-        {
-            if (shipped || copied)
-            {
-                // These are intended owned paths, recorded before each effect. A ship/copy can partly succeed before
-                // losing its reply. Cleanup is uncancelled and its failure must stay alongside the original failure.
-                try
-                {
-                    var cleanup = await host.RunAsync(host.Shell.Kind == HostShellKind.PowerShell ? WindowsCleanup : BashCleanup,
-                        new Dictionary<string, string> { ["runtime"] = copied ? destination : "", ["stage"] = shipped ? staging : "",
-                            ["parent"] = destination[..destination.LastIndexOfAny(['/', '\\'])] },
-                        timeout, CancellationToken.None).ConfigureAwait(false);
-                    cleanup.EnsureSuccess($"Cleaning failed preparation on {host.Name}");
-                    if (InteractiveClient.Line(cleanup.Stdout, "VT-STAGE-CLEANED") == null)
-                        throw new HostOperationException($"Cleanup of failed preparation on {host.Name} was not proven", cleanup);
-                }
-                catch (Exception cleanup) { throw new AggregateException("Preparation failed and cleanup of its owned paths was not proven.", original, cleanup); }
-            }
-            throw;
-        }
-        finally
-        {
-            Directory.Delete(payload, recursive: true);
-        }
     }
 
     private static async Task RequireStagePathsAsync(IGameHost host, HostedRuntimeKind kind, string source, string destination,

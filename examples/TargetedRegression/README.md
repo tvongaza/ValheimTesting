@@ -35,7 +35,7 @@ Every DLL is pinned by SHA256; leave a `sha256` empty and the preflight tells yo
 
 ## 1. Fill in regression.json
 
-Copy `regression.sample.json` somewhere outside the repository and replace every `<...>`. Relative paths are relative to the file. The owned profile is `vt-prep-regression-<name>-<run-id>/runtime` in the client environment's runtime folder. On Windows it contains hard links to the game's files and an independent loader; on macOS and Linux it contains only the loader and selected files and launches the source game. The shared stage journals it, and refuses a different run's existing folder. A direct API consumer can set `TargetedRegression.CopyGame = true` before staging to use the full-copy mode. For a basic smoke, use the pinned, game-created Valheim 1.0.16 world and character:
+Copy `regression.sample.json` somewhere outside the repository and replace every `<...>`. Relative paths are relative to the file. The owned profile is `vt-prep-regression-<name>-<run-id>/runtime` in the client environment's runtime folder. On Windows it contains hard links to the game's files and an independent loader; on macOS and Linux it contains only the loader and selected files and launches the source game. The shared stage journals it, and refuses a different run's existing folder. For a basic smoke, use the pinned, game-created Valheim 1.0.16 world and character:
 
 ```csharp
 var world = DefaultSmokeWorld.Prepare(Path.Combine(runRoot, "world-source"));
@@ -84,7 +84,7 @@ dotnet run --project examples/TargetedRegression -c Release -- run /absolute/pat
 
 `run` stages the arm again and repeats every check, refuses any file that appeared in the staged folders since (a plugin outside the allowlist loads even when the test never calls it), then hands the plan to the hosted `ClientRounds`: it places the fixture, launches the owned client, requires the hosted-session capabilities and the scenario's `Capabilities` live, hosts the world with the character protected and runs `Scenario.Measure`. Every command is checked against strict pins: each staged plugin's GUID with its MD5 and the world's UID. No other plugin is pinned `absent`: the clean install loads nothing else, and strict pins refuse anything unlisted. The client is stopped and the world moved into the evidence in every outcome.
 
-Each evidence directory holds `result.json`, `junit.xml`, `run-manifest.json` (the arm, every arm's commit and hash, the allowlist with SHA256 and MD5, the install pins, the world and capabilities; no machine path), the command trace `client-commands.jsonl`, the scenario's own JSON files and `host-world/`. `result.json` records the arm, the mod build, `launchMode` and `disposableStageSeconds` in its provenance. Each arm gets a fresh verified profile; the example retires it before exiting. An interrupted run leaves a journal for `valheim-test env recover`.
+Each evidence directory holds `result.json`, `junit.xml`, `run-manifest.json` (the arm, every arm's commit and hash, the allowlist with SHA256 and MD5, the install pins, the world and capabilities; no machine path), the command trace `client-commands.jsonl`, the scenario's own JSON files and `host-world/`. `result.json` records the arm, the mod build and `disposableStageSeconds` in its provenance. Each arm gets a fresh verified profile; the example retires it before exiting. An interrupted run leaves a journal for `valheim-test env recover`.
 
 ## Review the result
 
@@ -97,6 +97,6 @@ From a checkout of this repository, make a public copy with the maintainer tool 
 ## Limits
 
 - One owned client hosting one world. A dedicated server and restarts of a server process are FullLifecycle's; a second client is the native acceptance suite's.
-- The default profile does not copy the game on macOS or Linux. On Windows it needs hard links on the same volume as the source install; if the filesystem refuses them, use the full-copy path. `valheim-test start --copy-game` selects it, and direct API consumers can set `TargetedRegression.CopyGame = true` before staging.
+- The default profile does not copy the game on macOS or Linux. On Windows it needs hard links on the same volume as the source install; if the filesystem refuses them, put the client environment's `runtime` folder on the game's NTFS volume.
 - The optional registered-character path stages and removes one owned test character. Without it, stage your disposable local character yourself. The tool does not reserve a machine or publish anything.
 - The metadata checks read what BepInEx reads; a dependency a mod finds by reflection at run time, or a config value it needs, is caught only by the live run.

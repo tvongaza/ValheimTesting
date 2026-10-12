@@ -52,7 +52,6 @@ internal sealed class FakeServerHost : IGameHost
     public bool GameActive { get; set; }
     /// <summary>The conflicting processes' IDs the game-process check names when <see cref="GameActive"/> (comma separated), or none.</summary>
     public string GameProcessIds { get; set; } = "";
-    public long AvailableCopyBytes { get; set; } = 100L << 30;
     /// <summary>The server ignores the clean stop's SIGINT, so it is killed after the wait.</summary>
     public bool IgnoreQuit { get; set; }
     public bool ClientWritesBepInExLog { get; set; } = true;
@@ -70,6 +69,8 @@ internal sealed class FakeServerHost : IGameHost
     public Action<string>? AfterCopy { get; set; }
     /// <summary>What the staging apply leaves in the runtime after applying, for example a loader file it failed to remove.</summary>
     public Action<string>? AfterApply { get; set; }
+    /// <summary>Runs after the profile seed made its launch folder, for example to lose its reply.</summary>
+    public Action<string>? AfterSeed { get; set; }
     /// <summary>Controlled delay for tests that prove independent actors prepare concurrently.</summary>
     public Func<Task>? BeforeShip { get; set; }
     /// <summary>Runs after a lock release is recorded, with the releasing owner.</summary>
@@ -86,9 +87,8 @@ internal sealed class FakeServerHost : IGameHost
     public static string CommandLineSha256(string pid) => Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes("fake game " + pid)));
     /// <summary>The machine name the host reports (<c>[Environment]::MachineName</c>), as a runner on it journals it.</summary>
     public string MachineName { get; set; } = "FAKE-HOST";
-    /// <summary>What the macOS bundle check answers on a source install (read only) and on a copy it repairs (MacAppBundle).</summary>
+    /// <summary>What the macOS bundle check answers on a source install (read only, MacAppBundle).</summary>
     public string MacBundleInspect { get; set; } = "VT-BUNDLE accepted 0 -";
-    public string MacBundleRepair { get; set; } = "VT-BUNDLE accepted 0 -";
     public string MacAgentReply { get; set; } = "VT-AGENT removed\n";
     /// <summary>A process this host reports as running until it is stopped; for journal tests.</summary>
     public void Running(int pid, string start)
@@ -129,7 +129,6 @@ internal sealed class FakeServerHost : IGameHost
         ("character-folders", [HostedCharacterStage.PowerShellDirectories, HostedCharacterStage.BashDirectories]),
         ("character-drop", [HostedCharacterStage.WindowsDropStage, HostedCharacterStage.BashDropStage]),
         ("game-process", [HostedRuntimeStage.WindowsProcessCheck, HostedRuntimeStage.BashProcessCheck]),
-        ("copy-space", [HostCopyCapacityProbe.Windows, HostCopyCapacityProbe.Bash]),
         ("party", [CrossplayLibraryScripts.Check]),
         ("server-logon", [HostServerScripts.WindowsServerLogonCheck]),
         ("wait", [InteractiveScripts.LinuxWait, InteractiveScripts.WindowsWait]),
@@ -184,12 +183,9 @@ internal sealed class FakeServerHost : IGameHost
                         return Ok("VT-APART overlap " + Convert.ToBase64String(Encoding.UTF8.GetBytes(path)) + "\n");
                 return Ok("VT-APART ok\n");
             case "mac-agent-retire": return Ok(MacAgentReply);
-            case "mac-bundle": return Ok((v["repair"] == "1" ? MacBundleRepair : MacBundleInspect) + "\n");
+            case "mac-bundle": return Ok(MacBundleInspect + "\n");
             case "game-process": return Ok(GameActive ? $"VT-GAME busy {GameProcessIds}\n".Replace(" \n", "\n") : "VT-GAME idle\n");
             case "server-logon": return Ok("VT-LOGON " + ServerTaskLogon + "\n");
-            case "copy-space":
-                return Ok($"VT-STORAGE {DiskSpace.DirectoryBytes(Local(v["source"]))} {AvailableCopyBytes} " +
-                    Convert.ToBase64String(Encoding.UTF8.GetBytes(Windows ? "C:\\" : "/")) + "\n");
             case "preflight-exists":
                 return Ok(string.Concat(v["paths"].Split('\n').Where(relative => relative.Length != 0 && File.Exists(Local(HostPath.Join(v["root"], relative))))
                     .Select(relative => "VT-EXISTS file " + relative + "\n")) + "VT-EXISTS done\n");
@@ -220,6 +216,7 @@ internal sealed class FakeServerHost : IGameHost
                     Directory.CreateDirectory(Path.GetDirectoryName(target)!);
                     File.Copy(Path.Combine(Local(v["source"]), relative), target);
                 }
+                AfterSeed?.Invoke(destination);
                 return Ok("VT-PROFILE-SEEDED\n");
             }
             case "apply-stage":
@@ -454,7 +451,18 @@ internal sealed class FakeServerHost : IGameHost
                 int id; lock (_sync) id = _nextClient++;
                 Directory.CreateDirectory(Local(v["dir"]));
                 if (ClientWritesBepInExLog)
-                    File.WriteAllText(Path.Combine(Local(v["install"]), "BepInEx", "LogOutput.log"), "[Info   :valheimCLI] Command server listening on 127.0.0.1:5578\n");
+                {
+                    // As BepInEx does: its log goes to the BepInEx folder Doorstop loads, the owned profile's when the launch names
+                    // one (a Unix profile runs the game from its install with the profile's preloader), else the install's.
+                    const string preloader = "/" + BepInExLoader.CorePreloader;
+                    string? target = Spec(v["spec"]).Where(line => line.Kind == "env" && line.Text.StartsWith("DOORSTOP_TARGET_ASSEMBLY=", StringComparison.Ordinal))
+                        .Select(line => line.Text["DOORSTOP_TARGET_ASSEMBLY=".Length..]).SingleOrDefault();
+                    string loaderRoot = target != null && target.StartsWith('/') && target.EndsWith(preloader, StringComparison.Ordinal)
+                        ? target[..^preloader.Length] : v["install"];
+                    string log = Path.Combine(Local(loaderRoot), "BepInEx", "LogOutput.log");
+                    Directory.CreateDirectory(Path.GetDirectoryName(log)!);
+                    File.WriteAllText(log, "[Info   :valheimCLI] Command server listening on 127.0.0.1:5578\n");
+                }
                 lock (_sync) _processes[id] = ("555", ct => exit.Task.WaitAsync(ct), () => exit.TrySetResult(137));
                 return Ok($"VT-INTERACTIVE started {id} 555\n");
             }

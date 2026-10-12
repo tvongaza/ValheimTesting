@@ -3,8 +3,8 @@ using Valheim.Testing.Game;
 using Xunit;
 using Valheim.Testing.GameSessions;
 
-// The real macOS check behind a client copy (#258 run A): a bundle with a file added inside it is fixable, the repair removes
-// that file from the copy only and drops quarantine, and a changed sealed file refuses. macOS only (CI's macOS leg).
+// The real macOS check behind a client profile (#258 run A): a bundle with a file added inside it is fixable (an install macOS
+// already let run tolerates it) and inspecting never changes it; a changed sealed file refuses. macOS only (CI's macOS leg).
 public sealed class MacAppBundleTests : IDisposable
 {
     private readonly string _root = Directory.CreateTempSubdirectory("mac-bundle-").FullName;
@@ -17,7 +17,7 @@ public sealed class MacAppBundleTests : IDisposable
         Assert.Equal(TimeSpan.FromSeconds(600), HostedTimeouts.MacBundleAssessment(TimeSpan.FromSeconds(600)));
     }
 
-    [Fact] public async Task AnAddedFileIsRemovedFromTheCopyAndAChangedFileRefuses()
+    [Fact] public async Task AnAddedFileIsFixableAndAChangedFileRefuses()
     {
         if (!OperatingSystem.IsMacOS()) return;
         string app = Path.Combine(_root, GameLaunch.ClientMacBundle);
@@ -48,27 +48,13 @@ public sealed class MacAppBundleTests : IDisposable
         Assert.Equal(MacBundleInspection.State.Fixable, localInspection.State);
         Assert.Equal(1, localInspection.Count);
         Assert.True(File.Exists(added));
-
-        // An ad-hoc signature satisfies codesign; Gatekeeper rejects it unless assessments are disabled (CI runners may be).
-        var repaired = await MacAppBundle.RepairAsync(host, _root, timeout);
-        Assert.Contains(repaired.State, new[] { MacBundleInspection.State.Accepted, MacBundleInspection.State.Rejected });
-        Assert.Equal(1, repaired.Count);
-        Assert.False(File.Exists(added));
-        Assert.Equal(0, await Run("codesign", "--verify", "--deep", "--strict", app));
-        Assert.NotEqual(0, await Run("xattr", "-p", "com.apple.quarantine", app));
-
-        File.WriteAllText(added, "left by a second launch");
-        var localRepair = MacBundleInspection.Repair(_root, timeout);
-        Assert.Contains(localRepair.State, new[] { MacBundleInspection.State.Accepted, MacBundleInspection.State.Rejected });
-        Assert.Equal(1, localRepair.Count);
-        Assert.False(File.Exists(added));
+        Assert.Equal(0, await Run("xattr", "-p", "com.apple.quarantine", app)); // nor its attributes
 
         File.WriteAllText(Path.Combine(app, "Contents", "Resources", "data.txt"), "changed");
         var broken = await MacAppBundle.InspectAsync(host, _root, timeout);
         Assert.Equal(MacBundleInspection.State.Broken, broken.State);
         Assert.Contains("data.txt", broken.Detail);
         Assert.Contains("Verify the game's files in Steam", MacBundleInspection.SourceRefusal(broken));
-        Assert.Equal(MacBundleInspection.State.Broken, (await MacAppBundle.RepairAsync(host, _root, timeout)).State);
         Assert.Equal(MacBundleInspection.State.Broken, MacBundleInspection.Inspect(_root, timeout).State);
         Assert.Equal("changed", File.ReadAllText(Path.Combine(app, "Contents", "Resources", "data.txt")));
     }
