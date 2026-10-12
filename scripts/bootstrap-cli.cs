@@ -2,7 +2,7 @@
 // Needs only the .NET 10 SDK and Git; never needs a game install.
 //
 //   sh scripts/bootstrap-cli.sh                  (macOS/Linux)
-//   pwsh -File scripts/bootstrap-cli.ps1          (Windows)
+//   Windows: the command in CONTRIBUTING.md ("Set up and validate locally")
 //   sh scripts/bootstrap-cli.sh --source /path/to/valheimCLI
 //
 // --source uses an existing Git repository, but exports the pinned commit

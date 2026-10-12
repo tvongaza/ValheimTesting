@@ -40,9 +40,10 @@ For reusable synthetic ground and multi-zone height/paint state, read [Shared-wo
 
    ```sh
    sh scripts/validate.sh  # macOS/Linux: preflight, CLI bootstrap and full validation
-   # Windows: powershell -NoProfile -File scripts/bootstrap-cli.ps1
-   #          dotnet run scripts/validate.cs
+   # Windows: the two commands in CONTRIBUTING.md
    ```
+
+   The Windows commands are in [CONTRIBUTING.md](../CONTRIBUTING.md#set-up-and-validate-locally); they are written out there only.
 
    For a public API or reference change, also run `dotnet tool restore` and `dotnet run scripts/api-docs.cs`, which
    checks the rendered pages for machine-local paths. A pull request changes no package version, pin or public-api list
