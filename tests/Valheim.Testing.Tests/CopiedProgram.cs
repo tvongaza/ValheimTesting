@@ -69,7 +69,7 @@ public sealed class CopiedProgramTests : IDisposable
     // The same race for a script stub (#723): written in this process, the stub is "Text file busy" to a start for as long as a forked child holds its descriptor.
     [Fact] public void AScriptStubStartsWhileOtherThreadsStartPrograms()
     {
-        if (!OperatingSystem.IsLinux()) return;
+        if (OperatingSystem.IsWindows()) return; // A stub runs unsigned on macOS too, so its scratch-file path is exercised there as well.
         string source = File.Exists("/usr/bin/true") ? "/usr/bin/true" : "/bin/true";
         WhileOtherThreadsStartPrograms(source, () =>
         {
