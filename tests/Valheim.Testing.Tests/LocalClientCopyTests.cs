@@ -193,15 +193,15 @@ public sealed class LocalClientCopyTests : IDisposable
     }
 
     [Theory]
-    [InlineData(true, true)]
-    [InlineData(false, false)]
-    public void AnExplicitConfigIsCheckedOnlyWhenTheRoleNeedsMutationAccess(bool requireClientMutations, bool refused)
+    [InlineData(true)]
+    [InlineData(false)]
+    public void AnExplicitConfigIsCheckedOnlyWhenTheRoleNeedsMutationAccess(bool requireClientMutations)
     {
         string selected = Path.Combine(_rig.Root, "selected.cfg"), generated = Path.Combine(_rig.Root, "generated.cfg");
         File.WriteAllText(selected, "[Server]\nEnabled = true\nPort = 5556\n");
         var files = new[] { new HostedRuntimeFile(selected, CliServerConfig.RelativePath) };
-        if (refused) Assert.Throws<InvalidDataException>(() => CliServerConfig.Stage(files, "client", 5556, generated, requireClientMutations));
-        else Assert.Equal(selected, Assert.Single(CliServerConfig.Stage(files, "server", 5556, generated, requireClientMutations)).Source);
+        if (requireClientMutations) Assert.Throws<InvalidDataException>(() => CliServerConfig.Stage(files, "actor", 5556, generated, true));
+        else Assert.Equal(selected, Assert.Single(CliServerConfig.Stage(files, "actor", 5556, generated, false)).Source);
         Assert.False(File.Exists(generated)); // An explicit config is kept as selected, never rewritten.
     }
 

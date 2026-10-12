@@ -889,12 +889,12 @@ public static class HostedCampaignPreparation
     /// <summary>Prepare a hosted campaign using loader profiles on supported hosts.</summary>
     public static Task<PreparedHostedCampaign> PrepareAsync(string manifestFile, string outputDirectory, TimeSpan timeout,
         Func<string, IGameHost>? hostFactory = null, CancellationToken cancellation = default) =>
-        PrepareAsync(InspectInputs(manifestFile), outputDirectory, timeout, hostFactory, cancellation);
+        PrepareAsync(InspectInputs(manifestFile), outputDirectory, timeout, hostFactory, cancellation, plans: null);
 
     /// <summary>Prepare a hosted campaign, optionally making full disposable game copies for every actor.</summary>
     public static Task<PreparedHostedCampaign> PrepareAsync(string manifestFile, string outputDirectory, TimeSpan timeout,
         bool copyGame, Func<string, IGameHost>? hostFactory = null, CancellationToken cancellation = default) =>
-        PrepareAsync(InspectInputs(manifestFile), outputDirectory, timeout, hostFactory, cancellation, copyGame: copyGame);
+        PrepareAsync(InspectInputs(manifestFile), outputDirectory, timeout, hostFactory, cancellation, plans: null, copyGame: copyGame);
 
     // A preparation that failed ends its run in the journal of every host it was to touch, best effort: the entry is a record,
     // and the preparation's own failure is the one to report.
@@ -918,11 +918,11 @@ public static class HostedCampaignPreparation
     /// <remarks>A failed preparation removes what it made before it throws; <paramref name="cleanupStep"/> (the runner's report, as a
     /// Cleanup step) records that removal, so the result and the journal's <c>run-ended</c> judge the same cleanup (#424).
     /// <paramref name="plans"/> are the runner's client plans by name: a client whose plan hosts its own world needs no ValheimCLI
-    /// mutation access (<see cref="CliServerConfig.RequiresClientMutations"/>); a client with no plan here is treated as joined.</remarks>
+    /// mutation access (<see cref="CliServerConfig.RequiresClientMutations"/>); null (the manifest-only overloads, which cannot know who hosts) or a client with no plan here is treated as joined. There is no default: a caller states it.</remarks>
     internal static async Task<PreparedHostedCampaign> PrepareAsync(Inspection inspection, string outputDirectory, TimeSpan timeout,
-        Func<string, IGameHost>? hostFactory, CancellationToken cancellation, string? runId = null, Func<string, Func<Task>, Task>? cleanupStep = null,
-        ShippedLoader.Rule? shippedLoader = null, Action<string, string>? loaderChosen = null, bool copyGame = false,
-        IReadOnlyDictionary<string, ClientRunPlan>? plans = null)
+        Func<string, IGameHost>? hostFactory, CancellationToken cancellation, IReadOnlyDictionary<string, ClientRunPlan>? plans,
+        string? runId = null, Func<string, Func<Task>, Task>? cleanupStep = null,
+        ShippedLoader.Rule? shippedLoader = null, Action<string, string>? loaderChosen = null, bool copyGame = false)
     {
         inspection.Report.RequireReady();
         var readiness = await InspectHostsAsync(inspection, timeout, hostFactory, cancellation, shippedLoader, copyGame: copyGame).ConfigureAwait(false);
