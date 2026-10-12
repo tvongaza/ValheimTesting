@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -52,7 +51,7 @@ internal static partial class ModBuild
     private static (string Project, string Game, Dictionary<string, string> Dependencies, string Output) Parse(string[] args)
     {
         string? project = null, game = null, output = null, role = null;
-        var dependencies = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var dependencyValues = new List<string>();
         for (int i = 0; i < args.Length; i++)
         {
             string key = args[i];
@@ -65,14 +64,11 @@ internal static partial class ModBuild
                 case "--game" when game == null: game = value; break;
                 case "--role" when role == null: role = value; break;
                 case "--output" when output == null: output = value; break;
-                case "--dependency":
-                    int equal = value.IndexOf('=');
-                    if (equal < 1 || equal == value.Length - 1 || !dependencies.TryAdd(value[..equal], value[(equal + 1)..]))
-                        throw new ArgumentException("--dependency must be a unique NAME=DLL pair.");
-                    break;
+                case "--dependency": dependencyValues.Add(value); break;
                 default: throw new ArgumentException("Unknown or repeated option: " + key);
             }
         }
+        var dependencies = ParseDependencies(dependencyValues);
         if (project == null) throw new ArgumentException("Give --project MOD.csproj.");
         if (role is not (null or "client" or "server")) throw new ArgumentException("--role must be client or server.");
         if (game == null)
@@ -96,12 +92,7 @@ internal static partial class ModBuild
             File.Exists(Path.Combine(game, GameLaunch.ServerLinuxExecutable)) ||
             File.Exists(Path.Combine(game, GameLaunch.ServerMacExecutable))) GameLaunch.DetectServer(game);
         else GameLaunch.DetectClient(game);
-        string managed = new[] { Path.Combine(game, "valheim_Data", "Managed"),
-            Path.Combine(game, "Valheim.app", "Contents", "Resources", "Data", "Managed"),
-            Path.Combine(game, "valheim_server_Data", "Managed"), Path.Combine(game, "valheim_server", "Data", "Managed") }
-            .FirstOrDefault(Directory.Exists) ?? throw new DirectoryNotFoundException("No Valheim Managed folder under " + game);
-        string source = Path.Combine(managed, "assembly_valheim.dll");
-        if (!File.Exists(source)) throw new FileNotFoundException("The selected game lacks assembly_valheim.dll: " + source, source);
+        string managed = Path.GetDirectoryName(InstallPins.GameAssembly(game))!;
         string core = Path.Combine(loaderRoot ?? game, "BepInEx", "core");
         foreach (string name in new[] { "BepInEx.dll", "0Harmony.dll" })
             if (!File.Exists(Path.Combine(core, name)))
@@ -167,43 +158,15 @@ internal static partial class ModBuild
             File.Copy(file, target);
             deps.Add(Pin(file));
         }
-        // Reuse an owned writable cache. A per-run cache would accumulate gigabytes in retained evidence.
-        string packages = WritableCache("NUGET_PACKAGES", "packages"), http = WritableCache("NUGET_HTTP_CACHE_PATH", "http");
-        var start = new ProcessStartInfo("dotnet") { WorkingDirectory = Path.GetDirectoryName(input.Project)!,
-            RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
-        start.Environment["NUGET_PACKAGES"] = packages; start.Environment["NUGET_HTTP_CACHE_PATH"] = http;
-        string[] buildArguments = BuildArguments(input, core, publicized, deployment);
-        start.ArgumentList.Add("build");
-        foreach (string argument in buildArguments)
-            start.ArgumentList.Add(argument);
-        using var process = Process.Start(start) ?? throw new InvalidOperationException("Could not start the .NET SDK for the mod build.");
-        Task<string> stdout = process.StandardOutput.ReadToEndAsync(cancellation), stderr = process.StandardError.ReadToEndAsync(cancellation);
-        try { await process.WaitForExitAsync(cancellation).ConfigureAwait(false); }
-        catch (OperationCanceledException)
-        {
-            if (!process.HasExited) process.Kill(entireProcessTree: true);
-            await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
-            throw;
-        }
-        string log = (await stdout.ConfigureAwait(false)) + "\n" + (await stderr.ConfigureAwait(false));
-        File.WriteAllText(Path.Combine(input.Output, "build.log"), log);
-        if (process.ExitCode != 0) throw new InvalidOperationException($"The mod build failed (exit {process.ExitCode}); see {Path.Combine(input.Output, "build.log")}.");
-        // Ask MSBuild for the target path rather than guessing the DLL name or picking up an older build.
+        string log = Path.Combine(input.Output, "build.log");
+        var build = new ProjectBuild(input.Project, BuildArguments(input, core, publicized, deployment), NuGetCaches.Owned());
+        // Ask MSBuild for the target path in the same invocation rather than guessing the DLL name or picking up an older build.
         // A project may set AssemblyName and output paths in imported properties.
-        var targetQuery = new ProcessStartInfo("dotnet") { WorkingDirectory = Path.GetDirectoryName(input.Project)!,
-            RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
-        targetQuery.Environment["NUGET_PACKAGES"] = packages; targetQuery.Environment["NUGET_HTTP_CACHE_PATH"] = http;
-        targetQuery.ArgumentList.Add("msbuild");
-        foreach (string argument in buildArguments) targetQuery.ArgumentList.Add(argument);
-        targetQuery.ArgumentList.Add("-getProperty:TargetPath");
-        using var query = Process.Start(targetQuery) ?? throw new InvalidOperationException("Could not inspect the built mod's target path.");
-        Task<string> queryOutput = query.StandardOutput.ReadToEndAsync(cancellation);
-        Task<string> queryError = query.StandardError.ReadToEndAsync(cancellation);
-        await query.WaitForExitAsync(cancellation).ConfigureAwait(false);
-        string built = (await queryOutput.ConfigureAwait(false)).Trim();
-        if (query.ExitCode != 0 || !Path.IsPathFullyQualified(built) || !File.Exists(built))
-            throw new InvalidDataException("The mod build did not produce an inspectable target DLL: " +
-                (await queryError.ConfigureAwait(false)).Trim());
+        var run = await build.BuildAsync(cancellation, logFile: log, query: new ProjectQuery([], ["TargetPath"])).ConfigureAwait(false);
+        if (run.ExitCode != 0) throw new InvalidOperationException($"The mod build failed (exit {run.ExitCode}); see {log}.");
+        string built = run.Query.Properties.GetValueOrDefault("TargetPath", "").Trim();
+        if (!Path.IsPathFullyQualified(built) || !File.Exists(built))
+            throw new InvalidDataException("The mod build did not produce an inspectable target DLL: " + built);
         if (PluginMetadata.Read(built).Plugins.Count == 0) throw new InvalidDataException("The built DLL declares no BepInEx plugin: " + built);
         string mod = Path.Combine(input.Output, "mod", Path.GetFileName(built));
         Directory.CreateDirectory(Path.GetDirectoryName(mod)!); File.Copy(built, mod);
@@ -213,7 +176,7 @@ internal static partial class ModBuild
     }
 
     internal static string[] BuildArguments(Inputs input, string core, string publicized, string deployment) =>
-        [input.Project, "-p:Configuration=Debug",
+        ["-p:Configuration=Debug",
             "-p:OutputPath=" + Path.Combine(input.Output, "private-build"),
             "-p:VALHEIM_INSTALL=" + input.Game, "-p:VALHEIM_MANAGED=" + input.Managed,
             "-p:ValheimPath=" + input.Game, "-p:ValheimManaged=" + input.Managed,
@@ -241,10 +204,7 @@ internal static partial class ModBuild
         }
         // A dedicated server is a different Steam install from the client used to build the mod.
         // Its managed game assemblies must still be byte-identical before the run can use this build.
-        string? selectedManaged = new[] { "valheim_Data/Managed", "Valheim.app/Contents/Resources/Data/Managed",
-            "valheim_server_Data/Managed", "valheim_server/Data/Managed" }
-            .Select(relative => Path.Combine(selectedGame, relative.Replace('/', Path.DirectorySeparatorChar))).FirstOrDefault(Directory.Exists);
-        if (selectedManaged == null) throw new DirectoryNotFoundException("Selected native game has no Managed folder: " + selectedGame);
+        string selectedManaged = Path.GetDirectoryName(InstallPins.GameAssembly(selectedGame))!;
         foreach (var source in record.Sources)
         {
             string counterpart = Path.Combine(selectedManaged, Path.GetFileName(source.File));
@@ -289,27 +249,6 @@ internal static partial class ModBuild
     }
 
     private static FilePin Pin(string file) => new(Path.GetFullPath(file), FileHash.Sha256(file));
-    internal static string WritableCache(string variable, string leaf)
-    {
-        string? chosen = Environment.GetEnvironmentVariable(variable);
-        if (chosen != null && CanWrite(chosen)) return Path.GetFullPath(chosen);
-        string owned = Path.Combine(CliBundle.DataRoot, "nuget", leaf);
-        if (CanWrite(owned)) return owned;
-        throw new IOException($"Neither {variable} nor the ValheimTesting-owned NuGet cache is writable: {owned}.");
-    }
-
-    private static bool CanWrite(string directory)
-    {
-        try
-        {
-            Directory.CreateDirectory(directory);
-            string probe = Path.Combine(directory, ".valheim-test-write-" + Guid.NewGuid().ToString("N"));
-            using (File.Create(probe)) { }
-            File.Delete(probe);
-            return true;
-        }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { return false; }
-    }
     [GeneratedRegex(@"([A-Za-z0-9_.-]+)_publicized\.dll", RegexOptions.IgnoreCase)] private static partial Regex PublicizedName();
     [GeneratedRegex("<Reference\\s+Include=\"([A-Za-z0-9_.-]+)\"", RegexOptions.IgnoreCase)] private static partial Regex DependencyName();
     [GeneratedRegex(@"^[A-Za-z0-9_.-]+$")] private static partial Regex Name();
