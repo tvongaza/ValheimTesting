@@ -268,9 +268,10 @@ public sealed class DisposableCharacterStore
     internal static string SaveFile(string character) => character + ".fch";
 
     // A host listing hashes only this character's files. Include the same save, temporary,
-    // previous and automatic-backup names that retirement can remove.
-    internal static string[] OwnedFilePatterns(string character) =>
-        [.. OwnedNames(character), .. OwnedPrefixes(character).Select(prefix => prefix + "*")];
+    // previous and automatic-backup names that retirement can remove. The listing reads globs:
+    // literal turns each name and prefix into the listing's pattern for that literal text.
+    internal static string[] OwnedFilePatterns(string character, Func<string, string> literal) =>
+        [.. OwnedNames(character).Select(literal), .. OwnedPrefixes(character).Select(prefix => literal(prefix) + "*")];
 
     /// <summary>
     /// Every folder on this machine that can hold a character named like a staged one: <paramref name="charactersLocal"/>, its

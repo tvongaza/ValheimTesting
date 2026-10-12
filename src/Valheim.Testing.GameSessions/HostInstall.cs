@@ -43,13 +43,23 @@ public static class HostInstall
 
     /// <summary>
     /// Hashes every regular file under <paramref name="root"/> on the host (links are refused, as <see cref="WorldFixture"/>
-    /// refuses them). <paramref name="paths"/> limits the listing to those subdirectories and files (relative, <c>*</c> allowed
-    /// in a directory, for example <c>*_Data/Managed</c>, or at the file name, for example <c>save_backup_auto-*</c>); null
-    /// lists everything. The patcher entries and executables are always read.
+    /// refuses them). <paramref name="paths"/> limits the listing to those subdirectories and files: relative patterns whose
+    /// segments are separated by <c>/</c> or <c>\</c>, with <c>*</c> allowed in a directory, for example <c>*_Data/Managed</c>,
+    /// or at the file name, for example <c>save_backup_auto-*</c>. A pattern that starts with a separator or a drive, or holds an
+    /// empty segment, one ending in <c>.</c> or a space (<c>..</c> included) or one starting with <c>.</c> that holds a wildcard,
+    /// is refused before anything runs on the host.
+    /// Null lists everything. The patcher entries and executables are always read.
     /// </summary>
     public static Task<HostListing> ListAsync(IGameHost host, string root, TimeSpan timeout, IReadOnlyList<string>? paths = null,
         CancellationToken cancellation = default) => ListCoreAsync(host, root, timeout, paths, cancellation, ignoreCase: false);
 
+    /// <summary>
+    /// <see cref="ListAsync"/> with every segment of every pattern compared ignoring case (on a bash host as its locale folds
+    /// letters, ASCII letters at least; on Windows as the filesystem does). The
+    /// patterns are globs, used as written: <c>*</c> matches any run of characters within a segment and <c>?</c> one character
+    /// (on a bash host <c>[</c> opens a character class). A caller that names a literal file passes the name through
+    /// <see cref="LiteralPattern"/> first.
+    /// </summary>
     internal static Task<HostListing> ListCaseInsensitiveAsync(IGameHost host, string root, TimeSpan timeout,
         IReadOnlyList<string> paths, CancellationToken cancellation = default) =>
         ListCoreAsync(host, root, timeout, paths, cancellation, ignoreCase: true);
@@ -59,14 +69,43 @@ public static class HostInstall
     {
         ArgumentNullException.ThrowIfNull(host);
         RequireHostPath(host, root, nameof(root));
-        foreach (string path in paths ?? Array.Empty<string>())
-            if (string.IsNullOrWhiteSpace(path) || path.Any(char.IsControl) || path.StartsWith('/') || path.Split('/', '\\').Contains(".."))
-                throw new ArgumentException($"'{path}' is not a relative path inside the root.", nameof(paths));
+        var patterns = ListingPatterns(paths ?? Array.Empty<string>());
         var result = (await host.RunAsync(HostInstallScripts.List(host.Shell.Kind), new Dictionary<string, string>
         {
-            ["root"] = root, ["dirs"] = string.Join('\n', paths ?? Array.Empty<string>()), ["nocase"] = ignoreCase ? "1" : "0",
+            ["root"] = root, ["dirs"] = string.Join('\n', patterns), ["nocase"] = ignoreCase ? "1" : "0",
         }, timeout, cancellation).ConfigureAwait(false)).EnsureSuccess($"Listing {root} on {host.Name}");
         return ReadListing(host.Name, host.Shell.Kind, root, result);
+    }
+
+    private static readonly Regex Drive = new("^[A-Za-z]:", RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// The listing patterns as both listing scripts receive them, with <c>/</c> separators: refuses a pattern that is blank,
+    /// holds a control character, starts with a separator or a drive (<c>C:</c>), or has an empty segment, one ending in
+    /// <c>.</c> or a space (<c>.</c>, <c>..</c>, and names Windows trims) or one starting with <c>.</c> that holds a wildcard
+    /// (a glob such as <c>.*</c>, which bash before 5.2 expands to <c>..</c>), each of which a bash and a PowerShell host would
+    /// read differently or outside the root.
+    /// </summary>
+    internal static string[] ListingPatterns(IEnumerable<string> paths) => paths.Select(path =>
+    {
+        string pattern = (path ?? "").Replace('\\', '/');
+        if (string.IsNullOrWhiteSpace(pattern) || pattern.Any(char.IsControl) || pattern.StartsWith('/') || Drive.IsMatch(pattern) ||
+            pattern.Split('/').Any(segment => segment.Length == 0 || segment[^1] is '.' or ' ' ||
+                (segment[0] == '.' && segment.IndexOfAny(['*', '?', '[']) >= 0)))
+            throw new ArgumentException($"'{path}' is not a relative path inside the root.", nameof(paths));
+        return pattern;
+    }).ToArray();
+
+    /// <summary>
+    /// A listing pattern for the single file or directory named <paramref name="name"/>: each character either host's glob
+    /// reads as a wildcard or a separator (<c>*</c>, <c>?</c>, <c>[</c>, <c>\</c>) becomes <c>?</c>, the one wildcard both hosts
+    /// share. The pattern may therefore also match names that differ only there; compare the listing's names exactly.
+    /// </summary>
+    internal static string LiteralPattern(string name)
+    {
+        if (string.IsNullOrEmpty(name) || name is "." or ".." || name.Contains('/'))
+            throw new ArgumentException($"'{name}' is not a file name.", nameof(name));
+        return string.Concat(name.Select(c => c is '*' or '?' or '[' or '\\' ? '?' : c));
     }
 
     internal static HostListing ReadListing(string hostName, HostShellKind shell, string root, HostResult result)
@@ -321,22 +360,42 @@ internal static class HostInstallScripts
     public static string List(HostShellKind kind) => kind == HostShellKind.Bash ? BashList : PowerShellList;
     public static string Port(HostShellKind kind) => kind == HostShellKind.Bash ? BashPort : PowerShellPort;
 
-    // Variables: root, dirs (relative directory patterns and file names, one per line; none lists everything). sha256sum prints each file as
-    // "<hash>  ./<path>", escaping a name with a backslash or line break. Links are refused before anything is hashed.
+    // Variables: root, dirs (relative directory patterns and file names with "/" separators, one per line, as
+    // HostInstall.ListingPatterns checked them; none lists everything), nocase (1: compare every segment ignoring case).
+    // sha256sum prints each file as "<hash>  ./<path>", escaping a name with a backslash or line break. Links are refused before
+    // anything is hashed.
     public static readonly string BashList = """
         set -u
         if [ ! -d "$root" ]; then echo "VT-LIST missing"; exit 0; fi
         cd -- "$root" || exit 3
         shopt -s nullglob dotglob
-        if [ "${nocase:-0}" = 1 ]; then shopt -s nocaseglob; fi
+        if [ "${nocase:-0}" = 1 ]; then shopt -s nocasematch; fi
         if command -v sha256sum > /dev/null 2>&1; then hasher=(sha256sum); else hasher=(shasum -a 256); fi
         roots=()
         if [ -z "$dirs" ]; then roots=(.); else
             while IFS= read -r pattern; do
                 [ -n "$pattern" ] || continue
-                # Bash leaves a literal name unchanged even with nocaseglob. Make every
-                # case-insensitive request a real glob before expanding it.
-                if [ "${nocase:-0}" = 1 ]; then pattern="[${pattern:0:1}]${pattern:1}"; fi
+                if [ "${nocase:-0}" = 1 ]; then
+                    # A glob never folds the case of a segment without a wildcard, so resolve the pattern a segment at a time:
+                    # keep each entry whose name the segment, as written, matches under nocasematch ("$dir"/* never yields . or
+                    # ..). A named entry that is a link is kept for the link check below; a linked directory on the way is
+                    # entered, as the case-sensitive glob and the PowerShell listing enter it.
+                    found=(.)
+                    IFS=/ read -ra segments <<< "$pattern"
+                    for segment in "${segments[@]}"; do
+                        next=()
+                        for dir in "${found[@]}"; do
+                            for entry in "$dir"/*; do
+                                case "${entry##*/}" in $segment) next+=("$entry");; esac
+                            done
+                        done
+                        found=()
+                        if [ "${#next[@]}" -eq 0 ]; then break; fi
+                        found=("${next[@]}")
+                    done
+                    if [ "${#found[@]}" -gt 0 ]; then roots+=("${found[@]}"); fi
+                    continue
+                fi
                 IFS=$'\n'
                 # A named path that is a link is kept, so the link check below refuses it rather than leave it out.
                 for d in $pattern; do if [ -e "$d" ] || [ -L "$d" ]; then roots+=("./$d"); fi; done
@@ -352,7 +411,8 @@ internal static class HostInstallScripts
         echo "VT-LIST done"
         """.ReplaceLineEndings("\n");
 
-    // Variables: root, dirs. Hashes with .NET (see HostScripts' note on Get-FileHash); names travel as base64.
+    // Variables: root, dirs (as the bash listing's; names compare ignoring case, so nocase changes nothing). Hashes with .NET
+    // (see HostScripts' note on Get-FileHash); names travel as base64.
     public static readonly string PowerShellList = """
         $utf8 = New-Object Text.UTF8Encoding $false
         if (-not [IO.Directory]::Exists($root)) { 'VT-LIST missing'; exit 0 }
@@ -365,7 +425,7 @@ internal static class HostInstallScripts
             foreach ($pattern in ($dirs -split "`n")) {
                 if (-not $pattern) { continue }
                 $current = @($full)
-                $segments = @($pattern -split '[\\/]' | Where-Object { $_ })
+                $segments = @($pattern -split '/')
                 for ($i = 0; $i -lt $segments.Count; $i++) {
                     $segment = $segments[$i]
                     $next = @()
