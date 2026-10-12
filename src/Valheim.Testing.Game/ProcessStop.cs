@@ -139,12 +139,12 @@ internal static class ProcessQuit
                 int code => (false, $"{name} helper exited {code}: {(error.Result + output.Result).Trim()}"),
             };
         }
-        catch (System.ComponentModel.Win32Exception failure)
+        catch (System.ComponentModel.Win32Exception failure) when (failure.NativeErrorCode == 2) // ERROR_FILE_NOT_FOUND
         {
             // The helper is pwsh, as every Windows host script is: without it no console event can be sent.
             return (false, $"{name} helper could not run: {failure.Message}. {HostProfile.MissingPwsh("this machine")}");
         }
-        catch (IOException failure)
+        catch (Exception failure) when (failure is IOException or System.ComponentModel.Win32Exception)
         {
             return (false, $"{name} helper could not run: " + failure.Message);
         }

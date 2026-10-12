@@ -125,7 +125,8 @@ public sealed class SshGameHost : ScriptedGameHost
     internal override bool IsTransportFailure(ProcessExit exit) => exit.ExitCode == 255;
     // The login shell could not find the command: cmd.exe (OpenSSH's default on Windows) exits 9009, which an ssh client on macOS
     // or Linux reports as its low byte, 49; a POSIX shell exits 127. Either way the wrapper never ran, so it wrote nothing. The
-    // English words cover Windows PowerShell as the login shell (exit 1) too; a localised one is caught by its exit code alone.
+    // English words cover Windows PowerShell as the login shell (exit 1) too. A localised cmd.exe is caught by its exit code; a
+    // localised Windows PowerShell login shell is not (exit 1 says nothing), and the outcome stays a plain unknown.
     internal override bool ShellNotFound(ProcessExit exit) => exit.End == ProcessEnd.Exited && (Regex.IsMatch(exit.Stderr,
         "'" + Regex.Escape(Shell.Executable) + "' is not recognized as|" + Regex.Escape(Shell.Executable) + ": (command )?not found", RegexOptions.CultureInvariant) ||
         (exit.ExitCode is 9009 or 9009 % 256 or 127 && exit.Stdout.Length == 0));

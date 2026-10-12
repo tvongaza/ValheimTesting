@@ -15,7 +15,8 @@ public sealed class HostProfile
     internal const string PwshInstall = "winget install --id Microsoft.PowerShell --source winget";
     internal static string MissingPwsh(string host) =>
         $"PowerShell 7 (pwsh) is not installed on {host}, or not on its PATH; a Windows host runs its scripts in pwsh. Install it in a " +
-        $"desktop terminal on that machine (over SSH the installer fails with access denied): {PwshInstall}";
+        $"desktop terminal on that machine (over SSH the installer fails with access denied): {PwshInstall}. Then restart its OpenSSH " +
+        "server (Restart-Service sshd) or the machine, so new SSH sessions see the new PATH.";
 
     public string Kind { get; set; } = "";
     /// <summary><c>windows</c>, <c>linux</c> or <c>macos</c>: the host's own OS (a container's is linux).</summary>
