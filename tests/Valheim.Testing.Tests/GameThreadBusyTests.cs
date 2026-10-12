@@ -18,22 +18,30 @@ public class GameThreadBusyTests
     /// Lists capabilities only after <paramref name="listingTime"/> of the world-entry deadline has gone, as a slow game would,
     /// by moving the actor's clock rather than sleeping. Nothing else moves that clock, so each read's time left is exact.
     /// </summary>
-    private sealed class LaggedTransport(ScriptedTransport inner, ManualClock clock, TimeSpan listingTime) : IGameTransport, IGameThreadStatusTransport
+    private sealed class LaggedTransport(ScriptedTransport inner, ManualClock clock, TimeSpan listingTime, TimeSpan pinTime, int pinsSlowAfterReads) : IGameTransport, IGameThreadStatusTransport
     {
         private readonly List<TimeSpan> _sessionReads = [];
+        private bool _listed;
         /// <summary>The time each session-state read was given to start and finish.</summary>
         public IReadOnlyList<TimeSpan> SessionReadTimeouts => _sessionReads;
         public CommandResult Execute(string command, TimeSpan timeout)
         {
-            if (command == "cli_extensions") clock.Advance(listingTime);
-            if (command == "cli_extension valheim.session/state") _sessionReads.Add(timeout);
+            if (command == "cli_extensions") { clock.Advance(listingTime); _listed = true; }
+            // A slow pin check (its round trip is on the same clock) once the listing and the given number of reads are done.
+            if (command.StartsWith("cli_expect", StringComparison.Ordinal) && _listed && _sessionReads.Count >= pinsSlowAfterReads) clock.Advance(pinTime);
+            if (command == "cli_extension valheim.session/state")
+            {
+                _sessionReads.Add(timeout);
+                // A game thread answers a read given under 25 ms as not started: too little time to start it.
+                if (timeout <= TimeSpan.FromMilliseconds(25)) return Unstarted();
+            }
             return inner.Execute(command, timeout);
         }
         public IReadOnlyDictionary<string, string> ReadStatus() => new Dictionary<string, string> { ["mainThreadIdleMs"] = "10" };
         public void Dispose() => inner.Dispose();
     }
 
-    private static GameActor LoadingServer(int listingMs, out LaggedTransport transport)
+    private static GameActor LoadingServer(int listingMs, out LaggedTransport transport, int pinMs = 0, int pinsSlowAfterReads = 0)
     {
         var inner = new ScriptedTransport().Extension("valheim.session", "state", _ => new
         {
@@ -42,7 +50,7 @@ public class GameThreadBusyTests
             localPlayer = false, playerReady = false, saving = false, loadError = false, connectionStatus = "Connecting"
         });
         var clock = new ManualClock();
-        transport = new LaggedTransport(inner, clock, TimeSpan.FromMilliseconds(listingMs));
+        transport = new LaggedTransport(inner, clock, TimeSpan.FromMilliseconds(listingMs), TimeSpan.FromMilliseconds(pinMs), pinsSlowAfterReads);
         var actor = new GameActor("server", transport) { Clock = clock };
         actor.VerifyEnvironment("cli_expect worlduid=7");
         return actor;
@@ -90,6 +98,36 @@ public class GameThreadBusyTests
         Assert.Contains("deadline passed before another session read could start", error.Message);
         Assert.DoesNotContain("game thread to resume", error.Message);
         Assert.Empty(transport.SessionReadTimeouts);
+    }
+
+    // The guard lets a read start with 26 to 35 ms left, but the read's own pin check comes first. When that round trip uses
+    // the difference, the read would be sent with under 25 ms, expire before starting and end the wait as a stalled game
+    // thread or a harness fault. The deadline ends it instead, as the guard would have, once the pin check has taken its time.
+    [Theory]
+    [InlineData(316, 10)]
+    [InlineData(316, 9)]
+    [InlineData(300, 40)]
+    public void APinCheckThatUsesUpTheLastOfTheDeadlineEndsTheWaitAsADeadlineTimeout(int listingMs, int pinMs)
+    {
+        using var actor = LoadingServer(listingMs, out var transport, pinMs);
+        var error = Assert.Throws<WaitTimeoutException>(() =>
+            new SessionControl(actor).WaitForWorld("7", TimeSpan.FromMilliseconds(350)));
+        Assert.Contains("deadline passed before another session read could start", error.Message);
+        Assert.DoesNotContain("game thread to resume", error.Message);
+        Assert.Empty(transport.SessionReadTimeouts);
+    }
+
+    // A read after a successful one: the pin check uses the rest of the deadline, and the wait reports the state it last saw.
+    [Fact]
+    public void APinCheckThatUsesUpTheDeadlineAfterAReadStillReportsTheLastSessionState()
+    {
+        using var actor = LoadingServer(0, out var transport, pinMs: 2000, pinsSlowAfterReads: 1);
+        var error = Assert.Throws<WaitTimeoutException>(() =>
+            new SessionControl(actor).WaitForWorld("7", TimeSpan.FromMilliseconds(1000)));
+        Assert.Contains("phase loading", error.Message);
+        Assert.DoesNotContain("game thread to resume", error.Message);
+        Assert.DoesNotContain("Harness fault", error.Message);
+        Assert.Single(transport.SessionReadTimeouts);
     }
 
     private static CommandResult Unstarted() => new()
