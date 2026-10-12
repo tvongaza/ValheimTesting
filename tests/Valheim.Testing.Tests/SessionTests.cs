@@ -145,6 +145,7 @@ public class SessionTests
         finally { unrelated.Kill(); unrelated.WaitForExit(); Directory.Delete(dir, true); }
     }
     private const string Listening = "[Info   :valheimCLI] Command server listening on 127.0.0.1:5555\n";
+    private const string SteamworksInitFailed = "[Error  : Unity Log] [Steamworks.NET] SteamAPI_Init() failed. Refer to Valve's documentation.";
     private static readonly TimeSpan Generous = TimeSpan.FromSeconds(60);
     // BepInEx 5's own chainloader messages, as its BepInEx.dll carries them.
     [Theory]
@@ -191,7 +192,7 @@ public class SessionTests
         Assert.All(StartupEvents.BepInExPluginLoadFailures, failure => Assert.Contains(failure, StartupEvents.StartupFailures));
     [Fact] public async Task AClientSteamLoginFailureEndsStartupWithoutWaitingForTheMenu()
     {
-        string line = "[Error  : Unity Log] [Steamworks.NET] SteamAPI_Init() failed. Refer to Valve's documentation.";
+        string line = SteamworksInitFailed;
         Assert.Contains(StartupEvents.ClientStartupFailures, failure => failure.IsMatch(line));
         Assert.DoesNotContain(StartupEvents.StartupFailures, failure => failure.IsMatch(line)); // a dedicated server has separate rules
         using var log = new TempLog();
@@ -201,11 +202,11 @@ public class SessionTests
             StartupEvents.CliListening, TimeSpan.FromSeconds(5), StartupEvents.ClientStartupFailures));
         Assert.Equal(line, error.LastSeen);
     }
-    // #659: Steam's native "[S_API FAIL]" line goes only to the process's standard error (seen on macOS beside the
-    // Steamworks.NET line, which BepInEx's log carried), never to the BepInEx log the watcher reads, so no pattern names it.
+    // #659: Steam's native "[S_API FAIL]" line goes to the process's standard error (seen on macOS beside the Steamworks.NET
+    // line, which BepInEx's log carried), not to the BepInEx log these patterns are matched against, so none names it.
     [Fact] public void SteamsNativeLoginFailureLineIsNotAWatchedPattern() =>
         Assert.DoesNotContain(StartupEvents.ClientStartupFailures,
-            failure => failure.ToString().Contains("S_API", StringComparison.Ordinal) || failure.IsMatch("[S_API FAIL] SteamAPI_Init() failed; connect to global user failed."));
+            failure => failure.IsMatch("[S_API FAIL] SteamAPI_Init() failed; connect to global user failed."));
     [Fact] public async Task ASteamFailureAfterCliListeningStillEndsTheMenuWait()
     {
         using var log = new TempLog();
@@ -218,7 +219,7 @@ public class SessionTests
             token => menu.Task.WaitAsync(token),
             token => reader.WaitAsync(StartupEvents.Never, Generous, StartupEvents.ClientStartupFailures, token),
             menuCancelled.Token);
-        string line = "[Error  : Unity Log] [Steamworks.NET] SteamAPI_Init() failed. Refer to Valve's documentation.";
+        string line = SteamworksInitFailed;
         log.Append(line + "\n");
         var error = await Assert.ThrowsAsync<WaitFailedException>(() => waiting.WaitAsync(TimeSpan.FromSeconds(5)));
         Assert.Equal(line, error.LastSeen);

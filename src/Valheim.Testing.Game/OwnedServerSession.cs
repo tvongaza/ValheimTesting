@@ -77,8 +77,9 @@ public sealed class StartupEvents
     /// A client's Steamworks login failure ends startup immediately; dedicated servers keep their own startup rules. The game
     /// logs Steamworks.NET's <c>[Steamworks.NET] SteamAPI_Init() failed</c> through Unity, so BepInEx's log carries it on every
     /// platform. Steam's own <c>[S_API FAIL] SteamAPI_Init() failed; connect to global user failed.</c> (Steam running with no
-    /// user signed in) goes only to the process's standard error, never to BepInEx's log or Player.log, and always comes with
-    /// the Steamworks.NET line, so it is not watched (#659).
+    /// user signed in) is printed by Steam's native library to the process's standard error, which this watcher does not read:
+    /// in the macOS runs that hit it (#659) only the standard-error capture had it, and the Steamworks.NET line in BepInEx's
+    /// log ended startup at once. No Windows BepInEx log or Player.log has shown any <c>[S_API</c> line.
     /// </summary>
     internal static readonly IReadOnlyList<Regex> ClientStartupFailures = [.. StartupFailures,
         new(@"\[Steamworks\.NET\] SteamAPI_Init\(\) failed", RegexOptions.CultureInvariant)];
