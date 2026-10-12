@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Reflection;
 using Valheim.Testing.Game;
 
@@ -19,50 +18,17 @@ internal static class SmokeAdapter
         {
             Directory.CreateDirectory(stage);
             WriteSource(stage);
-            string packages = Path.Combine(stage, "packages"), httpCache = Path.Combine(stage, "http-cache");
-            Directory.CreateDirectory(packages);
-            Directory.CreateDirectory(httpCache);
-            var start = new ProcessStartInfo("dotnet") { WorkingDirectory = stage, UseShellExecute = false,
-                RedirectStandardError = true, RedirectStandardOutput = true };
-            start.Environment["NUGET_PACKAGES"] = packages;
-            start.Environment["NUGET_HTTP_CACHE_PATH"] = httpCache;
-            foreach (string argument in new[] { "restore", "NativeSmoke.SessionAdapter.csproj",
-                "--configfile", "NuGet.Config", "-p:ValheimPath=" + server,
-                "-p:BepInExCore=" + bepInExCore, "-p:CliDll=" + cliCore[0].File })
-                start.ArgumentList.Add(argument);
-            using var process = Process.Start(start) ?? throw new InvalidOperationException("The .NET SDK could not start to build the test-only session adapter.");
-            Task<string> stdout = process.StandardOutput.ReadToEndAsync(cancellation);
-            Task<string> stderr = process.StandardError.ReadToEndAsync(cancellation);
-            try { await process.WaitForExitAsync(cancellation); }
-            catch (OperationCanceledException)
-            {
-                if (!process.HasExited) process.Kill(entireProcessTree: true);
-                await process.WaitForExitAsync(CancellationToken.None);
-                throw;
-            }
-            if (process.ExitCode != 0)
+            // A staged cache pair proves the adapter restores from NuGet.org alone; no shared cache can stand in.
+            var build = new ProjectBuild(Path.Combine(stage, "NativeSmoke.SessionAdapter.csproj"),
+                ["-p:ValheimPath=" + server, "-p:BepInExCore=" + bepInExCore, "-p:CliDll=" + cliCore[0].File], NuGetCaches.Staged(stage));
+            var restore = await build.RestoreAsync(cancellation, ["--configfile", "NuGet.Config"]);
+            if (restore.ExitCode != 0)
                 throw new InvalidOperationException("The test-only session adapter could not restore its reference assemblies from NuGet.org (exit " +
-                    process.ExitCode + "): " + ((await stdout) + "\n" + (await stderr)).Trim());
-            var build = new ProcessStartInfo("dotnet") { WorkingDirectory = stage, UseShellExecute = false,
-                RedirectStandardError = true, RedirectStandardOutput = true };
-            build.Environment["NUGET_PACKAGES"] = packages;
-            build.Environment["NUGET_HTTP_CACHE_PATH"] = httpCache;
-            foreach (string argument in new[] { "build", "NativeSmoke.SessionAdapter.csproj", "-c", "Release", "--no-restore",
-                "-p:ValheimPath=" + server, "-p:BepInExCore=" + bepInExCore,
-                "-p:CliDll=" + cliCore[0].File }) build.ArgumentList.Add(argument);
-            using var compiler = Process.Start(build) ?? throw new InvalidOperationException("The .NET SDK could not compile the test-only session adapter.");
-            Task<string> buildOutput = compiler.StandardOutput.ReadToEndAsync(cancellation);
-            Task<string> buildError = compiler.StandardError.ReadToEndAsync(cancellation);
-            try { await compiler.WaitForExitAsync(cancellation); }
-            catch (OperationCanceledException)
-            {
-                if (!compiler.HasExited) compiler.Kill(entireProcessTree: true);
-                await compiler.WaitForExitAsync(CancellationToken.None);
-                throw;
-            }
-            if (compiler.ExitCode != 0)
+                    restore.ExitCode + "): " + restore.Combined.Trim());
+            var compile = await build.BuildAsync(cancellation, restore: false, options: ["-c", "Release"]);
+            if (compile.ExitCode != 0)
                 throw new InvalidOperationException("The test-only session adapter did not compile against the selected game and ValheimCLI (exit " +
-                    compiler.ExitCode + "): " + ((await buildOutput) + "\n" + (await buildError)).Trim());
+                    compile.ExitCode + "): " + compile.Combined.Trim());
             string built = Path.Combine(stage, "bin", "Release", "net48", "NativeSmoke.SessionAdapter.dll");
             if (!File.Exists(built)) throw new IOException("The session adapter build succeeded but produced no DLL.");
             var metadata = PluginMetadata.Read(built);

@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Security;
 using System.Text.Json;
 using Valheim.Testing.Game;
@@ -99,11 +98,19 @@ internal static class SmokeProject
         {
             Directory.CreateDirectory(stage);
             Write(stage, server, candidateFeed);
-            string packages = Path.Combine(stage, "packages"), httpCache = Path.Combine(stage, "http-cache");
-            Directory.CreateDirectory(packages);
-            Directory.CreateDirectory(httpCache);
-            await RunDotnetAsync(server, stage, packages, httpCache, candidateFeed, cancellation, "restore", "SmokeCheck.csproj", "--configfile", "NuGet.Config");
-            await RunDotnetAsync(server, stage, packages, httpCache, candidateFeed, cancellation, "build", "SmokeCheck.csproj", "-c", "Release", "--no-restore");
+            var caches = NuGetCaches.Staged(stage);
+            var build = new ProjectBuild(Path.Combine(stage, "SmokeCheck.csproj"), [], caches);
+            var restore = await build.RestoreAsync(cancellation, ["--configfile", "NuGet.Config"]);
+            string restored = restore.Combined;
+            // NU1101-NU1103: the version is not on NuGet.org, as for a tool built from a checkout ahead of the last release.
+            if (restore.ExitCode != 0 && System.Text.RegularExpressions.Regex.IsMatch(restored, @"\bNU110[123]\b"))
+                throw new InvalidOperationException($"NuGet.org does not serve {string.Join(" and ", Restored(server).Select(item => item.Package + " " + item.Version))}, the {(server ? "versions" : "version")} this tool runs; a tool built from a source checkout ahead of the last release cannot create a consumer. Use a released valheim-test. ({restored.Trim()})");
+            if (restore.ExitCode != 0)
+                throw new InvalidOperationException($"The generated consumer did not restore from {(candidateFeed == null ? "NuGet.org" : "the local candidate feed")} (exit {restore.ExitCode}): {restored.Trim()}");
+            foreach (var (package, version) in Restored(server)) RequireFromSource(caches.Packages, package, version, candidateFeed ?? Feed);
+            var compile = await build.BuildAsync(cancellation, restore: false, options: ["-c", "Release"]);
+            if (compile.ExitCode != 0)
+                throw new InvalidOperationException($"The generated consumer did not build from {(candidateFeed == null ? "NuGet.org" : "the local candidate feed")} (exit {compile.ExitCode}): {compile.Combined.Trim()}");
             string project = Path.Combine(output, "consumer");
             Directory.CreateDirectory(project);
             foreach (string file in new[] { "SmokeCheck.csproj", "Program.cs", "NuGet.Config", "README.md" })
@@ -217,35 +224,6 @@ internal static class SmokeProject
             {{(server ? "" : "The generated hosted-client consumer launches directly into this process's desktop session. On Windows, run it from an interactive desktop terminal; an SSH/session-0 invocation is refused before staging. Use `valheim-test start` for a Windows SSH launch because it preflights and uses the desktop route.")}}
             Do not publish the environment or evidence unchanged; they can contain private machine paths.
             """);
-    }
-
-    private static async Task RunDotnetAsync(bool server, string directory, string packages, string httpCache, string? candidateFeed, CancellationToken cancellation,
-        params string[] args)
-    {
-        var start = new ProcessStartInfo("dotnet") { WorkingDirectory = directory, UseShellExecute = false,
-            RedirectStandardError = true, RedirectStandardOutput = true };
-        start.Environment["NUGET_PACKAGES"] = packages;
-        start.Environment["NUGET_HTTP_CACHE_PATH"] = httpCache;
-        foreach (string arg in args) start.ArgumentList.Add(arg);
-        using var process = Process.Start(start) ?? throw new InvalidOperationException("The .NET SDK could not start; install .NET 10 before running this smoke.");
-        Task<string> stdout = process.StandardOutput.ReadToEndAsync(cancellation);
-        Task<string> stderr = process.StandardError.ReadToEndAsync(cancellation);
-        try { await process.WaitForExitAsync(cancellation); }
-        catch (OperationCanceledException)
-        {
-            // This process belongs to this one project build. Never leave a child restore running after Ctrl+C.
-            if (!process.HasExited) process.Kill(entireProcessTree: true);
-            await process.WaitForExitAsync(CancellationToken.None);
-            throw;
-        }
-        string output = (await stdout) + "\n" + (await stderr);
-        // NU1101-NU1103: the version is not on NuGet.org, as for a tool built from a checkout ahead of the last release.
-        if (process.ExitCode != 0 && args[0] == "restore" && System.Text.RegularExpressions.Regex.IsMatch(output, @"\bNU110[123]\b"))
-            throw new InvalidOperationException($"NuGet.org does not serve {string.Join(" and ", Restored(server).Select(item => item.Package + " " + item.Version))}, the {(server ? "versions" : "version")} this tool runs; a tool built from a source checkout ahead of the last release cannot create a consumer. Use a released valheim-test. ({output.Trim()})");
-        if (process.ExitCode != 0)
-            throw new InvalidOperationException($"The generated consumer did not {args[0]} from {(candidateFeed == null ? "NuGet.org" : "the local candidate feed")} (exit {process.ExitCode}): {output.Trim()}");
-        if (args[0] == "restore")
-            foreach (var (package, version) in Restored(server)) RequireFromSource(packages, package, version, candidateFeed ?? Feed);
     }
 
     internal static void RequireFromSource(string packages, string package, string version, string source)

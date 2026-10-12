@@ -72,7 +72,10 @@ public sealed class OneShotScenarioBuildTests : IDisposable
             Reference("Valheim.Cli.Testing", cli) +
             "</ItemGroup><Target Name=\"AddDynamicResource\" BeforeTargets=\"AssignTargetPaths\"><ItemGroup>" +
             "<EmbeddedResource Include=\"../shared/Dynamic.txt\" LogicalName=\"$(ResourceName)\"/>" +
-            "</ItemGroup></Target></Project>");
+            "</ItemGroup></Target>" +
+            // One line per run of the Build target: the compile count of an --adapter-project run.
+            "<Target Name=\"CountBuild\" AfterTargets=\"Build\" Condition=\"'$(BuildCountFile)' != ''\"><WriteLinesToFile File=\"$(BuildCountFile)\" Lines=\"build\"/></Target>" +
+            "</Project>");
         File.WriteAllText(Path.Combine(scenario, "Scenario.cs"), """
             using Valheim.Testing.Game;
             using Valheim.Testing.GameSessions;
@@ -92,8 +95,12 @@ public sealed class OneShotScenarioBuildTests : IDisposable
             """);
 
         string output = Path.Combine(_root, "built");
+        string buildCount = Path.Combine(_root, "build-count.txt");
         string dll = await OneShotScenario.BuildAsync(Path.Combine(scenario, "Scenario.csproj"), output,
-            CancellationToken.None, new Dictionary<string, string> { ["ModDll"] = "baseline.dll" }, captureAdapterSources: true);
+            CancellationToken.None, new Dictionary<string, string> { ["ModDll"] = "baseline.dll", ["BuildCountFile"] = buildCount },
+            captureAdapterSources: true);
+        // The adapter compiles once: its inputs come from that build's own answers, not from builds before and after it.
+        Assert.Single(File.ReadAllLines(buildCount));
         Assert.True(File.Exists(Path.Combine(Path.GetDirectoryName(dll)!, "OneShotHelper.dll")));
         var record = JsonSerializer.Deserialize<AdapterSourceInputs.Record>(
             File.ReadAllText(Path.Combine(output, "source-inputs", "manifest.json")))!;
@@ -143,18 +150,18 @@ public sealed class OneShotScenarioBuildTests : IDisposable
             File.ReadAllText(Path.Combine(swappedOutput, "source-inputs", "manifest.json")))!;
         Assert.NotEqual(record.SourceInputSha256, swapped.SourceInputSha256);
         string project = Path.Combine(scenario, "Scenario.csproj");
-        string packages = ModBuild.WritableCache("NUGET_PACKAGES", "packages");
-        string http = ModBuild.WritableCache("NUGET_HTTP_CACHE_PATH", "http");
-        string[] args = [project, "-p:Configuration=Release", "-p:CopyLocalLockFileAssemblies=true",
+        string[] args = ["-p:Configuration=Release", "-p:CopyLocalLockFileAssemblies=true",
             "-p:OutputPath=" + Path.Combine(output, "bin"),
             "-p:CopyOutputDLLPath=" + Path.Combine(output, "private-deployment"),
             "-p:CopyOutputDLLPath2=", "-p:CopyOutputDLLPath3=", "-p:ModDll=baseline.dll",
             "-p:DebugType=embedded", "-p:EmbedAllSources=true"];
-        var snapshot = await AdapterSourceInputs.BeforeAsync(project, Path.Combine(_root, "changed-import"),
-            args, packages, http, CancellationToken.None);
+        var build = new ProjectBuild(project, args, NuGetCaches.Owned());
+        var snapshot = await AdapterSourceInputs.BeginAsync(build, Path.Combine(_root, "changed-import"), null, CancellationToken.None);
+        var built = await build.BuildAsync(CancellationToken.None, query: AdapterSourceInputs.Query);
+        Assert.True(built.ExitCode == 0, built.Combined);
         File.AppendAllText(Path.Combine(scenario, "adapter.props"), "<!-- changed before the run -->");
-        await Assert.ThrowsAsync<InvalidDataException>(() => AdapterSourceInputs.AfterAsync(snapshot, dll,
-            args, packages, http, CancellationToken.None));
+        var changed = await Assert.ThrowsAsync<InvalidDataException>(() => AdapterSourceInputs.FinishAsync(snapshot, built.Query, dll, CancellationToken.None));
+        Assert.Contains("imported build settings changed", changed.Message);
         // This is the slow-world-entry race: the checkout changes after compilation, before the DLL is loaded.
         File.WriteAllText(linked, "public static class LinkedValue { public const string Name = \"changed\"; }");
         Assert.Contains("original", File.ReadAllText(source.Retained));
@@ -180,6 +187,55 @@ public sealed class OneShotScenarioBuildTests : IDisposable
             File.ReadAllText(Path.Combine(directOutput, "source-inputs", "manifest.json")))!;
         Assert.NotEqual(changedHelper.SourceInputSha256, changedDirect.SourceInputSha256);
         Assert.Contains("direct-second", OneShotScenario.Load(directDll, Path.Combine(_root, "changed-direct-pinned")).Runner.Name);
+    }
+
+    [Fact]
+    public async Task AnInputEditedWhileTheOneBuildRunsIsRefused()
+    {
+        using var dataRoot = new FakeDataRoot(Path.Combine(_root, "machine"));
+        string feed = Path.Combine(_root, "feed"), scenario = Path.Combine(_root, "scenario");
+        Directory.CreateDirectory(feed);
+        Directory.CreateDirectory(scenario);
+        File.WriteAllText(Path.Combine(_root, "NuGet.Config"),
+            $"<configuration><packageSources><clear/><add key=\"local\" value=\"{SecurityElement.Escape(feed)}\"/></packageSources></configuration>");
+        string resource = Path.Combine(scenario, "Data.txt");
+        File.WriteAllText(resource, "before");
+        File.WriteAllText(Path.Combine(scenario, "Scenario.cs"), "public static class Marker { }");
+        string project = Path.Combine(scenario, "Scenario.csproj");
+        File.WriteAllText(project,
+            "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>" +
+            "<ItemGroup><EmbeddedResource Include=\"Data.txt\"/></ItemGroup>" +
+            "<Target Name=\"EditResource\" BeforeTargets=\"CoreCompile\" Condition=\"'$(EditResource)' != ''\">" +
+            "<WriteLinesToFile File=\"$(EditResource)\" Lines=\"edited while building\" Overwrite=\"true\"/></Target></Project>");
+        await OneShotScenario.BuildAsync(project, Path.Combine(_root, "unedited"), CancellationToken.None, captureAdapterSources: true);
+        // The same build without source capture asks only for the target path, which MSBuild prints bare.
+        Assert.True(File.Exists(await OneShotScenario.BuildAsync(project, Path.Combine(_root, "plain"), CancellationToken.None)));
+        var refused = await Assert.ThrowsAsync<InvalidDataException>(() => OneShotScenario.BuildAsync(project,
+            Path.Combine(_root, "edited"), CancellationToken.None, new Dictionary<string, string> { ["EditResource"] = resource },
+            captureAdapterSources: true));
+        Assert.Contains("changed during compilation", refused.Message);
+    }
+
+    [Fact]
+    public async Task AGeneratorInTheIntermediateFolderMayRewriteADeclaredInput()
+    {
+        using var dataRoot = new FakeDataRoot(Path.Combine(_root, "machine"));
+        string feed = Path.Combine(_root, "feed"), scenario = Path.Combine(_root, "scenario");
+        Directory.CreateDirectory(feed);
+        Directory.CreateDirectory(Path.Combine(scenario, "obj"));
+        File.WriteAllText(Path.Combine(_root, "NuGet.Config"),
+            $"<configuration><packageSources><clear/><add key=\"local\" value=\"{SecurityElement.Escape(feed)}\"/></packageSources></configuration>");
+        File.WriteAllText(Path.Combine(scenario, "obj", "version.txt"), "previous run");
+        File.WriteAllText(Path.Combine(scenario, "Scenario.cs"), "public static class Marker { }");
+        string project = Path.Combine(scenario, "Scenario.csproj");
+        File.WriteAllText(project,
+            "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>" +
+            "<ItemGroup><EmbeddedResource Include=\"obj/version.txt\"/></ItemGroup>" +
+            "<Target Name=\"WriteVersion\" BeforeTargets=\"CoreCompile\">" +
+            "<WriteLinesToFile File=\"obj/version.txt\" Lines=\"$(VersionText)\" Overwrite=\"true\"/></Target></Project>");
+        // The declared file held the previous run's text when the build began; the project's own target rewrites it.
+        Assert.True(File.Exists(await OneShotScenario.BuildAsync(project, Path.Combine(_root, "generated"), CancellationToken.None,
+            new Dictionary<string, string> { ["VersionText"] = "this run" }, captureAdapterSources: true)));
     }
 
     private static async Task RunDotnet(params string[] arguments)
