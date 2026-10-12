@@ -79,6 +79,8 @@ public sealed class GameActor : IDisposable
     private string _expectations = "";
     private BusyReadScope? _busyReads;
     private long _longestMainThreadIdleMs;
+    /// <summary>Measures the world-entry deadline (<see cref="BusyReadRetries"/>); tests substitute a clock they advance themselves.</summary>
+    internal TimeProvider Clock { get; init; } = TimeProvider.System;
     private string? _lastBusyNote;
     /// <summary>The largest observed frame age during a busy world-entry wait, or zero if none was observed.</summary>
     public long LongestMainThreadIdleMs => _longestMainThreadIdleMs;
@@ -99,8 +101,8 @@ public sealed class GameActor : IDisposable
 
     private sealed class BusyReadScope(GameActor actor, TimeSpan timeout, BusyReadScope? previous, CancellationToken cancellation) : IDisposable
     {
-        private readonly System.Diagnostics.Stopwatch _clock = System.Diagnostics.Stopwatch.StartNew();
-        public TimeSpan Left => timeout - _clock.Elapsed;
+        private readonly long _start = actor.Clock.GetTimestamp(); // Clock is init-only: start and every later reading share it.
+        public TimeSpan Left => timeout - actor.Clock.GetElapsedTime(_start);
         public CancellationToken Cancellation => cancellation;
         public bool ResponsiveRetryUsed { get; set; }
         public void Dispose() => actor._busyReads = previous;
