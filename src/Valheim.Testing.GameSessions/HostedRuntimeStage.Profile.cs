@@ -113,7 +113,7 @@ internal static partial class HostedRuntimeStage
         Func<IGameHost, string, TimeSpan, CancellationToken, Task<MacBundleInspection.Verdict>>? inspectMac = null,
         MacSteamRuntimePackage? steamRuntimePackage = null)
     {
-        RequireStagePaths(host, kind, source, destination, staging, files);
+        await RequireStagePathsAsync(host, kind, source, destination, staging, files, timeout, cancellation).ConfigureAwait(false);
         bool windows = host.Shell.Kind == HostShellKind.PowerShell;
         var (selected, explicitlySelectedSettings) = SelectPayload(files, loaderPackage, host.Shell.Kind);
         if (steamRuntimePackage != null) loaderPackage?.RequireNativeMacServer();

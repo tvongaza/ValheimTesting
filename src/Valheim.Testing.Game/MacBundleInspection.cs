@@ -108,8 +108,7 @@ internal static class MacBundleInspection
         return ParseReport(output, error);
     }
 
-    internal static readonly string Bash = """
-        set -u
+    internal static readonly string Bash = "set -u\n" + ProtectedPaths.BashInside + """
         if [ "$(uname -s)" != Darwin ] || [ ! -d "$app" ]; then echo "VT-BUNDLE none"; exit 0; fi
         command -v codesign > /dev/null && command -v spctl > /dev/null || { echo "VT-BUNDLE tools"; exit 0; }
         # codesign names files by their physical path (/tmp is /private/tmp), so compare against that.
@@ -131,9 +130,8 @@ internal static class MacBundleInspection
           while IFS= read -r file; do
             [ -n "$file" ] || continue
             case "$file" in "$app"/*) ;; *) continue;; esac
-            # A linked parent could make a textual path inside the app point outside the disposable copy.
-            parent=$(cd "$(dirname "$file")" && pwd -P) || continue
-            case "$parent" in "$app"|"$app"/*) ;; *) continue;; esac
+            # A linked parent could make a textual path inside the app point outside the disposable copy (ProtectedPaths.BashInside).
+            vt_inside "$app" "$(dirname -- "$file")" || continue
             if [ -f "$file" ] && [ ! -L "$file" ]; then rm -f -- "$file" && removed=$((removed + 1)); fi
           done <<< "$added"
         elif [ -n "$added" ]; then

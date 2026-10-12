@@ -45,6 +45,23 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.Empty(host.Runs);
     }
 
+    // #700: whether the runtime lies outside the install is decided on the host (links resolved there), before the run writes
+    // anything under it; the inventory no longer compares the spelling. A standalone copy into the install is refused.
+    [Fact] public async Task AStandaloneRunRefusesARuntimeInsideTheInstallBeforeCopying()
+    {
+        var host = NewHost();
+        var (planPath, profilePath) = Write(host);
+        var plan = ServerRunPlan.Read<ServerRunPlan>(planPath);
+        var profile = TestEnvironment.Read(profilePath);
+        profile.Server!.Runtime = Install + "/runs";
+        var hosted = HostedServerRun.Create(profile, plan, "test", new FakeRunHooks { Host = _ => host, RunId = RunId });
+        var error = await Assert.ThrowsAsync<ArgumentException>(() => hosted.LockAndCopyRuntimeAsync(new ScenarioReport("inside"), plan, pinned: true, CancellationToken.None));
+        Assert.Contains("overlaps the install", error.Message);
+        Assert.Contains("apart", host.Scripts);
+        Assert.DoesNotContain("copy", host.Scripts);
+        Assert.False(Directory.Exists(host.Local(Install + "/runs")));
+    }
+
     // #257: a campaign's prepared install is the server's runtime, verified where it is and never copied again (the campaign
     // test proves the passing path); one that changed between preparation and the run is refused before anything launches.
     [Fact] public async Task APreparedRuntimeThatChangedSincePreparationIsRefusedAndNotCopied()

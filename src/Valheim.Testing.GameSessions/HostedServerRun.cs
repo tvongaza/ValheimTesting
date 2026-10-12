@@ -164,6 +164,9 @@ internal sealed class HostedServerRun : IServerPlacement
             await report.StepAsync(StepPhase.Setup, "the server host can start a server task", () => HostServer.RequireTaskLogonAsync(Host, HostedTimeouts.Quick, cancellation)).ConfigureAwait(false);
         await report.StepAsync(StepPhase.Setup, "take the server host's lock", async () => _lock = await Host.AcquireLockAsync(HostProfile.Lock, _owner, HostedTimeouts.Quick, cancellation).ConfigureAwait(false)).ConfigureAwait(false);
         await NoteLockAsync(Host, Role.Host, _lock!, JournalEntry.LockHeld).ConfigureAwait(false);
+        // Everything this run writes on the host lies under its run directory, which must lie outside the install that runs never
+        // change: decided on the host, with links resolved there (a prepared campaign's preparation checked its own copy too).
+        await HostInstall.RequireApartAsync(Host, Role.Install, [RunDirectory], "the install", HostedTimeouts.Quick, cancellation).ConfigureAwait(false);
         if (MacServer)
             await report.StepAsync(StepPhase.Setup, "preserve the Mac server's user-level access lists", async () =>
             {
@@ -772,9 +775,9 @@ internal static class HostedClientScripts
 
 internal static class HostedRunScripts
 {
-    // Windows counterpart of Retire. Only this run's own runtime copy may be removed, and retained files must resolve
-    // below it without a reparse point. Variables: runtime, keep, run, files, perfile, total.
-    public static readonly string WindowsRetire = """
+    // Windows counterpart of Retire. Only this run's own runtime copy may be removed, and a retained file must be a regular
+    // file that lies inside it once links are resolved (ProtectedPaths.PowerShellInside). Variables: runtime, keep, run, files, perfile, total.
+    public static readonly string WindowsRetire = ProtectedPaths.PowerShellInside + """
         if (-not $run -or $run -match '[\\/]' -or $run -eq '.' -or $run -eq '..') { exit 3 }
         $parent = [IO.Path]::GetDirectoryName($runtime)
         if ([IO.Path]::GetFileName($runtime) -cne 'runtime' -or [IO.Path]::GetFileName($parent) -cne $run -or
@@ -783,21 +786,18 @@ internal static class HostedRunScripts
         [void][IO.Directory]::CreateDirectory($keep)
         if (-not [IO.Directory]::Exists($runtime)) { 'VT-RETIRED 0 0'; exit 0 }
         if ([IO.File]::GetAttributes($runtime) -band [IO.FileAttributes]::ReparsePoint) { exit 3 }
-        $root = [IO.Path]::GetFullPath($runtime).TrimEnd('\', '/') + '\'
+        $real = Get-VtPhysical $runtime # the copy's physical path; each kept file must resolve below it
         $kept = [long]0
         foreach ($line in ($files -split "`n")) {
             if (-not $line) { continue }
             $relative = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($line))
             if ([IO.Path]::IsPathRooted($relative) -or $relative.Split([char[]]'\/') -contains '..') { 'VT-NOTKEPT ' + $line + ' -1'; continue }
             $source = [IO.Path]::GetFullPath((Join-Path $runtime $relative))
-            if (-not $source.StartsWith($root, [StringComparison]::OrdinalIgnoreCase) -or -not [IO.File]::Exists($source)) { 'VT-NOTKEPT ' + $line + ' -1'; continue }
-            $walk = [IO.Path]::GetDirectoryName($source)
-            $linked = $false
-            while ($walk -and $walk.StartsWith($root, [StringComparison]::OrdinalIgnoreCase)) {
-                if ([IO.File]::GetAttributes($walk) -band [IO.FileAttributes]::ReparsePoint) { $linked = $true; break }
-                $walk = [IO.Path]::GetDirectoryName($walk)
-            }
-            if ($linked -or ([IO.File]::GetAttributes($source) -band [IO.FileAttributes]::ReparsePoint)) { 'VT-NOTKEPT ' + $line + ' -1'; continue }
+            if (-not [IO.File]::Exists($source) -or ([IO.File]::GetAttributes($source) -band [IO.FileAttributes]::ReparsePoint)) { 'VT-NOTKEPT ' + $line + ' -1'; continue }
+            # Never through a link that leaves the copy: the file's physical path must be inside the copy too. Unknown is outside.
+            $inside = $false
+            try { $inside = Test-VtInside $real $source } catch { }
+            if (-not $inside) { 'VT-NOTKEPT ' + $line + ' -1'; continue }
             $size = (New-Object IO.FileInfo $source).Length
             if ($size -gt [long]$perfile -or $kept + $size -gt [long]$total) { 'VT-NOTKEPT ' + $line + ' ' + $size; continue }
             $target = Join-Path $keep $relative
@@ -805,8 +805,21 @@ internal static class HostedRunScripts
             [IO.File]::Copy($source, $target)
             $kept += $size
         }
+        # The copy's size and its removal never pass through a link in it (as du and rm -rf on a bash host): a link counts nothing
+        # and is removed as a link first, so the recursive delete meets no junction (Windows PowerShell 5.1's refuses one).
         $bytes = [long]0
-        foreach ($file in [IO.Directory]::EnumerateFiles($runtime, '*', [IO.SearchOption]::AllDirectories)) { $bytes += (New-Object IO.FileInfo $file).Length }
+        $links = @()
+        $walk = New-Object 'Collections.Generic.Stack[string]'
+        $walk.Push($runtime)
+        while ($walk.Count -gt 0) {
+            foreach ($entry in [IO.Directory]::GetFileSystemEntries($walk.Pop())) {
+                $attributes = [IO.File]::GetAttributes($entry)
+                if ($attributes -band [IO.FileAttributes]::ReparsePoint) { $links += , @($entry, [bool]($attributes -band [IO.FileAttributes]::Directory)) }
+                elseif ($attributes -band [IO.FileAttributes]::Directory) { $walk.Push($entry) }
+                else { $bytes += (New-Object IO.FileInfo $entry).Length }
+            }
+        }
+        foreach ($link in $links) { if ($link[1]) { [IO.Directory]::Delete($link[0]) } else { [IO.File]::Delete($link[0]) } }
         [IO.Directory]::Delete($runtime, $true)
         'VT-RETIRED ' + $bytes + ' ' + $kept
         """.ReplaceLineEndings("\n");
@@ -821,8 +834,7 @@ internal static class HostedRunScripts
     // Keeps the listed files (base64 relative paths, one per line) from a run's runtime copy in $keep, within the size
     // limits, then removes the copy. Only a directory named runtime directly inside the run's own directory ($run) is
     // ever removed; a path that leaves the copy, a link or anything but a regular file is listed, never copied.
-    public static readonly string Retire = """
-        set -u
+    public static readonly string Retire = "set -u\n" + ProtectedPaths.BashInside + """
         case "$run" in ''|*/*|.|..) exit 3;; esac
         [ "$(basename -- "$runtime")" = runtime ] || exit 3
         [ "$(basename -- "$(dirname -- "$runtime")")" = "$run" ] || exit 3
@@ -832,7 +844,7 @@ internal static class HostedRunScripts
         [ ! -e "$keep" ] && [ ! -L "$keep" ] || exit 3
         if [ ! -d "$runtime" ] || [ -L "$runtime" ]; then mkdir -p -- "$keep" || exit 3; echo "VT-RETIRED 0 0"; exit 0; fi
         mkdir -p -- "$keep" || exit 3
-        real=$(readlink -f -- "$runtime") || exit 3
+        real=$(vt_physical "$runtime") || exit 3 # the copy's physical path; each kept file must resolve below it
         kept=0
         while IFS= read -r line; do
             [ -n "$line" ] || continue
@@ -840,18 +852,18 @@ internal static class HostedRunScripts
             case "$rel" in /*|..|../*|*/../*|*/..) printf 'VT-NOTKEPT %s -1\n' "$line"; continue;; esac
             src="$runtime/$rel"
             if [ ! -f "$src" ] || [ -L "$src" ]; then printf 'VT-NOTKEPT %s -1\n' "$line"; continue; fi
-            # Never through a linked directory inside the copy: the file's real path must be inside the copy too.
-            case "$(readlink -f -- "$src")" in "$real"/*) ;; *) printf 'VT-NOTKEPT %s -1\n' "$line"; continue;; esac
-            if [ "$(uname)" = Darwin ]; then size=$(stat -f %z -- "$src") || exit 3
+            # Never through a link that leaves the copy: the file's physical path must be inside the copy too (ProtectedPaths.BashInside).
+            vt_inside "$real" "$src" || { printf 'VT-NOTKEPT %s -1\n' "$line"; continue; }
+            if [ "$vt_darwin" = 1 ]; then size=$(stat -f %z -- "$src") || exit 3
             else size=$(stat -c %s -- "$src") || exit 3; fi
             if [ "$size" -gt "$perfile" ] || [ $((kept + size)) -gt "$total" ]; then printf 'VT-NOTKEPT %s %s\n' "$line" "$size"; continue; fi
             mkdir -p -- "$(dirname -- "$keep/$rel")" && cp -p -- "$src" "$keep/$rel" || exit 3
             kept=$((kept + size))
         done <<< "$files"
-        if [ "$(uname)" = Darwin ]; then bytes=$(du -sk -- "$runtime") || exit 3
+        if [ "$vt_darwin" = 1 ]; then bytes=$(du -sk -- "$runtime") || exit 3
         else bytes=$(du -sb -- "$runtime") || exit 3; fi
         bytes=${bytes%%$'\t'*}
-        if [ "$(uname)" = Darwin ]; then bytes=$((bytes * 1024)); fi
+        if [ "$vt_darwin" = 1 ]; then bytes=$((bytes * 1024)); fi
         rm -rf -- "$runtime" || exit 3
         printf 'VT-RETIRED %s %s\n' "$bytes" "$kept"
         """.ReplaceLineEndings("\n");

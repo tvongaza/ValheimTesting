@@ -182,6 +182,33 @@ public static class HostInstall
     }
 
     /// <summary>
+    /// Refuses, on the host, each of <paramref name="paths"/> that is <paramref name="root"/>, lies inside it or holds it, once
+    /// every link on the way is resolved there (<see cref="ProtectedPaths"/>' rule, applied on the host by its script fragments):
+    /// a destination reached through a link into an install is inside it. A path whose links the host cannot resolve is refused
+    /// too. <paramref name="what"/> names the root in the message, for example "the source install".
+    /// </summary>
+    internal static async Task RequireApartAsync(IGameHost host, string root, IReadOnlyList<string> paths, string what, TimeSpan timeout,
+        CancellationToken cancellation)
+    {
+        ArgumentNullException.ThrowIfNull(host);
+        RequireHostPath(host, root, nameof(root));
+        foreach (string path in paths) RequireHostPath(host, path, nameof(paths));
+        var result = (await host.RunAsync(HostInstallScripts.Apart(host.Shell.Kind), new Dictionary<string, string>
+            { ["root"] = root, ["paths"] = string.Join('\n', paths) }, timeout, cancellation).ConfigureAwait(false))
+            .EnsureSuccess($"Checking that paths on {host.Name} lie outside {root}");
+        string verdict = InteractiveClient.Line(result.Stdout, "VT-APART ") ?? throw new HostOperationException($"No path verdict from {host.Name}", result);
+        string[] parts = verdict.Split(' ', 2);
+        string Named() => parts.Length == 2 ? Decode(parts[1]) : "?";
+        switch (parts[0])
+        {
+            case "ok": return;
+            case "overlap": throw new ArgumentException($"{Named()} on {host.Name} overlaps {what} {root} once links are resolved there; give a directory outside it.");
+            case "unknown": throw new IOException($"{host.Name} cannot resolve the links of {Named()} or {root}, so whether it lies inside {what} is unknown; refusing.");
+            default: throw new HostOperationException($"Unexpected path verdict from {host.Name}", result);
+        }
+    }
+
+    /// <summary>
     /// Refuses when anything on the host listens on TCP <paramref name="port"/> (any address), so a command can never reach a
     /// process this run does not own. Bash reads <c>/proc/net/tcp</c> (Linux) or <c>netstat</c>'s listeners (macOS); PowerShell asks
     /// .NET for the active listeners.
@@ -221,11 +248,7 @@ public static class HostInstall
         throw new InvalidOperationException($"The {what} at {listing.Root} on {listing.HostName} is not the pinned one ({string.Join("; ", problems)}).");
     }
 
-    /// <summary>What a listing for <see cref="Pins"/> needs to cover: the game's Managed folder, the loader files and <c>BepInEx/patchers</c>.</summary>
-    internal static readonly string[] PinPaths =
-        ["*_Data/Managed", "*.app/Contents/Resources/Data/Managed", "valheim_server/Data/Managed", .. InstallPins.LoaderRootFiles, .. InstallPins.LoaderFolders, "BepInEx/patchers"];
-
-    /// <summary>The <see cref="InstallPins"/> of a listing that covers <see cref="PinPaths"/>.</summary>
+    /// <summary>The <see cref="InstallPins"/> of a listing that covers <see cref="InstallPins.PinPaths"/>.</summary>
     public static InstallPins Pins(HostListing listing) => Pins(listing, out _);
 
     /// <summary>
@@ -244,11 +267,11 @@ public static class HostInstall
         string loaderRoot, string sourceRoot, string kind, TimeSpan timeout, CancellationToken cancellation,
         IReadOnlyDictionary<string, string>? sourceFiles = null)
     {
-        var game = await ListAsync(host, gameRoot, timeout, PinPaths, cancellation).ConfigureAwait(false);
+        var game = await ListAsync(host, gameRoot, timeout, InstallPins.PinPaths, cancellation).ConfigureAwait(false);
         var loader = loaderRoot == gameRoot ? game :
-            await ListAsync(host, loaderRoot, timeout, PinPaths, cancellation).ConfigureAwait(false);
+            await ListAsync(host, loaderRoot, timeout, InstallPins.PinPaths, cancellation).ConfigureAwait(false);
         var source = sourceFiles == null && sourceRoot == gameRoot ? game :
-            await ListAsync(host, sourceRoot, timeout, sourceFiles == null ? PinPaths : null, cancellation).ConfigureAwait(false);
+            await ListAsync(host, sourceRoot, timeout, sourceFiles == null ? InstallPins.PinPaths : null, cancellation).ConfigureAwait(false);
         if (sourceFiles != null) RequireSame(sourceFiles, source, "source game before profile launch");
         if (!Pins(source, loader).Game.Equals(pinned.Game, StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException($"The source game changed after its loader profile was staged for {kind}; refuse this launch and prepare a new profile.");
@@ -354,6 +377,32 @@ internal static class HostInstallScripts
     public static string CopyFor(HostShellKind kind) => kind == HostShellKind.Bash ? Copy : PowerShellCopy;
     public static string List(HostShellKind kind) => kind == HostShellKind.Bash ? BashList : PowerShellList;
     public static string Port(HostShellKind kind) => kind == HostShellKind.Bash ? BashPort : PowerShellPort;
+    public static string Apart(HostShellKind kind) => kind == HostShellKind.Bash ? BashApart : PowerShellApart;
+
+    // Variables: root, paths (one per line). The first path that is the root, lies inside it or holds it, once links are resolved
+    // on the host (ProtectedPaths.BashInside), is named as "overlap"; one whose links cannot be resolved as "unknown".
+    public static readonly string BashApart = "set -u\n" + ProtectedPaths.BashInside + """
+        while IFS= read -r path; do
+            [ -n "$path" ] || continue
+            vt_inside "$root" "$path" fold; inside=$?
+            vt_inside "$path" "$root" fold; holds=$?
+            named=$(printf '%s' "$path" | base64 | tr -d '\n')
+            if [ "$inside" = 2 ] || [ "$holds" = 2 ]; then echo "VT-APART unknown $named"; exit 0; fi
+            if [ "$inside" = 0 ] || [ "$holds" = 0 ]; then echo "VT-APART overlap $named"; exit 0; fi
+        done <<< "$paths"
+        echo "VT-APART ok"
+        """.ReplaceLineEndings("\n");
+
+    // Variables: root, paths (as the bash check's; ProtectedPaths.PowerShellInside).
+    public static readonly string PowerShellApart = ProtectedPaths.PowerShellInside + """
+        foreach ($path in ($paths -split "`n")) {
+            if (-not $path) { continue }
+            $named = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($path))
+            try { $overlap = (Test-VtInside $root $path -Fold) -or (Test-VtInside $path $root -Fold) } catch { 'VT-APART unknown ' + $named; exit 0 }
+            if ($overlap) { 'VT-APART overlap ' + $named; exit 0 }
+        }
+        'VT-APART ok'
+        """.ReplaceLineEndings("\n");
 
     // Variables: root, dirs (relative directory patterns and file names with "/" separators, one per line, as
     // HostInstall.ListingPatterns checked them; none lists everything), nocase (1: compare every segment ignoring case).
@@ -452,7 +501,8 @@ internal static class HostInstallScripts
                             try {
                                 $entries = [IO.Directory]::EnumerateFileSystemEntries($candidate).GetEnumerator()
                                 try { $null = $entries.MoveNext() } finally { $entries.Dispose() }
-                            } catch [IO.DirectoryNotFoundException] { $opens = $false } catch [IO.FileNotFoundException] { $opens = $false }
+                            } catch [IO.DirectoryNotFoundException] { $opens = $false } catch [IO.FileNotFoundException] { $opens = $false } catch { }
+                            # Any other error (access denied, a loop) leaves it refused: unlistable, never entered and never an error here.
                             if ($opens) { $links.Add($candidate) }
                         }
                         $next = $kept

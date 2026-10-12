@@ -194,7 +194,7 @@ internal static partial class HostedRuntimeStage
         CancellationToken cancellation, BepInExLoaderPackage? loaderPackage, HostListing? inspectedSource,
         Func<IGameHost, string, TimeSpan, CancellationToken, Task<MacBundleInspection.Verdict>>? repairMac = null)
     {
-        RequireStagePaths(host, kind, source, destination, staging, files);
+        await RequireStagePathsAsync(host, kind, source, destination, staging, files, timeout, cancellation).ConfigureAwait(false);
 
         var (selected, explicitlySelectedSettings) = SelectPayload(files, loaderPackage, host.Shell.Kind);
         // Check this before shipping anything; a reviewed loader package fixes only the disposable copy.
@@ -305,8 +305,8 @@ internal static partial class HostedRuntimeStage
         }
     }
 
-    private static void RequireStagePaths(IGameHost host, HostedRuntimeKind kind, string source, string destination,
-        string staging, IReadOnlyList<HostedRuntimeFile> files)
+    private static async Task RequireStagePathsAsync(IGameHost host, HostedRuntimeKind kind, string source, string destination,
+        string staging, IReadOnlyList<HostedRuntimeFile> files, TimeSpan timeout, CancellationToken cancellation)
     {
         ArgumentNullException.ThrowIfNull(host);
         ArgumentNullException.ThrowIfNull(files);
@@ -325,12 +325,9 @@ internal static partial class HostedRuntimeStage
             !string.Equals(staging[..^stageSuffix.Length], destination[..destination.LastIndexOfAny(['/', '\\'])],
                 StringComparison.OrdinalIgnoreCase))
             throw new ArgumentException("The staging directory must be a new sibling named staging beside the disposable runtime.", nameof(staging));
-        static string Canonical(string path) => path.Replace('\\', '/').TrimEnd('/');
-        string from = Canonical(source), to = Canonical(destination), stage = Canonical(staging);
-        if (from.Equals(to, StringComparison.OrdinalIgnoreCase) || to.StartsWith(from + "/", StringComparison.OrdinalIgnoreCase) ||
-            from.StartsWith(to + "/", StringComparison.OrdinalIgnoreCase) ||
-            from.Equals(stage, StringComparison.OrdinalIgnoreCase) || stage.StartsWith(from + "/", StringComparison.OrdinalIgnoreCase))
-            throw new ArgumentException("The source install cannot be a staging or destination directory.");
+        // Whether the disposable runtime and its staging lie outside the install that runs never change is decided on the host,
+        // with links resolved there: a runtime directory reached through a link into the install is inside it.
+        await HostInstall.RequireApartAsync(host, source, [destination, staging], "the source install", timeout, cancellation).ConfigureAwait(false);
     }
 
     // Only HostedCampaignPreparation calls this for a unique directory it created and retained in memory. Its caller
