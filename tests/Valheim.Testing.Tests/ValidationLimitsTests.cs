@@ -13,8 +13,14 @@ public sealed class ValidationLimitsTests : IClassFixture<ValidationLimitsTests.
     [Fact]
     public async Task ARunPastTheSoftLimitWarnsWithItsSlowestTestsAndPasses()
     {
-        var run = await _probe.Run("PassesAfterTheSoftLimit", soft: 3, hard: 300, githubActions: true);
+        // #736: the same run has the heartbeat on, which names the running command and the machine (and is off in the next test).
+        var run = await _probe.Run("PassesAfterTheSoftLimit", soft: 3, hard: 300, githubActions: true, heartbeat: 1);
         run.AssertSucceeded();
+        Has(run, "heartbeat: running dotnet test");
+        Has(run, "; processes ");
+        Has(run, "; disk free ");
+        if (OperatingSystem.IsMacOS()) Has(run, "; free memory ");
+        Lacks(run, "free memory unknown");
         Has(run, "SOFT LIMIT:");
         Has(run, "slowest tests: LimitsProbe.ProbeTests.PassesAfterTheSoftLimit");
         Has(run, "::warning title=Test command over the soft limit::SOFT LIMIT:");
@@ -28,6 +34,7 @@ public sealed class ValidationLimitsTests : IClassFixture<ValidationLimitsTests.
         run.AssertSucceeded();
         Lacks(run, "SOFT LIMIT");
         Lacks(run, "::warning");
+        Lacks(run, "heartbeat:");
     }
 
     [Fact]
@@ -101,7 +108,7 @@ public sealed class ValidationLimitsTests : IClassFixture<ValidationLimitsTests.
         }
 
         /// <summary>validate.cs's probe mode on one test of the project; null limits keep the script's own.</summary>
-        public Task<BuildRun> Run(string test, double? soft, double? hard, bool githubActions) =>
+        public Task<BuildRun> Run(string test, double? soft, double? hard, bool githubActions, double? heartbeat = null) =>
             FixtureProjects.Dotnet(FixtureProjects.RepositoryRoot(),
                 ["run", _script, "--", "--limits-probe", _project, Path.Combine(_directory, "results-" + test), "FullyQualifiedName~" + test],
                 new Dictionary<string, string?>
@@ -110,6 +117,7 @@ public sealed class ValidationLimitsTests : IClassFixture<ValidationLimitsTests.
                     ["VT_VALIDATE_HARD_LIMIT_SECONDS"] = hard?.ToString(System.Globalization.CultureInfo.InvariantCulture),
                     ["GITHUB_ACTIONS"] = githubActions ? "true" : null,
                     ["VT_CI_PROFILE"] = null,
+                    ["VT_VALIDATE_HEARTBEAT_SECONDS"] = heartbeat?.ToString(System.Globalization.CultureInfo.InvariantCulture),
                 }, timeoutMinutes: 5);
     }
 }
