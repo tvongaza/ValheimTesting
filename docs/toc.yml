@@ -32,6 +32,18 @@
     href: packages/Valheim.Testing.Bindings.md
   - name: Valheim.Testing.Bindings.Tool
     href: packages/Valheim.Testing.Bindings.Tool.md
+- name: Reference
+  items:
+  - name: Doubles - world state
+    href: reference/doubles-world.md
+  - name: Doubles - networking
+    href: reference/doubles-network.md
+  - name: Doubles - Unity, config and Harmony
+    href: reference/doubles-unity.md
+  - name: Pinned world dumps
+    href: reference/world-dump-contract.md
+  - name: Bake a fixture
+    href: reference/fixture-authoring.md
 - name: API reference
   items:
   - name: API reference

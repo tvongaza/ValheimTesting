@@ -1,16 +1,51 @@
 # Valheim.Testing.Adapter
 
-[Current preview API reference](https://tvongaza.github.io/ValheimTesting/reference/). The package's README is this guide; use its versioned source commit from the package metadata when checking an older preview.
+[Current preview API reference](https://tvongaza.github.io/ValheimTesting/reference/). This page is the package's README.
 
-`Valheim.Testing.Adapter` is a source package compiled into a mod's **test-only** BepInEx adapter. It provides the mod's owned-session identity, a guarded global-key fixture change, and small helpers for mod-specific commands. Production mods do not reference it. The released package version is in the [package table](../package-versions.md).
+## Purpose
 
-Generic observations belong to the default `valheimCLI.dll`, not to a mod's adapter or a separate pack. They include `valheim.observe/harmony`, `content-census`, `zones`, `custom-data`, `globalkeys`, `config`, `unresolved-prefabs`, `dungeon-rooms`, and the `review-*` commands. The toolkit checks each capability against the pinned manifest before launch and against `cli_extensions` after launch. The [release contract](../valheimcli-release-contract.md) records the exact fork and bundle used by each release.
+`Valheim.Testing.Adapter` is a source package that you compile into your mod's **test-only** BepInEx adapter. It gives the adapter an owned-session identity, a gated global-key fixture command and helpers for your own commands. Production mods never reference it.
 
-[FullLifecycle's adapter](../../examples/FullLifecycle/ExampleMod.TestAdapter/Plugin.cs) is the minimal pattern. The [native acceptance adapter](../../tests/Valheim.Testing.NativeAcceptance/AcceptanceMod.Adapter/Plugin.cs) adds commands for its own marker and a guarded fixture mutation. Build against the exact ValheimCLI core installed in the test runtime with [game references](../../tools/game-references/README.md).
+Generic observations belong to the default `valheimCLI.dll`, not to a mod's adapter: `valheim.observe/harmony`, `content-census`, `zones`, `custom-data`, `globalkeys`, `config`, `unresolved-prefabs`, `dungeon-rooms` and the `review-*` commands. <!-- TODO(docs): verify after #670 --> The [release contract](../valheimcli-release-contract.md) records the exact ValheimCLI fork and bundle that each release uses.
 
-## Registration and session identity
+For the minimal pattern, see [FullLifecycle's adapter](../../examples/FullLifecycle/ExampleMod.TestAdapter/Plugin.cs). The [native acceptance adapter](../../tests/Valheim.Testing.NativeAcceptance/AcceptanceMod.Adapter/Plugin.cs) adds commands for its own marker and a guarded fixture mutation.
 
-`TestExtension.Register(id, version, tokenVariable, modReady, registered, logError, commands...)` waits for ValheimCLI's extension API, registers the adapter's `session` capability, then its mod-specific commands. Run it as a coroutine from `Start` and dispose the registration in `OnDestroy`:
+## Install or pin
+
+The released version is in the [package table](../package-versions.md).
+
+Build the adapter against the exact ValheimCLI core installed in your test runtime. Use the [game references](../../tools/game-references/README.md) for this.
+
+## Helpers
+
+| Helper | Does | Fails when |
+|---|---|---|
+| `TestExtension` | Registers the `session` capability and your commands once ValheimCLI's API is ready. | The API is not ready after `ApiWaitSeconds` (30): it logs an error and stays inert. |
+| `FixtureGate` | `Refusal` returns null only if the enabling variable is `1` and the token is set. | Otherwise it returns the refusal reason. An empty variable name throws `ArgumentException`. |
+| `GlobalKeyCommands.Change` | Adds a server command, default name `globalkey`: `set <name> [value]` or `remove <name>`. | It fails `fixture_disabled` if the gate refuses, `usage` on bad arguments, and `no_world` without a world. |
+| `Members` | Exact reflected `Field`, `StaticField`, `Method` and `Call` on private game members. | It throws `MissingFieldException`, `MissingMethodException` or `InvalidCastException`. It never returns a default. |
+| `SavedObjects.InZone` | Lists one zone's saved objects (ZDOs), loaded or not, up to `limit`. | It throws if matches exceed `limit`, the zone is outside ±`MaxZoneIndex`, or no world is loaded. |
+| `QuitLogFlush` | Flushes BepInEx's `LogOutput.log` while the game quits, for the teardown log scan. | It loses lines logged after managed code stops. |
+
+Check the gate at the start of every fixture command:
+
+```csharp
+if (FixtureGate.Refusal("MYMOD_TEST_FIXTURES", "MYMOD_TEST_SESSION_TOKEN") is string refused)
+{ context.Fail("fixture_disabled", refused); yield break; }
+```
+
+`GlobalKeyCommands.Change(enableVariable, tokenVariable)` runs this check for you. It replies `{source: "global-key-change", complete: true, action, name, value, keys}` with the server's keys after the change. Clients receive the new list with the server's next message. Read keys with the default plugin's read-only `globalkeys` listing.
+
+`Members` fails loudly when a game update renames a member:
+
+```csharp
+var findObjects = Members.Method(typeof(ZDOMan), "FindObjects",
+    typeof(Vector2s), typeof(List<ZDO>), typeof(HashSet<ZoneSystem.SectorIndex>));
+```
+
+## Register the adapter
+
+`TestExtension.Register(id, version, tokenVariable, modReady, registered, logError, commands...)` waits for ValheimCLI's extension API. It then registers the `session` capability, followed by your commands. Run it as a coroutine from `Start`:
 
 ```csharp
 private IEnumerator Start() => TestExtension.Register(
@@ -19,25 +54,27 @@ private IEnumerator Start() => TestExtension.Register(
     MyModObservation.Command());
 ```
 
-The session reports complete when the world is ready and `modReady` is true; `acceptingConnections` is separate. `OwnedServerSession.WaitUntilJoinable` waits for the owned server's socket before a client joins. If ValheimCLI's API is unavailable after 30 seconds, the adapter logs an error and remains inert. Dispose only this adapter's registration and Harmony ID; never call `Harmony.UnpatchAll()`.
+Dispose the registration in `OnDestroy`. Dispose only this adapter's registration and Harmony ID. Never call `Harmony.UnpatchAll()`.
 
-## Remaining helpers
+The session reports `complete` when the world is ready and `modReady` returns true. `acceptingConnections` is a separate field. Before a client joins, call `OwnedServerSession.WaitUntilJoinable` to wait for the owned server's socket.
 
-ValheimCLI owns the game-side extension API: registration and instance tokens, command roles, the devcommands and joined-client rules, the mutation gate, cancellation, cleanup and quiescence probes, result limits and `cli_extensions` discovery. Its reference is ValheimCLI's [extension API guide](https://github.com/tvongaza/valheimCLI/blob/e596a7d984feaaa695f5c2999964b64e23fbfd92/docs/testing-toolkit.md#extension-api-v1), at the commit the released `Valheim.Testing.Cli` was built from; this repository does not keep a copy. What the toolkit adds:
+If ValheimCLI's API is not ready after 30 seconds, the adapter logs an error and stays inert.
 
-| Helper | Purpose |
-|---|---|
-| `TestExtension` | Register the session identity and mod-specific extension commands once the CLI API is ready. |
-| `FixtureGate` | Refuse a test-only mutation unless the owned process has the enabling variable and session token. |
-| `GlobalKeyCommands.Change` | Register the shared, gated server-side `globalkey set|remove` fixture command; pair it with Observe's read-only `globalkeys` listing. |
-| `Members` | Exact reflected lookup/call for private game members; missing or mistyped members throw. |
-| `SavedObjects.InZone` | Bounded census of saved objects in one zone for a mod-specific observation. |
-| `QuitLogFlush` | Preserve BepInEx lines emitted during a clean quit for the teardown log scan. |
+## The quit-log flush
 
-`FixtureGate` and `Members` have unit tests; the source package also has a net48 compile check against declared game/Unity/CLI signatures. This does not prove that private reflected members exist in a new game build. A bounded native run is required for that boundary. The native acceptance suite exercises the session, saved-object and quit-log behavior.
+Put the three calls in your adapter plugin:
 
-### The quit-log flush
+```csharp
+private void Awake() => QuitLogFlush.Enable();
+private void OnApplicationQuit() => QuitLogFlush.Quitting("<adapter> OnApplicationQuit");
+private void OnDestroy() => QuitLogFlush.Disable();
+```
 
-`QuitLogFlush.Enable()` belongs in the adapter's `Awake`; call `Quitting("<adapter> OnApplicationQuit")` from `OnApplicationQuit` and `Disable()` from `OnDestroy`. Do not arm it on a script reload: `OnDestroy` can run without the game quitting. The helper cannot preserve lines logged after managed code stops.
+Never call `Quitting` from `OnDestroy`. A script reload runs `OnDestroy` without quitting the game, so the flush would arm too early. The helper cannot save lines logged after managed code stops.
 
-The ValheimCLI extension API owns command roles, devcommands and mutation gates, cancellation, quiescence, result-size limits and `cli_extensions` discovery. This package does not grant client admin rights or bypass those gates. A mod-specific command validates its own arguments. Game-side commands can be installed in `BepInEx/plugins` or, with ScriptEngine configured to load them at startup, `BepInEx/scripts`; do not install the same plugin in both places.
+## Limits
+
+- This package grants no client admin rights and bypasses no gate. ValheimCLI's [extension API guide](https://github.com/tvongaza/valheimCLI/blob/e596a7d984feaaa695f5c2999964b64e23fbfd92/docs/testing-toolkit.md#extension-api-v1) owns command roles, devcommands, the mutation gate, cancellation, quiescence, result limits and `cli_extensions` discovery.
+- Your mod-specific command validates its own arguments.
+- Tests without the game cannot prove that a private reflected member exists in a new game build. You need a bounded native run for that.
+- Install game-side commands in `BepInEx/plugins` or in `BepInEx/scripts`, never both. `BepInEx/scripts` works only if ScriptEngine is configured to load them at startup.

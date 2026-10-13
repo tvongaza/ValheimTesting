@@ -1,40 +1,60 @@
 # Valheim.Testing.Bindings
 
-[Current preview API reference](https://tvongaza.github.io/ValheimTesting/reference/). The package's README is this guide; use its versioned source commit from the package metadata when checking an older preview.
+[Current preview API reference](https://tvongaza.github.io/ValheimTesting/reference/). This page covers the library and its `valheim-bindings` tool.
 
-*Assistant-written (Claude).*
+Check offline that a built mod's references into the game still bind.
 
-An offline check that a built mod's references into the game still bind, from [ValheimTesting](https://github.com/tvongaza/ValheimTesting). A game update that removes, renames or retypes a member breaks a mod with `MissingFieldException`, `MissingMethodException` or `TypeLoadException`, but only when the runtime first compiles a method that uses it, which can be hours into play. This check reads the mod DLL with [Mono.Cecil](https://github.com/jbevain/cecil), resolves every type, field and method it references in the game assemblies you supply, and names the mod methods that use each one that no longer binds. (The modding wiki's examples of such breaks are `Terminal.m_input` in 0.217.14 and `SEMan.HaveStatusEffect` in 0.218.15; building against stale publicized assemblies hides the same break until the method runs.) It loads and runs nothing, and needs no game process.
+## Purpose
 
-- `Valheim.Testing.Bindings` (netstandard2.0) is the library: `BindingCheck.Check(modPath, options)` returns a `BindingReport`.
+A game update can remove, rename or retype a member your mod uses. The mod then throws `MissingFieldException`, `MissingMethodException` or `TypeLoadException`. It throws only when the runtime first compiles a method that uses the member, possibly hours into play.
+
+This check reads your mod DLL with [Mono.Cecil](https://github.com/jbevain/cecil). It resolves every type, field and method the mod references in the game assemblies you supply. For each reference that no longer binds, it names the mod methods that use it. It loads and runs nothing, and needs no game process.
+
+- `Valheim.Testing.Bindings` (netstandard2.0) is the library. `BindingCheck.Check(modPath, options)` returns a `BindingReport`.
 - `Valheim.Testing.Bindings.Tool` (net10.0) is the `valheim-bindings` .NET tool for CI.
+
+## Install
+
+Install the tool into `.tools`. Then point it at your built mod and the game's `Managed` directory:
 
 ```sh
 dotnet tool install Valheim.Testing.Bindings.Tool --version 0.1.0-preview.3 --tool-path .tools
 .tools/valheim-bindings MyMod/bin/Release/MyMod.dll --game-dir "path/to/valheim_Data/Managed"
 ```
 
-Exit code 0 means every checked reference binds, 1 that some are missing, and 2 bad arguments, an unreadable file or `assembly_valheim` not supplied. Members that exist but are not accessible from the mod (a mod built against publicized assemblies references them on purpose) are reported separately and fail only with `--fail-on-access`, and then only without an `IgnoresAccessChecksTo` attribute for their assembly. That attribute is a declaration for this checker, **not proof that the original game's runtime grants access**. Conversely, `--fail-on-access` can warn on a mod whose private call works at run time. [Our pinned native check](https://github.com/tvongaza/ValheimTesting/blob/main/docs/native-validation-20261002.md) shows both outcomes. References into assemblies you did not supply are counted as not checked.
+The tool prints one report per mod. Each report's last line starts with `PASS:`, `FAIL:` or `INCOMPLETE:`. The tool then exits with one of the [exit codes](#exit-codes).
 
-Mono.Cecil is MIT-licensed (Jb Evain, Novell); see THIRD-PARTY-NOTICES.md in the package.
+<!-- TODO(docs): capture output -->
 
-## What is checked
+| Report line starts with | Meaning |
+|---|---|
+| `Checked:` | A supplied assembly, its reference count and its file |
+| `Not checked (not supplied):` | A referenced assembly you did not supply |
+| `INCOMPLETE: the mod references` | A required assembly was not supplied |
+| `MISSING` | A reference that does not bind. `instead:` gives a clue |
+| `used by` | A mod method, field, type or attribute that uses it |
+| `ACCESS info` or `ACCESS warning` | A member that binds but the mod cannot access |
+| `Note:` | A part of the mod that could not be read completely |
 
-What is checked, the way the runtime binds it:
+## Options
 
-- Every type, field and method the mod names in method bodies, signatures, locals, catch clauses, base types, interfaces, generic constraints, explicit overrides, attributes (including `typeof(...)` arguments) and the module's reference tables. Properties and events are their accessor methods (`get_Level`).
-- A field matches by name and field type; a method by name, static or instance, generic arity, return type and parameter types, with byref, arrays and their rank, pointers, generic instances and modifiers compared exactly. Members are looked for in the type and then its base types, so a member moved to a base class still binds. Nested types are resolved through their declaring types and type forwarders are followed into the target assembly.
-- A reference that does not bind is **missing**, listed once with every mod method (or type, field or attribute) that uses it, and with what the assembly has instead when that is a clue: the other overloads, the field's new type, a property that became a field.
-- A member or type that binds but is not accessible from the mod (private, internal, or protected used outside a derived type) is an **access** finding, a separate list. See below.
-- References into an assembly you did not supply are counted per assembly as **not checked**, never reported as missing. If the lookup of a member reaches a base type in an assembly you did not supply (a game type's `MonoBehaviour` base, say), the member is still reported missing, with a note that it was not searched there.
+```text
+valheim-bindings <mod.dll>... (--game-dir <dir> | --game-file <file>)... [options]
+```
 
-## The game's assemblies
+Name one or more mod DLLs. Supply at least one `--game-dir` or `--game-file`.
 
-Supply the game's managed directory with `--game-dir` (the client's `valheim_Data/Managed` holds `assembly_valheim`, `assembly_utils`, the Unity modules and the framework the game runs on; add `BepInEx/core` for BepInEx and Harmony) or individual files with `--game-file`, which are matched by the assembly name inside them, so a pinned copy may have any file name. `--only <name>` limits which assemblies from the directories are checked. `assembly_valheim` must be supplied whenever the mod references it, so a wrong path fails instead of checking nothing; `--require <name>` adds others.
+| Option | Does |
+|---|---|
+| `--game-dir <dir>` | Looks up referenced assemblies here as `<name>.dll`. Repeatable. |
+| `--game-file <file>` | Checks against this file, matched by the assembly name inside it. Repeatable. |
+| `--only <name>` | Checks only these assemblies from `--game-dir` directories. Files are always checked. Repeatable. |
+| `--require <name>` | Also requires this assembly if the mod references it. Repeatable. |
+| `--fail-on-access` | Also fails on an access finding without `IgnoresAccessChecksTo` for its assembly. |
+| `--max-users <n>` | Lists at most `n` users per finding. Default 10. |
+| `-h`, `--help` | Prints usage and exits 0. |
 
-## Publicized assemblies and access
-
-Mods commonly compile against publicized copies of the game assemblies, where every member is public, and reach private members at run time. Checked against the real assemblies, each such reference is an access finding even if nothing changed, so access findings never fail the check by default: missing references are what break. Each access finding says whether the mod carries `[assembly: IgnoresAccessChecksTo("<assembly>")]` for that assembly (some publicizer build tasks add it), which declares the access as intended: those are **info**, the rest **warning**. `--fail-on-access` fails on warnings only. Checking against the publicized copy the mod was built with still finds removals, but reports no access findings. This is metadata classification, not a runtime permission check: [a pinned native test](https://github.com/tvongaza/ValheimTesting/blob/main/docs/native-validation-20261002.md) found that the attribute alone passed `--fail-on-access` yet threw `FieldAccessException`, while a plugin built with `AllowUnsafeBlocks=true` executed the access despite a checker warning. Run an actual call with the original game assembly before relying on private access.
+The client's `valheim_Data/Managed` holds `assembly_valheim`, `assembly_utils`, the Unity modules and the framework the game runs on. Add `BepInEx/core` for BepInEx and Harmony. `assembly_valheim` is always required when the mod references it. If your path is wrong, the check therefore fails instead of checking nothing.
 
 ## Exit codes
 
@@ -42,11 +62,44 @@ Mods commonly compile against publicized copies of the game assemblies, where ev
 |---|---|
 | 0 | Every checked reference binds (access findings may be listed) |
 | 1 | At least one missing reference; with `--fail-on-access`, also an access finding without `IgnoresAccessChecksTo` |
-| 2 | Bad arguments, an unreadable, malformed or missing file or directory, or a required assembly not supplied: the check is incomplete. Any failure to read a mod (a malformed method body, say) is exit 2 with the reason, never an unhandled crash with another code. |
+| 2 | Bad arguments, unreadable or malformed input, or a required assembly not supplied: the check is incomplete |
 
-## In CI
+A mod that cannot be read gives exit 2 with the reason, never an unhandled crash. The tool still checks the other mods. With several mods, the tool exits with the highest code among them.
 
-Run the check in the job that builds the plugin, since both need the game's assemblies, and before anything launches the game. The workflow step is in [Run tests in CI](../guides/run-tests-in-ci.md#5-optional-check-game-references-where-the-plugin-builds).
+## What is checked
+
+The check looks up references the way the runtime binds them:
+
+| What is looked up | How it must match | Outcome |
+|---|---|---|
+| Type | Declared in the assembly, or forwarded to one that declares it | Missing |
+| Nested type | Resolved through its declaring types | Missing |
+| Field | Name and field type, on the type or a base type | Missing |
+| Method | Name, static or instance, generic arity, return and parameter types | Missing |
+| Property or event | Its accessor methods (`get_Level`) | Missing |
+| Bound member or type | Not private, internal, or protected used outside a derived type | Access finding |
+| Reference into an assembly you did not supply | Not looked up | Not checked, counted per assembly |
+
+References come from method bodies, signatures, locals and catch clauses. They also come from base types, interfaces, generic constraints and explicit overrides. Attributes count, including `typeof(...)` arguments, as do the module's reference tables. Byref, arrays and their rank, pointers, generic instances and modifiers must match exactly.
+
+Each missing reference appears once, with every mod member that uses it. When it helps, the finding also shows what the assembly has instead: other overloads, the field's new type, or a property that became a field. Suppose a lookup reaches a base type in an assembly you did not supply, such as a game type's `MonoBehaviour` base. The member is then still reported missing, with a note that it was not searched there.
+
+## Publicized assemblies and access
+
+Mods often compile against publicized game assemblies, where every member is public. Checked against the real assemblies, each private reference is an access finding. So access findings never fail the check by default. An access finding is **info** if the mod carries `[assembly: IgnoresAccessChecksTo("<assembly>")]` for that assembly, and a **warning** otherwise. `--fail-on-access` fails on warnings only.
+
+If you check against the publicized copy you built with, the check still finds removals. It reports no access findings.
+
+A mod compiled against a publicized assembly that reads a private game member at run time needs `AllowUnsafeBlocks=true` in its project. `[assembly: IgnoresAccessChecksTo("assembly_valheim")]` alone passes `--fail-on-access` but throws `FieldAccessException` at run time. `--fail-on-access` can also warn on a mod whose private access works:
+
+| Build | `valheim-bindings --fail-on-access` | Run-time read of a private member |
+|---|---|---|
+| Ordinary | warning, exit 1 | `FieldAccessException` |
+| `AllowUnsafeBlocks=true` | warning, exit 1 | Succeeds |
+| `IgnoresAccessChecksTo` only | info, exit 0 | `FieldAccessException` |
+| Both | info, exit 0 | Succeeds |
+
+The check classifies metadata and does not test run-time permissions. Before you rely on private access, make a real call against the original game assembly.
 
 ## From a test
 
@@ -58,8 +111,31 @@ Assert.Empty(report.MissingRequired);
 Assert.True(report.Binds, string.Join("\n", report.Missing.Select(f => $"{f.Member}: {string.Join(", ", f.UsedBy)}")));
 ```
 
+To get the tool's exit code and report text instead, call `BindingCheckCommand.Run(string[] args, TextWriter output, TextWriter error)` with the same arguments the tool takes.
+
+| `BindingReport` member | Holds |
+|---|---|
+| `Binds` | True when `Missing` is empty. Says nothing about `NotChecked` assemblies |
+| `Missing` | References that would not bind at run time |
+| `Access` | References that bind but are not accessible from the mod |
+| `UndeclaredAccess` | Access findings without `IgnoresAccessChecksTo` for their assembly |
+| `MissingRequired` | Required assemblies the mod references that were not supplied |
+| `Checked`, `NotChecked` | Referenced assemblies, supplied or not, with reference counts |
+| `Notes` | Parts of the mod that could not be read completely |
+| `WriteText(output, maxUsers)` | Writes the report for a person or a CI log |
+
+## In CI
+
+Run the check in the job that builds the plugin, since both need the game's assemblies. Run it before anything launches the game. See [Run tests in CI](../guides/run-tests-in-ci.md) for the workflow step.
+
 ## Limits
 
-Only metadata references are checked. Members found by name at run time are not: Harmony's `[HarmonyPatch(typeof(T), "Method")]` and `AccessTools` lookups (`nameof` compiles to a string too), reflection, and Jötunn or prefab names. Neither are type-shape changes that fail when a mod type loads (a game interface gaining a member the mod's class must implement, a base class becoming sealed or gaining an abstract member) or generic constraint changes. An attribute whose arguments name an enum from an assembly that cannot be found is noted, and the types in its arguments are not checked. A pass says the checked references bind, not that the mod behaves correctly with the new game version. The tests build a miniature game in three versions and two mods at test time; the tool has not been run against a real Valheim update in this repository.
+- The check covers metadata references only. It misses name lookups at run time: Harmony's `[HarmonyPatch(typeof(T), "Method")]`, `AccessTools` (`nameof` compiles to a string), reflection, and Jötunn or prefab names.
+- It misses type-shape changes that fail when a mod type loads, such as a new interface member, a sealed base or a new abstract member.
+- It misses generic constraint changes.
+- If an attribute argument names an enum from an assembly it cannot find, the check notes it and skips the types in that attribute's arguments.
+- A pass means the checked references bind. It does not mean the mod behaves correctly with the new game version.
+
+Mono.Cecil is MIT-licensed (Jb Evain, Novell); see THIRD-PARTY-NOTICES.md in the package.
 
 Unofficial community tooling; not affiliated with or endorsed by Iron Gate or Coffee Stain. Valheim is a trademark of Iron Gate AB.

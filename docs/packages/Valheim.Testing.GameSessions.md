@@ -8,7 +8,7 @@
 
 A test project that only observes or drives one game through `GameActor`, `OwnedServerSession`, `ClientSession` or `ClientRounds` needs `Valheim.Testing.Game` alone. Add this package for `TargetedRegression`, which now uses the shared hosted-runtime copy and recovery path, or when the test runs a session: a dedicated server with its clients, a hosted world with peers, a server-only load check, or any actor on another machine.
 
-Topic pages: [pinned world dumps](../world-dump-contract.md) (`WorldDump`) and [evidence linked from `result.json`](../evidence.md) (review captures and clips).
+Topic pages: [pinned world dumps](../reference/world-dump-contract.md) (`WorldDump`) and [evidence linked from `result.json`](../evidence.md) (review captures and clips).
 
 ## What it holds
 

@@ -92,7 +92,7 @@ The tool checks the recorded PID and exact start time, then verifies strict pins
 4. Confirm a save, leave the world, restart only the owned server, rejoin and reverify pins/readiness/arrival. Repeat the **original** expectation plan in another new output directory.
 5. Inspect every result, incomplete sample and game warning/error. Retain the original failed attempts; do not silently replace evidence or use a saved report from an older DLL.
 
-This recipe established paved-core/verge paint. The [follow-up native campaign](native-validation-20260927.md) also established a declared dirt/fading-edge fixture. Ordinary noisy earthworks still need their own plans. A person judges appearance and walking; small acceptable bumps do not require more numerical research.
+This recipe covers paved-core/verge paint and a declared dirt/fading-edge fixture. Ordinary noisy earthworks still need their own plans. A person judges appearance and walking; small acceptable bumps do not require more numerical research.
 
 ## Completion and handoff
 
@@ -113,7 +113,7 @@ Inspect evidence before publishing: logs may expose account identifiers, local p
 
 Use [ObserveCheck `capture`](../examples/ObserveCheck/README.md#capture-record-a-bounded-grid-for-exact-replay) for a bounded `valheim.world/terrain-grid` observation and validated exact replay. Keep generator and loaded-ground layers distinct. A replay is input, not an independent expected result. To choose test sites on a world the game has just created, `SiteSearch.Find(server, worldUid, grids, enough)` reads generator grids through `TerrainCapture` in order, each required to come from the pinned world, until the mod's own rule is satisfied, and `SiteSearch.Nearest` picks the sample closest to the world's centre with an order-independent tie-break (the [native acceptance suite](../tests/Valheim.Testing.NativeAcceptance/README.md#the-server-half-alone)'s `prepare-server`).
 
-Use [ObserveCheck `session`](../examples/ObserveCheck/README.md#session-state-save-join-leave) for `valheim.session/state`, `join`, `leave` and `save` in Standard. Mutations are issued once; world transitions invalidate actor pins even on a lost reply. Reverify the destination world before further actions. Readiness does not include mod generation or local terrain/collider readiness. Confirm world saving on the server by advanced save number, not a client's logout. These capabilities passed the [bounded native campaign](native-validation-20260927.md); mod readiness and human usability remain separate.
+Use [ObserveCheck `session`](../examples/ObserveCheck/README.md#session-state-save-join-leave) for `valheim.session/state`, `join`, `leave` and `save` in Standard. Mutations are issued once; world transitions invalidate actor pins even on a lost reply. Reverify the destination world before further actions. Readiness does not include mod generation or local terrain/collider readiness. Confirm world saving on the server by advanced save number, not a client's logout. Native readiness is not mod readiness, and neither tells you whether a person finds the result usable.
 
 ## Require strict expectations
 

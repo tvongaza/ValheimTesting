@@ -141,7 +141,7 @@ Prove that the tests can fail. In `MyMod/DrySiteRule.cs`, change `>=` to `>` and
 
 Never copy the rule into the tests, or you test a substitute.
 
-A pass proves the mod's decision on declared inputs. It does not prove that the real world is dry, that a collider exists, or that a client receives terrain. The doubles model only [what they list](../packages/Valheim.Testing.Doubles.md#what-the-doubles-model). Everything else is a plain field or a no-op ([limits](../packages/Valheim.Testing.Doubles.md#limits)).
+A pass proves the mod's decision on declared inputs. It does not prove that the real world is dry, that a collider exists, or that a client receives terrain. The doubles model only [what they list](../packages/Valheim.Testing.Doubles.md#where-each-behaviour-is-documented). Everything else is a plain field or a no-op ([limits](../packages/Valheim.Testing.Doubles.md#limits)).
 
 ## Problems
 

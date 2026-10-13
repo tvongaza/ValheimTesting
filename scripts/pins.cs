@@ -28,8 +28,7 @@
 // PackageReference, a `dotnet tool install` or `dotnet add package` command, ToolkitPackageVersion (the Game package; a -p:
 // argument or a project property), and a backticked package ID followed by a backticked version, as in the package table.
 // A link to a page of the valheimCLI fork at a full commit pins releasedCliCommit, so the docs read the fork as the
-// released Cli was built. History in prose ("new in Game preview 11") is not a pin. Dated native-validation records are
-// not scanned. The NativeSmoke tool does not read this file: its generated consumer pins the Game the tool was built with.
+// released Cli was built. History in prose ("new in Game preview 11") is not a pin. The NativeSmoke tool does not read this file: its generated consumer pins the Game the tool was built with.
 //
 // check reads NuGet.org and fails, naming the file and line, when: a pin differs from the file; a released version is not
 // served, is a candidate, or is superseded by a newer version NuGet.org lists (the docs lag a release; an unlisted
@@ -40,7 +39,7 @@
 // from GitHub). write and docs read only this checkout.
 //
 // docs fails, naming the file and line, on a Markdown heading that names a version or a date (a page describes what is,
-// and history belongs in release notes; native-validation records are exempt), a link to a review/ branch (which moves),
+// and history belongs in release notes), a link to a review/ branch (which moves),
 // a valheimCLI fork page linked at anything but a full commit (so it is pinned), and a relative link, or one to this
 // repository's main branch, whose file or heading anchor does not exist (#278). It needs no network, so a docs problem is
 // never hidden behind a release the pins have not caught up with.
@@ -644,10 +643,9 @@ List<Problem> DocsProblems()
     var anchors = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
     foreach (string file in Walk(root, ".md"))
     {
-        bool record = Path.GetFileName(file).StartsWith("native-validation-", StringComparison.Ordinal);
         foreach (var (line, text, heading) in MarkdownLines(File.ReadLines(Path.Combine(root, file))))
         {
-            if (heading != null && !record && versioned.IsMatch(heading))
+            if (heading != null && versioned.IsMatch(heading))
                 problems.Add(new(file, line, "A heading names a version or a date, so its anchor changes with every release. Name the concept; history belongs in release notes."));
             foreach (string url in Links(text))
             {
@@ -780,8 +778,7 @@ List<Pin> FindPins()
     var files = Walk(root, ".md").Where(f => !f.Contains('/')).ToList(); // the root pages: README, CONTRIBUTING, AGENTS, ...
     foreach (string dir in new[] { "docs", "examples", "tools", "src" })
         files.AddRange((dir == "src" ? Walk(Path.Combine(root, dir), ".md") // a package's README, not its build
-                : Walk(Path.Combine(root, dir), ".md", ".csproj", ".props", ".targets", ".yml", ".yaml", ".cs"))
-            .Where(f => !Path.GetFileName(f).StartsWith("native-validation-", StringComparison.Ordinal)));
+                : Walk(Path.Combine(root, dir), ".md", ".csproj", ".props", ".targets", ".yml", ".yaml", ".cs")));
     const string Id = @"(?<id>Valheim\.Testing(?:\.[A-Za-z]+)*)";
     const string Version = @"(?<version>\d+\.\d+\.\d+(?:-[0-9A-Za-z.]*[0-9A-Za-z])?)";
     // (pattern, package when the pattern names none)
