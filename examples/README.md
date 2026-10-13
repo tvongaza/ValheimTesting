@@ -1,6 +1,6 @@
 # Choose an example
 
-Bringing an existing mod? Start with [ModWithTests](ModWithTests/README.md), then the [adoption guide](../docs/adopting.md). Use [getting started](../docs/getting-started.md) for package availability and feeds. Run commands from the repository root. All examples are built by `dotnet run scripts/validate.cs`; validation runs SharedWorld and the ModWithTests tests and never starts Valheim.
+Bringing an existing mod? Start with [ModWithTests](ModWithTests/README.md), then the [adoption guide](../docs/adopting.md). Use [package versions](../docs/package-versions.md) for package availability and [CONTRIBUTING](../CONTRIBUTING.md#try-an-unpublished-build-in-a-mod) for local feeds. Run commands from the repository root. All examples are built by `dotnet run scripts/validate.cs`; validation runs SharedWorld and the ModWithTests tests and never starts Valheim.
 
 | Example | Concept | Audience | Prerequisites |
 |---|---|---|---|

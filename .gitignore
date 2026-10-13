@@ -9,6 +9,7 @@ artifacts/
 docs/reference/api/
 docs/reference/_site/
 docs/reference/packages/
+docs/reference/package-versions.md
 .DS_Store
 __pycache__/
 *.pyc

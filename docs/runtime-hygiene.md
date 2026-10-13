@@ -42,7 +42,7 @@ What follows is what only you can do: how you write the mod, which characters yo
 
 ## Builds and output
 
-- **Use a fresh `NUGET_PACKAGES` per run when you rebuild an unpublished version number.** NuGet caches packages by id and version, so a rebuilt local-feed package with the same version restores the cached old copy. ([NuGet global packages folder](https://learn.microsoft.com/nuget/consume-packages/managing-the-global-packages-and-cache-folders), [package feeds](getting-started.md#package-versions-and-feeds))
+- **Use a fresh `NUGET_PACKAGES` per run when you rebuild an unpublished version number.** NuGet caches packages by id and version, so a rebuilt local-feed package with the same version restores the cached old copy. ([NuGet global packages folder](https://learn.microsoft.com/nuget/consume-packages/managing-the-global-packages-and-cache-folders), [local package feeds](../CONTRIBUTING.md#try-an-unpublished-build-in-a-mod))
 - **Add `#:property PublishAot=false` to a file-based program that serializes JSON by reflection.** `dotnet run app.cs` defaults to Native AOT settings, which turn reflection-based `System.Text.Json` off, so `JsonSerializer.Serialize(object)` throws. `JsonDocument` or a source-generated context works either way. ([file-based apps](https://learn.microsoft.com/dotnet/core/sdk/file-based-apps), [reflection defaults under trimming and AOT](https://learn.microsoft.com/dotnet/standard/serialization/system-text-json/source-generation#disable-reflection-defaults))
 - **Never zip a runner's output directory recursively.** `PinnedServerRun` keeps its copies of the runtime and world there for inspection; archive the reports and logs by name. ([pinned server runner](packages/Valheim.Testing.GameSessions.md#pinned-server-runner))
 

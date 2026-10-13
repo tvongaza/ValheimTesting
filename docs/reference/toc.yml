@@ -6,6 +6,8 @@
   href: documentation-scope.md
 - name: Packages and examples
   items:
+  - name: Packages and versions
+    href: package-versions.md
   - name: Valheim.Testing
     href: packages/Valheim.Testing.md
   - name: Valheim.Testing.Doubles

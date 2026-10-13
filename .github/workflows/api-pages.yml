@@ -10,7 +10,7 @@ on:
       - 'cli-dependency.json'
       - 'docs/reference/**'
       - 'docs/packages/**'
-      - 'docs/getting-started.md'
+      - 'docs/package-versions.md'
       - 'toolkit-versions.json'
       - 'scripts/api-docs.cs'
       - 'scripts/versioned-api-docs.cs'
