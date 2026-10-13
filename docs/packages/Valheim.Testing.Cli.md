@@ -1,6 +1,6 @@
 # Valheim.Testing.Cli
 
-[Current preview API reference](https://tvongaza.github.io/ValheimTesting/) and [pinned ValheimCLI fork](https://github.com/tvongaza/valheimCLI). The fork owns the transport's source and game-side command contracts.
+[Current preview API reference](https://tvongaza.github.io/ValheimTesting/reference/) and [pinned ValheimCLI fork](https://github.com/tvongaza/valheimCLI). The fork owns the transport's source and game-side command contracts.
 
 ValheimCLI's external client and YAML test-plan runner, packaged by [ValheimTesting](https://github.com/tvongaza/ValheimTesting) so external Valheim test tools can talk to a running game. It connects to the in-game ValheimCLI plugin over TCP, sends commands, reads replies and runs YAML test plans with strict environment pins. It contains no game, Unity or BepInEx assemblies.
 

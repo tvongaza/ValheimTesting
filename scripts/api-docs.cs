@@ -5,7 +5,7 @@
 //   dotnet tool restore
 //   sh scripts/bootstrap-cli.sh                  (macOS/Linux)
 //   dotnet run scripts/validate.cs
-//   dotnet run scripts/api-docs.cs                       the DocFX reference (docs/reference/_site, not committed)
+//   dotnet run scripts/api-docs.cs                       the documentation site: guides, packages and the API (docs/reference/_site, not committed)
 //   dotnet run scripts/api-docs.cs -- surface            write docs/reference/public-api/<Package>.txt from the release builds
 //   dotnet run scripts/api-docs.cs -- check              release.yml: the committed lists match the builds
 //   dotnet run scripts/api-docs.cs -- check-docs          CI: selected 0.1 entrypoint pages and members have summaries
@@ -23,6 +23,10 @@ using System.Text;
 using System.Text.RegularExpressions;
 
 string root = FindRoot();
+// The site publishes the landing page, getting started, the package table and every page in these folders; a page
+// elsewhere under docs/ (maintainers/, agent pages) stays on GitHub. A published page also needs an entry in docs/toc.yml.
+string[] publishedRootPages = ["index.md", "getting-started.md", "package-versions.md"];
+string[] publishedFolders = ["guides", "concepts", "tutorials", "packages", "reference"];
 string[] packagePages = ["Valheim.Testing", "Valheim.Testing.Doubles", "Valheim.Testing.Cli", "Valheim.Testing.Game",
     "Valheim.Testing.GameSessions", "Valheim.Testing.NativeSmoke", "Valheim.Testing.Adapter",
     "Valheim.Testing.Bindings", "Valheim.Testing.Bindings.Tool"];
@@ -43,6 +47,7 @@ foreach (var package in packages)
     if (!File.Exists(Path.Combine(root, package.Assembly)))
         throw new FileNotFoundException("Run validate.cs first; a release build is missing.", package.Assembly);
 string listDirectory = Path.Combine(root, "docs", "reference", "public-api");
+string siteSource = Path.Combine(root, "artifacts", "docs-site");
 if (args is ["surface"])
 {
     Directory.CreateDirectory(listDirectory);
@@ -57,7 +62,7 @@ if (args is ["check"]) return CheckLists();
 if (args is ["check-docs"]) return CheckDocumentedEntrypoints();
 if (args.Length != 0) throw new ArgumentException("usage: dotnet run scripts/api-docs.cs [-- surface | -- check | -- check-docs]");
 
-PreparePackagePages();
+PreparePages();
 var info = new ProcessStartInfo("dotnet")
 {
     UseShellExecute = false,
@@ -89,7 +94,6 @@ if (output.Contains("InvalidFileLink", StringComparison.Ordinal) ||
 string site = Path.Combine(root, "docs", "reference", "_site");
 foreach (string page in new[]
 {
-    "index.html",
     "api/Valheim.Testing.ITerrain.html",
     "api/Valheim.Testing.Doubles.TerrainWorld.html",
     "api/Valheim.Testing.Game.html",
@@ -98,9 +102,9 @@ foreach (string page in new[]
 })
     if (!File.Exists(Path.Combine(site, page)))
         throw new InvalidOperationException($"DocFX omitted a package's reference page: {page}");
-foreach (string package in packagePages)
-    if (!File.Exists(Path.Combine(site, "packages", package + ".html")))
-        throw new InvalidOperationException($"DocFX omitted the {package} package guide.");
+foreach (string page in PublishedPages())
+    if (!File.Exists(Path.Combine(site, Path.ChangeExtension(page, ".html"))))
+        throw new InvalidOperationException($"DocFX omitted the site page {page}.");
 if (CheckDocumentedEntrypoints() != 0)
     throw new InvalidOperationException("A selected 0.1 entrypoint has no rendered XML summary.");
 
@@ -144,7 +148,7 @@ foreach (string file in Directory.EnumerateFiles(site, "*", SearchOption.AllDire
             throw new InvalidOperationException($"Generated reference contains a build-machine path in {Path.GetRelativePath(site, file)}.");
 }
 
-Console.WriteLine("API reference ready: docs/reference/_site/index.html");
+Console.WriteLine("Documentation site ready: docs/reference/_site/index.html");
 return 0;
 
 // These types are the selected 0.1 operation entrypoints. Adding a public member to one without an XML summary is a
@@ -165,7 +169,7 @@ int CheckDocumentedEntrypoints()
     bool missing = false;
     foreach (string type in entrypoints)
     {
-        string page = Path.Combine(root, "docs", "reference", "api", type + ".yml");
+        string page = Path.Combine(siteSource, "api", type + ".yml");
         if (!File.Exists(page)) { Console.Error.WriteLine($"Missing selected 0.1 entrypoint: {type}"); missing = true; continue; }
         string yaml = File.ReadAllText(page).ReplaceLineEndings("\n");
         string items = yaml.Split("\nreferences:", 2, StringSplitOptions.None)[0];
@@ -184,77 +188,126 @@ int CheckDocumentedEntrypoints()
     return missing ? 1 : 0;
 }
 
-// The repository's package guides are the single source of truth. DocFX publishes copies beside the generated types;
-// a link outside that set points at this exact source revision, never at a moving main branch or a build-machine path.
-void PreparePackagePages()
+// The repository's pages are the single source of truth. DocFX publishes copies of the published pages (see
+// publishedFolders) in the same layout under artifacts/docs-site, beside the generated types. A relative link to a
+// published page stays; a link to anything else points at this exact source revision, never at a moving main branch
+// or a build-machine path.
+void PreparePages()
 {
-    string source = Path.Combine(root, "docs", "packages"), destination = Path.Combine(root, "docs", "reference", "packages");
+    string docs = Path.Combine(root, "docs"), packages = Path.Combine(docs, "packages");
     string revision = Git("rev-parse", "HEAD");
     string? releaseVersion = Environment.GetEnvironmentVariable("VALHEIM_DOCS_RELEASE_VERSION");
     if (releaseVersion != null && !Regex.IsMatch(releaseVersion, @"^0\.1\.0(?:-rc\.[1-9][0-9]*)?$"))
         throw new InvalidDataException("VALHEIM_DOCS_RELEASE_VERSION must name a coordinated 0.1 RC or final release.");
-    Directory.CreateDirectory(destination);
-    string[] guides = Directory.GetFiles(source, "*.md").Select(path => Path.GetFileNameWithoutExtension(path)!).Order(StringComparer.Ordinal).ToArray();
+    string[] guides = Directory.GetFiles(packages, "*.md").Select(path => Path.GetFileNameWithoutExtension(path)!).Order(StringComparer.Ordinal).ToArray();
     if (!guides.SequenceEqual(packagePages.Order(StringComparer.Ordinal)))
         throw new InvalidDataException("The API site package list and docs/packages guides differ: " + string.Join(", ", guides));
-    foreach (string generated in Directory.GetFiles(destination, "*.md")) File.Delete(generated);
-    foreach (string package in packagePages)
+    // DocFX never removes a page it no longer renders, so a rebuild starts from nothing.
+    foreach (string stale in new[] { siteSource, Path.Combine(docs, "reference", "_site") })
+        if (Directory.Exists(stale)) Directory.Delete(stale, recursive: true);
+    Directory.CreateDirectory(siteSource);
+    foreach (string page in PublishedPages())
     {
-        string file = Path.Combine(source, package + ".md");
-        if (!File.Exists(file)) throw new FileNotFoundException("A published package has no guide.", file);
+        string file = Path.Combine(docs, page);
         string content = File.ReadAllText(file);
-        if (releaseVersion != null)
-            content = content.Replace("[Current preview API reference](https://tvongaza.github.io/ValheimTesting/)",
-                "[This release's API reference](https://tvongaza.github.io/ValheimTesting/versions/" + releaseVersion + "/)");
-        content = RewriteLinks(content, source, source, package + " guide", revision);
+        if (!content.StartsWith("# ", StringComparison.Ordinal))
+            throw new InvalidDataException($"docs/{page} needs its title heading first.");
+        bool packageGuide = Path.GetDirectoryName(file) == packages;
+        if (packageGuide && releaseVersion != null)
+            content = content.Replace("[Current preview API reference](https://tvongaza.github.io/ValheimTesting/reference/)",
+                "[This release's API reference](https://tvongaza.github.io/ValheimTesting/versions/" + releaseVersion + "/reference/)");
+        content = RewriteLinks(content, Path.GetDirectoryName(file)!, "docs/" + page, revision);
         string sourceLink = "https://github.com/tvongaza/ValheimTesting/tree/" + revision;
-        string versionsLink = "https://github.com/tvongaza/ValheimTesting/blob/" + revision +
-            "/docs/package-versions.md";
         int headingEnd = content.IndexOf('\n');
-        if (headingEnd < 0 || !content.StartsWith("# " + package + "\n", StringComparison.Ordinal))
-            throw new InvalidDataException($"The {package} guide needs its package heading first.");
-        string banner = releaseVersion == null
-            ? "> Reference source: [`" + revision[..12] + "`](" + sourceLink +
-                "). For the installed package version, use the [published package table](" + versionsLink + ")."
-            : "> Release `" + releaseVersion + "` from source [`" + revision[..12] + "`](" + sourceLink +
-                "); [this package on NuGet.org](https://www.nuget.org/packages/" + package + "/" + releaseVersion + ").";
-        content = content[..(headingEnd + 1)] + "\n" + banner + "\n" + content[(headingEnd + 1)..];
-        File.WriteAllText(Path.Combine(destination, package + ".md"), content);
+        if (packageGuide)
+        {
+            string package = Path.GetFileNameWithoutExtension(page);
+            string banner = releaseVersion == null
+                ? "> Reference source: [`" + revision[..12] + "`](" + sourceLink +
+                    "). For the installed package version, use the [published package table](../package-versions.md)."
+                : "> Release `" + releaseVersion + "` from source [`" + revision[..12] + "`](" + sourceLink +
+                    "); [this package on NuGet.org](https://www.nuget.org/packages/" + package + "/" + releaseVersion + ").";
+            content = content[..(headingEnd + 1)] + "\n" + banner + "\n" + content[(headingEnd + 1)..];
+        }
+        else if (page == "package-versions.md" && releaseVersion != null)
+        {
+            // The release's own versions are recorded after it is published, so this revision still lists the previous ones.
+            content = content[..(headingEnd + 1)] + "\n> Release `" + releaseVersion + "` from source [`" + revision[..12] + "`](" + sourceLink +
+                "). The versions below are the ones recorded at this source revision; this release's packages are on NuGet.org.\n" + content[(headingEnd + 1)..];
+        }
+        string target = Path.Combine(siteSource, page.Replace('/', Path.DirectorySeparatorChar));
+        Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+        File.WriteAllText(target, content);
     }
-    // docs/package-versions.md reads the same on GitHub and in the site: its packages/<name>.md links reach docs/packages on
-    // GitHub and the copies above in the site. DocFX builds this uncommitted copy beside them.
-    string docs = Path.Combine(root, "docs");
-    string versions = RewriteLinks(File.ReadAllText(Path.Combine(docs, "package-versions.md")), docs, source, "package versions page", revision);
-    if (releaseVersion != null)
-    {
-        // The release's own versions are recorded after it is published, so this revision still lists the previous ones.
-        int end = versions.IndexOf('\n');
-        versions = versions[..(end + 1)] + "\n> Release `" + releaseVersion + "` from source [`" + revision[..12] +
-            "`](https://github.com/tvongaza/ValheimTesting/tree/" + revision + "). The versions below are the ones recorded at this source revision; " +
-            "this release's packages are on NuGet.org.\n" + versions[(end + 1)..];
-    }
-    File.WriteAllText(Path.Combine(root, "docs", "reference", "package-versions.md"), versions);
+    File.Copy(Path.Combine(docs, "toc.yml"), Path.Combine(siteSource, "toc.yml"));
+    CheckToc();
 }
 
-// A relative link in a copied page stays when it names a package guide; any other target points at the same file at this
-// source revision. baseDirectory is where the page lives in the repository.
-string RewriteLinks(string content, string baseDirectory, string source, string owner, string revision) =>
-    Regex.Replace(content, @"(?<=\]\()(?<target>(?!https?://|#)[^)\r\n]+)(?=\))", match =>
+// The published pages, relative to docs/ with '/' separators.
+List<string> PublishedPages()
+{
+    string docs = Path.Combine(root, "docs");
+    var pages = new List<string>(publishedRootPages);
+    foreach (string folder in publishedFolders.Where(folder => Directory.Exists(Path.Combine(docs, folder)))) // a folder exists once its first page does
+        foreach (string file in Directory.EnumerateFiles(Path.Combine(docs, folder), "*.md", SearchOption.AllDirectories))
+        {
+            string relative = Path.GetRelativePath(docs, file).Replace('\\', '/');
+            if (!relative.StartsWith("reference/public-api/", StringComparison.Ordinal)) pages.Add(relative);
+        }
+    foreach (string page in pages)
+        if (!File.Exists(Path.Combine(docs, page))) throw new FileNotFoundException("A published page is missing.", page);
+    return pages.Order(StringComparer.Ordinal).ToList();
+}
+
+// docs/toc.yml is the site's navigation: every published page except the landing page appears in it, and every local
+// page it names is published. Adding a page to the site is a new entry there.
+void CheckToc()
+{
+    var named = Regex.Matches(File.ReadAllText(Path.Combine(root, "docs", "toc.yml")), @"(?m)^\s*(?:-\s+)?href:\s*(?<href>\S+)\s*$")
+        .Select(match => match.Groups["href"].Value).Where(href => !Regex.IsMatch(href, "^[a-zA-Z][a-zA-Z0-9+.-]*:")).ToList();
+    var pages = PublishedPages();
+    foreach (string page in pages.Where(page => page != "index.md" && !named.Contains(page)))
+        throw new InvalidDataException($"docs/{page} is published but has no entry in docs/toc.yml.");
+    foreach (string href in named.Where(href => !href.EndsWith('/') && !pages.Contains(href)))
+        throw new InvalidDataException($"docs/toc.yml names {href}, which is not a published page.");
+}
+
+// Links in a page that sit outside fenced code. baseDirectory is where the page lives in the repository. A target that
+// is a published page stays as written (the staged tree has the repository's layout); any other file or folder becomes
+// a link to the same path at this source revision.
+string RewriteLinks(string content, string baseDirectory, string owner, string revision)
+{
+    HashSet<string> published = PublishedPages().Select(page => Path.GetFullPath(Path.Combine(root, "docs", page))).ToHashSet();
+    string? fence = null;
+    var lines = content.Split('\n');
+    for (int i = 0; i < lines.Length; i++)
     {
-        string target = match.Groups["target"].Value;
-        int fragment = target.IndexOf('#');
-        string path = fragment < 0 ? target : target[..fragment];
-        if (path.Length == 0) return target;
-        string full = Path.GetFullPath(Path.Combine(baseDirectory, path));
-        bool directory = Directory.Exists(full);
-        if (!File.Exists(full) && !directory) throw new FileNotFoundException($"The {owner} links to a missing file: {target}", full);
-        if (Path.GetDirectoryName(full) == source && packagePages.Contains(Path.GetFileNameWithoutExtension(full)))
-            return target;
-        string relative = Path.GetRelativePath(root, full).Replace('\\', '/');
-        if (relative.StartsWith("../", StringComparison.Ordinal)) throw new InvalidDataException($"The {owner} links outside the repository: {target}");
-        return "https://github.com/tvongaza/ValheimTesting/" + (directory ? "tree/" : "blob/") + revision + "/" + relative +
-            (fragment < 0 ? "" : target[fragment..]);
-    });
+        if (Regex.Match(lines[i], @"^\s{0,3}(?<fence>`{3,}|~{3,})") is { Success: true } marker)
+        {
+            string run = marker.Groups["fence"].Value;
+            if (fence == null) fence = run;
+            else if (run[0] == fence[0] && run.Length >= fence.Length && lines[i].Trim() == run) fence = null;
+            continue;
+        }
+        if (fence != null) continue;
+        lines[i] = Regex.Replace(lines[i], @"(?<=\]\()(?<target>(?![a-zA-Z][a-zA-Z0-9+.-]*:|#|/)[^)\r\n]+)(?=\))", match =>
+        {
+            string target = match.Groups["target"].Value;
+            int fragment = target.IndexOf('#');
+            string path = fragment < 0 ? target : target[..fragment];
+            if (path.Length == 0) return target;
+            string full = Path.GetFullPath(Path.Combine(baseDirectory, path));
+            bool directory = Directory.Exists(full);
+            if (!File.Exists(full) && !directory) throw new FileNotFoundException($"{owner} links to a missing file: {target}", full);
+            if (published.Contains(full)) return target;
+            string relative = Path.GetRelativePath(root, full).Replace('\\', '/');
+            if (relative.StartsWith("../", StringComparison.Ordinal)) throw new InvalidDataException($"{owner} links outside the repository: {target}");
+            return "https://github.com/tvongaza/ValheimTesting/" + (directory ? "tree/" : "blob/") + revision + "/" + relative +
+                (fragment < 0 ? "" : target[fragment..]);
+        });
+    }
+    return string.Join('\n', lines);
+}
 
 // The committed lists against the builds.
 int CheckLists()

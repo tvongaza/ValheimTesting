@@ -103,12 +103,14 @@ internal static class VersionedApiDocs
                 string html = Encoding.UTF8.GetString(contents);
                 foreach (string kind in new[] { "blob", "tree" })
                     html = html.Replace(Home + kind + "/main/", Home + kind + "/" + commit + "/", StringComparison.Ordinal);
-                if (relative == "index.html")
+                html = html.Replace("API reference (preview)", $"API reference ({version})", StringComparison.Ordinal)
+                    .Replace("This reference is generated from the current package sources.", $"This reference is generated from release {version}'s package sources.", StringComparison.Ordinal);
+                // The landing page and the API page each carry the banner, with a link back to the unversioned site's root.
+                if (relative is "index.html" or "reference/index.html")
                 {
-                    html = html.Replace("ValheimTesting API reference (preview)", $"ValheimTesting API reference ({version})", StringComparison.Ordinal)
-                        .Replace("This reference is generated from the current package sources.", $"This reference is generated from release {version}'s package sources.", StringComparison.Ordinal);
-                    if (!html.Contains("</h1>", StringComparison.Ordinal)) throw new InvalidDataException("DocFX's API home has no heading for the release banner");
-                    string banner = $"<p>Release <strong>{version}</strong>, built from source <code>{commit[..12]}</code>. This reference is immutable; <a href=\"../../\">the unversioned site</a> follows current source.</p>";
+                    if (!html.Contains("</h1>", StringComparison.Ordinal)) throw new InvalidDataException($"DocFX's {relative} has no heading for the release banner");
+                    string up = relative == "index.html" ? "../../" : "../../../";
+                    string banner = $"<p>Release <strong>{version}</strong>, built from source <code>{commit[..12]}</code>. This documentation is immutable; <a href=\"{up}\">the unversioned site</a> follows current source.</p>";
                     int end = html.IndexOf("</h1>", StringComparison.Ordinal) + "</h1>".Length;
                     html = html.Insert(end, banner);
                 }
@@ -202,7 +204,7 @@ internal static class VersionedApiDocs
         string links = string.Join("\n", versions.Select(v => $"<li><a href=\"{v}/\">{v}</a></li>"));
         File.WriteAllText(Path.Combine(folder, "index.html"),
             "<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><title>Versioned ValheimTesting API references</title>" +
-            "<h1>Versioned ValheimTesting API references</h1><p><a href=\"../\">Current reference</a></p>" +
+            "<h1>Versioned ValheimTesting API references</h1><p><a href=\"../\">Current documentation</a></p>" +
             (versions.Length > 0 ? $"<ul>{links}</ul>" : "<p>No 0.1 release candidate has been published yet.</p>") + "</html>\n");
     }
 

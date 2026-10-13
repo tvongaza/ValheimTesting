@@ -1,6 +1,6 @@
 # Valheim.Testing.Adapter
 
-[Current preview API reference](https://tvongaza.github.io/ValheimTesting/). The package's README is this guide; use its versioned source commit from the package metadata when checking an older preview.
+[Current preview API reference](https://tvongaza.github.io/ValheimTesting/reference/). The package's README is this guide; use its versioned source commit from the package metadata when checking an older preview.
 
 `Valheim.Testing.Adapter` is a source package compiled into a mod's **test-only** BepInEx adapter. It provides the mod's owned-session identity, a guarded global-key fixture change, and small helpers for mod-specific commands. Production mods do not reference it. The released package version is in the [package table](../package-versions.md).
 

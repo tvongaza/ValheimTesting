@@ -31,6 +31,8 @@ public sealed class VersionedApiDocsTests : IDisposable
         Directory.CreateDirectory(Path.Combine(site, "api"));
         File.WriteAllText(Path.Combine(site, "index.html"), "<title>ValheimTesting API reference (preview)</title><h1>current</h1>" +
             "This reference is generated from the current package sources.<a href=\"https://github.com/tvongaza/ValheimTesting/blob/main/docs/adopting.md\">adopt</a>");
+        Directory.CreateDirectory(Path.Combine(site, "reference"));
+        File.WriteAllText(Path.Combine(site, "reference", "index.html"), "<title>API reference (preview)</title><h1>API reference (preview)</h1>");
         File.WriteAllText(Path.Combine(site, "api", "GameActor.html"), "<a href=\"https://github.com/tvongaza/ValheimTesting/tree/main/examples/FullLifecycle\">owned</a>");
         File.WriteAllBytes(Path.Combine(site, "api", "empty.css"), []);
         Directory.CreateDirectory(Path.Combine(site, "versions"));
@@ -46,6 +48,9 @@ public sealed class VersionedApiDocsTests : IDisposable
         string home = File.ReadAllText(Path.Combine(release, "index.html"));
         Assert.Contains("Release <strong>0.1.0-rc.1</strong>", home);
         Assert.Contains("blob/" + commit + "/docs/adopting.md", home);
+        string reference = File.ReadAllText(Path.Combine(release, "reference", "index.html"));
+        Assert.Contains("API reference (0.1.0-rc.1)", reference);
+        Assert.Contains("<a href=\"../../../\">the unversioned site</a>", reference);
         Assert.False(Directory.Exists(Path.Combine(release, "versions")));
         Assert.Contains("0.1.0-rc.1/", File.ReadAllText(Path.Combine(published, "versions", "index.html")));
         Assert.Contains("SHA-256 mismatch", Assert.Throws<InvalidDataException>(() =>

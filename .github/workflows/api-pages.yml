@@ -1,6 +1,6 @@
-name: API reference site
+name: Documentation site
 
-# The existing test workflow builds the reference on PRs. Only main publishes it.
+# The existing test workflow builds the site on PRs. Only main publishes it.
 on:
   push:
     branches: [main]
@@ -8,9 +8,8 @@ on:
       - '.github/workflows/api-pages.yml'
       - '.config/dotnet-tools.json'
       - 'cli-dependency.json'
-      - 'docs/reference/**'
-      - 'docs/packages/**'
-      - 'docs/package-versions.md'
+      - 'docs/**'
+      - '!docs/maintainers/**'
       - 'toolkit-versions.json'
       - 'scripts/api-docs.cs'
       - 'scripts/versioned-api-docs.cs'

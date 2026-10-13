@@ -286,7 +286,7 @@ jobs:
           sha=$(sha256sum "$RUNNER_TEMP/api-reference-0.1.0-rc.1.tgz" | cut -d ' ' -f 1)
           dotnet run scripts/versioned-api-docs.cs -- install "$RUNNER_TEMP/api-reference-0.1.0-rc.1.tgz" "$sha" 0.1.0-rc.1 "$RUNNER_TEMP/api-site"
           # Prove the selected-entrypoint gate refuses a missing rendered summary.
-          page=docs/reference/api/Valheim.Testing.ITerrain.yml
+          page=artifacts/docs-site/api/Valheim.Testing.ITerrain.yml
           cp "$page" "$RUNNER_TEMP/ITerrain.yml"
           sed -i '0,/^  summary:/s/^  summary:/  omitted-summary:/' "$page"
           if out=$(dotnet run scripts/api-docs.cs -- check-docs 2>&1); then

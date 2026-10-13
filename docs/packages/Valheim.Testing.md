@@ -1,6 +1,6 @@
 # Valheim.Testing
 
-[Current preview API reference](https://tvongaza.github.io/ValheimTesting/). The package's README is this page. For an older preview, use the versioned source commit in the package metadata.
+[Current preview API reference](https://tvongaza.github.io/ValheimTesting/reference/). The package's README is this page. For an older preview, use the versioned source commit in the package metadata.
 
 ## Purpose
 
