@@ -45,6 +45,17 @@ internal static class ImageEvidence
     }
 
     /// <summary>
+    /// <see cref="VerifyPng"/> for a file that is already whole (a fetched image): anything else throws, and an image over
+    /// <see cref="MaxBytes"/> says so instead of looking like a truncated transfer.
+    /// </summary>
+    internal static Verified RequirePng(string path)
+    {
+        if (File.Exists(path) && new FileInfo(path).Length > MaxBytes)
+            throw new InvalidDataException($"The image is larger than the {MaxBytes / 1_000_000} MB image-evidence limit: {new FileInfo(path).Length} bytes.");
+        return VerifyPng(path) ?? throw new InvalidDataException("The fetched image is not a complete PNG.");
+    }
+
+    /// <summary>
     /// The destination a ValheimCLI capture reply names: the text after <c>path=</c> up to the reply's next field
     /// (<c> size=</c> or <c> bytes=</c>), without quotes. A path may contain spaces. Null when the reply names none.
     /// </summary>

@@ -89,4 +89,17 @@ public sealed class ImageEvidenceTests : IDisposable
         Assert.Equal("unit-image", root.GetProperty("kind").GetString());
         Assert.Throws<IOException>(() => ImageEvidence.WriteSidecar(path, "unit-image", new JsonObject()));
     }
+
+    [Fact]
+    public void AnImageOverTheLimitIsRefusedAsTooLargeNotAsTruncated()
+    {
+        string path = Path.Combine(_root, "big.png");
+        using (var file = new FileStream(path, FileMode.CreateNew, FileAccess.Write)) file.SetLength(ImageEvidence.MaxBytes + 1);
+        Assert.Null(ImageEvidence.VerifyPng(path));
+        var refused = Assert.Throws<InvalidDataException>(() => ImageEvidence.RequirePng(path));
+        Assert.Contains("larger than", refused.Message);
+        string half = Path.Combine(_root, "half.png");
+        File.WriteAllBytes(half, Png[..(Png.Length / 2)]);
+        Assert.Contains("not a complete PNG", Assert.Throws<InvalidDataException>(() => ImageEvidence.RequirePng(half)).Message);
+    }
 }

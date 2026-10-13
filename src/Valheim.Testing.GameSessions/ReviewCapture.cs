@@ -110,8 +110,7 @@ public static class ReviewCapture
             string[] files = Directory.GetFiles(staging, "*", SearchOption.AllDirectories);
             if (files.Length != 1 || Path.GetFileName(files[0]) != plan.Id + ".png")
                 throw new InvalidDataException("The fetched capture has an unexpected filename.");
-            var png = ImageEvidence.VerifyPng(files[0])
-                ?? throw new InvalidDataException("The fetched image is not a complete PNG.");
+            var png = ImageEvidence.RequirePng(files[0]);
             string sidecarSha = ReviewLease.WriteSidecar(Path.Combine(staging, plan.Id + ".json"), "human-review-still", plan.Id, plan.WorldUid, plan.GameBuild, plan.PluginPins, new
             {
                 location = new { plan.Arrival.X, y = plan.Arrival.Height, plan.Arrival.Z },
