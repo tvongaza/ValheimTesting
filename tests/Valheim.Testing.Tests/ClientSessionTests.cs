@@ -173,7 +173,7 @@ public sealed class ClientSessionTests : IDisposable
             () => transport, (_, _) => Task.CompletedTask);
         OwnedClientCommandLease.Write(_output, 99, "test-start", plan);
         transport.PinsHold = false; // The game changed world before the joined world could be verified.
-        Assert.Throws<InvalidOperationException>(() => session.WorldEntered(plan, "4242"));
+        Assert.Throws<InvalidOperationException>(() => session.Actor.PublishWorld(plan, "4242"));
         Assert.False(File.Exists(Path.Combine(_output, OwnedClientCommandLease.WorldPins)));
     }
 

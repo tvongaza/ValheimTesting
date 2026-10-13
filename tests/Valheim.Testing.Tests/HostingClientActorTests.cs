@@ -18,7 +18,7 @@ public sealed class HostingClientActorTests : IDisposable
     private string Fixture => Path.Combine(_root, "fixture");
     private string Save => Path.Combine(_root, "client-data");
     private string Worlds => Path.Combine(Save, "worlds_local");
-    private bool _hosting, _openServer = true, _peerJoined;
+    private bool _hosting, _openServer = true, _peerJoined, _hostLease;
     private string _hostSteamId = HostSteamId;
     private int _readings, _peerOpens, _peerLeaves;
 
@@ -112,7 +112,8 @@ public sealed class HostingClientActorTests : IDisposable
     private GameSession Session(ScenarioReport report, ClientRunPlan host, bool withPeer = true) =>
         FakeGameSession.Hosted(report, Output, host, (plan, name, output) =>
             plan.HostWorld != null
-                ? plan.Owned ? ClientSession.Launch(plan, output, () => _hostProcess, HostTransport, (_, _) => Task.CompletedTask) : ClientSession.Attach(plan, output, HostTransport())
+                ? plan.Owned ? ClientSession.Launch(plan, output, () => { if (_hostLease) OwnedClientCommandLease.Write(output, _hostProcess.Id, "test-start", plan); return _hostProcess; }, HostTransport, (_, _) => Task.CompletedTask)
+                    : ClientSession.Attach(plan, output, HostTransport())
                 : ClientSession.Attach(plan, output, PeerTransport(Interlocked.Increment(ref _peerOpens))),
             peers: withPeer ? new Dictionary<string, ClientRunPlan> { ["peer"] = PeerPlan() } : null);
 
@@ -217,6 +218,27 @@ public sealed class HostingClientActorTests : IDisposable
         Assert.Equal(new[] { "host: start", "host: leave", "host: start", "host: identity" }, commands);
         Assert.Contains("establish test access on the owned host", Steps(report, StepPhase.Setup));
         Assert.Equal(0, _hostProcess.Stops); // A host's restart is the same process.
+    }
+
+    // The hosting client's world pins are published when its start ends and removed by any leave, the restart's included.
+    [ClientHostFact] public async Task TheHostsWorldPinsFollowItsStartRestartAndLeave()
+    {
+        _hostLease = true;
+        var report = new ScenarioReport("hosted");
+        using var data = new FakeClientDataDirectory(Save);
+        string pins = Path.Combine(Output, OwnedClientCommandLease.WorldPins);
+        await using (var session = Session(report, HostPlan("owned"), withPeer: false))
+        {
+            Assert.False(File.Exists(pins));
+            await session.StartAsync();
+            Assert.Contains("worlduid=" + WorldUid, File.ReadAllText(pins));
+            var host = session.Host!;
+            host.Restart();
+            Assert.Contains("worlduid=" + WorldUid, File.ReadAllText(pins));
+            new SessionControl(host.Game).Leave(); // A leave by any caller.
+            Assert.False(File.Exists(pins));
+        }
+        Assert.False(File.Exists(pins));
     }
 
     [ClientHostFact] public async Task TeardownClosesThePeerThenTheHostThenCollectsTheWorld()
