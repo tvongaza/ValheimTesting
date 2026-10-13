@@ -13,7 +13,7 @@ public sealed class OneManifestRefusalTests : IDisposable
     private readonly RegressionRig _rig = new();
     public void Dispose() => _rig.Dispose();
 
-    /// <summary>Turns the one-plugin manifest at <paramref name="path"/> into an old split core-and-pack one, as ValheimCLI wrote them before its one-plugin build.</summary>
+    /// <summary>Turns the one-plugin manifest at <paramref name="path"/> into a split core-and-pack one (two plugin files).</summary>
     internal static void MakeSplit(string path)
     {
         var manifest = JsonNode.Parse(File.ReadAllText(path))!;
@@ -27,7 +27,7 @@ public sealed class OneManifestRefusalTests : IDisposable
 
     // What Read says about a split manifest, after its "<path> is malformed: " prefix: every other command must say the same.
     private const string SplitRefusal = "files lists valheimCLI.dll (valheimCLI.valheimCLI), Valheim.Cli.Standard.dll (valheimCLI.standard): not a one-plugin build. " +
-        "This toolkit reads one valheimCLI.dll declaring valheimCLI.valheimCLI; replace the old core and first-party pack DLLs together with one pinned valheimCLI.dll and its matching capability manifest.";
+        "This toolkit reads one valheimCLI.dll declaring valheimCLI.valheimCLI; use one pinned valheimCLI.dll and its matching capability manifest.";
 
     [Fact] public void ASplitManifestGetsTheSameErrorFromEveryCommand()
     {

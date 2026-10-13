@@ -248,27 +248,6 @@ public sealed class PinningTests : IDisposable
         Assert.Equal(["winhttp.dll", "doorstop_config.ini", "libdoorstop.dylib", "BepInEx/core", "doorstop_libs"], InstallPins.LoaderEntries);
     }
 
-    // A plan written before #295 names bepinexCore; it is refused with what to do, wherever the pins sit.
-    [Theory]
-    [InlineData("runtimePins")]
-    [InlineData("client")]
-    public void APlanThatStillNamesBepInExCoreIsRefusedNamingTheLoaderPin(string where)
-    {
-        string pins = $$"""{ "game": "{{new string('a', 64)}}", "bepinexCore": "{{new string('b', 64)}}", "patchers": "{{new string('c', 64)}}" }""";
-        string path = Path.Combine(_root, "old-plan.json");
-        File.WriteAllText(path, where == "client" ? $$"""{ "client": { "mode": "owned", "installPins": {{pins}} } }""" : $$"""{ "runtimePins": {{pins}} }""");
-        var error = Assert.ThrowsAny<Exception>(() => ServerRunPlan.Read<CrossplayPlanTests.ClientPlan>(path));
-        string message = error.Message + " " + error.InnerException?.Message;
-        Assert.Contains("The pins' bepinexCore was removed (ValheimTesting #295)", message);
-        Assert.Contains("Replace bepinexCore with loader, computed by InstallPins.Of(<install>)", message);
-        // The control: the same pins naming loader are read.
-        File.WriteAllText(path, where == "client" ? $$"""{ "client": { "mode": "owned", "installPins": {{pins.Replace("bepinexCore", "loader")}} } }"""
-            : $$"""{ "runtimePins": {{pins.Replace("bepinexCore", "loader")}} }""");
-        var read = ServerRunPlan.Read<CrossplayPlanTests.ClientPlan>(path);
-        Assert.Equal(new string('b', 64), (where == "client" ? read.Client!.InstallPins : read.RuntimePins)!.Loader);
-        Assert.DoesNotContain("bepinexCore", System.Text.Json.JsonSerializer.Serialize(read.RuntimePins ?? read.Client!.InstallPins), StringComparison.OrdinalIgnoreCase);
-    }
-
     [Fact] public void TheGameAssemblyIsFoundInEachLayoutAndNeverGuessed()
     {
         string mac = Path.Combine(_root, "mac", "Valheim.app", "Contents", "Resources", "Data", "Managed");

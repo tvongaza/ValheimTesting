@@ -39,44 +39,10 @@ public sealed class RegressionInputs
 
     private static readonly Regex Token = new(@"^[A-Za-z0-9][A-Za-z0-9_-]*\z", RegexOptions.CultureInvariant);
 
-    // Fields of the retired environment manifest that described the machine, and where each now comes from.
-    private static readonly (string Path, string Now)[] Retired =
-    [
-        ("game", "the inventory's client environment's install (this machine's Valheim with no file; --game or an environments.json entry overrides it)"),
-        ("install", "the client environment's runtime (the disposable copy is made there)"),
-        ("loaderPackage", "the client environment's loaderPackage"),
-        ("client.port", "the client environment's cliPort"),
-        ("client.saveDirectory", "the client's host (its standard save folder)"),
-        ("client.steamUserDataDirectory", "this machine's detected Steam userdata"),
-    ];
-
-    /// <summary>Reads and validates the inputs; relative paths are relative to the file's directory. A retired machine field is refused, naming where it now comes from.</summary>
+    /// <summary>Reads and validates the inputs; relative paths are relative to the file's directory.</summary>
     public static RegressionInputs Read(string path)
     {
         path = Path.GetFullPath(path);
-        JsonDocument parsed;
-        try { parsed = JsonDocument.Parse(File.ReadAllText(path)); }
-        catch (JsonException error) { throw new ArgumentException($"{path} is not a regression's inputs: {error.Message}", error); }
-        using (var document = parsed)
-        {
-            var found = new List<string>();
-            foreach (var (field, now) in Retired)
-            {
-                var element = document.RootElement;
-                bool present = true;
-                foreach (string part in field.Split('.'))
-                {
-                    if (element.ValueKind != JsonValueKind.Object) { present = false; break; }
-                    var match = element.EnumerateObject().FirstOrDefault(property => property.Name.Equals(part, StringComparison.OrdinalIgnoreCase));
-                    if (match.Value.ValueKind == JsonValueKind.Undefined) { present = false; break; }
-                    element = match.Value;
-                }
-                if (present) found.Add($"{field} now comes from {now}");
-            }
-            if (found.Count != 0)
-                throw new ArgumentException($"{path} is a retired environment manifest: it names the machine, which the environment inventory now describes. Remove " +
-                    string.Join("; ", found) + ".");
-        }
         RegressionInputs inputs;
         try { inputs = ClientPlanFile.Read<RegressionInputs>(path); }
         catch (JsonException error) { throw new ArgumentException($"{path} is not a regression's inputs: {error.Message}", error); }

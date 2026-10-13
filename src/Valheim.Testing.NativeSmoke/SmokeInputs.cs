@@ -38,7 +38,7 @@ internal static class SmokeInputs
                     ? $"No ValheimCLI capability manifest is in {files} ({origin}). Give --cli-manifest and --cli-files from one build, " +
                       "or set VALHEIMCLI_BUNDLE to a directory containing its manifest and DLLs."
                     : "Several ValheimCLI capability manifests were found: " + string.Join(", ", candidates) +
-                      ". Choose the single-plugin build with --cli-manifest and --cli-files; remove old first-party pack DLLs.");
+                      ". Choose one build with --cli-manifest and --cli-files.");
             manifest = candidates[0];
         }
         files ??= Path.GetDirectoryName(manifest)!;

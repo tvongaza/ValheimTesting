@@ -665,10 +665,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         };
         IReadOnlyDictionary<string, ClientRunPlan> NoClients(SitePlan _) => new Dictionary<string, ClientRunPlan>();
 
-        // A legacy fixed-profile manifest is named as such; a manifest without world or join is refused before any host.
-        string legacy = Path.Combine(_rig.Root, "run-campaign-legacy.json");
-        File.WriteAllText(legacy, "{\"profile\": \"environment.json\", \"server\": {\"dependencyLock\": \"lock.json\"}, \"clients\": {}}");
-        Assert.Contains(HostedCampaignPreparation.Inspect(legacy).Problems, problem => problem.Message.Contains("replace profile with inventory"));
+        // A manifest without world or join is refused before any host.
         string noJoin = Path.Combine(_rig.Root, "run-campaign-nojoin.json");
         File.WriteAllText(noJoin, JsonSerializer.Serialize(new { inventory, world, server = new { dependencyLock = serverLock }, clients = new Dictionary<string, object>() }));
         HostedCampaignPreparation.Check(noJoin);

@@ -621,20 +621,6 @@ public sealed class TargetedRegressionTests : IDisposable
         Assert.Throws<ArgumentException>(() => RegressionInputs.Read(path));
     }
 
-    // The environment manifest it replaces described the machine; each such field is refused, naming where it now comes from.
-    [Fact] public void ARetiredEnvironmentManifestNamesWhereEachMachineFieldNowComesFrom()
-    {
-        string path = Path.Combine(_rig.Root, "environment.json");
-        File.WriteAllText(path, """
-            { "name": "old", "game": "C:\\Valheim", "install": "C:\\disposable", "loaderPackage": "loader.json",
-              "client": { "port": 5560, "character": "smoketest", "saveDirectory": "C:\\save", "steamUserDataDirectory": "C:\\Steam\\userdata" } }
-            """);
-        string message = Assert.Throws<ArgumentException>(() => RegressionInputs.Read(path)).Message;
-        foreach (string field in new[] { "game now comes from", "install now comes from", "loaderPackage now comes from", "client.port now comes from",
-                     "client.saveDirectory now comes from", "client.steamUserDataDirectory now comes from" })
-            Assert.Contains(field, message);
-    }
-
     // A run's inputs read back on the machine recorded beside them, or on this machine when nothing is.
     [ClientHostFact] public void ReadUsesTheRecordedMachineOrThisOne()
     {
@@ -673,13 +659,11 @@ public sealed class TargetedRegressionTests : IDisposable
         Assert.Contains("no client environment nobody", Assert.Throws<ArgumentException>(() => new TargetedRegression(_rig.Manifest(), inventory: remote, clientEnvironment: "nobody")).Message);
     }
 
-    // The example's sample is a regression's inputs (#376): no retired machine field, and every field one RegressionInputs has
+    // The example's sample is a regression's inputs (#376): every field is one RegressionInputs has
     // (read strictly, unknown fields refused). Its placeholders are not valid inputs, so it is not validated; the shape is.
     [Fact] public void TheExamplesSampleIsARegressionsInputs()
     {
         string sample = Path.Combine(FixtureProjects.RepositoryRoot(), "examples", "TargetedRegression", "regression.sample.json");
-        var error = Assert.Throws<ArgumentException>(() => RegressionInputs.Read(sample));
-        Assert.DoesNotContain("retired environment manifest", error.Message);
         var inputs = ClientPlanFile.Read<RegressionInputs>(sample);
         Assert.Equal("examplemod-mark", inputs.Name);
         Assert.Equal(["parent", "candidate"], inputs.Mod.Arms.Keys);

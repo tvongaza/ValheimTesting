@@ -163,23 +163,4 @@ public sealed class BepInExPatchersTests : IDisposable
         Directory.Delete(Path.Combine(Patchers, "HookGenPatcher"), true);
         Assert.Contains(", empty, pinned patchers", Assert.Throws<InvalidOperationException>(() => pins.Check(_root, "runtime")).Message);
     }
-
-    // #295: a plan that still names its patchers, at the plan's root or in a client section, is refused with what to do.
-    [Theory]
-    [InlineData("""{ "patchers": ["HookGenPatcher"] }""")]
-    [InlineData("""{ "patchers": [] }""")]
-    [InlineData("""{ "client": { "mode": "owned", "patchers": [] } }""")]
-    public void APlanThatStillNamesPatchersIsRefusedNamingThePin(string json)
-    {
-        string path = Path.Combine(_root, "plan.json");
-        File.WriteAllText(path, json);
-        var error = Assert.ThrowsAny<Exception>(() => ServerRunPlan.Read<CrossplayPlanTests.ClientPlan>(path));
-        string message = error.Message + " " + error.InnerException?.Message;
-        Assert.Contains("patchers was removed (ValheimTesting #295)", message);
-        Assert.Contains("the patchers pin in runtimePins and installPins", message);
-        Assert.Contains("Delete patchers from the plan.", message);
-        // The control: the same plan without the names is read, and its pins keep their patchers hash.
-        File.WriteAllText(path, """{ "runtimePins": { "game": "g", "loader": "l", "patchers": "p" }, "client": { "mode": "owned" } }""");
-        Assert.Equal("p", ServerRunPlan.Read<CrossplayPlanTests.ClientPlan>(path).RuntimePins!.Patchers);
-    }
 }

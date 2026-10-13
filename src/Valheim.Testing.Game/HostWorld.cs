@@ -1,7 +1,5 @@
 using System.Diagnostics;
 using System.Globalization;
-using System.Text.Json;
-using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 
 namespace Valheim.Testing.Game;
@@ -27,13 +25,6 @@ public sealed class HostWorldPlan
     public string WorldUid { get; set; } = "";
     /// <summary>Hosts a crossplay world (the game's PlayFab backend, <c>--crossplay true</c>).</summary>
     public bool Crossplay { get; set; }
-    // Removed (#301): local was added for direct start (#298), and no runner, example or sample set it after that went.
-    [JsonInclude, JsonPropertyName("local"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    private JsonElement? RemovedLocal
-    {
-        get => null;
-        set => throw ClientRunPlan.Removed("hostWorld.local", 301, "a hosting client always opens its fixture world as a listen server from its menu (cli_start_host_world), which a local world start only skipped the network for");
-    }
     /// <summary>
     /// The client's data directory, which holds <c>worlds_local</c>. Default: this user's Valheim data directory for the
     /// client's platform (<see cref="HostedWorld.DefaultSaveDirectory"/>). Set it when a Windows client runs as
