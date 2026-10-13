@@ -816,6 +816,9 @@ public sealed partial class HostedServerRunTests : IDisposable
     [InlineData(@"\\nas\share\a", @"\\NAS\Share\b", true)]
     [InlineData(@"\\nas\share\a", @"\\nas\other\a", false)]
     [InlineData(@"\\nas\share\a", @"C:\a", false)]
+    [InlineData(@"\\?\C:\a", @"C:\b", true)]
+    [InlineData(@"\\?\UNC\nas\share\a", @"\\nas\share\b", true)]
+    [InlineData(@"\\?\UNC\nas\share\a", @"\\?\UNC\other\share\a", false)]
     public void WindowsVolumesCompareByDriveOrShare(string first, string second, bool same) =>
         Assert.Equal(same, HostedServerRun.SameWindowsVolume(first, second));
 

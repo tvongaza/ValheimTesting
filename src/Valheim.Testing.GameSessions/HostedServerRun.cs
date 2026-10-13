@@ -156,6 +156,9 @@ internal sealed class HostedServerRun : IServerPlacement
         static string Volume(string path)
         {
             string normal = path.Replace('/', '\\');
+            // A long path (\\?\C:\..., \\?\UNC\server\share\...) is on the volume it names.
+            if (normal.StartsWith(@"\\?\UNC\", StringComparison.OrdinalIgnoreCase)) normal = @"\\" + normal[8..];
+            else if (normal.StartsWith(@"\\?\", StringComparison.Ordinal)) normal = normal[4..];
             if (normal.StartsWith(@"\\", StringComparison.Ordinal))
             {
                 string[] parts = normal[2..].Split('\\', 3);
@@ -181,7 +184,9 @@ internal sealed class HostedServerRun : IServerPlacement
     /// </summary>
     public async Task LockAndPrepareRuntimeAsync(ScenarioReport report, ServerRunPlan plan, bool pinned, CancellationToken cancellation)
     {
-        _preparedPins = Role.PreparedSourceRoot != null ? plan.RuntimePins : null;
+        // A campaign's prepared profile is checked before each boot against the pins its preparation bound; a standalone run's
+        // are bound once it has staged its own (StageProfileAsync), never taken from a role an earlier run staged.
+        _preparedPins = Prepared && Role.PreparedSourceRoot != null ? plan.RuntimePins : null;
         if (RemoteMac)
             WorldDirectory = await HostedWorldOnHost.MacSaveRootAsync(Host, HostedTimeouts.Quick, cancellation).ConfigureAwait(false);
         // A Windows host that can register no server task is refused before the profile (a campaign's preflight asked already).
@@ -234,9 +239,7 @@ internal sealed class HostedServerRun : IServerPlacement
     {
         var bundle = _hooks.CliSet() ?? throw new InvalidDataException("This build of Valheim.Testing.GameSessions carries no pinned ValheimCLI bundle " +
             "(it was built without one); a standalone dedicated server's profile stages it in place of the install's own ValheimCLI.");
-        var cli = CliCapabilityManifest.Read(bundle.Manifest);
-        string setFolder = Path.GetDirectoryName(Path.GetFullPath(bundle.Manifest))!;
-        var cliFiles = cli.Locate(Directory.EnumerateFiles(setFolder, "*.dll"), "beside its manifest", othersLoad: false);
+        var (cli, cliFiles, setFolder) = InstallSelection.ReadCliSet(bundle.Manifest);
         BepInExLoaderPackage? loader = null;
         if (_loaderPackage != null)
         {
@@ -256,7 +259,7 @@ internal sealed class HostedServerRun : IServerPlacement
             HostInstall.RequireSame(HostInstall.WithoutSkipped(plan.Runtime.Sha256, HostedRuntimeStage.RuntimeSkips, source.Names), source, "server install",
                 source.Files.Keys.Where(path => HostInstall.Skipped(path, HostedRuntimeStage.RuntimeSkips, source.Names)));
         if (pinned)
-            HostInstall.CheckPins(plan.RuntimePins ?? throw new ArgumentException("Pin the runtime's game build, loader and patchers in runtimePins, or opt out explicitly with \"pinning\": \"none\"."),
+            HostInstall.CheckPins(RequiredRuntimePins(plan),
                 source, "server install");
         if (selection.Replaced.Count != 0)
             Console.WriteLine($"server: the profile stages ValheimCLI {cli.Build} in place of the install's own {string.Join(", ", selection.Replaced)}.");
@@ -343,23 +346,26 @@ internal sealed class HostedServerRun : IServerPlacement
         {
             var manifest = WorldFixture.Manifest(localWorld);
             // Journalled before the ship, like the profile: no journal line, no world copy on the host.
-            await JournalAsync(Host, Role.Host, "server", CopyIntended(WorldDirectory, "world"), cancellation).ConfigureAwait(false);
+            await JournalAsync(Host, Role.Host, "server", WorldCopyIntended(), cancellation).ConfigureAwait(false);
             _world = WorldCopy.Intended;
             await Host.ShipFilesAsync(localWorld, WorldDirectory, HostedTimeouts.Long, cancellation).ConfigureAwait(false);
             _world = WorldCopy.Shipped;
             var listing = await HostInstall.ListAsync(Host, WorldDirectory, HostedTimeouts.Long, null, cancellation).ConfigureAwait(false);
             HostInstall.RequireSame(manifest, listing, "world copy", ["SOURCE.txt"]);
             // Only a verified copy is journalled done: env recover hands a done world over as the run's save, and removes any other.
-            await JournalAsync(Host, Role.Host, "server", CopyDone(WorldDirectory, listing), cancellation).ConfigureAwait(false);
+            await JournalAsync(Host, Role.Host, "server", WorldCopyDone(listing), cancellation).ConfigureAwait(false);
             _world = WorldCopy.Verified;
         });
 
     // A copy in this run's own directory, journalled with what it holds: env recover removes it by these fields (no staging; its
     // parent is the run directory). Done only once verified, so a done copy is a whole one.
-    private JournalEntry CopyIntended(string directory, string holds) =>
-        JournalEntry.Of(JournalEntry.CopyIntended, ("runtime", directory), ("stage", ""), ("parent", RunDirectory), ("holds", holds));
-    private static JournalEntry CopyDone(string directory, HostListing listing) =>
-        JournalEntry.Of(JournalEntry.CopyDone, ("runtime", directory), ("files", listing.Files.Count.ToString(CultureInfo.InvariantCulture)), ("verified", "true"));
+    private JournalEntry WorldCopyIntended() =>
+        JournalEntry.Of(JournalEntry.CopyIntended, ("runtime", WorldDirectory), ("stage", ""), ("parent", RunDirectory), ("holds", "world"));
+    private JournalEntry WorldCopyDone(HostListing listing) =>
+        JournalEntry.Of(JournalEntry.CopyDone, ("runtime", WorldDirectory), ("files", listing.Files.Count.ToString(CultureInfo.InvariantCulture)), ("verified", "true"));
+
+    private static InstallPins RequiredRuntimePins(ServerRunPlan plan) => plan.RuntimePins ??
+        throw new ArgumentException("Pin the runtime's game build, loader and patchers in runtimePins, or opt out explicitly with \"pinning\": \"none\".");
 
     /// <summary>The server's executable and its pins, on the listings of its profile and its game, before anything launches.</summary>
     public void CheckRuntime(ScenarioReport report, ServerRunPlan plan, bool pinned)
@@ -376,7 +382,7 @@ internal sealed class HostedServerRun : IServerPlacement
                 throw new InvalidOperationException($"{unixExecutable} is not executable in {runtime.Root} on {Host.Name}; restore its mode (chmod u+x) in the install {Role.PreparedSourceRoot ?? Role.Install}.");
         });
         report.Step(StepPhase.Setup, pinned ? "server runtime is the pinned game build, loader and patchers" : "record the unpinned server runtime's game build, loader and patchers", () =>
-            (pinned ? HostInstall.CheckPins(plan.RuntimePins ?? throw new ArgumentException("Pin the runtime's game build, loader and patchers in runtimePins, or opt out explicitly with \"pinning\": \"none\"."), runtime, _loader ?? runtime, "runtime")
+            (pinned ? HostInstall.CheckPins(RequiredRuntimePins(plan), runtime, _loader ?? runtime, "runtime")
                 : HostInstall.Pins(runtime, _loader ?? runtime)).Record(report.Provenance, "runtime"));
     }
 

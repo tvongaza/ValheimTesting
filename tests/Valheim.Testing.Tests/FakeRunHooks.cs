@@ -55,6 +55,7 @@ internal static class TestCliSet
     private static readonly Lazy<CliBundleSource> Made = new(() =>
     {
         string folder = Directory.CreateTempSubdirectory("vt-test-cli-set-").FullName;
+        AppDomain.CurrentDomain.ProcessExit += (_, _) => { try { Directory.Delete(folder, recursive: true); } catch (IOException) { } catch (UnauthorizedAccessException) { } };
         string core = Path.Combine(folder, "valheimCLI.dll");
         File.WriteAllBytes(core, RegressionRig.Assembly("valheimCLI", new("valheimCLI.valheimCLI", "0.4.0")));
         string manifest = Path.Combine(folder, CliBundle.ManifestFile);

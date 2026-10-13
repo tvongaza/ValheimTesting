@@ -24,7 +24,7 @@ Over SSH, restart the host's OpenSSH server (`Restart-Service sshd`) or the mach
 
 ## Windows
 
-A game client runs as `valheim.exe` and a dedicated server as `valheim_server.exe`, both from Steam installs (the server is the free Valheim Dedicated Server tool, app 896660). The owned client needs the Steam client running and signed in in the same desktop session; the dedicated server does not. Another Windows machine can host the server over SSH: a headless server starts from a disposable runtime copy without Steam or a desktop session ([a server-only plan on a remote host](packages/Valheim.Testing.GameSessions.md#a-server-only-plan-on-a-remote-host)).
+A game client runs as `valheim.exe` and a dedicated server as `valheim_server.exe`, both from Steam installs (the server is the free Valheim Dedicated Server tool, app 896660). The owned client needs the Steam client running and signed in in the same desktop session; the dedicated server does not. Another Windows machine can host the server over SSH: a headless server starts from a disposable loader profile of its install without Steam or a desktop session ([a server-only plan on a remote host](packages/Valheim.Testing.GameSessions.md#a-server-only-plan-on-a-remote-host)).
 
 Run `valheim-test` and the runners from an ordinary terminal (Windows Terminal, PowerShell or cmd), not from inside an MSIX-packaged app such as a desktop app that starts commands for you. Windows redirects such an app's AppData writes into its package, where the dedicated server's scheduled task and the game cannot see them, so `env preflight` and a run's host checks refuse a packaged process with that reason (#406).
 
