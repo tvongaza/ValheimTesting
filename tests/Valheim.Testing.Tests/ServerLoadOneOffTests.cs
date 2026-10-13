@@ -19,6 +19,8 @@ public sealed class ServerLoadOneOffTests : IDisposable
     public void Dispose() { _preflight.Dispose(); _rig.Dispose(); }
 
     private static readonly CampaignPreflightReport Ready = new([]);
+    private static ModInputStage.Choice Choose(ServerLoad.Arguments parsed, string output) =>
+        ModInputStage.ChooseDedicated(parsed.Options, parsed.ServerOnly, output);
     [Fact]
     public async Task ScenarioInputRefusalHappensBeforeFixtureOrCampaignPreparation()
     {
@@ -491,7 +493,7 @@ public sealed class ServerLoadOneOffTests : IDisposable
         Assert.Equal(3, result);
         Assert.False(ran);
         Assert.True(ServerLoad.TryRead(Arguments(Path.Combine(_rig.Root, "unused")), out var parsed, out _));
-        var refused = Assert.Throws<ArgumentException>(() => ServerLoad.Choose(parsed!, Path.Combine(_rig.Root, "choice")));
+        var refused = Assert.Throws<ArgumentException>(() => Choose(parsed!, Path.Combine(_rig.Root, "choice")));
         Assert.Contains("--server-only", refused.Message);
         Assert.Contains("892970", refused.Message); // what was looked for
 
@@ -615,14 +617,14 @@ public sealed class ServerLoadOneOffTests : IDisposable
             leaseHost = "lab", leaseDirectory = "/vt/leases",
         }));
         Assert.True(ServerLoad.TryRead(["--mod", "a.dll", "--inventory", file], out var remote, out _));
-        Assert.Contains("PinnedServerRun --inventory", Assert.Throws<ArgumentException>(() => ServerLoad.Choose(remote!, _rig.Root)).Message);
+        Assert.Contains("PinnedServerRun --inventory", Assert.Throws<ArgumentException>(() => Choose(remote!, _rig.Root)).Message);
         Assert.True(ServerLoad.TryRead(["--mod", "a.dll", "--inventory", file, "--server-env", "local-server"], out var local, out _));
-        Assert.Contains("--join HOST:2486", Assert.Throws<ArgumentException>(() => ServerLoad.Choose(local!, _rig.Root)).Message);
+        Assert.Contains("--join HOST:2486", Assert.Throws<ArgumentException>(() => Choose(local!, _rig.Root)).Message);
         Assert.True(ServerLoad.TryRead(["--mod", "a.dll", "--inventory", file, "--server-env", "local-server", "--join", "pc.lan:2456"], out var wrongPort, out _));
-        Assert.Contains("game port 2486", Assert.Throws<ArgumentException>(() => ServerLoad.Choose(wrongPort!, _rig.Root)).Message);
+        Assert.Contains("game port 2486", Assert.Throws<ArgumentException>(() => Choose(wrongPort!, _rig.Root)).Message);
         Assert.True(ServerLoad.TryRead(["--mod", "a.dll", "--inventory", file, "--server-env", "local-server", "--join", "pc.lan:2486"], out var joined, out _));
-        var choice = ServerLoad.Choose(joined!, _rig.Root);
-        Assert.Equal(("local-server", "lab-client", "pc.lan:2486"), (choice.Server.Name, choice.Client!.Name, choice.Join));
+        var choice = Choose(joined!, _rig.Root);
+        Assert.Equal(("local-server", "lab-client", "pc.lan:2486"), (choice.Server!.Name, choice.Client!.Name, choice.Join));
     }
 
     [Fact] public void ARemoteMacClientUsesTheSharedCampaignPath()
@@ -639,8 +641,8 @@ public sealed class ServerLoadOneOffTests : IDisposable
             leaseHost = "mac", leaseDirectory = "/vt/leases",
         }));
         Assert.True(ServerLoad.TryRead(["--mod", "a.dll", "--inventory", file, "--client-env", "mac-client", "--join", "server.lan:2486"], out var parsed, out _));
-        var choice = ServerLoad.Choose(parsed!, _rig.Root);
-        Assert.Equal(("local-server", "mac-client", "server.lan:2486"), (choice.Server.Name, choice.Client!.Name, choice.Join));
+        var choice = Choose(parsed!, _rig.Root);
+        Assert.Equal(("local-server", "mac-client", "server.lan:2486"), (choice.Server!.Name, choice.Client!.Name, choice.Join));
     }
 
     [ClientHostFact] public void ConflictingOptionsAreRefusedBeforeAnything()
@@ -656,11 +658,11 @@ public sealed class ServerLoadOneOffTests : IDisposable
         })
             Assert.False(ServerLoad.TryRead(args, out _, out _), string.Join(" ", args));
         Assert.True(ServerLoad.TryRead(["--mod", "a.dll", "--inventory", "f.json", "--server", "s"], out var both, out _));
-        Assert.Contains("--inventory", Assert.Throws<ArgumentException>(() => ServerLoad.Choose(both!, _rig.Root)).Message);
+        Assert.Contains("--inventory", Assert.Throws<ArgumentException>(() => Choose(both!, _rig.Root)).Message);
         // An output inside a named install is refused before anything is written there.
         string server = Path.Combine(_rig.Root, "server-install");
         Assert.True(ServerLoad.TryRead(["--mod", "a.dll", "--server", server, "--server-only"], out var inside, out _));
-        Assert.Contains("outside the prepared install", Assert.Throws<ArgumentException>(() => ServerLoad.Choose(inside!, Path.Combine(server, "run"))).Message);
+        Assert.Contains("outside the prepared install", Assert.Throws<ArgumentException>(() => Choose(inside!, Path.Combine(server, "run"))).Message);
         Assert.False(Directory.Exists(server));
 
         // An override must not write its temporary inventory inside a different,
@@ -669,7 +671,7 @@ public sealed class ServerLoadOneOffTests : IDisposable
         {
             Assert.True(ServerLoad.TryRead(["--mod", "a.dll", "--server", server], out var selected, out _));
             string unsafeOutput = Path.Combine(clientGame, "run");
-            ServerLoad.Choose(selected!, unsafeOutput);
+            Choose(selected!, unsafeOutput);
             Assert.False(Directory.Exists(unsafeOutput));
         }
     }
@@ -732,23 +734,23 @@ public sealed class ServerLoadOneOffTests : IDisposable
         Assert.False(Directory.Exists(Path.Combine(output, "staged-runtime")));
     }
 
-    // start's client is the inventory's: this machine's Valheim, --game and --loader-package as its override, or a file's
-    // (--client-env picks one). It must be on this machine, and the chosen one is recorded beside the run's inputs.
+    // start's client is the inventory's: this machine's Valheim, --game as its install override, or a file's (--client-env
+    // picks one). It must be on this machine, and the chosen one, with its chosen loader, is recorded beside the run's inputs.
     [ClientHostFact] public void StartTakesItsClientFromTheInventoryAndRecordsIt()
     {
         string output = Path.Combine(_rig.Root, "start");
         string game;
-        bool checkedGui = false;
         using (EnvironmentInventory.UseMachine(WithValheim(out game)))
         {
-            var (_, client, _) = SmokeInputs.Client(new Dictionary<string, string>(), output, requireMacGui: () => checkedGui = true);
-            Assert.Equal(("local-client", game), (client.Name, client.Install));
+            var choice = ModInputStage.ChooseHosted(new Dictionary<string, string>(), output);
+            Assert.Equal(("local-client", game), (choice.Client!.Name, choice.Client.Install));
+            Assert.Null(choice.Server);
             Assert.EndsWith("userdata", SmokeInputs.SteamUserdata(new Dictionary<string, string>()));
+            ModInputStage.RecordHostedClient(choice.Inventory, Hosted(choice), output);
         }
-        Assert.True(checkedGui);
         Assert.Equal(game, EnvironmentInventory.Read(Path.Combine(output, "environments.json"), new FakeMachine(HostProfile.CurrentPlatform)).Environments.Single().Install);
-        var (_, overridden, _) = SmokeInputs.Client(new Dictionary<string, string> { ["--game"] = _rig.Game }, Path.Combine(_rig.Root, "start-game"), requireMacGui: () => { });
-        Assert.Equal(_rig.Game, overridden.Install);
+        var overridden = ModInputStage.ChooseHosted(new Dictionary<string, string> { ["--game"] = _rig.Game }, Path.Combine(_rig.Root, "start-game"));
+        Assert.Equal(_rig.Game, overridden.Client!.Install);
 
         // A file with two clients here and one elsewhere: --client-env picks, and only that one is recorded.
         string file = Path.Combine(_rig.Root, "lab.json");
@@ -764,39 +766,23 @@ public sealed class ServerLoadOneOffTests : IDisposable
             leaseHost = "lab", leaseDirectory = "/vt/leases",
         }));
         Assert.Contains("not this machine", Assert.Throws<ArgumentException>(() =>
-            SmokeInputs.Client(new Dictionary<string, string> { ["--inventory"] = file }, Path.Combine(_rig.Root, "start-remote"))).Message);
+            ModInputStage.ChooseHosted(new Dictionary<string, string> { ["--inventory"] = file }, Path.Combine(_rig.Root, "start-remote"))).Message);
         string chosen = Path.Combine(_rig.Root, "start-alt");
-        var (_, alt, _) = SmokeInputs.Client(new Dictionary<string, string> { ["--inventory"] = file, ["--client-env"] = "alt" }, chosen, requireMacGui: () => { });
-        Assert.Equal(5702, alt.CliPort);
+        var alt = ModInputStage.ChooseHosted(new Dictionary<string, string> { ["--inventory"] = file, ["--client-env"] = "alt" }, chosen);
+        Assert.Equal(5702, alt.Client!.CliPort);
         string explicitLoader = Path.Combine(_rig.Root, "client-loader.json");
-        var (_, withLoader, _) = SmokeInputs.Client(new Dictionary<string, string>
-        {
-            ["--inventory"] = file, ["--client-env"] = "alt", ["--client-loader-package"] = explicitLoader,
-        }, Path.Combine(_rig.Root, "start-alt-loader"), requireMacGui: () => { });
-        Assert.Equal(explicitLoader, withLoader.LoaderPackage);
+        BepInExLoaderPackage.Capture(_rig.Game, "reviewed", "1").Write(explicitLoader);
+        ModInputStage.RecordHostedClient(alt.Inventory, Hosted(alt, explicitLoader), chosen);
         var recorded = EnvironmentInventory.Read(Path.Combine(chosen, "environments.json"), new FakeMachine(HostProfile.CurrentPlatform));
-        Assert.Equal(("alt", 5702), (recorded.Environments.Single().Name, recorded.Environments.Single().CliPort));
+        Assert.Equal(("alt", 5702, explicitLoader), (recorded.Environments.Single().Name, recorded.Environments.Single().CliPort, recorded.Environments.Single().LoaderPackage));
 
-        Assert.Contains("Give --game", Assert.Throws<ArgumentException>(() => SmokeInputs.Client(new Dictionary<string, string>(), Path.Combine(_rig.Root, "none"))).Message);
-        Assert.Contains("--inventory", Assert.Throws<ArgumentException>(() => SmokeInputs.Client(
+        Assert.Contains("Give --game", Assert.Throws<ArgumentException>(() => ModInputStage.ChooseHosted(new Dictionary<string, string>(), Path.Combine(_rig.Root, "none"))).Message);
+        Assert.Contains("--inventory", Assert.Throws<ArgumentException>(() => ModInputStage.ChooseHosted(
             new Dictionary<string, string> { ["--game"] = _rig.Game, ["--inventory"] = "f.json" }, Path.Combine(_rig.Root, "both"))).Message);
         Assert.Contains("--steam-userdata", Assert.Throws<DirectoryNotFoundException>(() => SmokeInputs.SteamUserdata(new Dictionary<string, string>())).Message);
     }
 
-    [ClientHostFact] public void StartRefusesAnUnavailableGuiBeforeRecordingOrInspectingTheLoader()
-    {
-        string output = Path.Combine(_rig.Root, "locked-mac-start");
-        bool inspectedLoader = false;
-        var failure = Assert.Throws<InvalidOperationException>(() => SmokeInputs.Client(
-            new Dictionary<string, string> { ["--game"] = _rig.Game }, output,
-            shippedLoader: (_, _) => { inspectedLoader = true; return null; },
-            requireMacGui: () => throw new InvalidOperationException("The macOS console session is locked or unavailable")));
-        Assert.Contains("macOS console session is locked", failure.Message);
-        Assert.False(inspectedLoader);
-        Assert.False(Directory.Exists(output));
-    }
-
-    [ClientHostFact] public void StartCanDeferRecordingUntilOutputPassesSourceProtection()
+    [ClientHostFact] public void StartChoosesWithoutWritingUntilOutputPassesSourceProtection()
     {
         string output = Path.Combine(_rig.Game, "accidental-output");
         string inventoryFile = Path.Combine(_rig.Root, "client-inventory.json");
@@ -805,18 +791,19 @@ public sealed class ServerLoadOneOffTests : IDisposable
             environments = new[] { new { name = "local-client", roles = new[] { "client" },
                 install = _rig.Game, runtime = Path.Combine(_rig.Root, "runs"), cliPort = 5701 } },
         }));
-        var (inventory, client, _) = SmokeInputs.Client(
-            new Dictionary<string, string> { ["--inventory"] = inventoryFile }, output,
-            requireMacGui: () => { }, recordSelection: false);
+        var choice = ModInputStage.ChooseHosted(new Dictionary<string, string> { ["--inventory"] = inventoryFile }, output);
         Assert.False(Directory.Exists(output));
         Assert.Throws<ArgumentException>(() => SmokeOutput.RefuseInside(output, _rig.Game));
         Assert.False(Directory.Exists(output));
 
         string safe = Path.Combine(_rig.Root, "safe-output");
         SmokeOutput.RefuseInside(safe, _rig.Game);
-        SmokeInputs.RecordClient(inventory, client, safe);
+        ModInputStage.RecordHostedClient(choice.Inventory, Hosted(choice), safe);
         Assert.True(File.Exists(Path.Combine(safe, "environments.json")));
     }
+
+    private static ModInputStage.Actor Hosted(ModInputStage.Choice choice, string? loader = null) =>
+        new("client", choice.Client!, choice.ClientReason!, loader, null, null);
 }
 
 public sealed class SampleOneShotServerScenario : IOneShotServerScenario, IOneShotScenarioPreflight

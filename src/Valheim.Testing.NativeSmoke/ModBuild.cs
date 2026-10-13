@@ -2,11 +2,12 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Valheim.Testing.Game;
+using Valheim.Testing.GameSessions;
 
 /// <summary>Prepares private compile references from an installed game and builds a mod without deploying it.</summary>
 internal static partial class ModBuild
 {
-    internal const string Usage = "valheim-test build --project MOD.csproj [--role client|server] [--game DIR] [--dependency NAME=DLL ...] [--output NEW_DIR]";
+    internal const string Usage = "valheim-test build --project MOD.csproj [--output NEW_DIR] [--inventory FILE] [--role client|server] [--game DIR] [--client-env NAME] [--client-loader-package FILE] [--server DIR] [--server-env NAME] [--loader-package FILE] [--dependency NAME=DLL ...] [--search-root DIR|DLL ...]";
     private const string PublicizerVersion = "BepInEx.AssemblyPublicizer/0.4.3";
     private static readonly JsonSerializerOptions Json = new() { WriteIndented = true, PropertyNameCaseInsensitive = true };
 
@@ -28,62 +29,36 @@ internal static partial class ModBuild
         return result;
     }
 
+    // build only parses its options: the mod-input stage chooses the game and loader and builds, as start and server-load do.
     public static async Task<int> RunAsync(string[] args, CancellationToken cancellation = default)
     {
+        if (!SmokeCommandOptions.TryRead(args, SmokeCommandOptions.Command.Build, allowImplicitMod: true, out var parsed, out string error))
+        {
+            Console.Error.WriteLine(error);
+            Console.Error.WriteLine("Usage: " + Usage);
+            return 2;
+        }
         try
         {
-            var (project, game, dependencies, output) = Parse(args);
-            var input = Plan(project, game, dependencies, output);
-            var record = await BuildAsync(input, cancellation).ConfigureAwait(false);
-            Console.WriteLine("Built mod: " + record.Mod);
-            Console.WriteLine("Build inputs: " + Path.Combine(input.Output, "build-inputs.json"));
-            Console.WriteLine("Use --mod " + record.Mod + " --build-inputs " + Path.Combine(input.Output, "build-inputs.json") + " for the native run.");
+            string output = SmokeCommandOptions.Output(parsed!.Options);
+            var built = await ModInputStage.RunAsync(new ModInputStage.Request(ModInputStage.Route.Build, output, parsed.Options, parsed.Switches,
+                [], parsed.List("--search-root"), [], parsed.List("--dependency")) { Shipped = ShippedLoader.Instead }, cancellation).ConfigureAwait(false);
+            Console.WriteLine("Built mod: " + built.Mods[0]);
+            Console.WriteLine("Build inputs: " + built.BuildInputs);
+            Console.WriteLine("Use --mod " + built.Mods[0] + " --build-inputs " + built.BuildInputs + " for the native run.");
             return 0;
         }
-        catch (Exception error) when (error is ArgumentException or IOException or InvalidDataException or InvalidOperationException or UnauthorizedAccessException or OperationCanceledException or PlatformNotSupportedException)
+        catch (Exception refused) when (refused is ArgumentException or IOException or InvalidDataException or InvalidOperationException or UnauthorizedAccessException or OperationCanceledException or PlatformNotSupportedException)
         {
-            Console.Error.WriteLine("REFUSED: " + error.Message);
-            Console.Error.WriteLine("Usage: " + Usage);
+            Console.Error.WriteLine("REFUSED: " + refused.Message);
             return 3;
         }
     }
 
-    private static (string Project, string Game, Dictionary<string, string> Dependencies, string Output) Parse(string[] args)
-    {
-        string? project = null, game = null, output = null, role = null;
-        var dependencyValues = new List<string>();
-        for (int i = 0; i < args.Length; i++)
-        {
-            string key = args[i];
-            if (i + 1 == args.Length || args[i + 1].StartsWith("--", StringComparison.Ordinal))
-                throw new ArgumentException(key + " needs a value.");
-            string value = args[++i];
-            switch (key)
-            {
-                case "--project" when project == null: project = value; break;
-                case "--game" when game == null: game = value; break;
-                case "--role" when role == null: role = value; break;
-                case "--output" when output == null: output = value; break;
-                case "--dependency": dependencyValues.Add(value); break;
-                default: throw new ArgumentException("Unknown or repeated option: " + key);
-            }
-        }
-        var dependencies = ParseDependencies(dependencyValues);
-        if (project == null) throw new ArgumentException("Give --project MOD.csproj.");
-        if (role is not (null or "client" or "server")) throw new ArgumentException("--role must be client or server.");
-        if (game == null)
-        {
-            var inventory = EnvironmentInventory.Read(null);
-            string chosenRole = role ?? "client";
-            game = inventory.Environments.FirstOrDefault(recipe => recipe.Roles.Contains(chosenRole))?.Install
-                ?? throw new ArgumentException($"Valheim {chosenRole} install was not found in Steam libraries; give --game DIR.");
-        }
-        output = SmokeCommandOptions.Output(output == null ? new Dictionary<string, string>() : new Dictionary<string, string> { ["--output"] = output });
-        return (project, game, dependencies, output);
-    }
-
+    // The compile references: the game's managed assemblies, the chosen loader's core, and each third-party reference the
+    // project names, given with --dependency or found once in that core or a --search-root (never the game's own BepInEx).
     internal static Inputs Plan(string project, string game, IReadOnlyDictionary<string, string> dependencies, string output,
-        string? loaderRoot = null)
+        string? loaderRoot = null, IReadOnlyList<string>? searchRoots = null)
     {
         project = Path.GetFullPath(project); game = Path.GetFullPath(game); output = Path.GetFullPath(output);
         if (!File.Exists(project) || Path.GetExtension(project) != ".csproj")
@@ -118,9 +93,10 @@ internal static partial class ModBuild
                 selected[dependency] = Path.GetFullPath(explicitFile);
             else
             {
-                string[] matches = Directory.GetFiles(Path.Combine(game, "BepInEx"), dependency + ".dll", SearchOption.AllDirectories);
+                string[] matches = Candidates(dependency + ".dll", searchRoots ?? [], core);
                 if (matches.Length == 0 || matches.Select(FileHash.Sha256).Distinct(StringComparer.Ordinal).Count() != 1)
-                    throw new InvalidDataException($"{dependency} is a required third-party build dependency: found {matches.Length} missing or different copies in {game}. Install one coherent copy or give --dependency {dependency}=DLL; nothing is downloaded.");
+                    throw new InvalidDataException($"{dependency} is a required third-party build dependency: found {matches.Length} missing or different copies in the loader core {core} and the --search-root inputs. " +
+                        $"Give --search-root DIR|{dependency}.dll with one copy, or --dependency {dependency}=DLL; nothing is downloaded, and the game's own BepInEx is not read.");
                 selected[dependency] = matches.Order(StringComparer.Ordinal).First();
             }
         }
@@ -134,6 +110,13 @@ internal static partial class ModBuild
                 throw new FileNotFoundException($"Dependency {name} must name an existing {name}.dll: {file}");
         return new Inputs(project, game, managed, core, output, names, selected);
     }
+
+    // The named file in the loader core and each search root: a directory searched through, or that exact file.
+    private static string[] Candidates(string file, IEnumerable<string> searchRoots, string core) =>
+        searchRoots.Select(Path.GetFullPath).Prepend(core).SelectMany(root =>
+            File.Exists(root) ? Path.GetFileName(root).Equals(file, StringComparison.OrdinalIgnoreCase) ? new[] { root } : Array.Empty<string>()
+            : Directory.Exists(root) ? Directory.GetFiles(root, file, SearchOption.AllDirectories) : Array.Empty<string>())
+            .Distinct(StringComparer.Ordinal).ToArray();
 
     internal static async Task<BuildRecord> BuildAsync(Inputs input, CancellationToken cancellation)
     {

@@ -27,11 +27,13 @@ public sealed class ModBuildTests : IDisposable
     {
         Inputs();
         _game.Add("valheim_Data/Managed/assembly_utils.dll");
-        string jotunn = _game.Add("BepInEx/plugins/Jotunn/Jotunn.dll");
+        string jotunn = Path.Combine(_work, "deps", "Jotunn", "Jotunn.dll");
+        Directory.CreateDirectory(Path.GetDirectoryName(jotunn)!); File.WriteAllText(jotunn, "jotunn");
         string project = Project("<Reference Include=\"Jotunn\" />");
         File.WriteAllText(Path.Combine(Path.GetDirectoryName(project)!, "environment.props"),
             "<HintPath>$(PUBLICIZED_PATH)/assembly_utils_publicized.dll</HintPath>");
-        var plan = ModBuild.Plan(project, _game.Root, new Dictionary<string, string>(), Path.Combine(_work, "evidence"));
+        var plan = ModBuild.Plan(project, _game.Root, new Dictionary<string, string>(), Path.Combine(_work, "evidence"),
+            searchRoots: [Path.Combine(_work, "deps")]);
         Assert.Equal(new[] { "assembly_utils" }, plan.Publicize);
         Assert.Equal(jotunn, plan.Dependencies["Jotunn"]);
         Assert.False(Directory.Exists(plan.Output));
@@ -46,6 +48,17 @@ public sealed class ModBuildTests : IDisposable
         Assert.Contains("Jotunn", message);
         Assert.Contains("--dependency", message);
         Assert.False(Path.Exists(output));
+    }
+
+    // #673: a profile run never loads the game folder's own plugins, so a build does not compile against them either.
+    [Fact] public void TheGameFoldersPluginsAreNotACompileSource()
+    {
+        Inputs();
+        _game.Add("BepInEx/plugins/Jotunn/Jotunn.dll");
+        string message = Assert.Throws<InvalidDataException>(() => ModBuild.Plan(Project("<Reference Include=\"Jotunn\" />"),
+            _game.Root, new Dictionary<string, string>(), Path.Combine(_work, "evidence"))).Message;
+        Assert.Contains("--search-root", message);
+        Assert.Contains("found 0", message);
     }
 
     [Fact] public void BuildOverridesAProjectsLivePluginDeployment()
@@ -69,9 +82,10 @@ public sealed class ModBuildTests : IDisposable
     {
         Inputs();
         _game.Add("BepInEx/core/Jotunn.dll", "one copy");
-        _game.Add("BepInEx/plugins/Jotunn/Jotunn.dll", "one copy");
+        string copy = Path.Combine(_work, "deps", "Jotunn.dll");
+        Directory.CreateDirectory(Path.GetDirectoryName(copy)!); File.WriteAllText(copy, "one copy");
         var plan = ModBuild.Plan(Project("<Reference Include=\"Jotunn\" />"), _game.Root,
-            new Dictionary<string, string>(), Path.Combine(_work, "out"));
+            new Dictionary<string, string>(), Path.Combine(_work, "out"), searchRoots: [copy]);
         Assert.EndsWith("Jotunn.dll", plan.Dependencies["Jotunn"]);
     }
 

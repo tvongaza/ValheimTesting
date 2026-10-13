@@ -74,12 +74,12 @@ internal static class ServerLoadPhases
                 phases[0].evidence, phases[0].checkpoint);
             if (!ServerLoad.TryRead(firstArgs, out var parsed, out string parseError, allowImplicitMod: false))
                 throw new InvalidDataException("Invalid first server-load phase: " + parseError);
-            var choice = ServerLoad.Choose(parsed!, output);
-            string? loader = parsed!.Options.GetValueOrDefault("--loader-package") ?? choice.Server.LoaderPackage;
+            var choice = ModInputStage.ChooseDedicated(parsed!.Options, parsed.ServerOnly, output);
+            string? loader = parsed.Options.GetValueOrDefault("--loader-package") ?? choice.Server!.LoaderPackage;
             var (_, cliFiles) = SmokeInputs.Cli(parsed.Options);
             SmokeOutput.RefuseResolved(output, cliFiles, choice.Inventory, [choice.Server, choice.Client]);
-            FixtureBake.RefuseOutput(output, loader == null ? [choice.Server.Install]
-                : [choice.Server.Install, BepInExLoaderPackage.Read(loader).Root]);
+            FixtureBake.RefuseOutput(output, loader == null ? [choice.Server!.Install]
+                : [choice.Server!.Install, BepInExLoaderPackage.Read(loader).Root]);
             var inputs = CaptureInputs(planFile, plan);
             FixtureBake.RefuseOutput(output, inputs.Where(input => input.Files != null).Select(input => input.Path).ToArray());
             Directory.CreateDirectory(output);

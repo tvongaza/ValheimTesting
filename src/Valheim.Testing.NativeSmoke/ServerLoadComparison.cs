@@ -39,10 +39,10 @@ internal static class ServerLoadComparison
             // Freeze the first environment decision. The dependency locks and both arms
             // must use the same choice even if the inventory changes before launch.
             var selected = freezeInputs || !options.ContainsKey("--server")
-                ? ServerLoad.Choose(parsed, Path.Combine(output, "choice")) : null;
+                ? ModInputStage.ChooseDedicated(options, parsed.ServerOnly, Path.Combine(output, "choice")) : null;
             var serverRecipe = selected?.Server ?? new EnvironmentRecipe { Install = Path.GetFullPath(options["--server"]) };
             string server = serverRecipe.Install;
-            var (loaderManifest, automaticLoader) = ServerLoad.SelectServerLoader(parsed, serverRecipe, shippedLoader);
+            var (loaderManifest, automaticLoader) = SmokeInputResolver.Loader("server", serverRecipe, options.GetValueOrDefault("--loader-package"), shippedLoader);
             var armSeams = new ServerLoad.Seams(Loader: ShippedLoader.Instead, FrozenServerLoader: automaticLoader);
             runArm ??= arm => runArmWithSeams == null
                 ? ServerLoad.RunAsync(arm, armSeams) : runArmWithSeams(arm, armSeams);

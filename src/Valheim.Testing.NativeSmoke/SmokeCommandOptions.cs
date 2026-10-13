@@ -4,17 +4,17 @@ using Valheim.Testing.Game;
 /// <summary>The option contract shared by the one-shot hosted and dedicated-server commands.</summary>
 internal static class SmokeCommandOptions
 {
-    internal enum Command { Start, ServerLoad, ServerLoadAb }
+    internal enum Command { Start, ServerLoad, ServerLoadAb, Build }
     private enum Kind { Single, Repeat, Switch }
-    private sealed record Spec(Kind Kind, bool Start = true, bool ServerLoad = true, bool ServerLoadAb = true);
+    private sealed record Spec(Kind Kind, bool Start = true, bool ServerLoad = true, bool ServerLoadAb = true, bool Build = false);
 
     // A shared option has one arity and one validation rule regardless of the actor that runs it.
     private static readonly Dictionary<string, Spec> Table = new(StringComparer.Ordinal)
     {
-        ["--mod"] = new(Kind.Repeat), ["--output"] = new(Kind.Single),
+        ["--mod"] = new(Kind.Repeat), ["--output"] = new(Kind.Single, Build: true),
         ["--build-inputs"] = new(Kind.Single, ServerLoadAb: false),
-        ["--project"] = new(Kind.Single, ServerLoadAb: false),
-        ["--dependency"] = new(Kind.Repeat, ServerLoadAb: false),
+        ["--project"] = new(Kind.Single, ServerLoadAb: false, Build: true),
+        ["--dependency"] = new(Kind.Repeat, ServerLoadAb: false, Build: true),
         ["--scenario"] = new(Kind.Single, ServerLoadAb: false),
         ["--scenario-project"] = new(Kind.Single, ServerLoadAb: false),
         ["--adapter-project"] = new(Kind.Single, Start: false, ServerLoadAb: false),
@@ -22,19 +22,19 @@ internal static class SmokeCommandOptions
         ["--session-capability"] = new(Kind.Single, Start: false, ServerLoadAb: false),
         ["--session-token-variable"] = new(Kind.Single, Start: false, ServerLoadAb: false),
         ["--server-startup-seconds"] = new(Kind.Single, Start: false),
-        ["--inventory"] = new(Kind.Single), ["--client-env"] = new(Kind.Single),
+        ["--inventory"] = new(Kind.Single, Build: true), ["--client-env"] = new(Kind.Single, Build: true),
         ["--client-architecture"] = new(Kind.Single), ["--cli-manifest"] = new(Kind.Single),
-        ["--cli-files"] = new(Kind.Single), ["--client-loader-package"] = new(Kind.Single),
-        ["--search-root"] = new(Kind.Repeat), ["--optional-reference"] = new(Kind.Repeat),
+        ["--cli-files"] = new(Kind.Single), ["--client-loader-package"] = new(Kind.Single, Build: true),
+        ["--search-root"] = new(Kind.Repeat, Build: true), ["--optional-reference"] = new(Kind.Repeat),
         ["--expected-log-error"] = new(Kind.Single), ["--expected-log-reason"] = new(Kind.Single),
         ["--join-seconds"] = new(Kind.Single), ["--hold"] = new(Kind.Switch, ServerLoadAb: false),
-        ["--game"] = new(Kind.Single, ServerLoad: false, ServerLoadAb: false),
+        ["--game"] = new(Kind.Single, ServerLoad: false, ServerLoadAb: false, Build: true),
         ["--source"] = new(Kind.Single, ServerLoad: false, ServerLoadAb: false),
         ["--compare-mod"] = new(Kind.Single, ServerLoad: false, ServerLoadAb: false),
         ["--compare-source"] = new(Kind.Single, ServerLoad: false, ServerLoadAb: false),
-        ["--server"] = new(Kind.Single, Start: false), ["--client"] = new(Kind.Single, Start: false),
-        ["--server-env"] = new(Kind.Single, Start: false), ["--join"] = new(Kind.Single, Start: false),
-        ["--adapter"] = new(Kind.Single, Start: false), ["--loader-package"] = new(Kind.Single, Start: false),
+        ["--server"] = new(Kind.Single, Start: false, Build: true), ["--client"] = new(Kind.Single, Start: false),
+        ["--server-env"] = new(Kind.Single, Start: false, Build: true), ["--join"] = new(Kind.Single, Start: false),
+        ["--adapter"] = new(Kind.Single, Start: false), ["--loader-package"] = new(Kind.Single, Start: false, Build: true),
         ["--steam-runtime-package"] = new(Kind.Single, Start: false, ServerLoadAb: false),
         ["--config"] = new(Kind.Repeat, Start: false), ["--plugin-file"] = new(Kind.Repeat, Start: false),
         ["--plugin-dir"] = new(Kind.Repeat, Start: false),
@@ -47,6 +47,7 @@ internal static class SmokeCommandOptions
         ["--assert-line"] = new(Kind.Single, Start: false, ServerLoadAb: false),
         ["--preflight-only"] = new(Kind.Switch, Start: false, ServerLoadAb: false),
         ["--remove-mod"] = new(Kind.Single, Start: false, ServerLoad: false),
+        ["--role"] = new(Kind.Single, Start: false, ServerLoad: false, ServerLoadAb: false, Build: true),
     };
 
     internal sealed class Parsed
@@ -70,7 +71,7 @@ internal static class SmokeCommandOptions
             if (command == Command.ServerLoadAb && key == "--preflight-only")
             { error = "--preflight-only runs no arm; preflight each arm with server-load instead."; return false; }
             if (!Table.TryGetValue(key, out var spec) || !(command switch
-                { Command.Start => spec.Start, Command.ServerLoad => spec.ServerLoad, _ => spec.ServerLoadAb }))
+                { Command.Start => spec.Start, Command.ServerLoad => spec.ServerLoad, Command.Build => spec.Build, _ => spec.ServerLoadAb }))
             { error = command == Command.Start && key == "--loader-package"
                 ? "start uses --client-loader-package (not --loader-package)."
                 : "Unknown option: " + key; return false; }
@@ -91,6 +92,16 @@ internal static class SmokeCommandOptions
             { error = "Repeated option: " + key; return false; }
         }
         if (!allowImplicitMod && result.List("--mod").Count == 0) { error = "Missing: --mod"; return false; }
+        if (command == Command.Build)
+        {
+            if (!result.Options.ContainsKey("--project")) { error = "Give --project MOD.csproj."; return false; }
+            string role = result.Options.GetValueOrDefault("--role", "client");
+            if (role is not ("client" or "server")) { error = "--role must be client or server."; return false; }
+            // A role's install, environment and loader options are the same ones start (client) and server-load (server) take.
+            string[] other = role == "server" ? ["--game", "--client-env", "--client-loader-package"] : ["--server", "--server-env", "--loader-package"];
+            if (other.FirstOrDefault(result.Options.ContainsKey) is { } wrong)
+            { error = $"{wrong} selects the other role's install; --role {role} takes " + (role == "server" ? "--server, --server-env and --loader-package." : "--game, --client-env and --client-loader-package."); return false; }
+        }
         if (result.Options.ContainsKey("--project") && (result.List("--mod").Count != 0 || result.Options.ContainsKey("--build-inputs")))
         { error = "--project builds the one selected mod and records its inputs; leave out --mod and --build-inputs."; return false; }
         if (result.List("--dependency").Count != 0 && !result.Options.ContainsKey("--project"))
