@@ -68,14 +68,14 @@ public sealed record Capability(string Path, string Instance, bool ReadOnly, int
 /// </code>
 /// The pin file comes from the test plan, not from the running game. After a world or plugin transition, verify the new
 /// expected pins and rediscover capabilities before another action. See the compiling
-/// <see href="https://github.com/tvongaza/ValheimTesting/blob/main/examples/ObserveCheck/ObserveCheck.cs">pinning example</see>
+/// <see href="https://github.com/tvongaza/ValheimTesting/blob/main/examples/ObserveCheck/ObserveCheck.cs">pins example</see>
 /// and <see href="https://github.com/tvongaza/ValheimTesting/blob/main/tests/Valheim.Testing.NativeAcceptance/ServerFixture.cs">adapter observation</see>.
 /// </example>
 public sealed class GameActor : IDisposable
 {
     private readonly IGameTransport _transport;
     private readonly object _sync = new();
-    private bool _verified, _pinned = true;
+    private bool _verified;
     private string _expectations = "";
     private BusyReadScope? _busyReads;
     private long _longestMainThreadIdleMs;
@@ -90,11 +90,6 @@ public sealed class GameActor : IDisposable
     public string Name { get; }
     /// <summary>The timeout for each ordinary command and strict pin check; bounded world-entry reads may use less time.</summary>
     public TimeSpan CommandTimeout { get; set; } = TimeSpan.FromSeconds(30);
-    /// <summary>
-    /// False once the actor was explicitly unpinned (<see cref="VerifyEnvironment"/> with <see cref="EnvironmentPinning.None"/>)
-    /// and not verified with pins since.
-    /// </summary>
-    public bool Pinned { get { lock (_sync) return _pinned; } }
     /// <summary>
     /// Where this actor's verified world pins are published for a separate diagnostic invocation, or null when it publishes none.
     /// The publisher is told about every join and leave here and nowhere else: <see cref="PublishWorld"/> (the end of a join) and,
@@ -223,12 +218,7 @@ public sealed class GameActor : IDisposable
             if (scope.Cancellation.WaitHandle.WaitOne(pause)) scope.Cancellation.ThrowIfCancellationRequested();
         }
     }
-    /// <summary>
-    /// Checks the strict pins now and before every command. <see cref="EnvironmentPinning.None"/> instead of a
-    /// <c>cli_expect</c> command is the explicit opt-out: the actor then runs commands without any pin check, prints
-    /// <see cref="EnvironmentPinning.Warning"/> when it becomes unpinned, and reports <see cref="Pinned"/> false until it is
-    /// verified with pins again. A transition still needs this call again, pinned or not.
-    /// </summary>
+    /// <summary>Checks the strict pins now and before every command. A transition needs this call again.</summary>
     public void VerifyEnvironment(string expectationCommand)
     {
         lock (_sync) _verified = false; // Before the retract below, which may throw: nothing stays verified on stale state.
@@ -236,14 +226,7 @@ public sealed class GameActor : IDisposable
         lock (_sync)
         {
             _verified = false;
-            if (expectationCommand == EnvironmentPinning.None)
-            {
-                if (_pinned) EnvironmentPinning.Warn($"game actor \"{Name}\"");
-                _pinned = false; _expectations = ""; _verified = true;
-                return;
-            }
             _expectations = StrictExpectations.Normalize(expectationCommand);
-            _pinned = true;
             CheckEnvironment();
             _verified = true;
         }
@@ -265,22 +248,19 @@ public sealed class GameActor : IDisposable
         {
             if (!_verified) throw new InvalidOperationException("Verify the actor's world and plugin expectations before using it.");
             if (command.IndexOfAny(new[] { '\r', '\n' }) >= 0) throw new ArgumentException("One command per call.");
-            if (_pinned)
+            _verified = false;
+            try { CheckEnvironment(); _verified = true; }
+            catch (InvalidOperationException error) when (IsUnstartedCommandTimeout(error))
             {
-                _verified = false;
-                try { CheckEnvironment(); _verified = true; }
-                catch (InvalidOperationException error) when (IsUnstartedCommandTimeout(error))
-                {
-                    // The CLI explicitly says the pin check never ran. A world-entry read scope can
-                    // verify game-thread liveness and retry the read without relaxing the pins.
-                    _verified = true;
-                    throw;
-                }
-                catch (WaitTimeoutException error) when (IsDeadlinePassed(error))
-                {
-                    _verified = true; // The deadline refused the pin check (or its retry): nothing showed the pins that held before to be wrong.
-                    throw;
-                }
+                // The CLI explicitly says the pin check never ran. A world-entry read scope can
+                // verify game-thread liveness and retry the read without relaxing the pins.
+                _verified = true;
+                throw;
+            }
+            catch (WaitTimeoutException error) when (IsDeadlinePassed(error))
+            {
+                _verified = true; // The deadline refused the pin check (or its retry): nothing showed the pins that held before to be wrong.
+                throw;
             }
             var reply = new GameReply(command, _transport.Execute(command, EffectiveTimeout()));
             return requireAccepted ? reply.RequireAccepted() : reply;
@@ -320,7 +300,6 @@ public sealed class GameActor : IDisposable
     private async Task WaitForEnvironment(string expectations, TimeSpan timeout, TimeSpan interval, Func<TimeSpan, CancellationToken, Task> pause, CancellationToken cancellation)
     {
         InvalidateEnvironment();
-        if (expectations == EnvironmentPinning.None) { VerifyEnvironment(expectations); return; } // Nothing to wait for.
         expectations = StrictExpectations.Normalize(expectations);
         WaitText.RequireTimeout(timeout);
         var prior = CommandTimeout;

@@ -59,13 +59,13 @@ A page is exactly one type. If a reference page starts giving advice, move the a
 Before: "The unit tests need only the .NET 10 SDK, on any OS; no game. The usual setup for the native checks is the **Windows PC where Valheim is installed through Steam**: an owned dedicated server and an owned client run there, both started from test copies of the Steam installs."
 After: "Unit tests need the .NET 10 SDK and nothing else. They run on any OS. Native checks run on the Windows PC where Steam installed Valheim: `valheim-test` starts a dedicated server and a client from disposable profiles and leaves the install untouched."
 
-**2. From `docs/packages/Valheim.Testing.Game.md`, "Pins and the opt-out".**
+**2. From `docs/packages/Valheim.Testing.Game.md`, "Pins".**
 Before: "**Computing the pins.** Every strict plan needs `runtimePins`, and an owned client section needs `installPins`; `ValidateServerPlan` and `ClientRunPlan.Validate` refuse a plan without them. Compute the values once with `InstallPins.Of(<runtime>)` and `InstallPins.Of(<client install>)` (or the shell listing above), review them, and add them to the plan: … `bepinexCore`, which pinned `BepInEx/core` alone, was replaced by `loader` (#295); a plan that still names it is refused with that instruction."
 After: "A standalone runner pins omitted values from what it stages and records them as observed. To require reviewed values, compute the pins with `InstallPins.Of(<runtime>)` and add them to the plan:
 ```json
 "runtimePins": { "game": "...", "loader": "...", "patchers": "..." }
 ```
-An owned client section still needs the same object as `"installPins"`; `ClientRunPlan.Validate` refuses an owned client without it."
+A disposable owned client may omit `"installPins"`; the runner records and enforces the staged profile's observed values. An in-place client still supplies the expected object."
 
 **3. From `CONTRIBUTING.md`, "Set up and validate locally".**
 Before: "A pull request carries code, tests and docs only. It changes no package `<Version>`, no Cli `packageVersion`, no dependency pin between the packages, no `toolkit-versions.json` entry or copyable pin, and no list in `docs/reference/public-api/`: cutting a release does all of that in one step (see "Release packages"). The one exception is a pull request that moves the ValheimCLI fork pin: it marks the transport a candidate …"

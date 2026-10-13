@@ -462,7 +462,7 @@ public sealed class CliCapabilityManifestTests : IDisposable
         return install;
     }
 
-    /// <summary>The install's plan, pinning the ValheimCLI plugin installed at <paramref name="pinned"/> (under <c>BepInEx</c>).</summary>
+    /// <summary>The install's plan, with the ValheimCLI plugin installed at <paramref name="pinned"/> (under <c>BepInEx</c>) as an exact pin.</summary>
     private static ClientRunPlan PlanFor(PreflightInstall install, string? manifest, string pinned = "plugins/" + Core)
     {
         var plan = install.Plan();

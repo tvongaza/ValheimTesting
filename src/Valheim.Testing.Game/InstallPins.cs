@@ -2,46 +2,6 @@
 namespace Valheim.Testing.Game;
 
 /// <summary>
-/// Whether a run's environment is pinned. <see cref="Strict"/> is the default of every plan and actor and the mode to
-/// rely on. <see cref="None"/> is an explicit opt-out for trying the toolkit before maintaining pins: it is never a
-/// default and no environment variable sets it; it prints <see cref="Warning"/> when it takes effect and every report
-/// and evidence file of the run carries <see cref="NotPinned"/>.
-/// </summary>
-public static class EnvironmentPinning
-{
-    public const string Strict = "strict";
-    public const string None = "none";
-    /// <summary>The marker an unpinned run's reports and evidence files carry.</summary>
-    public const string NotPinned = "environment not pinned";
-
-    /// <summary>
-    /// True for <see cref="Strict"/>, false for <see cref="None"/>; anything else (null, empty, another spelling) is refused,
-    /// so the opt-out is never implied. <paramref name="owner"/> names the setting in the message, for example "The plan's".
-    /// </summary>
-    public static bool IsStrict(string? value, string owner) => value switch
-    {
-        Strict => true,
-        None => false,
-        _ => throw new ArgumentException($"{owner} pinning is \"{Strict}\" (the default when omitted) or \"{None}\", not \"{value}\"."),
-    };
-
-    /// <summary>What an unpinned run prints when the opt-out takes effect.</summary>
-    public static string Warning(string what) =>
-        $"WARNING: {NotPinned}: {what} runs with pinning \"{None}\". Nothing checks the game build, BepInEx, its patchers, the plugins or the world it runs against, " +
-        "so its result is not evidence for any particular build. Use strict pins for results you rely on.";
-
-    internal static void Warn(string what) => Console.Error.WriteLine(Warning(what));
-
-    /// <summary>Adds <c>pinning</c> and, for an unpinned run, the <c>environment</c> marker to an evidence file's fields.</summary>
-    internal static Dictionary<string, object?> Stamp(Dictionary<string, object?> evidence, bool pinned)
-    {
-        evidence["pinning"] = pinned ? Strict : None;
-        if (!pinned) evidence["environment"] = NotPinned;
-        return evidence;
-    }
-}
-
-/// <summary>
 /// What a game install or server runtime holds that ValheimCLI cannot report in game, pinned on disk before launch. Each
 /// value is a full SHA256; <see cref="Of"/> computes them.
 /// <list type="bullet">
@@ -72,6 +32,12 @@ public sealed class InstallPins
     /// <summary>The game's own assemblies in its Managed folder, which <see cref="Game"/> covers.</summary>
     public const string GameAssemblies = "assembly_*.dll";
     public static readonly string CoreDirectory = Path.Combine("BepInEx", "core");
+
+    /// <summary>Whether two pin sets name the same game, loader and patchers (hashes compared case-insensitively).</summary>
+    internal bool SameAs(InstallPins other) =>
+        Game.Equals(other.Game, StringComparison.OrdinalIgnoreCase) &&
+        Loader.Equals(other.Loader, StringComparison.OrdinalIgnoreCase) &&
+        Patchers.Equals(other.Patchers, StringComparison.OrdinalIgnoreCase);
 
     public string Game { get; set; } = "";
     public string Loader { get; set; } = "";

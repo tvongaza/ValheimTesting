@@ -14,9 +14,9 @@ internal static class OwnedClientPreflight
     internal const string ScriptEngineConfig = ScriptEngine + ".cfg";
     internal const string CliConfig = CliCapabilityManifest.PluginGuid + ".cfg";
 
-    internal static void Check(string install, IReadOnlyDictionary<string, string> pins, bool pinned, HostWorldPlan? hostWorld, string? hostWorldName)
+    internal static void Check(string install, IReadOnlyDictionary<string, string> pins, HostWorldPlan? hostWorld, string? hostWorldName)
     {
-        if (pinned) RequireScriptsLoad(install, pins, RequireInstalled(install, pins));
+        RequireScriptsLoad(install, pins, RequireInstalled(install, pins));
         RequireStandingFile(install, pins, hostWorld?.WorldUid, hostWorldName);
     }
 

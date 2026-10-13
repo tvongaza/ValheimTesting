@@ -64,11 +64,11 @@ public sealed class ScenarioReport
     private readonly SortedDictionary<string, string> _pinOrigins = new(StringComparer.Ordinal);
     /// <summary>
     /// Each standalone-run pin group (<c>runtimeManifest</c>, <c>runtimePins</c>, <c>worldManifest</c>, <c>worldUid</c>
-    /// and <c>plugins.&lt;guid&gt;</c>) to <c>plan</c> when supplied and checked, or <c>observed</c> when bound from what
-    /// the run staged. Other run kinds leave the map empty.
+    /// and <c>plugins.&lt;guid&gt;</c>) and each prepared owned client's prefixed <c>installPins</c> and plugin pins, to
+    /// <c>plan</c> when supplied and checked, or <c>observed</c> when bound from what the run staged.
     /// </summary>
     public IReadOnlyDictionary<string, string> PinOrigins => _pinOrigins;
-    /// <summary>Records a standalone run's complete pin-origin map before the report is written.</summary>
+    /// <summary>Records a run's pin-origin entries before the report is written.</summary>
     internal void RecordPinOrigins(IEnumerable<KeyValuePair<string, string>> origins)
     {
         ArgumentNullException.ThrowIfNull(origins);
@@ -83,7 +83,7 @@ public sealed class ScenarioReport
     private readonly SortedDictionary<string, IReadOnlyDictionary<string, string>> _plugins = new(StringComparer.Ordinal);
     /// <summary>
     /// Per actor (<c>server</c>, a client's name, the host), the plugins its game confirmed with strict pins when it started:
-    /// plugin GUID to the MD5 ValheimCLI compares, or <c>absent</c>. An unpinned actor has none.
+    /// plugin GUID to the MD5 ValheimCLI compares, or <c>absent</c>.
     /// </summary>
     public IReadOnlyDictionary<string, IReadOnlyDictionary<string, string>> Plugins { get { lock (_plugins) return new SortedDictionary<string, IReadOnlyDictionary<string, string>>(_plugins, StringComparer.Ordinal); } }
     /// <summary>
@@ -127,20 +127,8 @@ public sealed class ScenarioReport
     private bool PhasePassed(StepPhase phase) { lock (_stepGate) return Steps.Where(x => x.Phase == phase).All(x => x.Passed); }
     // The phase of the step running on this logical thread, so evidence attached inside it records that phase.
     private readonly AsyncLocal<StepPhase?> _current = new();
-    /// <summary><c>strict</c>, or <c>none</c> once <see cref="MarkNotPinned"/> recorded an explicit opt-out.</summary>
-    public string Pinning { get; private set; } = EnvironmentPinning.Strict;
     /// <summary>Creates an empty report; it cannot pass until at least one step runs and all recorded steps pass.</summary>
     public ScenarioReport(string name) => Name = name;
-    /// <summary>
-    /// Records that this run's environment is not pinned, and why: <see cref="Pinning"/> <c>none</c>, the provenance entry
-    /// <c>environment</c> ("environment not pinned: ..."), and in <c>junit.xml</c> a suite property and a skipped test case
-    /// of that name, so the marker shows wherever the result is read. A pass stays a pass.
-    /// </summary>
-    public void MarkNotPinned(string why)
-    {
-        Pinning = EnvironmentPinning.None;
-        Provenance["environment"] = EnvironmentPinning.NotPinned + ": " + why;
-    }
     /// <summary>Records a <see cref="StepPhase.Scenario"/> step: runs <paramref name="action"/>, records its outcome and time, rethrows its failure.</summary>
     public void Step(string name, Action action) => Step(StepPhase.Scenario, name, action);
     /// <summary>Records a step in <paramref name="phase"/>: runs <paramref name="action"/>, records its outcome and time, rethrows its failure.</summary>
@@ -285,24 +273,16 @@ public sealed class ScenarioReport
             Evidence.Add(new(evidence.Kind, evidence.Site, evidence.WorldUid, file, FileHash.Sha256(path)) { Phase = phase });
         }
         File.WriteAllText(Path.Combine(directory, "result.json"), JsonSerializer.Serialize(this, new JsonSerializerOptions { WriteIndented = true }));
-        bool unpinned = Pinning != EnvironmentPinning.Strict;
         StepResult[] steps;
         lock (_stepGate) steps = Steps.ToArray();
         // One suite per phase, each named "<report> / <phase>", so a reader sees which state failed without reading names.
-        var suites = new XElement("testsuites", new XAttribute("name", Name), new XAttribute("tests", steps.Length + (unpinned ? 1 : 0)),
+        var suites = new XElement("testsuites", new XAttribute("name", Name), new XAttribute("tests", steps.Length),
             new XAttribute("failures", steps.Count(x => !x.Passed)));
         foreach (var phase in Enum.GetValues<StepPhase>())
         {
             var inPhase = steps.Where(x => x.Phase == phase).ToArray();
-            bool marker = unpinned && phase == StepPhase.Preflight;
             var suite = new XElement("testsuite", new XAttribute("name", Name + " / " + phase.ToString().ToLowerInvariant()),
-                new XAttribute("tests", inPhase.Length + (marker ? 1 : 0)), new XAttribute("failures", inPhase.Count(x => !x.Passed)));
-            if (marker)
-            {
-                string text = Provenance.GetValueOrDefault("environment", EnvironmentPinning.NotPinned);
-                suite.Add(new XAttribute("skipped", 1), new XElement("properties", new XElement("property", new XAttribute("name", "environment"), new XAttribute("value", text))),
-                    new XElement("testcase", new XAttribute("name", EnvironmentPinning.NotPinned), new XAttribute("time", 0), new XElement("skipped", new XAttribute("message", text))));
-            }
+                new XAttribute("tests", inPhase.Length), new XAttribute("failures", inPhase.Count(x => !x.Passed)));
             foreach (var step in inPhase) suite.Add(new XElement("testcase", new XAttribute("name", step.Name), new XAttribute("time", step.Seconds), step.Passed ? null : new XElement("failure", step.Error)));
             suites.Add(suite);
         }

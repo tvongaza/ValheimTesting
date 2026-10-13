@@ -127,12 +127,4 @@ public sealed class AreaObjectSnapshotTests
         Assert.Equal(0, st.Count("cli_zdos_at"));
     }
 
-    [Fact] public void UnpinnedActorCannotCaptureEvenWhenRepliesLookCorrect()
-    {
-        var st = Transport(true); var ct = Transport(false);
-        using var server = st.Actor(); using var client = ct.Actor();
-        client.VerifyEnvironment(EnvironmentPinning.None);
-        Assert.Throws<InvalidOperationException>(() => AreaObjectSnapshot.Capture(server, client, "site", "7", 16, -8, 8, TimeSpan.FromSeconds(1)));
-        Assert.Equal(0, st.Count("cli_zdos_at"));
-    }
 }

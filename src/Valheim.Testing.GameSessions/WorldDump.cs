@@ -45,7 +45,6 @@ public static class WorldDump
     {
         ArgumentNullException.ThrowIfNull(actor);
         ArgumentNullException.ThrowIfNull(fetch);
-        if (!actor.Pinned) throw new InvalidOperationException("A pinned world dump needs strict pins on the actor that makes it.");
         if (string.IsNullOrWhiteSpace(hostDirectory) || hostDirectory.Any(char.IsWhiteSpace) || !AbsoluteHostPath.IsMatch(hostDirectory))
             throw new ArgumentException("The host directory must be an absolute path without whitespace (the CLI splits arguments on spaces).", nameof(hostDirectory));
         if (name == null || !SafeName.IsMatch(name)) throw new ArgumentException("Name the dump with letters, digits, '.', '_' or '-'.", nameof(name));

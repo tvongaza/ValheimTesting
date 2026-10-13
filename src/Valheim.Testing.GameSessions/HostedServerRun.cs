@@ -181,7 +181,7 @@ internal sealed class HostedServerRun : IServerPlacement
     /// Takes the server host's lock, then readies the server's profile: a campaign's prepared one is verified where it is; a
     /// standalone run stages its own from the host's install (<see cref="StageProfileAsync"/>).
     /// </summary>
-    public async Task LockAndPrepareRuntimeAsync(ScenarioReport report, ServerRunPlan plan, bool pinned, CancellationToken cancellation)
+    public async Task LockAndPrepareRuntimeAsync(ScenarioReport report, ServerRunPlan plan, CancellationToken cancellation)
     {
         // A campaign's prepared profile is checked before each boot against the pins its preparation bound; a standalone run's
         // are bound once it has staged its own (StageProfileAsync), never taken from a role an earlier run staged.
@@ -221,8 +221,8 @@ internal sealed class HostedServerRun : IServerPlacement
             return;
         }
         await report.StepAsync(StepPhase.Setup, verified ? "check the server host's install against the pinned runtime and stage its profile"
-            : pinned ? "stage the server's profile and pin it as found" : "stage the server's profile from its install as found",
-            () => StageProfileAsync(report, plan, pinned, verified, cancellation)).ConfigureAwait(false);
+            : "stage the server's profile and pin it as found",
+            () => StageProfileAsync(report, plan, verified, cancellation)).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -236,7 +236,7 @@ internal sealed class HostedServerRun : IServerPlacement
     /// game listing, its runtime pins to the profile's (the loader is the profile's own), and its ValheimCLI pins to the staged
     /// set's. The profile is journalled before it is made, done once made, and retired at teardown (<see cref="TeardownAsync"/>).
     /// </summary>
-    private async Task StageProfileAsync(ScenarioReport report, ServerRunPlan plan, bool pinned, bool verified, CancellationToken cancellation)
+    private async Task StageProfileAsync(ScenarioReport report, ServerRunPlan plan, bool verified, CancellationToken cancellation)
     {
         InstallPins? expectedRuntimePins = plan.RuntimePins;
         var pluginPinsFromPlan = plan.Pins.Where(pin => !Expectations.IsWorldKey(pin.Key))
@@ -262,40 +262,9 @@ internal sealed class HostedServerRun : IServerPlacement
         if (verified)
             HostInstall.RequireSame(HostInstall.WithoutSkipped(plan.Runtime.Sha256, HostedRuntimeStage.RuntimeSkips, source.Names), source, "server install",
                 source.Files.Keys.Where(path => HostInstall.Skipped(path, HostedRuntimeStage.RuntimeSkips, source.Names)));
-        Dictionary<string, string>? stagedPins = null;
-        var stagedPinsFromPlan = new HashSet<string>(StringComparer.Ordinal);
-        if (pinned)
-        {
-            if (plan.RuntimePins != null) HostInstall.CheckPins(plan.RuntimePins, source, "server install");
-            stagedPins = InstallSelection.BindCliPins(HostedCampaignPreparation.PluginPins("server", selection.Files, pluginPinsFromPlan), cli, setFolder);
-            var cliSetFiles = cliFiles.Located.Select(file => Path.GetFullPath(file.Path)).ToHashSet(StringComparer.OrdinalIgnoreCase);
-            var sourceCliExpected = pluginPinsFromPlan.Where(pin => CliBuildManifest.IsCliPlugin(pin.Key) &&
-                (!stagedPins.TryGetValue(pin.Key, out string? staged) || !staged.Equals(pin.Value, StringComparison.OrdinalIgnoreCase)))
-                .ToDictionary(pin => pin.Key, pin => pin.Value, StringComparer.Ordinal);
-            var sourcePins = sourceCliExpected.Count == 0 ? new Dictionary<string, string>(StringComparer.Ordinal) :
-                HostedCampaignPreparation.PluginPins("server install", selection.ReplacedFiles, sourceCliExpected,
-                    selection.Files.Where(file => !cliSetFiles.Contains(Path.GetFullPath(file.Source))).Concat(selection.ReplacedFiles));
-            foreach (var (plugin, expected) in pluginPinsFromPlan)
-            {
-                if (stagedPins.TryGetValue(plugin, out string? found) && found.Equals(expected, StringComparison.OrdinalIgnoreCase))
-                {
-                    stagedPinsFromPlan.Add(plugin);
-                    continue;
-                }
-                // A profile always replaces the install's own ValheimCLI with the toolkit's coherent set. A supplied pin for
-                // that source build remains an expected input and is checked before replacement; the staged pin is observed.
-                sourcePins.TryGetValue(plugin, out string? replaced);
-                if (CliBuildManifest.IsCliPlugin(plugin) && replaced != null && replaced.Equals(expected, StringComparison.OrdinalIgnoreCase))
-                {
-                    _sourceCliPins[plugin] = replaced;
-                    continue;
-                }
-                string detail = found == null ? "the staged selection does not contain it." : $"the staged build is {found}.";
-                if (CliBuildManifest.IsCliPlugin(plugin) && replaced != null)
-                    detail = $"the staged build is {found}, and the install build it replaces is {replaced}.";
-                throw new InvalidOperationException($"The server profile would not hold the plan's pinned plugin {plugin}={expected}: " + detail);
-            }
-        }
+        var bound = selection.BindPins("server", plan.RuntimePins, pluginPinsFromPlan, cli, setFolder);
+        var stagedPins = bound.Plugins;
+        foreach (var pin in bound.SourceCliPins) _sourceCliPins[pin.Key] = pin.Value;
         _replacedCliPaths = selection.Replaced.Order(StringComparer.Ordinal).ToArray();
         if (_replacedCliPaths.Count != 0)
         {
@@ -336,26 +305,16 @@ internal sealed class HostedServerRun : IServerPlacement
         await JournalAsync(Host, Role.Host, "server", JournalEntry.Of(JournalEntry.CopyDone, ("runtime", RuntimeDirectory),
             ("files", profile.Loader.Files.Count.ToString(CultureInfo.InvariantCulture)), ("runtimeKind", "server"),
             ("launchRoot", profile.GameRoot)), cancellation).ConfigureAwait(false);
-        if (pinned)
-        {
-            plan.Runtime = new PinnedDirectory { Source = profile.Game.Root, Sha256 = new Dictionary<string, string>(profile.Game.Files, StringComparer.Ordinal) };
-            plan.RuntimePins = _preparedPins = profile.Pins;
-            if (stagedPins == null) throw new InvalidOperationException("The standalone profile's staged plugin pins were not prepared.");
-            plan.Pins = plan.Pins.Where(pin => Expectations.IsWorldKey(pin.Key)).Concat(stagedPins)
-                .ToDictionary(pin => pin.Key, pin => pin.Value, StringComparer.Ordinal);
-            _preparedPluginFiles = ProfilePluginFiles(profile.Loader);
-            _pinOrigins["runtimeManifest"] = verified ? "plan" : "observed";
-            _pinOrigins["runtimePins"] = expectedRuntimePins != null && Same(expectedRuntimePins, profile.Pins) ? "plan" : "observed";
-            foreach (string plugin in stagedPins.Keys.Order(StringComparer.Ordinal))
-                _pinOrigins["plugins." + plugin] = stagedPinsFromPlan.Contains(plugin) ? "plan" : "observed";
-            plan.RequireStagedPlugins();
-        }
+        plan.Runtime = new PinnedDirectory { Source = profile.Game.Root, Sha256 = new Dictionary<string, string>(profile.Game.Files, StringComparer.Ordinal) };
+        plan.RuntimePins = _preparedPins = profile.Pins;
+        plan.Pins = plan.Pins.Where(pin => Expectations.IsWorldKey(pin.Key)).Concat(stagedPins)
+            .ToDictionary(pin => pin.Key, pin => pin.Value, StringComparer.Ordinal);
+        _preparedPluginFiles = ProfilePluginFiles(profile.Loader);
+        _pinOrigins["runtimeManifest"] = verified ? "plan" : "observed";
+        _pinOrigins["runtimePins"] = expectedRuntimePins != null && expectedRuntimePins.SameAs(profile.Pins) ? "plan" : "observed";
+        foreach (var (key, origin) in bound.PluginOrigins()) _pinOrigins[key] = origin;
+        plan.RequireStagedPlugins();
     }
-
-    private static bool Same(InstallPins expected, InstallPins enforced) =>
-        expected.Game.Equals(enforced.Game, StringComparison.OrdinalIgnoreCase) &&
-        expected.Loader.Equals(enforced.Loader, StringComparison.OrdinalIgnoreCase) &&
-        expected.Patchers.Equals(enforced.Patchers, StringComparison.OrdinalIgnoreCase);
 
     private static Dictionary<string, string> ProfilePluginFiles(HostListing profile) => profile.Files
         .Where(file => HostedRuntimeStage.IsStartupPlugin(file.Key))
@@ -399,7 +358,7 @@ internal sealed class HostedServerRun : IServerPlacement
                 HostPath.Join(RunDirectory, "world-stage"), HostPath.Join(RunDirectory, "host-world"),
                 (entry, token) => JournalAsync(Host, Role.Host, "server", entry, token),
                 _ => _lock != null ? Task.CompletedTask : throw new InvalidOperationException("Take the Mac server host's lock before placing its world."));
-            _macWorld = HostedWorldOnHost.Place(site, fixture, Path.Combine(output, "mac-world-input"), pinned: true, cancellation);
+            _macWorld = HostedWorldOnHost.Place(site, fixture, Path.Combine(output, "mac-world-input"), cancellation);
             return Task.CompletedTask;
         }) : report.StepAsync(StepPhase.Setup, "ship and verify the world copy on the server host", async () =>
         {
@@ -427,7 +386,7 @@ internal sealed class HostedServerRun : IServerPlacement
         throw new InvalidOperationException("The standalone profile was not bound to its observed runtime pins.");
 
     /// <summary>The server's executable and its pins, on the listings of its profile and its game, before anything launches.</summary>
-    public void CheckRuntime(ScenarioReport report, ServerRunPlan plan, bool pinned)
+    public void CheckRuntime(ScenarioReport report, ServerRunPlan plan)
     {
         var runtime = _runtime ?? throw new InvalidOperationException("Ready the server's profile first.");
         // Hashes do not cover file modes: a launch also requires the game's execute bit.
@@ -440,9 +399,8 @@ internal sealed class HostedServerRun : IServerPlacement
             if (unixExecutable != null && !runtime.Executables.Contains(unixExecutable))
                 throw new InvalidOperationException($"{unixExecutable} is not executable in {runtime.Root} on {Host.Name}; restore its mode (chmod u+x) in the install {Role.PreparedSourceRoot ?? Role.Install}.");
         });
-        report.Step(StepPhase.Setup, pinned ? "server runtime is the pinned game build, loader and patchers" : "record the unpinned server runtime's game build, loader and patchers", () =>
-            (pinned ? HostInstall.CheckPins(RequiredRuntimePins(plan), runtime, _loader ?? runtime, "runtime")
-                : HostInstall.Pins(runtime, _loader ?? runtime)).Record(report.Provenance, "runtime"));
+        report.Step(StepPhase.Setup, "server runtime is the pinned game build, loader and patchers", () =>
+            HostInstall.CheckPins(RequiredRuntimePins(plan), runtime, _loader ?? runtime, "runtime").Record(report.Provenance, "runtime"));
     }
 
     /// <summary>Refuses a busy CLI port on the host, then opens the loopback tunnel to it.</summary>

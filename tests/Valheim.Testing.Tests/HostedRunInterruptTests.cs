@@ -28,7 +28,7 @@ public sealed partial class HostedServerRunTests
         string clientInstall = clientHost.Local("/Users/tester/valheim");
         FakeInstalls.MacClient(clientInstall);
         var (plan, profile) = Write(host, withClient: true);
-        var client = new ClientRunPlan { Mode = "owned", Architecture = "x64", Install = _root, Port = 5578, Pinning = "none", StartSeconds = 120, BepInExSeconds = 120 };
+        var client = PreparedClient(clientHost, startSeconds: 120, bepInExSeconds: 120, connect: false);
         using var interrupt = new RunCancellation();
         // The wait hangs until its token is cancelled; the Ctrl+C comes while it is in progress.
         clientHost.Hang.Add("follow");

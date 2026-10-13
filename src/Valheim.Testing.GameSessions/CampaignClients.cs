@@ -162,8 +162,9 @@ internal sealed class CampaignClients
         var listing = await HostInstall.ListAsync(host, gameRoot, HostedTimeouts.Long, InstallPins.PinPaths, cancellation).ConfigureAwait(false);
         var loader = loaderRoot == gameRoot ? listing :
             await HostInstall.ListAsync(host, loaderRoot, HostedTimeouts.Long, InstallPins.PinPaths, cancellation).ConfigureAwait(false);
-        if (plan.Pinned)
-            HostInstall.CheckPins(plan.InstallPins ?? throw new ArgumentException("Pin the owned client's game build, loader and patchers in installPins, or opt out explicitly with \"pinning\": \"none\"."), listing, loader, "client install");
+        HostInstall.CheckPins(plan.InstallPins ?? throw new ArgumentException(
+            "A client placed on an inventory host runs from that host's install, not a disposable profile, so it cannot pin it as found: " +
+            "pin its game build, loader and patchers in the client section's installPins (InstallPins.Of computes them)."), listing, loader, "client install");
         await HostClientPreflight.CheckAsync(host, loaderRoot, platform, plan, HostedTimeouts.Quick, cancellation).ConfigureAwait(false);
         await HostInstall.RequirePortFreeAsync(host, role.CliPort, HostedTimeouts.Quick, cancellation).ConfigureAwait(false);
         // The first write under the run directory: it must lie outside the install, decided on the host with links resolved there.

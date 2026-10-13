@@ -27,8 +27,8 @@ public sealed class PinnedServerRunTests : IDisposable
     // A path the run reports on this machine's host, in the mirror.
     private string OnHost(string path) => _machine.Host.Local(path);
 
-    // runtimePins: the pins to write (default: the runtime's own). Unpinned: pinning "none", no pins and no fixture manifests.
-    private string WritePlan(Dictionary<string, object>? logScan = null, InstallPins? runtimePins = null, bool unpinned = false,
+    // runtimePins: the pins to write (default: the runtime's own).
+    private string WritePlan(Dictionary<string, object>? logScan = null, InstallPins? runtimePins = null,
         object? client = null)
     {
         Directory.CreateDirectory(Path.Combine(World, "worlds_local"));
@@ -37,15 +37,14 @@ public sealed class PinnedServerRunTests : IDisposable
         var plan = new Dictionary<string, object>
         {
             ["scenario"] = "smoke",
-            ["runtime"] = new { source = LocalServerMachine.Install, sha256 = unpinned ? new Dictionary<string, string>() : WorldFixture.Manifest(Runtime) },
-            ["world"] = new { source = World, sha256 = unpinned ? new Dictionary<string, string>() : WorldFixture.Manifest(World) },
+            ["runtime"] = new { source = LocalServerMachine.Install, sha256 = WorldFixture.Manifest(Runtime) },
+            ["world"] = new { source = World, sha256 = WorldFixture.Manifest(World) },
             ["arguments"] = new[] { "-batchmode", "-nographics", "-savedir", "{world}" },
-            ["pins"] = unpinned ? new Dictionary<string, string>() : new Dictionary<string, string> { ["worlduid"] = "1" },
+            ["pins"] = new Dictionary<string, string> { ["worlduid"] = "1" },
             ["port"] = port < 1024 ? 5577 : port,
             ["logScan"] = logScan ?? [],
         };
-        if (unpinned) plan["pinning"] = "none";
-        else plan["runtimePins"] = runtimePins ?? InstallPins.Of(Runtime);
+        plan["runtimePins"] = runtimePins ?? InstallPins.Of(Runtime);
         if (client != null) plan["client"] = client;
         string path = Path.Combine(_root, "plan.json");
         File.WriteAllText(path, JsonSerializer.Serialize(plan));
@@ -79,10 +78,15 @@ public sealed class PinnedServerRunTests : IDisposable
         Scenario = (_, _) => Task.CompletedTask,
         SessionOverride = server == null ? null : _ => server.Session(TimeSpan.FromSeconds(60)),
     };
-    private static object MacClient(string install, string architecture) => new
+    private static object MacClient(string install, string architecture)
     {
-        mode = "owned", install, architecture, inPlace = true, port = 5556, join = "127.0.0.1:2456", character = "Tester", pinning = "none",
-    };
+        FakeInstalls.MacClient(install);
+        return new
+        {
+            mode = "owned", install, architecture, inPlace = true, port = 5556, join = "127.0.0.1:2456", character = "Tester",
+            installPins = InstallPins.Of(install), pins = new Dictionary<string, string> { [CliCapabilityManifest.PluginGuid] = new string('a', 32) },
+        };
+    }
 
     [Theory]
     [InlineData(0)]
@@ -131,7 +135,6 @@ public sealed class PinnedServerRunTests : IDisposable
         Assert.Equal(before, WorldFixture.Manifest(Runtime)); // the install itself never changes
         Assert.Equal("validate", result.GetProperty("Provenance").GetProperty("mode").GetString());
         Assert.Equal(InstallPins.Of(Runtime).Game, result.GetProperty("Provenance").GetProperty("runtimeGameSha256").GetString());
-        Assert.Equal("strict", result.GetProperty("Pinning").GetString());
         Assert.True(File.Exists(Path.Combine(Output, "input-hashes.json"))); Assert.True(File.Exists(Path.Combine(Output, "junit.xml")));
     }
     // An in-place launch's architecture check runs when the plan is read: validate refuses it, and run refuses it before the server starts.
@@ -162,7 +165,8 @@ public sealed class PinnedServerRunTests : IDisposable
             string plan = WritePlan(client: new
             {
                 mode = "owned", install = install.Root, architecture = "x64", port = 5556,
-                join = "127.0.0.1:2456", character = "Tester", pinning = "none", passwordVariable = variable,
+                join = "127.0.0.1:2456", character = "Tester", passwordVariable = variable,
+                installPins = InstallPins.Of(install.Root), pins = new Dictionary<string, string> { [CliCapabilityManifest.PluginGuid] = FileHash.Md5(Path.Combine(install.Root, "BepInEx", "plugins", "valheimCLI.dll")) },
             });
             var server = new FakeOwnedServer("test.mod");
             Assert.Equal(1, await RunHere(["run", plan, Output], ClientOptions(server)));
@@ -206,7 +210,7 @@ public sealed class PinnedServerRunTests : IDisposable
     [Fact] public async Task AChangedFixtureFailsBeforeAnythingLaunches()
     {
         string plan = WritePlan();
-        File.WriteAllText(Path.Combine(World, "worlds_local", "Test.db"), "edited after pinning");
+        File.WriteAllText(Path.Combine(World, "worlds_local", "Test.db"), "edited after pins recorded");
         Assert.Equal(1, await RunHere(["validate", plan, Output], Options()));
         Assert.False(Result().GetProperty("Passed").GetBoolean());
     }

@@ -39,8 +39,8 @@ internal static class HostedWorldOnHost
     internal sealed record Site(IGameHost Host, string HostName, string WorldsDirectory, string Stage, string KeepIn,
         Func<JournalEntry, CancellationToken, Task> Journal, Func<CancellationToken, Task> Hold) : IHostedWorldSite
     {
-        public HostedWorld Place(HostWorldPlan plan, string output, bool pinned, CancellationToken cancellation) =>
-            HostedWorldOnHost.Place(this, plan, output, pinned, cancellation);
+        public HostedWorld Place(HostWorldPlan plan, string output, CancellationToken cancellation) =>
+            HostedWorldOnHost.Place(this, plan, output, cancellation);
     }
 
     /// <summary>
@@ -62,10 +62,9 @@ internal static class HostedWorldOnHost
     /// placement, ships the fixture into the run's stage folder on the host and verifies every file there, then moves its entries
     /// (all named for the world) into the host's worlds, refusing one that appeared meanwhile.
     /// </summary>
-    internal static HostedWorld Place(Site site, HostWorldPlan plan, string output, bool pinned, CancellationToken cancellation)
+    internal static HostedWorld Place(Site site, HostWorldPlan plan, string output, CancellationToken cancellation)
     {
-        bool verified = pinned || plan.World.Sha256.Count != 0;
-        var copy = verified ? WorldFixture.Copy(plan.World.Source, output, plan.World.Sha256) : WorldFixture.CopyAsFound(plan.World.Source, output);
+        var copy = WorldFixture.Copy(plan.World.Source, output, plan.World.Sha256);
         copy.Preserve = true;
         try
         {

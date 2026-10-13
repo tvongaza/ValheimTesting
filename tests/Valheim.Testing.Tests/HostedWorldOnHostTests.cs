@@ -32,7 +32,7 @@ public sealed class HostedWorldOnHostTests : IDisposable
         string path = _host.Local(Worlds + "/" + existing);
         if (existing == "Campaign") Directory.CreateDirectory(path); else File.WriteAllText(path, "the user's own");
         string output = Directory.CreateDirectory(Path.Combine(_root, "out")).FullName;
-        var error = Assert.Throws<InvalidOperationException>(() => HostedWorldOnHost.Place(Site(), Plan(), output, pinned: true, CancellationToken.None));
+        var error = Assert.Throws<InvalidOperationException>(() => HostedWorldOnHost.Place(Site(), Plan(), output, CancellationToken.None));
         Assert.Contains("never copied over a world", error.Message);
         Assert.Empty(_journal);
         Assert.DoesNotContain(_host.Runs, run => run.Script is "ship" or "world-move");
@@ -42,7 +42,7 @@ public sealed class HostedWorldOnHostTests : IDisposable
     [Fact] public void ThePlacementIsJournalledBeforeTheShipAndCollectingMovesItIntoTheRunsFolder()
     {
         string output = Directory.CreateDirectory(Path.Combine(_root, "out")).FullName;
-        var placed = HostedWorldOnHost.Place(Site(), Plan(), output, pinned: true, CancellationToken.None);
+        var placed = HostedWorldOnHost.Place(Site(), Plan(), output, CancellationToken.None);
         Assert.Equal("pc", placed.Host);
         Assert.True(File.Exists(_host.Local(Worlds + "/Campaign/_main.0.fwl2")));
         Assert.False(File.Exists(_host.Local(Worlds + "/SOURCE.txt"))); // the ship's record stays in the stage

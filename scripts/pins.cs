@@ -33,7 +33,7 @@
 // check reads NuGet.org and fails, naming the file and line, when: a pin differs from the file; a released version is not
 // served, is a candidate, or is superseded by a newer version NuGet.org lists (the docs lag a release; an unlisted
 // version, such as a release withdrawn as broken, supersedes nothing); the released Cli was not built from
-// releasedCliCommit; a released package's Valheim.Testing* dependency is not met by the released set (so a page pinning
+// releasedCliCommit; a released package's Valheim.Testing* dependency is not met by the released set (so a page that pins
 // both Doubles and Valheim.Testing names a pair that restores together); or a project's source version is older than its
 // release; or a fork link pinned to releasedCliCommit names a file or heading the fork does not have at that commit (read
 // from GitHub). write and docs read only this checkout.
@@ -208,7 +208,7 @@ async Task<List<Problem>> CheckReleased(HttpClient http, Dictionary<string, stri
         if (!released.TryGetValue(dependency.Id, out string? pinned))
             problems.Add(new(VersionsFile, line, $"{id} {version} depends on {dependency.Id}, which has no released version here."));
         else if (!VersionRange.TryParse(dependency.Range, out VersionRange? range) || !NuGetVersion.TryParse(pinned, out NuGetVersion? pinnedVersion) || !range.Satisfies(pinnedVersion))
-            problems.Add(new(VersionsFile, line, $"{id} {version} depends on {dependency.Id} {dependency.Range}, but the released {dependency.Id} is {pinned}: a page pinning both would restore a mismatched pair."));
+            problems.Add(new(VersionsFile, line, $"{id} {version} depends on {dependency.Id} {dependency.Range}, but the released {dependency.Id} is {pinned}: a page that pins both would restore a mismatched pair."));
         // NuGet restores the lowest version a range allows, so a floor below the released dependency makes a project with
         // this package alone restore an older one than the rest of the release (v2026.10.06: Doubles .11 kept Valheim.Testing .12).
         else if (range.MinVersion != null && range.MinVersion != pinnedVersion)

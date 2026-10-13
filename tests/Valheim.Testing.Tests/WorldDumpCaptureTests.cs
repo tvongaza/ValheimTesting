@@ -87,16 +87,13 @@ public class WorldDumpCaptureTests
     }
 
     [Fact]
-    public async Task ARefusedDumpCommandOrAnUnpinnedActorStopsBeforeAnyFile()
+    public async Task ARefusedDumpCommandStopsBeforeAnyFile()
     {
         using var output = new PinnedDumpFixture();
         var refusing = new ScriptedTransport().On("cli_world", _ => ScriptedTransport.Ok(WorldLine))
             .OnPrefix("cli_world_dump ", _ => ScriptedTransport.Ok("That command is a cheat"));
         await Assert.ThrowsAnyAsync<Exception>(() => WorldDump.CaptureCoreAsync(refusing.Actor(), (_, _, _) => throw new InvalidOperationException("no fetch"),
             "C:/dumps", "fine", 8, (0, 0, 64), "1.0.16", output.Directory, CancellationToken.None));
-        var unpinned = new ScriptedTransport().Actor(expectations: EnvironmentPinning.None);
-        await Assert.ThrowsAsync<InvalidOperationException>(() => WorldDump.CaptureCoreAsync(unpinned, (_, _, _) => throw new InvalidOperationException("no fetch"),
-            "C:/dumps", "fine", 8, null, "1.0.16", output.Directory, CancellationToken.None));
         Assert.Empty(Directory.GetFileSystemEntries(output.Directory));
     }
 

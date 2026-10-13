@@ -101,7 +101,7 @@ public sealed class HostedRunOptions<TPlan> where TPlan : class
 /// <item>Records provenance: plan, runner and toolkit hashes, mode, platform, <c>crossplay</c>, the profile, the world copy and their input hashes.</item>
 /// <item>Takes the host's lock, checks every runtime or plugin pin the plan supplies, stages the server's disposable loader
 /// profile from the install (which is never changed), and binds omitted pins from that profile. It copies the world, checking
-/// a supplied manifest or pinning its hashes as found, reads a world UID from the fixture only when the plan supplied neither
+/// a supplied manifest or recording its hashes as found, reads a world UID from the fixture only when the plan supplied neither
 /// <c>worlduid</c> nor <c>world</c>, places the copy beside the profile, and checks the profile's executable and its game build,
 /// loader, patchers, required plugins and staged plugin set before launch.</item>
 /// <item><c>validate</c> stops there. Otherwise: checks the CLI port is free, starts the <see cref="GameSession"/>'s owned
@@ -113,12 +113,8 @@ public sealed class HostedRunOptions<TPlan> where TPlan : class
 /// with the plan's <see cref="ServerRunPlan.LogScan"/>), writes <c>result.json</c> and <c>junit.xml</c>, and prints PASS (only
 /// for <c>run</c>), VALIDATED or FAIL. Ctrl+C and SIGTERM cancel the run.</item>
 /// </list>
-/// A plan with <see cref="ServerRunPlan.Pinning"/> <c>none</c> runs without pins: the runner prints
-/// <see cref="EnvironmentPinning.Warning"/> once the plan is read, copies fixtures without a manifest as found, records the
-/// runtime's hashes without checking them, and marks <c>result.json</c>, <c>junit.xml</c>, <c>input-hashes.json</c>,
-/// <c>boot-N.process.json</c>, <c>connection-N.jsonl</c> and the result banner "environment not pinned".
-/// A default strict standalone plan with omitted pins is different: the run enforces the values it observed from the staged
-/// profile and fixture, records their <c>PinOrigins</c> as <c>observed</c>, and never carries the unpinned marker.
+/// A standalone plan with omitted pins enforces the values it observed from the staged profile and fixture and records their
+/// <c>PinOrigins</c> as <c>observed</c>.
 /// <para>
 /// Without <c>--inventory</c> the server's host is this machine (a <c>local</c> host whose one environment is the plan's install);
 /// with <c>--inventory &lt;environments.json&gt;</c> it is a host of the private environment inventory instead:
@@ -292,7 +288,7 @@ public static class PinnedServerRun
                 // The host gets the session's token, which the session's teardown and a failed start cancel.
                 game = new GameSession(report, output, host.HostWorld.WorldUid, server: null, [], cancellation.Token, Actor)
                 {
-                    Mod = options.Mod, ServerPinsMod = !host.Pinned || options.Mod.PinnedIn(host.Pins),
+                    Mod = options.Mod, ServerPinsMod = options.Mod.PinnedIn(host.Pins),
                     DisposeOnFailedStart = false, // The finally disposes it.
                 };
                 await game.StartAsync().ConfigureAwait(false);
@@ -457,7 +453,6 @@ public static class PinnedServerRun
             report.Provenance["hostCrossplay"] = hostPlan.HostWorld!.Crossplay ? "true" : "false";
             report.Provenance["cliPreflight"] = hostPlan.CliPreflight;
             report.Provenance["clientMode"] = hostPlan.Mode;
-            if (!hostPlan.Pinned) report.MarkNotPinned("the hosting client's plan sets pinning \"none\"");
             var placement = actors.Placement(report);
             // The hosting client's world: in this machine's client data directory for a local host, else in its host user's own
             // worlds_local (beside the characters_local its character was staged in), moved out into the run's folder there after.
@@ -487,7 +482,7 @@ public static class PinnedServerRun
                 // A client a scenario opens itself is one of the campaign's, by name, on its host and lease.
                 ResolveClient = (_, name) => (name ?? throw new ArgumentException($"The campaign declares clients {string.Join(", ", named.Keys.Order(StringComparer.Ordinal))}; say which one opens.", nameof(name)), placement),
                 FindClientHost = campaignActors.ClientHost,
-                Mod = options.Mod, ServerPinsMod = !hostPlan.Pinned || options.Mod.PinnedIn(hostPlan.Pins),
+                Mod = options.Mod, ServerPinsMod = options.Mod.PinnedIn(hostPlan.Pins),
                 DisposeOnFailedStart = false, // The finally disposes it.
             };
             await game.StartAsync().ConfigureAwait(false);
@@ -571,7 +566,7 @@ public static class PinnedServerRun
         HostedServerRun? hosted = null;
         PreparedHostedCampaign? prepared = null;
         string output = Path.GetFullPath(outputArgument);
-        bool ownOutput = false, pinned = true, definite = false, unknownOutcome = false;
+        bool ownOutput = false, definite = false, unknownOutcome = false;
         string? unknown = null, abandoned = null;
         // A run with its own id (a campaign's, a hosted run's, a local run's) journals this machine's copies under it too: one
         // journal run per run. A hosted run whose id differs from its campaign's (a test's fixed id) is a second run inside it.
@@ -588,13 +583,6 @@ public static class PinnedServerRun
             IReadOnlyDictionary<string, ClientRunPlan>? campaignPlans = campaign is { } declared ? declared.Clients(plan) : null;
             foreach (var client in campaignPlans?.Values ?? options.ClientPlans?.Invoke(plan) ?? [])
                 client.RequirePasswordSource();
-            pinned = plan.Pinned;
-            if (!pinned)
-            {
-                // Only the plan's own explicit "pinning": "none" gets here; warned before anything is copied or launched.
-                EnvironmentPinning.Warn($"{options.Name} with plan {planName}");
-                report.MarkNotPinned("the plan sets pinning \"none\"");
-            }
             ResolvedEnvironment? environment = given;
             string? serverLoaderPackage = null; // an inventory recipe's reviewed loader package for a standalone server's profile
             if (campaign is var (manifestFile, bind))
@@ -676,7 +664,7 @@ public static class PinnedServerRun
                     if (storage != null) Console.WriteLine("profile storage: " + storage);
                 }).ConfigureAwait(false);
             phase = StepPhase.Setup;
-            // A supplied manifest remains an expected pin. A strict standalone run binds an omitted one from the copy as found.
+            // A supplied manifest remains an expected pin. A standalone run binds an omitted one from the copy as found.
             bool Verified(PinnedDirectory fixture) => fixture.Sha256.Count != 0;
             WorldFixture CopyOf(PinnedDirectory fixture) =>
                 Verified(fixture) ? WorldFixture.Copy(fixture.Source, output, fixture.Sha256) : WorldFixture.CopyAsFound(fixture.Source, output);
@@ -684,11 +672,10 @@ public static class PinnedServerRun
             // world=any or world=<name> is already a plan-supplied identity expectation. In particular, prepare-server uses
             // world=any with an intentionally empty new-world directory that the game populates on first boot.
             bool worldIdentityFromPlan = plan.Pins.ContainsKey("worlduid") || plan.Pins.ContainsKey("world");
-            await hosted.LockAndPrepareRuntimeAsync(report, plan, pinned, cancellation.Token).ConfigureAwait(false);
-            report.Step(StepPhase.Setup, Verified(plan.World) ? "copy and verify pinned world" : pinned ? "copy the world and pin it as found" : "copy unpinned world as found", () =>
+            await hosted.LockAndPrepareRuntimeAsync(report, plan, cancellation.Token).ConfigureAwait(false);
+            report.Step(StepPhase.Setup, Verified(plan.World) ? "copy and verify pinned world" : "copy the world and pin it as found", () =>
             {
                 world = CopyOf(plan.World); world.Preserve = true;
-                if (!pinned) return;
                 if (!worldManifestFromPlan)
                     plan.World = new PinnedDirectory { Source = world.DirectoryPath, Sha256 = new Dictionary<string, string>(world.SourceHashes, StringComparer.Ordinal) };
                 if (!worldIdentityFromPlan)
@@ -708,7 +695,7 @@ public static class PinnedServerRun
             var pinOrigins = new SortedDictionary<string, string>(StringComparer.Ordinal);
             // ApplyTo already rewrites a campaign to its prepared profiles and fixture. PinOrigins describes only a standalone
             // input plan whose supplied expectations can be distinguished from values this run observed and bound.
-            if (pinned && campaign == null)
+            if (campaign == null)
             {
                 foreach (var origin in hosted.PinOrigins) pinOrigins.Add(origin.Key, origin.Value);
                 pinOrigins["worldManifest"] = worldManifestFromPlan ? "plan" : "observed";
@@ -718,19 +705,19 @@ public static class PinnedServerRun
                     report.Provenance["pins"] = "pins observed, not reviewed";
             }
             File.WriteAllText(Path.Combine(output, "input-hashes.json"), JsonSerializer.Serialize(
-                EnvironmentPinning.Stamp(new()
+                new Dictionary<string, object?>
                 {
                     ["runtime"] = hosted.RuntimeHashes,
-                    ["runtimePins"] = pinned ? plan.RuntimePins : null,
-                    ["plugins"] = pinned ? plan.Pins.Where(pin => !Expectations.IsWorldKey(pin.Key))
-                        .ToDictionary(pin => pin.Key, pin => pin.Value, StringComparer.Ordinal) : null,
-                    ["sourceValheimCliPins"] = pinned ? hosted.SourceCliPins : null,
-                    ["replacedValheimCliPaths"] = pinned ? hosted.ReplacedCliPaths : null,
+                    ["runtimePins"] = plan.RuntimePins,
+                    ["plugins"] = plan.Pins.Where(pin => !Expectations.IsWorldKey(pin.Key))
+                        .ToDictionary(pin => pin.Key, pin => pin.Value, StringComparer.Ordinal),
+                    ["sourceValheimCliPins"] = hosted.SourceCliPins,
+                    ["replacedValheimCliPaths"] = hosted.ReplacedCliPaths,
                     ["world"] = world.SourceHashes,
-                    ["worldUid"] = pinned ? plan.Pins.GetValueOrDefault("worlduid") : null,
-                    ["pinOrigins"] = pinned ? pinOrigins : null,
-                }, pinned), new JsonSerializerOptions { WriteIndented = true }));
-            hosted.CheckRuntime(report, plan, pinned);
+                    ["worldUid"] = plan.Pins.GetValueOrDefault("worlduid"),
+                    ["pinOrigins"] = pinOrigins,
+                }, new JsonSerializerOptions { WriteIndented = true }));
+            hosted.CheckRuntime(report, plan);
             await hosted.CheckCrossplayAsync(report, plan, cancellation.Token).ConfigureAwait(false);
             if (mode == "validate") report.Step(StepPhase.Setup, "prepared only; no game launched", () => { });
             else await Launch(plan, hosted, runtimeDirectory, worldDirectory).ConfigureAwait(false);
@@ -819,9 +806,8 @@ public static class PinnedServerRun
             return 3;
         }
         // Only `run` is an acceptance result: validate launches nothing, and preparing a fixture never passes a test.
-        Console.WriteLine((unknownOutcome ? "UNKNOWN (a host operation's outcome could not be established; neither a pass nor a failure: " + unknown + ")"
-            : !report.Passed ? "FAIL" : mode == "run" ? "PASS" : "VALIDATED (plan and fixtures only; no game was launched)")
-            + (pinned ? "" : $" [{EnvironmentPinning.NotPinned}]"));
+        Console.WriteLine(unknownOutcome ? "UNKNOWN (a host operation's outcome could not be established; neither a pass nor a failure: " + unknown + ")"
+            : !report.Passed ? "FAIL" : mode == "run" ? "PASS" : "VALIDATED (plan and fixtures only; no game was launched)");
         return report.Passed ? 0 : unknownOutcome ? 3 : 1;
 
         async Task Launch(TPlan plan, HostedServerRun hostedRun, string runtimeDirectory, string worldDirectory)
@@ -843,7 +829,7 @@ public static class PinnedServerRun
                         hostedRun.ClientPlacement(report))
                     : game!.ThisMachine(client, name), // assigned before any client opens
                 FindClientHost = hostedRun.ClientHost,
-                Mod = options.Mod, ServerPinsMod = !plan.Pinned || options.Mod.PinnedIn(plan.Pins),
+                Mod = options.Mod, ServerPinsMod = options.Mod.PinnedIn(plan.Pins),
                 DisposeOnFailedStart = false, // The finally disposes it, on the cleanup's own bounded token.
             };
             await game.StartAsync().ConfigureAwait(false); // "start and verify owned dedicated fixture"

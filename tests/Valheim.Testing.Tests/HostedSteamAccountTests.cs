@@ -29,8 +29,6 @@ public sealed partial class HostedServerRunTests
     private static ScriptedTransport SignedInClientTransport(string id = LeaseBox.SteamId) =>
         new ScriptedTransport().On("cli_multiplayer_identity", _ => ScriptedTransport.Ok("OK: steamId=" + id + ", playFabLoginState=NotLoggedIn, playFabId=none, backend=Steam, gameState=main_menu, connectionStatus=None, isServer=False, isOpenServer=False, server="));
 
-    private ClientRunPlan OwnedClient() => new() { Mode = "owned", Architecture = "x64", Install = _root, Port = 5578, Pinning = "none", StartSeconds = 30, LaunchArguments = ["+connect", "linux-box:2456"] };
-
     private static JsonElement ResultIn(string output) => JsonDocument.Parse(File.ReadAllText(Path.Combine(output, "result.json"))).RootElement;
     private static List<string> StepNamesIn(string output) => ResultIn(output).GetProperty("Steps").EnumerateArray().Select(step => step.GetProperty("Name").GetString()!).ToList();
 
@@ -40,7 +38,7 @@ public sealed partial class HostedServerRunTests
         string plainOutput = Path.Combine(_root, "out-plain");
         Assert.Equal(0, await PinnedServerRun.MainAsync(TestEnvironment.Read(plain.Profile), ["run", plain.Plan, plainOutput], Options(plain.Host, plain.Server, run =>
         {
-            using (run.OpenClient(OwnedClient())) { }
+            using (run.OpenClient(PreparedClient(plain.Client))) { }
             return Task.CompletedTask;
         }, plain.Client, new ScriptedTransport())));
         // Today's steps, exactly: nothing is leased and no account is recorded.
@@ -57,7 +55,7 @@ public sealed partial class HostedServerRunTests
         var leased = WithClient(Accounts());
         Assert.Equal(0, await PinnedServerRun.MainAsync(TestEnvironment.Read(leased.Profile), ["run", leased.Plan, Output], Options(leased.Host, leased.Server, run =>
         {
-            using (run.OpenClient(OwnedClient())) { }
+            using (run.OpenClient(PreparedClient(leased.Client))) { }
             return Task.CompletedTask;
         }, leased.Client, new ScriptedTransport(), LeaseBox.Host())));
         // The same run with a pool: the same steps plus the lease and its release, the same client launch, and the account's name.
@@ -87,7 +85,7 @@ public sealed partial class HostedServerRunTests
         SteamAccountStatus? during = null, afterStop = null;
         Assert.Equal(0, await PinnedServerRun.MainAsync(TestEnvironment.Read(run.Profile), ["run", run.Plan, Output], Options(run.Host, run.Server, async context =>
         {
-            using (var session = context.OpenClient(OwnedClient()))
+            using (var session = context.OpenClient(PreparedClient(run.Client)))
             {
                 Assert.Equal(LeaseBox.Account, session.Account!.Account);
                 during = await LeaseBox.StatusAsync(PoolFile);
@@ -109,7 +107,7 @@ public sealed partial class HostedServerRunTests
         bool opened = false;
         Assert.Equal(1, await PinnedServerRun.MainAsync(TestEnvironment.Read(run.Profile), ["run", run.Plan, Output], Options(run.Host, run.Server, context =>
         {
-            using (context.OpenClient(OwnedClient())) opened = true;
+            using (context.OpenClient(PreparedClient(run.Client))) opened = true;
             return Task.CompletedTask;
         }, run.Client, new ScriptedTransport(), LeaseBox.Host())));
         Assert.False(opened);
@@ -130,7 +128,7 @@ public sealed partial class HostedServerRunTests
         run.Client.Failures["client-start"] = new HostResult(HostOutcome.Exited, 0, "VT-INTERACTIVE no-steam no Steam client runs as tester\n", "", TimeSpan.Zero, false);
         Assert.Equal(1, await PinnedServerRun.MainAsync(TestEnvironment.Read(run.Profile), ["run", run.Plan, Output], Options(run.Host, run.Server, context =>
         {
-            using (context.OpenClient(OwnedClient())) { }
+            using (context.OpenClient(PreparedClient(run.Client))) { }
             return Task.CompletedTask;
         }, run.Client, new ScriptedTransport(), LeaseBox.Host())));
         Assert.Contains("No Steam client", Result().GetProperty("Steps").EnumerateArray().Single(step => step.GetProperty("Name").GetString() == "runner failed").GetProperty("Error").GetString(),
@@ -146,7 +144,7 @@ public sealed partial class HostedServerRunTests
         var run = WithClient(Accounts());
         Assert.Equal(3, await PinnedServerRun.MainAsync(TestEnvironment.Read(run.Profile), ["run", run.Plan, Output], Options(run.Host, run.Server, context =>
         {
-            var session = context.OpenClient(OwnedClient());
+            var session = context.OpenClient(PreparedClient(run.Client));
             run.Client.Failures["mac-client-stop"] = new HostResult(HostOutcome.Unknown, null, "", "", TimeSpan.FromSeconds(45), true);
             session.Dispose();
             return Task.CompletedTask;
@@ -177,7 +175,7 @@ public sealed partial class HostedServerRunTests
         run.Client.SteamUserReply = reply + "\n";
         int code = await PinnedServerRun.MainAsync(TestEnvironment.Read(run.Profile), ["run", run.Plan, Output], Options(run.Host, run.Server, context =>
         {
-            using (context.OpenClient(OwnedClient())) { }
+            using (context.OpenClient(PreparedClient(run.Client))) { }
             return Task.CompletedTask;
         }, run.Client, SignedInClientTransport(), LeaseBox.Host()));
         var check = Step("client player's host is signed in to Steam account vt_client_one (signed-in check)");
@@ -210,7 +208,7 @@ public sealed partial class HostedServerRunTests
         bool exercised = false;
         int code = await PinnedServerRun.MainAsync(TestEnvironment.Read(run.Profile), ["run", run.Plan, Output], Options(run.Host, run.Server, context =>
         {
-            using var session = context.OpenClient(OwnedClient());
+            using var session = context.OpenClient(PreparedClient(run.Client));
             exercised = true;
             return Task.CompletedTask;
         }, run.Client, SignedInClientTransport(gameId), LeaseBox.Host()));
@@ -229,7 +227,10 @@ public sealed partial class HostedServerRunTests
         SteamAccountStatus? during = null;
         Assert.Equal(0, await PinnedServerRun.MainAsync(TestEnvironment.Read(run.Profile), ["run", run.Plan, Output], Options(run.Host, run.Server, async context =>
         {
-            using (var session = context.OpenClient(new ClientRunPlan { Mode = "attach", Port = 15578, Pinning = "none" }))
+            using (var session = context.OpenClient(new ClientRunPlan
+            {
+                Mode = "attach", Port = 15578, Pins = new() { [CliCapabilityManifest.PluginGuid] = TestCliSet.CorePin },
+            }))
             {
                 Assert.False(session.Owned);
                 during = await LeaseBox.StatusAsync(PoolFile);
@@ -256,7 +257,7 @@ public sealed partial class HostedServerRunTests
             run.Client.SteamUserReply = "VT-STEAMUSER id " + LeaseBox.SteamId + "\n";
             Assert.Equal(0, await PinnedServerRun.MainAsync(TestEnvironment.Read(run.Profile), ["run", run.Plan, Output], Options(run.Host, run.Server, context =>
             {
-                using (context.OpenClient(OwnedClient())) { }
+                using (context.OpenClient(PreparedClient(run.Client))) { }
                 return Task.CompletedTask;
             }, run.Client, SignedInClientTransport(), LeaseBox.Host())));
             var seen = Seen(Output, run);
@@ -268,7 +269,7 @@ public sealed partial class HostedServerRunTests
             string controlOutput = Path.Combine(_root, "out-control");
             Assert.Equal(0, await PinnedServerRun.MainAsync(TestEnvironment.Read(control.Profile), ["run", control.Plan, controlOutput], Options(control.Host, control.Server, context =>
             {
-                using (context.OpenClient(OwnedClient())) { }
+                using (context.OpenClient(PreparedClient(control.Client))) { }
                 return Task.CompletedTask;
             }, control.Client, SignedInClientTransport(), LeaseBox.Host(), name: "toolkit-" + canary)));
             Assert.Contains(Seen(controlOutput, control), text => text.Contains(canary, StringComparison.Ordinal));

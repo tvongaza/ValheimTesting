@@ -149,10 +149,21 @@ public sealed class GameSession : IAsyncDisposable
             Report.Provenance[prefix + "LaunchMode"] = mode;
             Report.Provenance[prefix + "Install"] = mode switch
             {
-                "profile" => $"source game: {plan.Install}; owned loader profile: {plan.PreparedLoaderRoot ?? plan.Install}",
+                "profile" => $"source game: {plan.PreparedSourceGameRoot ?? plan.Install}; owned loader profile: {plan.PreparedLoaderRoot ?? plan.Install}",
                 _ => $"in place: {plan.Install}",
             };
             if (plan.PreparedLeftOut != null) Report.Provenance[prefix + "ProfileLeftOut"] = plan.PreparedLeftOut;
+            (plan.InstallPins ?? throw new InvalidOperationException($"Prepared client {actor} has no bound install pins to record."))
+                .Record(Report.Provenance, prefix);
+            if (plan.PreparedPinOrigins.Count != 0)
+                Report.RecordPinOrigins(plan.PreparedPinOrigins.Select(pin => new KeyValuePair<string, string>(prefix + "." + pin.Key, pin.Value)));
+            // The run-level marker, as a standalone server sets it: any observed pin, server's or client's, was not reviewed.
+            if (plan.PreparedPinOrigins.Values.Contains("observed", StringComparer.Ordinal))
+                Report.Provenance["pins"] = "pins observed, not reviewed";
+            if (plan.PreparedSourceCliPins.Count != 0)
+                Report.Provenance[prefix + "SourceValheimCliPins"] = string.Join(" ", plan.PreparedSourceCliPins.Select(pin => pin.Key + "=" + pin.Value));
+            if (plan.PreparedReplacedCliPaths.Count != 0)
+                Report.Provenance[prefix + "ReplacedValheimCliPaths"] = string.Join(", ", plan.PreparedReplacedCliPaths);
         }
     }
     private readonly List<ClientActor> _opened = [];
@@ -342,7 +353,7 @@ public sealed class GameSession : IAsyncDisposable
 
     /// <summary>The mod's declaration, whose Harmony check <see cref="StartAsync"/> runs on the server (or host) when <see cref="ServerPinsMod"/>.</summary>
     internal ModDeclaration? Mod { get; init; }
-    /// <summary>Whether the server (or host) loads the mod: its plugin pinned to a build, or an unpinned plan.</summary>
+    /// <summary>Whether the server (or host) loads the mod: its plugin is pinned to a build.</summary>
     internal bool ServerPinsMod { get; init; }
 
 

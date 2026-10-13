@@ -40,7 +40,6 @@ public sealed record TerrainSiteSnapshot(string Site, string WorldUid, DateTimeO
             throw new ArgumentException("Supply 1..16 distinct points inside the supported world range.", nameof(points));
         if (readinessTimeout <= TimeSpan.Zero || readinessTimeout > TimeSpan.FromMinutes(2))
             throw new ArgumentOutOfRangeException(nameof(readinessTimeout), "Use a positive timeout of at most two minutes.");
-        if (!client.Pinned || server is not null && !server.Pinned) throw new InvalidOperationException("Terrain snapshots require strict environment pins on every actor.");
 
         var started = DateTimeOffset.UtcNow;
         var commands = new List<ObservedCommand>();

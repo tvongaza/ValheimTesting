@@ -29,7 +29,8 @@ internal sealed class LocalClientCopy
 
     // The plan as it was before it was bound, restored when the profile is retired: a plan reused later makes a new profile.
     private sealed record Unbound(string Install, InstallPins? InstallPins, Dictionary<string, string> Pins, string? CliManifest,
-        string? LoaderRoot, string? LaunchMode, string? SourceGameRoot, string? SourceGameHash, string? LeftOut);
+        string? LoaderRoot, string? LaunchMode, string? SourceGameRoot, string? SourceGameHash, string? LeftOut,
+        SortedDictionary<string, string> PinOrigins, Dictionary<string, string> SourceCliPins, IReadOnlyList<string> ReplacedCliPaths);
 
     private LocalClientCopy(IGameHost host, string actor, string runtime, string stage, string launchRoot, RunJournal journal, ClientRunPlan plan, Unbound unbound)
     { _host = host; _actor = actor; _runtime = runtime; _stage = stage; _launchRoot = launchRoot; _journal = journal; _plan = plan; _unbound = unbound; }
@@ -86,9 +87,10 @@ internal sealed class LocalClientCopy
         Console.WriteLine($"Preparing an owned mod profile for {source}; the game install stays in place.");
         using var selection = await InstallSelection.ReadAsync(host, HostedRuntimeKind.Client, source, manifest, location, loaderPackage,
             plan.Port, plan, StepTimeout, cancellation).ConfigureAwait(false);
-        Directory.CreateDirectory(root);
         if (selection.Replaced.Count != 0)
             Console.WriteLine($"{actor}: the profile stages ValheimCLI {manifest.Build} in place of the install's own {string.Join(", ", selection.Replaced)}.");
+        var bound = selection.BindPins(actor, plan.InstallPins, plan.Pins, manifest, setFolder);
+        Directory.CreateDirectory(root);
         // Journalled before the profile: an interrupted preparation leaves a record of every path it may own.
         journal.AppendLocal(actor, JournalEntry.Of(JournalEntry.CopyIntended, ("runtime", runtime), ("stage", stage), ("parent", parent),
             ("runtimeKind", "client"), ("launchRoot", source)));
@@ -108,8 +110,9 @@ internal sealed class LocalClientCopy
             ("files", profile.Loader.Files.Count.ToString(CultureInfo.InvariantCulture)), ("source", source),
             ("runtimeKind", "client"), ("launchRoot", profile.GameRoot)));
         var unbound = new Unbound(plan.Install, plan.InstallPins, plan.Pins, plan.CliManifest, plan.PreparedLoaderRoot, plan.PreparedLaunchMode,
-            plan.PreparedSourceGameRoot, plan.PreparedSourceGameHash, plan.PreparedLeftOut);
-        Bind(plan, source, profile, manifest, manifestPath, setFolder);
+            plan.PreparedSourceGameRoot, plan.PreparedSourceGameHash, plan.PreparedLeftOut, plan.PreparedPinOrigins,
+            plan.PreparedSourceCliPins, plan.PreparedReplacedCliPaths);
+        Bind(plan, source, profile, manifestPath, bound, selection.Replaced);
         return new LocalClientCopy(host, actor, runtime, stage, profile.GameRoot, journal, plan, unbound);
     }
 
@@ -128,13 +131,15 @@ internal sealed class LocalClientCopy
         _plan.PreparedLoaderRoot = _unbound.LoaderRoot; _plan.PreparedLaunchMode = _unbound.LaunchMode;
         _plan.PreparedSourceGameRoot = _unbound.SourceGameRoot; _plan.PreparedSourceGameHash = _unbound.SourceGameHash;
         _plan.PreparedLeftOut = _unbound.LeftOut;
+        _plan.PreparedPinOrigins = _unbound.PinOrigins; _plan.PreparedSourceCliPins = _unbound.SourceCliPins;
+        _plan.PreparedReplacedCliPaths = _unbound.ReplacedCliPaths;
         _plan.Prepared = false;
     }
 
     // The plan, bound to its profile: the profile's game and loader roots and install pins, its plugin pins with the staged
     // set's in place of any ValheimCLI pin the plan carried (each file's MD5, as the session derives them), and the staged set's manifest.
     private static void Bind(ClientRunPlan plan, string source, HostedRuntimeStage.PreparedProfile profile,
-        CliCapabilityManifest manifest, string manifestPath, string setFolder)
+        string manifestPath, InstallSelection.BoundPins bound, IReadOnlyList<string> replacedCliPaths)
     {
         plan.Install = profile.GameRoot;
         plan.PreparedLoaderRoot = profile.GameRoot == profile.LoaderRoot ? null : profile.LoaderRoot;
@@ -142,11 +147,16 @@ internal sealed class LocalClientCopy
         plan.PreparedLeftOut = HostedRuntimeStage.ProfileLeftOut.Describe(profile.LeftOut);
         plan.PreparedSourceGameRoot = source;
         plan.PreparedSourceGameHash = profile.Pins.Game;
-        if (plan.Pinned)
+        var expectedInstallPins = plan.InstallPins;
+        plan.InstallPins = profile.Pins;
+        plan.Pins = bound.Plugins;
+        plan.PreparedPinOrigins = new(StringComparer.Ordinal)
         {
-            plan.InstallPins = profile.Pins;
-            plan.Pins = InstallSelection.BindCliPins(plan.Pins, manifest, setFolder);
-        }
+            ["installPins"] = expectedInstallPins != null && expectedInstallPins.SameAs(profile.Pins) ? "plan" : "observed",
+        };
+        foreach (var (key, origin) in bound.PluginOrigins()) plan.PreparedPinOrigins[key] = origin;
+        plan.PreparedSourceCliPins = new Dictionary<string, string>(bound.SourceCliPins, StringComparer.Ordinal);
+        plan.PreparedReplacedCliPaths = replacedCliPaths.Order(StringComparer.Ordinal).ToArray();
         plan.CliManifest = Path.GetFullPath(manifestPath);
         plan.Prepared = true;
     }

@@ -1,4 +1,5 @@
 using Valheim.Testing.Game;
+using Valheim.Testing.Game.Fakes;
 using Xunit;
 using Valheim.Testing.GameSessions;
 
@@ -23,7 +24,7 @@ public sealed class LocalClientCopyTests : IDisposable
     {
         Mode = "owned", Install = install, Port = 5556, Join = "127.0.0.1:2456", Character = "Tester",
         Architecture = "x64", // The synthetic Mac install has only the stock x64 Doorstop.
-        Pins = new() { ["valheimCLI.valheimCLI"] = OwnedRunPreflightTests.Md5("an older ValheimCLI core"), ["example.unrelated"] = "absent" },
+        Pins = new() { ["example.unrelated"] = "absent" },
         InstallPins = InstallPins.Of(install),
     };
 
@@ -54,9 +55,10 @@ public sealed class LocalClientCopyTests : IDisposable
         _rig.Write("game/BepInEx/plugins/valheimCLI.dll", System.Text.Encoding.UTF8.GetBytes("an older ValheimCLI core")); // another build, by name
         string manifest = CliSet();
         var plan = Plan(source);
+        string sourceCliPin = plan.Pins[CliCapabilityManifest.PluginGuid] = FileHash.Md5(Path.Combine(source, "BepInEx", "plugins", "valheimCLI.dll"));
         plan.CliManifest = manifest;
         plan.Validate();
-        plan.Preflight(); // The source's checks: its pins but ValheimCLI's, which are the staged set's.
+        plan.Preflight(); // The source ValheimCLI check waits until the profile selection can inspect the build it replaces.
         Assert.True(plan.CopySource);
         Assert.Equal("static and live", plan.CliPreflight);
         var before = Tree(source);
@@ -74,6 +76,8 @@ public sealed class LocalClientCopyTests : IDisposable
         Assert.Equal(copy.Runtime, plan.LoaderRoot);
         Assert.StartsWith(Path.Combine(data, "runs", "local-clients", "vt-prep-"), copy.Runtime);
         Assert.Equal(FileHash.Md5(Path.Combine(_rig.Root, "cli", "valheimCLI.dll")), plan.Pins["valheimCLI.valheimCLI"]);
+        Assert.Equal(sourceCliPin, plan.PreparedSourceCliPins[CliCapabilityManifest.PluginGuid]);
+        Assert.Equal("observed", plan.PreparedPinOrigins["plugins." + CliCapabilityManifest.PluginGuid]);
         Assert.DoesNotContain("valheimCLI.standard", plan.Pins.Keys);
         Assert.Equal("absent", plan.Pins["example.unrelated"]);
         Assert.Equal(manifest, plan.CliManifest);
@@ -105,10 +109,51 @@ public sealed class LocalClientCopyTests : IDisposable
         Assert.Equal(before, Tree(source));
     }
 
+    [ClientHostFact] public async Task ASuppliedSourceValheimCliPinIsCheckedBeforeReplacement()
+    {
+        string source = _rig.Game;
+        _rig.Write("game/BepInEx/plugins/valheimCLI.dll", System.Text.Encoding.UTF8.GetBytes("the source ValheimCLI"));
+        var plan = Plan(source);
+        plan.CliManifest = CliSet();
+        plan.Pins[CliCapabilityManifest.PluginGuid] = OwnedRunPreflightTests.Md5("another source ValheimCLI");
+        string data = Path.Combine(_rig.Root, "source-cli-check");
+        using var journalDirectory = RunJournal.UseLocalDirectory(Path.Combine(data, "journal"));
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            LocalClientCopy.PrepareAsync("client", plan, default, data, ThisMachine(), loader: (_, _) => null));
+
+        Assert.Contains("install build it replaces", error.Message);
+        Assert.False(Directory.Exists(Path.Combine(data, "runs")));
+        Assert.False(plan.Prepared);
+    }
+
+    [ClientHostFact] public async Task AStagedCliMatchDoesNotSkipTheSuppliedSourcePinCheck()
+    {
+        string source = _rig.Game;
+        _rig.Write("game/BepInEx/plugins/valheimCLI.dll", System.Text.Encoding.UTF8.GetBytes("a drifted source ValheimCLI"));
+        var plan = Plan(source);
+        plan.CliManifest = CliSet();
+        plan.Pins[CliCapabilityManifest.PluginGuid] = FileHash.Md5(Path.Combine(_rig.Root, "cli", "valheimCLI.dll"));
+        string data = Path.Combine(_rig.Root, "staged-cli-match");
+        using var journalDirectory = RunJournal.UseLocalDirectory(Path.Combine(data, "journal"));
+
+        var failure = await Record.ExceptionAsync(async () =>
+        {
+            var copy = await LocalClientCopy.PrepareAsync("client", plan, default, data, ThisMachine(), loader: (_, _) => null);
+            await copy.RetireAsync();
+        });
+
+        var error = Assert.IsType<InvalidOperationException>(failure);
+        Assert.Contains("install build it replaces", error.Message);
+        Assert.False(plan.Prepared);
+    }
+
     [ClientHostFact] public async Task AnOwnedClientDefaultsToAProfileAndKeepsItsSourceUnchanged()
     {
         string source = _rig.Game;
         var plan = Plan(source);
+        plan.InstallPins = null;
+        plan.Pins.Clear();
         plan.CliManifest = CliSet();
         var before = Tree(source);
         string data = Path.Combine(_rig.Root, "profile-data");
@@ -123,8 +168,18 @@ public sealed class LocalClientCopyTests : IDisposable
             Assert.Equal(OperatingSystem.IsWindows() ? null : profile.Runtime, plan.PreparedLoaderRoot);
             Assert.Equal(InstallPins.Of(plan.Install, plan.LoaderRoot).Game, plan.InstallPins!.Game);
             Assert.Equal(InstallPins.Of(plan.Install, plan.LoaderRoot).Loader, plan.InstallPins.Loader);
+            Assert.Equal("observed", plan.PreparedPinOrigins["installPins"]);
+            Assert.Equal("observed", plan.PreparedPinOrigins["plugins." + CliCapabilityManifest.PluginGuid]);
+            Assert.Equal(FileHash.Md5(Path.Combine(_rig.Root, "cli", "valheimCLI.dll")), plan.Pins[CliCapabilityManifest.PluginGuid]);
             Assert.Single(plan.CheckCliManifest()!.Files);
             Assert.True(File.Exists(Path.Combine(profile.Runtime, "BepInEx", "plugins", "valheimCLI.dll")));
+            var transport = new ScriptedTransport().On("look", _ => ScriptedTransport.Ok("OK"));
+            using (var actor = new GameActor("client", transport))
+            {
+                actor.VerifyEnvironment(plan.MenuExpectations);
+                actor.Execute("look");
+            }
+            Assert.Equal(2, transport.Commands.Count(command => command.StartsWith("cli_expect --strict", StringComparison.Ordinal)));
             Assert.Equal(before, Tree(source));
         }
         finally { await profile.RetireAsync(); }

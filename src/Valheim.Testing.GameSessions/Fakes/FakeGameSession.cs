@@ -64,7 +64,7 @@ public static class FakeGameSession
             ResolveClient = (_, name) => (name ?? "client", placement),
             LiveClientLog = _ => null,
             Interval = interval ?? TimeSpan.FromMilliseconds(10),
-            Mod = mod, ServerPinsMod = mod != null && (!host.Pinned || mod.PinnedIn(host.Pins)),
+            Mod = mod, ServerPinsMod = mod != null && mod.PinnedIn(host.Pins),
         };
     }
 

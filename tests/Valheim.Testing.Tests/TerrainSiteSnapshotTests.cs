@@ -63,14 +63,6 @@ public sealed class TerrainSiteSnapshotTests
         Assert.Equal(1, transport.Count(GroundCommand));
     }
 
-    [Fact] public void UnpinnedActorCannotCapture()
-    {
-        var transport = Transport(); using var actor = transport.Actor();
-        actor.VerifyEnvironment(EnvironmentPinning.None);
-        Assert.Throws<InvalidOperationException>(() => TerrainSiteSnapshot.Capture(actor, "site", "7", [Point], TimeSpan.FromSeconds(1)));
-        Assert.Equal(0, transport.Count("cli_extension valheim.observe/zones"));
-    }
-
     public static TheoryData<string> BadReplies => new() { "ground incomplete", "ground other point", "ground other layer", "surface incomplete", "surface units",
         "paint incomplete", "paint units", "paint out of range", "paint other point" };
     [Theory, MemberData(nameof(BadReplies))]

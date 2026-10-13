@@ -123,7 +123,7 @@ public sealed class MacSteamRuntimePackageTests
 
             Compile(root, source, "crashhandler.dylib");
             Assert.Equal(0, ExitCode("/usr/bin/install_name_tool", "-id",
-                "/private/tmp/unpinned-valheim-test-library.dylib", Path.Combine(root, "libtier0_s.dylib")));
+                "/private/tmp/unreviewed-valheim-test-library.dylib", Path.Combine(root, "libtier0_s.dylib")));
             Compile(root, clientSource, "steamclient.dylib", "-L" + root, "-ltier0_s");
             Assert.Contains("outside macOS system libraries", Assert.Throws<InvalidDataException>(() =>
                 MacSteamRuntimePackage.Capture(root)).Message);
