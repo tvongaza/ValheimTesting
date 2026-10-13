@@ -65,7 +65,34 @@ public sealed class MacSteamRuntimePackageTests
                 Assert.Equal(0, ExitCode("/usr/bin/codesign", "--verify", path));
                 Assert.Equal(package.Files[relative], FileHash.Sha256(Path.Combine(root, relative)));
             }
+            // The local server preparation path selects this reviewed package into steam-runtime/*. The real Bash apply
+            // script must derive that permission from the selected payload kind and keep unrelated game targets refused.
             var host = new LocalGameHost("mac-shell", HostShell.Bash);
+            string install = Path.Combine(root, "server");
+            string executable = Path.Combine(install, "valheim_server", "Valheim");
+            Directory.CreateDirectory(Path.GetDirectoryName(executable)!);
+            File.WriteAllText(executable, "server");
+            File.SetUnixFileMode(executable, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+            string managed = Path.Combine(install, "valheim_server", "Data", "Managed");
+            Directory.CreateDirectory(managed);
+            File.WriteAllText(Path.Combine(managed, InstallPins.GameAssemblyName), "game");
+            FakeInstalls.MacLoader(install);
+            string core = Path.Combine(install, "BepInEx", "core");
+            Directory.CreateDirectory(core);
+            File.WriteAllText(Path.Combine(core, "BepInEx.dll"), "core");
+            File.WriteAllText(Path.Combine(core, "BepInEx.Preloader.dll"), "preloader");
+            string selected = Path.Combine(root, "selected.dll");
+            File.WriteAllText(selected, "selected");
+            string run = Path.Combine(root, "vt-prep-steam");
+            var prepared = await HostedRuntimeStage.PrepareProfileAsync(host, HostedRuntimeKind.Server, install,
+                Path.Combine(run, "runtime"), Path.Combine(run, "staging"),
+                [new HostedRuntimeFile(selected, "BepInEx/plugins/selected.dll")], TimeSpan.FromSeconds(60),
+                steamRuntimePackage: package);
+            Assert.Equal(FileHash.Sha256(Path.Combine(run, "runtime", "steam-runtime", "steamclient.dylib")),
+                prepared.Loader.Files["steam-runtime/steamclient.dylib"]);
+            Assert.False(Directory.Exists(Path.Combine(run, "staging")));
+            await HostedRuntimeStage.RetireAsync(host, prepared.LoaderRoot, Path.Combine(run, "staging"), TimeSpan.FromSeconds(60));
+
             await MacSteamRuntimeOnHost.VerifyAsync(host, remote, TimeSpan.FromSeconds(60), default);
             string sshProfile = Path.Combine(root, "ssh-profile");
             Directory.CreateDirectory(sshProfile);

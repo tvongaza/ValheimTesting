@@ -16,7 +16,7 @@ internal static partial class HostedRuntimeStage
         internal string LoaderRoot => Loader.Root;
     }
 
-    /// <summary>One root file of the game install that a profile does not use, and why.</summary>
+    /// <summary>One root file or aggregated top-level folder of the game install that a profile does not use, and why.</summary>
     internal sealed record ProfileLeftOut(string Path, string Reason)
     {
         public override string ToString() => $"{Path}: {Reason}";
@@ -30,21 +30,27 @@ internal static partial class HostedRuntimeStage
     }
 
     /// <summary>
-    /// The top-level entries of an install that a launch folder never takes from it: <c>logs</c>, where Steam writes a dedicated
-    /// server's own runtime output (<c>connection_log_*.txt</c>, <c>stats_log.txt</c>), none of it the game's or the loader's
-    /// files (#257). The one definition: a profile's links and the check of a standalone server's install against its plan's
-    /// runtime manifest (<see cref="HostedServerRun"/>) both take it from here.
+    /// The top-level entries a standalone hosted server leaves out when comparing its install with the plan's runtime manifest:
+    /// <c>logs</c>, where Steam writes runtime output (<c>connection_log_*.txt</c>, <c>stats_log.txt</c>) (#257).
     /// </summary>
     internal static readonly string[] RuntimeSkips = ["logs"];
 
     /// <summary>
     /// The DLLs at a Windows game root (client or dedicated server) that the game itself needs: Unity's player and the
-    /// Steam runtime. <c>tier0_s64.dll</c> and <c>vstdlib_s64.dll</c> are the server install's and are what
-    /// <c>steamclient64.dll</c> loads when no Steam client is running. Any other root DLL is not the game's (a mod
+    /// Steam runtime. <c>steamwebrtc64.dll</c>, <c>tier0_s64.dll</c> and <c>vstdlib_s64.dll</c> are in the server install's
+    /// 64-bit Steam closure when no Steam client is running. Any other root DLL is not the game's (a mod
     /// manager's proxy such as <c>version.dll</c>), so the profile leaves it out.
     /// </summary>
     internal static readonly string[] WindowsGameRootDlls =
-        ["UnityPlayer.dll", "steam_api64.dll", "steamclient64.dll", "tier0_s64.dll", "vstdlib_s64.dll"];
+        ["UnityPlayer.dll", "steam_api64.dll", "steamclient64.dll", "steamwebrtc64.dll", "tier0_s64.dll", "vstdlib_s64.dll"];
+
+    /// <summary>32-bit Steam client libraries present beside the 64-bit dedicated server but not loaded by it.</summary>
+    internal static readonly string[] WindowsOmittedSteam32Dlls =
+        ["steamclient.dll", "steamwebrtc.dll", "tier0_s.dll", "vstdlib_s.dll"];
+
+    /// <summary>Other immutable root files Unity reads or starts for a Windows client or dedicated server.</summary>
+    internal static readonly string[] WindowsGameRootFiles =
+        [GameLaunch.ClientWindowsExecutable, GameLaunch.ServerWindowsExecutable, "UnityCrashHandler64.exe"];
 
     /// <summary>
     /// Root DLLs that mod managers and injectors use as a proxy (Windows loads them from the executable directory in place of
@@ -58,21 +64,28 @@ internal static partial class HostedRuntimeStage
 
     /// <summary>
     /// Sorts <paramref name="files"/> (relative, <c>/</c> separators) of a Windows game install into what the profile's launch
-    /// folder hard-links: game files only, never the loader (the profile gets its own), a top-level entry in
-    /// <paramref name="skips"/> (<see cref="RuntimeSkips"/>), logs, or a root DLL outside <see cref="WindowsGameRootDlls"/>.
+    /// folder hard-links: the installed executable, its matching <c>_Data</c> tree, Unity's <c>MonoBleedingEdge</c> and
+    /// <c>D3D12</c> trees,
+    /// <see cref="WindowsGameRootFiles"/> and <see cref="WindowsGameRootDlls"/>. Writable text/log/crash output is excluded
+    /// even below an otherwise selected tree. Every unrelated nested file is reported in one aggregate per top-level folder.
     /// A root file left out is reported unless it is the loader's or a known proxy (<see cref="KnownProxyDlls"/>), which are
     /// expected; an unknown root DLL gets an actionable reason, because a DLL the game needs and the profile dropped fails
     /// inside Steam or Unity start-up with no other hint (#651).
     /// </summary>
-    internal static WindowsProfileFiles PlanWindowsProfile(IEnumerable<string> files, IReadOnlyCollection<string> skips)
+    internal static WindowsProfileFiles PlanWindowsProfile(IEnumerable<string> files)
     {
+        string[] listing = files.Order(StringComparer.Ordinal).ToArray();
+        var dataRoots = new List<string>();
+        if (listing.Contains(GameLaunch.ClientWindowsExecutable, StringComparer.OrdinalIgnoreCase)) dataRoots.Add("valheim_Data/");
+        if (listing.Contains(GameLaunch.ServerWindowsExecutable, StringComparer.OrdinalIgnoreCase)) dataRoots.Add("valheim_server_Data/");
         var links = new List<string>();
         var leftOut = new List<ProfileLeftOut>();
-        foreach (string path in files.Order(StringComparer.Ordinal))
+        var nestedLeftOut = new Dictionary<string, (string Name, List<string> Reasons)>(StringComparer.OrdinalIgnoreCase);
+        foreach (string path in listing)
         {
             bool root = !path.Contains('/');
             string? reason = null;
-            bool report = root;
+            bool report = true;
             if (path.StartsWith("BepInEx/", StringComparison.OrdinalIgnoreCase) ||
                 InstallPins.IsLoaderFile(path, StringComparison.OrdinalIgnoreCase) ||
                 path.StartsWith(".doorstop", StringComparison.OrdinalIgnoreCase) ||
@@ -81,10 +94,28 @@ internal static partial class HostedRuntimeStage
                 reason = "loader file";
                 report = false;
             }
-            else if (HostInstall.Skipped(path, skips, StringComparer.OrdinalIgnoreCase)) reason = "a runtime skip (HostedRuntimeStage.RuntimeSkips)";
+            // Runtime output is not immutable. Exclude it even inside a selected game tree, so an existing output name
+            // can never become a write-through hard link to the source install (#656).
+            else if (path.StartsWith("logs/", StringComparison.OrdinalIgnoreCase)) reason = "runtime log output";
+            else if (path.Split('/').Contains("crashdumps", StringComparer.OrdinalIgnoreCase) ||
+                path.EndsWith(".dmp", StringComparison.OrdinalIgnoreCase) ||
+                path.EndsWith(".mdmp", StringComparison.OrdinalIgnoreCase) ||
+                path.EndsWith(".dump", StringComparison.OrdinalIgnoreCase)) reason = "a crash dump";
             else if (path.EndsWith(".log", StringComparison.OrdinalIgnoreCase)) reason = "a log file";
-            else if (root && path.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) &&
-                !WindowsGameRootDlls.Contains(path, StringComparer.OrdinalIgnoreCase))
+            else if (path.Equals("steam_appid.txt", StringComparison.OrdinalIgnoreCase)) reason = "not needed because the launch supplies SteamAppId";
+            else if (path.EndsWith(".txt", StringComparison.OrdinalIgnoreCase)) reason = "a writable text output";
+            else if (WindowsGameRootFiles.Contains(path, StringComparer.OrdinalIgnoreCase) ||
+                WindowsGameRootDlls.Contains(path, StringComparer.OrdinalIgnoreCase) ||
+                path.StartsWith("D3D12/", StringComparison.OrdinalIgnoreCase) ||
+                path.StartsWith("MonoBleedingEdge/", StringComparison.OrdinalIgnoreCase) ||
+                dataRoots.Any(prefix => path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)))
+            {
+                links.Add(path);
+                continue;
+            }
+            else if (root && WindowsOmittedSteam32Dlls.Contains(path, StringComparer.OrdinalIgnoreCase))
+                reason = "32-bit Steam client library, not loaded by the 64-bit game";
+            else if (root && path.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
             {
                 if (KnownProxyDlls.Contains(path, StringComparer.OrdinalIgnoreCase))
                 {
@@ -95,10 +126,29 @@ internal static partial class HostedRuntimeStage
                     "If the game needs it, a launch fails inside Steam or Unity start-up: report it so the game's root DLL list " +
                     "(HostedRuntimeStage.WindowsGameRootDlls) gains it. Otherwise nothing to do";
             }
-            if (reason == null) links.Add(path);
-            else if (report) leftOut.Add(new ProfileLeftOut(path, reason));
+            else reason = "not an input to the Windows game launch";
+            if (!report) continue;
+            if (root)
+            {
+                leftOut.Add(new ProfileLeftOut(path, reason));
+            }
+            else
+            {
+                string folder = path[..path.IndexOf('/')];
+                if (!nestedLeftOut.TryGetValue(folder, out var group))
+                    nestedLeftOut.Add(folder, group = (folder, []));
+                group.Reasons.Add(reason);
+            }
         }
-        return new WindowsProfileFiles(links, leftOut);
+        foreach (var group in nestedLeftOut.Values)
+        {
+            var reasons = group.Reasons.GroupBy(reason => reason, StringComparer.Ordinal)
+                .OrderBy(item => item.Key, StringComparer.Ordinal)
+                .Select(item => item.Count() == 1 ? item.Key : $"{item.Key} ({item.Count()})");
+            string count = group.Reasons.Count == 1 ? "1 file" : $"{group.Reasons.Count} files";
+            leftOut.Add(new ProfileLeftOut(group.Name + "/**", $"{count} left out: {string.Join("; ", reasons)}"));
+        }
+        return new WindowsProfileFiles(links, leftOut.OrderBy(item => item.Path, StringComparer.Ordinal).ToArray());
     }
 
     /// <summary>
@@ -152,7 +202,7 @@ internal static partial class HostedRuntimeStage
         // A mod manager may have placed another proxy beside valheim.exe (for example version.dll). Linking
         // arbitrary root DLLs into our launch folder would load that manager's chain alongside this profile.
         // Keep only the game's known root dependencies; every other source file stays untouched and out of the run.
-        var plan = windows ? PlanWindowsProfile(game.Files.Keys, RuntimeSkips) : new WindowsProfileFiles([], []);
+        var plan = windows ? PlanWindowsProfile(game.Files.Keys) : new WindowsProfileFiles([], []);
         string[] gameLinks = [.. plan.Links];
         if (plan.LeftOut.Count != 0)
             Console.WriteLine($"The profile {destination} on {host.Name} leaves out {ProfileLeftOut.Describe(plan.LeftOut)}.");
@@ -175,7 +225,7 @@ internal static partial class HostedRuntimeStage
                 foreach (var (relative, sha) in steamRuntimePackage.StageSignedFiles(steamRoot))
                 {
                     string name = "steam-runtime/" + relative;
-                    if (!selected.TryAdd(name, (Path.Combine(steamRoot, relative), sha)))
+                    if (!selected.TryAdd(name, Select(Path.Combine(steamRoot, relative), sha, name)))
                         throw new InvalidDataException("Steam runtime target collides with another staged file: " + name);
                 }
             }
@@ -210,7 +260,7 @@ internal static partial class HostedRuntimeStage
                     !hash.Equals(game.Files[relative], StringComparison.OrdinalIgnoreCase))
                     throw new IOException($"The profile's source loader file {relative} on {host.Name} changed while it was copied.");
 
-            string names = string.Join('\n', selected.Keys.Select(Encode));
+            string names = string.Join('\n', selected.Select(file => Encode(file.Key) + " " + file.Value.Kind));
             var applied = await host.RunAsync(windows ? WindowsApply : BashApply,
                 new Dictionary<string, string> {
                     ["runtime"] = destination, ["stage"] = staging, ["parent"] = HostPath.Parent(destination), ["files"] = names,
@@ -221,10 +271,15 @@ internal static partial class HostedRuntimeStage
             if (InteractiveClient.Line(applied.Stdout, "VT-STAGED") == null)
                 throw new HostOperationException($"No profile-apply verdict from {host.Name}", applied);
             if (steamRuntimePackage != null && host.Kind != GameHostKind.Local)
+            {
                 foreach (var (relative, sha) in await MacSteamRuntimeOnHost.StageAsync(host, steamRuntimePackage,
                     destination, timeout, cancellation).ConfigureAwait(false))
-                    if (!selected.TryAdd("steam-runtime/" + relative, ("remote SteamCMD source", sha)))
+                {
+                    string name = "steam-runtime/" + relative;
+                    if (!selected.TryAdd(name, Select("remote SteamCMD source", sha, name)))
                         throw new InvalidDataException("Steam runtime target collides with another staged file: " + relative);
+                }
+            }
             var profile = await HostInstall.ListAsync(host, destination, timeout, cancellation: cancellation).ConfigureAwait(false);
             foreach (var (relative, value) in selected)
                 if (!profile.Files.TryGetValue(relative, out string? hash) || !hash.Equals(value.Sha, StringComparison.OrdinalIgnoreCase))

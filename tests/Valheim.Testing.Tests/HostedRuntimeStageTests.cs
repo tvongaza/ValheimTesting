@@ -347,9 +347,10 @@ public sealed class HostedRuntimeStageTests : IDisposable
         Assert.False(prepared.Loader.Files.ContainsKey("BepInEx/plugins/original.dll"));
         Assert.False(prepared.Loader.Files.ContainsKey("version.dll"));
         Assert.False(prepared.Loader.Files.ContainsKey("newsteamthing64.dll"));
-        var unknown = Assert.Single(prepared.LeftOut);
+        var unknown = Assert.Single(prepared.LeftOut, item => item.Path == "newsteamthing64.dll");
         Assert.Equal("newsteamthing64.dll", unknown.Path);
         Assert.Contains("unknown root DLL", unknown.Reason);
+        Assert.DoesNotContain(prepared.LeftOut, item => item.Path == "BepInEx/**");
         Assert.Equal(FileHash.Sha256(Path.Combine(source, "tier0_s64.dll")), prepared.Loader.Files["tier0_s64.dll"]);
         Assert.Equal(FileHash.Sha256(Path.Combine(source, "vstdlib_s64.dll")), prepared.Loader.Files["vstdlib_s64.dll"]);
         Assert.Equal(before, WorldFixture.Manifest(source));
@@ -359,35 +360,108 @@ public sealed class HostedRuntimeStageTests : IDisposable
         Assert.Equal(before, WorldFixture.Manifest(source));
     }
 
-    // The Windows profile links the game's own root dependencies from a client or a dedicated-server install and nothing a
-    // mod manager or the loader put there. Pure: it runs on every platform, unlike the profile preparation above.
-    [Fact] public void WindowsProfileLinksTheDedicatedServersSteamRuntimeDllsButNotProxiesOrLoader()
+    // Synthetic minimal client listing: no private run in the available evidence held a client-file manifest. It covers the
+    // corresponding client launch classes without claiming to reproduce an installed client.
+    [Fact] public void WindowsProfileLinksOnlyTheClientLaunchInputs()
+    {
+        string[] listing =
+        [
+            "valheim.exe", "UnityCrashHandler64.exe", "UnityPlayer.dll", "steam_api64.dll", "steamwebrtc64.dll",
+            "D3D12/D3D12Core.dll",
+            "MonoBleedingEdge/EmbedRuntime/mono-2.0-bdwgc.dll", "MonoBleedingEdge/etc/mono/config",
+            "valheim_Data/boot.config", "valheim_Data/Managed/assembly_valheim.dll",
+            "valheim_Data/Plugins/x86_64/party.dll", "diagnostics/output_log.txt",
+            "valheim_server_Data/Managed/not-this-install.dll", "readme.md",
+        ];
+
+        var plan = HostedRuntimeStage.PlanWindowsProfile(listing);
+
+        Assert.Equal(new[]
+        {
+            "MonoBleedingEdge/EmbedRuntime/mono-2.0-bdwgc.dll", "MonoBleedingEdge/etc/mono/config", "UnityCrashHandler64.exe",
+            "D3D12/D3D12Core.dll", "UnityPlayer.dll", "steam_api64.dll", "steamwebrtc64.dll", "valheim.exe", "valheim_Data/Managed/assembly_valheim.dll",
+            "valheim_Data/Plugins/x86_64/party.dll", "valheim_Data/boot.config",
+        }.Order(StringComparer.Ordinal), plan.Links);
+        Assert.Equal(new[] { "diagnostics/**", "readme.md", "valheim_server_Data/**" }, plan.LeftOut.Select(item => item.Path));
+        Assert.All(plan.LeftOut.Where(item => item.Path.EndsWith("/**", StringComparison.Ordinal)),
+            item => Assert.StartsWith("1 file left out:", item.Reason));
+    }
+
+    // File names from the top two levels of a real prepared Windows dedicated-server manifest, plus the real nested plugin
+    // location that proves steam_api64.dll is not a server-root file. No hashes or machine paths are fixture data.
+    [Fact] public void WindowsProfileLinksOnlyTheDedicatedServerLaunchInputs()
     {
         string[] serverListing =
         [
-            "valheim_server.exe", "UnityPlayer.dll", "steam_api64.dll", "steamclient64.dll", "tier0_s64.dll", "vstdlib_s64.dll",
-            "steam_appid.txt", "valheim_server_Data/Managed/assembly_valheim.dll", "valheim_server_Data/globalgamemanagers",
-            // A mod manager's proxies, Doorstop's and BepInEx's own files, logs, and an unrelated root DLL.
-            "version.dll", "winhttp.dll", "dinput8.dll", "doorstop_config.ini", ".doorstop_version", "doorstop_libs/x64/winhttp.dll",
-            "BepInEx/core/BepInEx.dll", "BepInEx/plugins/mod.dll", "output_log.txt", "logs/server.log", "other.dll",
+            ".doorstop_version", "UnityCrashHandler64.exe", "UnityPlayer.dll", "Valheim Dedicated Server Manual.pdf",
+            "doorstop_config.ini", "start_headless_server.bat", "steam_appid.txt", "steamclient.dll", "steamclient64.dll",
+            "steamwebrtc.dll", "steamwebrtc64.dll", "tier0_s.dll", "tier0_s64.dll", "valheim_server.exe", "vstdlib_s.dll",
+            "vstdlib_s64.dll", "winhttp.dll", "config/config.vdf", "D3D12/D3D12Core.dll",
+            "doorstop_libs/libdoorstop_x64.dylib", "doorstop_libs/libdoorstop_x64.so",
+            "valheim_server_Data/app.info", "valheim_server_Data/boot.config", "valheim_server_Data/globalgamemanagers",
+            "valheim_server_Data/globalgamemanagers.assets", "valheim_server_Data/level0", "valheim_server_Data/resources.assets",
+            "valheim_server_Data/RuntimeInitializeOnLoads.json", "valheim_server_Data/ScriptingAssemblies.json",
+            "valheim_server_Data/sharedassets0.assets", "valheim_server_Data/Plugins/Steamworks.NET.txt",
+            "valheim_server_Data/Plugins/x86_64/libonigwrap.dll", "valheim_server_Data/Plugins/x86_64/lib_burst_generated.dll",
+            "valheim_server_Data/Plugins/x86_64/Microsoft.Xbox.Services.141.GDK.C.Thunks.dll",
+            "valheim_server_Data/Plugins/x86_64/Party.dll", "valheim_server_Data/Plugins/x86_64/PartyWin32.dll",
+            "valheim_server_Data/Plugins/x86_64/PartyXboxLive.dll", "valheim_server_Data/Plugins/x86_64/PartyXboxLiveWin32.dll",
+            "valheim_server_Data/Plugins/x86_64/steam_api64.dll", "valheim_server_Data/Plugins/x86_64/XCurl.dll",
+            "valheim_server_Data/Plugins/x86_64/XGamingRuntimeThunks.dll",
         ];
         string[] expectedLinks =
         [
-            "valheim_server.exe", "UnityPlayer.dll", "steam_api64.dll", "steamclient64.dll", "tier0_s64.dll", "vstdlib_s64.dll",
-            "steam_appid.txt", "valheim_server_Data/Managed/assembly_valheim.dll", "valheim_server_Data/globalgamemanagers", "output_log.txt",
+            "D3D12/D3D12Core.dll", "UnityCrashHandler64.exe", "UnityPlayer.dll", "steamclient64.dll", "steamwebrtc64.dll",
+            "tier0_s64.dll", "valheim_server.exe", "vstdlib_s64.dll", "valheim_server_Data/app.info",
+            "valheim_server_Data/boot.config", "valheim_server_Data/globalgamemanagers", "valheim_server_Data/globalgamemanagers.assets",
+            "valheim_server_Data/level0", "valheim_server_Data/resources.assets", "valheim_server_Data/RuntimeInitializeOnLoads.json",
+            "valheim_server_Data/ScriptingAssemblies.json", "valheim_server_Data/sharedassets0.assets",
+            "valheim_server_Data/Plugins/x86_64/libonigwrap.dll", "valheim_server_Data/Plugins/x86_64/lib_burst_generated.dll",
+            "valheim_server_Data/Plugins/x86_64/Microsoft.Xbox.Services.141.GDK.C.Thunks.dll",
+            "valheim_server_Data/Plugins/x86_64/Party.dll", "valheim_server_Data/Plugins/x86_64/PartyWin32.dll",
+            "valheim_server_Data/Plugins/x86_64/PartyXboxLive.dll", "valheim_server_Data/Plugins/x86_64/PartyXboxLiveWin32.dll",
+            "valheim_server_Data/Plugins/x86_64/steam_api64.dll", "valheim_server_Data/Plugins/x86_64/XCurl.dll",
+            "valheim_server_Data/Plugins/x86_64/XGamingRuntimeThunks.dll",
         ];
-        var plan = HostedRuntimeStage.PlanWindowsProfile(serverListing, HostedRuntimeStage.RuntimeSkips);
-        // Sorted, so two runs on one install record the same text.
+        var plan = HostedRuntimeStage.PlanWindowsProfile(serverListing);
         Assert.Equal(expectedLinks.Order(StringComparer.Ordinal), plan.Links);
+        Assert.DoesNotContain("steam_api64.dll", plan.Links);
+        Assert.Contains("valheim_server_Data/Plugins/x86_64/steam_api64.dll", plan.Links);
+        Assert.Contains(plan.LeftOut, item => item.Path == "config/**" && item.Reason.StartsWith("1 file left out:"));
+        Assert.DoesNotContain(plan.LeftOut, item => item.Path == "doorstop_libs/**");
+        Assert.Contains(plan.LeftOut, item => item.Path == "valheim_server_Data/**" && item.Reason.StartsWith("1 file left out:"));
+        foreach (string dll in new[] { "steamclient.dll", "steamwebrtc.dll", "tier0_s.dll", "vstdlib_s.dll" })
+            Assert.Equal("32-bit Steam client library, not loaded by the 64-bit game",
+                Assert.Single(plan.LeftOut, item => item.Path == dll).Reason);
         // A case-insensitive host lists the same files in another spelling.
-        var spelled = HostedRuntimeStage.PlanWindowsProfile(["TIER0_S64.DLL", "VSTDLIB_S64.dll", "Version.dll"], HostedRuntimeStage.RuntimeSkips);
-        Assert.Equal(new[] { "TIER0_S64.DLL", "VSTDLIB_S64.dll" }, spelled.Links);
+        var spelled = HostedRuntimeStage.PlanWindowsProfile(["d3d12/D3D12Core.DLL", "STEAMWEBRTC64.DLL", "TIER0_S64.DLL", "VSTDLIB_S64.dll", "Version.dll"]);
+        Assert.Equal(new[] { "STEAMWEBRTC64.DLL", "TIER0_S64.DLL", "VSTDLIB_S64.dll", "d3d12/D3D12Core.DLL" }.Order(StringComparer.Ordinal), spelled.Links);
         Assert.Empty(spelled.LeftOut);
+    }
+
+    [Fact] public void WindowsProfileNeverLinksFilesTheGameOrSteamMayWrite()
+    {
+        string[] writable =
+        [
+            "output_log.txt", "Player.log", "server-notes.TXT", "logs/server.log", "logs/connection_log_123.txt",
+            "crash.dmp", "error.MDMP", "core.dump", "crashdumps/report.dmp", "BepInEx/LogOutput.log",
+            "BepInEx/config/BepInEx.cfg", "BepInEx/plugins/cache.bin", "diagnostics/output_log.txt",
+            "valheim.exe", "valheim_Data/diagnostics/output_log.txt", "valheim_Data/crashdumps/report.dmp",
+        ];
+
+        var plan = HostedRuntimeStage.PlanWindowsProfile(writable);
+
+        Assert.Equal(new[] { "valheim.exe" }, plan.Links);
+        Assert.Equal(new[] { "Player.log", "core.dump", "crash.dmp", "crashdumps/**", "diagnostics/**", "error.MDMP", "logs/**",
+            "output_log.txt", "server-notes.TXT", "valheim_Data/**" }, plan.LeftOut.Select(item => item.Path));
+        Assert.DoesNotContain(plan.LeftOut, item => item.Path == "BepInEx/**");
+        Assert.Contains(plan.LeftOut, item => item.Path == "logs/**" && item.Reason.StartsWith("2 files left out:"));
+        Assert.Contains(plan.LeftOut, item => item.Path == "valheim_Data/**" && item.Reason.StartsWith("2 files left out:"));
     }
 
     // A root DLL the profile does not know is left out of the launch folder, and the run says so with what to do about it:
     // a DLL the game needs and the profile dropped fails inside Steam or Unity start-up with no other hint (#651, #689).
-    [Fact] public void WindowsProfileRecordsAnUnknownRootDllAndStaysSilentAboutProxiesAndLoaderFiles()
+    [Fact] public void WindowsProfileRecordsAnUnknownRootDllAndAggregatesNestedOmissions()
     {
         string[] listing =
         [
@@ -396,37 +470,33 @@ public sealed class HostedRuntimeStageTests : IDisposable
             "BepInEx/core/BepInEx.dll", "newsteamthing64.dll", "crash.log", "logs/server.log",
             "valheim_server_Data/Plugins/x86_64/nested.dll",
         ];
-        var plan = HostedRuntimeStage.PlanWindowsProfile(listing, HostedRuntimeStage.RuntimeSkips);
+        var plan = HostedRuntimeStage.PlanWindowsProfile(listing);
 
-        Assert.Equal(new[] { "crash.log", "newsteamthing64.dll" }, plan.LeftOut.Select(item => item.Path).ToArray());
-        var unknown = plan.LeftOut[1];
+        Assert.Equal(new[] { "crash.log", "logs/**", "newsteamthing64.dll" },
+            plan.LeftOut.Select(item => item.Path));
+        var unknown = Assert.Single(plan.LeftOut, item => item.Path == "newsteamthing64.dll");
         Assert.Contains("unknown root DLL", unknown.Reason);
         Assert.Contains("WindowsGameRootDlls", unknown.Reason);
-        Assert.Equal("a log file", plan.LeftOut[0].Reason);
+        Assert.Equal("a log file", Assert.Single(plan.LeftOut, item => item.Path == "crash.log").Reason);
         Assert.DoesNotContain("newsteamthing64.dll", plan.Links);
         Assert.Contains("valheim_server_Data/Plugins/x86_64/nested.dll", plan.Links);
         // The text a run keeps names the file and the reason.
         string evidence = HostedRuntimeStage.ProfileLeftOut.Describe(plan.LeftOut)!;
-        Assert.StartsWith("crash.log: a log file; newsteamthing64.dll: an unknown root DLL", evidence);
+        Assert.DoesNotContain("loader file", evidence);
+        Assert.Contains("newsteamthing64.dll: an unknown root DLL", evidence);
         Assert.Null(HostedRuntimeStage.ProfileLeftOut.Describe(
-            HostedRuntimeStage.PlanWindowsProfile(["valheim.exe", "UnityPlayer.dll", "version.dll", "winhttp.dll"], HostedRuntimeStage.RuntimeSkips).LeftOut));
+            HostedRuntimeStage.PlanWindowsProfile(["valheim.exe", "UnityPlayer.dll", "version.dll", "winhttp.dll"]).LeftOut));
     }
 
-    // The skip list has one definition, HostedRuntimeStage.RuntimeSkips, and the profile takes its skips from the list it is
-    // given: an entry added there stops a profile from linking it, as a standalone hosted run's runtime copy no longer copies it (#689).
-    [Fact] public void WindowsProfileTakesItsSkipsFromTheRuntimeSkipList()
+    // Positive selection already omits every unrelated nested folder. Those omissions are evidence even though RuntimeSkips
+    // now belongs only to a standalone hosted server's install comparison (#689).
+    [Fact] public void WindowsProfileRecordsEachTopLevelFolderItDoesNotLink()
     {
-        string[] listing = ["valheim.exe", "logs/steam.txt", "crashdumps/a.dmp", "crashdumps", "scratch.bin"];
-        var stock = HostedRuntimeStage.PlanWindowsProfile(listing, HostedRuntimeStage.RuntimeSkips);
-        Assert.DoesNotContain("logs/steam.txt", stock.Links);
-        Assert.Contains("crashdumps/a.dmp", stock.Links);
-
-        var extended = HostedRuntimeStage.PlanWindowsProfile(listing, [.. HostedRuntimeStage.RuntimeSkips, "crashdumps"]);
-        Assert.Equal(new[] { "scratch.bin", "valheim.exe" }, extended.Links);
-        // A skipped root entry is reported with its reason; what lies inside a skipped folder is not listed one by one.
-        var skipped = Assert.Single(extended.LeftOut);
-        Assert.Equal("crashdumps", skipped.Path);
-        Assert.Contains("RuntimeSkips", skipped.Reason);
+        string[] listing = ["valheim.exe", "logs/steam.txt", "crashdumps/a.dmp", "cache/temporary.bin", "cache/other.bin"];
+        var plan = HostedRuntimeStage.PlanWindowsProfile(listing);
+        Assert.Equal(new[] { "valheim.exe" }, plan.Links);
+        Assert.Equal(new[] { "cache/**", "crashdumps/**", "logs/**" }, plan.LeftOut.Select(item => item.Path));
+        Assert.StartsWith("2 files left out:", plan.LeftOut[0].Reason);
         // A standalone hosted run's runtime copy uses the same skip test.
         Assert.True(HostInstall.Skipped("logs/steam.txt", HostedRuntimeStage.RuntimeSkips, StringComparer.Ordinal));
     }
