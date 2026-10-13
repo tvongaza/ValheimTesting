@@ -229,6 +229,8 @@ internal static class ServerLoad
             var clientLock = new NativeDependencyLock { CliFiles = dependencies.CliFiles, CliManifest = dependencies.CliManifest };
             string clientLockFile = Path.Combine(output, "client-dependencies.lock.json");
             clientLock.Write(clientLockFile);
+            // This run owns a new store built from the embedded unvisited seed. Hosted staging only copies from that
+            // store, so a prior run cannot carry a logout position for a fixture copy that shares the same world UID.
             var store = DefaultSmokeCharacter.Prepare(Path.Combine(output, "character-source"));
             campaign.Clients["client"] = new HostedCampaignRole
             {
