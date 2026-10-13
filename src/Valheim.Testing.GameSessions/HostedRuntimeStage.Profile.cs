@@ -135,7 +135,7 @@ internal static partial class HostedRuntimeStage
                 throw new InvalidOperationException($"The source Valheim.app on {host.Name} cannot launch: {refusal}");
         }
         const string settings = BepInExSettings.RelativePath;
-        bool macOS = kind == HostedRuntimeKind.Server ? HostInstall.DetectServer(game) == ServerPlatform.MacOS : MacAppBundle.IsMacClient(game);
+        bool macOS = IsMacOS(kind, game);
         bool preserveSourceSettings = BepInExSettings.Choose(game.Files.ContainsKey(settings),
             loaderPackage?.Files.ContainsKey(settings), explicitlySelectedSettings, macOS) == BepInExSettingsOrigin.Source;
         // The source loader is copied only when no reviewed package replaces it (a macOS install's own loader); its BepInEx.cfg
@@ -271,6 +271,10 @@ internal static partial class HostedRuntimeStage
         }
         finally { Directory.Delete(payload, recursive: true); }
     }
+
+    /// <summary>Whether <paramref name="source"/> (a listed install) is a macOS client or dedicated server: the install's platform on its host, never the runner's.</summary>
+    internal static bool IsMacOS(HostedRuntimeKind kind, HostListing source) =>
+        kind == HostedRuntimeKind.Server ? HostInstall.DetectServer(source) == ServerPlatform.MacOS : MacAppBundle.IsMacClient(source);
 
     private static string Encode(string name) => Convert.ToBase64String(Encoding.UTF8.GetBytes(name));
 

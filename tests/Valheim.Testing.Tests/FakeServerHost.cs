@@ -69,6 +69,8 @@ internal sealed class FakeServerHost : IGameHost
     public Action<string>? AfterCopy { get; set; }
     /// <summary>What the staging apply leaves in the runtime after applying, for example a loader file it failed to remove.</summary>
     public Action<string>? AfterApply { get; set; }
+    /// <summary>What happens to a fetched directory after it arrived here, for example a file changed on the way.</summary>
+    public Action<string>? AfterFetch { get; set; }
     /// <summary>Runs after the profile seed made its launch folder, for example to lose its reply.</summary>
     public Action<string>? AfterSeed { get; set; }
     /// <summary>Controlled delay for tests that prove independent actors prepare concurrently.</summary>
@@ -650,6 +652,7 @@ internal sealed class FakeServerHost : IGameHost
         lock (_sync) Runs.Add(("fetch", new Dictionary<string, string> { ["dir"] = hostDirectory, ["local"] = localDirectory }));
         if (Directory.Exists(localDirectory)) throw new InvalidOperationException("Fetch into a new local directory.");
         CopyDirectory(Local(hostDirectory), localDirectory);
+        AfterFetch?.Invoke(localDirectory);
         return Task.FromResult(new FetchedDirectory(localDirectory, new string('b', 64), 1, Directory.GetFiles(localDirectory, "*", SearchOption.AllDirectories).Length));
     }
     public Task<CliTunnel> OpenCliTunnelAsync(int hostPort, TimeSpan readyTimeout, int localPort = 0, CancellationToken cancellation = default)

@@ -8,8 +8,8 @@ namespace Valheim.Testing.GameSessions;
 /// One owned client's disposable loader profile on this machine (#296): the default for every owned client a run opens here
 /// (unless it runs in place), so the user's install never changes. It is made the way a session prepares a client on a host,
 /// by the same stage owner (<see cref="HostedRuntimeStage.PrepareProfileAsync"/> on this machine as a <see cref="LocalGameHost"/>):
-/// the install's BepInEx plugins, scripts, config and patchers are staged into the profile without any ValheimCLI build of its
-/// own, and with the ValheimCLI set the run checks against (the plan's <see cref="ClientRunPlan.CliManifest"/>, else the toolkit's
+/// the install's BepInEx plugins, scripts, config and patchers (<see cref="InstallSelection"/>) are staged into the profile without
+/// any ValheimCLI build of its own, and with the ValheimCLI set the run checks against (the plan's <see cref="ClientRunPlan.CliManifest"/>, else the toolkit's
 /// pinned bundle); a Windows profile runs on the pinned BepInExPack, never the install's loader (<see cref="ShippedLoader"/>); a macOS
 /// source bundle is checked so macOS opens it without a dialog. The profile is journalled before it is made (this machine's run
 /// journal, so <c>valheim-test env status</c> and <c>env recover</c> see it) and retired after the client closes. The plan is
@@ -80,40 +80,36 @@ internal sealed class LocalClientCopy
         var choice = (loader ?? ShippedLoader.Local)(actor, source);
         if (choice != null) ShippedLoader.Print(actor, choice);
         var loaderPackage = choice == null ? null : BepInExLoaderPackage.Read(choice.Manifest);
-        string? config = null;
+        using var selection = await InstallSelection.ReadAsync(host, HostedRuntimeKind.Client, source, manifest, location, loaderPackage,
+            plan.Port, plan, StepTimeout, cancellation).ConfigureAwait(false);
+        // One client per desktop session, and never a profile prepared while a game runs.
+        await HostedRuntimeStage.RequireStoppedAsync(host, StepTimeout, cancellation, clientSession: true).ConfigureAwait(false);
+        Directory.CreateDirectory(root);
+        Console.WriteLine($"Preparing an owned mod profile for {source}; the game install stays in place.");
+        if (selection.Replaced.Count != 0)
+            Console.WriteLine($"{actor}: the profile stages ValheimCLI {manifest.Build} in place of the install's own {string.Join(", ", selection.Replaced)}.");
+        // Journalled before the profile: an interrupted preparation leaves a record of every path it may own.
+        journal.AppendLocal(actor, JournalEntry.Of(JournalEntry.CopyIntended, ("runtime", runtime), ("stage", stage), ("parent", parent),
+            ("runtimeKind", "client"), ("launchRoot", source)));
+        HostedRuntimeStage.PreparedProfile profile;
         try
         {
-            var selection = Selection(source, manifest, location, plan, loaderPackage, out config, out var replaced);
-            // One client per desktop session, and never a profile prepared while a game runs.
-            await HostedRuntimeStage.RequireStoppedAsync(host, StepTimeout, cancellation, clientSession: true).ConfigureAwait(false);
-            Directory.CreateDirectory(root);
-            Console.WriteLine($"Preparing an owned mod profile for {source}; the game install stays in place.");
-            if (replaced.Count != 0)
-                Console.WriteLine($"{actor}: the profile stages ValheimCLI {manifest.Build} in place of the install's own {string.Join(", ", replaced)}.");
-            // Journalled before the profile: an interrupted preparation leaves a record of every path it may own.
-            journal.AppendLocal(actor, JournalEntry.Of(JournalEntry.CopyIntended, ("runtime", runtime), ("stage", stage), ("parent", parent),
-                ("runtimeKind", "client"), ("launchRoot", source)));
-            HostedRuntimeStage.PreparedProfile profile;
-            try
-            {
-                profile = await HostedRuntimeStage.PrepareProfileAsync(host, HostedRuntimeKind.Client, source, runtime, stage,
-                    selection, StepTimeout, cancellation, loaderPackage).ConfigureAwait(false);
-            }
-            catch (Exception error) when (error is not AggregateException)
-            {
-                // The stage removed what it made (an unproven removal is an AggregateException and stays open for env recover).
-                journal.AppendLocal(actor, JournalEntry.Of(JournalEntry.CopyRetired, ("runtime", runtime), ("failed", "true")));
-                throw;
-            }
-            journal.AppendLocal(actor, JournalEntry.Of(JournalEntry.CopyDone, ("runtime", runtime),
-                ("files", profile.Loader.Files.Count.ToString(CultureInfo.InvariantCulture)), ("source", source),
-                ("runtimeKind", "client"), ("launchRoot", profile.GameRoot)));
-            var unbound = new Unbound(plan.Install, plan.InstallPins, plan.Pins, plan.CliManifest, plan.PreparedLoaderRoot, plan.PreparedLaunchMode,
-                plan.PreparedSourceGameRoot, plan.PreparedSourceGameHash, plan.PreparedLeftOut);
-            Bind(plan, source, profile, manifest, manifestPath, setFolder);
-            return new LocalClientCopy(host, actor, runtime, stage, profile.GameRoot, journal, plan, unbound);
+            profile = await HostedRuntimeStage.PrepareProfileAsync(host, HostedRuntimeKind.Client, source, runtime, stage,
+                selection.Files, StepTimeout, cancellation, loaderPackage, selection.Source).ConfigureAwait(false);
         }
-        finally { if (config != null) File.Delete(config); }
+        catch (Exception error) when (error is not AggregateException)
+        {
+            // The stage removed what it made (an unproven removal is an AggregateException and stays open for env recover).
+            journal.AppendLocal(actor, JournalEntry.Of(JournalEntry.CopyRetired, ("runtime", runtime), ("failed", "true")));
+            throw;
+        }
+        journal.AppendLocal(actor, JournalEntry.Of(JournalEntry.CopyDone, ("runtime", runtime),
+            ("files", profile.Loader.Files.Count.ToString(CultureInfo.InvariantCulture)), ("source", source),
+            ("runtimeKind", "client"), ("launchRoot", profile.GameRoot)));
+        var unbound = new Unbound(plan.Install, plan.InstallPins, plan.Pins, plan.CliManifest, plan.PreparedLoaderRoot, plan.PreparedLaunchMode,
+            plan.PreparedSourceGameRoot, plan.PreparedSourceGameHash, plan.PreparedLeftOut);
+        Bind(plan, source, profile, manifest, manifestPath, setFolder);
+        return new LocalClientCopy(host, actor, runtime, stage, profile.GameRoot, journal, plan, unbound);
     }
 
     /// <summary>
@@ -132,48 +128,6 @@ internal sealed class LocalClientCopy
         _plan.PreparedSourceGameRoot = _unbound.SourceGameRoot; _plan.PreparedSourceGameHash = _unbound.SourceGameHash;
         _plan.PreparedLeftOut = _unbound.LeftOut;
         _plan.Prepared = false;
-    }
-
-    // The files staged into the profile: the install's own plugins, scripts, config and patchers without any ValheimCLI build
-    // (another build loaded beside the staged set is what the static check refuses), and the staged set in BepInEx/plugins.
-    // A loader package (the pinned BepInExPack) brings its own files, its BepInEx.cfg among them: the install's are left out.
-    private static List<HostedRuntimeFile> Selection(string source, CliCapabilityManifest manifest, CliSetLocation location, ClientRunPlan plan,
-        BepInExLoaderPackage? loader, out string? config, out List<string> replaced)
-    {
-        var selection = new List<HostedRuntimeFile>();
-        replaced = [];
-        config = null;
-        var settingsOrigin = BepInExSettings.Choose(
-            File.Exists(Path.Combine(source, "BepInEx", "config", "BepInEx.cfg")),
-            loader?.Files.ContainsKey(BepInExSettings.RelativePath), explicitExists: false, macOS: OperatingSystem.IsMacOS());
-        foreach (string folder in new[] { "plugins", "scripts", "config", "patchers" })
-        {
-            string directory = Path.Combine(source, "BepInEx", folder);
-            if (!Directory.Exists(directory)) continue;
-            foreach (string file in Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories).Order(StringComparer.Ordinal))
-            {
-                if (FileHash.IsMacMetadata(file)) continue;
-                string relative = Path.GetRelativePath(source, file).Replace('\\', '/');
-                if (relative.Equals(BepInExSettings.RelativePath, StringComparison.OrdinalIgnoreCase) &&
-                    settingsOrigin != BepInExSettingsOrigin.Source) continue;
-                if (loader != null && loader.Files.Keys.Any(path => path.Equals(relative, StringComparison.OrdinalIgnoreCase))) continue;
-                if (folder is "plugins" or "scripts" && file.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)
-                    && (Path.GetFileName(file).Equals(manifest.Plugin.File, StringComparison.OrdinalIgnoreCase) || CliBuildManifest.Plugins(file)?.Any(CliBuildManifest.IsCliPlugin) == true))
-                {
-                    replaced.Add(relative);
-                    continue;
-                }
-                if (!HostedRuntimeStage.IsStageable(relative))
-                    throw new ArgumentException($"{relative} in {source} cannot be staged into a disposable profile: a staged path is letters, digits, '.', '_', '-' and spaces. " +
-                        "Rename it, or run your install in place (--in-place).");
-                selection.Add(new HostedRuntimeFile(file, relative));
-            }
-        }
-        foreach (var found in location.Located)
-            selection.Add(new HostedRuntimeFile(found.Path, "BepInEx/plugins/" + found.File.File));
-        // ValheimCLI's port, as a session writes it, when the install has no config of its own for it.
-        config = Path.Combine(Path.GetTempPath(), "vt-local-client-" + Guid.NewGuid().ToString("N") + ".cfg");
-        return CliServerConfig.Stage(selection, "Client", plan.Port, config, CliServerConfig.RequiresClientMutations(plan));
     }
 
     // The plan, bound to its profile: the profile's game and loader roots and install pins, its plugin pins with the staged
