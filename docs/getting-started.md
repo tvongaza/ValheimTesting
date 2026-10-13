@@ -61,19 +61,19 @@ From your mod checkout, run it:
 dotnet test MyMod.Tests/MyMod.Tests.csproj -c Release
 ```
 
-A passing run exits 0. A failed assertion returns nonzero. Visual Studio 2026, Rider and VS Code with C# Dev Kit discover the project with no extra setup. If the project also targets `net48`, Rider needs Mono on macOS and Linux; see [running both frameworks](../examples/ModWithTests/README.md#also-test-on-net-framework).
+A passing run exits 0. A failed assertion returns nonzero. Visual Studio 2026, Rider and VS Code with C# Dev Kit discover the project with no extra setup. If the project also targets `net48`, Rider needs Mono on macOS and Linux; see [run tests in CI](guides/run-tests-in-ci.md).
 
 <!-- TODO(docs): capture output -->
 
-### 4. Run it on every push
+### 4. Run it in GitHub Actions
 
-Copy the example's [workflow](../examples/ModWithTests/.github/workflows/tests.yml) to `.github/workflows/tests.yml` in your repository and change the project path if yours differs. It installs the .NET 10 SDK and runs the same `dotnet test` on a hosted Ubuntu runner, with no game and no secrets ([GitHub Actions](adopting.md#run-your-tests-in-github-actions)).
+Copy the example's [workflow](../examples/ModWithTests/.github/workflows/tests.yml) to `.github/workflows/tests.yml` in your repository and change the project path if yours differs. It installs the .NET 10 SDK and runs the same `dotnet test` on a hosted Ubuntu runner, with no game and no secrets. It runs on pushes to `main`, on pull requests and by hand ([run tests in CI](guides/run-tests-in-ci.md)).
 
 ## Check the result
 
 For a control, change `>=` to `>` in [DrySiteRule.cs](../examples/ModWithTests/MyMod/DrySiteRule.cs): the boundary case must fail. Restore the rule afterwards.
 
-A passing test proves the mod's decision on declared inputs. It does not prove the real world is dry, that a collider exists, or that a client receives terrain. [Bring your mod](adopting.md#choose-your-first-layer) matches each behaviour to a layer.
+A passing test proves the mod's decision on declared inputs. It does not prove the real world is dry, that a collider exists, or that a client receives terrain. [Choose a test layer](guides/choose-a-test-layer.md) matches each behaviour to a layer.
 
 ## Code without game types
 
@@ -96,7 +96,7 @@ Every other package and version is in the [package table](package-versions.md).
 | A mod or adapter build cannot find the game | Your Steam library is not in the default folder | Pass `-p:ValheimPath=<folder>`, or set `VALHEIM_PATH` before starting the IDE ([game references](../tools/game-references/README.md#use-them)) |
 | A test adapter build asks for `CliDll` | The adapter compiles against the exact ValheimCLI core it runs with | Pass `-p:CliDll=<path>`, or set `CliDll` before starting the IDE ([game references](../tools/game-references/README.md#use-them)) |
 
-More in [Apply it to your checkout](../examples/ModWithTests/README.md#apply-it-to-your-checkout) and [a layout that builds on hosted CI](adopting.md#a-layout-that-builds-on-hosted-ci).
+More in [Test logic that uses game types](guides/test-logic-that-uses-game-types.md).
 
 ## What a native check needs
 
@@ -116,7 +116,7 @@ Next: [Debug a mod load or mod conflict](debugging-mods.md) walks through the fi
 
 ## Related
 
-- [Bring your mod](adopting.md): which layer tests which behaviour
+- [Choose a test layer](guides/choose-a-test-layer.md): which layer tests which behaviour
 - [Examples](../examples/README.md): from the first unit test to a native session test
 - [Packages](package-versions.md): every package, version and pin
 - [Candidate API reference](https://tvongaza.github.io/ValheimTesting/): every public declaration

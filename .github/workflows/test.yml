@@ -466,14 +466,14 @@ jobs:
           page=docs/packages/Valheim.Testing.Game.md
           sed -i 's/^## Waiting$/## Waiting (preview 13)/' "$page"
           refused "FAIL $page:$(grep -n '^## Waiting' "$page" | cut -d: -f1): A heading names a version or a date"
-          last() { echo "FAIL docs/adopting.md:$(wc -l < docs/adopting.md): $1"; }
-          echo '[removed](testing-toolkit.md#waiting)' >> docs/adopting.md
+          last() { echo "FAIL docs/getting-started.md:$(wc -l < docs/getting-started.md): $1"; }
+          echo '[removed](testing-toolkit.md#waiting)' >> docs/getting-started.md
           refused "$(last 'testing-toolkit.md#waiting: docs/testing-toolkit.md does not exist')"
-          echo '[stale](packages/Valheim.Testing.Game.md#waiting-preview-13)' >> docs/adopting.md
+          echo '[stale](packages/Valheim.Testing.Game.md#waiting-preview-13)' >> docs/getting-started.md
           refused "$(last 'packages/Valheim.Testing.Game.md#waiting-preview-13: docs/packages/Valheim.Testing.Game.md has no heading with the anchor #waiting-preview-13')"
-          echo '[moving](https://github.com/tvongaza/valheimCLI/blob/review/x/README.md)' >> docs/adopting.md
+          echo '[moving](https://github.com/tvongaza/valheimCLI/blob/review/x/README.md)' >> docs/getting-started.md
           refused "$(last 'https://github.com/tvongaza/valheimCLI/blob/review/x/README.md links a review branch')"
-          echo '[short](https://github.com/tvongaza/valheimCLI/tree/main/docs)' >> docs/adopting.md
+          echo '[short](https://github.com/tvongaza/valheimCLI/tree/main/docs)' >> docs/getting-started.md
           refused "$(last 'https://github.com/tvongaza/valheimCLI/tree/main/docs links the valheimCLI fork at a branch or short commit')"
           git diff --exit-code
   game-hosts:
@@ -514,7 +514,7 @@ jobs:
   test-runners:
     name: test runners (${{ matrix.os }})
     # tools/test-runners for real: a copy of ModWithTests that also targets net48 and imports the targets file (the
-    # three changes its README describes), run with Mono on Linux and macOS and on .NET Framework on Windows, with the
+    # three project changes docs/guides/run-tests-in-ci.md describes), run with Mono on Linux and macOS and on .NET Framework on Windows, with the
     # same command on every OS. Negative control: an added test that fails only on .NET Framework must fail the run,
     # while the net10.0 leg alone still passes, and a filter that selects no test must fail the net48 leg.
     # Packages restore from NuGet.org, as in a mod.

@@ -46,18 +46,7 @@ Mods commonly compile against publicized copies of the game assemblies, where ev
 
 ## In CI
 
-Run it in the job that builds the plugin, since both need the game's assemblies, and before anything launches the game:
-
-```yaml
-      # After the step that builds the plugin.
-      - name: Check that game references still bind
-        shell: bash
-        run: |
-          dotnet tool install Valheim.Testing.Bindings.Tool --version 0.1.0-preview.3 --tool-path .tools
-          .tools/valheim-bindings MyMod/bin/Release/MyMod.dll --game-dir "$VALHEIM_MANAGED"
-```
-
-`VALHEIM_MANAGED` is wherever that job finds the game's `Managed` directory: a self-hosted runner's install, or the dedicated server from anonymous SteamCMD (app 896660), whose `valheim_server_Data/Managed` holds the server's own copies of the game assemblies; check a client mod against the client's where you can. As for any build, do not commit game assemblies or upload them as artifacts or public caches. The version shown is the newest release; pin the one you choose.
+Run the check in the job that builds the plugin, since both need the game's assemblies, and before anything launches the game. The workflow step is in [Run tests in CI](../guides/run-tests-in-ci.md#5-optional-check-game-references-where-the-plugin-builds).
 
 ## From a test
 

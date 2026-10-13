@@ -69,7 +69,7 @@ Nothing runs, and the build fails with an error saying why, when the project doe
 - The console runner, as a package reference: `<PackageReference Include="xunit.runner.console" Version="2.8.1" PrivateAssets="all" />` (use your xunit version), in the project before the import or in `Directory.Build.props`. The targets file asks restore for its folder (`GeneratePathProperty`) and runs that version's `tools/net48/xunit.console.exe`.
 - On macOS and Linux, Mono on PATH: `brew install mono` on macOS, `sudo apt-get install --no-install-recommends mono-devel` on Debian or Ubuntu (`mono-runtime` alone lacks the `System.Runtime` and `netstandard` facades the console runner loads; `mono-complete` works too, but adds about 28 MB of documentation and tools). `dotnet test -f net10.0` runs the modern leg without it. Windows needs nothing extra: .NET Framework 4.8 is part of the system.
 
-[ModWithTests](../../examples/ModWithTests/README.md#also-test-on-net-framework) shows the project changes.
+[Run tests in CI](../../docs/guides/run-tests-in-ci.md#4-optional-add-a-net-framework-leg) shows the project changes and the workflow.
 
 ## Filters
 

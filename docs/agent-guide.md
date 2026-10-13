@@ -1,35 +1,23 @@
 # Agent workflow: Valheim unit and system tests
 
-This guide is for an AI agent working in a mod checkout or operating an explicitly authorized test fixture. Begin with [AGENTS.md](../AGENTS.md). For first adoption in an unrelated mod, follow [Bring your mod](adopting.md); it separates consumer setup from framework development. Examples are actual runnable programs; their READMEs state required inputs, effects and output contracts.
+This guide is for an AI agent working in a mod checkout or operating an explicitly authorized test fixture. Begin with [AGENTS.md](../AGENTS.md). For first adoption in an unrelated mod, follow [Choose a test layer](guides/choose-a-test-layer.md); consumer setup and framework development are separate. Examples are actual runnable programs; their READMEs state required inputs, effects and output contracts.
 
 For contributions to the shared library, follow [CONTRIBUTING.md](../CONTRIBUTING.md). It maps changes to the right repository and includes a synthetic-fixture recipe and PR checklist. For a mod repository, [install the project skill](agent-skills.md) so its agents can discover this workflow.
 
 ## Choose the smallest useful task
 
+The tasks a mod author picks are in [Choose a test layer](guides/choose-a-test-layer.md): task, first example, what still needs the game. The rows below are the maintainer and campaign tasks.
+
 | Task | Start here | What success does not prove |
 |---|---|---|
-| Test source that uses game types | [ModWithTests](../examples/ModWithTests/README.md), the complete source-linked xUnit example | Unmodeled game behavior or native physics |
-| Test a mod decision on declared terrain | [ModWithTests](../examples/ModWithTests/README.md) with declared terrain such as [SharedWorld](../examples/SharedWorld/README.md)'s, calling real mod code from its own tests | Native noise, physics or save encoding |
-| Test driver failure/cleanup behavior | [Library tests](../tests/Valheim.Testing.Tests), controlled transports | Runtime Harmony/RPC timing |
-| Read a game sample | [ObserveCheck `capture`](../examples/ObserveCheck/README.md#capture-record-a-bounded-grid-for-exact-replay) | That the sampled value is independently correct |
-| Compare generator or loaded ground | [ObserveCheck `ground`](../examples/ObserveCheck/README.md#ground-generator-or-loaded-ground-heights) | Collider, paint or walking behavior |
-| Review a pinned dump as a picture | [`TerrainRenderer` with contours](shared-world.md#render-a-terrain-for-review); ValheimCLI's `examples/world-map.py` for the topographic map | The pictured interpolation or rendered colour being native gameplay evidence |
-| Compare client ground and support | [ObserveCheck `surface`](../examples/ObserveCheck/README.md#surface-a-clients-ground-collider-and-support) | Human usability |
-| Compare loaded paint | [ObserveCheck `paint`](../examples/ObserveCheck/README.md#paint-loaded-paint-channels) | Rendered appearance or every biome's alpha meaning |
-| Capture a named loaded-terrain site before/after or on failure | [Terrain site snapshots](terrain-site-snapshots.md) | Generator height, ZDO state or human usability |
-| Capture saved objects, containers and loaded structures near a site | [Area object snapshots](area-object-snapshots.md) | Terrain/paint or a mod-specific correctness verdict |
-| Find a run's evidence: snapshots, review stills and clips, round JSON | [Evidence linked from result.json](evidence.md) | That any picture looks right; a human verdict is recorded separately |
-| A/B regression of one mod in the real game | [TargetedRegression](../examples/TargetedRegression/README.md): preflight without the game, then one hosted run per arm | Other mods, dedicated servers or restarts |
-| Load a mod or isolate a mod-set conflict | [NativeSmoke](packages/Valheim.Testing.NativeSmoke.md) through [Debugging mods](debugging-mods.md): `valheim-test server-load`, `server-load-ab` or `start` | The mod's gameplay behavior or which mod owns a conflict |
 | Prepare a dedicated server and multiple owned clients | [Native acceptance three-actor campaign](../tests/Valheim.Testing.NativeAcceptance/README.md#prepare-the-campaign): reviewed per-role locks, separate character/account hosts, strict pins, one run command | An arbitrary mod's gameplay correctness; the small sample is a setup smoke |
 | Share a native regression's source and result | [tools/regression-bundle](../tools/regression-bundle/README.md), a maintainer tool: a scrubbed directory for review, never published | That a ported runner's harness ran natively, or that no private detail outside its rules remains |
 | Exercise extension replacement | [tools/reload-check](../tools/reload-check/README.md) | Assembly memory reclamation or rollback of arbitrary effects |
-| Collect walking evidence | [ObserveCheck `walk`](../examples/ObserveCheck/README.md#walk-record-a-person-walking-a-route) | Acceptance without a separate human verdict |
 | Collect a short world-only motion clip | [Native acceptance review evidence](../tests/Valheim.Testing.NativeAcceptance/README.md#bounded-motion-evidence) | UI implemented on an unexpected scene layer, or a visual verdict without watching the clip |
 
 Use an existing mod-owned scenario when one fits: a mod's own repository owns its scenarios. This repository's [FullLifecycle](../examples/FullLifecycle/README.md) example is the pattern for a new one.
 
-For reusable synthetic ground and multi-zone height/paint state, read [Shared-world fixtures](shared-world.md). Do not move mod-specific compiler doubles into the shared library.
+For reusable synthetic ground and multi-zone height/paint state, read [Test terrain decisions](guides/test-terrain-decisions.md). Do not move mod-specific compiler doubles into the shared library.
 
 ## First actions in a new checkout
 
@@ -130,3 +118,13 @@ Use [ObserveCheck `session`](../examples/ObserveCheck/README.md#session-state-sa
 ## Require strict expectations
 
 Executable calls use `--expect-strict <pins-file>`; in-game checks use `cli_expect --strict`. Prefer `GameActor`, which now normalizes strict pins and rechecks them before every command. Never fall back to raw transport when a strict check fails, even for an expected-refusal test. Reload drivers require explicit staged hashes from candidate artifacts; they may recheck only those expected pins during replacement, preferably when the reload's log line appears. Wait on events (a log line, the process exit, a pushed game state) with an explicit timeout rather than sleeping; see [Waiting](packages/Valheim.Testing.Game.md#waiting). The read-only owned-session bootstrap probe remains separate until world readiness allows strict checking. See [strict call setup](packages/Valheim.Testing.Game.md#strict-pins-from-tests).
+
+## Quick answers
+
+- **Where do my tests go?** In the mod repository. Shared fixtures and generic helpers go here; the game-side API goes in ValheimCLI.
+- **A package will not restore?** Check the exact version in [package versions](package-versions.md). Do not substitute another preview silently.
+- **A game type conflicts or is missing?** Do not mix the doubles with game assemblies. Link a smaller production helper, or add the modelled member ([guide](guides/test-logic-that-uses-game-types.md#problems)).
+- **Can tests run concurrently?** Pure immutable inputs can. Tests that use game singletons or static overrides must be serialised.
+- **A native run hangs, or passes with a clean log but proves nothing?** Go through the [runtime hygiene checklist](runtime-hygiene.md). Link it from the mod's docs instead of copying it.
+- **Does a passing synthetic test prove the mod works in Valheim?** It proves the tested decision on declared inputs. Native observations, save/replication and human usability have their own evidence.
+- **What do I report?** The behaviour tested, exact package and build versions, the checks you ran, failed or incomplete evidence, and what remains untested. Never publish credentials, game binaries or private saves.

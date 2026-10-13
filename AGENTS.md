@@ -2,7 +2,7 @@
 
 Before submitting changes, read [CONTRIBUTING.md](CONTRIBUTING.md) for extension contracts, evidence requirements and PR scope.
 
-Adopting this in another mod? Start with [Bring your mod](docs/adopting.md), choose the smallest test layer, and run [ModWithTests](examples/ModWithTests/README.md) before adapting its project to your production code. Published-package consumers do not need the full framework bootstrap.
+Adopting this in another mod? Start with [Choose a test layer](docs/guides/choose-a-test-layer.md) and run [ModWithTests](examples/ModWithTests/README.md) before adapting its project to your production code. Published-package consumers do not need the full framework bootstrap.
 
 Read [the agent workflow](docs/agent-guide.md) before using the tools. For installation and examples, follow [getting started](docs/getting-started.md) and the [example index](examples/README.md). These files describe this repository's current preview API; do not assume an older upstream ValheimCLI has it.
 

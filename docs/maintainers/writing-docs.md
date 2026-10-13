@@ -41,7 +41,7 @@ A page is exactly one type. If a reference page starts giving advice, move the a
 
 - Per-change notes, issue archaeology, "the one exception is…" chains: state the rule; put the exception in one clause.
 - Paragraphs that explain why a design is right. One sentence of rationale at most; the rest goes to a concept page or is deleted.
-- Repeated safety reminders. They live once, in `docs/guides/before-a-native-run.md` and AGENTS.md.
+- Repeated safety reminders. They live once, on the [runtime hygiene checklist](../runtime-hygiene.md) and in AGENTS.md.
 - Native measurement narratives ("ran it ten times…", "median 10.35 s"). Keep the claim, link the record.
 - Any behaviour an open release issue removes: `--copy-game`, Linux game clients, the Doorstop 3/4 pairing rules, legacy ValheimCLI pack handling, `Removed*` plan fields, `validate.sh` and the cache wrappers.
 
