@@ -172,8 +172,10 @@ public sealed class ClientSessionTests : IDisposable
         using var session = ClientSession.Launch(plan, _output, () => new FakeOwnedProcess(99),
             () => transport, (_, _) => Task.CompletedTask);
         OwnedClientCommandLease.Write(_output, 99, "test-start", plan);
+        string worldPins = Path.Combine(_output, OwnedClientCommandLease.WorldPins);
+        File.WriteAllText(worldPins, "worlduid=1111"); // An earlier world's pins: a failed publish must not leave them standing.
         transport.PinsHold = false; // The game changed world before the joined world could be verified.
-        Assert.Throws<InvalidOperationException>(() => session.WorldEntered(plan, "4242"));
+        Assert.Throws<InvalidOperationException>(() => session.Actor.PublishWorld(plan, "4242"));
         Assert.False(File.Exists(Path.Combine(_output, OwnedClientCommandLease.WorldPins)));
     }
 

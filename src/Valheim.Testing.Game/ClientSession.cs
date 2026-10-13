@@ -15,7 +15,7 @@ namespace Valheim.Testing.Game;
 /// attached client's process is never touched. The client is pinned at its menu. A session given a leased Steam account (a multi-machine session's
 /// client) starts or attaches only while that lease is held (and signed-in checked when the profile asks); the hold's owner releases it after disposing the session.
 /// </summary>
-public sealed class ClientSession : IDisposable
+public sealed class ClientSession : IDisposable, IWorldPins
 {
     private readonly IOwnedProcess? _process;
     private readonly Action<IOwnedProcess, GameActor?, string>? _failureEvidence;
@@ -53,6 +53,7 @@ public sealed class ClientSession : IDisposable
     {
         Actor = actor; _process = process; Logs = logs ?? []; Architecture = architecture;
         _output = output; _failureEvidence = failureEvidence;
+        actor.WorldPins = this;
     }
 
     // A failed world-entry round calls this before disposing the client. Diagnostics must not hide its original error.
@@ -67,15 +68,14 @@ public sealed class ClientSession : IDisposable
 
     // The world's identity is not in a joining client's launch plan. Only publish a diagnostic
     // world pin after the session has entered and reverified the fixture's world on this actor.
-    internal void WorldEntered(ClientRunPlan plan, string worldUid)
+    void IWorldPins.Publish(ClientRunPlan plan, string worldUid)
     {
         if (_process == null || _output == null || !File.Exists(Path.Combine(_output, OwnedClientCommandLease.FileName))) return;
-        OwnedClientCommandLease.LeaveWorld(_output);
-        Actor.VerifyEnvironment(plan.WorldExpectations(worldUid));
+        Actor.VerifyEnvironment(plan.WorldExpectations(worldUid)); // Retracts first; the pins are written only once this holds.
         OwnedClientCommandLease.WriteVerifiedWorld(_output, plan, worldUid);
     }
 
-    internal void WorldLeft()
+    void IWorldPins.Retract()
     {
         if (_output != null) OwnedClientCommandLease.LeaveWorld(_output);
     }

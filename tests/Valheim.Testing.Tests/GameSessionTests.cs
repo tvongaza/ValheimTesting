@@ -64,14 +64,22 @@ public sealed class GameSessionTests : IDisposable
     };
 
     // A client at its menu that can join and leave the server's world, as ValheimCLI's session commands answer.
+    private Action _dropClients = () => { };
+    private bool _failLeave;
     private ScriptedTransport ClientTransport()
     {
         bool joined = false;
+        _dropClients += () => joined = false; // The server restarted: every client is back at its menu.
         return new ScriptedTransport()
             .ClientAccess(() => joined)
             .OnPrefix("cli_select_character ", _ => ScriptedTransport.Ok("OK: Selected character 'Tester' (tester-copy, Local)"))
             .Extension("valheim.session", "join", _ => { joined = true; return new { source = "session-join", complete = true, action = "join" }; }, readOnly: false)
-            .Extension("valheim.session", "leave", _ => { joined = false; return new { source = "session-leave", complete = true, action = "leave" }; }, readOnly: false)
+            .Extension("valheim.session", "leave", _ =>
+            {
+                if (_failLeave) throw new IOException("the reply was lost");
+                joined = false;
+                return new { source = "session-leave", complete = true, action = "leave" };
+            }, readOnly: false)
             .Extension("valheim.session", "state", _ => new
             {
                 source = "session-state", complete = true, phase = joined ? "world-present" : "menu", worldUid = joined ? WorldUid : null, worldPresent = joined,
@@ -189,6 +197,48 @@ public sealed class GameSessionTests : IDisposable
         finally { await session.DisposeAsync(); }
         Assert.False(File.Exists(Path.Combine(output, OwnedClientCommandLease.WorldPins)));
         Assert.False(File.Exists(Path.Combine(output, OwnedClientCommandLease.FileName)));
+    }
+
+    // The pin file follows the client's observed join and leave alone: nothing here tells it, and every way out of the world removes it.
+    [Fact] public async Task TheWorldPinsFollowEveryJoinLeaveLostReplyAndServerRestart()
+    {
+        var report = new ScenarioReport("session");
+        var session = Session(report, clients: ["client-a"]);
+        string output = GameSession.ActorOutput(_root, "client-a");
+        string worldPins = Path.Combine(output, OwnedClientCommandLease.WorldPins);
+        try
+        {
+            await session.StartAsync();
+            OwnedClientCommandLease.Write(output, _clientProcesses["client-a"].Id, "test-start", session.Clients["client-a"].Plan);
+            var game = session.Clients["client-a"].Game;
+            Assert.False(File.Exists(worldPins));
+
+            await session.Join("client-a");
+            Assert.Contains("worlduid=" + WorldUid, File.ReadAllText(worldPins));
+
+            var plan = session.Clients["client-a"].Plan;
+            _failLeave = true; // A leave whose reply is lost may have changed the world: the pins go anyway.
+            Assert.ThrowsAny<Exception>(() => new SessionControl(game).Leave());
+            Assert.False(File.Exists(worldPins));
+            _failLeave = false;
+            game.VerifyEnvironment(plan.WorldExpectations(WorldUid)); // The client is still in the world.
+            new SessionControl(game).Leave(); // A leave by any caller, not a session method.
+            Assert.False(File.Exists(worldPins));
+            game.VerifyEnvironment(plan.MenuExpectations); // A transition always needs fresh pins.
+
+            await session.Join("client-a");
+            Assert.True(File.Exists(worldPins));
+
+            _dropClients(); // The server restarted and dropped the client to its menu; nothing told the session.
+            Assert.True(File.Exists(worldPins));
+            Assert.False(new SessionControl(game).SettleAtMenuOrInWorld(plan, WorldUid, TimeSpan.FromSeconds(5)));
+            Assert.False(File.Exists(worldPins));
+
+            await session.Rejoin("client-a");
+            Assert.Contains("worlduid=" + WorldUid, File.ReadAllText(worldPins));
+        }
+        finally { await session.DisposeAsync(); }
+        Assert.False(File.Exists(worldPins));
     }
 
     [Fact] public async Task ASessionStartsOnceAndAFailedServerStopIsReported()

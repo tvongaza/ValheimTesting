@@ -296,7 +296,9 @@ public static class HostWorlds
                     "(a wrong fixture, not a load failure; a load failure is reported as one). HostWorldPlan.Preflight reads the fixture's own UID before the run.", error);
             }
         }
-        return session.WaitForWorld(world.WorldUid, Left(), cancellation, protectPlayer);
+        var started = session.WaitForWorld(world.WorldUid, Left(), cancellation, protectPlayer);
+        host.PublishWorld(plan, world.WorldUid); // The one place a hosting client's world pins are published; any transition retracts them.
+        return started;
 
         TimeSpan Left()
         {

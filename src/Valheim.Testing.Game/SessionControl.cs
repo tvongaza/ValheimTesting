@@ -244,6 +244,7 @@ public sealed class SessionControl(GameActor actor)
         // allow it (AllowOnServerClients), so a client staged without it is named here rather than by a refused command.
         if (plan.Owned) TestAccess.Ensure(actor, TestActorRole.ClientInWorld, clientMutations: protectPlayer);
         if (protectPlayer) PlayerPlacement.Protect(actor, plan.Targetable);
+        actor.PublishWorld(plan, worldUid); // The one place a joined client's world pins are published; any transition retracts them.
         return state;
     }
 

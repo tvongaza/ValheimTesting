@@ -95,6 +95,18 @@ public sealed class GameActor : IDisposable
     /// and not verified with pins since.
     /// </summary>
     public bool Pinned { get { lock (_sync) return _pinned; } }
+    /// <summary>
+    /// Where this actor's verified world pins are published for a separate diagnostic invocation, or null when it publishes none.
+    /// The publisher is told about every join and leave here and nowhere else: <see cref="PublishWorld"/> (the end of a join) and,
+    /// for everything that ends them, <see cref="VerifyEnvironment"/> and <see cref="InvalidateEnvironment"/>.
+    /// </summary>
+    internal IWorldPins? WorldPins { get; set; }
+    /// <summary>
+    /// The joined (or hosted) world <paramref name="worldUid"/> was entered and verified: publishes its pins, which stay until the
+    /// next verification or transition of this actor. Called by <see cref="SessionControl"/> and <see cref="HostWorlds"/>, the
+    /// places that join and host, never by a caller of theirs.
+    /// </summary>
+    internal void PublishWorld(ClientRunPlan plan, string worldUid) => WorldPins?.Publish(plan, worldUid);
     /// <summary>Take ownership of <paramref name="transport"/>. Call <see cref="VerifyEnvironment"/> before issuing a command.</summary>
     public GameActor(string name, IGameTransport transport)
     { Name = name; _transport = transport; }
@@ -219,6 +231,8 @@ public sealed class GameActor : IDisposable
     /// </summary>
     public void VerifyEnvironment(string expectationCommand)
     {
+        lock (_sync) _verified = false; // Before the retract below, which may throw: nothing stays verified on stale state.
+        WorldPins?.Retract(); // New expectations: the published world pins no longer describe what was verified.
         lock (_sync)
         {
             _verified = false;
@@ -235,7 +249,11 @@ public sealed class GameActor : IDisposable
         }
     }
     /// <summary>After an attempted world transition, require fresh explicit environment pins.</summary>
-    public void InvalidateEnvironment() { lock (_sync) _verified = false; }
+    public void InvalidateEnvironment()
+    {
+        lock (_sync) _verified = false;
+        WorldPins?.Retract(); // A world transition (even a lost reply) ends the published world pins.
+    }
     /// <summary>
     /// Every command rechecks strict pins. By default the reply must be accepted (<see cref="GameReply.RequireAccepted"/>):
     /// the transport completed and the game did not refuse it. <paramref name="requireAccepted"/> false permits inspecting
@@ -443,4 +461,11 @@ public sealed record Observation(string Source, bool Complete, JsonElement Data)
     {
         if (!Complete || Source != source) throw new InvalidOperationException("Incomplete observation or wrong observation layer.");
     }
+}
+
+/// <summary>Publishes and retracts a joined client's diagnostic world pins; <see cref="GameActor"/> is the only caller.</summary>
+internal interface IWorldPins
+{
+    void Publish(ClientRunPlan plan, string worldUid);
+    void Retract();
 }
