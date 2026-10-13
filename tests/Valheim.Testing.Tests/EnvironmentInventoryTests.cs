@@ -293,7 +293,7 @@ public sealed class EnvironmentInventoryTests : IDisposable
         Assert.Matches("^steam_[a-f0-9]{40}$", key);
     }
 
-    [Fact]
+    [ClientHostFact] // the local client is on this machine
     public void InventoryCanMixContainerServerLocalClientAndRemoteClient()
     {
         var inventory = Inventory();

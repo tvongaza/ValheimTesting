@@ -7,7 +7,7 @@ namespace Valheim.Testing.GameSessions;
 [ResultShape]
 public enum SteamSignedInState
 {
-    /// <summary>The host's account signal matches the leased account. On Linux and macOS this is the last recorded login.</summary>
+    /// <summary>The host's account signal matches the leased account. On macOS this is the last recorded login.</summary>
     Matches,
     /// <summary>The host's account signal names another account.</summary>
     OtherAccount,
@@ -94,7 +94,7 @@ public sealed class SteamAccountHold : IAsyncDisposable, ILeasedSteamAccount
     /// <summary>
     /// The optional signed-in check, on the client's own host: its Steam client must be signed in to this account (the SteamID
     /// observed for it). Windows reads the signed-in user from <c>HKCU\Software\Valve\Steam\ActiveProcess\ActiveUser</c>;
-    /// Linux and macOS read the account Steam last signed in from the host user's <c>loginusers.vdf</c> (its <c>MostRecent</c> user, or
+    /// macOS reads the account Steam last signed in from the host user's <c>loginusers.vdf</c> (its <c>MostRecent</c> user, or
     /// with current clients that write no <c>MostRecent</c>, the single newest <c>Timestamp</c>). Another account, none, or a state that
     /// cannot be read throws <see cref="SteamSignedInException"/>: unreadable is refused, never passed. The SteamID is kept in
     /// the private prepared profile for the later in-game check, but never written to the run report.
@@ -204,8 +204,8 @@ internal static class SteamSignedInUsers
         };
     }
 
-    // Linux and macOS: the account Steam last signed in, from loginusers.vdf under the host's Steam root. This file does not prove
-    // Steam is running or that the remembered account still has an active session.
+    // macOS (the only bash host that runs a client): the account Steam last signed in, from loginusers.vdf under the host's Steam
+    // root. This file does not prove Steam is running or that the remembered account still has an active session.
     // Older clients mark it MostRecent "1"; the current macOS client (September 2026) writes no MostRecent key at all and records
     // each user's last sign-in as Timestamp, so without any MostRecent key the single newest Timestamp is that account, and a tie or
     // no Timestamp is unreadable. A user is a bare "<SteamID64>" line; only its id is printed. Variable: steam (optional Steam root).

@@ -13,7 +13,7 @@ public sealed class NativeSmokeLoaderTests : IDisposable
         Journals: (_, _) => Task.FromResult<IReadOnlyList<CampaignPreflightProblem>>([]), Packaged: () => null));
     public void Dispose() { _preflight.Dispose(); _rig.Dispose(); }
 
-    [Fact]
+    [ClientHostFact] // start puts a client on this machine
     public async Task OneShotScenarioBuildCannotWriteInsideTheSelectedCliBundle()
     {
         using var journal = RunJournal.UseLocalDirectory(Path.Combine(_rig.Root, "source-guard-journal"));
@@ -64,7 +64,7 @@ public sealed class NativeSmokeLoaderTests : IDisposable
         Assert.False(Path.Exists(hostedLoaderOutput));
     }
 
-    [Fact]
+    [ClientHostFact] // start puts a client on this machine
     public async Task EveryOneShotCommandLocksTheSameCompleteCliBundle()
     {
         using var journal = RunJournal.UseLocalDirectory(Path.Combine(_rig.Root, "all-packs-journal"));
@@ -178,7 +178,7 @@ public sealed class NativeSmokeLoaderTests : IDisposable
         Assert.False(Directory.Exists(Path.Combine(output, "consumer")));
     }
 
-    [Fact]
+    [ClientHostFact] // start puts a client on this machine
     public void StartRefusesMissingSteamBeforeWritingAnOutput()
     {
         using var journal = RunJournal.UseLocalDirectory(Path.Combine(_rig.Root, "steam-refusal-journal"));
@@ -201,7 +201,7 @@ public sealed class NativeSmokeLoaderTests : IDisposable
     // #297: start goes straight to the hosted run from the tool's own assemblies; no consumer project comes first. The
     // run stops at its first Setup step here (this test machine has no Steam, so no userdata to check the character
     // against), before anything outside the output changes. Its client is the --game override, written beside its inputs.
-    [Fact]
+    [ClientHostFact] // start puts a client on this machine
     public void StartRunsTheHostedRunWithoutBuildingAConsumer()
     {
         using var journal = RunJournal.UseLocalDirectory(Path.Combine(_rig.Root, "journal"));

@@ -112,6 +112,9 @@ internal sealed class GameRole
     internal void Validate(string role, HostProfile host, List<string> errors)
     {
         string where = "The " + role;
+        bool server = role == "server";
+        // Linux hosts run the dedicated server only (#708), so no client check (Steam sign-in, account in use) asks one (#740).
+        if (!server && host.Platform == "linux") { errors.Add($"{where}: {GameLaunch.LinuxClientRefusal}"); return; }
         if (!host.IsAbsolutePath(Install)) errors.Add($"{where}: install must be an absolute path on host '{Host}'.");
         // Whether the runtime lies outside the install is decided on the host, with links resolved there, when a run prepares its
         // copy (HostInstall.RequireApartAsync): spelling alone cannot tell (#700).
@@ -120,7 +123,6 @@ internal sealed class GameRole
         if (LocalCliPort != 0 && LocalCliPort is < 1024 or > 65535) errors.Add($"{where}: localCliPort must be 0 or 1024 to 65535.");
         if (host.Kind is "local" or "container" && LocalCliPort != 0 && LocalCliPort != CliPort)
             errors.Add($"{where}: a {host.Kind} host's CLI is reached on cliPort itself; leave localCliPort 0.");
-        bool server = role == "server";
         if (server && GamePort is < 1024 or > 65534) errors.Add($"{where}: gamePort must be 1024 to 65534.");
         if (!server && GamePort != 0) errors.Add($"{where}: only the server has a gamePort.");
     }

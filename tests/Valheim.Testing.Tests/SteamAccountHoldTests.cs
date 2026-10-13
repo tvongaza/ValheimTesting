@@ -142,9 +142,9 @@ public sealed class SteamSignedInUserTests
         Assert.Contains(@"HKEY_CURRENT_USER\Software\Valve\Steam\ActiveProcess", FakeLauncher.Script(fake.Calls[1]));
     }
 
-    // A loginusers.vdf as Steam writes it, through bash on Linux and macOS: the MostRecent user is the second, and
-    // its other fields are not read.
-    [Fact] public async Task OnLinuxAndMacOSTheMostRecentUserOfLoginusersIsRead()
+    // A loginusers.vdf as Steam writes it, read by a macOS host's script (only a Mac's bash runs it for a client; this machine's bash
+    // parses it the same): the MostRecent user is the second, and its other fields are not read.
+    [Fact] public async Task ThroughBashTheMostRecentUserOfLoginusersIsRead()
     {
         if (OperatingSystem.IsWindows()) return;
         foreach (var row in LocalGameHostShellTests.Shells) await ReadsLoginusers((string)row[0]);

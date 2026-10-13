@@ -901,20 +901,11 @@ public sealed partial class HostedServerRunTests : IDisposable
         else Assert.Contains("check winhttp.dll, doorstop_config.ini and BepInEx/core", message);
     }
 
-    // Linux hosts run the dedicated server only (#708): a client the profile puts on one is refused before its host is locked or touched.
-    [Fact] public async Task AProfileClientOnALinuxHostIsRefusedBeforeItsHostIsLockedOrAnythingStarts()
+    // Linux hosts run the dedicated server only (#708): a client the profile puts on one is refused when the profile is read (#740).
+    [Fact] public void AProfileClientOnALinuxHostIsRefusedWhenTheProfileIsRead()
     {
-        var server = NewServer(); var host = NewHost(server);
-        var clientHost = new FakeServerHost("mac-gpu", Path.Combine(_root, "gpu"), tunnelPort: 15578);
-        var (plan, profile) = Write(host, withClient: true, clientPlatform: "linux");
-        var client = new ClientRunPlan { Mode = "owned", Architecture = "x64", Install = _root, Port = 5578, Pinning = "none", StartSeconds = 30 };
-        Exception? refused = null;
-        Assert.Equal(0, await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["run", plan, Output], Options(host, server, run =>
-        {
-            refused = Record.Exception(() => run.OpenClient(client));
-            return Task.CompletedTask;
-        }, clientHost, new ScriptedTransport())));
-        Assert.Equal("Linux hosts run the dedicated server only; start the client on Windows or macOS.", Assert.IsType<PlatformNotSupportedException>(refused).Message);
-        Assert.Empty(clientHost.Claims); Assert.Empty(clientHost.Runs); Assert.Empty(clientHost.Tunnels);
+        var (_, profile) = Write(NewHost(NewServer()), withClient: true, clientPlatform: "linux");
+        Assert.Contains("The client player: Linux hosts run the dedicated server only; start the client on Windows or macOS.",
+            Assert.Throws<ArgumentException>(() => TestEnvironment.Read(profile)).Message);
     }
 }

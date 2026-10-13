@@ -515,7 +515,7 @@ public class ResolvedEnvironmentTests
 
     [Fact] public void ALocalHostMustBeThisMachinesPlatform()
     {
-        string json = """{ "hosts": { "here": { "kind": "local", "platform": "PLATFORM", "shell": "SHELL", "lock": "LOCK" } }, "clients": { "me": { "host": "here", "install": "INSTALL", "runtime": "RUNTIME", "cliPort": 5578 } } }""";
+        string json = """{ "hosts": { "here": { "kind": "local", "platform": "PLATFORM", "shell": "SHELL", "lock": "LOCK" } }, "server": { "host": "here", "install": "INSTALL", "runtime": "RUNTIME", "cliPort": 5578, "gamePort": 2456 } }""";
         string Fill(string platform) => json.Replace("PLATFORM", platform).Replace("SHELL", platform == "windows" ? "pwsh" : "bash")
             .Replace("LOCK", platform == "windows" ? "C:/vt/lock" : "/tmp/vt/lock").Replace("INSTALL", platform == "windows" ? "C:/Games/Valheim" : "/games/valheim")
             .Replace("RUNTIME", platform == "windows" ? "C:/vt/runs" : "/tmp/vt/runs");
@@ -527,8 +527,8 @@ public class ResolvedEnvironmentTests
     [Theory]
     [InlineData("\"server\": {", "\"extra\": 1, \"server\": {", "'extra'")]
     [InlineData("\"host\": \"linux-box\"", "\"host\": \"nowhere\"", "not listed")]
-    [InlineData("\"host\": \"windows-pc\", \"install\": \"C:\\\\Games\\\\Valheim\", \"runtime\": \"D:/ValheimTesting/runs\", \"cliPort\": 5578",
-                "\"host\": \"linux-box\", \"install\": \"/opt/valheim/client\", \"runtime\": \"/srv/vt/client\", \"cliPort\": 5577", "same ValheimCLI port 5577 on host 'linux-box'")]
+    [InlineData("\"host\": \"linux-box\", \"install\": \"/opt/valheim/server\", \"runtime\": \"/srv/valheim-testing/runs\", \"cliPort\": 5577",
+                "\"host\": \"windows-pc\", \"install\": \"C:/server\", \"runtime\": \"C:/vt/server\", \"cliPort\": 5578", "same ValheimCLI port 5578 on host 'windows-pc'")]
     [InlineData("\"lock\": \"/var/tmp/valheim-testing.lock\"", "\"lock\": \"var/tmp/lock\"", "lock must be an absolute path")]
     [InlineData("\"lock\": \"C:\\\\ValheimTesting\\\\lock\"", "\"lock\": \"/ValheimTesting/lock\"", "lock must be an absolute path")]
     [InlineData("\"destination\": \"tester@linux-box.example\", ", "", "needs a destination")]
@@ -553,14 +553,14 @@ public class ResolvedEnvironmentTests
         Assert.Contains(expected, error.Message);
     }
 
-    [Fact] public void ALocalHostAndAHostNetworkContainerNeverShareACliPort()
+    [ClientHostFact] public void ALocalHostAndAHostNetworkContainerNeverShareACliPort() // client me is on this machine
     {
         // Both are reached on this machine's own loopback, so one port would reach whichever answered first.
         string shell = Platform == "windows" ? "pwsh" : "bash", root = Platform == "windows" ? "C:/vt" : "/tmp/vt";
         string json = $$"""
             { "hosts": { "here": { "kind": "local", "platform": "{{Platform}}", "shell": "{{shell}}", "lock": "{{root}}/lock" },
                          "ctr": { "kind": "container", "platform": "linux", "shell": "bash", "container": "vt-server", "lock": "/home/valheim/lock" },
-                         "far": { "kind": "ssh", "platform": "linux", "shell": "bash", "destination": "far.example", "lock": "/tmp/lock" } },
+                         "far": { "kind": "ssh", "platform": "macos", "shell": "bash", "destination": "far.example", "lock": "/tmp/lock" } },
               "server": { "host": "ctr", "install": "/opt/valheim/server", "runtime": "/home/valheim/runs", "cliPort": 5577, "gamePort": 2456 },
               "clients": { "me": { "host": "here", "install": "{{root}}/game", "runtime": "{{root}}/runs", "cliPort": CLIENTPORT },
                            "far": { "host": "far", "install": "/games/valheim", "runtime": "/tmp/runs", "cliPort": 5577, "localCliPort": FARPORT } } }
