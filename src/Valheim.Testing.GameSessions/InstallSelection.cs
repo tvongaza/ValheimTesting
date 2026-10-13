@@ -14,7 +14,7 @@ namespace Valheim.Testing.GameSessions;
 /// inspected first (<see cref="HostedRuntimeStage.InspectSourceAsync"/>); the selection is read from that listing: in place on this
 /// machine, or fetched into an owned local folder from another host (<see cref="IGameHost.FetchDirectoryAsync"/>) and checked
 /// against the listing's hashes. A file changed in place after the listing is refused by the profile stage, which compares the
-/// install with its listing once the profile is made. The platform is the install's on its host, never the runner's. Dispose it
+/// install with its listing once the profile is made. Paths compare as the install's host lists them, never as the runner's filesystem does. Dispose it
 /// once the profile is prepared: that removes the fetched files and the generated config.
 /// </summary>
 internal sealed class InstallSelection : IDisposable
@@ -77,9 +77,8 @@ internal sealed class InstallSelection : IDisposable
         string install, HostListing source, CliCapabilityManifest cli, CliSetLocation cliFiles, BepInExLoaderPackage? loader, string work,
         TimeSpan timeout, CancellationToken cancellation)
     {
-        // BepInEx finds its folders as the install's filesystem does: ignoring case on Windows and macOS, exactly on Linux.
-        var folderNames = HostedRuntimeStage.IsMacOS(role, source) || source.Shell == HostShellKind.PowerShell
-            ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+        // The install's paths compare as its host's listing does: ignoring case on Windows, exactly on a bash host.
+        var names = source.Names;
         bool inPlace = host.Kind == GameHostKind.Local;
         var selection = new List<HostedRuntimeFile>();
         var replaced = new List<string>();
@@ -87,19 +86,16 @@ internal sealed class InstallSelection : IDisposable
         {
             string prefix = "BepInEx/" + folder + "/";
             // Each listed file below the folder, by its path below it (macOS Finder and AppleDouble files are never part of an install).
-            var found = source.Files.Where(file => file.Key.Length > prefix.Length && folderNames.Equals(file.Key[..prefix.Length], prefix) &&
+            var found = source.Files.Where(file => file.Key.Length > prefix.Length && names.Equals(file.Key[..prefix.Length], prefix) &&
                 !FileHash.IsMacMetadata(file.Key)).ToList();
             if (found.Count == 0) continue;
-            // The folder as the install spells it: one spelling, or BepInEx would see two folders' files as one.
-            var spellings = found.Select(file => file.Key[..(prefix.Length - 1)]).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList();
-            if (spellings.Count != 1)
-                throw new InvalidDataException($"{string.Join(" and ", spellings)} in {install} on {host.Name} are one folder to BepInEx, which finds " +
-                    "its folders ignoring case there. Keep one of them.");
+            // The folder as the install spells it, which a Windows host may write in another case.
+            string spelling = found[0].Key[..(prefix.Length - 1)];
             var listed = found.ToDictionary(file => file.Key[prefix.Length..], file => (file.Key, Sha: file.Value), StringComparer.Ordinal);
             string fetched = Path.Combine(work, "BepInEx", folder);
             if (!inPlace)
             {
-                await host.FetchDirectoryAsync(HostPath.Join(install, spellings[0]), fetched, timeout, cancellation).ConfigureAwait(false);
+                await host.FetchDirectoryAsync(HostPath.Join(install, spelling), fetched, timeout, cancellation).ConfigureAwait(false);
                 // Exactly the listed files arrived, each with the listing's hash.
                 foreach (string file in Directory.EnumerateFiles(fetched, "*", SearchOption.AllDirectories))
                 {
@@ -119,7 +115,7 @@ internal sealed class InstallSelection : IDisposable
                 string relative = prefix + below;
                 string local = inPlace ? Path.Combine(install, key.Replace('/', Path.DirectorySeparatorChar))
                     : Path.Combine(fetched, below.Replace('/', Path.DirectorySeparatorChar));
-                if (relative.Equals(BepInExSettings.RelativePath, StringComparison.OrdinalIgnoreCase)) continue;
+                if (names.Equals(key, BepInExSettings.RelativePath)) continue;
                 if (loader != null && loader.Files.Keys.Any(path => path.Equals(relative, StringComparison.OrdinalIgnoreCase))) continue;
                 if (folder is "plugins" or "scripts" && relative.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)
                     && (Path.GetFileName(relative).Equals(cli.Plugin.File, StringComparison.OrdinalIgnoreCase) || CliBuildManifest.Plugins(local)?.Any(CliBuildManifest.IsCliPlugin) == true))

@@ -82,7 +82,8 @@ public sealed class LocalClientCopyTests : IDisposable
         Assert.Equal(FileHash.Sha256(Path.Combine(_rig.Root, "cli", "valheimCLI.dll")), FileHash.Sha256(Path.Combine(copy.Runtime, "BepInEx", "plugins", "valheimCLI.dll")));
         Assert.False(File.Exists(Path.Combine(copy.Runtime, "BepInEx", "plugins", "Valheim.Cli.Standard.dll")));
         Assert.True(File.Exists(Path.Combine(copy.Runtime, "BepInEx", "plugins", "Unrelated.dll")));
-        Assert.True(File.Exists(Path.Combine(copy.Runtime, "BepInEx", "config", "BepInEx.cfg")));
+        // The install's own BepInEx.cfg, as the profile stage decides it (no loader package here).
+        Assert.Equal(File.ReadAllText(Path.Combine(source, "BepInEx", "config", "BepInEx.cfg")), File.ReadAllText(Path.Combine(copy.Runtime, "BepInEx", "config", "BepInEx.cfg")));
         string cliConfig = File.ReadAllText(Path.Combine(copy.Runtime, "BepInEx", "config", "valheimCLI.valheimCLI.cfg"));
         Assert.Contains("Port = 5556", cliConfig);
         Assert.Contains("AllowOnServerClients = true", cliConfig);

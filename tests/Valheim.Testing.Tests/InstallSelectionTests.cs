@@ -178,22 +178,18 @@ public sealed class InstallSelectionTests : IDisposable
             InstallSelection.ReadAsync(host, HostedRuntimeKind.Server, server, manifest, location, null, 5560, new ClientRunPlan(), Timeout));
     }
 
-    // BepInEx finds its folders as the install's filesystem does: a macOS install's BepInEx/Plugins is its plugins folder, a Linux
-    // install's is not. The platform is read from the install on its host, so either answer holds on every runner.
-    [Fact] public async Task TheInstallsPlatformOnItsHostDecidesNotTheRunners()
+    // An install's paths compare as its host lists them: a Windows install's BepInEx\Scripts is its scripts folder, a Linux
+    // install's BepInEx/Scripts is not one BepInEx reads. Either answer holds on every runner, whatever its filesystem.
+    [Fact] public async Task TheInstallsHostDecidesHowItsPathsCompareNotTheRunner()
     {
         var (manifest, location) = CliSet();
-        var mac = new FakeServerHost("mac-server", Path.Combine(Mirror, "mac"));
-        string macInstall = mac.Local("/game/mac-server");
-        Put(macInstall, GameLaunch.ServerMacExecutable, "mac server");
-        Put(macInstall, "valheim_server/Data/Managed/" + InstallPins.GameAssemblyName, "mac game assembly");
-        FakeInstalls.MacLoader(macInstall);
-        Put(macInstall, "BepInEx/core/BepInEx.dll", "core");
-        Put(macInstall, "BepInEx/core/BepInEx.Preloader.dll", "preloader");
-        Put(macInstall, "BepInEx/Plugins/Mod.dll", "the install's mod");
-        using (var selection = await InstallSelection.ReadAsync(mac, HostedRuntimeKind.Server, "/game/mac-server", manifest, location, null, 5560, null, Timeout))
-            Assert.Equal("the install's mod", File.ReadAllText(selection.Files.Single(file => file.RelativePath == "BepInEx/plugins/Mod.dll").Source));
-        Assert.Contains(mac.Runs, run => run.Script == "fetch" && run.Variables["dir"] == "/game/mac-server/BepInEx/Plugins");
+        var windows = new FakeServerHost("windows-host", Path.Combine(Mirror, "windows"), windows: true);
+        const string server = @"C:\game\server";
+        WindowsInstalls(windows, @"C:\game\client", server);
+        Put(windows.Local(server), "BepInEx/Scripts/Tool.dll", "the install's script");
+        using (var selection = await InstallSelection.ReadAsync(windows, HostedRuntimeKind.Server, server, manifest, location, null, 5560, null, Timeout))
+            Assert.Equal("the install's script", File.ReadAllText(selection.Files.Single(file => file.RelativePath == "BepInEx/scripts/Tool.dll").Source));
+        Assert.Contains(windows.Runs, run => run.Script == "fetch" && run.Variables["dir"] == @"C:\game\server\BepInEx\Scripts");
 
         var linux = new FakeServerHost("linux-server", Path.Combine(Mirror, "linux"));
         string linuxInstall = LinuxServer(linux, "/game/server");
@@ -203,13 +199,6 @@ public sealed class InstallSelectionTests : IDisposable
             Assert.DoesNotContain(selection.Files, file => file.Source.EndsWith("Ignored.dll", StringComparison.Ordinal));
             Assert.Contains(selection.Files, file => file.RelativePath == "BepInEx/plugins/Mod/Mod.dll");
         }
-
-        // Two spellings of one folder on a case-sensitive macOS volume are refused, naming both. The mirror holds two spellings
-        // only where this runner's filesystem tells them apart.
-        Put(macInstall, "BepInEx/plugins/Other.dll", "another mod");
-        if (Directory.GetDirectories(Path.Combine(macInstall, "BepInEx")).Length != 3) return; // core, Plugins and plugins
-        var twice = await Assert.ThrowsAsync<InvalidDataException>(() =>
-            InstallSelection.ReadAsync(mac, HostedRuntimeKind.Server, "/game/mac-server", manifest, location, null, 5560, null, Timeout));
-        Assert.Contains("BepInEx/Plugins and BepInEx/plugins", twice.Message);
+        Assert.DoesNotContain(linux.Runs, run => run.Script == "fetch" && run.Variables["dir"].Contains("Scripts", StringComparison.Ordinal));
     }
 }
