@@ -42,7 +42,7 @@ public sealed class ServerActor : IOwnedServer, IDisposable
             var launch = GameLaunch.ForServerWithLoader(placement.GameDirectory, placement.LoaderDirectory,
                 plan.LaunchArguments(runtime, world), environment, placement.Platform, placement.MacSteamRuntimeDirectory);
             int n = ++boot;
-            var started = placement.Start(n, launch, output, cancellation);
+            var started = placement.Start(n, launch, output, TimeSpan.FromSeconds(plan.QuitSeconds), cancellation);
             // What the stop keeps: BepInEx's log, Unity's log when the plan passes -logFile {runtime}/toolkit-unity.log, and the
             // process output (Unity's log on Linux without -logFile).
             // Registered at once, so a boot that fails from here is still scanned.
@@ -190,8 +190,11 @@ internal interface IServerPlacement
     IGameHost? Host { get; }
     /// <summary>The launch's platform on a host, or null for this machine's own.</summary>
     ServerPlatform? Platform { get; }
-    /// <summary>Starts boot <paramref name="boot"/> (from 1). A failure after the returned process started is the actor's to stop.</summary>
-    ServerBoot Start(int boot, GameLaunch launch, string output, CancellationToken cancellation);
+    /// <summary>
+    /// Starts boot <paramref name="boot"/> (from 1), which its stop will give <paramref name="quit"/> to quit when asked (a journalling
+    /// placement records it, so env recover gives it the same). A failure after the returned process started is the actor's to stop.
+    /// </summary>
+    ServerBoot Start(int boot, GameLaunch launch, string output, TimeSpan quit, CancellationToken cancellation);
     /// <summary>A new connection to the server's ValheimCLI.</summary>
     IGameTransport Connect();
     StartupEvents? Events(ServerRunPlan plan);
@@ -208,7 +211,7 @@ internal sealed class LocalServerPlacement(string runtimeDirectory, string world
     public ServerPlatform? Platform => null;
     public IGameHost? Host => null;
 
-    public ServerBoot Start(int boot, GameLaunch launch, string output, CancellationToken cancellation)
+    public ServerBoot Start(int boot, GameLaunch launch, string output, TimeSpan quit, CancellationToken cancellation)
     {
         string prefix = Path.Combine(output, "boot-" + boot);
         var process = new DirectServerProcess(launch.ToStartInfo(), prefix,

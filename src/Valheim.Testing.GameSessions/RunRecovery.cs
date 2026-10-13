@@ -40,34 +40,18 @@ internal static class RunRecovery
     /// <summary>The actor a recovery journals as on every host: its entries never make the recovering process the run's runner.</summary>
     public const string Actor = "recovery";
 
-    // The local Mac server path predates HostServer's remote Mac backend. Check all three journalled
-    // process facts again in the stop script, immediately before signalling; an unproven process is untouched.
-    internal static readonly string MacStop = """
-        set -u
-        current() {
-          state=$(LC_ALL=C ps -p "$game" -o stat= 2>/dev/null) || state=
-          case "$state" in ''|Z*) return 1 ;; esac
-          begin=$(LC_ALL=C ps -ww -p "$game" -o lstart= 2>/dev/null) || return 2
-          [ -n "$begin" ] || return 2
-          identity=$(printf '%s' "$begin" | cksum | awk '{print $1}')
-          [ "$identity" = "$start" ] || return 2
-          command=$(LC_ALL=C ps -ww -p "$game" -o command= 2>/dev/null) || return 2
-          [ -n "$command" ] || return 2
-          hash=$(printf '%s' "$command" | shasum -a 256 | awk '{print $1}')
-          [ "$hash" = "$commandLine" ] || return 2
-        }
-        current
-        case $? in 1) echo 'VT-STOP gone'; exit 0 ;; 0) ;; *) echo 'VT-STOP unproven'; exit 0 ;; esac
-        kill -INT "$game" 2>/dev/null || { echo 'VT-STOP unproven'; exit 0; }
-        n=0
-        while current && [ "$n" -lt 100 ]; do sleep 0.1; n=$((n + 1)); done
-        if current; then
-          kill -KILL "$game" 2>/dev/null || { echo 'VT-STOP unproven'; exit 0; }
-          n=0
-          while current && [ "$n" -lt 200 ]; do sleep 0.1; n=$((n + 1)); done
-        fi
-        if current; then echo 'VT-STOP running'; else echo 'VT-STOP stopped'; fi
-        """;
+    // How long a process killed by a recovery has to exit before the stop says it is still running.
+    private static readonly TimeSpan KillWait = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// How long a recovery lets a process quit when asked before it kills it: what its own stop would have given it (#665). A
+    /// server boot journals its plan's <see cref="ServerRunPlan.QuitSeconds"/> (<c>quitSeconds</c>), taken at most up to a plan's
+    /// maximum (a journal is a file on the host, which an edit or a cut line could aim anywhere); a client journals none and gets its
+    /// session's default <see cref="ClientSession.QuitTimeout"/>.
+    /// </summary>
+    internal static TimeSpan QuitBudget(IReadOnlyDictionary<string, string> fields) =>
+        fields.GetValueOrDefault("quitSeconds") is { } text && int.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out int seconds)
+            ? TimeSpan.FromSeconds(Math.Min(seconds, ServerRunPlan.MaximumQuitSeconds)) : ClientSession.DefaultQuitTimeout;
 
     public static async Task<RecoveryReport> RecoverAsync(IReadOnlyDictionary<string, HostProfile> hosts, Func<string, IGameHost> hostFactory, string runId,
         bool teardown, TimeSpan timeout, CancellationToken cancellation = default, string? leaseHost = null, string? leaseDirectory = null)
@@ -169,31 +153,31 @@ internal static class RunRecovery
                         Step(group.Key, what, "not stopped: its ID, start time and command line no longer all match the journal", failed: true);
                         continue;
                     }
-                    string directory = process.Fields.GetValueOrDefault("bootDirectory") is { Length: > 0 } boot ? boot : process.Fields.GetValueOrDefault("launchDirectory") ?? "";
-                    InteractiveStop outcome;
+                    // Stopped as its own run would have stopped it: asked to quit, given its quit budget, then killed (#665). On macOS a
+                    // server and a client share the one stop (MacProcess), which checks the command line again itself; a Mac client's GUI
+                    // agent is retired next. Elsewhere by its kind's stop: the server's (SIGINT, or Ctrl+Break) or the client's.
+                    var quit = QuitBudget(process.Fields);
+                    bool quitWhenAsked, alreadyGone;
                     if (hosts[group.Key].Platform == "macos")
                     {
-                        var result = (await host.RunAsync(MacStop, new Dictionary<string, string>
-                        {
-                            ["game"] = pid.ToString(CultureInfo.InvariantCulture), ["start"] = start, ["commandLine"] = commandLine,
-                        }, TimeSpan.FromSeconds(45), cancellation).ConfigureAwait(false)).EnsureSuccess($"Stopping Mac process {pid} on {host.Name}");
-                        outcome = InteractiveClient.Line(result.Stdout, "VT-STOP ") switch
-                        {
-                            "gone" => InteractiveStop.AlreadyGone,
-                            "stopped" => InteractiveStop.Stopped,
-                            _ => throw new HostOperationException($"Mac process {pid} could not be proven stopped", result),
-                        };
-                        var after = (await HostProcessProbe.ProbeAsync(host, [(pid, start)], timeout, cancellation).ConfigureAwait(false))[(pid, start)];
-                        if (after.State is not (ProbedState.Gone or ProbedState.Reused))
-                            throw new IOException($"Mac process {pid} is still {after.State} after the stop attempt; its world and runtime are kept.");
+                        string word = await MacProcess.StopAsync(host, $"Mac process {pid} on {host.Name}", pid, start, quit, KillWait, commandLine, cancellation).ConfigureAwait(false);
+                        quitWhenAsked = word == "quit"; alreadyGone = word == "gone";
+                    }
+                    else if (process.Fields.GetValueOrDefault("bootDirectory") is { Length: > 0 } boot)
+                    {
+                        var stopped = await HostServerProcess.StopOnHostAsync(host, host.Shell.Kind == HostShellKind.PowerShell ? ClientPlatform.Windows : ClientPlatform.Linux,
+                            pid, start, boot, quit, KillWait, cancellation).ConfigureAwait(false);
+                        quitWhenAsked = stopped == HostServerStop.Quit; alreadyGone = stopped == HostServerStop.AlreadyGone;
                     }
                     else
                     {
-                        var owned = new InteractiveClientProcess(host, host.Shell.Kind == HostShellKind.PowerShell ? ClientPlatform.Windows : ClientPlatform.Linux, pid, start, directory, null);
-                        outcome = await owned.StopAsync(TimeSpan.FromSeconds(30), cancellation).ConfigureAwait(false);
+                        var owned = new InteractiveClientProcess(host, host.Shell.Kind == HostShellKind.PowerShell ? ClientPlatform.Windows : ClientPlatform.Linux,
+                            pid, start, process.Fields.GetValueOrDefault("launchDirectory") ?? "", null);
+                        var stopped = await owned.StopAsync(quit, KillWait, cancellation).ConfigureAwait(false);
+                        quitWhenAsked = stopped == InteractiveStop.Quit; alreadyGone = stopped == InteractiveStop.AlreadyGone;
                     }
                     await RetireMacClientAgent(group.Key, process.Fields.GetValueOrDefault("launchDirectory")).ConfigureAwait(false);
-                    Step(group.Key, what, outcome == InteractiveStop.AlreadyGone ? "already gone" : "stopped");
+                    Step(group.Key, what, alreadyGone ? "already gone" : quitWhenAsked ? "quit when asked" : "stopped");
                     await Note(group.Key, Stopped(pid, start)).ConfigureAwait(false);
                     await SettleAdopted(process).ConfigureAwait(false);
                 }

@@ -27,7 +27,7 @@ internal sealed record ProbedProcess(int Pid, ProbedState State, string? StartId
 /// <summary>
 /// Reads, without changing anything, whether processes a run journalled still run on a host: the process ID, its start
 /// identity (the same rule as the stop scripts: Windows <c>StartTime</c> as a UTC file time, Linux the start in clock ticks
-/// from <c>/proc/PID/stat</c>, or macOS the checksum of a C-locale <c>ps lstart</c> value) and the SHA-256 of its command line
+/// from <c>/proc/PID/stat</c>, or macOS <see cref="MacProcess"/>'s) and the SHA-256 of its command line
 /// (Windows <c>Win32_Process.CommandLine</c> as UTF-8, Linux the raw bytes of <c>/proc/PID/cmdline</c>, or macOS the full
 /// <c>ps command</c> value). A recovery stops a process only when all three match its journal entry (#257 Q2).
 /// </summary>
@@ -120,30 +120,24 @@ internal static class HostProcessProbe
     internal static string ExpectedMacCommandLineSha256(string executable, IReadOnlyList<string> arguments) =>
         FileHash.Sha256(System.Text.Encoding.UTF8.GetBytes(string.Join(' ', arguments.Prepend(executable))));
 
-    // A local Mac has no /proc. The C-locale ps start string, checksummed as a decimal token, distinguishes a reused PID;
-    // the full command line is separately hashed. An unreadable process is never reported as gone or safe to stop.
-    internal static readonly string Mac = """
-        set -u
+    // A Mac has no /proc: the start identity is MacProcess's (#665), and the full command line is separately hashed. An
+    // unreadable process is never reported as gone or safe to stop.
+    internal static readonly string Mac = "set -u\n" + MacProcess.Functions + """
         for pair in $processes; do
           id=${pair%%:*}; start=${pair#*:}; asked=${start:--}
-          state=$(LC_ALL=C ps -p "$id" -o stat= 2>/dev/null) || state=
-          if [ -z "$state" ]; then
-            if kill -0 "$id" 2>/dev/null; then echo "VT-PROC $id $asked unreadable - -"; else echo "VT-PROC $id $asked gone - -"; fi
-            continue
-          fi
-          case "$state" in Z*) echo "VT-PROC $id $asked gone - -"; continue ;; esac
-          begin=$(LC_ALL=C ps -ww -p "$id" -o lstart= 2>/dev/null) || begin=
-          if [ -z "$begin" ]; then echo "VT-PROC $id $asked unreadable - -"; continue; fi
-          identity=$(printf '%s' "$begin" | cksum | awk '{print $1}')
-          if [ -n "$start" ] && [ "$identity" != "$start" ]; then echo "VT-PROC $id $asked reused $identity -"; continue; fi
+          observed=$(vt_mac_observe "$id" "$start"); state=${observed%% *}; identity=${observed#* }
+          case "$state" in
+            gone|unreadable) echo "VT-PROC $id $asked $state - -"; continue ;;
+            reused) echo "VT-PROC $id $asked reused $identity -"; continue ;;
+          esac
           if [ -n "${settle:-}" ]; then
             n=0
             while [ "$n" -lt 50 ]; do
-              command=$(LC_ALL=C ps -ww -p "$id" -o command= 2>/dev/null) || command=
+              command=$(vt_mac_command "$id") || command=
               case "$command" in /usr/bin/arch\ *|arch\ *) sleep 0.1; n=$((n + 1)) ;; *) break ;; esac
             done
           fi
-          command=$(LC_ALL=C ps -ww -p "$id" -o command= 2>/dev/null) || command=
+          command=$(vt_mac_command "$id") || command=
           if [ -z "$command" ]; then echo "VT-PROC $id $asked unreadable $identity -"; continue; fi
           case "$command" in
             /usr/bin/arch\ *|arch\ *) echo "VT-PROC $id $asked starting $identity -"; continue ;;

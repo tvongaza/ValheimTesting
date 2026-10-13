@@ -5,17 +5,7 @@ namespace Valheim.Testing.GameSessions;
 // making a clean Valheim save impossible. Perl ships with macOS and is checked before staging.
 internal static partial class HostServerScripts
 {
-    internal static readonly string MacStarted = """
-        started() {
-          state=$(LC_ALL=C ps -p "$1" -o stat= 2>/dev/null) || return 1
-          case "$state" in ''|Z*) return 1 ;; esac
-          begin=$(LC_ALL=C ps -ww -p "$1" -o lstart= 2>/dev/null) || return 1
-          [ -n "$begin" ] || return 1
-          printf '%s' "$begin" | cksum | awk '{print $1}'
-        }
-        """.ReplaceLineEndings("\n");
-
-    internal static readonly string MacStart = ("set -eu\n" + MacStarted + "\n" + """
+    internal static readonly string MacStart = ("set -eu\n" + MacProcess.Functions + """
         [ "$(uname -s)" = Darwin ] || { echo 'VT-SERVER unsupported this host is not macOS'; exit 0; }
         [ -x /usr/bin/perl ] && [ -x /usr/bin/arch ] || { echo 'VT-SERVER unsupported macOS needs its system perl and arch'; exit 0; }
         while IFS= read -r f; do
@@ -52,7 +42,7 @@ internal static partial class HostServerScripts
         cd -- "$workdir"
         /usr/bin/perl -MPOSIX -e '
           use strict; use warnings;
-          my ($directory, @command) = @ARGV;
+          my ($directory, $identify, @command) = @ARGV;
           pipe(my $reader, my $writer) or die "pipe: $!";
           my $supervisor = fork(); die "fork: $!" unless defined $supervisor;
           if ($supervisor) {
@@ -72,16 +62,18 @@ internal static partial class HostServerScripts
             $SIG{INT} = "DEFAULT";
             exec @command or die "exec: $!";
           }
-          my $begin;
+          # The start identity is read by vt_mac_started (MacProcess), handed over as text: never computed here. It reads a game
+          # that already exited too (a zombie until the waitpid below), so a game that dies at once still reports its exit code.
+          my $identity = "";
           for (1..50) {
-            $begin = qx(LC_ALL=C ps -ww -p $game -o lstart= 2>/dev/null);
-            last if $begin =~ /\S/;
+            open(my $read, "-|", "/bin/bash", "-c", "$identify\nvt_mac_started \"\$1\"", "vt", $game) or die "identity: $!";
+            $identity = <$read>; close $read;
+            $identity = "" unless defined $identity;
+            chomp $identity;
+            last if $identity =~ /^\d+$/;
             select undef, undef, undef, 0.1;
           }
-          $begin =~ s/\n\z// if defined $begin;
-          my $identity = qx(printf "%s" "$begin" | cksum);
-          $identity =~ s/ .*//s;
-          if (!$begin || $identity !~ /^\d+$/) { print $writer "VT-SERVER failed no process identity\n"; close $writer; exit 3; }
+          if ($identity !~ /^\d+$/) { print $writer "VT-SERVER failed no process identity\n"; close $writer; exit 3; }
           open my $pid, ">", "$directory/pid.tmp" or die "pid: $!";
           print $pid "$game $identity\n"; close $pid;
           rename "$directory/pid.tmp", "$directory/pid" or die "pid rename: $!";
@@ -95,30 +87,9 @@ internal static partial class HostServerScripts
           print $exit "$code\n"; close $exit;
           rename "$directory/exit.tmp", "$directory/exit" or die "exit rename: $!";
           exit 0;
-        ' "$dir" /usr/bin/env ${unsets[@]+"${unsets[@]}"} ${sets[@]+"${sets[@]}"} \
+        ' "$dir" "$(declare -f vt_mac_started)" /usr/bin/env ${unsets[@]+"${unsets[@]}"} ${sets[@]+"${sets[@]}"} \
           /usr/bin/arch ${archOptions[@]+"${archOptions[@]}"} "$runtime/$exe" ${args[@]+"${args[@]}"}
         """).ReplaceLineEndings("\n");
 
-    internal static readonly string MacStop = ("set -u\n" + MacStarted + "\n" + """
-        if [ "$(started "$game")" != "$start" ]; then echo 'VT-STOP gone'; exit 0; fi
-        if [ "$quit" -gt 0 ] && kill -INT "$game" 2>/dev/null; then
-          i=0
-          while [ "$(started "$game")" = "$start" ] && [ "$i" -lt $((quit * 10)) ]; do sleep 0.1; i=$((i + 1)); done
-          if [ "$(started "$game")" != "$start" ]; then echo 'VT-STOP quit'; exit 0; fi
-        fi
-        kill -KILL "$game" 2>/dev/null || true
-        i=0
-        while [ "$(started "$game")" = "$start" ] && [ "$i" -lt $((seconds * 10)) ]; do sleep 0.1; i=$((i + 1)); done
-        if [ "$(started "$game")" = "$start" ]; then echo 'VT-STOP running'; else echo 'VT-STOP stopped'; fi
-        """).ReplaceLineEndings("\n");
-
-    internal static readonly string MacWait = ("set -u\n" + MacStarted + "\n" + """
-        i=0
-        while [ "$(started "$game")" = "$start" ]; do
-          if [ "$i" -ge "$seconds" ]; then echo 'VT-WAIT running'; exit 0; fi
-          sleep 1; i=$((i + 1))
-        done
-        for _ in 1 2 3 4 5 6 7 8 9 10; do [ ! -s "$dir/exit" ] || break; sleep 0.2; done
-        if [ -s "$dir/exit" ]; then echo "VT-WAIT exited $(cat "$dir/exit")"; else echo 'VT-WAIT exited ?'; fi
-        """).ReplaceLineEndings("\n");
+    // The server's stop and wait are MacProcess's (Stop, Wait): the same identity and verdicts as the client's and recovery's (#665).
 }

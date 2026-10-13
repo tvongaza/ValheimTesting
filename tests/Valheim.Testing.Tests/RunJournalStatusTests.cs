@@ -460,13 +460,13 @@ public sealed class RunJournalStatusTests : IDisposable
             var variables = new Dictionary<string, string>
             {
                 ["game"] = process.Id.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                ["start"] = first.StartIdentity!, ["commandLine"] = new string('0', 64),
+                ["start"] = first.StartIdentity!, ["commandLine"] = new string('0', 64), ["quit"] = "0", ["seconds"] = "20",
             };
-            var refused = (await host.RunAsync(RunRecovery.MacStop, variables, TimeSpan.FromSeconds(10))).EnsureSuccess("refusing another command line");
+            var refused = (await host.RunAsync(MacProcess.Stop, variables, TimeSpan.FromSeconds(10))).EnsureSuccess("refusing another command line");
             Assert.Equal("unproven", InteractiveClient.Line(refused.Stdout, "VT-STOP "));
             Assert.False(process.HasExited);
             variables["commandLine"] = first.CommandLineSha256!;
-            var stopped = (await host.RunAsync(RunRecovery.MacStop, variables, TimeSpan.FromSeconds(35))).EnsureSuccess("stopping the proven process");
+            var stopped = (await host.RunAsync(MacProcess.Stop, variables, TimeSpan.FromSeconds(35))).EnsureSuccess("stopping the proven process");
             Assert.Equal("stopped", InteractiveClient.Line(stopped.Stdout, "VT-STOP "));
             await process.WaitForExitAsync();
         }

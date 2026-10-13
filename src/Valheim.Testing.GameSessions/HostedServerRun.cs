@@ -295,7 +295,7 @@ internal sealed class HostedServerRun : IServerPlacement
     ServerPlatform? IServerPlacement.Platform => LocalMac ? null : RemoteMac ? ServerPlatform.MacOS
         : Host.Shell.Kind == HostShellKind.PowerShell ? ServerPlatform.Windows : ServerPlatform.Linux;
 
-    ServerBoot IServerPlacement.Start(int n, GameLaunch launch, string output, CancellationToken cancellation)
+    ServerBoot IServerPlacement.Start(int n, GameLaunch launch, string output, TimeSpan quit, CancellationToken cancellation)
     {
         if (Role.PreparedSteamRuntimeRoot is { } steam && Role.PreparedSteamRuntimeFiles is { } files)
         {
@@ -322,13 +322,15 @@ internal sealed class HostedServerRun : IServerPlacement
                 Role.PreparedSourceFiles).GetAwaiter().GetResult();
         }
         string local = Path.Combine(output, "boot-" + n), bootDirectory = HostPath.Join(RunDirectory, "boot-" + n);
-        if (LocalMac) return StartLocalMac(launch, local, bootDirectory, cancellation);
+        // The stop's quit budget, journalled so env recover gives the server the same time to save (#665).
+        string quitSeconds = WaitText.WholeSeconds(quit);
+        if (LocalMac) return StartLocalMac(launch, local, bootDirectory, quitSeconds, cancellation);
         HostServerProcess process;
         // Journalled before the start: a run interrupted from here leaves a record of where its server's pid file is.
         // With the command line the server will have, so its pid file alone proves it the run's (#257).
         string expected = launch.CommandLineSha256();
         JournalAsync(Host, Role.Host, "server", JournalEntry.Of(JournalEntry.ProcessIntended, ("bootDirectory", bootDirectory),
-            ("expectedCommandLineSha256", expected)), cancellation).GetAwaiter().GetResult();
+            ("expectedCommandLineSha256", expected), ("quitSeconds", quitSeconds)), cancellation).GetAwaiter().GetResult();
         try { process = HostServer.StartAsync(Host, launch, bootDirectory, HostedTimeouts.Quick, [BepInExLog, UnityLog], local,
             logonSeams: null, cancellation: cancellation, logRoot: LoaderDirectory).GetAwaiter().GetResult(); }
         catch (Exception error) when (UnknownOutcome(error) != null)
@@ -353,17 +355,17 @@ internal sealed class HostedServerRun : IServerPlacement
                 WarnUnexpectedCommandLine(Host, process.Id, expected, commandLine);
                 NoteAsync(Host, Role.Host, "server", JournalEntry.Of(JournalEntry.ProcessStarted, ("pid", process.Id.ToString(CultureInfo.InvariantCulture)),
                     ("startIdentity", process.StartIdentity), ("commandLineSha256", commandLine), ("bootDirectory", bootDirectory),
-                    ("taskLogon", process.TaskLogon ?? ""))).GetAwaiter().GetResult();
+                    ("taskLogon", process.TaskLogon ?? ""), ("quitSeconds", quitSeconds))).GetAwaiter().GetResult();
             });
     }
 
     // The macOS server is local to the runner. Its launch must come from GameLaunch.ToStartInfo: that path carries the
     // native architecture and both DYLD variables through /usr/bin/arch, which a host-shell launch would strip.
-    private ServerBoot StartLocalMac(GameLaunch launch, string local, string bootDirectory, CancellationToken cancellation)
+    private ServerBoot StartLocalMac(GameLaunch launch, string local, string bootDirectory, string quitSeconds, CancellationToken cancellation)
     {
         string expected = launch.CommandLineSha256();
         JournalAsync(Host, Role.Host, "server", JournalEntry.Of(JournalEntry.ProcessIntended, ("bootDirectory", bootDirectory),
-            ("expectedCommandLineSha256", expected)), cancellation).GetAwaiter().GetResult();
+            ("expectedCommandLineSha256", expected), ("quitSeconds", quitSeconds)), cancellation).GetAwaiter().GetResult();
         Directory.CreateDirectory(local);
         Directory.CreateDirectory(bootDirectory);
         foreach (var (relative, index) in new[] { (BepInExLog, 0), (UnityLog, 1) })
@@ -391,7 +393,7 @@ internal sealed class HostedServerRun : IServerPlacement
                     WarnUnexpectedCommandLine(Host, process.Id, expected, found.CommandLineSha256);
                     NoteAsync(Host, Role.Host, "server", JournalEntry.Of(JournalEntry.ProcessStarted,
                         ("pid", process.Id.ToString(CultureInfo.InvariantCulture)), ("startIdentity", found.StartIdentity),
-                        ("commandLineSha256", found.CommandLineSha256), ("bootDirectory", bootDirectory))).GetAwaiter().GetResult();
+                        ("commandLineSha256", found.CommandLineSha256), ("bootDirectory", bootDirectory), ("quitSeconds", quitSeconds))).GetAwaiter().GetResult();
                 });
         }
         catch

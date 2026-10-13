@@ -29,7 +29,7 @@ internal static partial class InteractiveScripts
 
     // The GUI agent reads only a named FIFO, never a secret-bearing file. Its script and plist hold
     // the fixed launch mechanics and the public launch specification, not the password values.
-    internal static readonly string MacLauncher = ("set -u\n" + HostServerScripts.MacStarted + "\n" + """
+    internal static readonly string MacLauncher = ("set -u\n" + MacProcess.Functions + """
         dir=$(cd -- "$(dirname -- "$0")" && pwd -P) || exit 3
         # This marker precedes every possible game spawn. A failed bootstrap can only be
         # settled as never started when neither this marker nor a pid exists.
@@ -72,8 +72,8 @@ internal static partial class InteractiveScripts
           > "$dir/game.stdout.log" 2> "$dir/game.stderr.log" < /dev/null &
         game=$!
         i=0
-        while [ -z "$(started "$game")" ] && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
-        start=$(started "$game")
+        while ! vt_mac_identity "$game" > /dev/null && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
+        start=$(vt_mac_identity "$game") || start=
         [ -n "$start" ] || { printf 'no process identity\n' > "$dir/launcher-error.txt"; exit 3; }
         printf '%s %s\n' "$game" "$start" > "$dir/pid.tmp" && mv -f -- "$dir/pid.tmp" "$dir/pid"
         wait "$game"; code=$?
@@ -82,7 +82,7 @@ internal static partial class InteractiveScripts
 
     // The SSH side. launchctl bootstrap (unlike launchctl asuser) can cross into this user's GUI
     // domain from SSH. The only secret transfer is the FIFO write after the agent is bootstrapped.
-    internal static readonly string MacStart = ("set -u\nsecrets=${VT_SECRETS:-}\nunset VT_SECRETS\n" + HostServerScripts.MacStarted + "\n" + """
+    internal static readonly string MacStart = ("set -u\nsecrets=${VT_SECRETS:-}\nunset VT_SECRETS\n" + MacProcess.Functions + """
         [ "$(uname -s)" = Darwin ] || { echo 'VT-INTERACTIVE unsupported this host is not macOS'; exit 0; }
         user=$(id -un); uid=$(id -u)
         [ "$(/usr/bin/stat -f %Su /dev/console)" = "$user" ] &&
@@ -135,7 +135,7 @@ internal static partial class InteractiveScripts
           echo "VT-INTERACTIVE failed no game process within $seconds s; see $dir/launcher-error.txt"; exit 0
         fi
         read -r game recorded < "$dir/pid"
-        start=$(started "$game")
+        start=$(vt_mac_identity "$game") || start=
         if [ -z "$start" ] || [ "$start" != "$recorded" ]; then
           /bin/launchctl bootout "gui/$uid/$label" >/dev/null 2>&1 || true
           echo 'VT-INTERACTIVE failed the game exited before its process identity could be verified'; exit 0
@@ -143,75 +143,34 @@ internal static partial class InteractiveScripts
         echo "VT-INTERACTIVE started $game $start"
         """).ReplaceLineEndings("\n");
 
-    // A GUI agent is stopped only after the exact game process is gone. A lost bootout reply is
-    // verified through launchctl before the run releases its host lock.
-    internal static readonly string MacAgentRetire = """
-        set -u
-        [ -d "$dir" ] || { echo 'VT-AGENT removed'; exit 0; }
-        [ -f "$dir/label" ] || { echo 'VT-AGENT unproven'; exit 0; }
-        label=$(cat -- "$dir/label")
-        case "$label" in org.valheimtesting.client.*) ;; *) echo 'VT-AGENT unproven'; exit 0 ;; esac
-        suffix=${label#org.valheimtesting.client.}
-        case "$suffix" in *[!0-9a-f]*|'') echo 'VT-AGENT unproven'; exit 0 ;; esac
-        [ "${#suffix}" -eq 32 ] || { echo 'VT-AGENT unproven'; exit 0; }
-        domain="gui/$(id -u)/$label"
-        if /bin/launchctl print "$domain" >/dev/null 2>&1; then
-          /bin/launchctl bootout "$domain" >/dev/null 2>&1 || true
-        fi
-        if /bin/launchctl print "$domain" >/dev/null 2>&1; then echo 'VT-AGENT kept'; else echo 'VT-AGENT removed'; fi
+    // A GUI agent is stopped only after the exact game process is gone. A lost bootout reply is verified through launchctl
+    // before the run releases its host lock. vt_mac_agent_retire (variable dir) prints exactly one verdict, VT-AGENT
+    // removed|kept|unproven: a launch directory that is gone left no agent; one without a ValheimTesting label is unproven.
+    private static readonly string MacAgentFunction = """
+        vt_mac_agent_retire() {
+          local label suffix domain
+          [ -d "$dir" ] || { echo 'VT-AGENT removed'; return 0; }
+          [ -f "$dir/label" ] || { echo 'VT-AGENT unproven'; return 0; }
+          label=$(cat -- "$dir/label")
+          case "$label" in org.valheimtesting.client.*) ;; *) echo 'VT-AGENT unproven'; return 0 ;; esac
+          suffix=${label#org.valheimtesting.client.}
+          case "$suffix" in *[!0-9a-f]*|'') echo 'VT-AGENT unproven'; return 0 ;; esac
+          [ "${#suffix}" -eq 32 ] || { echo 'VT-AGENT unproven'; return 0; }
+          domain="gui/$(id -u)/$label"
+          if /bin/launchctl print "$domain" >/dev/null 2>&1; then
+            /bin/launchctl bootout "$domain" >/dev/null 2>&1 || true
+          fi
+          if /bin/launchctl print "$domain" >/dev/null 2>&1; then echo 'VT-AGENT kept'; else echo 'VT-AGENT removed'; fi
+        }
+
         """.ReplaceLineEndings("\n");
 
-    // A failed ps read is not proof that the owned process exited. Keep the GUI agent and
-    // the run's ownership until the game is explicitly gone or its PID has been reused.
-    private static readonly string MacObserve = """
-        observed() {
-          state=$(LC_ALL=C ps -p "$game" -o stat= 2>/dev/null) || state=
-          if [ -z "$state" ]; then
-            if kill -0 "$game" 2>/dev/null; then echo unreadable; else echo gone; fi
-            return
-          fi
-          case "$state" in Z*) echo gone; return ;; esac
-          begin=$(LC_ALL=C ps -ww -p "$game" -o lstart= 2>/dev/null) || begin=
-          [ -n "$begin" ] || { echo unreadable; return; }
-          identity=$(printf '%s' "$begin" | cksum | awk '{print $1}')
-          if [ "$identity" = "$start" ]; then echo same; else echo reused; fi
-        }
-        """;
+    internal static readonly string MacAgentRetire = "set -u\n" + MacAgentFunction + "vt_mac_agent_retire\n";
 
-    internal static readonly string MacStop = ("set -u\n" + MacObserve + "\n" + """
-        outcome=gone
-        state=$(observed)
-        [ "$state" != unreadable ] || { echo 'VT-STOP unproven'; exit 0; }
-        if [ "$state" = same ]; then
-          if [ "$quit" -gt 0 ] && kill -INT "$game" 2>/dev/null; then
-            i=0
-            while [ "$(observed)" = same ] && [ "$i" -lt $((quit * 10)) ]; do sleep 0.1; i=$((i + 1)); done
-            state=$(observed)
-            case "$state" in gone|reused) outcome=quit ;; unreadable) echo 'VT-STOP unproven'; exit 0 ;; esac
-          fi
-          if [ "$state" = same ]; then
-            kill -KILL "$game" 2>/dev/null || true
-            i=0
-            while [ "$(observed)" = same ] && [ "$i" -lt $((seconds * 10)) ]; do sleep 0.1; i=$((i + 1)); done
-            state=$(observed)
-            case "$state" in gone|reused) outcome=stopped ;; unreadable) echo 'VT-STOP unproven'; exit 0 ;; esac
-          fi
-        fi
-        [ "$state" != same ] || { echo 'VT-STOP running'; exit 0; }
-        """ + "\n" + MacAgentRetire + "\n" + """
-        echo "VT-STOP $outcome"
-        """).ReplaceLineEndings("\n");
-
-    internal static readonly string MacWait = ("set -u\n" + MacObserve + "\n" + """
-        i=0
-        state=$(observed)
-        while [ "$state" = same ]; do
-          [ "$i" -lt "$seconds" ] || { echo 'VT-WAIT running'; exit 0; }
-          sleep 1; i=$((i + 1))
-          state=$(observed)
-        done
-        [ "$state" != unreadable ] || { echo 'VT-WAIT unproven'; exit 0; }
-        for _ in 1 2 3 4 5 6 7 8 9 10; do [ ! -s "$dir/exit" ] || break; sleep 0.2; done
-        if [ -s "$dir/exit" ]; then echo "VT-WAIT exited $(cat "$dir/exit")"; else echo 'VT-WAIT exited ?'; fi
-        """).ReplaceLineEndings("\n");
+    // The client's stop is MacProcess's one stop. Its GUI agent is retired only after that verdict is printed, and only once the
+    // game is proven gone: a game still running, or unreadable, keeps its agent and the run's ownership.
+    internal static readonly string MacStop = "set -u\n" + MacProcess.Functions + MacAgentFunction + """
+        vt_mac_stop
+        case "$vt_stopped" in gone|quit|stopped) vt_mac_agent_retire ;; esac
+        """.ReplaceLineEndings("\n");
 }

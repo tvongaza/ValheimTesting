@@ -25,13 +25,23 @@ internal static class GameHostChecks
         return deadline < Generous ? Generous : deadline > TimeSpan.FromMinutes(5) ? TimeSpan.FromMinutes(5) : deadline;
     }
 
-    /// <summary>A new, absolute directory path on the host for one test, and its removal.</summary>
-    public static async Task WithRootAsync(IGameHost host, string parent, Func<string, Task> test)
+    /// <summary>
+    /// A new, absolute directory path on the host for one test, and its removal. With <paramref name="serversRunFromIt"/> (a check
+    /// that starts a server in the root) the root is removed only once no game runs from it: a server whose stop was not proven, or
+    /// whose start reply was lost, keeps the root, and the check fails naming it, so no server is left running from a deleted folder (#665).
+    /// </summary>
+    public static async Task WithRootAsync(IGameHost host, string parent, Func<string, Task> test, bool serversRunFromIt = false)
     {
         string root = parent.TrimEnd('/', '\\') + "/vt-" + Guid.NewGuid().ToString("N")[..12];
+        Exception? failed = null;
         try { await test(root); }
+        catch (Exception error) { failed = error; throw; }
         finally
         {
+            // The refusal keeps the check's own failure beside it.
+            if (serversRunFromIt)
+                try { await HostedRuntimeStage.RequireStoppedAsync(host, Generous, runtimes: [root], clientSession: false); }
+                catch (Exception refused) when (failed != null) { throw new AggregateException(failed, refused); }
             string script = host.Shell.Kind == HostShellKind.Bash ? "rm -rf -- \"$root\"" : "Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue";
             (await host.RunAsync(script, new Dictionary<string, string> { ["root"] = root }, Generous)).EnsureSuccess("Removing " + root);
         }

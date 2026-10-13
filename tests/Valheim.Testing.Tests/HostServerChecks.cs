@@ -87,7 +87,7 @@ internal static class HostServerChecks
             }
             finally { if (!killed.HasExited) await killed.StopAsync(TimeSpan.FromSeconds(5)); }
             HostInstall.RequireSame(before.Files, await HostInstall.ListAsync(host, install, Generous), "Mac server source after a profile boot");
-        });
+        }, serversRunFromIt: true);
 
     // A server install as far as the launch and the pins need one: the game's Managed folder, BepInEx core, Doorstop's library
     // (a stand-in: the loader warns and carries on) and the server executable, here a script. Line endings stay LF.

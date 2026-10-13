@@ -290,10 +290,11 @@ public sealed class InteractiveClientProcess : IOwnedProcess, IAsyncDisposable
         while (true)
         {
             var result = (await _host.RunAsync(_platform switch
-                { ClientPlatform.Windows => InteractiveScripts.WindowsWait, ClientPlatform.MacOS => InteractiveScripts.MacWait, _ => InteractiveScripts.LinuxWait },
+                { ClientPlatform.Windows => InteractiveScripts.WindowsWait, ClientPlatform.MacOS => MacProcess.Wait, _ => InteractiveScripts.LinuxWait },
                 Variables(("seconds", "600")), TimeSpan.FromSeconds(660), cancellation).ConfigureAwait(false)).EnsureSuccess($"Waiting for client process {Id} on {HostName}");
             string? verdict = InteractiveClient.Line(result.Stdout, "VT-WAIT ");
-            if (verdict == "running") continue;
+            // A process that could not be read (macOS) is not known to have exited: wait on.
+            if (verdict is "running" or "unproven") continue;
             if (verdict != null && verdict.StartsWith("exited ", StringComparison.Ordinal))
             {
                 _exited = true;
@@ -321,19 +322,24 @@ public sealed class InteractiveClientProcess : IOwnedProcess, IAsyncDisposable
         if (Interlocked.Exchange(ref _stopped, 1) == 1) return InteractiveStop.AlreadyGone;
         try
         {
-            string seconds = Math.Max(1, (int)Math.Ceiling(timeout.TotalSeconds)).ToString(CultureInfo.InvariantCulture);
-            string quitSeconds = ((int)Math.Ceiling(quit.TotalSeconds)).ToString(CultureInfo.InvariantCulture);
+            string seconds = WaitText.WholeSeconds(timeout, minimum: 1), quitSeconds = WaitText.WholeSeconds(quit);
             var result = (await _host.RunAsync(_platform switch
                 { ClientPlatform.Windows => InteractiveScripts.WindowsStop, ClientPlatform.MacOS => InteractiveScripts.MacStop, _ => InteractiveScripts.LinuxStop },
                 Variables(("seconds", seconds), ("quit", quitSeconds), ("signal", "TERM"),
                     ("quitTask", InteractiveClient.TaskPrefix + "quit-" + Guid.NewGuid().ToString("N")),
-                    ("desktopQuit", InteractiveScripts.WindowsDesktopQuit)), quit + timeout + TimeSpan.FromSeconds(30), cancellation).ConfigureAwait(false))
+                    ("desktopQuit", InteractiveScripts.WindowsDesktopQuit)),
+                    quit + timeout + TimeSpan.FromSeconds(30), cancellation).ConfigureAwait(false))
                 .EnsureSuccess($"Stopping client process {Id} on {HostName}");
             if (_platform == ClientPlatform.Windows && InteractiveClient.Line(result.Stdout, "VT-TASK ") is { } taskReply && taskReply.StartsWith("kept ", StringComparison.Ordinal))
                 throw new HostOperationException($"The desktop quit task {taskReply["kept ".Length..]} was not removed on {HostName}; inspect and remove it before another run.", result);
-            if (_platform == ClientPlatform.MacOS && InteractiveClient.Line(result.Stdout, "VT-AGENT ") != "removed")
-                throw new HostOperationException($"The Mac GUI launch agent for client {Id} on {HostName} was not proven removed; inspect {LaunchDirectory} before another run.", result);
             string? verdict = InteractiveClient.Line(result.Stdout, "VT-STOP ");
+            // The stop's verdict first: a game still running, or unreadable, is that, whatever became of its Mac GUI agent.
+            if (verdict == "running")
+                throw new InvalidOperationException($"Client process {Id} on {HostName} was still running {WaitText.Seconds(timeout)} after it was killed.");
+            if (verdict == "unproven")
+                throw new HostOperationException($"Client process {Id} on {HostName} could not be read; it was not stopped", result);
+            if (_platform == ClientPlatform.MacOS && verdict is ("gone" or "quit" or "stopped") && InteractiveClient.Line(result.Stdout, "VT-AGENT ") != "removed")
+                throw new HostOperationException($"The Mac GUI launch agent for client {Id} on {HostName} was not proven removed; inspect {LaunchDirectory} before another run.", result);
             string? request = _platform == ClientPlatform.Windows ? InteractiveClient.Line(result.Stdout, "VT-QUIT ") : null;
             _quitRequested = _platform != ClientPlatform.Windows || request is "window" or "desktop-window";
             LastQuitRequest = _platform == ClientPlatform.MacOS ? "SIGINT" : _platform != ClientPlatform.Windows ? "SIGTERM" : request switch
@@ -351,7 +357,6 @@ public sealed class InteractiveClientProcess : IOwnedProcess, IAsyncDisposable
                 "quit" => InteractiveStop.Quit,
                 "stopped" => InteractiveStop.Stopped,
                 "gone" => InteractiveStop.AlreadyGone,
-                "running" => throw new InvalidOperationException($"Client process {Id} on {HostName} was still running {WaitText.Seconds(timeout)} after it was killed."),
                 _ => throw new HostOperationException($"Unexpected reply while stopping client process {Id} on {HostName}", result),
             };
             _exited = true;

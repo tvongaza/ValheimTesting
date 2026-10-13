@@ -101,7 +101,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         await hosted.LockAndCopyRuntimeAsync(new ScenarioReport("prepared profile"), plan, pinned: true, CancellationToken.None);
         File.AppendAllText(Directory.EnumerateFiles(host.Local(Install), "assembly_valheim.dll", SearchOption.AllDirectories).Single(), "steam update");
         var launch = GameLaunch.ForServerWithLoader(Install, owned, ["-batchmode"], null, ServerPlatform.Linux);
-        var error = Assert.ThrowsAny<Exception>(() => ((IServerPlacement)hosted).Start(1, launch, Output, CancellationToken.None));
+        var error = Assert.ThrowsAny<Exception>(() => ((IServerPlacement)hosted).Start(1, launch, Output, TimeSpan.FromSeconds(120), CancellationToken.None));
         Assert.Contains("game", error.Message, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("start", host.Scripts);
         Assert.False(Directory.Exists(Path.Combine(Output, "boot-1")));
@@ -125,7 +125,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         File.WriteAllText(Path.Combine(host.Local(source), "unrelated-source-file.txt"), "changed after preparation");
 
         var launch = GameLaunch.ForServerWithLoader(owned, owned, ["-batchmode"], null, ServerPlatform.Windows);
-        var error = Assert.ThrowsAny<Exception>(() => ((IServerPlacement)hosted).Start(1, launch, Output, CancellationToken.None));
+        var error = Assert.ThrowsAny<Exception>(() => ((IServerPlacement)hosted).Start(1, launch, Output, TimeSpan.FromSeconds(120), CancellationToken.None));
         Assert.Contains("source game before profile launch", error.Message, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("start", host.Scripts);
     }
@@ -296,6 +296,9 @@ public sealed partial class HostedServerRunTests : IDisposable
         var processes = journal.Where(record => record.Actor == "server" && record.Entry.Kind.StartsWith("process-", StringComparison.Ordinal)).ToList();
         Assert.Equal([JournalEntry.ProcessIntended, JournalEntry.ProcessStarted, JournalEntry.ProcessIntended, JournalEntry.ProcessStarted], processes.Select(record => record.Entry.Kind));
         Assert.Equal(RunDirectory + "/boot-2", processes.Last().Entry.Fields["bootDirectory"]);
+        // Each boot journals the quit budget its stop gives it, which env recover gives it too (#665).
+        string quit = host.Runs.First(run => run.Script == "stop").Variables["quit"];
+        Assert.All(processes, record => Assert.Equal(quit, record.Entry.Fields["quitSeconds"]));
         // Each started process carries its command line's hash, read on the host right after the start (#257 Q2's third fact).
         Assert.All(journal.Where(record => record.Entry.Kind == JournalEntry.ProcessStarted), record =>
             Assert.Equal(FakeServerHost.CommandLineSha256(record.Entry.Fields["pid"]), record.Entry.Fields["commandLineSha256"]));
