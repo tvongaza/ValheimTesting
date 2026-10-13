@@ -36,8 +36,10 @@ internal static class ServerLoadPhases
         public string[] Args { get; set; } = [];
     }
 
-    internal static async Task<int> RunAsync(string[] args, Func<string[], Task<int>>? runPhase = null)
+    internal static async Task<int> RunAsync(string[] args, Func<string[], Task<int>>? runPhase = null, ShippedLoader.Rule? shippedLoader = null)
     {
+        // The pinned-loader rule extracts the real pack into this machine's data root: on for real phases, and for a test that passes one.
+        shippedLoader ??= runPhase == null ? ShippedLoader.Choose : null;
         if (args is not ["--plan", var planFile, "--output", var outputGiven] ||
             !Path.IsPathFullyQualified(planFile) || !Path.IsPathFullyQualified(outputGiven))
         {
@@ -67,19 +69,18 @@ internal static class ServerLoadPhases
             // Validate every phase's exact server-load command before any copy or game process exists.
             foreach (var (phase, _, evidence, checkpoint) in phases)
                 BuildArgs(plan.CommonArgs, phase.Args, fixture, evidence, checkpoint);
-            // Resolve the server even when it came from an inventory. The aggregate output is
-            // written before the first server-load command, so its own protected-path check is
-            // too late to keep this wrapper out of the source install or loader package.
+            // The server and its loader as the stage chooses them, even when they came from an inventory or the pinned pack, with
+            // the stage's output guard. The aggregate output is written before the first server-load command, so that command's
+            // own protected-path check is too late to keep this wrapper out of the source install or loader package.
             string[] firstArgs = BuildArgs(plan.CommonArgs, phases[0].phase.Args, fixture,
                 phases[0].evidence, phases[0].checkpoint);
             if (!ServerLoad.TryRead(firstArgs, out var parsed, out string parseError, allowImplicitMod: false))
                 throw new InvalidDataException("Invalid first server-load phase: " + parseError);
-            var choice = ModInputStage.ChooseDedicated(parsed!.Options, parsed.ServerOnly, output);
-            string? loader = parsed.Options.GetValueOrDefault("--loader-package") ?? choice.Server!.LoaderPackage;
-            var (_, cliFiles) = SmokeInputs.Cli(parsed.Options);
-            SmokeOutput.RefuseResolved(output, cliFiles, choice.Inventory, [choice.Server, choice.Client]);
-            FixtureBake.RefuseOutput(output, loader == null ? [choice.Server!.Install]
-                : [choice.Server!.Install, BepInExLoaderPackage.Read(loader).Root]);
+            // The bake and world fixtures are the phases' own, under or beside this output.
+            var stageOptions = parsed!.Options.Where(option => option.Key is not ("--bake-fixture" or "--world-fixture"))
+                .ToDictionary(option => option.Key, option => option.Value, StringComparer.Ordinal);
+            _ = ModInputStage.Choose(new ModInputStage.Request(ModInputStage.Route.Dedicated, output, stageOptions, parsed.Switches,
+                parsed.Mods, parsed.Roots, parsed.Optional, parsed.BuildDependencies) { Shipped = shippedLoader });
             var inputs = CaptureInputs(planFile, plan);
             FixtureBake.RefuseOutput(output, inputs.Where(input => input.Files != null).Select(input => input.Path).ToArray());
             Directory.CreateDirectory(output);

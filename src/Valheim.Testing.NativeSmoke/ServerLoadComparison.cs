@@ -9,18 +9,15 @@ internal static class ServerLoadComparison
         Func<NativeDependencyRequest, NativeDependencyLock>? resolve = null,
         Func<string, NativeDependencyLock, string, CancellationToken, string?, Task<string>>? buildAdapter = null,
         Func<string[], ServerLoad.Seams, Task<int>>? runArmWithSeams = null,
-        bool freezeInputs = false)
+        Action<EnvironmentInventory, EnvironmentRecipe, string, string?>? clientArchitecture = null)
     {
-        // Real arms always use one frozen environment. A scripted arm may opt in to
-        // exercise that path without launching the game.
-        freezeInputs |= runArm == null && runArmWithSeams == null;
         // The pinned-loader rule extracts the real pack into this machine's data root: on for real arms, and for a test that passes one.
         shippedLoader ??= runArm == null && runArmWithSeams == null ? ShippedLoader.Choose : null;
         resolve ??= NativeDependencyResolver.Resolve;
         buildAdapter ??= SmokeAdapter.BuildAsync;
         using var cancel = new CancellationTokenSource();
         string? output = null;
-        bool outputChecked = false;
+        var progress = new ModInputStage.Progress();
         ConsoleCancelEventHandler onCancel = (_, press) => { press.Cancel = true; cancel.Cancel(); };
         Console.CancelKeyPress += onCancel;
         try
@@ -36,39 +33,19 @@ internal static class ServerLoadComparison
             var mods = parsed.Mods.Select(Path.GetFullPath).ToList();
             if (mods.Count < 2 || mods.Count(mod => mod.Equals(removed, pathComparison)) != 1)
                 throw new ArgumentException("--remove-mod must name exactly one of at least two selected --mod DLLs.");
-            // The server install both arms resolve against: given, or the inventory's server environment on this machine.
-            // Freeze the first environment decision. The dependency locks and both arms
-            // must use the same choice even if the inventory changes before launch.
-            var selected = freezeInputs || !options.ContainsKey("--server")
-                ? ModInputStage.ChooseDedicated(options, parsed.ServerOnly, Path.Combine(output, "choice")) : null;
-            var serverRecipe = selected?.Server ?? new EnvironmentRecipe { Install = Path.GetFullPath(options["--server"]) };
-            string server = serverRecipe.Install;
-            // The server's platform as the arms' own stage reads it: its host in the chosen inventory (this machine for --server).
-            var (loaderManifest, automaticLoader) = SmokeInputResolver.Loader("server", serverRecipe,
-                selected?.Inventory.Hosts[serverRecipe.Host].Platform ?? HostProfile.CurrentPlatform,
-                options.GetValueOrDefault("--loader-package"), shippedLoader);
-            if (automaticLoader != null) ShippedLoader.Print("server", automaticLoader);
-            var armSeams = new ServerLoad.Seams(Loader: ShippedLoader.Choose, FrozenServerLoader: automaticLoader);
+            // The stage's own choice, taken once before either arm: the server and client, their loaders, the core, the output
+            // guard and the ValheimCLI inputs. The dependency locks and both arms use it even if the inventory changes before launch.
+            var stage = ModInputStage.Choose(new ModInputStage.Request(ModInputStage.Route.Dedicated, output, options, parsed.Switches,
+                parsed.Mods, parsed.Roots, parsed.Optional, parsed.BuildDependencies) { Shipped = shippedLoader, ClientArchitecture = clientArchitecture, Progress = progress });
+            var server = stage.Server!;
+            string serverInstall = server.Recipe.Install, serverCore = stage.Core;
+            var armSeams = new ServerLoad.Seams(Loader: ShippedLoader.Choose, FrozenServerLoader: server.Shipped);
             runArm ??= arm => runArmWithSeams == null
                 ? ServerLoad.RunAsync(arm, armSeams) : runArmWithSeams(arm, armSeams);
-            var serverLoader = loaderManifest == null ? null : BepInExLoaderPackage.Read(loaderManifest);
-            string serverCore = Path.Combine(serverLoader?.Root ?? server, InstallPins.CoreDirectory);
-            var clientLoader = options.TryGetValue("--client-loader-package", out string? clientLoaderFile)
-                ? BepInExLoaderPackage.Read(clientLoaderFile) : null;
-            var (cliManifest, cliFiles) = SmokeInputs.Cli(options);
-            var clientRecipe = selected?.Client ?? (options.TryGetValue("--client", out string? client)
-                ? new EnvironmentRecipe { Install = Path.GetFullPath(client) } : null);
-            SmokeOutput.RefuseResolved(output, cliFiles, selected?.Inventory, [serverRecipe, clientRecipe],
-                serverLoader?.Root, clientLoader?.Root);
-            outputChecked = true;
             var roots = parsed.Roots.Select(Path.GetFullPath).ToList();
             var optional = parsed.Optional.ToList();
-            var capabilities = parsed.ServerOnly ? ["valheim.session/state"]
-                : new List<string> { "valheim.session/state", "valheim.session/join", "valheim.session/leave" };
-            NativeDependencyRequest Request(List<string> selected) => SmokeDependencyInputs.Request(selected, server,
-                serverCore, cliManifest, cliFiles, roots, optional, capabilities);
-            var before = resolve(Request(mods));
-            var after = resolve(Request(mods.Where(mod => !mod.Equals(removed, pathComparison)).ToList()));
+            var before = ModInputStage.Resolve(stage, mods, roots, optional, resolve);
+            var after = ModInputStage.Resolve(stage, mods.Where(mod => !mod.Equals(removed, pathComparison)).ToList(), roots, optional, resolve);
             if (!before.Ready || !after.Ready)
             {
                 throw new InvalidDataException("Dependency choices remain before launch: " +
@@ -77,30 +54,24 @@ internal static class ServerLoadComparison
             }
             before.RequireSameExceptRemovedMod(after, removed);
 
-            string? frozenInventory = null;
-            if (freezeInputs)
-            {
-                frozenInventory = SmokeInputResolver.RecordSelected(selected!.Inventory,
-                    Path.Combine(output, "selection"),
-                    new[] { selected.Server, selected.Client }.OfType<EnvironmentRecipe>());
-            }
+            // Both arms read one frozen copy of the chosen environments.
+            string frozenInventory = SmokeInputResolver.RecordSelected(stage.Inventory, Path.Combine(output, "selection"),
+                stage.Actors.Select(actor => actor.Recipe));
             Directory.CreateDirectory(output);
             string adapter = options.TryGetValue("--adapter", out string? chosenAdapter)
                 ? Path.GetFullPath(chosenAdapter)
-                : await buildAdapter(server, before, output, cancel.Token, serverCore);
+                : await buildAdapter(serverInstall, before, output, cancel.Token, serverCore);
 
             // Both arms receive identical arguments and the same packaged fixture; only the selected DLL is omitted.
             // Pin the source installs and explicit assets as well as dependency files before launching either arm.
-            var directoryInputs = new[] { server, cliFiles }.Concat(new[] { serverLoader?.Root, clientLoader?.Root }.OfType<string>())
+            var directoryInputs = new[] { stage.CliFiles }
+                .Concat(stage.Actors.SelectMany(actor => new[] { actor.Recipe.Install, actor.LoaderRoot }.OfType<string>()))
                 .Concat(parsed.PluginDirectories.Select(Path.GetFullPath))
-                .Concat(options.TryGetValue("--client", out string? clientInstall) ? [Path.GetFullPath(clientInstall)] : [])
                 .Distinct(StringComparer.Ordinal)
                 .ToDictionary(path => path, WorldFixture.Manifest, StringComparer.Ordinal);
-            var fileInputs = new[] { cliManifest, adapter, loaderManifest }.OfType<string>()
-                .Concat(frozenInventory == null ? [] : [frozenInventory])
+            var fileInputs = new[] { stage.CliManifest, adapter, frozenInventory }
+                .Concat(stage.Actors.Select(actor => actor.Loader).OfType<string>())
                 .Concat(parsed.Configs.Concat(parsed.PluginFiles).Select(Path.GetFullPath))
-                .Concat(new[] { "--client-loader-package" }
-                    .Where(options.ContainsKey).Select(key => Path.GetFullPath(options[key])))
                 .Distinct(StringComparer.Ordinal)
                 .ToDictionary(path => path, FileHash.Sha256, StringComparer.Ordinal);
             before.Write(Path.Combine(output, "before-dependencies.lock.json"));
@@ -116,14 +87,14 @@ internal static class ServerLoadComparison
                 // Rebuild from the validated parse, not raw tokens: flags never consume the next option.
                 foreach (var (key, value) in options)
                 {
-                    if (frozenInventory != null && key is "--server" or "--client" or "--inventory") continue;
+                    if (key is "--server" or "--client" or "--inventory") continue;
                     Add(key, [key == "--output" ? Path.Combine(output, name) : value]);
                 }
-                if (frozenInventory != null) Add("--inventory", [frozenInventory]);
+                Add("--inventory", [frozenInventory]);
                 // Freeze the environment or shipped-package decision for both arms. No arm can silently
                 // compile against one core and run against a different one.
-                if (!options.ContainsKey("--loader-package") && loaderManifest != null)
-                    Add("--loader-package", [loaderManifest]);
+                if (!options.ContainsKey("--loader-package") && server.Loader != null)
+                    Add("--loader-package", [server.Loader]);
                 arm.AddRange(parsed.Switches);
                 Add("--mod", parsed.Mods.Where(mod => !omit || !Path.GetFullPath(mod).Equals(removed, pathComparison)));
                 Add("--search-root", parsed.Roots);
@@ -158,7 +129,7 @@ internal static class ServerLoadComparison
         catch (Exception failure) when (failure is ArgumentException or IOException or InvalidDataException or InvalidOperationException or UnauthorizedAccessException or OperationCanceledException or System.Text.Json.JsonException or FormatException)
         {
             Console.Error.WriteLine("REFUSED: " + failure.Message);
-            if (outputChecked) SmokeOutput.MarkRefused(output, "server-load-ab", [failure.Message]);
+            if (progress.OutputChecked) SmokeOutput.MarkRefused(output, "server-load-ab", [failure.Message]);
             return 3;
         }
         finally { Console.CancelKeyPress -= onCancel; }

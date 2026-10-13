@@ -161,6 +161,91 @@ public sealed class ModInputStageTests : IDisposable
         Assert.Equal(1, probes); // no input error waited for a host probe
     }
 
+    // #745: server-load-ab chooses through the stage, not on its own, so an environment's client loaderPackage is guarded
+    // exactly as server-load and the stage itself guard it, and the stage's choice stops before the mod step.
+    [ClientHostFact]
+    public async Task AnEnvironmentsClientLoaderIsProtectedAlikeByTheStageServerLoadAndServerLoadAb()
+    {
+        var source = BepInExLoaderPackage.Capture(_rig.Game, "client-loader", "1");
+        string loaderRoot = Path.Combine(_rig.Root, "client-loader");
+        foreach (string relative in source.Files.Keys)
+        {
+            string destination = Path.Combine(loaderRoot, relative.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+            File.Copy(Path.Combine(_rig.Game, relative.Replace('/', Path.DirectorySeparatorChar)), destination);
+        }
+        string package = Path.Combine(_rig.Root, "client-loader.json");
+        BepInExLoaderPackage.Capture(loaderRoot, "client-loader", "2").Write(package);
+        string clientInstall = Path.Combine(_rig.Root, "client");
+        Directory.CreateDirectory(clientInstall);
+        File.WriteAllText(Path.Combine(clientInstall, "client-marker"), "a client install; an A/B run pins its files");
+        string inventory = Path.Combine(_rig.Root, "client-loader-inventory.json");
+        File.WriteAllText(inventory, JsonSerializer.Serialize(new
+        {
+            environments = new object[]
+            {
+                new { name = "chosen-server", roles = new[] { "server" }, install = _rig.Game },
+                new { name = "chosen-client", roles = new[] { "client" }, install = clientInstall, loaderPackage = package },
+            },
+        }));
+        string companion = _rig.Write("companion/Companion.dll", RegressionRig.Assembly("Companion", new("example.companion")));
+        string adapter = _rig.Write("adapter/NativeSmoke.SessionAdapter.dll",
+            RegressionRig.Assembly("NativeSmoke.SessionAdapter", new(SmokeSessionContract.SessionAdapterPluginGuid)));
+        string cliManifest = _rig.CliManifest(save: true, full: true), cliFiles = Path.Combine(_rig.Root, "cli");
+        void NoArchitectureCheck(EnvironmentInventory _, EnvironmentRecipe __, string ___, string? ____) { }
+        string unsafeOutput = Path.Combine(loaderRoot, "run");
+
+        // The stage's own guard names the client's loader root, and stops before it reads or writes anything.
+        var stageFailure = Assert.Throws<ArgumentException>(() => ModInputStage.Choose(new ModInputStage.Request(ModInputStage.Route.Dedicated,
+            unsafeOutput, new Dictionary<string, string> { ["--inventory"] = inventory, ["--cli-manifest"] = cliManifest, ["--cli-files"] = cliFiles },
+            new HashSet<string>(), [], [], [], []) { ClientArchitecture = NoArchitectureCheck }));
+        Assert.Contains(loaderRoot, stageFailure.Message);
+
+        // server-load takes it through the stage.
+        int ranCampaign = 0;
+        int serverLoad = await ServerLoad.RunAsync(["--inventory", inventory, "--mod", _rig.Parent, "--cli-manifest", cliManifest,
+            "--cli-files", cliFiles, "--adapter", adapter, "--output", unsafeOutput],
+            new ServerLoad.Seams(Inspect: _ => throw new Xunit.Sdk.XunitException("A refused output reached the host preflight."),
+                Campaign: (_, _, _, _, _) => { ranCampaign++; return Task.FromResult(0); }, ClientArchitecture: NoArchitectureCheck));
+        Assert.Equal(3, serverLoad);
+        Assert.Equal(0, ranCampaign);
+
+        // server-load-ab too: the same output is refused, and a safe one is not.
+        int arms = 0;
+        string[] Comparison(string output) => ["--inventory", inventory, "--mod", _rig.Parent, "--mod", companion, "--remove-mod", companion,
+            "--search-root", Path.Combine(_rig.Root, "deps"), "--adapter", adapter, "--cli-manifest", cliManifest, "--cli-files", cliFiles, "--output", output];
+        Assert.Equal(3, await ServerLoadComparison.RunAsync(Comparison(unsafeOutput), runArm: _ => { arms++; return Task.FromResult(0); },
+            clientArchitecture: NoArchitectureCheck));
+        Assert.Equal(0, arms);
+        Assert.False(Directory.Exists(unsafeOutput));
+        Assert.Equal(0, await ServerLoadComparison.RunAsync(Comparison(Path.Combine(_rig.Root, "safe-ab")), runArm: _ => { arms++; return Task.FromResult(0); },
+            clientArchitecture: NoArchitectureCheck));
+        Assert.Equal(2, arms);
+    }
+
+    // #745: the stage's choice alone reads nothing but the environment and the pinned inputs, and writes nothing: a wrapper
+    // that needs the choice before the stage runs takes it from here.
+    [Fact]
+    public void TheChoiceAloneNamesTheCoreAndCapabilitiesWithoutWritingTheOutput()
+    {
+        string output = Path.Combine(_rig.Root, "choice-only");
+        var options = new Dictionary<string, string>
+        {
+            ["--server"] = _rig.Game, ["--cli-manifest"] = _rig.CliManifest(save: true, full: true), ["--cli-files"] = Path.Combine(_rig.Root, "cli"),
+        };
+        var progress = new ModInputStage.Progress();
+        var inputs = ModInputStage.Choose(new ModInputStage.Request(ModInputStage.Route.Dedicated, output, options,
+            new HashSet<string> { "--server-only" }, [], [], [], []) { Progress = progress });
+
+        Assert.True(progress.OutputChecked);
+        Assert.False(Path.Exists(output));
+        Assert.Equal(Path.Combine(_rig.Game, InstallPins.CoreDirectory), inputs.Core);
+        Assert.Equal(["valheim.session/state"], inputs.Capabilities);
+        Assert.Equal(options["--cli-manifest"], inputs.CliManifest);
+        Assert.Empty(inputs.Mods);
+        Assert.Null(inputs.Dependencies);
+    }
+
     // Build takes a role's install, environment and loader with the same options as the command that runs that role.
     [Fact]
     public void BuildParsesTheRunCommandsRoleOptions()

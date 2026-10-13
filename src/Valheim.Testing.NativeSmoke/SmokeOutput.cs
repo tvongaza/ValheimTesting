@@ -6,9 +6,14 @@ internal static class SmokeOutput
     public static void RefuseResolved(string output, string? cliFiles, EnvironmentInventory? inventory,
         IEnumerable<EnvironmentRecipe?> actors, params string?[] otherProtected)
     {
-        RefuseInside(output, actors.OfType<EnvironmentRecipe>().Select(actor => actor.Install)
+        string[] sources = actors.OfType<EnvironmentRecipe>().Select(actor => actor.Install)
             .Concat(new[] { cliFiles, inventory?.SteamUserData }.OfType<string>())
-            .Concat(otherProtected.OfType<string>()).ToArray());
+            .Concat(otherProtected.OfType<string>()).ToArray();
+        RefuseInside(output, sources);
+        // An output that holds a selected source is as wrong as one inside it (server-load-phases checked this before #745).
+        foreach (string source in sources)
+            if (ProtectedPaths.Contains(output, source))
+                throw new ArgumentException($"--output must not contain the prepared install and account directories: {Path.GetFullPath(source)}");
     }
 
     // The same marker means every one-shot command stopped without a passing result. Keep the refusal and any
