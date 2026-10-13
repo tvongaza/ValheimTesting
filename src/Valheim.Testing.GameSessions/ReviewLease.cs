@@ -33,22 +33,20 @@ internal static class ReviewLease
     }
 
     /// <summary>
-    /// Writes the sidecar: <c>schema</c>, <c>kind</c>, <c>visualVerdict: "not asserted"</c>, the id, world, build and
-    /// plugin pins, then <paramref name="details"/>' own fields, then <c>recordedUtc</c>. Returns the sidecar's SHA-256:
-    /// the sidecar is what a report links, since it records the image's or frames' own digests with the provenance.
+    /// Writes the sidecar (<see cref="ImageEvidence.WriteSidecar"/>): <c>schema</c>, <c>kind</c>, <c>visualVerdict: "not asserted"</c>,
+    /// the id, world, build and plugin pins, then <paramref name="details"/>' own fields, then <c>recordedUtc</c>. Returns the
+    /// sidecar's SHA-256: the sidecar is what a report links, since it records the image's or frames' own digests with the provenance.
     /// </summary>
     internal static string WriteSidecar(string path, string kind, string id, string worldUid, string gameBuild,
         IReadOnlyDictionary<string, string> pluginPins, object details)
     {
-        var sidecar = new JsonObject
+        var fields = new JsonObject
         {
-            ["schema"] = 1, ["kind"] = kind, ["visualVerdict"] = "not asserted", ["Id"] = id,
+            ["visualVerdict"] = "not asserted", ["Id"] = id,
             ["worldUid"] = worldUid, ["gameBuild"] = gameBuild, ["pluginPins"] = JsonSerializer.SerializeToNode(pluginPins),
         };
-        foreach (var (name, value) in JsonSerializer.SerializeToNode(details)!.AsObject()) sidecar[name] = value?.DeepClone();
-        sidecar["recordedUtc"] = DateTimeOffset.UtcNow;
-        File.WriteAllText(path, sidecar.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
-        return FileHash.Sha256(path);
+        foreach (var (name, value) in JsonSerializer.SerializeToNode(details)!.AsObject()) fields[name] = value?.DeepClone();
+        return ImageEvidence.WriteSidecar(path, kind, fields);
     }
 
     /// <summary>

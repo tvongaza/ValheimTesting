@@ -178,4 +178,71 @@ public sealed class ReviewCaptureTests
             Assert.False(Directory.Exists(root));
         }
     }
+
+    [Fact]
+    public void TheStillAndItsSidecarUseTheSharedImageEvidenceFields()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "vt-review-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var (_, client) = Client();
+            using (client) using (var server = new ScriptedTransport().Actor())
+            {
+                var result = ReviewCapture.CaptureCore(server, client, Plan(root), HostShellKind.PowerShell, Fetch, () => { }, CancellationToken.None);
+                var sidecar = System.Text.Json.JsonDocument.Parse(File.ReadAllText(result.MetadataPath)).RootElement;
+                Assert.Equal("human-review-still", sidecar.GetProperty("kind").GetString());
+                Assert.Equal("shot-1.png", sidecar.GetProperty("image").GetString());
+                Assert.Equal(FileHash.Sha256(result.ImagePath), sidecar.GetProperty("sha256").GetString());
+                Assert.Equal(Png.Length, sidecar.GetProperty("bytes").GetInt64());
+                Assert.Equal(result.Sha256, sidecar.GetProperty("sha256").GetString());
+            }
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public void AWindowsHostPathIsMatchedWithoutRegardToCaseButAUnixPathIsNot()
+    {
+        string windowsRoot = Path.Combine(Path.GetTempPath(), "vt-review-" + Guid.NewGuid().ToString("N"));
+        var (_, windowsClient) = Client(command => ScriptedTransport.Ok("OK: CAPTURE name=shot-1 path=" + command.Split(' ')[1].ToLowerInvariant() + " bytes=20 size=1x1 ready_ms=3"));
+        using (windowsClient) using (var server = new ScriptedTransport().Actor())
+        {
+            try
+            {
+                Assert.True(File.Exists(ReviewCapture.CaptureCore(server, windowsClient, Plan(windowsRoot), HostShellKind.PowerShell, Fetch, () => { }, CancellationToken.None).ImagePath));
+            }
+            finally { if (Directory.Exists(windowsRoot)) Directory.Delete(windowsRoot, true); }
+        }
+        string unixRoot = Path.Combine(Path.GetTempPath(), "vt-review-" + Guid.NewGuid().ToString("N"));
+        var plan = Plan(unixRoot) with { HostDirectory = "/Stage/Review-Shot-1" };
+        var (transport, unixClient) = Client(command => ScriptedTransport.Ok("OK: CAPTURE name=shot-1 path=" + command.Split(' ')[1].ToLowerInvariant() + " bytes=20 size=1x1 ready_ms=3"));
+        using (unixClient) using (var server2 = new ScriptedTransport().Actor())
+        {
+            var refused = Assert.Throws<InvalidDataException>(() => ReviewCapture.CaptureCore(server2, unixClient, plan, HostShellKind.Bash, Fetch, () => { }, CancellationToken.None));
+            Assert.Contains("different image path", refused.Message);
+            Assert.Equal(1, transport.Count("cli_extension valheim.observe/review-restore"));
+            Assert.False(Directory.Exists(unixRoot));
+        }
+    }
+
+    [Fact]
+    public void AFetchedFileThatIsNotACompletePngIsRefused()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "vt-review-" + Guid.NewGuid().ToString("N"));
+        var (transport, client) = Client();
+        using (client) using (var server = new ScriptedTransport().Actor())
+        {
+            Task<FetchedDirectory> Truncated(string host, string local, CancellationToken _)
+            {
+                Directory.CreateDirectory(local);
+                File.WriteAllBytes(Path.Combine(local, "shot-1.png"), Png[..12]);
+                return Task.FromResult(new FetchedDirectory(local, "archive-sha", 12, 1));
+            }
+            var refused = Assert.Throws<InvalidDataException>(() => ReviewCapture.CaptureCore(server, client, Plan(root),
+                HostShellKind.PowerShell, Truncated, () => { }, CancellationToken.None));
+            Assert.Contains("not a complete PNG", refused.Message);
+            Assert.Equal(1, transport.Count("cli_extension valheim.observe/review-restore"));
+            Assert.False(Directory.Exists(root));
+        }
+    }
 }
