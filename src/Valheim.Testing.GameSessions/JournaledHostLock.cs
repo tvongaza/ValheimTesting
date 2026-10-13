@@ -11,6 +11,8 @@ internal sealed class JournaledHostLock : IAsyncDisposable
     private readonly string _actor;
     private readonly TimeSpan _timeout;
     private readonly HostLock _held;
+    private readonly SemaphoreSlim _releaseGate = new(1, 1);
+    private int _released;
 
     private JournaledHostLock(IGameHost host, RunJournal journal, string journalDirectory, string actor, TimeSpan timeout, HostLock held)
     {
@@ -79,19 +81,32 @@ internal sealed class JournaledHostLock : IAsyncDisposable
 
     internal async Task<HostLockResult> ReleaseAsync(CancellationToken cancellation = default)
     {
-        var result = await _held.ReleaseAsync(cancellation).ConfigureAwait(false);
-        if (result.State is not (HostLockState.Released or HostLockState.Free)) throw new HostLockException(result);
+        await _releaseGate.WaitAsync(cancellation).ConfigureAwait(false);
         try
         {
-            await _journal.AppendAsync(_host, _journalDirectory, _actor,
-                JournalEntry.Of(JournalEntry.LockReleased, ("lock", Path), ("claimant", Owner)), _timeout, CancellationToken.None).ConfigureAwait(false);
+            if (Volatile.Read(ref _released) == 1)
+                return new(HostLockState.Free, null, "The journalled lock was already released by this handle.");
+            // Do not use HostLock.ReleaseAsync here: that handle deliberately acts only once even when the host did not prove
+            // the effect. A journalled handle must remain retryable so DisposeAsync can make another bounded release attempt.
+            var result = await _host.ReleaseLockAsync(Path, Owner, _timeout, cancellation).ConfigureAwait(false);
+            if (result.State is not (HostLockState.Released or HostLockState.Free)) throw new HostLockException(result);
+            Volatile.Write(ref _released, 1);
+            try
+            {
+                await _journal.AppendAsync(_host, _journalDirectory, _actor,
+                    JournalEntry.Of(JournalEntry.LockReleased, ("lock", Path), ("claimant", Owner)), _timeout, CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (Exception error)
+            {
+                // The lock is already free. A lost note cannot turn a successful release into a cleanup failure.
+                Console.Error.WriteLine($"Warning: could not journal {JournalEntry.LockReleased} for {_actor} on {_host.Name}: {error.Message}");
+            }
+            return result;
         }
-        catch (Exception error)
+        finally
         {
-            // The lock is already free. A lost note cannot turn a successful release into a cleanup failure.
-            Console.Error.WriteLine($"Warning: could not journal {JournalEntry.LockReleased} for {_actor} on {_host.Name}: {error.Message}");
+            _releaseGate.Release();
         }
-        return result;
     }
 
     public async ValueTask DisposeAsync() => await ReleaseAsync(CancellationToken.None).ConfigureAwait(false);

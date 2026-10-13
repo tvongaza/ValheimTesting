@@ -48,14 +48,23 @@ public static class EnvironmentRuns
     /// it is in, never removed by a run's recovery. Returns true only when post-recovery status says nothing of the run is left.
     /// </summary>
     public static async Task<bool> RecoverRunAsync(string? inventoryPath, string runId, bool teardown, TextWriter output, bool json = false,
-        CancellationToken cancellation = default)
+        CancellationToken cancellation = default) =>
+        await RecoverRunAsync(inventoryPath, runId, teardown, output, json, cancellation, launchGone: false).ConfigureAwait(false);
+
+    /// <summary>The command-only guarded recovery for an interrupted launch whose process identity cannot otherwise be proved.</summary>
+    internal static async Task<bool> RecoverRunWithLaunchGoneAsync(string? inventoryPath, string runId, bool teardown, TextWriter output, bool json = false,
+        CancellationToken cancellation = default) =>
+        await RecoverRunAsync(inventoryPath, runId, teardown, output, json, cancellation, launchGone: true).ConfigureAwait(false);
+
+    private static async Task<bool> RecoverRunAsync(string? inventoryPath, string runId, bool teardown, TextWriter output, bool json,
+        CancellationToken cancellation, bool launchGone)
     {
         ArgumentNullException.ThrowIfNull(output);
         var inventory = EnvironmentInventory.ReadHosts(inventoryPath, EnvironmentInventory.ThisMachine);
         if (!json) foreach (string line in inventory.Detected) output.WriteLine("detected: " + line);
         var (hosts, _) = JournalScope(inventory);
         var report = await RunRecovery.RecoverAsync(hosts, new ResolvedEnvironment { Hosts = hosts }.CreateHost, runId, teardown,
-            TimeSpan.FromSeconds(60), cancellation, inventory.LeaseHost, inventory.LeaseDirectory).ConfigureAwait(false);
+            TimeSpan.FromSeconds(60), cancellation, inventory.LeaseHost, inventory.LeaseDirectory, launchGone).ConfigureAwait(false);
         RunRecovery.Write(report, output, json);
         return report.Clean;
     }

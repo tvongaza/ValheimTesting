@@ -55,6 +55,8 @@ internal sealed record JournalHostStatus(string Name, string Journal, int Runs, 
 {
     /// <summary>The host answered but some of its lines could not be read: a cut line may belong to any run.</summary>
     [System.Text.Json.Serialization.JsonIgnore] public bool Reached { get; init; }
+    /// <summary>Each unreadable line, including its run, file, line number and parse problem.</summary>
+    public IReadOnlyList<JournalLineProblem> UnreadableLines { get; init; } = [];
 }
 
 internal sealed record JournalStatusReport(IReadOnlyList<JournalHostStatus> Hosts, IReadOnlyList<JournalRunStatus> Runs)
@@ -73,6 +75,11 @@ internal sealed record JournalStatusReport(IReadOnlyList<JournalHostStatus> Host
 /// </summary>
 internal static class RunJournalStatus
 {
+    /// <summary>The newest non-recovery line that actually names the run's runner; later legacy lines may omit it.</summary>
+    internal static JournalRunner? LastNamedRunner(IEnumerable<JournalRecord> records) => records
+        .Where(record => record.Actor != RunRecovery.Actor && record.Runner != null)
+        .OrderBy(record => record.Utc).LastOrDefault()?.Runner;
+
     /// <param name="leaseHost">The inventory's lease host and <paramref name="leaseDirectory"/> its lease directory: where a lease journalled
     /// before leases named their directory is checked.</param>
     /// <param name="copyRoots">Directories on this machine searched for copies no journal names (<see cref="OwnedCopies.Find"/>).</param>
@@ -90,7 +97,8 @@ internal static class RunJournalStatus
                 var host = hostFactory(name);
                 var (records, unreadable) = await RunJournalOnHost.ReadAllAsync(host, journal, timeout, cancellation).ConfigureAwait(false);
                 var status = new JournalHostStatus(name, journal, records.Select(record => record.Run).Distinct(StringComparer.Ordinal).Count(),
-                    unreadable == 0 ? null : $"{unreadable} journal line{(unreadable == 1 ? "" : "s")} could not be read, so what they record is unknown.") { Reached = unreadable != 0 };
+                    unreadable.Count == 0 ? null : $"{unreadable.Count} journal line{(unreadable.Count == 1 ? "" : "s")} could not be read, so what they record is unknown.")
+                { Reached = unreadable.Count != 0, UnreadableLines = unreadable.Count == 0 ? [] : unreadable };
                 return (Status: status, Read: ((string Host, IGameHost Connection, IReadOnlyList<JournalRecord> Records)?)(name, host, records));
             }
             catch (Exception error) when (error is HostOperationException or TimeoutException or IOException or ArgumentException or PlatformNotSupportedException
@@ -165,6 +173,7 @@ internal static class RunJournalStatus
                             Open("scheduled-task " + Field("task"), "scheduled-task", Field("task"), "registered, not retired"); break;
                         case JournalEntry.ScheduledTaskRetired: left.Remove("scheduled-task " + Field("task")); break;
                         case JournalEntry.LaunchSettled: left.Remove($"launch {Field("actor")} {Field("directory")}"); break;
+                        case JournalEntry.LaunchAbandoned: left.Remove($"launch {Field("actor")} {Field("directory")}"); break;
                         case JournalEntry.LeaseHeld: Open($"lease {Field("account")} {Field("owner")}", "lease", $"Steam account {Field("account")} ({Field("pool")})", "held"); break;
                         case JournalEntry.LeaseKept: Open($"lease {Field("account")} {Field("owner")}", "lease", $"Steam account {Field("account")} ({Field("pool")})", "kept: its client may still run", kept: true); break;
                         case JournalEntry.LeaseReleased: left.Remove($"lease {Field("account")} {Field("owner")}"); break;
@@ -224,7 +233,7 @@ internal static class RunJournalStatus
 
         // The run's own runner: a recovery journals as its own actor, and its process is not the run's.
         var runnerOf = read.SelectMany(host => host.Records).GroupBy(record => record.Run, StringComparer.Ordinal).ToDictionary(run => run.Key,
-            run => run.OrderBy(record => record.Utc).LastOrDefault(record => record.Actor != RunRecovery.Actor)?.Runner, StringComparer.Ordinal);
+            run => LastNamedRunner(run), StringComparer.Ordinal);
         var remoteRunners = await RemoteRunnersAsync(read.Select(host => (host.Host, host.Connection)).ToList(),
             runnerOf.Where(run => !ended.ContainsKey(run.Key) && run.Value is { OnThisMachine: false })
                 .ToDictionary(run => run.Key, run => run.Value!, StringComparer.Ordinal), timeout, cancellation).ConfigureAwait(false);
@@ -593,7 +602,10 @@ internal static class RunJournalStatus
         {
             JournalRunState.Live when here => $"run {run.Run} is still going on {where} ({run.Reason}); wait for it to end",
             JournalRunState.Recoverable => $"run {run.Run} left {run.Items.Count} thing(s) on {where} ({run.Reason}); see valheim-test env status, then valheim-test env recover --run {run.Run}",
-            JournalRunState.Unrecoverable => $"run {run.Run} left something on {where} that cannot be proven its own ({run.Reason}); see valheim-test env status and settle it by hand",
+            JournalRunState.Unrecoverable => $"run {run.Run} left something on {where} that cannot be proven its own ({run.Reason}); see valheim-test env status" +
+                (run.Items.Any(item => item.Unrecoverable) && run.Items.Where(item => item.Unrecoverable).All(item => item.Kind == "launch")
+                    ? $", then use valheim-test env recover --run {run.Run} --launch-gone only after confirming the named launch is gone"
+                    : " and resolve the named unprovable item"),
             JournalRunState.Unknown when run.Runner != null && here => $"run {run.Run} on {where} may still be going: {run.Reason}",
             _ => null,
         };
@@ -626,9 +638,13 @@ internal static class RunJournalStatus
             return;
         }
         foreach (var host in report.Hosts)
+        {
             output.WriteLine(host.Error == null ? $"host {host.Name}: journal {host.Journal}, {Count(host.Runs, "run")}"
                 : host.Runs != 0 ? $"UNREADABLE lines on host {host.Name}: journal {host.Journal}, {Count(host.Runs, "run")}; {host.Error}"
                 : $"UNREADABLE host {host.Name}: {host.Error} Its runs are unknown; none is reported as over.");
+            foreach (var problem in host.UnreadableLines)
+                output.WriteLine($"  run {problem.Run}, file {problem.File}, line {problem.Line.ToString(CultureInfo.InvariantCulture)}: {problem.Problem}");
+        }
         foreach (var run in report.Runs.Where(run => run.State != JournalRunState.Ended))
         {
             output.WriteLine($"{run.State.ToString().ToUpperInvariant()} {run.Run} on {string.Join(", ", run.Hosts)}, {Time(run.FirstUtc)} to {Time(run.LastUtc)}: {run.Reason}");
@@ -636,6 +652,10 @@ internal static class RunJournalStatus
                 output.WriteLine($"  {item.Kind} {item.What} on {item.Host} ({item.Actor}, since {Time(item.SinceUtc)}): {(item.Unrecoverable ? "UNRECOVERABLE " : "")}{item.Status}");
             if (run.State == JournalRunState.Recoverable)
                 output.WriteLine($"  Recover it with: valheim-test env recover --run {run.Run}");
+            else if (run.State == JournalRunState.Unrecoverable && run.Items.Any(item => item.Unrecoverable) &&
+                run.Items.Where(item => item.Unrecoverable).All(item => item.Kind == "launch") &&
+                !report.Hosts.SelectMany(host => host.UnreadableLines).Any(problem => problem.Run == run.Run))
+                output.WriteLine($"  If the named launch is gone, verify the host and settle it with: valheim-test env recover --run {run.Run} --launch-gone");
         }
         foreach (var copy in report.Unjournalled)
             output.WriteLine($"UNJOURNALLED copy {copy.Path} ({copy.Kind}, {DiskSpace.Format(copy.Bytes)}, made {Time(copy.CreatedUtc)}" +

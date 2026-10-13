@@ -914,6 +914,25 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.Equal([JournalEntry.LockIntended, JournalEntry.LockHeld], records.Select(record => record.Entry.Kind));
     }
 
+    [Fact]
+    public async Task DisposeRetriesAJournalledLockWhoseFirstReleaseWasNotProven()
+    {
+        var host = NewHost();
+        var journal = new RunJournal("run-release-retry");
+        var held = await JournaledHostLock.AcquireAsync(host, "/var/tmp/vt/lock", "test owner", journal,
+            "/var/tmp/vt/journal", "run", TimeSpan.FromSeconds(5));
+        host.ReleaseLockResults.Enqueue(new HostLockResult(HostLockState.Unknown, null, "release reply was lost"));
+
+        var error = await Assert.ThrowsAsync<HostLockException>(() => held.ReleaseAsync());
+        Assert.Equal(HostLockState.Unknown, error.State);
+        await held.DisposeAsync();
+
+        Assert.Equal([held.Owner], host.Releases);
+        var records = await RunJournalOnHost.ReadAsync(host, "/var/tmp/vt/journal", journal.RunId, TimeSpan.FromSeconds(5));
+        Assert.Equal([JournalEntry.LockIntended, JournalEntry.LockHeld, JournalEntry.LockReleased],
+            records.Select(record => record.Entry.Kind));
+    }
+
     // #257 step 5: cleanup never runs on the cancelled token. A Ctrl+C during the scenario still lets the copy be retired and
     // the run's end be journalled; a second Ctrl+C while a retire hangs abandons the cleanup: exit 3, journalled, recoverable.
     [Fact] public async Task CleanupRunsOnItsOwnTokenAndASecondInterruptAbandonsIt()

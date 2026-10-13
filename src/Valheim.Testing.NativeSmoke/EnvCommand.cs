@@ -10,7 +10,8 @@ using Valheim.Testing.GameSessions;
 internal static class EnvCommand
 {
     internal const string Usage = "valheim-test env list|preflight [--inventory FILE] [--json] | valheim-test env status [--inventory FILE] [--json] | " +
-        "valheim-test env recover|teardown --run ID [--inventory FILE] [--json] | valheim-test env teardown --copy PATH [--inventory FILE] | " +
+        "valheim-test env recover --run ID [--launch-gone] [--inventory FILE] [--json] | valheim-test env teardown --run ID [--inventory FILE] [--json] | " +
+        "valheim-test env teardown --copy PATH [--inventory FILE] | " +
         "valheim-test env teardown --run ID --machine-gone [--inventory FILE]";
 
     public static async Task<int> RunAsync(string[] args, TextWriter? output = null, TextWriter? error = null)
@@ -134,7 +135,8 @@ internal static class EnvCommand
     private static async Task<int> Journal(string action, string[] args, TextWriter output, TextWriter error)
     {
         var rest = args.ToList();
-        bool json = rest.Remove("--json"), machineGone = action == "teardown" && rest.Remove("--machine-gone");
+        bool json = rest.Remove("--json"), machineGone = action == "teardown" && rest.Remove("--machine-gone"),
+            launchGone = action == "recover" && rest.Remove("--launch-gone");
         string? file = Option(rest, "--inventory"), run = action == "status" ? null : Option(rest, "--run"), copy = action == "teardown" ? Option(rest, "--copy") : null;
         if (rest.Count != 0 || (action != "status" && (run == null) == (copy == null)) || (copy != null && json) || (machineGone && (run == null || json)))
         {
@@ -147,6 +149,7 @@ internal static class EnvCommand
             bool clean = action == "status" ? await EnvironmentRuns.WriteRunStatusAsync(inventory, output, json).ConfigureAwait(false)
                 : copy != null ? await EnvironmentRuns.TeardownCopyAsync(inventory, copy, output).ConfigureAwait(false)
                 : machineGone ? await EnvironmentRuns.ReleaseLeasesOfGoneRunAsync(inventory, run!, output).ConfigureAwait(false)
+                : launchGone ? await EnvironmentRuns.RecoverRunWithLaunchGoneAsync(inventory, run!, teardown: false, output, json).ConfigureAwait(false)
                 : await EnvironmentRuns.RecoverRunAsync(inventory, run!, action == "teardown", output, json).ConfigureAwait(false);
             if (clean && !machineGone && run != null && action is ("recover" or "teardown")) ForegroundHold.RetireRecovered(run);
             return clean ? 0 : 3;
