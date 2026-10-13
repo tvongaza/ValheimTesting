@@ -2,12 +2,197 @@ using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using System.Text.Json;
 using Valheim.Testing.Game;
 using Valheim.Testing.GameSessions;
 using Xunit;
 
 public sealed class OwnedCliCommandTests
 {
+    [Fact]
+    public async Task RoleSelectsTheServerAndAnImplicitAmbiguousOrUnverifiedWorldSendsNothing()
+    {
+        if (!OperatingSystem.IsWindows() && !OperatingSystem.IsMacOS() && !OperatingSystem.IsLinux()) return;
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        int port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        var commands = new List<string>();
+        Task serve = Task.Run(async () =>
+        {
+            using var socket = await listener.AcceptTcpClientAsync();
+            using var stream = socket.GetStream();
+            using var reader = new StreamReader(stream, new UTF8Encoding(false));
+            using var writer = new StreamWriter(stream, new UTF8Encoding(false)) { AutoFlush = true, NewLine = "\n" };
+            await writer.WriteLineAsync("VALHEIM_CLI_READY");
+            await writer.WriteLineAsync("VALHEIM_CLI_CAPS completion");
+            while (await reader.ReadLineAsync() is { } line)
+            {
+                string command = line[(line.IndexOf(':', 5) + 1)..];
+                commands.Add(command);
+                await writer.WriteLineAsync("OUTPUT:1");
+                await writer.WriteLineAsync(command.StartsWith("cli_expect --strict ", StringComparison.Ordinal) ? "OK: EXPECT" : "OK: MANIFEST");
+                await writer.WriteLineAsync("END_OUTPUT");
+            }
+        });
+        string evidence = Directory.CreateTempSubdirectory("owned-cli-roles-").FullName;
+        try
+        {
+            using var process = Process.GetCurrentProcess();
+            string start = OwnedClientCommandLease.LocalStartFileTimeUtc(process.Id);
+            OwnedClientCommandLease.Write(evidence, process.Id, start, new ClientRunPlan
+            {
+                Install = evidence, Port = port, Pins = new() { ["client.mod"] = new string('a', 32) },
+            });
+            var serverPlan = new ServerRunPlan { Pins = new() { ["server.mod"] = new string('b', 32), ["worlduid"] = "123" } };
+            OwnedClientCommandLease.WriteServer(evidence, process.Id, start, port, evidence, serverPlan);
+
+            AssertRefused(evidence, "both an owned client and server");
+            Assert.False(listener.Pending());
+            using (var output = new StringWriter())
+            using (var error = new StringWriter())
+            {
+                int result = OwnedCliCommand.Run(["--evidence", evidence, "--role", "server", "--phase", "world", "--command", "cli_manifest"], output, error);
+                Assert.Equal(3, result);
+                Assert.Empty(output.ToString());
+                Assert.Contains(OwnedClientCommandLease.ServerWorldPins, error.ToString());
+            }
+            Assert.False(listener.Pending());
+
+            string serverLease = Path.Combine(evidence, OwnedClientCommandLease.ServerFileName);
+            var written = JsonSerializer.Deserialize<OwnedClientCommandLease>(File.ReadAllText(serverLease))!;
+            File.WriteAllText(serverLease, JsonSerializer.Serialize(written with { Role = OwnedClientCommandLease.ClientRole }));
+            using (var output = new StringWriter())
+            using (var error = new StringWriter())
+            {
+                int result = OwnedCliCommand.Run(["--evidence", evidence, "--role", "server", "--phase", "menu", "--command", "cli_manifest"], output, error);
+                Assert.Equal(3, result);
+                Assert.Empty(output.ToString());
+                Assert.Contains("names another role", error.ToString());
+            }
+            Assert.False(listener.Pending());
+            OwnedClientCommandLease.WriteServer(evidence, process.Id, start, port, evidence, serverPlan);
+
+            using (var output = new StringWriter())
+            using (var error = new StringWriter())
+            {
+                int result = OwnedCliCommand.Run(["--evidence", evidence, "--role", "server", "--phase", "menu", "--command", "cli_manifest"], output, error);
+                Assert.Equal(0, result);
+                Assert.Empty(error.ToString());
+            }
+            Assert.Equal(3, commands.Count);
+            Assert.All(commands.Take(2), command => Assert.Contains("server.mod=" + new string('b', 32), command));
+            Assert.DoesNotContain(commands, command => command.Contains("client.mod=", StringComparison.Ordinal));
+        }
+        finally
+        {
+            listener.Stop();
+            try { await serve.WaitAsync(TimeSpan.FromSeconds(5)); }
+            catch (SocketException) when (commands.Count == 0) { }
+            Directory.Delete(evidence, recursive: true);
+        }
+    }
+
+    // The reader's identity refusal against a LIVE process: a server lease naming the stand-in's PID and port but another
+    // start identity (the PID reused by a later launch) is refused before any connection. The stand-in accepts exactly
+    // one connection, so the exact lease succeeding afterwards proves the refused attempt sent nothing.
+    [Fact]
+    public async Task AServerLeaseWithTheWrongIdentityForALiveStandInIsRefusedAndSendsNothing()
+    {
+        string root = Directory.CreateTempSubdirectory("owned-cli-wrong-identity-").FullName;
+        try
+        {
+            var start = new ProcessStartInfo("dotnet") { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true };
+            start.ArgumentList.Add(typeof(Valheim.Testing.ProcessSignalProbe.Marker).Assembly.Location);
+            start.ArgumentList.Add("owned-cli-listener");
+            await using var standIn = StandInProcess.Start(start, nameof(AServerLeaseWithTheWrongIdentityForALiveStandInIsRefusedAndSendsNothing));
+            string? ready = await standIn.Process.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            if (string.IsNullOrWhiteSpace(ready))
+            {
+                string diagnostic = standIn.Process.HasExited ? await standIn.Process.StandardError.ReadToEndAsync() : "stand-in is still running";
+                Assert.Fail("the owned CLI stand-in did not report readiness: " + diagnostic);
+            }
+            string[] fields = ready!.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            int port = int.Parse(fields[0], System.Globalization.CultureInfo.InvariantCulture);
+            int pid = int.Parse(fields[1], System.Globalization.CultureInfo.InvariantCulture);
+            Assert.Equal(standIn.Process.Id, pid);
+            string identity = OwnedClientCommandLease.LocalStartFileTimeUtc(pid);
+            string other = (long.Parse(identity, System.Globalization.CultureInfo.InvariantCulture) + 1).ToString(System.Globalization.CultureInfo.InvariantCulture);
+            var plan = new ServerRunPlan { Pins = new() { ["server.mod"] = new string('e', 32) } };
+            string[] command = ["--evidence", root, "--role", "server", "--phase", "menu", "--command", "cli_manifest"];
+
+            OwnedClientCommandLease.WriteServer(root, pid, other, port, root, plan);
+            using (var output = new StringWriter())
+            using (var error = new StringWriter())
+            {
+                Assert.Equal(3, OwnedCliCommand.Run(command, output, error));
+                Assert.Empty(output.ToString());
+                Assert.Contains("The exact server this run started is no longer running", error.ToString());
+            }
+            Assert.Empty(Directory.GetFiles(root, "owned-cli-command-*.jsonl"));
+            Assert.False(standIn.Process.HasExited);
+
+            OwnedClientCommandLease.WriteServer(root, pid, identity, port, root, plan);
+            using (var output = new StringWriter())
+            using (var error = new StringWriter())
+            {
+                Assert.Equal(0, OwnedCliCommand.Run(command, output, error));
+                Assert.Contains("OK: MANIFEST", output.ToString());
+                Assert.Empty(error.ToString());
+            }
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    // Without --role, a server-only hold reaches its server; only evidence holding both roles needs --role.
+    [Fact]
+    public async Task WithoutRoleAServerOnlyHoldReachesItsServer()
+    {
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        int port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        var commands = new List<string>();
+        Task serve = Task.Run(async () =>
+        {
+            using var socket = await listener.AcceptTcpClientAsync();
+            using var stream = socket.GetStream();
+            using var reader = new StreamReader(stream, new UTF8Encoding(false));
+            using var writer = new StreamWriter(stream, new UTF8Encoding(false)) { AutoFlush = true, NewLine = "\n" };
+            await writer.WriteLineAsync("VALHEIM_CLI_READY");
+            await writer.WriteLineAsync("VALHEIM_CLI_CAPS completion");
+            while (await reader.ReadLineAsync() is { } line)
+            {
+                string command = line[(line.IndexOf(':', 5) + 1)..];
+                commands.Add(command);
+                await writer.WriteLineAsync("OUTPUT:1");
+                await writer.WriteLineAsync(command.StartsWith("cli_expect --strict ", StringComparison.Ordinal) ? "OK: EXPECT" : "OK: MANIFEST");
+                await writer.WriteLineAsync("END_OUTPUT");
+            }
+        });
+        string evidence = Directory.CreateTempSubdirectory("owned-cli-server-default-").FullName;
+        try
+        {
+            Assert.Equal(OwnedClientCommandLease.ClientRole, OwnedCliCommand.DefaultRole(evidence));
+            OwnedClientCommandLease.WriteServer(evidence, Environment.ProcessId, OwnedClientCommandLease.LocalStartFileTimeUtc(Environment.ProcessId),
+                port, evidence, new ServerRunPlan { Pins = new() { ["server.mod"] = new string('f', 32) } });
+            Assert.Equal(OwnedClientCommandLease.ServerRole, OwnedCliCommand.DefaultRole(evidence));
+            using (var output = new StringWriter())
+            using (var error = new StringWriter())
+            {
+                Assert.Equal(0, OwnedCliCommand.Run(["--evidence", evidence, "--phase", "menu", "--command", "cli_manifest"], output, error));
+                Assert.Contains("OK: MANIFEST", output.ToString());
+                Assert.Empty(error.ToString());
+            }
+            Assert.Equal(3, commands.Count);
+            Assert.All(commands.Take(2), command => Assert.Contains("server.mod=" + new string('f', 32), command));
+        }
+        finally
+        {
+            listener.Stop();
+            await serve.WaitAsync(TimeSpan.FromSeconds(5));
+            Directory.Delete(evidence, recursive: true);
+        }
+    }
+
     [Fact] public async Task SupportedClientPassthroughSendsOnePinnedCommandToTheOwnedListener()
     {
         if (!OperatingSystem.IsWindows() && !OperatingSystem.IsMacOS()) return;
@@ -37,7 +222,7 @@ public sealed class OwnedCliCommandTests
         try
         {
             using var process = Process.GetCurrentProcess();
-            string start = process.StartTime.ToFileTimeUtc().ToString(System.Globalization.CultureInfo.InvariantCulture);
+            string start = OwnedClientCommandLease.LocalStartFileTimeUtc(process.Id);
             OwnedClientCommandLease.Write(evidence, process.Id, start, new ClientRunPlan
             {
                 Install = evidence, Port = port, Pins = new() { ["example.mod"] = new string('a', 32) },
@@ -102,15 +287,7 @@ public sealed class OwnedCliCommandTests
         Assert.Equal(2, OwnedCliCommand.Run(["--evidence", "/run", "--phase", "menu", "--command", "cli_world\ncli_save"], output, error));
         Assert.Equal(2, OwnedCliCommand.Run(["--evidence", "/run", "--phase", "menu", "--command", "cli_world",
             "--timeout-seconds", "16"], output, error));
-    }
-
-    [Fact] public void LinuxPassthroughWaitsForIssue788Part2()
-    {
-        if (!OperatingSystem.IsLinux()) return;
-        using var output = new StringWriter(); using var error = new StringWriter();
-        int result = OwnedCliCommand.Run(["--evidence", "/run", "--phase", "menu", "--command", "cli_manifest"], output, error);
-        Assert.Equal(3, result);
-        Assert.Contains("#788 part 2", error.ToString());
+        Assert.Equal(2, OwnedCliCommand.Run(["--evidence", "/run", "--role", "both", "--phase", "menu", "--command", "cli_world"], output, error));
     }
 
     [Fact]
@@ -131,7 +308,7 @@ public sealed class OwnedCliCommandTests
             int childPort = int.Parse(fields[0], System.Globalization.CultureInfo.InvariantCulture);
             int childPid = int.Parse(fields[1], System.Globalization.CultureInfo.InvariantCulture);
             using var current = Process.GetCurrentProcess();
-            string currentStart = current.StartTime.ToFileTimeUtc().ToString(System.Globalization.CultureInfo.InvariantCulture);
+            string currentStart = OwnedClientCommandLease.LocalStartFileTimeUtc(current.Id);
             var plan = new ClientRunPlan { Install = root, Pins = new() { ["example.mod"] = new string('a', 32) } };
             const string exactProcess = "The exact client this run started is no longer running; a reused PID is never contacted.";
             const string exactPort = "The recorded ValheimCLI port is not listening in this exact owned client; no command was sent.";
@@ -188,7 +365,7 @@ public sealed class OwnedCliCommandTests
     [Fact] public void PassthroughChecksTheExactProcessStartAndWritesPinnedPhases()
     {
         using var current = Process.GetCurrentProcess();
-        string start = current.StartTime.ToFileTimeUtc().ToString(System.Globalization.CultureInfo.InvariantCulture);
+        string start = OwnedClientCommandLease.LocalStartFileTimeUtc(current.Id);
         var matching = new OwnedClientCommandLease(current.Id, start, 5689, Path.GetTempPath());
         Assert.True(OwnedCliCommand.IsExactProcess(current, matching));
         Assert.False(OwnedCliCommand.IsExactProcess(current, matching with { StartFileTimeUtc = "1" }));
@@ -252,6 +429,248 @@ public sealed class OwnedCliCommandTests
     [InlineData("cli_manifest")]
     [InlineData("")]
     public void OtherCommandsAreNotScreenshots(string command) => Assert.Null(OwnedCliCommand.ScreenshotSupersize(command));
+}
+
+[Trait("Os", "unix")]
+public sealed class OwnedCliCommandServerLeaseUnixTests
+{
+    [Fact]
+    public async Task HostedWriterAndCommandReaderShareTheLiveServersFileTimeIdentityAndRefuseAReusedLaunchIdentity()
+    {
+        if (!OperatingSystem.IsMacOS() && !OperatingSystem.IsLinux()) return;
+        string root = Directory.CreateTempSubdirectory("owned-cli-server-identity-").FullName;
+        try
+        {
+            var start = new ProcessStartInfo("dotnet") { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true };
+            start.ArgumentList.Add(typeof(Valheim.Testing.ProcessSignalProbe.Marker).Assembly.Location);
+            start.ArgumentList.Add("owned-cli-listener");
+            await using var standIn = StandInProcess.Start(start, nameof(HostedWriterAndCommandReaderShareTheLiveServersFileTimeIdentityAndRefuseAReusedLaunchIdentity));
+            string? ready = await standIn.Process.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            if (string.IsNullOrWhiteSpace(ready))
+            {
+                string diagnostic = standIn.Process.HasExited ? await standIn.Process.StandardError.ReadToEndAsync() : "stand-in is still running";
+                Assert.Fail("the owned CLI stand-in did not report readiness: " + diagnostic);
+            }
+            string[] fields = ready!.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            Assert.Equal(3, fields.Length);
+            int port = int.Parse(fields[0], System.Globalization.CultureInfo.InvariantCulture);
+            int pid = int.Parse(fields[1], System.Globalization.CultureInfo.InvariantCulture);
+            Assert.Equal(standIn.Process.Id, pid);
+
+            var host = new LocalGameHost("local lease identity", HostShell.ThisMachine);
+            var found = (await HostProcessProbe.ProbeAsync(host, [(pid, "")], TimeSpan.FromSeconds(10), settle: true))[(pid, "")];
+            Assert.Equal(ProbedState.Same, found.State);
+            Assert.NotNull(found.StartIdentity);
+            var hosted = LocalHostedRun(root, port);
+
+            string reusedEvidence = Path.Combine(root, "reused");
+            Directory.CreateDirectory(reusedEvidence);
+            hosted.WriteServerCommandLease(reusedEvidence, pid, "1", new(pid, ProbedState.Reused, found.StartIdentity, null));
+            using (var refusedOutput = new StringWriter())
+            using (var refusedError = new StringWriter())
+            {
+                int refused = OwnedCliCommand.Run(["--evidence", reusedEvidence, "--role", "server", "--phase", "menu", "--command", "cli_manifest"],
+                    refusedOutput, refusedError);
+                Assert.Equal(3, refused);
+                Assert.Empty(refusedOutput.ToString());
+                Assert.Contains("owned server identity file", refusedError.ToString());
+            }
+
+            string evidence = Path.Combine(root, "live");
+            Directory.CreateDirectory(evidence);
+            hosted.WriteServerCommandLease(evidence, pid, found.StartIdentity!, found);
+            var lease = JsonSerializer.Deserialize<OwnedClientCommandLease>(File.ReadAllText(
+                Path.Combine(evidence, OwnedClientCommandLease.ServerFileName)));
+            Assert.NotNull(lease);
+            Assert.Equal(OwnedClientCommandLease.LocalStartFileTimeUtc(pid), lease.StartFileTimeUtc);
+
+            using var output = new StringWriter(); using var error = new StringWriter();
+            int result = OwnedCliCommand.Run(["--evidence", evidence, "--role", "server", "--phase", "menu", "--command", "cli_manifest"], output, error);
+            Assert.Equal(0, result);
+            Assert.Contains("OK: MANIFEST", output.ToString());
+            Assert.Empty(error.ToString());
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    private static HostedServerRun LocalHostedRun(string root, int port)
+    {
+        const string hostName = "local";
+        var profile = new ResolvedEnvironment
+        {
+            Hosts = new()
+            {
+                [hostName] = new HostProfile
+                {
+                    Kind = "local", Platform = HostProfile.CurrentPlatform, Shell = HostProfile.ShellFor(HostProfile.CurrentPlatform),
+                    Lock = Path.Combine(root, "lock"),
+                },
+            },
+            Server = new GameRole
+            {
+                Host = hostName, Install = Path.Combine(root, "install"), Runtime = Path.Combine(root, "runs"),
+                CliPort = port, GamePort = 2456,
+            },
+        };
+        var plan = new ServerRunPlan { Port = port, Pins = new() { ["server.mod"] = new string('a', 32) } };
+        return HostedServerRun.Create(profile, plan, "real-process server lease test");
+    }
+}
+
+[Trait("Os", "unix")]
+public sealed class OwnedCliCommandLinuxTests
+{
+    private static string Fixture(string name) =>
+        File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Fixtures", "ProcNet", name));
+
+    [Fact]
+    public void LinuxLeaseAbiUsesArchitectureSpecificNoFollowFlagsLayoutsAndLegacyStatVersions()
+    {
+        Assert.Equal((0x00020000, 24, 28, 1), OwnedCliCommand.LinuxLeaseAbi(System.Runtime.InteropServices.Architecture.X64));
+        Assert.Equal((0x00008000, 16, 24, 0), OwnedCliCommand.LinuxLeaseAbi(System.Runtime.InteropServices.Architecture.Arm64));
+        Assert.Throws<InvalidOperationException>(() => OwnedCliCommand.LinuxLeaseAbi(System.Runtime.InteropServices.Architecture.X86));
+    }
+
+    [Fact]
+    public void LinuxStatFallsBackForOldGlibcAndRefusesWhenNeitherEntryPointExists()
+    {
+        Assert.Equal(7, OwnedCliCommand.LinuxFStatWithFallback(
+            () => throw new EntryPointNotFoundException("fstat"), () => 7));
+        var refusal = Assert.Throws<InvalidOperationException>(() => OwnedCliCommand.LinuxFStatWithFallback(
+            () => throw new EntryPointNotFoundException("fstat"), () => throw new EntryPointNotFoundException("__fxstat")));
+        Assert.Contains("neither fstat nor its __fxstat compatibility entry point", refusal.Message);
+    }
+
+    [Fact]
+    public void ProcNetFixturesProveOwnForeignIpv6AndMissingListeners()
+    {
+        const int port = 5555, pid = 4242;
+        string own = Fixture("linux-own-pid.txt");
+        string foreign = Fixture("linux-foreign-pid.txt");
+        string ipv6 = Fixture("linux-ipv6.txt");
+        string none = Fixture("linux-no-listener.txt");
+
+        Assert.Equal([111], OwnedCliCommand.LinuxListenerInodes(own, "", port));
+        IReadOnlyCollection<int> ownOwners = OwnedCliCommand.LinuxListenerOwners(own, "", ["socket:[111]"], port, pid);
+        Assert.Equal([pid], ownOwners);
+        OwnedCliCommand.RequireOnlyPortOwner(ownOwners, pid, OwnedClientCommandLease.ServerRole);
+
+        IReadOnlyCollection<int> mixed = OwnedCliCommand.LinuxListenerOwners(own + foreign, "", ["socket:[111]"], port, pid);
+        Assert.Equal([0, pid], mixed.Order());
+        Assert.Throws<InvalidOperationException>(() =>
+            OwnedCliCommand.RequireOnlyPortOwner(mixed, pid, OwnedClientCommandLease.ServerRole));
+
+        Assert.Equal([333], OwnedCliCommand.LinuxListenerInodes("", ipv6, port));
+        Assert.Equal([pid], OwnedCliCommand.LinuxListenerOwners("", ipv6, ["socket:[333]"], port, pid));
+        Assert.Empty(OwnedCliCommand.LinuxListenerInodes(none, "", port));
+        Assert.Throws<InvalidOperationException>(() =>
+            OwnedCliCommand.RequireOnlyPortOwner([], pid, OwnedClientCommandLease.ServerRole));
+    }
+
+    // A kernel booted with ipv6.disable=1 has no /proc/net/tcp6: no IPv6 listeners, so the IPv4 proof alone decides.
+    // A file-system /proc stand-in (descriptor links to socket inodes) runs on any Unix.
+    [Fact]
+    public void AMissingTcp6TableIsEmptyNotARefusal()
+    {
+        if (OperatingSystem.IsWindows()) return; // The stand-in descriptor is a symbolic link.
+        const int port = 5555, pid = 4242;
+        string proc = Directory.CreateTempSubdirectory("owned-cli-proc-").FullName;
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(proc, "net"));
+            File.WriteAllText(Path.Combine(proc, "net", "tcp"), Fixture("linux-own-pid.txt"));
+            string descriptors = Path.Combine(proc, pid.ToString(System.Globalization.CultureInfo.InvariantCulture), "fd");
+            Directory.CreateDirectory(descriptors);
+            File.CreateSymbolicLink(Path.Combine(descriptors, "3"), "socket:[111]");
+
+            Assert.Equal([pid], OwnedCliCommand.LinuxListenerOwners(port, pid, proc));
+
+            File.WriteAllText(Path.Combine(proc, "net", "tcp6"), Fixture("linux-ipv6.txt")); // Its listener (inode 333) is not this PID's.
+            Assert.Throws<InvalidOperationException>(() =>
+                OwnedCliCommand.RequireOnlyPortOwner(OwnedCliCommand.LinuxListenerOwners(port, pid, proc), pid, OwnedClientCommandLease.ServerRole));
+        }
+        finally { Directory.Delete(proc, recursive: true); }
+    }
+
+    [Fact]
+    public async Task LiveLinuxListenerIsProvedFromProcAndForeignOrMissingListenersAreRefused()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+        var start = new ProcessStartInfo("dotnet") { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true };
+        start.ArgumentList.Add(typeof(Valheim.Testing.ProcessSignalProbe.Marker).Assembly.Location);
+        start.ArgumentList.Add("tcp-listener");
+        await using var child = StandInProcess.Start(start, nameof(LiveLinuxListenerIsProvedFromProcAndForeignOrMissingListenersAreRefused));
+        string? ready = await child.Process.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        if (string.IsNullOrWhiteSpace(ready))
+        {
+            string diagnostic = child.Process.HasExited ? await child.Process.StandardError.ReadToEndAsync() : "child is still running";
+            Assert.Fail("the Linux child listener did not report readiness: " + diagnostic);
+        }
+        string[] fields = ready!.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        Assert.Equal(3, fields.Length);
+        int port = int.Parse(fields[0], System.Globalization.CultureInfo.InvariantCulture);
+        int pid = int.Parse(fields[1], System.Globalization.CultureInfo.InvariantCulture);
+        Assert.Equal(child.Process.Id, pid);
+
+        OwnedCliCommand.RequirePortOwner(port, pid, OwnedClientCommandLease.ServerRole);
+        Assert.Throws<InvalidOperationException>(() =>
+            OwnedCliCommand.RequirePortOwner(port, Environment.ProcessId, OwnedClientCommandLease.ServerRole));
+
+        using var noListener = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+        noListener.Bind(new IPEndPoint(IPAddress.Loopback, 0)); // Holds the port against reuse without listening on it.
+        int missingPort = ((IPEndPoint)noListener.LocalEndPoint!).Port;
+        Assert.Throws<InvalidOperationException>(() =>
+            OwnedCliCommand.RequirePortOwner(missingPort, Environment.ProcessId, OwnedClientCommandLease.ServerRole));
+    }
+
+    [Fact]
+    public void LinuxServerLeaseRequiresARegularCurrentUser0600File()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+        string evidence = Directory.CreateTempSubdirectory("owned-cli-linux-private-").FullName;
+        try
+        {
+            using var process = Process.GetCurrentProcess();
+            var plan = new ServerRunPlan { Pins = new() { ["server.mod"] = new string('c', 32) } };
+            OwnedClientCommandLease.WriteServer(evidence, process.Id,
+                OwnedClientCommandLease.LocalStartFileTimeUtc(process.Id), 5689, evidence, plan);
+            string lease = Path.Combine(evidence, OwnedClientCommandLease.ServerFileName);
+            Assert.Equal(OwnedClientCommandLease.PrivateMode, File.GetUnixFileMode(lease));
+            File.SetUnixFileMode(lease, OwnedClientCommandLease.PrivateMode | UnixFileMode.GroupRead);
+            using var output = new StringWriter(); using var error = new StringWriter();
+            Assert.Equal(3, OwnedCliCommand.Run(["--evidence", evidence, "--role", "server", "--phase", "menu", "--command", "cli_manifest"], output, error));
+            Assert.Empty(output.ToString());
+            Assert.Contains("regular file owned by the current user with mode 0600", error.ToString());
+        }
+        finally { Directory.Delete(evidence, recursive: true); }
+    }
+
+    [Fact]
+    public void LinuxServerRefusesAMissingOrChangedProcessLeaseBeforeConnecting()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+        string evidence = Directory.CreateTempSubdirectory("owned-cli-linux-identity-").FullName;
+        try
+        {
+            using var output = new StringWriter(); using var error = new StringWriter();
+            string[] command = ["--evidence", evidence, "--role", "server", "--phase", "menu", "--command", "cli_manifest"];
+            Assert.Equal(3, OwnedCliCommand.Run(command, output, error));
+            Assert.Contains("owned server identity file", error.ToString());
+
+            using var listener = new TcpListener(IPAddress.Loopback, 0);
+            listener.Start();
+            using var process = Process.GetCurrentProcess();
+            var plan = new ServerRunPlan { Pins = new() { ["server.mod"] = new string('d', 32) } };
+            OwnedClientCommandLease.WriteServer(evidence, process.Id, "1",
+                ((IPEndPoint)listener.LocalEndpoint).Port, evidence, plan);
+            output.GetStringBuilder().Clear(); error.GetStringBuilder().Clear();
+            Assert.Equal(3, OwnedCliCommand.Run(command, output, error));
+            Assert.Empty(output.ToString());
+            Assert.Contains("exact server this run started is no longer running", error.ToString());
+            Assert.False(listener.Pending());
+        }
+        finally { Directory.Delete(evidence, recursive: true); }
+    }
 }
 
 [Trait("Os", "macos")]
@@ -457,7 +876,7 @@ public sealed class OwnedCliCommandMacTests
     {
         using var current = Process.GetCurrentProcess();
         OwnedClientCommandLease.Write(evidence, current.Id,
-            current.StartTime.ToFileTimeUtc().ToString(System.Globalization.CultureInfo.InvariantCulture),
+            OwnedClientCommandLease.LocalStartFileTimeUtc(current.Id),
             new ClientRunPlan { Install = evidence, Port = port, Pins = new() { ["example.mod"] = new string('a', 32) } });
     }
 

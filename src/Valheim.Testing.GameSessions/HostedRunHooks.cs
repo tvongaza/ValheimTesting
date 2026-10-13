@@ -31,6 +31,12 @@ internal interface IHostedRunHooks
     ShippedLoader.Choice? PinnedLoader(string actor, string install, string platform);
     /// <summary>The ValheimCLI set a standalone dedicated server's profile stages (<see cref="PinnedCliBundle.Source"/>), or null when this build carries none.</summary>
     CliBundleSource? CliSet();
+    /// <summary>
+    /// The local process identity used by an owned-command lease: unlike a host's recovery identity, both client and server
+    /// leases use <see cref="OwnedClientCommandLease.LocalStartFileTimeUtc"/>. The host identity is supplied only so no-process
+    /// tests can model the local read without launching a game.
+    /// </summary>
+    string LocalProcessStartFileTimeUtc(int pid, string hostStartIdentity);
 }
 
 /// <summary>The real hosted-run hooks: ssh and local hosts, CLI sockets, the pool's leases, this machine's session.</summary>
@@ -52,4 +58,8 @@ internal sealed class HostedRunHooks : IHostedRunHooks
     public RunCancellation Cancellation(out bool owned) { owned = true; return new RunCancellation(); }
     public ShippedLoader.Choice? PinnedLoader(string actor, string install, string platform) => ShippedLoader.Choose(actor, install, platform);
     public CliBundleSource? CliSet() => PinnedCliBundle.Source();
+    public string LocalProcessStartFileTimeUtc(int pid, string hostStartIdentity)
+    {
+        return OwnedClientCommandLease.LocalStartFileTimeUtc(pid);
+    }
 }

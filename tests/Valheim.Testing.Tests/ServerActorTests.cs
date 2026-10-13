@@ -55,6 +55,40 @@ public sealed class ServerActorTests : IDisposable
         public IGameHost? Host => null;
     }
 
+    // A placement that publishes a local command capability, recording each publication.
+    private sealed class PublishingPlacement(FakeOwnedServer server, string runtime, string world) : IServerPlacement
+    {
+        private readonly FakePlacement _inner = new(server, runtime, world);
+        public List<string> Published { get; } = [];
+        public string RuntimeDirectory => runtime;
+        public string WorldDirectory => world;
+        public ServerPlatform? Platform => null;
+        public IGameHost? Host => null;
+        public ServerBoot Start(int boot, GameLaunch launch, string output, TimeSpan quit, CancellationToken cancellation) => _inner.Start(boot, launch, output, quit, cancellation);
+        public IGameTransport Connect() => server.Connect();
+        public StartupEvents? Events(ServerRunPlan plan) => null;
+        public bool PublishesCommandLease => true;
+        public void PublishCommandLease(string output) => Published.Add("lease");
+        public void PublishVerifiedWorld(string worldUid, string output) => Published.Add("world " + worldUid);
+    }
+
+    // A plan without a worlduid pin reads the verified world from the session state for the world-phase pins. That read is
+    // for an optional capability: when it is refused, the boot still starts, with its lease and without world pins.
+    [Fact] public void ARefusedWorldReadForCommandPinsWarnsAndKeepsTheBootAndItsLease()
+    {
+        if (OperatingSystem.IsMacOS()) return; // This fake runtime is Windows or Linux, which a Mac cannot run.
+        var plan = Plan();
+        plan.Pins = new() { ["test.mod"] = new string('a', 32) };
+        var server = new FakeOwnedServer("test.mod", World); // Its transport refuses the session-state read.
+        var placement = new PublishingPlacement(server, Runtime, World);
+        using var actor = new ServerActor(placement, plan, Output, "test.mod/session", TokenVariable, CancellationToken.None);
+        var game = actor.Start();
+        Assert.Same(game, actor.Game);
+        Assert.Equal(["lease"], placement.Published);
+        actor.Restart();
+        Assert.Equal(["lease", "lease"], placement.Published);
+    }
+
     [Fact] public void EachBootRegistersItsLogsOnceWritesItsRecordsAndGetsTestAccessAgain()
     {
         if (OperatingSystem.IsMacOS()) return; // This fake runtime is Windows or Linux, which a Mac cannot run.

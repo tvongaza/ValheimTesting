@@ -135,6 +135,43 @@ internal sealed class StandInClient : IAsyncDisposable
     }
 }
 
+/// <summary>A directly launched test helper registered with the assembly's stand-in guard before it starts.</summary>
+internal sealed class StandInProcess : IAsyncDisposable
+{
+    private readonly Guid _registration;
+    private int _disposed;
+
+    private StandInProcess(Guid registration, Process process)
+    {
+        _registration = registration;
+        Process = process;
+    }
+
+    public Process Process { get; }
+
+    public static StandInProcess Start(ProcessStartInfo start, string test)
+    {
+        Guid registration = StandInProcessGuard.BeginProcess(test);
+        try
+        {
+            var process = System.Diagnostics.Process.Start(start) ?? throw new IOException("Could not start the stand-in process.");
+            StandInProcessGuard.Started(registration, process);
+            return new StandInProcess(registration, process);
+        }
+        catch
+        {
+            StandInProcessGuard.ReleaseUnstartedProcess(registration);
+            throw;
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) == 0)
+            await StandInProcessGuard.StopAndReleaseProcessAsync(_registration);
+    }
+}
+
 /// <summary>Every real test launch is registered before its mutation, so even a lost start reply remains visible.</summary>
 internal static class StandInProcessGuard
 {
@@ -157,6 +194,13 @@ internal static class StandInProcessGuard
     }
 
     private static readonly ConcurrentDictionary<Guid, Entry> Entries = [];
+    private sealed class DirectEntry(string test)
+    {
+        public string Test { get; } = test;
+        public Process? Process { get; set; }
+        public string? StartIdentity { get; set; }
+    }
+    private static readonly ConcurrentDictionary<Guid, DirectEntry> DirectEntries = [];
     private static readonly TimeSpan CleanupTimeout = TimeSpan.FromSeconds(30);
 
     internal static Guid BeginServer(IGameHost host, GameLaunch launch, string bootDirectory,
@@ -179,6 +223,51 @@ internal static class StandInProcessGuard
 
     internal static void Started(Guid registration, InteractiveClientProcess process) =>
         Entries[registration].Client = process;
+
+    internal static Guid BeginProcess(string test)
+    {
+        var registration = Guid.NewGuid();
+        if (!DirectEntries.TryAdd(registration, new(test)))
+            throw new InvalidOperationException("Could not register a stand-in process launch.");
+        return registration;
+    }
+
+    internal static void Started(Guid registration, Process process)
+    {
+        var entry = DirectEntries[registration];
+        entry.Process = process;
+        entry.StartIdentity = process.StartTime.ToFileTimeUtc().ToString(System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    internal static void ReleaseUnstartedProcess(Guid registration) => DirectEntries.TryRemove(registration, out _);
+
+    internal static async Task StopAndReleaseProcessAsync(Guid registration)
+    {
+        if (!DirectEntries.TryGetValue(registration, out var entry)) return;
+        var process = entry.Process ?? throw new InvalidOperationException($"The stand-in process from {entry.Test} has no identity to stop.");
+        Exception? stopError = null;
+        try
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+                await process.WaitForExitAsync().WaitAsync(CleanupTimeout);
+            }
+        }
+        catch (Exception error) { stopError = error; }
+
+        if (DirectProcessGone(process.Id, entry.StartIdentity!))
+        {
+            DirectEntries.TryRemove(registration, out _);
+            process.Dispose();
+        }
+        else
+        {
+            var stillRunning = new InvalidOperationException($"Stand-in process {process.Id} from {entry.Test} still has its launch identity after cleanup.");
+            stopError = stopError == null ? stillRunning : new AggregateException(stopError, stillRunning);
+        }
+        if (stopError != null) throw stopError;
+    }
 
     internal static async Task CleanupFailedStartAsync(Guid registration)
     {
@@ -236,8 +325,48 @@ internal static class StandInProcessGuard
                 failures.Add($"Stand-in process started by {pair.Value.Test} could not be checked or cleaned: {error.Message}");
             }
         }
+        foreach (var pair in DirectEntries.ToArray())
+        {
+            try
+            {
+                var process = pair.Value.Process;
+                if (process == null)
+                {
+                    DirectEntries.TryRemove(pair.Key, out _);
+                    continue;
+                }
+                if (DirectProcessGone(process.Id, pair.Value.StartIdentity!))
+                {
+                    DirectEntries.TryRemove(pair.Key, out _);
+                    process.Dispose();
+                    continue;
+                }
+                string leak = $"Stand-in process {process.Id} started by {pair.Value.Test} was still running at assembly teardown.";
+                try { await StopAndReleaseProcessAsync(pair.Key); }
+                catch (Exception error) { leak += " Cleanup also failed: " + error.Message; }
+                failures.Add(leak);
+            }
+            catch (Exception error)
+            {
+                failures.Add($"Stand-in process started by {pair.Value.Test} could not be checked or cleaned: {error.Message}");
+            }
+        }
         if (failures.Count != 0)
             throw new InvalidOperationException("Stand-in process leak guard failed:\n" + string.Join("\n", failures));
+    }
+
+    private static bool DirectProcessGone(int pid, string startIdentity)
+    {
+        try
+        {
+            using var current = Process.GetProcessById(pid);
+            if (current.HasExited) return true;
+            return current.StartTime.ToFileTimeUtc().ToString(System.Globalization.CultureInfo.InvariantCulture) != startIdentity;
+        }
+        catch (Exception error) when (error is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception)
+        {
+            return true;
+        }
     }
 
     private static async Task<string?> InspectAndCleanupAsync(Guid registration, Entry entry)

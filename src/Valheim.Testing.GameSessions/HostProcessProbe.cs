@@ -81,12 +81,20 @@ internal static class HostProcessProbe
     /// read it, which leaves a process no recovery ever stops. Never throws: the process runs either way.
     /// </summary>
     public static async Task<string?> CommandLineAsync(IGameHost host, int pid, string startIdentity, TimeSpan timeout)
+        => (await StartedProcessAsync(host, pid, startIdentity, timeout).ConfigureAwait(false))?.CommandLineSha256;
+
+    /// <summary>
+    /// The complete observation used when a just-started process is journalled. A caller which also publishes another
+    /// capability can reuse this result rather than racing a second independent initial probe. Never throws.
+    /// </summary>
+    internal static async Task<ProbedProcess?> StartedProcessAsync(IGameHost host, int pid, string startIdentity, TimeSpan timeout)
     {
         try
         {
             var probed = (await ProbeAsync(host, [(pid, startIdentity)], timeout, settle: true).ConfigureAwait(false))[(pid, startIdentity)];
-            if (probed.State == ProbedState.Same && probed.CommandLineSha256 != null) return probed.CommandLineSha256;
-            Console.Error.WriteLine($"Warning: the command line of process {pid} on {host.Name} could not be read ({probed.State}); no recovery will stop it.");
+            if (probed.State != ProbedState.Same || probed.CommandLineSha256 == null)
+                Console.Error.WriteLine($"Warning: the command line of process {pid} on {host.Name} could not be read ({probed.State}); no recovery will stop it.");
+            return probed;
         }
         catch (Exception error)
         {

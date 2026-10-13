@@ -21,17 +21,21 @@ internal static class ClientFailureEvidence
             try
             {
                 using var process = Process.GetProcessById(owned.Id);
-                string actual = process.StartTime.ToFileTimeUtc().ToString(System.Globalization.CultureInfo.InvariantCulture);
+                // The identity of the process found, running or exited: an exited launch that still matches is reported as
+                // exited with its facts, not as gone (a live-only identity read would make that branch unreachable).
+                string actual = OwnedClientCommandLease.LocalStartFileTimeUtc(process);
                 if (!string.Equals(actual, identity.StartFileTimeUtc, StringComparison.Ordinal))
                     facts["process"] = "not inspected: PID now belongs to a different launch";
                 else
                 {
-                    facts["process"] = process.HasExited ? "exited" : "same owned process";
+                    // The launch's own handle knows an exit first; such a client is described, never screenshotted.
+                    bool exited = owned.HasExited || process.HasExited;
+                    facts["process"] = exited ? "exited" : "same owned process";
                     facts["sessionId"] = Try(() => process.SessionId);
                     facts["windowHandle"] = Try(() => process.MainWindowHandle.ToInt64());
                     facts["windowTitle"] = Try(() => process.MainWindowTitle);
                     facts["responding"] = Try(() => process.Responding);
-                    if (!process.HasExited)
+                    if (!exited)
                     {
                         if (actor != null) facts["screenshot"] = Screenshot(actor, output);
                         else BootstrapStatus(plan, facts);
@@ -40,6 +44,8 @@ internal static class ClientFailureEvidence
             }
             catch (ArgumentException) { facts["process"] = "exited before diagnosis"; }
             catch (InvalidOperationException) { facts["process"] = "exited before diagnosis"; }
+            catch (IOException) { facts["process"] = "exited before diagnosis"; } // Linux: its /proc entry vanished during the read.
+            catch (InvalidDataException) { facts["process"] = "process facts unavailable to this runner"; }
             catch (System.ComponentModel.Win32Exception) { facts["process"] = "process facts unavailable to this runner"; }
 
         Tail(Path.Combine(plan.LoaderRoot, "BepInEx", "LogOutput.log"), Path.Combine(output, "client-failure-bepinex-tail.log"), facts, "bepInExTail");

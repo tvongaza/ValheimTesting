@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Globalization;
 using System.Text.Json;
 using Valheim.Testing.Game;
 
@@ -9,7 +8,7 @@ internal sealed class ForegroundHold : IDisposable
     internal const string FinishUsage = "valheim-test finish --run ID";
     internal static string FinishUsageForRun(string run) =>
         (DetachedSession.ConfiguredRun == run ? "valheim-test detach finish --run ID" : FinishUsage).Replace("ID", run, StringComparison.Ordinal);
-    private sealed record Marker(string Run, string Evidence, int Pid, string Started);
+    private sealed record Marker(string Run, string Evidence, string? ServerEvidence, int Pid, string Started);
 
     private readonly string _marker;
     private readonly string _request;
@@ -21,15 +20,20 @@ internal sealed class ForegroundHold : IDisposable
 
     internal static string DirectoryForThisMachine => Path.Combine(CliBundle.DataRoot, "runs", "holds");
 
-    internal static ForegroundHold Open(string run, string evidence, string? directory = null)
+    internal static ForegroundHold Open(string run, string evidence, string? directory = null, string? serverEvidence = null)
     {
         if (!RunJournal.SafeName(run) || run == "-") throw new ArgumentException("Invalid run ID.", nameof(run));
         evidence = Path.GetFullPath(evidence);
         if (!Directory.Exists(evidence)) throw new DirectoryNotFoundException("Hold evidence does not exist: " + evidence);
+        if (serverEvidence != null)
+        {
+            serverEvidence = Path.GetFullPath(serverEvidence);
+            if (!Directory.Exists(serverEvidence)) throw new DirectoryNotFoundException("Server hold evidence does not exist: " + serverEvidence);
+        }
         directory ??= DetachedSession.ConfiguredControlDirectory ?? DirectoryForThisMachine;
         Directory.CreateDirectory(directory);
         using var process = Process.GetCurrentProcess();
-        var identity = new Marker(run, evidence, process.Id, process.StartTime.ToFileTimeUtc().ToString(CultureInfo.InvariantCulture));
+        var identity = new Marker(run, evidence, serverEvidence, process.Id, OwnedClientCommandLease.LocalStartFileTimeUtc(process));
         string marker = Path.Combine(directory, run + ".json"), request = Path.Combine(directory, run + ".finish");
         if (File.Exists(request)) throw new IOException("A finish request already exists for run " + run + "; inspect the old run before reusing its ID.");
         // A stale marker must be recovered deliberately; a second owner must never overwrite it.
@@ -42,15 +46,25 @@ internal sealed class ForegroundHold : IDisposable
     }
 
     internal static async Task HoldAsync(string run, string evidence, CancellationToken cancellation,
-        IReadOnlyList<(string Name, IOwnedProcess Process)> processes, bool client = true)
+        IReadOnlyList<(string Name, IOwnedProcess Process)> processes, bool client = true, string? serverEvidence = null)
     {
         if (processes.Count == 0) throw new ArgumentException("A hold needs at least one owned process to watch.", nameof(processes));
-        using var hold = Open(run, evidence);
+        using var hold = Open(run, evidence, serverEvidence: serverEvidence);
         Console.WriteLine("HELD run " + run + "; finish from another shell with: " + FinishUsageForRun(run));
-        if (client) Console.WriteLine("Pinned client commands: valheim-test cli --evidence " + evidence + " --phase world --command cli_screenshot");
+        if (client) Console.WriteLine("Pinned client commands: valheim-test cli --evidence " + evidence + " --role client --phase world --command cli_screenshot");
+        if (ServerCommandHint(processes.Any(process => process.Name == "server"), evidence, serverEvidence) is { } serverHint)
+            Console.WriteLine(serverHint);
         Console.Out.Flush();
         try { await hold.WaitAsync(cancellation, processes).ConfigureAwait(false); }
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
+    }
+
+    internal static string? ServerCommandHint(bool hasServer, string evidence, string? serverEvidence)
+    {
+        string commandEvidence = serverEvidence ?? evidence;
+        // An SSH-hosted server is watched by this runner too, but its remote process cannot publish a lease on this machine.
+        if (!hasServer || !File.Exists(Path.Combine(commandEvidence, OwnedClientCommandLease.ServerFileName))) return null;
+        return "Pinned server commands: valheim-test cli --evidence " + commandEvidence + " --role server --phase world --command cli_manifest";
     }
 
     internal static int FinishCommand(string[] args, TextWriter? output = null, TextWriter? error = null, string? directory = null)
@@ -137,17 +151,19 @@ internal sealed class ForegroundHold : IDisposable
             ?? throw new InvalidDataException("The hold marker is empty.");
         if (identity.Run != run || identity.Pid <= 0 || identity.Started.Length == 0)
             throw new InvalidDataException("The hold marker has an invalid owner.");
-        try
-        {
-            using var process = Process.GetProcessById(identity.Pid);
-            if (process.HasExited || process.StartTime.ToFileTimeUtc().ToString(CultureInfo.InvariantCulture) != identity.Started)
-                throw new InvalidOperationException("The holding runner is gone; use valheim-test env status and env recover for its run.");
-        }
-        catch (Exception error) when (error is ArgumentException or System.ComponentModel.Win32Exception)
-        {
+        if (!ExactOwner(identity.Pid, identity.Started))
             throw new InvalidOperationException("The holding runner is gone; use valheim-test env status and env recover for its run.");
-        }
         using var request = new FileStream(Path.Combine(directory, run + ".finish"), FileMode.CreateNew, FileAccess.Write, FileShare.None);
+    }
+
+    // Whether the hold's recorded runner is still that exact live process. finish runs in another shell, so the marker and
+    // this check use the one cross-process identity rule (OwnedClientCommandLease.LocalStartFileTimeUtc); a detached run's
+    // readiness record carries the same marker identity.
+    internal static bool ExactOwner(int pid, string started)
+    {
+        try { return OwnedClientCommandLease.LocalStartFileTimeUtc(pid) == started; }
+        catch (Exception error) when (error is ArgumentException or InvalidOperationException or IOException or System.ComponentModel.Win32Exception)
+        { return false; } // No such process, it exited, or (Linux) its /proc entry vanished during the read.
     }
 
     // Recovery already proved the run has no live owner or owned game. Retire only the marker
@@ -163,19 +179,12 @@ internal sealed class ForegroundHold : IDisposable
             ?? throw new InvalidDataException("The hold marker is empty.");
         if (identity.Run != run || identity.Pid <= 0 || identity.Started.Length == 0)
             throw new InvalidDataException("The hold marker has an invalid owner.");
-        bool ownerAlive = false;
-        try
-        {
-            using var process = Process.GetProcessById(identity.Pid);
-            if (!process.HasExited)
-                ownerAlive = process.StartTime.ToFileTimeUtc().ToString(CultureInfo.InvariantCulture) == identity.Started;
-        }
-        catch (Exception error) when (error is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception) { }
-        if (ownerAlive) throw new InvalidOperationException("The holding runner is still alive; finish it instead of recovering it.");
+        if (ExactOwner(identity.Pid, identity.Started)) throw new InvalidOperationException("The holding runner is still alive; finish it instead of recovering it.");
         if (File.ReadAllText(marker) != source) throw new IOException("The hold marker changed during recovery.");
         // env recover has already proved the owned game is gone. The hold's world/menu pins and
         // process pointer are live-session capabilities, not lasting evidence; command records stay.
         OwnedClientCommandLease.Retire(identity.Evidence);
+        if (identity.ServerEvidence != null) OwnedClientCommandLease.RetireServer(identity.ServerEvidence);
         File.Delete(Path.Combine(directory, run + ".finish"));
         File.Delete(marker);
     }

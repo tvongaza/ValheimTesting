@@ -7,10 +7,10 @@ using Microsoft.Win32.SafeHandles;
 using Valheim.Testing.Game;
 using Valheim.Testing.GameSessions;
 
-/// <summary>One strictly pinned, recorded command to the exact client a concurrent one-shot run owns.</summary>
+/// <summary>One strictly pinned, recorded command to the exact local client or server a concurrent run owns.</summary>
 internal static class OwnedCliCommand
 {
-    internal const string Usage = "valheim-test cli --evidence RUN_EVIDENCE --phase menu|world --command TEXT [--timeout-seconds 1..15] " +
+    internal const string Usage = "valheim-test cli --evidence RUN_EVIDENCE [--role client|server] --phase menu|world --command TEXT [--timeout-seconds 1..15] " +
         "(or --expect-strict FILE in place of --phase)";
 
     internal static int Run(string[] args, TextWriter? output = null, TextWriter? error = null)
@@ -20,43 +20,43 @@ internal static class OwnedCliCommand
         var values = new Dictionary<string, string>(StringComparer.Ordinal);
         for (int i = 0; i < args.Length; i += 2)
         {
-            if (args[i] is not ("--evidence" or "--phase" or "--expect-strict" or "--command" or "--timeout-seconds") ||
+            if (args[i] is not ("--evidence" or "--role" or "--phase" or "--expect-strict" or "--command" or "--timeout-seconds") ||
                 !values.TryAdd(args[i], args[i + 1]) || string.IsNullOrWhiteSpace(args[i + 1]))
             { error.WriteLine("Usage: " + Usage); return 2; }
         }
         if (!values.ContainsKey("--evidence") || !values.ContainsKey("--command") ||
             values.ContainsKey("--phase") == values.ContainsKey("--expect-strict") ||
+            values.GetValueOrDefault("--role") is { } roleValue && roleValue is not (OwnedClientCommandLease.ClientRole or OwnedClientCommandLease.ServerRole) ||
             values.GetValueOrDefault("--phase") is { } phase && phase is not ("menu" or "world") ||
             values["--command"].IndexOfAny(['\0', '\r', '\n']) >= 0 ||
             values.TryGetValue("--timeout-seconds", out string? timeoutText) &&
                 (!int.TryParse(timeoutText, NumberStyles.None, CultureInfo.InvariantCulture, out int seconds) || seconds is < 1 or > 15))
         { error.WriteLine("Usage: " + Usage); return 2; }
-        if (OperatingSystem.IsLinux())
-        { error.WriteLine("REFUSED: Linux has no owned client; held dedicated-server passthrough waits for #788 part 2."); return 3; }
-        if (!OperatingSystem.IsWindows() && !OperatingSystem.IsMacOS())
-        { error.WriteLine("REFUSED: this owned-client passthrough supports Windows and macOS clients."); return 3; }
+        if (!OperatingSystem.IsWindows() && !OperatingSystem.IsMacOS() && !OperatingSystem.IsLinux())
+        { error.WriteLine("REFUSED: this owned-game passthrough supports Windows, macOS and Linux."); return 3; }
         try
         {
             string evidence = Path.GetFullPath(values["--evidence"]);
-            string leaseFile = Path.Combine(evidence, OwnedClientCommandLease.FileName);
-            string leaseJson = OperatingSystem.IsMacOS() ? ReadPrivateMacLease(leaseFile) : File.ReadAllText(leaseFile);
+            string role = values.TryGetValue("--role", out string? chosen) ? chosen : DefaultRole(evidence);
+            string leaseFile = Path.Combine(evidence, OwnedClientCommandLease.LeaseFile(role));
+            string leaseJson = OperatingSystem.IsWindows() ? File.ReadAllText(leaseFile) : ReadPrivateUnixLease(leaseFile, role);
             var lease = JsonSerializer.Deserialize<OwnedClientCommandLease>(leaseJson)
-                ?? throw new InvalidDataException("The owned client identity file is empty.");
+                ?? throw new InvalidDataException($"The owned {role} identity file is empty.");
             if (lease.Pid <= 0 || lease.Port is < 1 or > 65535 || lease.StartFileTimeUtc.Length == 0 ||
-                !Path.IsPathFullyQualified(lease.Install))
-                throw new InvalidDataException("The owned client identity file is incomplete.");
+                !Path.IsPathFullyQualified(lease.Install) || lease.Role != role)
+                throw new InvalidDataException($"The owned {role} identity file is incomplete or names another role.");
             using var process = Process.GetProcessById(lease.Pid);
             if (!IsExactProcess(process, lease))
-                throw new InvalidOperationException("The exact client this run started is no longer running; a reused PID is never contacted.");
-            RequirePortOwner(lease.Port, lease.Pid);
+                throw new InvalidOperationException($"The exact {role} this run started is no longer running; a reused PID is never contacted.");
+            RequirePortOwner(lease.Port, lease.Pid, role);
             string pins = values.TryGetValue("--expect-strict", out string? supplied) ? supplied :
-                Path.Combine(evidence, values["--phase"] == "menu" ? OwnedClientCommandLease.MenuPins : OwnedClientCommandLease.WorldPins);
+                Path.Combine(evidence, OwnedClientCommandLease.PhasePins(role, values["--phase"]));
             string expected = StrictExpectations.Load(pins);
             // A separate invocation is outside the runner's connection log. Open its own create-new record before
             // any pin check or game command, so a mutating diagnostic cannot succeed without private evidence.
             string commandLog = Path.Combine(evidence, "owned-cli-command-" + Guid.NewGuid().ToString("N") + ".jsonl");
             var recording = new RecordingTransport(new CliTransport("127.0.0.1", lease.Port), commandLog);
-            using var actor = new GameActor("owned diagnostic client", recording)
+            using var actor = new GameActor("owned diagnostic " + role, recording)
             { CommandTimeout = TimeSpan.FromSeconds(values.TryGetValue("--timeout-seconds", out string? limit) ? int.Parse(limit, CultureInfo.InvariantCulture) : 5) };
             actor.VerifyEnvironment(expected);
             if (ScreenshotSupersize(values["--command"]) is { } supersize)
@@ -78,7 +78,7 @@ internal static class OwnedCliCommand
             error.WriteLine("REFUSED: ValheimCLI completed but did not accept the command: " + (reply.Refusal ?? reply.ErrorCode ?? reply.Message ?? "no accepted reply"));
             return 1;
         }
-        catch (Exception failure) when (failure is IOException or ArgumentException or InvalidOperationException or JsonException or TimeoutException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
+        catch (Exception failure) when (failure is IOException or InvalidDataException or ArgumentException or InvalidOperationException or JsonException or TimeoutException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
         { error.WriteLine("REFUSED: " + failure.Message); return 3; }
     }
 
@@ -95,13 +95,24 @@ internal static class OwnedCliCommand
             "chooses the destination and writes the image to private run evidence.");
     }
 
+    // Without --role: the one role whose lease this evidence holds; a server-only hold needs no --role. Evidence holding
+    // both is ambiguous and refused; evidence holding neither reads the client lease, whose absence is the refusal.
+    internal static string DefaultRole(string evidence)
+    {
+        bool client = File.Exists(Path.Combine(evidence, OwnedClientCommandLease.FileName));
+        bool server = File.Exists(Path.Combine(evidence, OwnedClientCommandLease.ServerFileName));
+        if (client && server)
+            throw new InvalidOperationException("This evidence holds both an owned client and server; choose --role client or --role server.");
+        return server ? OwnedClientCommandLease.ServerRole : OwnedClientCommandLease.ClientRole;
+    }
+
     internal static bool IsExactProcess(Process process, OwnedClientCommandLease lease) =>
         process.Id == lease.Pid && !process.HasExited && string.Equals(
-            process.StartTime.ToFileTimeUtc().ToString(CultureInfo.InvariantCulture), lease.StartFileTimeUtc, StringComparison.Ordinal);
+            OwnedClientCommandLease.LocalStartFileTimeUtc(process.Id), lease.StartFileTimeUtc, StringComparison.Ordinal);
 
     // Exact process identity alone is insufficient if a different game has taken over the recorded CLI port.
     // Each supported OS has one owner proof behind this method.
-    internal static void RequirePortOwner(int port, int pid)
+    internal static void RequirePortOwner(int port, int pid, string role = OwnedClientCommandLease.ClientRole)
     {
         IEnumerable<int> owners;
         if (OperatingSystem.IsWindows())
@@ -111,25 +122,26 @@ internal static class OwnedCliCommand
             owners = new[] { AfInet, AfInet6 }.SelectMany(family => WindowsListenerOwners(family, port));
         }
         else if (OperatingSystem.IsMacOS()) owners = MacListenerOwners(port);
-        else throw new PlatformNotSupportedException("Linux port-owner proof waits for #788 part 2.");
+        else if (OperatingSystem.IsLinux()) owners = LinuxListenerOwners(port, pid);
+        else throw new PlatformNotSupportedException("TCP listener ownership is supported on Windows, macOS and Linux.");
 
-        RequireOnlyPortOwner(owners, pid);
+        RequireOnlyPortOwner(owners, pid, role);
     }
 
-    internal static void RequireOnlyPortOwner(IEnumerable<int> owners, int pid)
+    internal static void RequireOnlyPortOwner(IEnumerable<int> owners, int pid, string role = OwnedClientCommandLease.ClientRole)
     {
         bool found = false;
         foreach (int owner in owners)
         {
             found = true;
             if (owner != pid)
-                throw new InvalidOperationException("The recorded ValheimCLI port is not listening in this exact owned client; no command was sent.");
+                throw new InvalidOperationException($"The recorded ValheimCLI port is not listening in this exact owned {role}; no command was sent.");
         }
         if (!found)
-            throw new InvalidOperationException("The recorded ValheimCLI port is not listening in this exact owned client; no command was sent.");
+            throw new InvalidOperationException($"The recorded ValheimCLI port is not listening in this exact owned {role}; no command was sent.");
     }
 
-    private const string PrivateLeaseMessage = "The owned client identity file must be a regular file owned by the current user with mode 0600.";
+    private static string PrivateLeaseMessage(string role) => $"The owned {role} identity file must be a regular file owned by the current user with mode 0600.";
     private const int MacOpenNonBlock = 0x00000004;
     private const int MacOpenNoFollow = 0x00000100;
     private const int MacOpenCloseOnExec = 0x01000000;
@@ -138,22 +150,29 @@ internal static class OwnedCliCommand
 
     // Open first with O_NOFOLLOW, then validate the descriptor. The later JSON read therefore cannot be redirected
     // through a symlink or switched to a different path after validation.
-    private static string ReadPrivateMacLease(string path)
+    private static string ReadPrivateUnixLease(string path, string role)
+    {
+        if (OperatingSystem.IsMacOS()) return ReadPrivateMacLease(path, role);
+        if (OperatingSystem.IsLinux()) return ReadPrivateLinuxLease(path, role);
+        throw new PlatformNotSupportedException("Private Unix lease reads are supported on macOS and Linux.");
+    }
+
+    private static string ReadPrivateMacLease(string path, string role)
     {
         int descriptor = MacOpen(path, MacOpenNonBlock | MacOpenNoFollow | MacOpenCloseOnExec);
         if (descriptor < 0)
         {
             int error = Marshal.GetLastPInvokeError();
-            if (error == 2) throw new FileNotFoundException("Could not find the owned client identity file: " + path, path);
-            throw new InvalidOperationException(PrivateLeaseMessage, new System.ComponentModel.Win32Exception(error));
+            if (error == 2) throw new FileNotFoundException($"Could not find the owned {role} identity file: " + path, path);
+            throw new InvalidOperationException(PrivateLeaseMessage(role), new System.ComponentModel.Win32Exception(error));
         }
         var handle = new SafeFileHandle((IntPtr)descriptor, ownsHandle: true);
         try
         {
             if (MacFStatCurrent(descriptor, out MacFileStatus status) != 0)
-                throw new InvalidOperationException("Could not inspect the owned client identity file.",
+                throw new InvalidOperationException($"Could not inspect the owned {role} identity file.",
                     new System.ComponentModel.Win32Exception(Marshal.GetLastPInvokeError()));
-            RequirePrivateLease(status.Mode, status.Owner, MacEffectiveUserId());
+            RequirePrivateLease(status.Mode, status.Owner, MacEffectiveUserId(), role);
             using var stream = new FileStream(handle, FileAccess.Read);
             handle = null!; // FileStream owns the descriptor from here.
             using var reader = new StreamReader(stream);
@@ -162,11 +181,11 @@ internal static class OwnedCliCommand
         finally { handle?.Dispose(); }
     }
 
-    internal static void RequirePrivateLease(ushort rawMode, uint owner, uint currentUser)
+    internal static void RequirePrivateLease(ushort rawMode, uint owner, uint currentUser, string role = OwnedClientCommandLease.ClientRole)
     {
         var permissions = (UnixFileMode)(rawMode & 0x0fff);
         if ((rawMode & MacFileTypeMask) != MacRegularFile || owner != currentUser || permissions != OwnedClientCommandLease.PrivateMode)
-            throw new InvalidOperationException(PrivateLeaseMessage);
+            throw new InvalidOperationException(PrivateLeaseMessage(role));
     }
 
     // Darwin's public stat layout is shared by arm64 and x64. Only the stable prefix through st_uid is read.
@@ -195,6 +214,78 @@ internal static class OwnedCliCommand
 
     [DllImport("libSystem.B.dylib", EntryPoint = "geteuid")]
     private static extern uint MacEffectiveUserId();
+
+    private const int LinuxOpenNonBlock = 0x00000800;
+    private const int LinuxOpenCloseOnExec = 0x00080000;
+
+    // Linux does not give arm64 and x64 the same open(2) flag values or struct stat layout. These are the glibc
+    // layouts through st_uid; _STAT_VER is 1 on x64 and 0 on arm64 for the pre-2.33 __fxstat compatibility entry point.
+    internal static (int OpenNoFollow, int ModeOffset, int OwnerOffset, int StatVersion) LinuxLeaseAbi(Architecture architecture) => architecture switch
+    {
+        Architecture.X64 => (0x00020000, 24, 28, 1),
+        Architecture.Arm64 => (0x00008000, 16, 24, 0),
+        _ => throw new InvalidOperationException("Linux private lease inspection supports x64 and arm64 processes."),
+    };
+
+    private static string ReadPrivateLinuxLease(string path, string role)
+    {
+        var abi = LinuxLeaseAbi(RuntimeInformation.ProcessArchitecture);
+        int descriptor = LinuxOpen(path, LinuxOpenNonBlock | abi.OpenNoFollow | LinuxOpenCloseOnExec);
+        if (descriptor < 0)
+        {
+            int error = Marshal.GetLastPInvokeError();
+            if (error == 2) throw new FileNotFoundException($"Could not find the owned {role} identity file: " + path, path);
+            throw new InvalidOperationException(PrivateLeaseMessage(role), new System.ComponentModel.Win32Exception(error));
+        }
+        var handle = new SafeFileHandle((IntPtr)descriptor, ownsHandle: true);
+        IntPtr status = Marshal.AllocHGlobal(256);
+        try
+        {
+            if (LinuxFStatCurrent(descriptor, status, abi.StatVersion) != 0)
+                throw new InvalidOperationException($"Could not inspect the owned {role} identity file.",
+                    new System.ComponentModel.Win32Exception(Marshal.GetLastPInvokeError()));
+            RequirePrivateLease((ushort)Marshal.ReadInt32(status, abi.ModeOffset),
+                unchecked((uint)Marshal.ReadInt32(status, abi.OwnerOffset)), LinuxEffectiveUserId(), role);
+            using var stream = new FileStream(handle, FileAccess.Read);
+            handle = null!; // FileStream owns the descriptor from here.
+            using var reader = new StreamReader(stream);
+            return reader.ReadToEnd();
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(status);
+            handle?.Dispose();
+        }
+    }
+
+    [DllImport("libc", EntryPoint = "open", SetLastError = true)]
+    private static extern int LinuxOpen([MarshalAs(UnmanagedType.LPUTF8Str)] string path, int flags);
+
+    [DllImport("libc", EntryPoint = "fstat", SetLastError = true)]
+    private static extern int LinuxFStat(int descriptor, IntPtr status);
+
+    [DllImport("libc", EntryPoint = "__fxstat", SetLastError = true)]
+    private static extern int LinuxFxStat(int version, int descriptor, IntPtr status);
+
+    private static int LinuxFStatCurrent(int descriptor, IntPtr status, int statVersion) =>
+        LinuxFStatWithFallback(() => LinuxFStat(descriptor, status), () => LinuxFxStat(statVersion, descriptor, status));
+
+    internal static int LinuxFStatWithFallback(Func<int> current, Func<int> compatibility)
+    {
+        try { return current(); }
+        catch (EntryPointNotFoundException)
+        {
+            try { return compatibility(); }
+            catch (EntryPointNotFoundException error)
+            {
+                throw new InvalidOperationException("This Linux libc exports neither fstat nor its __fxstat compatibility entry point; " +
+                    "the private owned-game lease cannot be inspected.", error);
+            }
+        }
+    }
+
+    [DllImport("libc", EntryPoint = "geteuid")]
+    private static extern uint LinuxEffectiveUserId();
 
     // netstat reads the kernel TCP table rather than one user's descriptors, so it can prove that no listener
     // in either address family belongs to another account. Keep the process bounded like every host observation.
@@ -250,6 +341,59 @@ internal static class OwnedCliCommand
     private static readonly Regex MacListenerOwner = new(
         @"^\d+\s+\d+\s+\d+\s+\d+\s+.*:(?<pid>\d+)\s+[0-9a-fA-F]{5}\s",
         RegexOptions.CultureInvariant);
+
+    // Linux exposes the complete listener table in /proc/net, with each socket's inode. Prove every listener for the
+    // port is one of the leased process's own descriptors; no other process's descriptor tree needs to be read.
+    // procRoot is a test seam for a kernel's /proc (production: /proc).
+    internal static IReadOnlyCollection<int> LinuxListenerOwners(int port, int pid, string procRoot = "/proc")
+    {
+        string tcp = File.ReadAllText(Path.Combine(procRoot, "net", "tcp"));
+        // A kernel booted with ipv6.disable=1 has no tcp6 table: no IPv6 listeners. Only absence counts as empty; an
+        // unreadable table still refuses, since it could hide a foreign listener.
+        string tcp6;
+        try { tcp6 = File.ReadAllText(Path.Combine(procRoot, "net", "tcp6")); }
+        catch (FileNotFoundException) { tcp6 = ""; }
+        var targets = new List<string>();
+        foreach (string descriptor in Directory.EnumerateFileSystemEntries(Path.Combine(procRoot, pid.ToString(CultureInfo.InvariantCulture), "fd")))
+        {
+            try
+            {
+                if (new FileInfo(descriptor).LinkTarget is { } target) targets.Add(target);
+            }
+            catch (FileNotFoundException) { } // An unrelated descriptor closed while the process was inspected.
+            catch (DirectoryNotFoundException) { }
+        }
+        return LinuxListenerOwners(tcp, tcp6, targets, port, pid);
+    }
+
+    internal static IReadOnlyCollection<int> LinuxListenerOwners(string tcp, string tcp6,
+        IEnumerable<string> ownedDescriptorTargets, int port, int pid)
+    {
+        var owned = ownedDescriptorTargets.Select(target => LinuxSocketTarget.Match(target))
+            .Where(match => match.Success)
+            .Select(match => long.Parse(match.Groups["inode"].ValueSpan, NumberStyles.None, CultureInfo.InvariantCulture))
+            .ToHashSet();
+        return LinuxListenerInodes(tcp, tcp6, port).Select(inode => owned.Contains(inode) ? pid : 0).ToArray();
+    }
+
+    internal static IReadOnlyCollection<long> LinuxListenerInodes(string tcp, string tcp6, int port)
+    {
+        var inodes = new HashSet<long>();
+        foreach (string line in new[] { tcp, tcp6 }.SelectMany(table => table.Split('\n', StringSplitOptions.RemoveEmptyEntries)))
+        {
+            string[] fields = line.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+            if (fields.Length < 4 || fields[3] != "0A") continue; // TCP_LISTEN
+            int separator = fields[1].LastIndexOf(':');
+            if (separator < 0 || !int.TryParse(fields[1].AsSpan(separator + 1), NumberStyles.AllowHexSpecifier,
+                CultureInfo.InvariantCulture, out int rowPort) || rowPort != port) continue;
+            if (fields.Length < 10 || !long.TryParse(fields[9], NumberStyles.None, CultureInfo.InvariantCulture, out long inode) || inode <= 0)
+                throw new InvalidOperationException("Could not read a socket inode from Linux /proc/net's TCP listener result.");
+            inodes.Add(inode);
+        }
+        return inodes;
+    }
+
+    private static readonly Regex LinuxSocketTarget = new(@"^socket:\[(?<inode>\d+)\]$", RegexOptions.CultureInvariant);
 
     private const int AfInet = 2;
     private const int AfInet6 = 23;

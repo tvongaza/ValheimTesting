@@ -18,6 +18,205 @@ public sealed partial class HostedServerRunTests : IDisposable
 
     private FakeServerHost NewHost(FakeOwnedServer? server = null) => new("linux-box", Mirror, server);
     private FakeOwnedServer NewServer() => new("test.mod", saveRoot: RunDirectory + "/world");
+
+    private (FakeOwnedServer Server, FakeServerHost Host, string Plan, ResolvedEnvironment Profile) LocalFixture()
+    {
+        bool windows = LocalServerMachine.Windows;
+        string saveRoot = windows ? @"C:\vt\runs\run-test\world" : RunDirectory + "/world";
+        var server = new FakeOwnedServer("test.mod", saveRoot);
+        var host = new FakeServerHost("linux-box", Mirror, server, windows: windows);
+        var (planPath, profilePath) = Write(host, hostPlatform: windows ? "windows" : "linux", hostShell: windows ? "pwsh" : "bash");
+        var profile = TestEnvironment.Read(profilePath);
+        profile.Hosts["linux-box"].Kind = "local";
+        return (server, host, planPath, profile);
+    }
+
+    private static string ServerCapability(string output, string name) => Path.Combine(output, name);
+
+    [Fact]
+    public async Task ALocalServerPublishesThroughRealStartAndRestartAndRetiresAtTeardown()
+    {
+        var fixture = LocalFixture();
+        using var machine = LocalServerMachine.Use();
+        string leasePath = ServerCapability(Output, OwnedClientCommandLease.ServerFileName);
+        string menuPins = ServerCapability(Output, OwnedClientCommandLease.ServerMenuPins);
+        string worldPins = ServerCapability(Output, OwnedClientCommandLease.ServerWorldPins);
+
+        int code = await PinnedServerRun.MainAsync(fixture.Profile, ["run", fixture.Plan, Output], Options(fixture.Host, fixture.Server, run =>
+        {
+            var first = JsonSerializer.Deserialize<OwnedClientCommandLease>(File.ReadAllText(leasePath));
+            Assert.NotNull(first);
+            Assert.Equal((OwnedClientCommandLease.ServerRole, 1, "9001", 5577, run.RuntimeDirectory),
+                (first.Role, first.Pid, first.StartFileTimeUtc, first.Port, first.Install));
+            Assert.DoesNotContain("worlduid", File.ReadAllText(menuPins));
+            Assert.Contains("worlduid=1", File.ReadAllText(worldPins));
+            if (!OperatingSystem.IsWindows())
+            {
+                Assert.Equal(OwnedClientCommandLease.PrivateMode, File.GetUnixFileMode(leasePath));
+                Assert.Equal(OwnedClientCommandLease.PrivateMode, File.GetUnixFileMode(menuPins));
+                Assert.Equal(OwnedClientCommandLease.PrivateMode, File.GetUnixFileMode(worldPins));
+            }
+
+            run.Session.Restart();
+            var second = JsonSerializer.Deserialize<OwnedClientCommandLease>(File.ReadAllText(leasePath));
+            Assert.NotNull(second);
+            Assert.Equal((2, "9002"), (second.Pid, second.StartFileTimeUtc));
+            Assert.Contains("worlduid=1", File.ReadAllText(worldPins));
+            return Task.CompletedTask;
+        }));
+
+        Assert.Equal(0, code);
+        Assert.False(File.Exists(leasePath));
+        Assert.False(File.Exists(menuPins));
+        Assert.False(File.Exists(worldPins));
+    }
+
+    // The lease is published only after Start returned: a separate cli during the read-only bootstrap and strict
+    // verification finds no lease and sends nothing, and a boot that fails verification never publishes one.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ACommandBeforeStrictVerificationIsRefusedBecauseNoServerLeaseExistsYet(bool verificationFails)
+    {
+        var fixture = LocalFixture();
+        fixture.Server.RefusePins = verificationFails;
+        fixture.Server.PinGate = new ManualResetEventSlim(false);
+        using var machine = LocalServerMachine.Use();
+        bool scenarioRan = false;
+        Task<int> running = PinnedServerRun.MainAsync(fixture.Profile, ["run", fixture.Plan, Output], Options(fixture.Host, fixture.Server, _ =>
+        {
+            scenarioRan = true;
+            Assert.True(File.Exists(ServerCapability(Output, OwnedClientCommandLease.ServerFileName)));
+            Assert.True(File.Exists(ServerCapability(Output, OwnedClientCommandLease.ServerWorldPins)));
+            return Task.CompletedTask;
+        }));
+        try
+        {
+            Assert.True(fixture.Server.PinEntered.Wait(TimeSpan.FromSeconds(10)), "the fake server never reached strict startup verification");
+            foreach (string name in new[] { OwnedClientCommandLease.ServerFileName, OwnedClientCommandLease.ServerMenuPins, OwnedClientCommandLease.ServerWorldPins })
+                Assert.False(File.Exists(ServerCapability(Output, name)), name + " was published before strict verification passed");
+            using var output = new StringWriter(); using var error = new StringWriter();
+            Assert.Equal(3, OwnedCliCommand.Run(["--evidence", Output, "--role", "server", "--phase", "menu", "--command", "cli_manifest"], output, error));
+            Assert.Empty(output.ToString());
+            Assert.Contains(OwnedClientCommandLease.ServerFileName, error.ToString()); // Not found: each OS words it differently.
+            Assert.Empty(Directory.GetFiles(Output, "owned-cli-command-*.jsonl"));
+        }
+        finally { fixture.Server.PinGate.Set(); }
+
+        Assert.Equal(verificationFails ? 1 : 0, await running);
+        Assert.Equal(!verificationFails, scenarioRan);
+        foreach (string name in new[] { OwnedClientCommandLease.ServerFileName, OwnedClientCommandLease.ServerMenuPins, OwnedClientCommandLease.ServerWorldPins })
+            Assert.False(File.Exists(ServerCapability(Output, name)));
+    }
+
+    // The lease is optional: a lease or world-pin file that cannot be written or retired warns and publishes less, and
+    // never fails a healthy boot. A directory in the file's place makes every write and delete of it fail.
+    [Theory]
+    [InlineData(OwnedClientCommandLease.ServerFileName)]
+    [InlineData(OwnedClientCommandLease.ServerWorldPins)]
+    public async Task AnUnwritableServerCapabilityWarnsAndNeverFailsTheBoot(string blocked)
+    {
+        var fixture = LocalFixture();
+        string blocker = ServerCapability(Output, blocked);
+        fixture.Server.OnLaunch = _ => Directory.CreateDirectory(blocker);
+        using var machine = LocalServerMachine.Use();
+        bool scenarioRan = false;
+        int code = await PinnedServerRun.MainAsync(fixture.Profile, ["run", fixture.Plan, Output], Options(fixture.Host, fixture.Server, _ =>
+        {
+            scenarioRan = true;
+            Assert.True(Directory.Exists(blocker));
+            // Nothing is published: a lease that cannot be written, or a new boot's lease beside old world pins that cannot
+            // be removed. A separate cli therefore refuses.
+            Assert.False(File.Exists(ServerCapability(Output, OwnedClientCommandLease.ServerFileName)));
+            Assert.False(File.Exists(ServerCapability(Output, OwnedClientCommandLease.ServerMenuPins)));
+            Directory.Delete(blocker); // Teardown's own retirement is not under test here.
+            return Task.CompletedTask;
+        }));
+
+        Assert.True(scenarioRan);
+        Assert.Equal(0, code);
+    }
+
+    // World pins that cannot be written after the lease was published warn and leave world-phase commands refused.
+    [Fact]
+    public void UnwritableWorldPinsAfterAPublishedLeaseWarnAndDoNotThrow()
+    {
+        var fixture = LocalFixture();
+        using var machine = LocalServerMachine.Use();
+        Directory.CreateDirectory(Output);
+        var plan = ServerRunPlan.Read<ServerRunPlan>(fixture.Plan);
+        IServerPlacement hosted = HostedServerRun.Create(fixture.Profile, plan, "test", new FakeRunHooks { Host = _ => fixture.Host, RunId = RunId });
+        OwnedClientCommandLease.WriteServer(Output, 41, "100", 5577, Output, plan);
+        string blocker = ServerCapability(Output, OwnedClientCommandLease.ServerWorldPins);
+        Directory.CreateDirectory(blocker);
+
+        hosted.PublishVerifiedWorld("1", Output);
+
+        Assert.True(Directory.Exists(blocker));
+        Assert.True(File.Exists(ServerCapability(Output, OwnedClientCommandLease.ServerFileName)));
+    }
+
+    [Fact]
+    public async Task CancellationRetiresTheLocalServersPublishedCapabilities()
+    {
+        var fixture = LocalFixture();
+        using var cancellation = new RunCancellation();
+        using var machine = LocalServerMachine.Use();
+        await PinnedServerRun.MainAsync(fixture.Profile, ["run", fixture.Plan, Output], Options(fixture.Host, fixture.Server, _ =>
+        {
+            Assert.True(File.Exists(ServerCapability(Output, OwnedClientCommandLease.ServerFileName)));
+            Assert.True(File.Exists(ServerCapability(Output, OwnedClientCommandLease.ServerWorldPins)));
+            cancellation.SignalCancel();
+            return Task.CompletedTask;
+        }, cancellation: cancellation));
+
+        Assert.True(cancellation.Token.IsCancellationRequested);
+        Assert.False(File.Exists(ServerCapability(Output, OwnedClientCommandLease.ServerFileName)));
+        Assert.False(File.Exists(ServerCapability(Output, OwnedClientCommandLease.ServerMenuPins)));
+        Assert.False(File.Exists(ServerCapability(Output, OwnedClientCommandLease.ServerWorldPins)));
+    }
+
+    [Fact]
+    public void AReusedOrGoneLaunchIdentityPublishesNoServerLease()
+    {
+        var fixture = LocalFixture();
+        using var machine = LocalServerMachine.Use();
+        Directory.CreateDirectory(Output);
+        var plan = ServerRunPlan.Read<ServerRunPlan>(fixture.Plan);
+        var hosted = HostedServerRun.Create(fixture.Profile, plan, "test",
+            new FakeRunHooks { Host = _ => fixture.Host, RunId = RunId });
+        fixture.Host.Running(41, "200");
+
+        foreach (string name in new[] { OwnedClientCommandLease.ServerFileName, OwnedClientCommandLease.ServerMenuPins, OwnedClientCommandLease.ServerWorldPins })
+            File.WriteAllText(ServerCapability(Output, name), "stale capability");
+        hosted.WriteServerCommandLease(Output, 41, "100", new(41, ProbedState.Reused, "200", null));
+        Assert.False(File.Exists(ServerCapability(Output, OwnedClientCommandLease.ServerFileName)));
+        Assert.False(File.Exists(ServerCapability(Output, OwnedClientCommandLease.ServerMenuPins)));
+        Assert.False(File.Exists(ServerCapability(Output, OwnedClientCommandLease.ServerWorldPins)));
+        hosted.WriteServerCommandLease(Output, 42, "100", new(42, ProbedState.Gone, null, null));
+        Assert.False(File.Exists(ServerCapability(Output, OwnedClientCommandLease.ServerFileName)));
+    }
+
+    [Theory]
+    [InlineData((int)ProbedState.Starting)]
+    [InlineData((int)ProbedState.Unreadable)]
+    public void AnInconclusivePublicationProbeDoesNotFailTheHealthyBootOrLeaveAnOldLease(int stateValue)
+    {
+        var state = (ProbedState)stateValue;
+        var fixture = LocalFixture();
+        using var machine = LocalServerMachine.Use();
+        Directory.CreateDirectory(Output);
+        var hosted = HostedServerRun.Create(fixture.Profile, ServerRunPlan.Read<ServerRunPlan>(fixture.Plan), "test",
+            new FakeRunHooks { Host = _ => fixture.Host, RunId = RunId });
+        File.WriteAllText(ServerCapability(Output, OwnedClientCommandLease.ServerFileName), "stale capability");
+        File.WriteAllText(ServerCapability(Output, OwnedClientCommandLease.ServerMenuPins), "stale pins");
+
+        hosted.WriteServerCommandLease(Output, 41, "100", new(41, state, "100", null));
+
+        Assert.False(File.Exists(ServerCapability(Output, OwnedClientCommandLease.ServerFileName)));
+        Assert.False(File.Exists(ServerCapability(Output, OwnedClientCommandLease.ServerMenuPins)));
+    }
+
     [Fact] public void RuntimeExplicitIsSerializedWithAResolvedRole()
     {
         var assumed = new GameRole { Runtime = "/runs", RuntimeExplicit = false };
@@ -579,7 +778,12 @@ public sealed partial class HostedServerRunTests : IDisposable
         int code = await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["run", plan, Output], Options(host, server, run =>
         {
             seenHost = run.ServerHost; seenRuntime = run.RuntimeDirectory;
+            Assert.False(File.Exists(ServerCapability(Output, OwnedClientCommandLease.ServerFileName)));
+            Assert.False(File.Exists(ServerCapability(Output, OwnedClientCommandLease.ServerMenuPins)));
+            Assert.False(File.Exists(ServerCapability(Output, OwnedClientCommandLease.ServerWorldPins)));
             run.Session.Restart(); // A second boot: its own boot directory and log, and a stop of only the first.
+            Assert.False(File.Exists(ServerCapability(Output, OwnedClientCommandLease.ServerFileName)));
+            Assert.False(File.Exists(ServerCapability(Output, OwnedClientCommandLease.ServerWorldPins)));
             return Task.CompletedTask;
         }));
         Assert.Equal(0, code);
