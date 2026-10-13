@@ -93,7 +93,6 @@ internal static class DesktopClientSession
                         beforeLaunch: processIntended).GetAwaiter().GetResult();
                     try
                     {
-                        OwnedClientCommandLease.Write(output, process.Id, process.StartIdentity, plan);
                         processStarted?.Invoke(process);
                     }
                     catch
@@ -101,7 +100,7 @@ internal static class DesktopClientSession
                         try { process.Stop(TimeSpan.FromSeconds(15)); } finally { process.Dispose(); }
                         throw;
                     }
-                    return new HostedClientProcess(process, host, plan.Install, tunnel, keptDirectory);
+                    return new LocalHostedClientProcess(process, host, plan.Install, tunnel, keptDirectory);
                 },
                 () => new CliTransport(tunnel.Address, tunnel.LocalPort),
                 async (left, token) =>
@@ -127,9 +126,8 @@ internal static class DesktopClientSession
         catch (Exception error)
         {
             foreach (var kept in ClientSession.KeptLogs(error)) logs.Add(kept);
-            try { OwnedClientCommandLease.Retire(output); }
-            catch (Exception cleanup) when (cleanup is IOException or UnauthorizedAccessException)
-            { error.Data["owned-cli-lease-cleanup"] = cleanup.Message; }
+            // ClientSession alone owns a lease it publishes after verifying the menu pins. Failures before
+            // that point have no lease to retire, and failures after it are retired by ClientSession.
             tunnel.Dispose();
             throw;
         }

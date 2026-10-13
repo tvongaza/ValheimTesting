@@ -20,6 +20,7 @@ public sealed class ClientSession : IDisposable, IWorldPins
     private readonly IOwnedProcess? _process;
     private readonly Action<IOwnedProcess, GameActor?, string>? _failureEvidence;
     private readonly string? _output;
+    private readonly bool _ownsCommandLease;
     private bool _failureCaptured;
     private readonly object _stopping = new();
     private bool _disposed;
@@ -55,6 +56,7 @@ public sealed class ClientSession : IDisposable, IWorldPins
     {
         Actor = actor; _process = process; Logs = logs ?? []; Architecture = architecture;
         _output = output; _failureEvidence = failureEvidence;
+        _ownsCommandLease = process is ILocalClientProcessIdentity;
         actor.WorldPins = this;
     }
 
@@ -72,14 +74,14 @@ public sealed class ClientSession : IDisposable, IWorldPins
     // world pin after the session has entered and reverified the fixture's world on this actor.
     void IWorldPins.Publish(ClientRunPlan plan, string worldUid)
     {
-        if (_process == null || _output == null || !File.Exists(Path.Combine(_output, OwnedClientCommandLease.FileName))) return;
+        if (!_ownsCommandLease || _output == null || !File.Exists(Path.Combine(_output, OwnedClientCommandLease.FileName))) return;
         Actor.VerifyEnvironment(plan.WorldExpectations(worldUid)); // Retracts first; the pins are written only once this holds.
         OwnedClientCommandLease.WriteVerifiedWorld(_output, plan, worldUid);
     }
 
     void IWorldPins.Retract()
     {
-        if (_output != null) OwnedClientCommandLease.LeaveWorld(_output);
+        if (_ownsCommandLease && _output != null) OwnedClientCommandLease.LeaveWorld(_output);
     }
 
     private static void TryCaptureFailure(Action<IOwnedProcess, GameActor?, string>? capture, IOwnedProcess process, GameActor? actor, string output)
@@ -340,7 +342,7 @@ public sealed class ClientSession : IDisposable, IWorldPins
             pinsVerified = actor.Pinned;
             // The local one-shot start path opens this session directly, without DesktopClientSession. Make its
             // exact process and strict menu/world pins available to the separate valheim-test cli invocation too.
-            if (OperatingSystem.IsWindows() && pinsVerified && process is IClientProcessIdentity identity)
+            if (pinsVerified && process is ILocalClientProcessIdentity identity)
                 OwnedClientCommandLease.Write(output, process.Id, identity.StartFileTimeUtc, plan);
             return new ClientSession(actor, process, logs, architecture, output, failureEvidence).Using(account);
         }
@@ -355,9 +357,12 @@ public sealed class ClientSession : IDisposable, IWorldPins
             finally
             {
                 process.Dispose();
-                try { OwnedClientCommandLease.Retire(output); }
-                catch (Exception cleanup) when (cleanup is IOException or UnauthorizedAccessException)
-                { error.Data["owned-cli-lease-cleanup"] = cleanup.Message; }
+                if (process is ILocalClientProcessIdentity)
+                {
+                    try { OwnedClientCommandLease.Retire(output); }
+                    catch (Exception cleanup) when (cleanup is IOException or UnauthorizedAccessException)
+                    { error.Data["owned-cli-lease-cleanup"] = cleanup.Message; }
+                }
             }
             throw;
         }
@@ -405,7 +410,7 @@ public sealed class ClientSession : IDisposable, IWorldPins
                     try { Stopped = _process.StopCleanly(QuitTimeout, TimeSpan.FromSeconds(15)); }
                     finally { _process.Dispose(); }
             }
-            finally { if (_output != null) OwnedClientCommandLease.Retire(_output); }
+            finally { if (_ownsCommandLease && _output != null) OwnedClientCommandLease.Retire(_output); }
         }
     }
 

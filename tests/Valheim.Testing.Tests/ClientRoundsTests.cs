@@ -21,7 +21,7 @@ public sealed class ClientRoundsTests : IDisposable
     private string Worlds => Path.Combine(Save, "worlds_local");
     private readonly List<ScriptedTransport> _servers = [];
     private ScriptedTransport _client;
-    private readonly FakeOwnedProcess _process = new(77);
+    private readonly LocalFakeOwnedProcess _process = new(77);
     private readonly PreflightInstall _install = PreflightInstall.Create(); // An owned hosting client's install that passes the preflight.
     private bool _saves = true;
     private int _restarts, _opens;

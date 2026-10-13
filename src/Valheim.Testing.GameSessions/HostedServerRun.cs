@@ -713,7 +713,7 @@ internal sealed class ClientAccount(string client, SteamAccountHold hold, IGameH
 /// clean stop asks it to quit first),
 /// keeps its BepInEx log and Player.log in its launch directory, fetches that directory here and closes its CLI tunnel.
 /// </summary>
-internal sealed class HostedClientProcess(InteractiveClientProcess process, IGameHost host, string install, CliTunnel tunnel, string evidence,
+internal class HostedClientProcess(InteractiveClientProcess process, IGameHost host, string install, CliTunnel tunnel, string evidence,
     Action? afterStopped = null) : IOwnedProcess, IClientProcessIdentity
 {
     private bool _kept;
@@ -755,6 +755,11 @@ internal sealed class HostedClientProcess(InteractiveClientProcess process, IGam
         finally { tunnel.Dispose(); }
     }
 }
+
+// A desktop task is hosted through the same scripts as a remote client, but its process is on this machine.
+// The distinct identity type is the one rule ClientSession uses when deciding whether it may publish a local lease.
+internal sealed class LocalHostedClientProcess(InteractiveClientProcess process, IGameHost host, string install, CliTunnel tunnel, string evidence,
+    Action? afterStopped = null) : HostedClientProcess(process, host, install, tunnel, evidence, afterStopped), ILocalClientProcessIdentity;
 
 // Scripts for a hosted client's logs. Values arrive as variables; each ends with its verdict.
 internal static class HostedClientScripts
