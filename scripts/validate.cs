@@ -3,6 +3,7 @@
 //   dotnet run scripts/validate.cs
 //   dotnet run scripts/validate.cs -- --skip-ci-shell   CI only: shell integration runs in its own job
 //   dotnet run scripts/validate.cs -- --only-ci-shell   CI only: run that shard with the same data-root guard
+//   dotnet run scripts/validate.cs -- --ci-toolkit-tests CI only (Windows, macOS): the whole non-shell toolkit suite
 //   dotnet run scripts/validate.cs -- --ci-main-tests  CI only (Windows, macOS): toolkit tests excluding this OS's measured slow methods
 //   dotnet run scripts/validate.cs -- --ci-timed 1|2|3 CI only (Windows, macOS): one balanced slow-method shard of this OS
 //   dotnet run scripts/validate.cs -- --ci-build-only  CI only (Windows, macOS): packaging and other test layers
@@ -30,7 +31,7 @@
 // VT_VALIDATE_HEARTBEAT_SECONDS=N (the macOS CI job sets 60; #736 investigation) adds a "heartbeat:" line every N seconds that names the
 // running command and the machine's processes, free disk and, on macOS, free memory level.
 //
-// --split is the OS-aware split of a pull request's tests (#735), decided in SplitFilter and nowhere else. A test class carries at
+// --split is the OS-aware split of a pull request's tests (#735), decided in CiSplitFilter and nowhere else. A test class carries at
 // most one [Trait("Os", ...)]: "neutral" runs on Linux only, "windows" on Windows, "unix" on Linux and macOS, "macos" on macOS; a
 // class without one is OS-sensitive and runs on every OS. Without --split (pushes to main, manual dispatches, local validation)
 // every OS runs every test. OsSplitTests guards which classes may be neutral (CONTRIBUTING.md states the rule).
@@ -48,6 +49,7 @@ bool split = invocation.Split;
 string[] mode = invocation.Mode;
 bool skipCiShell = invocation.SkipCiShell;
 bool onlyCiShell = invocation.OnlyCiShell;
+bool ciToolkitTests = invocation.CiToolkitTests;
 bool ciMainTests = invocation.CiMainTests;
 bool ciBuildOnly = invocation.CiBuildOnly;
 bool testProjectTest = invocation.TestProjectTest;
@@ -56,7 +58,9 @@ bool testProject = invocation.TestProject;
 int ciTimed = invocation.CiTimed;
 string root = testProject ? mode[1] : FindRoot();
 string workingDirectory = testProject ? Path.GetDirectoryName(mode[2])! : root;
-string? splitFilter = split ? SplitFilter() : null;
+string operatingSystem = OperatingSystem.IsWindows() ? "Windows" : OperatingSystem.IsMacOS() ? "macOS" : OperatingSystem.IsLinux() ? "Linux" : "";
+CiSplitFilter? splitSelection = split ? CiSplitFilter.For(operatingSystem) : null;
+string? splitFilter = splitSelection?.Expression;
 // A one-project run writes beside its caller's choice, never over another validation's results.
 string results = testProject ? mode[3] : Path.Combine(root, "artifacts", "validate");
 Directory.CreateDirectory(results);
@@ -101,7 +105,7 @@ if (onlyCiShell)
 // "macOS"; an OS that does not name the method found it cheap). On an OS, the timed methods are those with seconds there: every one
 // appears in exactly one of that OS's timed shards, balanced by that OS's seconds, and ci-main-tests excludes exactly that list.
 using var timingDocument = JsonDocument.Parse(File.ReadAllText(Path.Combine(root, "scripts", "ci-test-timings.json")));
-string timingOs = OperatingSystem.IsWindows() ? "Windows" : OperatingSystem.IsMacOS() ? "macOS" : "";
+string timingOs = operatingSystem is "Windows" or "macOS" ? operatingSystem : "";
 var manifest = timingDocument.RootElement.EnumerateArray()
     .Select(item => (Name: item.GetProperty("Name").GetString() ?? "",
         Seconds: item.GetProperty("Seconds").EnumerateObject().ToDictionary(os => os.Name, os => os.Value.GetDouble()))).ToArray();
@@ -110,21 +114,11 @@ if (manifest.Length == 0 || manifest.Any(method => method.Seconds.Count == 0 ||
     !method.Name.Contains('.') || !System.Text.RegularExpressions.Regex.IsMatch(method.Name, @"^[A-Za-z_][A-Za-z_0-9.]*$")) ||
     manifest.Select(method => method.Name).Distinct(StringComparer.Ordinal).Count() != manifest.Length)
     throw new InvalidOperationException("CI test timing manifest has an invalid or duplicate method.");
-if ((ciTimed != 0 || ciMainTests) && timingOs == "") throw new PlatformNotSupportedException("--ci-main-tests and --ci-timed know Windows and macOS only.");
+if ((ciTimed != 0 || ciMainTests || ciToolkitTests) && timingOs == "")
+    throw new PlatformNotSupportedException("--ci-toolkit-tests, --ci-main-tests and --ci-timed know Windows and macOS only.");
 var timedMethods = manifest.Where(method => method.Seconds.ContainsKey(timingOs))
-    .Select(method => new TimedMethod(method.Name, method.Seconds[timingOs])).ToArray();
-var timedShards = timedMethods.GroupBy(method => method.Name[..method.Name.LastIndexOf('.')])
-    .SelectMany(group =>
-    {
-        double[] loads = new double[ValidationInvocation.TimedShardCount];
-        return group.OrderByDescending(method => method.Seconds).ThenBy(method => method.Name, StringComparer.Ordinal)
-            .Select(method =>
-            {
-                int shard = Array.IndexOf(loads, loads.Min());
-                loads[shard] += method.Seconds;
-                return (method.Name, Shard: shard + 1);
-            });
-    }).ToArray();
+    .Select(method => new CiTimedMethod(method.Name, method.Seconds[timingOs])).ToArray();
+var timedShards = CiToolkitShards.Assign(timedMethods, ValidationInvocation.TimedShardCount);
 if (ciTimed != 0)
 {
     var selected = timedShards.Where(method => method.Shard == ciTimed).Select(method => method.Name).ToArray();
@@ -136,15 +130,18 @@ if (ciTimed != 0)
     return 0;
 }
 
-// CI runs the slower local-shell integration tests in their own three-OS job. Plain local validation still runs all tests.
-if (ciMainTests)
+// A pull request's macOS toolkit share runs in one job (#777). It uses the ci-main path with an empty timed exclusion
+// list, so it is the union of ci-main and every timed shard by construction. --split then limits it to macOS's classes.
+if (ciToolkitTests || ciMainTests)
 {
-    Test("tests/Valheim.Testing.Tests/Valheim.Testing.Tests.csproj", "--filter",
-        "Category!=CiShell" + string.Concat(timedMethods.Select(method => "&FullyQualifiedName!=" + method.Name)),
+    CiToolkitFilter selection = CiToolkitShards.Filter(invocation, timedMethods);
+    Test("tests/Valheim.Testing.Tests/Valheim.Testing.Tests.csproj", "--filter", selection.Expression,
         "--", "RunConfiguration.TreatNoTestsAsError=true");
-    Note("CI main toolkit tests passed; the data-root guard found no changes.");
+    Note(ciToolkitTests ? "CI whole toolkit share passed; the data-root guard found no changes."
+        : "CI main toolkit tests passed; the data-root guard found no changes.");
     return 0;
 }
+// CI runs the slower local-shell integration tests in their own three-OS job. Plain local validation still runs all tests.
 if (!ciBuildOnly)
 {
     if (skipCiShell) Test("tests/Valheim.Testing.Tests/Valheim.Testing.Tests.csproj", "--filter", "Category!=CiShell");
@@ -291,13 +288,6 @@ string[] Split(string project, string[] extra)
         : settings < 0 ? [.. extra, "--filter", splitFilter] : [.. extra[..settings], "--filter", splitFilter, .. extra[settings..]];
     return selection.Contains(noTestsFail) ? selection : selection.Contains("--") ? [.. selection, noTestsFail] : [.. selection, "--", noTestsFail];
 }
-
-// The one owner of the split (#735): which Os trait values this OS leaves out. A class without the trait runs everywhere.
-static string SplitFilter() =>
-    OperatingSystem.IsWindows() ? "Os!=neutral&Os!=unix&Os!=macos"
-    : OperatingSystem.IsMacOS() ? "Os!=neutral&Os!=windows"
-    : OperatingSystem.IsLinux() ? "Os!=windows&Os!=macos"
-    : throw new PlatformNotSupportedException("--split knows Windows, macOS and Linux only.");
 
 void BuildScript(string script) => Run("dotnet", "build", script);
 
@@ -567,5 +557,3 @@ static double LimitSeconds(string variable, double seconds) =>
         ? double.TryParse(text, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double value) && value > 0
             ? value : throw new InvalidOperationException($"{variable} must be a positive number of seconds, not '{text}'.")
         : seconds;
-
-file sealed record TimedMethod(string Name, double Seconds);

@@ -5,13 +5,14 @@ internal sealed record ValidationInvocation(
     bool Split,
     bool SkipCiShell,
     bool OnlyCiShell,
+    bool CiToolkitTests,
     bool CiMainTests,
     bool CiBuildOnly,
     bool TestProjectTest,
     bool TestProjectTarget,
     int CiTimed)
 {
-    public const string Usage = "usage: dotnet run scripts/validate.cs [--skip-ci-shell|--only-ci-shell|--ci-main-tests|--ci-timed 1|2|3|--ci-build-only|--test-project ROOT PROJECT RESULTS [FILTER|--target TARGET [ARGUMENTS]]] [--split]; --split may appear anywhere";
+    public const string Usage = "usage: dotnet run scripts/validate.cs [--skip-ci-shell|--only-ci-shell|--ci-toolkit-tests|--ci-main-tests|--ci-timed 1|2|3|--ci-build-only|--test-project ROOT PROJECT RESULTS [FILTER|--target TARGET [ARGUMENTS]]] [--split]; --split may appear anywhere";
     public const int TimedShardCount = 3;
 
     public bool TestProject => TestProjectTest || TestProjectTarget;
@@ -23,6 +24,7 @@ internal sealed record ValidationInvocation(
         string[] mode = arguments.Where(argument => argument != "--split").ToArray();
         bool skipCiShell = mode.SequenceEqual(["--skip-ci-shell"]);
         bool onlyCiShell = mode.SequenceEqual(["--only-ci-shell"]);
+        bool ciToolkitTests = mode.SequenceEqual(["--ci-toolkit-tests"]);
         bool ciMainTests = mode.SequenceEqual(["--ci-main-tests"]);
         bool ciBuildOnly = mode.SequenceEqual(["--ci-build-only"]);
         bool testProjectTest = mode is ["--test-project", _, _, _] ||
@@ -31,14 +33,62 @@ internal sealed record ValidationInvocation(
         bool testProject = testProjectTest || testProjectTarget;
         int ciTimed = mode is ["--ci-timed", var shardNumber] && int.TryParse(shardNumber, out int shardIndex) &&
             shardIndex >= 1 && shardIndex <= TimedShardCount ? shardIndex : 0;
-        if ((mode.Length != 0 && !skipCiShell && !onlyCiShell && !ciMainTests && !ciBuildOnly && !testProject && ciTimed == 0) ||
+        if ((mode.Length != 0 && !skipCiShell && !onlyCiShell && !ciToolkitTests && !ciMainTests && !ciBuildOnly && !testProject && ciTimed == 0) ||
             splitCount > 1 || split && testProjectTarget)
             throw new ArgumentException(Usage);
         // A one-project run names its repository and paths absolutely: a file-based app's working directory is the SDK's choice (#766).
         if (testProject && (mode.Skip(1).Take(3).Any(path => !Path.IsPathFullyQualified(path)) || !File.Exists(Path.Combine(mode[1], "cli-dependency.json"))))
             throw new ArgumentException(Usage + "; --test-project needs three absolute paths, and ROOT holds cli-dependency.json");
-        return new(mode, split, skipCiShell, onlyCiShell, ciMainTests, ciBuildOnly, testProjectTest, testProjectTarget, ciTimed);
+        return new(mode, split, skipCiShell, onlyCiShell, ciToolkitTests, ciMainTests, ciBuildOnly, testProjectTest, testProjectTarget, ciTimed);
     }
+}
+
+internal sealed record CiTimedMethod(string Name, double Seconds);
+
+internal sealed record CiSplitFilter(string[] ExcludedTraits)
+{
+    public string Expression => string.Join('&', ExcludedTraits.Select(value => "Os!=" + value));
+
+    public bool Includes(string? osTrait) => osTrait == null || !ExcludedTraits.Contains(osTrait, StringComparer.Ordinal);
+
+    public static CiSplitFilter For(string operatingSystem) => operatingSystem switch
+    {
+        "Windows" => new(["neutral", "unix", "macos"]),
+        "macOS" => new(["neutral", "windows"]),
+        "Linux" => new(["windows", "macos"]),
+        _ => throw new PlatformNotSupportedException("--split knows Windows, macOS and Linux only."),
+    };
+}
+
+internal sealed record CiToolkitFilter(string[] ExcludedMethods)
+{
+    public string Expression => "Category!=CiShell" + string.Concat(ExcludedMethods.Select(name => "&FullyQualifiedName!=" + name));
+
+    public bool Includes(string method, bool ciShell) => !ciShell && !ExcludedMethods.Contains(method, StringComparer.Ordinal);
+}
+
+internal static class CiToolkitShards
+{
+    public static CiToolkitFilter Filter(ValidationInvocation invocation, IEnumerable<CiTimedMethod> timedMethods)
+    {
+        if (!invocation.CiToolkitTests && !invocation.CiMainTests)
+            throw new ArgumentException("A toolkit filter needs --ci-toolkit-tests or --ci-main-tests.", nameof(invocation));
+        return new((invocation.CiToolkitTests ? Enumerable.Empty<string>() : timedMethods.Select(method => method.Name)).ToArray());
+    }
+
+    public static (string Name, int Shard)[] Assign(IEnumerable<CiTimedMethod> methods, int shardCount) => methods
+        .GroupBy(method => method.Name[..method.Name.LastIndexOf('.')])
+        .SelectMany(group =>
+        {
+            double[] loads = new double[shardCount];
+            return group.OrderByDescending(method => method.Seconds).ThenBy(method => method.Name, StringComparer.Ordinal)
+                .Select(method =>
+                {
+                    int shard = Array.IndexOf(loads, loads.Min());
+                    loads[shard] += method.Seconds;
+                    return (method.Name, Shard: shard + 1);
+                });
+        }).ToArray();
 }
 
 internal static class ValidationLimitReports

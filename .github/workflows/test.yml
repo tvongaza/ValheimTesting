@@ -139,22 +139,16 @@ jobs:
   toolkit:
     name: toolkit tests (${{ matrix.os }}, ${{ matrix.shard }})
     # The normal toolkit suite and packaging were serial in validate. The measured slow methods of scripts/ci-test-timings.json also
-    # held xUnit's same-class queue. On Windows and macOS, separate jobs keep every case while shortening the path: validate.cs
-    # owns what each shard selects (the main shard and the N timed ones, per OS), this matrix only starts them.
+    # held xUnit's same-class queue. Main and dispatch use separate Windows and macOS jobs to shorten the path; a PR combines
+    # macOS's share in one job. validate.cs owns every selection, and this matrix only chooses which selections the event starts.
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest]
+        # Windows keeps four jobs. The one event choice for toolkit jobs (#777) adds one whole macOS job on a PR,
+        # or the four macOS shards on main and dispatch; every included row names a complete standalone job.
+        os: [windows-latest]
         shard: [main, timed-1, timed-2, timed-3]
-        include:
-          - shard: main
-            args: --ci-main-tests
-          - shard: timed-1
-            args: --ci-timed 1
-          - shard: timed-2
-            args: --ci-timed 2
-          - shard: timed-3
-            args: --ci-timed 3
+        include: ${{ fromJSON(github.event_name == 'pull_request' && '[{"os":"macos-latest","shard":"whole"}]' || '[{"os":"macos-latest","shard":"main"},{"os":"macos-latest","shard":"timed-1"},{"os":"macos-latest","shard":"timed-2"},{"os":"macos-latest","shard":"timed-3"}]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     env:
@@ -182,7 +176,7 @@ jobs:
       - name: Run toolkit shard
         # One test command: its 10-minute hard limit (validate.cs, #719) plus the data-root guard and the transcript.
         timeout-minutes: 12
-        run: dotnet run scripts/validate.cs -- ${{ matrix.args }} ${{ env.VT_SPLIT_ARGUMENT }}
+        run: dotnet run scripts/validate.cs -- ${{ matrix.shard == 'whole' && '--ci-toolkit-tests' || matrix.shard == 'main' && '--ci-main-tests' || matrix.shard == 'timed-1' && '--ci-timed 1' || matrix.shard == 'timed-2' && '--ci-timed 2' || matrix.shard == 'timed-3' && '--ci-timed 3' || '--no-such-shard' }} ${{ env.VT_SPLIT_ARGUMENT }}
         env:
           # A manual dispatch keeps each shard's TRX timings, to refresh ci-test-timings.json (the union is the whole suite).
           VT_CI_PROFILE: ${{ github.event_name == 'workflow_dispatch' && '1' || '' }}
@@ -533,7 +527,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        # PRs already exercise the Mono net48 leg on Ubuntu; main and dispatch retain the macOS runner check (#777).
+        os: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-latest","windows-latest"]' || '["ubuntu-latest","macos-latest","windows-latest"]') }}
     runs-on: ${{ matrix.os }}
     # Four separately bounded validate.cs calls plus Mono/setup time; any one has time to print its hard-limit evidence.
     timeout-minutes: 75

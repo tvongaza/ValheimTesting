@@ -110,11 +110,25 @@ public sealed class ValidationLimitsTests : IClassFixture<ValidationLimitsTests.
     {
         string root = FixtureProjects.RepositoryRoot();
         string results = _probe.Results("invalid");
-        foreach (string[] arguments in new[] { new[] { "--split", "--ci-main-tests" }, new[] { "--ci-main-tests", "--split" } })
+        foreach (string[] arguments in new[]
+        {
+            new[] { "--split", "--ci-main-tests" }, new[] { "--ci-main-tests", "--split" },
+        })
         {
             ValidationInvocation parsed = ValidationInvocation.Parse(arguments);
             Assert.True(parsed.Split);
             Assert.True(parsed.CiMainTests);
+            Assert.False(parsed.CiToolkitTests);
+        }
+        foreach (string[] arguments in new[]
+        {
+            new[] { "--split", "--ci-toolkit-tests" }, new[] { "--ci-toolkit-tests", "--split" },
+        })
+        {
+            ValidationInvocation parsed = ValidationInvocation.Parse(arguments);
+            Assert.True(parsed.Split);
+            Assert.True(parsed.CiToolkitTests);
+            Assert.False(parsed.CiMainTests);
         }
         string[][] invalid =
         [
