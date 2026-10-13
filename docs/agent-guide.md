@@ -26,12 +26,7 @@ For reusable synthetic ground and multi-zone height/paint state, read [Test terr
    For a load check from otherwise unmodded game installs, [NativeSmoke](packages/Valheim.Testing.NativeSmoke.md#a-server-side-mod-server-load) accepts a reviewed loader package and a coherent ValheimCLI bundle. A server and clean client use separately pinned loader packages. These options are in this checkout's candidate tool until its next release; the currently published tool may not have them.
 3. For framework development, bootstrap the exact ValheimCLI dependency, then run local validation:
 
-   ```sh
-   sh scripts/validate.sh  # macOS/Linux: preflight, CLI bootstrap and full validation
-   # Windows: the two commands in CONTRIBUTING.md
-   ```
-
-   The Windows commands are in [CONTRIBUTING.md](../CONTRIBUTING.md#set-up-and-validate-locally); they are written out there only.
+   The two commands (bootstrap, then validate) are the same on every OS and are written out only in [CONTRIBUTING.md](../CONTRIBUTING.md#set-up-and-validate-locally).
 
    For a public API or reference change, also run `dotnet tool restore` and `dotnet run scripts/api-docs.cs`, which
    checks the rendered pages for machine-local paths. A pull request changes no package version, pin or public-api list
@@ -39,7 +34,7 @@ For reusable synthetic ground and multi-zone height/paint state, read [Test terr
    A new public Game type is an operation, an operation's input, or a result shape marked `[ResultShape]` (any data type
    an operation returns; versioned with any JSON it is written to); the check refuses anything else ([CONTRIBUTING.md](../CONTRIBUTING.md)).
 
-   The platform bootstrap entrypoint checks both NuGet caches before the SDK restores the C# script, and prints the locations it uses. It moves an unwritable cache to an owned folder under `artifacts/nuget-bootstrap/`; `--check-caches` checks this without building or downloading anything. A blocked SDK file-based app directory is separate (see [AGENTS.md](../AGENTS.md)). This needs no game, Steam or test machine. For a mod checkout, use released packages directly, or restore candidates from a local feed. The [first mod test](../examples/ModWithTests/README.md) restores its pure packages from NuGet.org and needs no ValheimCLI bootstrap; it includes a GitHub Actions workflow for a mod repository. Package versions differ deliberately; follow the setup table rather than setting all packages to the same preview.
+   In an agent sandbox, configure it once first: [Running in an agent sandbox](../AGENTS.md#running-in-an-agent-sandbox). This needs no game, Steam or test machine. For a mod checkout, use released packages directly, or restore candidates from a local feed. The [first mod test](../examples/ModWithTests/README.md) restores its pure packages from NuGet.org and needs no ValheimCLI bootstrap; it includes a GitHub Actions workflow for a mod repository. Package versions differ deliberately; follow the setup table rather than setting all packages to the same preview.
 4. If the task is satisfied by local tests, stop there. Otherwise prepare a bounded native test plan with explicit independent expectations and a negative control where useful. Do not invent a whole new runner for a check an example already performs.
 
 ## Before an authorized native run

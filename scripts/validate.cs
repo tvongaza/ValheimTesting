@@ -7,8 +7,7 @@
 //   dotnet run scripts/validate.cs -- --ci-timed 1|2|3 CI only (Windows, macOS): one balanced slow-method shard of this OS
 //   dotnet run scripts/validate.cs -- --ci-build-only  CI only (Windows, macOS): packaging and other test layers
 //   dotnet run scripts/validate.cs -- --limits-probe PROJECT RESULTS [FILTER]  tests of validate.cs's test commands only: one command
-//   ... --split  with any mode above but --restricted-sandbox: CI pull requests: this OS's share of the toolkit tests (#735, below)
-//   sh scripts/validate.sh --restricted-sandbox  Selected no-host tests only; exits 4 (incomplete)
+//   ... --split  with any mode above: CI pull requests: this OS's share of the toolkit tests (#735, below)
 //
 // Runs the library tests, compiles the adapter source package against reference stubs, builds every example, tool and script, runs
 // the FullLifecycle example's and the native acceptance suite's tests against scripted fakes,
@@ -37,8 +36,6 @@
 // leases, runs and extracted bundles of the user running validation): tests use temporary folders (#411). Each command is
 // followed by a comparison with the folder as validation found it, and the first command that changed it fails, naming what.
 using System.Diagnostics;
-using System.Net;
-using System.Net.Sockets;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Xml.Linq;
@@ -50,13 +47,12 @@ bool skipCiShell = mode.SequenceEqual(["--skip-ci-shell"]);
 bool onlyCiShell = mode.SequenceEqual(["--only-ci-shell"]);
 bool ciMainTests = mode.SequenceEqual(["--ci-main-tests"]);
 bool ciBuildOnly = mode.SequenceEqual(["--ci-build-only"]);
-bool restrictedSandbox = mode.SequenceEqual(["--restricted-sandbox"]);
 bool limitsProbe = mode is ["--limits-probe", _, _] or ["--limits-probe", _, _, _];
 const int TimedShardCount = 3; // the timed shards of --ci-timed; the workflow's toolkit matrix lists the same N
 int ciTimed = mode is ["--ci-timed", var shardNumber] && int.TryParse(shardNumber, out int shardIndex) && shardIndex >= 1 && shardIndex <= TimedShardCount ? shardIndex : 0;
-if ((mode.Length != 0 && !skipCiShell && !onlyCiShell && !ciMainTests && !ciBuildOnly && !restrictedSandbox && !limitsProbe && ciTimed == 0) ||
-    args.Count(argument => argument == "--split") > 1 || (split && restrictedSandbox))
-    throw new ArgumentException("usage: dotnet run scripts/validate.cs [--skip-ci-shell|--only-ci-shell|--ci-main-tests|--ci-timed 1|2|3|--ci-build-only|--limits-probe PROJECT RESULTS [FILTER]] [--split] | --restricted-sandbox");
+if ((mode.Length != 0 && !skipCiShell && !onlyCiShell && !ciMainTests && !ciBuildOnly && !limitsProbe && ciTimed == 0) ||
+    args.Count(argument => argument == "--split") > 1)
+    throw new ArgumentException("usage: dotnet run scripts/validate.cs [--skip-ci-shell|--only-ci-shell|--ci-main-tests|--ci-timed 1|2|3|--ci-build-only|--limits-probe PROJECT RESULTS [FILTER]] [--split]");
 string? splitFilter = split ? SplitFilter() : null;
 // A probe writes beside its caller's choice, never over the results of the validation that runs the probing test.
 string results = limitsProbe ? Path.GetFullPath(mode[2]) : Path.Combine(root, "artifacts", "validate");
@@ -87,33 +83,6 @@ if (limitsProbe)
 {
     Test(mode[1], mode.Length == 4 ? ["--filter", mode[3]] : []);
     return 0;
-}
-
-if (restrictedSandbox)
-{
-    Note("RESTRICTED SANDBOX: running only selected no-host tests. This cannot establish full validation.");
-    var testHostProbe = new TcpListener(IPAddress.Loopback, 0);
-    try
-    {
-        testHostProbe.Start();
-    }
-    catch (SocketException ex)
-    {
-        Note($"UNAVAILABLE: local test-host socket: {ex.Message}. The .NET test runner needs a localhost socket; run validation in CI or an authorized shell.");
-        Note("INCOMPLETE: no tests ran in this restricted sandbox.");
-        return 3;
-    }
-    finally
-    {
-        testHostProbe.Stop();
-    }
-    Test("tests/Valheim.Testing.Tests/Valheim.Testing.Tests.csproj", "--filter",
-        "FullyQualifiedName~GridDumpTerrainTests|FullyQualifiedName~LayeredDumpTerrainTests", "--",
-        "RunConfiguration.TreatNoTestsAsError=true");
-    Test("tests/Valheim.Testing.Doubles.Tests/Valheim.Testing.Doubles.Tests.csproj");
-    Test("tests/Valheim.Testing.Bindings.Tests/Valheim.Testing.Bindings.Tests.csproj");
-    Note("INCOMPLETE: process, port, recovery, shell, package and consumer checks were not run. Full validation must pass in CI or an authorized shell.");
-    return 4;
 }
 
 if (onlyCiShell)
@@ -309,23 +278,11 @@ static string SplitFilter() =>
     : OperatingSystem.IsLinux() ? "Os!=windows&Os!=macos"
     : throw new PlatformNotSupportedException("--split knows Windows, macOS and Linux only.");
 
-// Full validation invokes more file apps after its own entrypoint. Give those builds and runs the same SDK-cache fallback.
-void BuildScript(string script)
-{
-    if (OperatingSystem.IsWindows()) Run("dotnet", "build", script);
-    else Run("sh", "scripts/run-file-app.sh", "--build-only", script);
-}
+void BuildScript(string script) => Run("dotnet", "build", script);
 
-void RunScript(string script, params string[] arguments)
-{
-    if (OperatingSystem.IsWindows()) Run("dotnet", ["run", script, "--", .. arguments]);
-    else Run("sh", ["scripts/run-file-app.sh", script, .. arguments]);
-}
+void RunScript(string script, params string[] arguments) => Run("dotnet", ["run", script, "--", .. arguments]);
 
-string CaptureScript(string script, params string[] arguments) =>
-    OperatingSystem.IsWindows()
-        ? Capture("dotnet", ["run", script, "--", .. arguments])
-        : Capture("sh", ["scripts/run-file-app.sh", script, .. arguments]);
+string CaptureScript(string script, params string[] arguments) => Capture("dotnet", ["run", script, "--", .. arguments]);
 
 void Run(string file, params string[] arguments) => Execute(file, arguments, null);
 
