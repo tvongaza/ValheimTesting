@@ -271,19 +271,44 @@ public sealed class ServerLoadOneOffTests : IDisposable
         string source = Path.Combine(_rig.Root, "joined-world");
         DefaultSmokeWorld.PrepareServerSaveRoot(source);
         var hashes = WorldFixture.Manifest(Path.Combine(source, "worlds_local"));
-        string output = Path.Combine(_rig.Root, "joined-custom-world-run");
+        string firstOutput = Path.Combine(_rig.Root, "joined-custom-world-run-1");
+        string secondOutput = Path.Combine(_rig.Root, "joined-custom-world-run-2");
         using (EnvironmentInventory.UseMachine(WithValheim(out _)))
-            Assert.Equal(0, await ServerLoad.RunAsync(Arguments(output, "--world-fixture", source,
+        {
+            Assert.Equal(0, await ServerLoad.RunAsync(Arguments(firstOutput, "--world-fixture", source,
                 "--server-startup-seconds", "3600", "--preflight-only"),
                 new ServerLoad.Seams(Inspect: _ => Task.FromResult(Ready),
                     ClientArchitecture: (_, _, _, _) => { })));
-        var campaign = JsonDocument.Parse(File.ReadAllText(Path.Combine(output, "campaign.json"))).RootElement;
-        Assert.Equal(DefaultSmokeWorld.Uid, campaign.GetProperty("worldUid").GetString());
-        Assert.Equal(DefaultSmokeCharacter.Name,
-            campaign.GetProperty("clients").GetProperty("client").GetProperty("character").GetProperty("registeredName").GetString());
-        Assert.Equal(3600, JsonSerializer.Deserialize<ServerRunPlan>(File.ReadAllText(Path.Combine(output, "plan.json")))!.StartupSeconds);
+            Assert.Equal(0, await ServerLoad.RunAsync(Arguments(secondOutput, "--world-fixture", source,
+                "--server-startup-seconds", "3600", "--preflight-only"),
+                new ServerLoad.Seams(Inspect: _ => Task.FromResult(Ready),
+                    ClientArchitecture: (_, _, _, _) => { })));
+        }
+
+        using var firstCampaign = JsonDocument.Parse(File.ReadAllText(Path.Combine(firstOutput, "campaign.json")));
+        using var secondCampaign = JsonDocument.Parse(File.ReadAllText(Path.Combine(secondOutput, "campaign.json")));
+        var firstCharacter = firstCampaign.RootElement.GetProperty("clients").GetProperty("client").GetProperty("character");
+        var secondCharacter = secondCampaign.RootElement.GetProperty("clients").GetProperty("client").GetProperty("character");
+        string firstStore = firstCharacter.GetProperty("store").GetString()!;
+        string secondStore = secondCharacter.GetProperty("store").GetString()!;
+        string firstName = firstCharacter.GetProperty("registeredName").GetString()!;
+        string secondName = secondCharacter.GetProperty("registeredName").GetString()!;
+
+        Assert.Equal(DefaultSmokeWorld.Uid, firstCampaign.RootElement.GetProperty("worldUid").GetString());
+        Assert.Equal(DefaultSmokeWorld.Uid, secondCampaign.RootElement.GetProperty("worldUid").GetString());
+        Assert.NotEqual(firstStore, secondStore);
+        Assert.Equal(Path.Combine("character-source", "store"), Path.GetRelativePath(firstOutput, firstStore));
+        Assert.Equal(Path.Combine("character-source", "store"), Path.GetRelativePath(secondOutput, secondStore));
+        Assert.NotEqual(firstCharacter.GetProperty("fileName").GetString(), secondCharacter.GetProperty("fileName").GetString());
+        Assert.Equal(DefaultSmokeCharacter.Name, firstName);
+        Assert.Equal(DefaultSmokeCharacter.Name, secondName);
+        Assert.True(CharacterSaveReader.IsFreshSmokeSeed(File.ReadAllBytes(Path.Combine(firstStore, firstName + ".fch"))));
+        Assert.True(CharacterSaveReader.IsFreshSmokeSeed(File.ReadAllBytes(Path.Combine(secondStore, secondName + ".fch"))));
+        Assert.Equal(3600, JsonSerializer.Deserialize<ServerRunPlan>(File.ReadAllText(Path.Combine(firstOutput, "plan.json")))!.StartupSeconds);
+        Assert.Equal(3600, JsonSerializer.Deserialize<ServerRunPlan>(File.ReadAllText(Path.Combine(secondOutput, "plan.json")))!.StartupSeconds);
         WorldFixture.Verify(Path.Combine(source, "worlds_local"), hashes);
-        WorldFixture.Verify(Path.Combine(output, "world-source", "worlds_local"), hashes);
+        WorldFixture.Verify(Path.Combine(firstOutput, "world-source", "worlds_local"), hashes);
+        WorldFixture.Verify(Path.Combine(secondOutput, "world-source", "worlds_local"), hashes);
     }
 
     [Fact]
