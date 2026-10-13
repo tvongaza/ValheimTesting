@@ -31,8 +31,9 @@ public sealed class HostScriptDeleteGuardTests
             string line = lines[index].Trim();
             // A comment (C#, bash or PowerShell) deletes nothing.
             if (line.StartsWith("//", StringComparison.Ordinal) || line.StartsWith('#')) continue;
+            // One finding per line: `rm -r` is also PowerShell's alias, so a line can match two patterns.
             foreach (var (kind, pattern) in Patterns)
-                if (pattern.IsMatch(line)) yield return $"{name}:{index + 1}: {kind}: {line}";
+                if (pattern.IsMatch(line)) { yield return $"{name}:{index + 1}: {kind}: {line}"; break; }
         }
     }
 
