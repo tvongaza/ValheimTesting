@@ -3,9 +3,9 @@
 //   dotnet run scripts/validate.cs
 //   dotnet run scripts/validate.cs -- --skip-ci-shell   CI only: shell integration runs in its own job
 //   dotnet run scripts/validate.cs -- --only-ci-shell   CI only: run that shard with the same data-root guard
-//   dotnet run scripts/validate.cs -- --ci-main-tests  CI only: Windows toolkit tests excluding measured slow methods
-//   dotnet run scripts/validate.cs -- --ci-timed 1|2   CI only: one balanced slow-method shard
-//   dotnet run scripts/validate.cs -- --ci-build-only  CI only: Windows packaging and other test layers
+//   dotnet run scripts/validate.cs -- --ci-main-tests  CI only (Windows, macOS): toolkit tests excluding this OS's measured slow methods
+//   dotnet run scripts/validate.cs -- --ci-timed 1|2   CI only (Windows, macOS): one balanced slow-method shard of this OS
+//   dotnet run scripts/validate.cs -- --ci-build-only  CI only (Windows, macOS): packaging and other test layers
 //   dotnet run scripts/validate.cs -- --limits-probe PROJECT RESULTS [FILTER]  tests of validate.cs's test commands only: one command
 //   ... --split  with any mode above but --restricted-sandbox: CI pull requests: this OS's share of the toolkit tests (#735, below)
 //   sh scripts/validate.sh --restricted-sandbox  Selected no-host tests only; exits 4 (incomplete)
@@ -52,7 +52,8 @@ bool ciMainTests = mode.SequenceEqual(["--ci-main-tests"]);
 bool ciBuildOnly = mode.SequenceEqual(["--ci-build-only"]);
 bool restrictedSandbox = mode.SequenceEqual(["--restricted-sandbox"]);
 bool limitsProbe = mode is ["--limits-probe", _, _] or ["--limits-probe", _, _, _];
-int ciTimed = mode is ["--ci-timed", "1"] ? 1 : mode is ["--ci-timed", "2"] ? 2 : 0;
+const int TimedShardCount = 2; // the timed shards of --ci-timed; the workflow's toolkit matrix lists the same N
+int ciTimed = mode is ["--ci-timed", var shardNumber] && int.TryParse(shardNumber, out int shardIndex) && shardIndex >= 1 && shardIndex <= TimedShardCount ? shardIndex : 0;
 if ((mode.Length != 0 && !skipCiShell && !onlyCiShell && !ciMainTests && !ciBuildOnly && !restrictedSandbox && !limitsProbe && ciTimed == 0) ||
     args.Count(argument => argument == "--split") > 1 || (split && restrictedSandbox))
     throw new ArgumentException("usage: dotnet run scripts/validate.cs [--skip-ci-shell|--only-ci-shell|--ci-main-tests|--ci-timed 1|2|--ci-build-only|--limits-probe PROJECT RESULTS [FILTER]] [--split] | --restricted-sandbox");
@@ -122,23 +123,31 @@ if (onlyCiShell)
     return 0;
 }
 
-// The timing manifest is an optimisation, not an allowlist. A newly added test stays in ci-main until its measured
-// method is added here. Every listed method appears in exactly one timed shard, and ci-main-tests excludes that list.
+// The timing manifest is the one owner of the shards of both OSes (#725). It is an optimisation, not an allowlist: a newly added test
+// stays in ci-main until its measured method is added here. Each entry lists the measured seconds of the method per OS ("Windows",
+// "macOS"; an OS that does not name the method found it cheap). On an OS, the timed methods are those with seconds there: every one
+// appears in exactly one of that OS's timed shards, balanced by that OS's seconds, and ci-main-tests excludes exactly that list.
 using var timingDocument = JsonDocument.Parse(File.ReadAllText(Path.Combine(root, "scripts", "ci-test-timings.json")));
-var timedMethods = timingDocument.RootElement.EnumerateArray()
-    .Select(item => new TimedMethod(item.GetProperty("Name").GetString() ?? "", item.GetProperty("Seconds").GetDouble())).ToArray();
-if (timedMethods.Length == 0 || timedMethods.Any(method => method.Seconds <= 0 ||
+string timingOs = OperatingSystem.IsWindows() ? "Windows" : OperatingSystem.IsMacOS() ? "macOS" : "";
+var manifest = timingDocument.RootElement.EnumerateArray()
+    .Select(item => (Name: item.GetProperty("Name").GetString() ?? "",
+        Seconds: item.GetProperty("Seconds").EnumerateObject().ToDictionary(os => os.Name, os => os.Value.GetDouble()))).ToArray();
+if (manifest.Length == 0 || manifest.Any(method => method.Seconds.Count == 0 ||
+    method.Seconds.Any(os => os.Key is not ("Windows" or "macOS") || os.Value <= 0) ||
     !method.Name.Contains('.') || !System.Text.RegularExpressions.Regex.IsMatch(method.Name, @"^[A-Za-z_][A-Za-z_0-9.]*$")) ||
-    timedMethods.Select(method => method.Name).Distinct(StringComparer.Ordinal).Count() != timedMethods.Length)
+    manifest.Select(method => method.Name).Distinct(StringComparer.Ordinal).Count() != manifest.Length)
     throw new InvalidOperationException("CI test timing manifest has an invalid or duplicate method.");
+if ((ciTimed != 0 || ciMainTests) && timingOs == "") throw new PlatformNotSupportedException("--ci-main-tests and --ci-timed know Windows and macOS only.");
+var timedMethods = manifest.Where(method => method.Seconds.ContainsKey(timingOs))
+    .Select(method => new TimedMethod(method.Name, method.Seconds[timingOs])).ToArray();
 var timedShards = timedMethods.GroupBy(method => method.Name[..method.Name.LastIndexOf('.')])
     .SelectMany(group =>
     {
-        double[] loads = [0, 0];
+        double[] loads = new double[TimedShardCount];
         return group.OrderByDescending(method => method.Seconds).ThenBy(method => method.Name, StringComparer.Ordinal)
             .Select(method =>
             {
-                int shard = loads[0] <= loads[1] ? 0 : 1;
+                int shard = Array.IndexOf(loads, loads.Min());
                 loads[shard] += method.Seconds;
                 return (method.Name, Shard: shard + 1);
             });
@@ -146,7 +155,7 @@ var timedShards = timedMethods.GroupBy(method => method.Name[..method.Name.LastI
 if (ciTimed != 0)
 {
     var selected = timedShards.Where(method => method.Shard == ciTimed).Select(method => method.Name).ToArray();
-    if (selected.Length == 0) throw new InvalidOperationException($"CI timed shard {ciTimed} has no methods.");
+    if (selected.Length == 0) throw new InvalidOperationException($"CI timed shard {ciTimed} has no methods on {timingOs}.");
     Note($"CI timed shard {ciTimed}: {selected.Length} methods; measured total {timedMethods.Where(method => selected.Contains(method.Name)).Sum(method => method.Seconds):F1} test-seconds.");
     Test("tests/Valheim.Testing.Tests/Valheim.Testing.Tests.csproj", "--filter",
         string.Join('|', selected.Select(name => "FullyQualifiedName=" + name)), "--", "RunConfiguration.TreatNoTestsAsError=true");
@@ -158,7 +167,7 @@ if (ciTimed != 0)
 if (ciMainTests)
 {
     Test("tests/Valheim.Testing.Tests/Valheim.Testing.Tests.csproj", "--filter",
-        "Category!=CiShell&" + string.Join('&', timedMethods.Select(method => "FullyQualifiedName!=" + method.Name)),
+        "Category!=CiShell" + string.Concat(timedMethods.Select(method => "&FullyQualifiedName!=" + method.Name)),
         "--", "RunConfiguration.TreatNoTestsAsError=true");
     Note("CI main toolkit tests passed; the data-root guard found no changes.");
     return 0;

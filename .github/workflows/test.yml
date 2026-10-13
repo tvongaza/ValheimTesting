@@ -36,7 +36,7 @@ jobs:
       # GitHub's Windows runners run the job in the signed-in console session, so the interactive client's scheduled-task
       # start is required to run there (with stand-ins for Steam and the game) rather than only its refusal.
       VALHEIM_TESTING_WINDOWS_DESKTOP: ${{ matrix.os == 'windows-latest' && '1' || '' }}
-      VT_CI_PROFILE: ${{ matrix.os == 'windows-latest' && github.event_name == 'workflow_dispatch' && '1' || '' }}
+      VT_CI_PROFILE: ${{ github.event_name == 'workflow_dispatch' && '1' || '' }}
       # The NuGet package cache's paths (see "Restore the NuGet package cache"), shared by its restore and save.
       VT_NUGET_CACHE_PATHS: |
         ~/.nuget/packages
@@ -72,54 +72,36 @@ jobs:
         run: test ! -e .packages/Valheim.Testing.Cli.0.1.0-preview.0.nupkg
       - name: Seed stale publish files for the packaging regression
         run: dotnet run scripts/tool-pack.cs -- seed
-      # #736 investigation, macOS only; remove it, its stop and upload steps below, .github/scripts/macos-sampler.sh and
-      # validate.cs's heartbeat when #736 closes. The macOS job has lost its runner three times inside the validate step. A
-      # sample of the machine every minute, kept beside validate.cs's transcript, shows what it was doing and which command ran.
-      - name: Sample the machine every minute (macOS, #736)
+      # #736 investigation, macOS only: a sample of the machine every minute (see the action).
+      - uses: ./.github/actions/macos-diagnostics-start
         if: runner.os == 'macOS'
-        run: |
-          mkdir -p artifacts/ci-diagnostics
-          nohup .github/scripts/macos-sampler.sh artifacts/ci-diagnostics/samples.txt artifacts/validate/validate.log > /dev/null 2>&1 &
-          echo $! > artifacts/ci-diagnostics/sampler.pid
       # CI runs the two slower, local-shell integration classes in a separate three-OS job. Plain local validate still runs
       # them. Normal runs take 3-6 minutes. validate.cs gives every test command a 5-minute soft limit (a warning) and a 10-minute
       # hard limit (killed and failed, naming the tests in flight; #719), so the step timeout is that hard limit plus the
       # slowest measured rest of the step (about 4 minutes on macOS) and a margin: a hang ends in minutes, not at the old 30.
       # The transcript and test results are kept when the step fails or is cancelled (#171), and a test run with no progress
       # for five minutes names its unfinished tests.
-      # A manual dispatch keeps the full Windows suite and its TRX timings to refresh ci-test-timings.json.
-      # Windows runs package and consume beside three toolkit jobs; other OSes retain their full non-shell validation. A pull
-      # request runs this OS's share of the toolkit tests (VT_SPLIT_ARGUMENT).
-      - run: dotnet run scripts/validate.cs -- ${{ matrix.os == 'windows-latest' && github.event_name != 'workflow_dispatch' && '--ci-build-only' || '--skip-ci-shell' }} ${{ env.VT_SPLIT_ARGUMENT }}
+      # A manual dispatch keeps the full toolkit suite on every OS and its TRX timings to refresh ci-test-timings.json.
+      # Windows and macOS run package and consume beside their toolkit jobs (the shards of scripts/ci-test-timings.json); Linux
+      # retains its full non-shell validation. A pull request runs this OS's share of the toolkit tests (VT_SPLIT_ARGUMENT).
+      - run: dotnet run scripts/validate.cs -- ${{ matrix.os != 'ubuntu-latest' && github.event_name != 'workflow_dispatch' && '--ci-build-only' || '--skip-ci-shell' }} ${{ env.VT_SPLIT_ARGUMENT }}
         timeout-minutes: 15
         env:
           # #736: macOS only; one line a minute in the job log, which reaches GitHub while the job runs.
           VT_VALIDATE_HEARTBEAT_SECONDS: ${{ runner.os == 'macOS' && '60' || '' }}
-      - name: Keep Windows test timings for CI profiling
-        if: runner.os == 'Windows' && github.event_name == 'workflow_dispatch' && always()
+      - name: Keep test timings for CI profiling
+        if: github.event_name == 'workflow_dispatch' && always()
         uses: actions/upload-artifact@v7
         with:
-          name: windows-test-timings
+          name: test-timings-${{ matrix.os }}
           path: artifacts/validate/Valheim.Testing.Tests/timings.trx
           if-no-files-found: ignore
           retention-days: 2
-      - name: Stop the sampler (macOS, #736)
+      # #736: always on macOS (see the action).
+      - uses: ./.github/actions/macos-diagnostics-finish
         if: always() && runner.os == 'macOS'
-        run: |
-          kill "$(cat artifacts/ci-diagnostics/sampler.pid)" 2>/dev/null || true
-          sleep 1
-      # #736: always on macOS. A lost runner never reaches this step, so an absent artifact after a cancel says the machine, not a
-      # test, stopped; otherwise the last sample and the transcript's last "start:" line show what was running and how the machine was.
-      - name: Keep the macOS diagnostics (#736)
-        if: always() && runner.os == 'macOS'
-        uses: actions/upload-artifact@v7
         with:
           name: macos-diagnostics
-          path: |
-            artifacts/ci-diagnostics
-            artifacts/validate/validate.log
-          if-no-files-found: ignore
-          retention-days: 7
       - name: Keep the validation transcript
         if: failure() || cancelled()
         uses: actions/upload-artifact@v7
@@ -164,24 +146,27 @@ jobs:
         with:
           path: ${{ env.VT_NUGET_CACHE_PATHS }}
           key: ${{ steps.nuget-cache.outputs.cache-primary-key }}
-  toolkit-windows:
-    name: Windows toolkit tests (${{ matrix.name }})
-    # The normal toolkit suite and packaging were serial in validate. The two measured regression classes also held
-    # xUnit's same-class queue for 515 cumulative test-seconds. Separate jobs keep every case while shortening the path.
+  toolkit:
+    name: toolkit tests (${{ matrix.os }}, ${{ matrix.shard }})
+    # The normal toolkit suite and packaging were serial in validate. The measured slow methods of scripts/ci-test-timings.json also
+    # held xUnit's same-class queue. On Windows and macOS, separate jobs keep every case while shortening the path: validate.cs
+    # owns what each shard selects (the main shard and the N timed ones, per OS), this matrix only starts them.
     strategy:
       fail-fast: false
       matrix:
+        os: [windows-latest, macos-latest]
+        shard: [main, timed-1, timed-2]
         include:
-          - name: main
+          - shard: main
             args: --ci-main-tests
-          - name: timed-1
+          - shard: timed-1
             args: --ci-timed 1
-          - name: timed-2
+          - shard: timed-2
             args: --ci-timed 2
-    runs-on: windows-latest
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     env:
-      VALHEIM_TESTING_WINDOWS_DESKTOP: '1'
+      VALHEIM_TESTING_WINDOWS_DESKTOP: ${{ matrix.os == 'windows-latest' && '1' || '' }}
       VT_NUGET_CACHE_PATHS: |
         ~/.nuget/packages
         !~/.nuget/packages/valheim.testing*
@@ -199,15 +184,25 @@ jobs:
           key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', 'scripts/*.cs', 'cli-dependency.json', 'NuGet.Config', '.config/dotnet-tools.json') }}
           restore-keys: nuget-${{ runner.os }}-
       - run: dotnet run scripts/bootstrap-cli.cs
+      # #736 investigation, macOS only (see the action).
+      - uses: ./.github/actions/macos-diagnostics-start
+        if: runner.os == 'macOS'
       - name: Run toolkit shard
         # One test command: its 10-minute hard limit (validate.cs, #719) plus the data-root guard and the transcript.
         timeout-minutes: 12
         run: dotnet run scripts/validate.cs -- ${{ matrix.args }} ${{ env.VT_SPLIT_ARGUMENT }}
+        env:
+          # #736: macOS only; one line a minute in the job log, which reaches GitHub while the job runs.
+          VT_VALIDATE_HEARTBEAT_SECONDS: ${{ runner.os == 'macOS' && '60' || '' }}
+      - uses: ./.github/actions/macos-diagnostics-finish
+        if: always() && runner.os == 'macOS'
+        with:
+          name: macos-diagnostics-toolkit-${{ matrix.shard }}
       - name: Keep shard evidence on failure
         if: failure() || cancelled()
         uses: actions/upload-artifact@v7
         with:
-          name: ci-toolkit-windows-${{ matrix.name }}
+          name: ci-toolkit-${{ matrix.os }}-${{ matrix.shard }}
           path: artifacts/validate
           if-no-files-found: ignore
           retention-days: 14
