@@ -101,18 +101,25 @@ public sealed class InstallSelectionTests : IDisposable
         const string source = "/game/server";
         string install = LinuxServer(host, source);
         Put(install, "BepInEx/plugins/valheimCLI.dll", "the install's own ValheimCLI");
+        // Another ValheimCLI build under another name, found by its plugin in the fetched bytes.
+        Put(install, "BepInEx/scripts/Renamed.dll", RegressionRig.Assembly("Renamed", new("valheimCLI.valheimCLI", "0.3.0"), marker: "Renamed"));
         Put(install, "BepInEx/plugins/Mod/._Mod.dll", "AppleDouble"); // never part of a selection
+        // A reviewed loader package replaces the install's loader; its plugins and settings stay the install's to select.
+        string packageRoot = Path.Combine(_rig.Root, "linux-package");
+        foreach (string relative in new[] { "BepInEx/core/BepInEx.dll", "BepInEx/core/BepInEx.Preloader.dll", "doorstop_libs/libdoorstop_x64.so" })
+            Put(packageRoot, relative, "package " + relative);
+        var package = BepInExLoaderPackage.Capture(packageRoot, "BepInExPack_Valheim", "5.4.2333");
         var before = WorldFixture.Manifest(install);
         string work;
-        using (var selection = await InstallSelection.ReadAsync(host, HostedRuntimeKind.Server, source, manifest, location, null, 5560, null, Timeout))
+        using (var selection = await InstallSelection.ReadAsync(host, HostedRuntimeKind.Server, source, manifest, location, package, 5560, null, Timeout))
         {
-            // Each folder the install holds was fetched once; scripts has nothing, so nothing was fetched for it.
+            // Each folder the install holds was fetched once.
             var fetched = host.Runs.Where(run => run.Script == "fetch").Select(run => run.Variables["dir"]).ToList();
-            Assert.Equal(new[] { "/game/server/BepInEx/plugins", "/game/server/BepInEx/config", "/game/server/BepInEx/patchers" }, fetched);
+            Assert.Equal(new[] { "/game/server/BepInEx/plugins", "/game/server/BepInEx/scripts", "/game/server/BepInEx/config", "/game/server/BepInEx/patchers" }, fetched);
             var files = selection.Files.ToDictionary(file => file.RelativePath, file => file.Source);
             Assert.Equal(new[] { "BepInEx/config/example.mod.cfg", CliServerConfig.RelativePath,
                 "BepInEx/patchers/Patch.dll", "BepInEx/plugins/Mod/Mod.dll", "BepInEx/plugins/valheimCLI.dll" }, files.Keys.Order(StringComparer.Ordinal));
-            Assert.Equal(new[] { "BepInEx/plugins/valheimCLI.dll" }, selection.Replaced);
+            Assert.Equal(new[] { "BepInEx/plugins/valheimCLI.dll", "BepInEx/scripts/Renamed.dll" }, selection.Replaced);
             // Every install file is a local copy, with the listing's hash.
             foreach (string relative in new[] { "BepInEx/plugins/Mod/Mod.dll", "BepInEx/config/example.mod.cfg", "BepInEx/patchers/Patch.dll" })
             {

@@ -7,8 +7,8 @@ namespace Valheim.Testing.GameSessions;
 /// The files an owned loader profile takes from a modded install (#730): the install's own BepInEx plugins, scripts, config and
 /// patchers, without any ValheimCLI build of its own (another build loaded beside the staged set is what the static check refuses),
 /// and the run's ValheimCLI set in <c>BepInEx/plugins</c>, with ValheimCLI's port when the install has no config of its own for it.
-/// A loader package (the pinned BepInExPack) brings its own files: the install's are left out. The install's <c>BepInEx.cfg</c> is
-/// never selected: the profile stage decides it from the same listing (<see cref="BepInExSettings"/>, in
+/// A loader package (the pinned BepInExPack) holds only loader files and a <c>BepInEx.cfg</c>, none of them selected here: the
+/// install's <c>BepInEx.cfg</c> is never selected: the profile stage decides it from the same listing (<see cref="BepInExSettings"/>, in
 /// <see cref="HostedRuntimeStage.PrepareProfileAsync"/>).
 /// The one owner of reading that selection from an install, on any host, for a client or a dedicated server. The install is
 /// inspected first (<see cref="HostedRuntimeStage.InspectSourceAsync"/>); the selection is read from that listing: in place on this
@@ -53,6 +53,8 @@ internal sealed class InstallSelection : IDisposable
         ArgumentNullException.ThrowIfNull(host);
         ArgumentNullException.ThrowIfNull(cli);
         ArgumentNullException.ThrowIfNull(cliFiles);
+        if (cliFiles.Problems.Count != 0)
+            throw new ArgumentException($"The ValheimCLI set to stage is not complete: {string.Join("; ", cliFiles.Problems.Select(problem => problem.Message))}.", nameof(cliFiles));
         if (!Enum.IsDefined(role)) throw new ArgumentOutOfRangeException(nameof(role));
         if (role == HostedRuntimeKind.Server && client != null) throw new ArgumentException("A dedicated server has no client plan.", nameof(client));
         var source = await HostedRuntimeStage.InspectSourceAsync(host, role, install, loader, timeout, cancellation).ConfigureAwait(false);
@@ -116,7 +118,6 @@ internal sealed class InstallSelection : IDisposable
                 string local = inPlace ? Path.Combine(install, key.Replace('/', Path.DirectorySeparatorChar))
                     : Path.Combine(fetched, below.Replace('/', Path.DirectorySeparatorChar));
                 if (names.Equals(key, BepInExSettings.RelativePath)) continue;
-                if (loader != null && loader.Files.Keys.Any(path => path.Equals(relative, StringComparison.OrdinalIgnoreCase))) continue;
                 if (folder is "plugins" or "scripts" && relative.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)
                     && (Path.GetFileName(relative).Equals(cli.Plugin.File, StringComparison.OrdinalIgnoreCase) || CliBuildManifest.Plugins(local)?.Any(CliBuildManifest.IsCliPlugin) == true))
                 {
