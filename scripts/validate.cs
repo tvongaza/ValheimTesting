@@ -6,8 +6,9 @@
 //   dotnet run scripts/validate.cs -- --ci-main-tests  CI only (Windows, macOS): toolkit tests excluding this OS's measured slow methods
 //   dotnet run scripts/validate.cs -- --ci-timed 1|2|3 CI only (Windows, macOS): one balanced slow-method shard of this OS
 //   dotnet run scripts/validate.cs -- --ci-build-only  CI only (Windows, macOS): packaging and other test layers
-//   dotnet run scripts/validate.cs -- --limits-probe ROOT PROJECT RESULTS [FILTER]  tests of validate.cs's test commands only: one command
-//   ... --split  with any mode above: CI pull requests: this OS's share of the toolkit tests (#735, below)
+//   dotnet run scripts/validate.cs -- --test-project ROOT PROJECT RESULTS [FILTER]  CI only: one project's dotnet test command
+//   ... --test-project ROOT PROJECT RESULTS --target TARGET [ARGUMENTS]  CI only: one test-running build target
+//   ... --split  with repository validation or plain --test-project above: this OS's share of classified tests (#735, below)
 //
 // Runs the library tests, compiles the adapter source package against reference stubs, builds every example, tool and script, runs
 // the FullLifecycle example's and the native acceptance suite's tests against scripted fakes,
@@ -40,25 +41,30 @@ using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Xml.Linq;
 
-bool split = args.Contains("--split");
-string[] mode = args.Where(argument => argument != "--split").ToArray();
+const string Usage = "usage: dotnet run scripts/validate.cs [--skip-ci-shell|--only-ci-shell|--ci-main-tests|--ci-timed 1|2|3|--ci-build-only|--test-project ROOT PROJECT RESULTS [FILTER|--target TARGET [ARGUMENTS]]] [--split]";
+bool split = args is [.., "--split"];
+string[] mode = split ? args[..^1] : args;
 bool skipCiShell = mode.SequenceEqual(["--skip-ci-shell"]);
 bool onlyCiShell = mode.SequenceEqual(["--only-ci-shell"]);
 bool ciMainTests = mode.SequenceEqual(["--ci-main-tests"]);
 bool ciBuildOnly = mode.SequenceEqual(["--ci-build-only"]);
-bool limitsProbe = mode is ["--limits-probe", _, _, _] or ["--limits-probe", _, _, _, _];
+bool testProjectTest = mode is ["--test-project", _, _, _] ||
+    mode is ["--test-project", _, _, _, var filter] && filter != "--target";
+bool testProjectTarget = mode is ["--test-project", _, _, _, "--target", var target, ..] && !string.IsNullOrWhiteSpace(target);
+bool testProject = testProjectTest || testProjectTarget;
 const int TimedShardCount = 3; // the timed shards of --ci-timed; the workflow's toolkit matrix lists the same N
 int ciTimed = mode is ["--ci-timed", var shardNumber] && int.TryParse(shardNumber, out int shardIndex) && shardIndex >= 1 && shardIndex <= TimedShardCount ? shardIndex : 0;
-if ((mode.Length != 0 && !skipCiShell && !onlyCiShell && !ciMainTests && !ciBuildOnly && !limitsProbe && ciTimed == 0) ||
-    args.Count(argument => argument == "--split") > 1)
-    throw new ArgumentException("usage: dotnet run scripts/validate.cs [--skip-ci-shell|--only-ci-shell|--ci-main-tests|--ci-timed 1|2|3|--ci-build-only|--limits-probe ROOT PROJECT RESULTS [FILTER]] [--split]");
-// A probe names its repository and paths absolutely: a file-based app's working directory is the SDK's choice (#766).
-if (limitsProbe && (mode.Skip(1).Take(3).Any(path => !Path.IsPathFullyQualified(path)) || !File.Exists(Path.Combine(mode[1], "cli-dependency.json"))))
-    throw new ArgumentException("usage: --limits-probe ROOT PROJECT RESULTS [FILTER]: three absolute paths, ROOT the repository (it holds cli-dependency.json)");
-string root = limitsProbe ? mode[1] : FindRoot();
+if ((mode.Length != 0 && !skipCiShell && !onlyCiShell && !ciMainTests && !ciBuildOnly && !testProject && ciTimed == 0) ||
+    args.Count(argument => argument == "--split") != (split ? 1 : 0) || split && testProjectTarget)
+    throw new ArgumentException(Usage);
+// A one-project run names its repository and paths absolutely: a file-based app's working directory is the SDK's choice (#766).
+if (testProject && (mode.Skip(1).Take(3).Any(path => !Path.IsPathFullyQualified(path)) || !File.Exists(Path.Combine(mode[1], "cli-dependency.json"))))
+    throw new ArgumentException(Usage + "; --test-project needs three absolute paths, and ROOT holds cli-dependency.json");
+string root = testProject ? mode[1] : FindRoot();
+string workingDirectory = testProject ? Path.GetDirectoryName(mode[2])! : root;
 string? splitFilter = split ? SplitFilter() : null;
-// A probe writes beside its caller's choice, never over the results of the validation that runs the probing test.
-string results = limitsProbe ? mode[3] : Path.Combine(root, "artifacts", "validate");
+// A one-project run writes beside its caller's choice, never over another validation's results.
+string results = testProject ? mode[3] : Path.Combine(root, "artifacts", "validate");
 Directory.CreateDirectory(results);
 string transcript = Path.Combine(results, "validate.log");
 File.WriteAllText(transcript, "");
@@ -80,11 +86,12 @@ using var heartbeat = heartbeatSeconds > 0
     ? new System.Threading.Timer(_ => Heartbeat(), null, TimeSpan.FromSeconds(heartbeatSeconds), TimeSpan.FromSeconds(heartbeatSeconds))
     : null;
 
-if (splitFilter != null) Note($"OS-aware split (#735): the toolkit tests' commands here select {splitFilter}; other test projects run whole");
+if (splitFilter != null) Note($"OS-aware split (#735): classified test commands here select {splitFilter}; repository validation's other test projects run whole");
 
-if (limitsProbe)
+if (testProject)
 {
-    Test(mode[2], mode.Length == 5 ? ["--filter", mode[4]] : []);
+    if (testProjectTarget) TestTarget(mode[2], mode[5], mode[6..]);
+    else Test(mode[2], mode.Length == 5 ? ["--filter", mode[4]] : []);
     return 0;
 }
 
@@ -207,7 +214,7 @@ static string ScriptPath([CallerFilePath] string path = "") => path;
 
 // The repository root holds cli-dependency.json. Search upward from the working directory first: CI path mapping can rewrite
 // the compile-time source path CallerFilePath reports. Newer SDKs start a file-based app in its own folder, which is inside the
-// repository for scripts/validate.cs; a copied limits probe lives outside it, so it receives its root explicitly above.
+// repository for scripts/validate.cs; a copied one-project runner lives outside it, so it receives its root explicitly above.
 static string FindRoot()
 {
     foreach (string start in new[] { Environment.CurrentDirectory, Path.GetDirectoryName(ScriptPath()) ?? "" })
@@ -228,22 +235,33 @@ string Solution(string name, IEnumerable<string> projects)
     return file;
 }
 
-// A test run's results go under artifacts/validate. Keep a TRX for ordinary assertion failures too: console output can be
-// lost when an agent shell yields. When a host crashes or is stopped at the hard limit, the blame sequence names tests that
-// started but did not complete. Old results are removed first: a stale sequence would name tests of an earlier run.
+// A validation test run's results go under artifacts/validate; a one-project mode uses its caller's results folder. Keep a TRX
+// for ordinary assertion failures too: console output can be lost when an agent shell yields. When a host crashes or is stopped
+// at the hard limit, the blame sequence names tests that started but did not complete. Old results are removed first: a stale
+// sequence would name tests of an earlier run.
 void Test(string project, params string[] extra)
 {
     string output = Path.Combine(results, Path.GetFileNameWithoutExtension(project));
+    var arguments = new List<string> { "test", project, "-c", "Release", "-m:1", "--blame-hang-timeout", "5m",
+        "--blame-hang-dump-type", "none", "--results-directory", output };
+    arguments.AddRange(["--logger", Environment.GetEnvironmentVariable("VT_CI_PROFILE") == "1"
+        ? "trx;LogFileName=timings.trx" : "trx;LogFileName=results.trx"]);
+    arguments.AddRange(Split(project, extra));
+    TestCommand(output, arguments.ToArray());
+}
+
+// Some projects own a test-running build target (tools/test-runners/Valheim.TestRunners.targets). The workflow still routes that
+// command through Execute, so the outer test run gets the same soft and hard limits and transcript as a direct dotnet test.
+void TestTarget(string project, string target, params string[] extra)
+{
+    string output = Path.Combine(results, Path.GetFileNameWithoutExtension(project));
+    TestCommand(output, ["build", project, "-m:1", "-t:" + target, .. extra]);
+}
+
+void TestCommand(string output, string[] arguments)
+{
     if (Directory.Exists(output)) Directory.Delete(output, recursive: true);
-    try
-    {
-        var arguments = new List<string> { "test", project, "-c", "Release", "-m:1", "--blame-hang-timeout", "5m",
-            "--blame-hang-dump-type", "none", "--results-directory", output };
-        arguments.AddRange(["--logger", Environment.GetEnvironmentVariable("VT_CI_PROFILE") == "1"
-            ? "trx;LogFileName=timings.trx" : "trx;LogFileName=results.trx"]);
-        arguments.AddRange(Split(project, extra));
-        Execute("dotnet", arguments.ToArray(), output);
-    }
+    try { Execute("dotnet", arguments, output); }
     catch
     {
         if (Directory.Exists(output))
@@ -260,13 +278,13 @@ void Test(string project, params string[] extra)
     }
 }
 
-// The tests of this OS's share under --split (#735): the test command's own filter, if any, and the split's. Only the toolkit tests
-// classify their classes (and the probe project of ValidationLimitsTests, which tests the split): the xunit adapter matches no test
-// at all when a filter names a trait no test in the project carries, so the other projects run whole. A split command must run a
-// test, so a filter that empties it fails rather than passes. Run settings after "--" stay last.
+// The tests of this OS's share under --split (#735): the test command's own filter, if any, and the split's. Repository validation
+// applies it to the toolkit project; plain --test-project applies it to its named project (including ValidationLimitsTests' probe).
+// Other repository projects run whole; the xunit adapter would match no test if the trait filter reached an unclassified project.
+// A split command must run a test, so a filter that empties it fails rather than passes. Run settings after "--" stay last.
 string[] Split(string project, string[] extra)
 {
-    if (splitFilter == null || !(limitsProbe || project == "tests/Valheim.Testing.Tests/Valheim.Testing.Tests.csproj")) return extra;
+    if (splitFilter == null || !(testProjectTest || project == "tests/Valheim.Testing.Tests/Valheim.Testing.Tests.csproj")) return extra;
     const string noTestsFail = "RunConfiguration.TreatNoTestsAsError=true";
     int filter = Array.IndexOf(extra, "--filter");
     int settings = Array.IndexOf(extra, "--");
@@ -297,7 +315,7 @@ void Execute(string file, string[] arguments, string? testResults)
     string command = file + " " + string.Join(' ', arguments);
     Note("start: " + command);
     running = command;
-    var info = new ProcessStartInfo(file) { UseShellExecute = false, WorkingDirectory = root };
+    var info = new ProcessStartInfo(file) { UseShellExecute = false, WorkingDirectory = workingDirectory };
     foreach (string argument in arguments) info.ArgumentList.Add(argument);
     using Process process = Process.Start(info) ?? throw new InvalidOperationException("Could not start " + file);
     var clock = Stopwatch.StartNew();

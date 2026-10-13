@@ -19,6 +19,28 @@ public sealed class CiShardTests
     }
 
     [Fact]
+    public void EveryWorkflowTestRunGoesThroughValidateCs()
+    {
+        string root = FixtureProjects.RepositoryRoot();
+        string workflows = string.Join('\n', Directory.GetFiles(Path.Combine(root, ".github", "workflows"), "*.yml")
+            .Order(StringComparer.Ordinal).Select(File.ReadAllText));
+        string[] directTestCommands =
+        [
+            @"\bdotnet\s+test\b",
+            @"\bdotnet\s+vstest\b",
+            @"\bxunit\.console(?:\.exe)?\b",
+            @"\b(?:dotnet\s+(?:build|msbuild)|msbuild(?:\.exe)?)\b[^\r\n]*(?:-t:|/t:)\S*test",
+        ];
+        foreach (string pattern in directTestCommands)
+            Assert.False(Regex.IsMatch(workflows, pattern, RegexOptions.IgnoreCase), $"workflow test command bypasses validate.cs: {pattern}");
+
+        string testWorkflow = File.ReadAllText(Path.Combine(root, ".github", "workflows", "test.yml"));
+        Assert.Contains("--test-project \"$GITHUB_WORKSPACE\" \"$GITHUB_WORKSPACE/tests/Valheim.Testing.Tests/Valheim.Testing.Tests.csproj\"", testWorkflow, StringComparison.Ordinal);
+        Assert.Contains("--test-project \"$GITHUB_WORKSPACE\" \"$RUNNER_TEMP/mod/MyMod.Tests/MyMod.Tests.csproj\"", testWorkflow, StringComparison.Ordinal);
+        Assert.Contains("--target RunTestsOnBothFrameworks", testWorkflow, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void EveryTimedMethodOfTheManifestIsATestOfThisProject()
     {
         string root = FixtureProjects.RepositoryRoot();

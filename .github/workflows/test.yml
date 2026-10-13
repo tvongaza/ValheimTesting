@@ -2,7 +2,7 @@ name: Local test layers
 # Bootstrap and local validation on every supported toolkit OS: library tests, example builds, the
 # no-game example, package-consuming mod tests and packing. Never launches Valheim or a server. The scripts are .NET file-based
 # programs, so the same commands run in each runner's default shell. No secrets are used. The mod-example job runs
-# the ModWithTests workflow template's commands against the published packages. The game-hosts job drives the real ssh
+# the copied template's test project through validate.cs's limits against the published packages. The game-hosts job drives the real ssh
 # and docker paths of the game hosts against a throwaway sshd on localhost and a throwaway container.
 # Pushes to main and pull requests only: a branch with an open PR would otherwise run everything twice.
 # A pull request runs the OS-aware split (#735): validate.cs --split runs OS-neutral toolkit test classes on Linux only and OS-specific ones
@@ -327,20 +327,27 @@ jobs:
           git diff --exit-code
   mod-example:
     name: mod example (published packages)
-    # Keep in step with examples/ModWithTests/.github/workflows/tests.yml. A copy outside the checkout leaves this
+    # Runs the template's test project through validate.cs's limits. A copy outside the checkout leaves this
     # repository's NuGet.Config and local feed out of play, so packages restore from NuGet.org only, as in a mod.
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup
       - run: cp -R examples/ModWithTests "$RUNNER_TEMP/mod"
-      # Not started by validate.cs: bound at the 10-minute hard limit of a test command (#719).
-      - run: dotnet test MyMod.Tests/MyMod.Tests.csproj -c Release
-        timeout-minutes: 10
-        working-directory: ${{ runner.temp }}/mod
+      # One test command: validate.cs owns its soft and hard limits, blame report and transcript (#719, #729).
+      - run: dotnet run scripts/validate.cs -- --test-project "$GITHUB_WORKSPACE" "$RUNNER_TEMP/mod/MyMod.Tests/MyMod.Tests.csproj" "$RUNNER_TEMP/mod-test-results"
+        timeout-minutes: 14
+      - name: Keep test evidence on failure
+        if: failure() || cancelled()
+        uses: actions/upload-artifact@v7
+        with:
+          name: mod-example-results
+          path: ${{ runner.temp }}/mod-test-results
+          if-no-files-found: ignore
+          retention-days: 14
   pins:
     name: pins (toolkit-versions.json)
     # toolkit-versions.json records the released versions; docs, examples and tools pin exactly those and follow every release
@@ -480,7 +487,7 @@ jobs:
     # network driven with docker exec. Both are removed at the end; .github/scripts/game-hosts.sh sets up and removes the
     # sshd.
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     env:
       VALHEIM_TESTING_REQUIRE_HOSTS: '1'
       VALHEIM_TESTING_SSH_PORT: '2222'
@@ -500,14 +507,22 @@ jobs:
         # anonymous-pull limits that have stopped this job before any tests ran. Override the runner entrypoint: this
         # container is only a disposable bash host for GameHosts tests, not a self-hosted Actions runner.
         run: docker run -d --rm --name vt-game-host --network host --entrypoint /bin/sleep ghcr.io/actions/actions-runner@sha256:e5496277be5d09bc968b3d64911b74e219ac4a3f2edce956a3ecf9271bea1ef4 1800
-      # Not started by validate.cs, so the step bound is the 10-minute hard limit of a test command (#719); the whole job takes about 3 minutes.
-      - run: dotnet test tests/Valheim.Testing.Tests/Valheim.Testing.Tests.csproj -c Release --filter Category=GameHosts
-        timeout-minutes: 10
+      # One test command: validate.cs owns its soft and hard limits, blame report and transcript (#719, #729).
+      - run: dotnet run scripts/validate.cs -- --test-project "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/tests/Valheim.Testing.Tests/Valheim.Testing.Tests.csproj" "$RUNNER_TEMP/game-host-results" Category=GameHosts
+        timeout-minutes: 14
       - name: Stop the sshd and the container
         if: always()
         run: |
           docker rm -f vt-game-host || true
           bash .github/scripts/game-hosts.sh stop
+      - name: Keep test evidence on failure
+        if: failure() || cancelled()
+        uses: actions/upload-artifact@v7
+        with:
+          name: game-host-results
+          path: ${{ runner.temp }}/game-host-results
+          if-no-files-found: ignore
+          retention-days: 14
   test-runners:
     name: test runners (${{ matrix.os }})
     # tools/test-runners for real: a copy of ModWithTests that also targets net48 and imports the targets file (the
@@ -520,7 +535,8 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    # Four separately bounded validate.cs calls plus Mono/setup time; any one has time to print its hard-limit evidence.
+    timeout-minutes: 75
     defaults:
       run:
         shell: bash
@@ -579,11 +595,12 @@ jobs:
           grep -q 'Include="xunit.runner.console"' "$project"
           grep -q 'Valheim.TestRunners.targets' "$project"
           rm "$project.orig"
-      # Not started by validate.cs: the steps that run tests are bound at the 10-minute hard limit of a test command (#719).
+      # validate.cs owns the soft and hard limits and transcript for every invocation of the test-running target (#719, #729).
+      # The copied consumer target owns its nested runners, so this outer build cannot name tests in flight without putting
+      # repository CI plumbing in Valheim.TestRunners.targets; its hard-limit evidence names the target command instead.
       - name: Both frameworks pass
-        timeout-minutes: 10
-        working-directory: ${{ runner.temp }}/mod
-        run: dotnet build MyMod.Tests/MyMod.Tests.csproj -t:RunTestsOnBothFrameworks
+        timeout-minutes: 14
+        run: dotnet run scripts/validate.cs -- --test-project "$GITHUB_WORKSPACE" "$RUNNER_TEMP/mod/MyMod.Tests/MyMod.Tests.csproj" "$RUNNER_TEMP/test-runner-results/pass" --target RunTestsOnBothFrameworks
       - name: Add a test that fails only on .NET Framework
         run: |
           cat > "$RUNNER_TEMP/mod/MyMod.Tests/Net48OnlyFailure.cs" <<'CS'
@@ -600,14 +617,30 @@ jobs:
               }
           }
           CS
-      - name: Negative control
-        timeout-minutes: 10
-        working-directory: ${{ runner.temp }}/mod
+      - name: Negative control - .NET Framework failure fails the run
+        timeout-minutes: 14
         run: |
-          run() { dotnet build MyMod.Tests/MyMod.Tests.csproj -t:RunTestsOnBothFrameworks "$@" | tee "$RUNNER_TEMP/run.log"; return "${PIPESTATUS[0]}"; }
-          status=0; run || status=$?
-          if [ "$status" = 0 ] || ! grep -q 'net48: FAILED (tests, exit 1)' "$RUNNER_TEMP/run.log"; then echo "::error::a net48-only failure must fail the run; it exited $status"; exit 1; fi
-          run -f net10.0
-          # A filter that selects no test must not pass the net48 leg.
-          status=0; run -f net48 -p:VSTestTestCaseFilter=FullyQualifiedName~NoSuchTest || status=$?
-          if [ "$status" = 0 ] || ! grep -q 'net48: FAILED (no tests ran)' "$RUNNER_TEMP/run.log"; then echo "::error::a net48 leg that ran no tests must fail the run; it exited $status"; exit 1; fi
+          set +e
+          dotnet run scripts/validate.cs -- --test-project "$GITHUB_WORKSPACE" "$RUNNER_TEMP/mod/MyMod.Tests/MyMod.Tests.csproj" "$RUNNER_TEMP/test-runner-results/net48-failure" --target RunTestsOnBothFrameworks | tee "$RUNNER_TEMP/net48-failure.log"
+          status="${PIPESTATUS[0]}"
+          set -e
+          if [ "$status" = 0 ] || ! grep -q 'net48: FAILED (tests, exit 1)' "$RUNNER_TEMP/net48-failure.log"; then echo "::error::a net48-only failure must fail the run; it exited $status"; exit 1; fi
+      - name: Negative control - modern framework still passes
+        timeout-minutes: 14
+        run: dotnet run scripts/validate.cs -- --test-project "$GITHUB_WORKSPACE" "$RUNNER_TEMP/mod/MyMod.Tests/MyMod.Tests.csproj" "$RUNNER_TEMP/test-runner-results/net10-only" --target RunTestsOnBothFrameworks -f net10.0
+      - name: Negative control - no .NET Framework tests fails the run
+        timeout-minutes: 14
+        run: |
+          set +e
+          dotnet run scripts/validate.cs -- --test-project "$GITHUB_WORKSPACE" "$RUNNER_TEMP/mod/MyMod.Tests/MyMod.Tests.csproj" "$RUNNER_TEMP/test-runner-results/net48-no-tests" --target RunTestsOnBothFrameworks -f net48 -p:VSTestTestCaseFilter=FullyQualifiedName~NoSuchTest | tee "$RUNNER_TEMP/net48-no-tests.log"
+          status="${PIPESTATUS[0]}"
+          set -e
+          if [ "$status" = 0 ] || ! grep -q 'net48: FAILED (no tests ran)' "$RUNNER_TEMP/net48-no-tests.log"; then echo "::error::a net48 leg that ran no tests must fail the run; it exited $status"; exit 1; fi
+      - name: Keep test evidence on failure
+        if: failure() || cancelled()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-runner-results-${{ matrix.os }}
+          path: ${{ runner.temp }}/test-runner-results
+          if-no-files-found: ignore
+          retention-days: 14
