@@ -57,7 +57,7 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: ${{ env.VT_NUGET_CACHE_PATHS }}
-          key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', 'scripts/*.cs', 'cli-dependency.json', 'NuGet.Config', '.config/dotnet-tools.json') }}
+          key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', 'scripts/*.cs', 'scripts/Shared/*.cs', 'cli-dependency.json', 'NuGet.Config', '.config/dotnet-tools.json') }}
           restore-keys: nuget-${{ runner.os }}-
       - run: dotnet --info
       - name: Seed an obsolete CLI package for the local-feed cleanup regression
@@ -173,7 +173,7 @@ jobs:
       - uses: actions/cache/restore@v6
         with:
           path: ${{ env.VT_NUGET_CACHE_PATHS }}
-          key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', 'scripts/*.cs', 'cli-dependency.json', 'NuGet.Config', '.config/dotnet-tools.json') }}
+          key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', 'scripts/*.cs', 'scripts/Shared/*.cs', 'cli-dependency.json', 'NuGet.Config', '.config/dotnet-tools.json') }}
           restore-keys: nuget-${{ runner.os }}-
       - run: dotnet run scripts/bootstrap-cli.cs
       # #736 investigation, macOS only (see the action).
@@ -236,7 +236,7 @@ jobs:
       - uses: actions/cache/restore@v6
         with:
           path: ${{ env.VT_NUGET_CACHE_PATHS }}
-          key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', 'scripts/*.cs', 'cli-dependency.json', 'NuGet.Config', '.config/dotnet-tools.json') }}
+          key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', 'scripts/*.cs', 'scripts/Shared/*.cs', 'cli-dependency.json', 'NuGet.Config', '.config/dotnet-tools.json') }}
           restore-keys: nuget-${{ runner.os }}-
       - run: dotnet run scripts/bootstrap-cli.cs
       - name: Run the local-shell integration tests
@@ -274,7 +274,7 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: ${{ env.VT_NUGET_CACHE_PATHS }}
-          key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', 'scripts/*.cs', 'cli-dependency.json', 'NuGet.Config', '.config/dotnet-tools.json') }}
+          key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', 'scripts/*.cs', 'scripts/Shared/*.cs', 'cli-dependency.json', 'NuGet.Config', '.config/dotnet-tools.json') }}
           restore-keys: nuget-${{ runner.os }}-
       - run: dotnet run scripts/bootstrap-cli.cs
       - name: Build candidate API reference

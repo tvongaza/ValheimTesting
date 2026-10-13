@@ -5,12 +5,11 @@
 //
 // The candidate form is for validate.cs's local feed. It accepts the shared -candidate.<hash> suffix; a release never does.
 using System.IO.Compression;
-using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
 
-string root = FindRoot();
+string root = RepositoryPaths.FindRoot();
 string? directory = null, sourceCommit = null;
 bool candidate = false;
 for (int i = 0; i < args.Length; i++)
@@ -21,7 +20,7 @@ for (int i = 0; i < args.Length; i++)
     else throw new ArgumentException("package-audit: unknown argument " + args[i]);
 }
 if (directory == null || (!candidate && (sourceCommit == null || !Regex.IsMatch(sourceCommit, "^[0-9a-f]{40}$", RegexOptions.IgnoreCase))))
-    throw new ArgumentException("Usage: dotnet run scripts/package-audit.cs -- --directory DIR --source-commit FULL_SHA | --directory DIR --candidate");
+    throw new ArgumentException("Usage: dotnet run scripts/package-audit.cs -- --directory DIR --source-commit FULL_SHA | --directory DIR --candidate. Relative paths are relative to the repository root.");
 
 using var cli = JsonDocument.Parse(File.ReadAllText(Path.Combine(root, "cli-dependency.json")));
 string cliCommit = cli.RootElement.GetProperty("commit").GetString()!;
@@ -31,7 +30,7 @@ var versions = Directory.GetDirectories(Path.Combine(root, "src"), "Valheim.Test
     .ToDictionary(id => id, id => XDocument.Load(Path.Combine(root, "src", id, id + ".csproj"))
         .Descendants("Version").Single().Value, StringComparer.Ordinal);
 versions.Add("Valheim.Testing.Cli", cli.RootElement.GetProperty("packageVersion").GetString()!);
-string folder = Path.GetFullPath(directory);
+string folder = RepositoryPaths.ResolvePath(root, directory);
 if (!Directory.Exists(folder)) throw new InvalidDataException("Package directory does not exist: " + folder);
 var packageFiles = Directory.GetFiles(folder, "*.nupkg", SearchOption.TopDirectoryOnly);
 if (packageFiles.Length != versions.Count) throw new InvalidDataException($"Expected {versions.Count} packages in {folder}, found {packageFiles.Length}.");
@@ -153,13 +152,5 @@ foreach ((string id, var package) in found)
     }
 Console.WriteLine($"Package audit passed: {found.Count} packages, one coherent {(candidate ? "candidate" : "release")} set.");
 
-static string FindRoot()
-{
-    foreach (string start in new[] { Environment.CurrentDirectory, Path.GetDirectoryName(SourcePath()) ?? "" })
-        for (DirectoryInfo? dir = new(start); dir != null; dir = dir.Parent)
-            if (File.Exists(Path.Combine(dir.FullName, "cli-dependency.json"))) return dir.FullName;
-    throw new InvalidOperationException("Run from the ValheimTesting repository.");
-}
-static string SourcePath([CallerFilePath] string path = "") => path;
 static bool IsBinary(string name) => new[] { ".dll", ".exe", ".so", ".dylib" }
     .Any(extension => name.EndsWith(extension, StringComparison.OrdinalIgnoreCase));

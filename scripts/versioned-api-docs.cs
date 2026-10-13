@@ -23,21 +23,33 @@ internal static class VersionedApiDocs
 
     public static async Task<int> Run(string[] args)
     {
-        if (args.Length == 0) throw new ArgumentException("Usage: dotnet run scripts/versioned-api-docs.cs -- version PACKAGES... | archive SITE VERSION COMMIT OUTPUT | install ARCHIVE SHA256 VERSION SITE | assemble SITE");
+        if (args.Length == 0) throw new ArgumentException("Usage: dotnet run scripts/versioned-api-docs.cs -- version PACKAGES... | archive SITE VERSION COMMIT OUTPUT | install ARCHIVE SHA256 VERSION SITE | assemble SITE. Relative paths are relative to the repository root.");
         switch (args[0])
         {
             case "version" when args.Length > 1:
-                Console.WriteLine(PackageVersion(args[1..]));
+            {
+                Console.WriteLine(PackageVersion(RepositoryPaths.Resolve(args[1..])));
                 break;
+            }
             case "archive" when args.Length == 5:
-                MakeArchive(args[1], args[2], args[3], args[4]);
-                Console.WriteLine($"Archived {args[2]}: {args[4]} ({Sha256(File.ReadAllBytes(args[4]))})");
+            {
+                string[] paths = RepositoryPaths.Resolve(args[1], args[4]);
+                string site = paths[0], output = paths[1];
+                MakeArchive(site, args[2], args[3], output);
+                Console.WriteLine($"Archived {args[2]}: {output} ({Sha256(File.ReadAllBytes(output))})");
                 break;
+            }
             case "install" when args.Length == 5:
-                InstallArchive(File.ReadAllBytes(args[1]), args[2], args[3], args[4]);
-                WriteIndex(args[4]);
+            {
+                string[] paths = RepositoryPaths.Resolve(args[1], args[4]);
+                string archive = paths[0], installSite = paths[1];
+                InstallArchive(File.ReadAllBytes(archive), args[2], args[3], installSite);
+                WriteIndex(installSite);
                 break;
+            }
             case "assemble" when args.Length == 2:
+            {
+                string assembledSite = RepositoryPaths.Resolve(args[1])[0];
                 string repository = Environment.GetEnvironmentVariable("GITHUB_REPOSITORY") ?? throw new ArgumentException("GITHUB_REPOSITORY is required");
                 string token = Environment.GetEnvironmentVariable("GH_TOKEN") ?? throw new ArgumentException("GH_TOKEN is required");
                 using (var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) })
@@ -46,12 +58,13 @@ internal static class VersionedApiDocs
                     await foreach (var archive in PublishedArchives(http, repository, token))
                     {
                         if (!seen.Add(archive.Version)) throw new InvalidDataException($"More than one published release contains API reference {archive.Version}");
-                        InstallArchive(archive.Data, archive.Digest, archive.Version, args[1]);
+                        InstallArchive(archive.Data, archive.Digest, archive.Version, assembledSite);
                     }
-                    WriteIndex(args[1]);
+                    WriteIndex(assembledSite);
                     Console.WriteLine("Versioned API references: " + (seen.Count == 0 ? "none yet" : string.Join(", ", seen.Order(StringComparer.Ordinal))));
                 }
                 break;
+            }
             default: throw new ArgumentException("Unknown versioned-api-docs command or argument count: " + args[0]);
         }
         return 0;

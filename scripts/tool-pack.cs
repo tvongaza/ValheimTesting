@@ -7,7 +7,7 @@
 using System.IO.Compression;
 using System.Text.RegularExpressions;
 
-string root = FindRoot();
+string root = RepositoryPaths.FindRoot();
 string[] tools = ["Valheim.Testing.Bindings.Tool", "Valheim.Testing.NativeSmoke"];
 const string sentinel = "Valheim.Testing.StalePackSentinel.dll";
 
@@ -36,6 +36,7 @@ switch (args)
         Console.WriteLine("Seeded stale tool publish files for the packaging regression.");
         break;
     case ["verify", var feed]:
+        feed = RepositoryPaths.ResolvePath(root, feed);
         foreach (string id in tools)
         {
             string[] matches = Directory.GetFiles(feed, id + ".*.nupkg");
@@ -54,14 +55,7 @@ switch (args)
         }
         break;
     default:
-        throw new ArgumentException("usage: dotnet run scripts/tool-pack.cs -- clean | seed | verify FEED");
+        throw new ArgumentException("usage: dotnet run scripts/tool-pack.cs -- clean | seed | verify FEED. Relative paths are relative to the repository root.");
 }
 
 string PublishDirectory(string id) => Path.Combine(root, "src", id, "bin", "Release", "net10.0", "publish");
-
-static string FindRoot()
-{
-    for (DirectoryInfo? directory = new(Environment.CurrentDirectory); directory != null; directory = directory.Parent)
-        if (File.Exists(Path.Combine(directory.FullName, "cli-dependency.json"))) return directory.FullName;
-    throw new InvalidOperationException("Run from inside the ValheimTesting repository.");
-}

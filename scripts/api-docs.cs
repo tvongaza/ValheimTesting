@@ -18,11 +18,10 @@
 // any JSON it is written to. Both commands refuse a type that breaks this (Classify below).
 #:package Mono.Cecil@0.11.6
 using System.Diagnostics;
-using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.RegularExpressions;
 
-string root = FindRoot();
+string root = RepositoryPaths.FindRoot();
 // The site publishes the landing page, getting started, the package table and every page in these folders; a page
 // elsewhere under docs/ (maintainers/, agent pages) stays on GitHub. A published page also needs an entry in docs/toc.yml.
 string[] publishedRootPages = ["index.md", "getting-started.md", "package-versions.md"];
@@ -532,14 +531,4 @@ static bool InNamespace(Mono.Cecil.TypeDefinition type, string? name)
     if (name == null) return true;
     while (type.DeclaringType != null) type = type.DeclaringType;
     return type.Namespace == name || type.Namespace.StartsWith(name + ".", StringComparison.Ordinal);
-}
-
-static string SourcePath([CallerFilePath] string path = "") => path;
-
-static string FindRoot()
-{
-    foreach (string start in new[] { Environment.CurrentDirectory, Path.GetDirectoryName(SourcePath()) ?? "" })
-        for (DirectoryInfo? directory = new DirectoryInfo(start); directory != null; directory = directory.Parent)
-            if (File.Exists(Path.Combine(directory.FullName, "cli-dependency.json"))) return directory.FullName;
-    throw new InvalidOperationException("Run from inside the ValheimTesting repository.");
 }

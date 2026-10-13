@@ -1,0 +1,8 @@
+<Project>
+  <Import Project="../Directory.Build.props" />
+  <!-- The SDK's file-based-app cache does not notice edits to Shared/RepositoryPaths.cs. After editing it,
+       rebuild each script with `dotnet run`, passing the `no-cache` flag with its two leading hyphens. -->
+  <ItemGroup>
+    <Compile Include="$(MSBuildThisFileDirectory)Shared/RepositoryPaths.cs" Link="RepositoryPaths.cs" />
+  </ItemGroup>
+</Project>
