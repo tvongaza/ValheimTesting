@@ -39,17 +39,20 @@ public sealed class ValidationLimitsTests : IClassFixture<ValidationLimitsTests.
     }
 
     [Fact]
-    public async Task ARunPastTheHardLimitStopsTheHostFlushesBlameKillsTheTreeAndNamesTheTestInFlight()
+    public async Task ARunPastTheHardLimitKeepsFinishedResultsAndNamesTheTestInFlight()
     {
-        var run = await _probe.Run("NeverFinishes", soft: 2, hard: 20, githubActions: false);
+        var run = await _probe.Run("HardLimitProbeTests", soft: 2, hard: 20, githubActions: false);
 
         Assert.NotEqual(0, run.ExitCode);
         Has(run, "HARD LIMIT:");
         Has(run, "stopped 1 test host process(es); waiting up to 10 s for the blame sequence to flush");
-        Has(run, "blame sequence flushed; killing the process tree");
+        Has(run, "blame sequence flushed; waiting up to 30 s for the test command to exit");
+        Has(run, "test command exited on its own after");
+        Lacks(run, "test command killed after");
         Has(run, "FAILED: over the hard limit");
-        Has(run, "started and not completed: LimitsProbe.ProbeTests.NeverFinishes");
+        Has(run, "started and not completed: LimitsProbe.HardLimitProbeTests.NeverFinishes");
         Lacks(run, "::warning");
+        Assert.Equal(new[] { "LimitsProbe.HardLimitProbeTests.FinishesBeforeTheHardLimit" }, _probe.Passed("HardLimitProbeTests", split: false));
     }
 
     [Fact]
@@ -63,6 +66,13 @@ public sealed class ValidationLimitsTests : IClassFixture<ValidationLimitsTests.
         Assert.EndsWith("; no test names: net48 xunit console leg",
             ValidationLimitReports.HardLimitFailure("dotnet build probe -t:RunTestsOnBothFrameworks", TimeSpan.FromSeconds(11), TimeSpan.FromSeconds(10), "net48 xunit console leg"),
             StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void NoStoppedTestHostMeansTheCommandTreeIsKilledImmediately()
+    {
+        Assert.False(ValidationLimitHandling.ShouldWaitForCommandExit(stoppedTestHosts: 0));
+        Assert.True(ValidationLimitHandling.ShouldWaitForCommandExit(stoppedTestHosts: 1));
     }
 
     // #735: --split runs neutral tests on Linux only and each OS-specific class on its OS; a class without the trait runs everywhere.
@@ -189,8 +199,12 @@ public sealed class ValidationLimitsTests : IClassFixture<ValidationLimitsTests.
                 """);
             File.WriteAllText(Path.Combine(project, "ProbeTests.cs"), """
                 using System;
+                using System.Collections.Generic;
+                using System.Linq;
                 using System.Threading;
                 using Xunit;
+                using Xunit.Abstractions;
+                using Xunit.Sdk;
 
                 namespace LimitsProbe;
 
@@ -198,7 +212,19 @@ public sealed class ValidationLimitsTests : IClassFixture<ValidationLimitsTests.
                 {
                     [Fact] public void PassesQuickly() { }
                     [Fact] public void PassesAfterTheSoftLimit() => Thread.Sleep(TimeSpan.FromSeconds(6));
+                }
+
+                [TestCaseOrderer("LimitsProbe.MethodNameOrderer", "LimitsProbe")]
+                public class HardLimitProbeTests
+                {
+                    [Fact] public void FinishesBeforeTheHardLimit() { }
                     [Fact] public void NeverFinishes() => Thread.Sleep(TimeSpan.FromMinutes(30));
+                }
+
+                public sealed class MethodNameOrderer : ITestCaseOrderer
+                {
+                    public IEnumerable<TTestCase> OrderTestCases<TTestCase>(IEnumerable<TTestCase> testCases)
+                        where TTestCase : ITestCase => testCases.OrderBy(test => test.TestMethod.Method.Name, StringComparer.Ordinal);
                 }
 
                 // The OS-aware split (#735): one class per Os trait value, and one without the trait.
