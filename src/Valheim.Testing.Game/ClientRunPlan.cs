@@ -261,8 +261,10 @@ public sealed class ClientRunPlan
         var platform = Owned ? InstallPlatform() : null;
         if (architecture == ClientArchitecture.Arm64 && platform is { } other && other != ClientPlatform.MacOS)
             throw new ArgumentException($"Architecture arm64 is for a macOS client (Valheim.app); this {other} client is x64 only. Leave architecture out.");
-        // The launch's own slice and core check on an install on this machine, so validate and run refuse it before a server starts.
-        if (platform == ClientPlatform.MacOS && !CopySource)
+        // The launch's own slice and core check on an install on this machine, so validate and run refuse it before a server
+        // starts (#657). A default profile (CopySource) is checked too: on macOS it stages its install's own loader (no pinned
+        // pack replaces it, ShippedLoader), so the install's game and Doorstop slices are the profile's.
+        if (platform == ClientPlatform.MacOS)
             try { GameLaunch.RequireMacArchitecture(Path.GetFullPath(Install), architecture, Path.GetFullPath(LoaderRoot)); }
             catch (Exception error) when (error is InvalidOperationException or IOException)
             {

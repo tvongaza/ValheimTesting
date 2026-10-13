@@ -312,34 +312,34 @@ public sealed class ClientSessionTests : IDisposable
         }
     }
 
-    // In-place validation checks the selected loader's slice before launch. An unprepared owned profile can replace
-    // the source loader with a reviewed package, so its source loader must not decide whether that profile can run.
-    [Fact] public void PlanValidationRefusesAMacInstallThePlansArchitectureCannotLaunch()
+    // Validation checks the launch's slice before any server starts (#657), for a default profile (CopySource, which on
+    // macOS stages its install's own loader) and for an install run in place alike.
+    [Theory] [InlineData(false)] [InlineData(true)]
+    public void PlanValidationRefusesAMacInstallThePlansArchitectureCannotLaunch(bool inPlace)
     {
-        using var pack = ClientLaunchTests.Install.Mac();
-        var armPlan = Owned(pack.Root, "arm64");
-        armPlan.InPlace = true;
-        var error = Assert.Throws<ArgumentException>(() => armPlan.Validate());
-        Assert.Contains("The client install cannot launch as arm64: No Doorstop library in the install has an arm64 slice", error.Message);
-        Owned(pack.Root, "x64").Validate(); // The pack's own route remains available when explicitly requested.
-        if (OperatingSystem.IsMacOS() && System.Runtime.InteropServices.RuntimeInformation.OSArchitecture == System.Runtime.InteropServices.Architecture.Arm64)
+        ClientRunPlan Plan(string root, string? architecture = null)
         {
-            var defaultPlan = Owned(pack.Root); defaultPlan.InPlace = true;
-            Assert.Contains("cannot launch as arm64", Assert.Throws<ArgumentException>(() => defaultPlan.Validate()).Message);
+            var plan = Owned(root, architecture); plan.InPlace = inPlace;
+            Assert.Equal(!inPlace, plan.CopySource);
+            return plan;
         }
+        bool appleSilicon = OperatingSystem.IsMacOS() && System.Runtime.InteropServices.RuntimeInformation.OSArchitecture == System.Runtime.InteropServices.Architecture.Arm64;
+        using var pack = ClientLaunchTests.Install.Mac();
+        var error = Assert.Throws<ArgumentException>(() => Plan(pack.Root, "arm64").Validate());
+        Assert.Contains("The client install cannot launch as arm64: No Doorstop library in the install has an arm64 slice", error.Message);
+        Plan(pack.Root, "x64").Validate(); // The pack's own route remains available when explicitly requested.
+        if (appleSilicon) Assert.Contains("cannot launch as arm64", Assert.Throws<ArgumentException>(() => Plan(pack.Root).Validate()).Message);
         using var legacy = ClientLaunchTests.Install.Mac(universalDoorstop: true, core: ClientLaunchTests.LegacyDetour);
-        var legacyPlan = Owned(legacy.Root, "arm64"); legacyPlan.InPlace = true;
-        Assert.Contains("MonoMod before 25", Assert.Throws<ArgumentException>(() => legacyPlan.Validate()).Message);
+        Assert.Contains("MonoMod before 25", Assert.Throws<ArgumentException>(() => Plan(legacy.Root, "arm64").Validate()).Message);
         using var nativeOnly = ClientLaunchTests.Install.Mac(packDoorstop: false, arm64Doorstop: true, core: ClientLaunchTests.NativeDetour);
-        Owned(nativeOnly.Root, "arm64").Validate();
-        var x64Plan = Owned(nativeOnly.Root, "x64"); x64Plan.InPlace = true;
-        Assert.Contains("cannot launch as x64: No Doorstop library in the install has an x86_64 slice", Assert.Throws<ArgumentException>(() => x64Plan.Validate()).Message);
-        if (OperatingSystem.IsMacOS() && System.Runtime.InteropServices.RuntimeInformation.OSArchitecture == System.Runtime.InteropServices.Architecture.Arm64)
-            Owned(nativeOnly.Root).Validate();
+        Plan(nativeOnly.Root, "arm64").Validate();
+        Assert.Contains("cannot launch as x64: No Doorstop library in the install has an x86_64 slice", Assert.Throws<ArgumentException>(() => Plan(nativeOnly.Root, "x64").Validate()).Message);
+        if (appleSilicon) Plan(nativeOnly.Root).Validate();
+        using var x64Game = ClientLaunchTests.Install.Mac(game: ClientLaunchTests.Thin(ClientLaunchTests.X86_64), universalDoorstop: true, core: ClientLaunchTests.NativeDetour);
+        Assert.Contains("has no arm64 slice (found: x86_64)", Assert.Throws<ArgumentException>(() => Plan(x64Game.Root, "arm64").Validate()).Message);
         using var noGame = ClientLaunchTests.Install.Mac(core: ClientLaunchTests.NativeDetour);
         File.Delete(noGame.Executable);
-        var noGamePlan = Owned(noGame.Root); noGamePlan.InPlace = true;
-        Assert.Contains("has no executable", Assert.Throws<ArgumentException>(() => noGamePlan.Validate()).Message);
+        Assert.Contains("has no executable", Assert.Throws<ArgumentException>(() => Plan(noGame.Root).Validate()).Message);
     }
 
     // The process started, so its kept logs travel with the failure for the scan; a start that never happened keeps none.

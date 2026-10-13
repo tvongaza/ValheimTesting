@@ -35,10 +35,10 @@ public sealed partial class GameLaunch
     // root, where a native install puts UnityDoorstop 4.5 or later: universal or arm64-only, what matters is its arm64 slice.
     // The Doorstop libraries a macOS install may load BepInEx through, relative with '/': BepInExPack's x64 one or a root one.
     internal static readonly string[] MacDoorstopFiles = ["doorstop_libs/libdoorstop_x64.dylib", "libdoorstop.dylib"];
-    private static readonly string[] MacDoorstops = MacDoorstopFiles.Select(file => file.Replace('/', Path.DirectorySeparatorChar)).ToArray();
     // Legacy MonoMod (before 25), which BepInExPack_Valheim's core uses, cannot apply detours on arm64: Apple Silicon keeps JIT
     // pages writable or executable, never both. Its reorganised releases (25 and later) can, so a native core is built on them.
-    internal static readonly string MacNativeDetour = Path.Combine("BepInEx", "core", "MonoMod.RuntimeDetour.dll");
+    // Relative with '/', as a macOS host names it; refusals name it this way whichever machine runs the check.
+    internal const string MacNativeDetour = "BepInEx/core/MonoMod.RuntimeDetour.dll";
     internal const int MacNativeDetourMajor = 25;
 
     /// <summary>The one place a Linux client is refused: Linux hosts run the dedicated server only.</summary>
@@ -93,11 +93,15 @@ public sealed partial class GameLaunch
     {
         string install = FullInstall(installDirectory);
         if (DetectClient(install) != ClientPlatform.MacOS) return [ClientArchitecture.X64];
-        var game = MachOArchitectures(Path.Combine(FindMacBundle(install)!, MacClientExecutable));
         string loader = loaderDirectory == null ? install : FullInstall(loaderDirectory);
-        var doorstops = MacDoorstops.Select(relative => Path.Combine(loader, relative)).Where(File.Exists).SelectMany(MachOArchitectures).ToHashSet();
-        return Enum.GetValues<ClientArchitecture>().Where(architecture => game.Contains(architecture) && doorstops.Contains(architecture)
-            && (architecture != ClientArchitecture.Arm64 || MacNativeCoreProblem(loader) == null)).ToList();
+        _ = MacExecutable(install); // A missing game is an error, not an empty list.
+        // Each slice the one Mac check (RequireMacArchitecture) accepts.
+        return Enum.GetValues<ClientArchitecture>().Where(architecture =>
+        {
+            try { RequireMacArchitecture(install, architecture, loader); return true; }
+            // A slice that does not match, or no Doorstop library: not launchable. Any other read failure is an error.
+            catch (Exception error) when (error is InvalidOperationException or FileNotFoundException) { return false; }
+        }).ToList();
     }
 
     /// <summary>Checks a source game and the loader that will be staged into its disposable copy, before copying either.</summary>
@@ -136,49 +140,93 @@ public sealed partial class GameLaunch
     // a server runs as the machine's own slice, so only a client (client true) is offered the x64 alternative.
     internal static string MacDoorstop(string install, string executable, ClientArchitecture architecture, bool client = true)
     {
-        var game = MachOArchitectures(executable);
-        if (!game.Contains(architecture))
-            throw new InvalidOperationException($"{executable} has no {SliceName(architecture)} slice (found: {SliceList(game)}).");
-        var found = MacDoorstops.Select(relative => Path.Combine(install, relative)).Where(File.Exists).ToList();
-        if (found.Count == 0)
-            throw new FileNotFoundException("BepInEx's Doorstop loader is missing from the install: " + string.Join(" or ", MacDoorstops), Path.Combine(install, MacDoorstops[0]));
-        string? match = found.FirstOrDefault(path => MachOArchitectures(path).Contains(architecture));
-        if (match != null) return match;
-        string slices = string.Join("; ", found.Select(path => Path.GetRelativePath(install, path) + ": " + SliceList(MachOArchitectures(path))));
+        RequireMacGameSlice(MachOArchitectures(executable), architecture, executable);
+        var present = MacDoorstopFiles.Where(relative => File.Exists(Path.Combine(install, Native(relative))))
+            .Select(relative => (relative, MachOArchitectures(Path.Combine(install, Native(relative))))).ToList();
+        return Path.Combine(install, Native(SelectMacDoorstop(present, architecture, "install", client)));
+    }
+
+    // The one Mac game-slice decision (#657). Every caller reads the slices where the game is (this machine's file through
+    // MachOArchitectures, a host's through lipo, MacSlices) and asks here: plan validation and the launch on this machine,
+    // and the remote preflight. A universal game never falls back to the other slice.
+    internal static void RequireMacGameSlice(IReadOnlySet<ClientArchitecture> slices, ClientArchitecture architecture, string executable)
+    {
+        if (!slices.Contains(architecture))
+            throw new InvalidOperationException($"{executable} has no {SliceName(architecture)} slice (found: {SliceList(slices)}).");
+    }
+
+    // The one Mac Doorstop selector (#657): of the Doorstop libraries present in a loader (relative paths with '/', from
+    // MacDoorstopFiles, each with its slices, read wherever the loader is), the first with the requested slice, in
+    // MacDoorstopFiles order. dyld cannot insert a library into a process of another architecture. where names the loader in a
+    // refusal. Used for an install or profile on this machine, a reviewed loader package before staging, and a host's loader.
+    internal static string SelectMacDoorstop(IReadOnlyCollection<(string Relative, IReadOnlySet<ClientArchitecture> Slices)> present,
+        ClientArchitecture architecture, string where, bool client = true)
+    {
+        if (present.Count == 0)
+            throw new FileNotFoundException($"BepInEx's Doorstop loader is missing from the {where}: " + string.Join(" or ", MacDoorstopFiles));
+        foreach (string relative in MacDoorstopFiles)
+            if (present.Any(item => item.Relative == relative && item.Slices.Contains(architecture))) return relative;
+        string slices = string.Join("; ", MacDoorstopFiles.SelectMany(relative => present.Where(item => item.Relative == relative))
+            .Select(item => item.Relative + ": " + SliceList(item.Slices)));
         string hint = architecture == ClientArchitecture.Arm64
             ? "A native arm64 launch needs a libdoorstop.dylib with an arm64 slice (UnityDoorstop 4.5 or later, universal or arm64-only) at the root, " +
               "and a BepInEx core that runs natively (MonoMod 25 or later)" + (client ? "; or request x64 to run under Rosetta." : ".")
             : "An x86_64 launch needs BepInExPack_Valheim's doorstop_libs/libdoorstop_x64.dylib or a libdoorstop.dylib with an x86_64 slice, and Rosetta on Apple Silicon.";
-        throw new InvalidOperationException($"No Doorstop library in the install has an {SliceName(architecture)} slice ({slices}). " + hint);
+        throw new InvalidOperationException($"No Doorstop library in the {where} has an {SliceName(architecture)} slice ({slices}). " + hint);
     }
 
-    // The launch's architecture check for a macOS install, shared with plan validation (ClientRunPlan.Validate) so a plan the
-    // launch would refuse is refused before a runner starts anything: the game's and a Doorstop library's slice, and for arm64
-    // a native core. Returns the Doorstop library to insert.
+    // The launch's architecture check for a macOS install on this machine, shared with plan validation (ClientRunPlan.Validate)
+    // so a plan the launch would refuse is refused before a runner starts anything: the game's and a Doorstop library's slice,
+    // and for arm64 a native core. Returns the Doorstop library to insert.
     internal static string RequireMacArchitecture(string install, ClientArchitecture architecture, string? loaderDirectory = null)
+    {
+        string loader = loaderDirectory ?? install;
+        string doorstop = MacDoorstop(loader, MacExecutable(install), architecture);
+        if (architecture == ClientArchitecture.Arm64 && MacNativeCoreProblem(loader) is { } problem) throw new InvalidOperationException(problem);
+        return doorstop;
+    }
+
+    private static string MacExecutable(string install)
     {
         string executable = Path.Combine(FindMacBundle(install) ?? throw new FileNotFoundException($"Install contains no {ClientMacBundle}.", install), MacClientExecutable);
         if (!File.Exists(executable)) throw new FileNotFoundException($"{ClientMacBundle} has no executable: {MacClientExecutable}", executable);
-        string loader = loaderDirectory ?? install;
-        string doorstop = MacDoorstop(loader, executable, architecture);
-        if (architecture == ClientArchitecture.Arm64 && MacNativeCoreProblem(loader) is { } problem) throw new InvalidOperationException(problem);
-        return doorstop;
+        return executable;
     }
 
     // Why this install's BepInEx core cannot run natively on arm64, or null when it can. Only the managed version is read:
     // no assembly is loaded. Whether every plugin's own hooks and native libraries work on arm64 is not something a file says.
     internal static string? MacNativeCoreProblem(string install)
     {
-        string path = Path.Combine(install, MacNativeDetour);
-        if (!File.Exists(path))
+        string path = Path.Combine(install, Native(MacNativeDetour));
+        return MacNativeCoreProblem(File.Exists(path), File.Exists(path) ? AssemblyVersion(path) : null);
+    }
+
+    // The one native-core rule (#657), for a core read on this machine or fetched from a host: MonoMod.RuntimeDetour present,
+    // and version 25 or later.
+    internal static string? MacNativeCoreProblem(bool present, Version? version)
+    {
+        if (!present)
             return $"A native arm64 launch needs a BepInEx core built on MonoMod {MacNativeDetourMajor} or later, and the install has no {MacNativeDetour}. Install a native core, or request x64 to run under Rosetta.";
-        Version? version;
-        try { version = AssemblyName.GetAssemblyName(path).Version; }
-        catch (Exception error) when (error is BadImageFormatException or FileLoadException) { version = null; }
         if (version != null && version.Major >= MacNativeDetourMajor) return null;
         return $"{MacNativeDetour} is {(version == null ? "not a .NET assembly" : "version " + version)}: MonoMod before {MacNativeDetourMajor} cannot apply Harmony hooks on arm64, " +
             $"which is why BepInExPack_Valheim's core runs only under Rosetta. A native arm64 launch needs a BepInEx core rebuilt on MonoMod {MacNativeDetourMajor} or later; or request x64 to run under Rosetta.";
     }
+
+    // A managed assembly's version, read without loading it; null for a file that is not one.
+    internal static Version? AssemblyVersion(string path)
+    {
+        try { return AssemblyName.GetAssemblyName(path).Version; }
+        catch (Exception error) when (error is BadImageFormatException or FileLoadException) { return null; }
+    }
+
+    // The slices lipo -archs names on a host (x86_64, arm64), as MachOArchitectures gives them for a file here; others are ignored.
+    internal static IReadOnlySet<ClientArchitecture> MacSlices(string names)
+    {
+        var listed = names.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return Enum.GetValues<ClientArchitecture>().Where(architecture => listed.Contains(SliceName(architecture))).ToHashSet();
+    }
+
+    private static string Native(string relative) => relative.Replace('/', Path.DirectorySeparatorChar);
 
     // The plan's name for an architecture (ClientRunPlan.Architecture, evidence files).
     internal static string PlanName(ClientArchitecture architecture) => architecture == ClientArchitecture.Arm64 ? "arm64" : "x64";
