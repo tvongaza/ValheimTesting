@@ -1,29 +1,39 @@
-# ValheimTesting API reference (preview)
+# API reference (preview)
 
-This reference is generated from the current package sources. It is a **candidate public-surface inventory**, not a promise that every listed type is supported in 1.0. Issue [#135](https://github.com/tvongaza/ValheimTesting/issues/135) selects that contract; [#140](https://github.com/tvongaza/ValheimTesting/issues/140) supplies the behavior and failure documentation it needs.
+This reference is generated from the current package sources. It is a candidate inventory of the public surface, not a promise that every listed type is supported in 1.0. The [compatibility policy](compatibility.md) lists the decisions still open.
 
-For a released 0.1 package, use its [versioned API reference](https://tvongaza.github.io/ValheimTesting/versions/) built from the release tag. The unversioned site home tracks current source and may move ahead of packages on NuGet.org.
+For a released 0.1 package, use its [versioned API reference](https://tvongaza.github.io/ValheimTesting/versions/), built from the release tag. This page tracks current source and can be ahead of the packages on NuGet.org.
 
-The [0.1 documentation scope](documentation-scope.md) names the operation entry points whose members must have rendered XML summaries in CI and explains the boundaries for other generated declarations.
+## Find a package's types
 
-Start with [Choose a test layer](https://github.com/tvongaza/ValheimTesting/blob/main/docs/guides/choose-a-test-layer.md) to choose a package and test layer. The [package versions page](https://github.com/tvongaza/ValheimTesting/blob/main/docs/package-versions.md) has current package versions; each package guide below explains its contract and limits. The guides are published from the same source revision as this reference. The [ValheimCLI fork](https://github.com/tvongaza/valheimCLI) owns game-side command and capability semantics. The external `Valheim.Testing.Cli` transport is built from the exact fork commit in [`cli-dependency.json`](https://github.com/tvongaza/ValheimTesting/blob/main/cli-dependency.json); read its [transport guide at that commit](https://github.com/tvongaza/valheimCLI/blob/e596a7d984feaaa695f5c2999964b64e23fbfd92/docs/client-library.md). Its generated type reference is still to be integrated under #140.
-
-For short examples on selected API pages, see [declaring synthetic terrain](xref:Valheim.Testing.CompositeTerrain), [copying a pinned world](xref:Valheim.Testing.Game.WorldFixture), and [registering](xref:Valheim.Testing.Game.DisposableCharacterStore) a disposable character. The character examples start from a game-created local save; they do not synthesize a player. For complete runnable flows, follow the linked guides and examples.
-
-For game-facing tests, [pin and observe through `GameActor`](xref:Valheim.Testing.Game.GameActor), then let [`PinnedServerRun` own the server lifecycle](xref:Valheim.Testing.GameSessions.PinnedServerRun). Their excerpts link to compiling examples; the API page is not a replacement for the complete scenario.
-
-The source-only `Valheim.Testing.Adapter` reference is extracted from the same source compiled by `tests/Valheim.Testing.Adapter.CompileCheck`, with unrelated game/reference stubs filtered out. `Valheim.Testing.Doubles` is also shipped as source. Its declarations intentionally model only selected game behavior; consult [game doubles](https://github.com/tvongaza/ValheimTesting/blob/main/docs/packages/Valheim.Testing.Doubles.md) before using them as evidence of native behavior.
-
-| Package | Reference in this preview | Package page |
+| Package | Types | Package page |
 | --- | --- | --- |
-| `Valheim.Testing` | [Pure terrain types](xref:Valheim.Testing) | [Valheim.Testing](packages/Valheim.Testing.md) |
-| `Valheim.Testing.Doubles` | [Toolkit doubles](xref:Valheim.Testing.Doubles); the game-name stand-ins still need a reviewed inventory | [Valheim.Testing.Doubles](packages/Valheim.Testing.Doubles.md) |
-| `Valheim.Testing.Cli` | Generated type reference pending; built from the pinned ValheimCLI fork | [Valheim.Testing.Cli](packages/Valheim.Testing.Cli.md) |
-| `Valheim.Testing.Game` | [Native runner types](xref:Valheim.Testing.Game) (the namespace also holds `Valheim.Testing.GameSessions`' types) | [Valheim.Testing.Game](packages/Valheim.Testing.Game.md) |
-| `Valheim.Testing.GameSessions` | [Game sessions](xref:Valheim.Testing.GameSessions.GameSession), [the pinned runner](xref:Valheim.Testing.GameSessions.PinnedServerRun) and hosts | [Valheim.Testing.GameSessions](packages/Valheim.Testing.GameSessions.md) |
-| `Valheim.Testing.NativeSmoke` | Command-line tool; no public library API | [Valheim.Testing.NativeSmoke](packages/Valheim.Testing.NativeSmoke.md) |
-| `Valheim.Testing.Adapter` | [Game-side helper types](xref:Valheim.Testing.Adapter) | [Valheim.Testing.Adapter](packages/Valheim.Testing.Adapter.md) |
-| `Valheim.Testing.Bindings` | [Binding-check types](xref:Valheim.Testing.Bindings) | [Valheim.Testing.Bindings](packages/Valheim.Testing.Bindings.md) |
-| `Valheim.Testing.Bindings.Tool` | Console entry point delegates to `BindingCheckCommand` | [Valheim.Testing.Bindings.Tool](packages/Valheim.Testing.Bindings.Tool.md) |
+| `Valheim.Testing` | [Pure terrain types](xref:Valheim.Testing) | [Valheim.Testing](../packages/Valheim.Testing.md) |
+| `Valheim.Testing.Doubles` | [Toolkit doubles](xref:Valheim.Testing.Doubles); the game-name stand-ins have no reviewed inventory yet | [Valheim.Testing.Doubles](../packages/Valheim.Testing.Doubles.md) |
+| `Valheim.Testing.Cli` | No generated reference yet; built from the pinned ValheimCLI fork | [Valheim.Testing.Cli](../packages/Valheim.Testing.Cli.md) |
+| `Valheim.Testing.Game` | [Native runner types](xref:Valheim.Testing.Game); the namespace also holds the `Valheim.Testing.GameSessions` types | [Valheim.Testing.Game](../packages/Valheim.Testing.Game.md) |
+| `Valheim.Testing.GameSessions` | [Game sessions](xref:Valheim.Testing.GameSessions.GameSession), [the pinned runner](xref:Valheim.Testing.GameSessions.PinnedServerRun) and hosts | [Valheim.Testing.GameSessions](../packages/Valheim.Testing.GameSessions.md) |
+| `Valheim.Testing.NativeSmoke` | Command-line tool; no public library API | [Valheim.Testing.NativeSmoke](../packages/Valheim.Testing.NativeSmoke.md) |
+| `Valheim.Testing.Adapter` | [Game-side helper types](xref:Valheim.Testing.Adapter) | [Valheim.Testing.Adapter](../packages/Valheim.Testing.Adapter.md) |
+| `Valheim.Testing.Bindings` | [Binding-check types](xref:Valheim.Testing.Bindings) | [Valheim.Testing.Bindings](../packages/Valheim.Testing.Bindings.md) |
+| `Valheim.Testing.Bindings.Tool` | Console entry point; delegates to `BindingCheckCommand` | [Valheim.Testing.Bindings.Tool](../packages/Valheim.Testing.Bindings.Tool.md) |
 
-This table deliberately names two gaps: source-included game-name doubles are outside the namespace filter, and the transport is built from another repository. Neither can be treated as a frozen contract solely because this site builds. See the [candidate compatibility policy](compatibility.md) for the decisions still needed before 1.0.
+Two gaps are deliberate. The source-included game-name doubles sit outside the namespace filter, and the `Valheim.Testing.Cli` transport is built from another repository. Its source and a [transport guide at the pinned commit](https://github.com/tvongaza/valheimCLI/blob/e596a7d984feaaa695f5c2999964b64e23fbfd92/docs/client-library.md) are in the [ValheimCLI fork](https://github.com/tvongaza/valheimCLI); the commit is in [`cli-dependency.json`](../../cli-dependency.json).
+
+## Pages with examples
+
+| Page | Shows |
+| --- | --- |
+| [`CompositeTerrain`](xref:Valheim.Testing.CompositeTerrain) | Declaring synthetic terrain |
+| [`WorldFixture`](xref:Valheim.Testing.Game.WorldFixture) | Copying a pinned world |
+| [`DisposableCharacterStore`](xref:Valheim.Testing.Game.DisposableCharacterStore) | Registering a disposable character, from a game-created local save |
+| [`GameActor`](xref:Valheim.Testing.Game.GameActor) | Pinning and observing a game process |
+| [`PinnedServerRun`](xref:Valheim.Testing.GameSessions.PinnedServerRun) | Owning the server lifecycle |
+
+An API page excerpts one call. For a complete scenario, follow the [guides](../index.md#find-the-guide-for-your-task).
+
+## Related
+
+- [Compatibility policy](compatibility.md): what is open before 1.0
+- [Documentation scope](documentation-scope.md): which types must have rendered XML summaries
+- [Packages](../package-versions.md): every package, version and pin

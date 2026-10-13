@@ -1,6 +1,6 @@
 # Valheim.Testing.NativeSmoke
 
-[Current preview API reference](https://tvongaza.github.io/ValheimTesting/). This command-line tool's supported entry points are the commands documented below, rather than a public .NET library surface.
+[Current preview API reference](https://tvongaza.github.io/ValheimTesting/reference/). This command-line tool's supported entry points are the commands documented below, rather than a public .NET library surface.
 
 *Assistant-written (Claude).*
 

@@ -1,6 +1,6 @@
 # Valheim.Testing.GameSessions
 
-[Current preview API reference](https://tvongaza.github.io/ValheimTesting/). The package's README is this guide; use its versioned source commit from the package metadata when checking an older preview.
+[Current preview API reference](https://tvongaza.github.io/ValheimTesting/reference/). The package's README is this guide; use its versioned source commit from the package metadata when checking an older preview.
 
 *Assistant-written (Claude).*
 

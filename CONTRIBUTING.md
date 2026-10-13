@@ -34,7 +34,7 @@ dotnet run scripts/bootstrap-cli.cs  # every OS: build the pinned ValheimCLI int
 dotnet run scripts/validate.cs       # every OS: full no-game validation
 # macOS/Linux alternative: sh scripts/validate.sh (host-access preflight, writable NuGet caches, then both of the above)
 
-# For a public API or documentation change, build the candidate reference too:
+# For a public API or documentation change, build the documentation site too (open docs/reference/_site/index.html through a local web server):
 dotnet tool restore
 dotnet run scripts/api-docs.cs
 ```

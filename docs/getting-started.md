@@ -119,5 +119,5 @@ Next: [Debug a mod load or mod conflict](debugging-mods.md) walks through the fi
 - [Choose a test layer](guides/choose-a-test-layer.md): which layer tests which behaviour
 - [Examples](../examples/README.md): from the first unit test to a native session test
 - [Packages](package-versions.md): every package, version and pin
-- [Candidate API reference](https://tvongaza.github.io/ValheimTesting/): every public declaration
+- [API reference](https://tvongaza.github.io/ValheimTesting/reference/): every public type
 
