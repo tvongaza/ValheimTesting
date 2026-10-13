@@ -145,7 +145,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [windows-latest, macos-latest]
-        shard: [main, timed-1, timed-2]
+        shard: [main, timed-1, timed-2, timed-3]
         include:
           - shard: main
             args: --ci-main-tests
@@ -153,6 +153,8 @@ jobs:
             args: --ci-timed 1
           - shard: timed-2
             args: --ci-timed 2
+          - shard: timed-3
+            args: --ci-timed 3
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     env:

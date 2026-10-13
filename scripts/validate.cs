@@ -4,7 +4,7 @@
 //   dotnet run scripts/validate.cs -- --skip-ci-shell   CI only: shell integration runs in its own job
 //   dotnet run scripts/validate.cs -- --only-ci-shell   CI only: run that shard with the same data-root guard
 //   dotnet run scripts/validate.cs -- --ci-main-tests  CI only (Windows, macOS): toolkit tests excluding this OS's measured slow methods
-//   dotnet run scripts/validate.cs -- --ci-timed 1|2   CI only (Windows, macOS): one balanced slow-method shard of this OS
+//   dotnet run scripts/validate.cs -- --ci-timed 1|2|3 CI only (Windows, macOS): one balanced slow-method shard of this OS
 //   dotnet run scripts/validate.cs -- --ci-build-only  CI only (Windows, macOS): packaging and other test layers
 //   dotnet run scripts/validate.cs -- --limits-probe PROJECT RESULTS [FILTER]  tests of validate.cs's test commands only: one command
 //   ... --split  with any mode above but --restricted-sandbox: CI pull requests: this OS's share of the toolkit tests (#735, below)
@@ -52,11 +52,11 @@ bool ciMainTests = mode.SequenceEqual(["--ci-main-tests"]);
 bool ciBuildOnly = mode.SequenceEqual(["--ci-build-only"]);
 bool restrictedSandbox = mode.SequenceEqual(["--restricted-sandbox"]);
 bool limitsProbe = mode is ["--limits-probe", _, _] or ["--limits-probe", _, _, _];
-const int TimedShardCount = 2; // the timed shards of --ci-timed; the workflow's toolkit matrix lists the same N
+const int TimedShardCount = 3; // the timed shards of --ci-timed; the workflow's toolkit matrix lists the same N
 int ciTimed = mode is ["--ci-timed", var shardNumber] && int.TryParse(shardNumber, out int shardIndex) && shardIndex >= 1 && shardIndex <= TimedShardCount ? shardIndex : 0;
 if ((mode.Length != 0 && !skipCiShell && !onlyCiShell && !ciMainTests && !ciBuildOnly && !restrictedSandbox && !limitsProbe && ciTimed == 0) ||
     args.Count(argument => argument == "--split") > 1 || (split && restrictedSandbox))
-    throw new ArgumentException("usage: dotnet run scripts/validate.cs [--skip-ci-shell|--only-ci-shell|--ci-main-tests|--ci-timed 1|2|--ci-build-only|--limits-probe PROJECT RESULTS [FILTER]] [--split] | --restricted-sandbox");
+    throw new ArgumentException("usage: dotnet run scripts/validate.cs [--skip-ci-shell|--only-ci-shell|--ci-main-tests|--ci-timed 1|2|3|--ci-build-only|--limits-probe PROJECT RESULTS [FILTER]] [--split] | --restricted-sandbox");
 string? splitFilter = split ? SplitFilter() : null;
 // A probe writes beside its caller's choice, never over the results of the validation that runs the probing test.
 string results = limitsProbe ? Path.GetFullPath(mode[2]) : Path.Combine(root, "artifacts", "validate");
