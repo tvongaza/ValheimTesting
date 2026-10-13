@@ -29,7 +29,7 @@ public sealed class RunJournalStatusTests : IDisposable
 
     // One journal line, as RunJournal.AppendAsync writes it, with the runner chosen by the test.
     private static int s_minute;
-    internal static void Line(FakeServerHost host, string run, string actor, JournalRunner? runner, string kind, params (string Key, string Value)[] fields)
+    internal static void Line(FakeServerHost host, string run, string actor, JournalRunner runner, string kind, params (string Key, string Value)[] fields)
     {
         string file = host.Local(Journal + "/" + run + "/" + actor + ".jsonl");
         Directory.CreateDirectory(Path.GetDirectoryName(file)!);
@@ -37,8 +37,8 @@ public sealed class RunJournalStatusTests : IDisposable
         {
             ["utc"] = T0.AddMinutes(Interlocked.Increment(ref s_minute)).ToString("O"), ["run"] = run, ["actor"] = actor, ["kind"] = kind,
             ["fields"] = fields.ToDictionary(field => field.Key, field => field.Value),
+            ["runner"] = new Dictionary<string, object> { ["machine"] = runner.Machine, ["pid"] = runner.Pid, ["startedUtc"] = runner.StartedUtc.ToString("O") },
         };
-        if (runner != null) line["runner"] = new Dictionary<string, object> { ["machine"] = runner.Machine, ["pid"] = runner.Pid, ["startedUtc"] = runner.StartedUtc.ToString("O") };
         File.AppendAllText(file, JsonSerializer.Serialize(line) + "\n");
     }
 
@@ -179,8 +179,10 @@ public sealed class RunJournalStatusTests : IDisposable
 
     [Fact] public async Task ARunWithoutItsEndIsLiveWhileItsRunnerRunsAndUnknownWhenItsRunnerCannotBeChecked()
     {
-        foreach (var (run, runner) in new[] { ("run-live", JournalRunner.Current), ("run-elsewhere", Elsewhere), ("run-unrecorded", (JournalRunner?)null) })
+        foreach (var (run, runner) in new[] { ("run-live", JournalRunner.Current), ("run-elsewhere", Elsewhere) })
             Line(_host, run, "server", runner, JournalEntry.CopyIntended, ("runtime", "/srv/" + run));
+        // A run only a recovery journalled (a gone machine's lease release): the recovery is never its runner.
+        Line(_host, "run-unrecorded", RunRecovery.Actor, Gone, JournalEntry.LeaseReleased, ("account", "a"), ("pool", "p"), ("owner", "o"));
 
         var report = await InspectAsync();
 
@@ -189,7 +191,7 @@ public sealed class RunJournalStatusTests : IDisposable
         Assert.Equal(JournalRunState.Unknown, Run(report, "run-elsewhere").State);
         Assert.Contains($"its runner ran on {Elsewhere.Machine}", Run(report, "run-elsewhere").Reason);
         Assert.Equal(JournalRunState.Unknown, Run(report, "run-unrecorded").State);
-        Assert.Contains("its runner was not journalled", Run(report, "run-unrecorded").Reason);
+        Assert.Contains("only a recovery journalled it", Run(report, "run-unrecorded").Reason);
     }
 
     // Run A (#258): a run whose runner ran on the host itself (the station PC, its journal read from this Mac) is judged through

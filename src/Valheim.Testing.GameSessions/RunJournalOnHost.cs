@@ -14,8 +14,6 @@ internal static class RunJournalOnHost
     /// <summary>Appends <paramref name="entry"/> for <paramref name="actor"/> on <paramref name="host"/>; throws unless the host confirms the write.</summary>
     public static async Task AppendAsync(this RunJournal run, IGameHost host, string journal, string actor, JournalEntry entry, TimeSpan timeout, CancellationToken cancellation = default)
     {
-        // Noted before the write: a journal whose entry may have landed is one the run's end goes to (RunFinish).
-        RunJournal.Journalled(run.RunId, Place(host, journal), (again, last, time) => run.AppendAsync(host, journal, again, last, time), timeout);
         // Base64 keeps the line one shell word whatever the paths hold; the host decodes it before appending.
         string encoded = Convert.ToBase64String(Encoding.UTF8.GetBytes(run.Line(actor, entry)));
         var result = (await host.RunAsync(host.Shell.Kind == HostShellKind.PowerShell ? WindowsAppend : BashAppend, new Dictionary<string, string>
@@ -24,6 +22,9 @@ internal static class RunJournalOnHost
         }, timeout, cancellation).ConfigureAwait(false)).EnsureSuccess($"Journalling {entry.Kind} for {actor} on {host.Name}");
         if (InteractiveClient.Line(result.Stdout, "VT-JOURNALED") == null)
             throw new HostOperationException($"The run journal on {host.Name} did not confirm {entry.Kind} for {actor}", result);
+        // Noted once the host confirmed it: the run's end goes to every journal that holds the run (RunFinish). A write the host
+        // never confirmed is the run's failure, and env recover settles whatever it may have left.
+        RunJournal.Journalled(run.RunId, Place(host, journal), (again, last, time) => run.AppendAsync(host, journal, again, last, time), timeout);
     }
 
     // This machine's journal is one place whether written in process or through its own shell; another host's is its name and directory.

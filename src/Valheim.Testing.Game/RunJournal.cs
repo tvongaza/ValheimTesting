@@ -26,11 +26,10 @@ internal sealed record JournalEntry(string Kind, IReadOnlyDictionary<string, str
         new(kind, fields.ToDictionary(field => field.Key, field => field.Value, StringComparer.Ordinal));
 }
 
-/// <summary>A journal line as read back: its time, actor and entry, the run it belongs to and the runner that wrote it (null on lines written before runners were recorded).</summary>
-internal sealed record JournalRecord(DateTime Utc, string Actor, JournalEntry Entry)
+/// <summary>A journal line as read back: its time, actor and entry, the run it belongs to and the runner that wrote it.</summary>
+internal sealed record JournalRecord(DateTime Utc, string Actor, JournalEntry Entry, JournalRunner Runner)
 {
     public string Run { get; init; } = "";
-    public JournalRunner? Runner { get; init; }
 }
 
 /// <summary>
@@ -182,7 +181,7 @@ internal sealed class RunJournal
     internal static IReadOnlyDictionary<string, int> LocalHolders()
     {
         var comparer = OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
-        var open = new Dictionary<string, JournalRunner?>(comparer);
+        var open = new Dictionary<string, JournalRunner>(comparer);
         if (!Directory.Exists(LocalDirectory)) return new Dictionary<string, int>(comparer);
         foreach (string file in Directory.EnumerateFiles(LocalDirectory, WorldFixture.Actor + ".jsonl", SearchOption.AllDirectories))
         {
@@ -199,8 +198,8 @@ internal sealed class RunJournal
                 else if (record.Entry.Kind is JournalEntry.CopyRetired or JournalEntry.CopyKept) open.Remove(path);
             }
         }
-        return open.Where(entry => entry.Value is { OnThisMachine: true } runner && runner.StillRuns())
-            .ToDictionary(entry => entry.Key, entry => entry.Value!.Pid, comparer);
+        return open.Where(entry => entry.Value.OnThisMachine && entry.Value.StillRuns())
+            .ToDictionary(entry => entry.Key, entry => entry.Value.Pid, comparer);
     }
 
     // A journal is read while runs append to it: readers share it for writing, so an append never fails because of a read
@@ -268,13 +267,13 @@ internal sealed class RunJournal
         using var document = JsonDocument.Parse(line);
         var root = document.RootElement;
         var fields = root.GetProperty("fields").EnumerateObject().ToDictionary(field => field.Name, field => field.Value.GetString() ?? "", StringComparer.Ordinal);
-        JournalRunner? runner = null;
-        if (root.TryGetProperty("runner", out var by) && by.ValueKind == JsonValueKind.Object)
-            runner = new(by.GetProperty("machine").GetString()!, by.GetProperty("pid").GetInt32(),
-                DateTime.Parse(by.GetProperty("startedUtc").GetString()!, null, System.Globalization.DateTimeStyles.RoundtripKind).ToUniversalTime());
+        // Every line names its runner; one without is unreadable (KeyNotFoundException), never a run that cannot be judged.
+        var by = root.GetProperty("runner");
+        var runner = new JournalRunner(by.GetProperty("machine").GetString()!, by.GetProperty("pid").GetInt32(),
+            DateTime.Parse(by.GetProperty("startedUtc").GetString()!, null, System.Globalization.DateTimeStyles.RoundtripKind).ToUniversalTime());
         return new(DateTime.Parse(root.GetProperty("utc").GetString()!, null, System.Globalization.DateTimeStyles.RoundtripKind),
-            root.GetProperty("actor").GetString()!, new JournalEntry(root.GetProperty("kind").GetString()!, fields))
-        { Run = root.GetProperty("run").GetString()!, Runner = runner };
+            root.GetProperty("actor").GetString()!, new JournalEntry(root.GetProperty("kind").GetString()!, fields), runner)
+        { Run = root.GetProperty("run").GetString()! };
     }
 
     internal static bool SafeName(string name) =>

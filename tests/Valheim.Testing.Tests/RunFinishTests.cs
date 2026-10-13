@@ -141,18 +141,25 @@ public sealed class RunFinishTests : IDisposable
         Assert.Equal(2, Records(local, runId).Count(record => record.Entry.Kind != JournalEntry.RunEnded));
     }
 
-    // A write in process that failed left nothing, so the run's end does not go there (a refusal stays a refusal).
-    [Fact] public async Task AJournalThisMachineCouldNotWriteGetsNoEnd()
+    // A journal that never took the run's first entry (a write in process that threw, a host that did not confirm) holds
+    // nothing of the run, so its end does not go there (a refusal stays a refusal).
+    [Fact] public async Task AJournalThatNeverTookAnEntryGetsNoEnd()
     {
         string blocked = Path.Combine(_root, "blocked-journal");
         File.WriteAllText(blocked, "a file where the journal directory would go");
+        var host = new FakeServerHost("station", Path.Combine(_root, "station"));
+        host.Failures["journal"] = new HostResult(HostOutcome.Exited, 4, "", "No space left on device", TimeSpan.Zero, false);
         string runId = RunJournal.NewRunId();
         using (var run = RunJournal.UseRun(runId))
         {
             Assert.ThrowsAny<IOException>(() => RunJournal.ThisProcess.AppendLocal("run", JournalEntry.Of(JournalEntry.LockHeld, ("lock", "/l"), ("claimant", "c")), blocked));
+            await Assert.ThrowsAsync<HostOperationException>(() => new RunJournal(runId).AppendAsync(host, "/var/tmp/vt/journal", "server",
+                JournalEntry.Of(JournalEntry.CopyIntended, ("runtime", "/srv/a")), TimeSpan.FromSeconds(5)));
+            host.Failures.Remove("journal");
             Assert.Empty(run.Places);
             Assert.True(await RunFinish.EndAsync(run, new RunEnd(RunOutcome.Failed, CleanupProven: true)));
         }
+        Assert.Empty(await RunJournalOnHost.ReadAsync(host, "/var/tmp/vt/journal", runId, TimeSpan.FromSeconds(5)));
     }
 
     [Fact] public async Task AnAbandonedCleanupIsRecordedInsteadOfAnEndAndAJournalThatCannotTakeItIsReported()

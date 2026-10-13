@@ -205,7 +205,7 @@ internal static class RunJournalStatus
 
         // The run's own runner: a recovery journals as its own actor, and its process is not the run's.
         var runnerOf = read.SelectMany(host => host.Records).GroupBy(record => record.Run, StringComparer.Ordinal).ToDictionary(run => run.Key,
-            run => run.OrderBy(record => record.Utc).LastOrDefault(record => record.Runner != null && record.Actor != RunRecovery.Actor)?.Runner, StringComparer.Ordinal);
+            run => run.OrderBy(record => record.Utc).LastOrDefault(record => record.Actor != RunRecovery.Actor)?.Runner, StringComparer.Ordinal);
         var remoteRunners = await RemoteRunnersAsync(read.Select(host => (host.Host, host.Connection)).ToList(),
             runnerOf.Where(run => !ended.ContainsKey(run.Key) && run.Value is { OnThisMachine: false })
                 .ToDictionary(run => run.Key, run => run.Value!, StringComparer.Ordinal), timeout, cancellation).ConfigureAwait(false);
@@ -458,7 +458,7 @@ internal static class RunJournalStatus
         string ending = end is { } e ? $"ended {e.State}" + (e.Cleaned ? "" : ", cleanup not verified") : "never journalled its end";
         if (end == null)
         {
-            if (runner == null) return (JournalRunState.Unknown, ending + "; its runner was not journalled, so it cannot be proven over");
+            if (runner == null) return (JournalRunState.Unknown, ending + "; only a recovery journalled it, so its runner is unknown and it cannot be proven over");
             if (!runner.OnThisMachine)
             {
                 if (remote is not { } asked) return (JournalRunState.Unknown, $"{ending}; its runner ran on {runner.Machine}: check it there");
