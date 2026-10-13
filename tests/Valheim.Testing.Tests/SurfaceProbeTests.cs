@@ -1,7 +1,8 @@
 using System.Text.Json;
 using Valheim.Testing.Game;
 using Xunit;
-public class SurfaceProbeTests
+[Trait("Os", "neutral")]
+public sealed class SurfaceProbeTests
 {
     private static Observation Surface(float h=65,float collider=65,bool complete=true)=>new("loaded-terrain-surface",complete,JsonSerializer.SerializeToElement(new{x=32,z=0,height=h,colliderHeight=collider,units="metres"}));
     [Fact] public void IndependentLayers()=>Assert.True(SurfaceProbe.Read(Surface(),new(32,0,65),.05f).Passed);

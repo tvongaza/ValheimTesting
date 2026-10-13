@@ -6,7 +6,8 @@ using Xunit;
 
 // SiteSearch against a scripted World Tools terrain grid: grids read in order and only until the rule is satisfied, the
 // capture's own checks applied, and the nearest-to-centre choice independent of read order. No game.
-public class SiteSearchTests
+[Trait("Os", "neutral")]
+public sealed class SiteSearchTests
 {
     // Generator ground 40 m everywhere, sea (10 m) east of x = 1000.
     private static ScriptedTransport Generator(bool complete = true, Func<int, int>? shiftX = null) => new ScriptedTransport().Extension("valheim.world", "terrain-grid", args =>

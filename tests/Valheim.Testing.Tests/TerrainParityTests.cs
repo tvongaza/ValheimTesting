@@ -1,7 +1,8 @@
 using Valheim.Testing;
 using Xunit;
 
-public class TerrainParityTests
+[Trait("Os", "neutral")]
+public sealed class TerrainParityTests
 {
     // h = 30 + x^2/64, independent of z. Every value used below is exact in float.
     private sealed class Parabola : ITerrain

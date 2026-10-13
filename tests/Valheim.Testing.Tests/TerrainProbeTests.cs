@@ -3,7 +3,8 @@ using Valheim.Testing;
 using Valheim.Testing.Game;
 using Xunit;
 
-public class TerrainProbeTests
+[Trait("Os", "neutral")]
+public sealed class TerrainProbeTests
 {
     private static Observation Observed(float x, float z, float? h, string layer = "loaded-ground", bool complete = true, string units = "metres") =>
         new(layer, complete, JsonSerializer.SerializeToElement(new { x, z, height = h, units }));

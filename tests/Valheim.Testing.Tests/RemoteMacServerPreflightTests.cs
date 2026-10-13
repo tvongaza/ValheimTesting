@@ -4,6 +4,7 @@ using Valheim.Testing.Game;
 using Valheim.Testing.GameSessions;
 using Xunit;
 
+[Trait("Os", "macos")]
 public sealed class RemoteMacServerPreflightTests : IDisposable
 {
     private readonly string _root = Directory.CreateTempSubdirectory("remote-mac-preflight-").FullName;

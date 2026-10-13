@@ -1,7 +1,8 @@
 using System.Text.Json;
 using Valheim.Testing.Game;
 using Xunit;
-public class WalkingReviewTests
+[Trait("Os", "neutral")]
+public sealed class WalkingReviewTests
 {
     private static WalkCheckpoint[] Route=>new[]{new WalkCheckpoint(0,10,0,1),new WalkCheckpoint(10,10,0,1)};
     private static WalkSample[] Walk=>Enumerable.Range(0,11).Select(i=>new WalkSample(i*.5,i,10,0,2,true,false,false,false,false)).ToArray();

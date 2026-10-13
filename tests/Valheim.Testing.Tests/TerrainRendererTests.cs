@@ -3,7 +3,8 @@ using System.Security.Cryptography;
 using Valheim.Testing;
 using Xunit;
 
-public class TerrainRendererTests
+[Trait("Os", "neutral")]
+public sealed class TerrainRendererTests
 {
     private static readonly RenderColor Red = new(255, 0, 0), Black = new(0, 0, 0);
 

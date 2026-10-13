@@ -4,7 +4,8 @@ using valheim_cli.Testing;
 using Xunit;
 
 // A refused command completes on the transport; acceptance is the default step check (#269).
-public class GameReplyTests
+[Trait("Os", "neutral")]
+public sealed class GameReplyTests
 {
     // The game's (1.0.16) and ValheimCLI's refusals, each on a transport-successful reply.
     public static TheoryData<string> Refusals => new()
