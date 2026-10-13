@@ -366,7 +366,7 @@ public sealed class ServerLoadOneOffTests : IDisposable
         Assert.True(ran);
         Assert.False(File.Exists(Path.Combine(output, "REFUSED.txt")));
         var locked = NativeDependencyLock.ReadReady(Path.Combine(output, "dependencies.lock.json"));
-        Assert.Equal(locked.CliManifest.Files.Select(file => file.File), locked.CliFiles.Select(file => Path.GetFileName(file.File)));
+        Assert.Equal(locked.CliManifest.Plugin.File, Path.GetFileName(locked.CliPlugin.File));
     }
 
     [Fact]
@@ -401,7 +401,7 @@ public sealed class ServerLoadOneOffTests : IDisposable
         string[] args = Arguments(output, "--server-only", "--assert-command", "mymod_new_alias", "--assert-line", "READY");
         string manifestFile = args[Array.IndexOf(args, "--cli-manifest") + 1];
         var manifest = CliCapabilityManifest.Read(manifestFile);
-        manifest.Files.Single(file => file.File == "valheimCLI.dll").Extensions["valheim.observe"].Remove("zones");
+        manifest.Plugin.Extensions["valheim.observe"].Remove("zones");
         manifest.Write(manifestFile);
         int result = await ServerLoad.RunAsync(args,
             new ServerLoad.Seams(Inspect: _ => Task.FromResult(Ready),

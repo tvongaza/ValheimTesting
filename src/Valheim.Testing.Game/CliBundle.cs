@@ -48,8 +48,6 @@ public static class CliBundle
             {
                 if (entry.FullName.Contains('/') || entry.FullName.Contains('\\') || entry.FullName is "" or "." or ".." || entry.FullName.StartsWith('.'))
                     throw new InvalidDataException($"The ValheimCLI bundle holds {entry.FullName}, which is not a file at its root.");
-                if (entry.FullName.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) && entry.FullName != "valheimCLI.dll")
-                    throw new InvalidDataException($"The ValheimCLI bundle holds old first-party pack or extra plugin {entry.FullName}; use the one-plugin bundle.");
                 using var content = entry.Open();
                 expected[entry.FullName] = FileHash.Sha256(content);
             }
@@ -66,6 +64,15 @@ public static class CliBundle
                     entry.ExtractToFile(Path.Combine(staging, entry.FullName));
                 }
             }
+            // The manifest's own reader refuses anything but a one-plugin build; the bundle holds that plugin and no other DLL.
+            if (!expected.ContainsKey(ManifestFile)) throw new InvalidDataException($"The ValheimCLI bundle holds no {ManifestFile}; it is not a bundle.");
+            CliCapabilityManifest manifest;
+            try { manifest = CliCapabilityManifest.Read(Path.Combine(staging, ManifestFile)); }
+            catch (InvalidDataException error) // The staging folder is gone once this fails: name the bundle, keep the reader's refusal.
+            { throw new InvalidDataException($"The ValheimCLI bundle for {commit} ({origin}) is refused. {error.Message}", error); }
+            var extra = expected.Keys.Where(name => name.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) && name != manifest.Plugin.File).Order(StringComparer.Ordinal).ToList();
+            if (extra.Count != 0)
+                throw new InvalidDataException($"The ValheimCLI bundle holds {string.Join(", ", extra)} beside its manifest's {manifest.Plugin.File}; a bundle is the one plugin, its manifest and its license.");
             if (!Intact(staging, expected)) throw new InvalidDataException("The ValheimCLI bundle's files do not match its own manifest.");
             File.WriteAllText(Path.Combine(staging, ".bundle-sha256"), found + "\n");
         }, "ValheimCLI bundle");
@@ -84,9 +91,8 @@ public static class CliBundle
         string manifestFile = Path.Combine(folder, ManifestFile);
         if (!File.Exists(manifestFile)) return false;
         CliCapabilityManifest manifest;
-        try { manifest = CliCapabilityManifest.Read(manifestFile); manifest.RequireDefaultPlugin(); }
-        catch (Exception error) when (error is InvalidDataException or System.Text.Json.JsonException or ArgumentException or InvalidOperationException) { return false; }
-        return manifest.Files.Count != 0 && manifest.Files.All(file =>
-            expected.TryGetValue(file.File, out string? hash) && hash.Equals(file.Sha256, StringComparison.OrdinalIgnoreCase));
+        try { manifest = CliCapabilityManifest.Read(manifestFile); }
+        catch (InvalidDataException) { return false; }
+        return expected.TryGetValue(manifest.Plugin.File, out string? plugin) && plugin.Equals(manifest.Plugin.Sha256, StringComparison.OrdinalIgnoreCase);
     }
 }

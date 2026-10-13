@@ -90,7 +90,6 @@ public sealed class TargetedRegression
 
     private void RequireDirectClientDesktop() => DirectClientDesktop.Require(DirectClientSession());
 
-    internal const string CliPlugin = "valheimCLI.valheimCLI", CliConfig = "valheimCLI.valheimCLI.cfg";
     private static readonly string[] StagedFolders = ["plugins", "patchers", "config", "scripts"];
     // What a copy of the prepared install leaves out: everything BepInEx loads or writes besides its core.
     // ValheimCLI's own extension owners are logical command groups in the default plugin.
@@ -167,6 +166,9 @@ public sealed class TargetedRegression
     {
         ArgumentNullException.ThrowIfNull(inputs);
         inputs.Validate();
+        // The manifest's own reader refuses a missing, malformed or split cli.manifest, as every command does, before the run
+        // changes anything (its evidence folder, a registered character, the stage).
+        CliCapabilityManifest.Read(inputs.Cli.Manifest!);
         Inputs = inputs;
         inventory ??= EnvironmentInventory.Read(null);
         var recipe = clientEnvironment != null
@@ -247,8 +249,8 @@ public sealed class TargetedRegression
         if (guids.Select(entry => entry.Guids).Distinct(StringComparer.Ordinal).Count() > 1)
             throw new InvalidOperationException($"The arms declare different plugins ({string.Join("; ", guids.Select(entry => $"{entry.Key}: {entry.Guids}"))}): they are not builds of one mod. Stage the same mod's parent and candidate builds.");
         var core = Read(env.Cli.Core.File);
-        if (!core.Plugins.Any(plugin => plugin.Guid == CliPlugin))
-            throw new InvalidOperationException($"cli.core: {env.Cli.Core.File} declares {Declared(core)}, not ValheimCLI's core plugin {CliPlugin}. Give the core valheimCLI.dll of one coherent ValheimCLI build.");
+        if (!core.Plugins.Any(plugin => plugin.Guid == CliCapabilityManifest.PluginGuid))
+            throw new InvalidOperationException($"cli.core: {env.Cli.Core.File} declares {Declared(core)}, not ValheimCLI's plugin {CliCapabilityManifest.PluginGuid}. Give the {CliCapabilityManifest.PluginFile} of one ValheimCLI build.");
         if (env.Probe != null && Read(env.Probe.File).Plugins.Count == 0)
             throw new InvalidOperationException($"probe: {env.Probe.File} declares no [BepInPlugin]; a probe is a plugin.");
 

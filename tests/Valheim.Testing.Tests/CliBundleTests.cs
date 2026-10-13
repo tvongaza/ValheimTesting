@@ -53,7 +53,7 @@ public sealed class CliBundleTests : IDisposable
         string dll = Path.Combine(first.Files, "valheimCLI.dll");
         File.AppendAllText(dll, "another build");
         var manifest = CliCapabilityManifest.Read(first.Manifest);
-        manifest.Files.Single(file => file.File == "valheimCLI.dll").Sha256 = FileHash.Sha256(dll);
+        manifest.Plugin.Sha256 = FileHash.Sha256(dll);
         manifest.Write(first.Manifest);
         var again = CliBundle.Extract(new MemoryStream(zip), sha, "80fb6ce", "shipped", data);
         Assert.Contains("extracted to", again.Origin);
@@ -172,8 +172,7 @@ public sealed class CliBundleTests : IDisposable
         string commit = pin.RootElement.GetProperty("commit").GetString()!;
         Assert.Equal(Path.Combine(data, "cli", commit, CliBundle.ManifestFile), pinned.Manifest);
         Assert.StartsWith($"the pinned {commit[..7]} bundle", pinned.Origin);
-        var manifest = CliCapabilityManifest.Read(pinned.Manifest);
-        manifest.RequireDefaultPlugin();
+        var manifest = CliCapabilityManifest.Read(pinned.Manifest); // A one-plugin build, or Read refuses it.
         Assert.Equal("tvongaza/valheimCLI@" + commit, manifest.Build);
         var capabilities = manifest.Capabilities;
         Assert.NotEmpty(capabilities);

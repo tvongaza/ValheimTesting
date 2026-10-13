@@ -930,7 +930,7 @@ public static class HostedCampaignPreparation
             JsonSerializer.Serialize(readiness.Report.Actors, new JsonSerializerOptions { WriteIndented = true }) + "\n");
         foreach (var (name, role, _) in roles)
         {
-            string config = Path.Combine(output, "inputs", name, "valheimCLI.valheimCLI.cfg");
+            string config = Path.Combine(output, "inputs", name, OwnedClientPreflight.CliConfig);
             // The dedicated server has no client; a client's need follows its plan's role (a hosting client does not join).
             selections[name] = CliServerConfig.Stage(selections[name], name, role.CliPort, config,
                 requireClientMutations: name != "server" && CliServerConfig.RequiresClientMutations(plans?.GetValueOrDefault(name))).ToArray();

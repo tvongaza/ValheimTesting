@@ -108,7 +108,7 @@ public sealed class NativeSmokeLoaderTests : IDisposable
         static (string File, string Hash)[] Pins(string path)
         {
             var resolved = NativeDependencyLock.ReadReady(path);
-            Assert.Equal(resolved.CliManifest.Files.Count, resolved.CliFiles.Count);
+            Assert.Equal(resolved.CliManifest.Plugin.Sha256, resolved.CliPlugin.Sha256);
             return resolved.CliFiles.Select(file => (Path.GetFileName(file.File), file.Sha256)).ToArray();
         }
         var expected = Pins(Path.Combine(start, "dependencies.lock.json"));

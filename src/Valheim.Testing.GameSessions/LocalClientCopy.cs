@@ -140,7 +140,6 @@ internal sealed class LocalClientCopy
     private static List<HostedRuntimeFile> Selection(string source, CliCapabilityManifest manifest, CliSetLocation location, ClientRunPlan plan,
         BepInExLoaderPackage? loader, out string? config, out List<string> replaced)
     {
-        var names = manifest.Files.Select(file => file.File).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var selection = new List<HostedRuntimeFile>();
         replaced = [];
         config = null;
@@ -159,7 +158,7 @@ internal sealed class LocalClientCopy
                     settingsOrigin != BepInExSettingsOrigin.Source) continue;
                 if (loader != null && loader.Files.Keys.Any(path => path.Equals(relative, StringComparison.OrdinalIgnoreCase))) continue;
                 if (folder is "plugins" or "scripts" && file.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)
-                    && (names.Contains(Path.GetFileName(file)) || CliBuildManifest.Plugins(file)?.Any(CliBuildManifest.IsCliPlugin) == true))
+                    && (Path.GetFileName(file).Equals(manifest.Plugin.File, StringComparison.OrdinalIgnoreCase) || CliBuildManifest.Plugins(file)?.Any(CliBuildManifest.IsCliPlugin) == true))
                 {
                     replaced.Add(relative);
                     continue;
@@ -192,11 +191,8 @@ internal sealed class LocalClientCopy
         {
             plan.InstallPins = profile.Pins;
             var pins = plan.Pins.Where(pin => !CliBuildManifest.IsCliPlugin(pin.Key)).ToDictionary(pin => pin.Key, pin => pin.Value, StringComparer.Ordinal);
-            foreach (var file in manifest.Files)
-            {
-                string md5 = FileHash.Md5(Path.Combine(setFolder, file.File));
-                foreach (string guid in file.Plugins) pins[guid] = md5;
-            }
+            string md5 = FileHash.Md5(Path.Combine(setFolder, manifest.Plugin.File));
+            foreach (string guid in manifest.Plugin.Plugins) pins[guid] = md5;
             plan.Pins = pins;
         }
         plan.CliManifest = Path.GetFullPath(manifestPath);

@@ -102,7 +102,7 @@ public sealed class RegressionInputs
     private IEnumerable<RegressionFile> Files() =>
         new[] { Cli.Core }.Concat(Plugins).Concat(Probe == null ? [] : [Probe]).Concat(Patchers);
 
-    /// <summary>Refuses inputs that cannot describe one clean run, naming the field and the fix. Reads the CLI manifest to check its one-plugin contract.</summary>
+    /// <summary>Refuses inputs that cannot describe one clean run, naming the field and the fix. A field check: it reads no file (the regression reads <c>cli.manifest</c>).</summary>
     public void Validate()
     {
         if (!Token.IsMatch(Name)) throw new ArgumentException("name: give the run a short name of letters, digits, - and _.");
@@ -192,7 +192,6 @@ public sealed class RegressionCli
         Core.Validate("cli.core");
         if (Manifest == null) throw new ArgumentException("cli.manifest: name the capability manifest of the staged valheimCLI.dll (valheim-test start writes it); the static check runs on every staged plugin.");
         if (!Path.IsPathFullyQualified(Manifest)) throw new ArgumentException("cli.manifest: give the capability manifest's path.");
-        CliCapabilityManifest.Read(Manifest).RequireDefaultPlugin();
     }
 }
 
