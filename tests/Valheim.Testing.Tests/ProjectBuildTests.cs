@@ -94,13 +94,29 @@ public sealed class ProjectBuildTests
     {
         try
         {
-            // A killed grandchild nobody reaps (a container whose init is the test host) stays a zombie: not running.
-            if (OperatingSystem.IsLinux() && File.Exists($"/proc/{id}/stat") &&
-                File.ReadAllText($"/proc/{id}/stat").Split(')')[^1].TrimStart().StartsWith('Z')) return false;
+            if (OperatingSystem.IsLinux() && IsGoneFromTheProcessTable(id, pid => File.ReadAllText($"/proc/{pid}/stat"))) return false;
             using var process = Process.GetProcessById(id);
             return !process.HasExited;
         }
         catch (ArgumentException) { return false; }
         catch (InvalidOperationException) { return false; }
+    }
+
+    // #748: a process that exits while its /proc/<pid>/stat is being read counts as already gone, with no check-then-read gap.
+    // A killed grandchild nobody reaps (a container whose init is the test host) stays a zombie: also gone.
+    private static bool IsGoneFromTheProcessTable(int id, Func<int, string> readStat)
+    {
+        try { return readStat(id).Split(')')[^1].TrimStart().StartsWith('Z'); }
+        catch (IOException) { return true; } // FileNotFound, DirectoryNotFound, or the read failing as the process vanishes
+    }
+
+    [Fact]
+    public void AProcessThatVanishesWhileItsStatIsReadCountsAsGone()
+    {
+        Assert.True(IsGoneFromTheProcessTable(4242, _ => throw new FileNotFoundException()));
+        Assert.True(IsGoneFromTheProcessTable(4242, _ => throw new DirectoryNotFoundException()));
+        Assert.True(IsGoneFromTheProcessTable(4242, _ => throw new IOException("No such process")));
+        Assert.True(IsGoneFromTheProcessTable(4242, _ => "4242 (a (b) c) Z 1 4242 4242 0 -1"));
+        Assert.False(IsGoneFromTheProcessTable(4242, _ => "4242 (a (b) c) S 1 4242 4242 0 -1"));
     }
 }
