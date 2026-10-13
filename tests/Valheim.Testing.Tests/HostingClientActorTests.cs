@@ -18,6 +18,7 @@ public sealed class HostingClientActorTests : IDisposable
     private string Fixture => Path.Combine(_root, "fixture");
     private string Save => Path.Combine(_root, "client-data");
     private string Worlds => Path.Combine(Save, "worlds_local");
+    private Action? _onHostStart;
     private bool _hosting, _openServer = true, _peerJoined, _hostLease;
     private string _hostSteamId = HostSteamId;
     private int _readings, _peerOpens, _peerLeaves;
@@ -54,7 +55,7 @@ public sealed class HostingClientActorTests : IDisposable
             .OnPrefix("cli_select_character ", _ => ScriptedTransport.Ok("OK: Selected character 'Tester' (tester, Local)"))
             .OnPrefix("cli_start_host_world ", command =>
             {
-                Note("host", "start"); _hosting = true; _readings = 0;
+                Note("host", "start"); _hosting = true; _readings = 0; _onHostStart?.Invoke();
                 return ScriptedTransport.Ok($"OK: Starting hosted world '{command.Split(' ')[1]}' using character 'Tester' (tester, Local); open=true, public=False, crossplay=False, backend=Steamworks, passwordSet=False");
             })
             .On("cli_multiplayer_identity", _ =>
@@ -233,7 +234,10 @@ public sealed class HostingClientActorTests : IDisposable
             await session.StartAsync();
             Assert.Contains("worlduid=" + WorldUid, File.ReadAllText(pins));
             var host = session.Host!;
+            bool pinsAtRestartedStart = true;
+            _onHostStart = () => pinsAtRestartedStart = File.Exists(pins);
             host.Restart();
+            Assert.False(pinsAtRestartedStart); // The restart's leave removed them before its start.
             Assert.Contains("worlduid=" + WorldUid, File.ReadAllText(pins));
             new SessionControl(host.Game).Leave(); // A leave by any caller.
             Assert.False(File.Exists(pins));

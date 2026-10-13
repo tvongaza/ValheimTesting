@@ -231,6 +231,7 @@ public sealed class GameActor : IDisposable
     /// </summary>
     public void VerifyEnvironment(string expectationCommand)
     {
+        lock (_sync) _verified = false; // Before the retract below, which may throw: nothing stays verified on stale state.
         WorldPins?.Retract(); // New expectations: the published world pins no longer describe what was verified.
         lock (_sync)
         {
@@ -250,8 +251,8 @@ public sealed class GameActor : IDisposable
     /// <summary>After an attempted world transition, require fresh explicit environment pins.</summary>
     public void InvalidateEnvironment()
     {
-        WorldPins?.Retract(); // A world transition (even a lost reply) ends the published world pins.
         lock (_sync) _verified = false;
+        WorldPins?.Retract(); // A world transition (even a lost reply) ends the published world pins.
     }
     /// <summary>
     /// Every command rechecks strict pins. By default the reply must be accepted (<see cref="GameReply.RequireAccepted"/>):

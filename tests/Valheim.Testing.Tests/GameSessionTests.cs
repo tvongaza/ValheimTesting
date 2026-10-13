@@ -65,7 +65,7 @@ public sealed class GameSessionTests : IDisposable
 
     // A client at its menu that can join and leave the server's world, as ValheimCLI's session commands answer.
     private Action _dropClients = () => { };
-    private bool _failJoin;
+    private bool _failLeave;
     private ScriptedTransport ClientTransport()
     {
         bool joined = false;
@@ -73,13 +73,13 @@ public sealed class GameSessionTests : IDisposable
         return new ScriptedTransport()
             .ClientAccess(() => joined)
             .OnPrefix("cli_select_character ", _ => ScriptedTransport.Ok("OK: Selected character 'Tester' (tester-copy, Local)"))
-            .Extension("valheim.session", "join", _ =>
+            .Extension("valheim.session", "join", _ => { joined = true; return new { source = "session-join", complete = true, action = "join" }; }, readOnly: false)
+            .Extension("valheim.session", "leave", _ =>
             {
-                if (_failJoin) throw new IOException("the reply was lost");
-                joined = true;
-                return new { source = "session-join", complete = true, action = "join" };
+                if (_failLeave) throw new IOException("the reply was lost");
+                joined = false;
+                return new { source = "session-leave", complete = true, action = "leave" };
             }, readOnly: false)
-            .Extension("valheim.session", "leave", _ => { joined = false; return new { source = "session-leave", complete = true, action = "leave" }; }, readOnly: false)
             .Extension("valheim.session", "state", _ => new
             {
                 source = "session-state", complete = true, phase = joined ? "world-present" : "menu", worldUid = joined ? WorldUid : null, worldPresent = joined,
@@ -217,20 +217,20 @@ public sealed class GameSessionTests : IDisposable
             Assert.Contains("worlduid=" + WorldUid, File.ReadAllText(worldPins));
 
             var plan = session.Clients["client-a"].Plan;
+            _failLeave = true; // A leave whose reply is lost may have changed the world: the pins go anyway.
+            Assert.ThrowsAny<Exception>(() => new SessionControl(game).Leave());
+            Assert.False(File.Exists(worldPins));
+            _failLeave = false;
+            game.VerifyEnvironment(plan.WorldExpectations(WorldUid)); // The client is still in the world.
             new SessionControl(game).Leave(); // A leave by any caller, not a session method.
             Assert.False(File.Exists(worldPins));
             game.VerifyEnvironment(plan.MenuExpectations); // A transition always needs fresh pins.
-
-            _failJoin = true; // A join whose reply is lost may have changed the world: no pins.
-            await Assert.ThrowsAnyAsync<Exception>(() => session.Join("client-a"));
-            Assert.False(File.Exists(worldPins));
-            _failJoin = false;
-            game.VerifyEnvironment(plan.MenuExpectations);
 
             await session.Join("client-a");
             Assert.True(File.Exists(worldPins));
 
             _dropClients(); // The server restarted and dropped the client to its menu; nothing told the session.
+            Assert.True(File.Exists(worldPins));
             Assert.False(new SessionControl(game).SettleAtMenuOrInWorld(plan, WorldUid, TimeSpan.FromSeconds(5)));
             Assert.False(File.Exists(worldPins));
 
@@ -239,7 +239,6 @@ public sealed class GameSessionTests : IDisposable
         }
         finally { await session.DisposeAsync(); }
         Assert.False(File.Exists(worldPins));
-        Assert.True(report.Steps.Count(step => step.Phase == StepPhase.Setup && !step.Passed) == 1, string.Join("; ", report.Steps.Where(s => !s.Passed).Select(s => s.Name + ": " + s.Error)));
     }
 
     [Fact] public async Task ASessionStartsOnceAndAFailedServerStopIsReported()
