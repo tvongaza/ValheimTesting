@@ -39,10 +39,23 @@ internal sealed record JournalRunStatus(string Run, JournalRunState State, strin
     [System.Text.Json.Serialization.JsonIgnore] public bool EndRecorded { get; init; }
     /// <summary>Launches never journalled as started whose pid file proves their process gone: a recovery journals them settled.</summary>
     [System.Text.Json.Serialization.JsonIgnore] public IReadOnlyList<JournalItem> SettledLaunches { get; init; } = [];
+    /// <summary>
+    /// The journals that could not be read among the ones this run's verdict rests on: the lease host, and any host that answered
+    /// with lines it could not read (a cut line may be this run's: journals say no more of whose it is). A host that could not be
+    /// reached at all is not counted here, since its journal shows no entry of the run: what the run left only there is unknown
+    /// (the limit of journals that name no hosts), so a recovery adds the hosts its own first read found the run on, and says which
+    /// others it could not read. The one readability verdict of a run; what
+    /// judges a run by its own hosts reads it (<c>env recover</c>'s post-recovery check, and any later run-level check, #508).
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore] public IReadOnlyList<JournalHostStatus> Unreadable { get; init; } = [];
 }
 
 /// <summary>One host's journal as read: where, how many runs, and why it (or some of it) could not be read.</summary>
-internal sealed record JournalHostStatus(string Name, string Journal, int Runs, string? Error);
+internal sealed record JournalHostStatus(string Name, string Journal, int Runs, string? Error)
+{
+    /// <summary>The host answered but some of its lines could not be read: a cut line may belong to any run.</summary>
+    [System.Text.Json.Serialization.JsonIgnore] public bool Reached { get; init; }
+}
 
 internal sealed record JournalStatusReport(IReadOnlyList<JournalHostStatus> Hosts, IReadOnlyList<JournalRunStatus> Runs)
 {
@@ -77,7 +90,7 @@ internal static class RunJournalStatus
                 var host = hostFactory(name);
                 var (records, unreadable) = await RunJournalOnHost.ReadAllAsync(host, journal, timeout, cancellation).ConfigureAwait(false);
                 var status = new JournalHostStatus(name, journal, records.Select(record => record.Run).Distinct(StringComparer.Ordinal).Count(),
-                    unreadable == 0 ? null : $"{unreadable} journal line{(unreadable == 1 ? "" : "s")} could not be read, so what they record is unknown.");
+                    unreadable == 0 ? null : $"{unreadable} journal line{(unreadable == 1 ? "" : "s")} could not be read, so what they record is unknown.") { Reached = unreadable != 0 };
                 return (Status: status, Read: ((string Host, IGameHost Connection, IReadOnlyList<JournalRecord> Records)?)(name, host, records));
             }
             catch (Exception error) when (error is HostOperationException or TimeoutException or IOException or ArgumentException or PlatformNotSupportedException
@@ -234,10 +247,13 @@ internal static class RunJournalStatus
                 runner, items, remoteRunners.TryGetValue(run.Key, out var remote) ? remote : null);
             if (abandoned.TryGetValue(run.Key, out string? why)) reason += $"; its cleanup was abandoned ({why})";
             if (recovered.ContainsKey(run.Key)) reason += "; recovered by env recover/teardown" + (items.Count == 0 ? "" : ", but not all of it");
-            runs.Add(new(run.Key, state, reason, ordered[0].Record.Utc, ordered[^1].Record.Utc,
-                run.Select(entry => entry.Host).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList(), runner?.ToString(),
+            var runHosts = run.Select(entry => entry.Host).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList();
+            runs.Add(new(run.Key, state, reason, ordered[0].Record.Utc, ordered[^1].Record.Utc, runHosts, runner?.ToString(),
                 items.OrderBy(item => item.Host, StringComparer.Ordinal).ThenBy(item => item.SinceUtc).ToList())
-            { SettledLaunches = settled, EndRecorded = isEnded });
+            {
+                SettledLaunches = settled, EndRecorded = isEnded,
+                Unreadable = hostStatus.Where(host => host.Error != null && (host.Reached || host.Name == leaseHost)).ToList(),
+            });
         }
         // Copies made before runs journalled them: every copy any journal names is the journal's to judge.
         var comparison = OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;

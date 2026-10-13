@@ -20,6 +20,8 @@ internal sealed record RecoveryReport(string Run, JournalRunState Before, string
 {
     public JournalRunState? After { get; init; }
     public IReadOnlyList<JournalItem> Remaining { get; init; } = [];
+    /// <summary>Hosts whose journals could not be read and that the run left no readable entry on: whatever the run left only there is not part of this result.</summary>
+    public IReadOnlyList<string> NotRead { get; init; } = [];
     public bool Recovered => Refused == null && Steps.All(step => !step.Failed);
     public bool Clean => Recovered && After == JournalRunState.Ended && Remaining.Count == 0;
 }
@@ -451,6 +453,7 @@ internal static class RunRecovery
             catch (Exception error) when (error is not OperationCanceledException) { Step(name, "journal " + JournalEntry.RunRecovered, "could not be journalled: " + error.Message); }
         JournalRunState? afterState = null;
         IReadOnlyList<JournalItem> remaining = [];
+        IReadOnlyList<string> notRead = [];
         if (steps.All(step => !step.Failed))
         {
             // A successful sequence of effects is not proof that the environment is empty:
@@ -460,8 +463,13 @@ internal static class RunRecovery
                 var after = await RunJournalStatus.InspectAsync(hosts, hostFactory, timeout, cancellation,
                     leaseHost, leaseDirectory).ConfigureAwait(false);
                 var checkedRun = after.Runs.SingleOrDefault(candidate => candidate.Run == runId);
-                if (after.Hosts.Any(host => host.Error != null) || checkedRun == null)
-                    Step("run", "post-recovery status", "could not read every host journal or find the run", failed: true);
+                // Judged over the run's own hosts: a host it never touched (powered off) does not fail a recovery that did every step.
+                // A host the first read found the run on counts too, though it has gone since.
+                var ownUnread = after.Hosts.Where(host => host.Error != null && (run.Hosts.Contains(host.Name) || checkedRun?.Unreadable.Any(own => own.Name == host.Name) == true)).ToList();
+                notRead = after.Hosts.Where(host => host.Error != null && !ownUnread.Contains(host)).Select(host => host.Name).ToList();
+                if (checkedRun == null || ownUnread.Count != 0)
+                    Step("run", "post-recovery status", "could not find the run or read every journal it rests on" +
+                        string.Concat(ownUnread.Select(host => $"; host {host.Name} ({host.Error})")), failed: true);
                 else
                 {
                     afterState = checkedRun.State;
@@ -473,7 +481,7 @@ internal static class RunRecovery
             catch (Exception error) when (error is not OperationCanceledException)
             { Step("run", "post-recovery status", "could not verify what remains: " + error.Message, failed: true); }
         }
-        return new(runId, run.State, null, steps) { After = afterState, Remaining = remaining };
+        return new(runId, run.State, null, steps) { After = afterState, Remaining = remaining, NotRead = notRead };
     }
 
     /// <summary>
@@ -570,7 +578,7 @@ internal static class RunRecovery
         if (json)
         {
             output.WriteLine(JsonSerializer.Serialize(new { report.Run, report.Before, report.After, report.Refused, report.Steps, report.Recovered,
-                report.Clean, report.Remaining },
+                report.Clean, report.Remaining, report.NotRead },
                 new JsonSerializerOptions { WriteIndented = true, Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() } }));
             return;
         }
@@ -580,6 +588,8 @@ internal static class RunRecovery
             return;
         }
         foreach (var step in report.Steps) output.WriteLine($"{(step.Failed ? "FAILED" : "done")} {step.What} on {step.Host}: {step.Outcome}");
+        if (report.Recovered && report.NotRead.Count != 0)
+            output.WriteLine($"NOTE host {string.Join(", ", report.NotRead)} could not be read and shows nothing of run {report.Run}; whatever it left only there is not part of this result. Run env status once it is back.");
         if (report.Clean) output.WriteLine($"RECOVERED {report.Run}: nothing of it is left.");
         else if (report.Recovered && report.Remaining.Count != 0)
         {

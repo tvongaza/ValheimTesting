@@ -739,6 +739,111 @@ public sealed class RunRecoveryTests : IDisposable
         Assert.Empty(_host.Stops);
     }
 
+    // The post-recovery check reads the run's own hosts. A run that left only a copy on pc, with the NAS powered off: every step was
+    // done and nothing of the run is left, so the recovery succeeds. A host the run did journal on that can only be partly read, or
+    // the lease host, still fails the check.
+    private static Dictionary<string, HostProfile> TwoHosts() => new()
+    {
+        ["pc"] = new HostProfile { Kind = "ssh", Lock = "/var/tmp/vt/lock" }, ["nas"] = new HostProfile { Kind = "ssh", Lock = "/var/tmp/vt/lock" },
+    };
+
+    private void RunThatLeftACopy(string run)
+    {
+        Directory.CreateDirectory(Path.Combine(_host.Local(Prep + "/runtime"), "BepInEx"));
+        File.WriteAllText(Path.Combine(_host.Local(Prep + "/runtime"), "valheim_server.x86_64"), "game");
+        Directory.CreateDirectory(_host.Local(Prep + "/staging"));
+        Line(_host, run, "server", Gone, JournalEntry.CopyIntended, ("runtime", Prep + "/runtime"), ("stage", Prep + "/staging"), ("parent", Prep));
+        Line(_host, run, "server", Gone, JournalEntry.CopyDone, ("runtime", Prep + "/runtime"), ("files", "1"));
+    }
+
+    private Task<RecoveryReport> RecoverWithAsync(FakeServerHost nas, string run, string? leaseHost = null) =>
+        RunRecovery.RecoverAsync(TwoHosts(), name => name == "nas" ? nas : _host, run, false, TimeSpan.FromSeconds(5),
+            leaseHost: leaseHost, leaseDirectory: leaseHost == null ? null : "/var/tmp/vt/leases");
+
+    private FakeServerHost PoweredOffNas()
+    {
+        var nas = new FakeServerHost("nas", Path.Combine(_root, "nas"));
+        nas.Failures["journal-read-all"] = FakeServerHost.TransportFailure;
+        return nas;
+    }
+
+    [Fact] public async Task AHostTheRunNeverJournalledOnDoesNotFailARecoveryThatDidEveryStep()
+    {
+        RunThatLeftACopy("run-cut");
+        var nas = PoweredOffNas();
+
+        var report = await RecoverWithAsync(nas, "run-cut");
+
+        Assert.True(report.Recovered, string.Join("\n", report.Steps));
+        Assert.Equal(JournalRunState.Ended, report.After);
+        Assert.False(Directory.Exists(_host.Local(Prep + "/runtime")));
+        // What the NAS may hold of the run is not part of that result, and the output says so.
+        Assert.Equal("nas", Assert.Single(report.NotRead));
+        var written = new StringWriter();
+        RunRecovery.Write(report, written, json: false);
+        Assert.Contains("NOTE host nas could not be read", written.ToString(), StringComparison.Ordinal);
+    }
+
+    // A host that answered with a cut line: the line may be the run's, so it counts for the run even though no readable line is.
+    [Fact] public async Task AHostWithOnlyUnreadableLinesStillFailsThePostRecoveryCheck()
+    {
+        RunThatLeftACopy("run-cut");
+        var nas = new FakeServerHost("nas", Path.Combine(_root, "nas"));
+        Directory.CreateDirectory(nas.Local(Journal + "/run-cut"));
+        File.AppendAllText(nas.Local(Journal + "/run-cut/client.jsonl"), "{\"utc\":");
+
+        var report = await RecoverWithAsync(nas, "run-cut");
+
+        Assert.False(report.Recovered);
+        Assert.Contains("host nas", Assert.Single(report.Steps, step => step.What == "post-recovery status").Outcome, StringComparison.Ordinal);
+    }
+
+    [Fact] public async Task AHostTheRunJournalledOnStillFailsThePostRecoveryCheck()
+    {
+        RunThatLeftACopy("run-cut");
+        // The NAS holds a line of the run and a line cut short: what that line recorded is unknown.
+        var nas = new FakeServerHost("nas", Path.Combine(_root, "nas"));
+        Line(nas, "run-cut", "client", Gone, JournalEntry.CopyRetired, ("runtime", "/srv/over-client"));
+        File.AppendAllText(nas.Local(Journal + "/run-cut/client.jsonl"), "{\"utc\":");
+
+        var report = await RecoverWithAsync(nas, "run-cut");
+
+        Assert.False(report.Recovered);
+        Assert.Contains("host nas", Assert.Single(report.Steps, step => step.What == "post-recovery status").Outcome, StringComparison.Ordinal);
+    }
+
+    // The first read found the run's closed entries on the NAS; the NAS is gone by the post-recovery read. The run's host counts.
+    [Fact] public async Task AHostTheFirstReadFoundTheRunOnStillCountsAfterItIsGone()
+    {
+        RunThatLeftACopy("run-cut");
+        var nas = new FakeServerHost("nas", Path.Combine(_root, "nas"));
+        Line(nas, "run-cut", "client", Gone, JournalEntry.CopyIntended, ("runtime", "/srv/over-client"));
+        Line(nas, "run-cut", "client", Gone, JournalEntry.CopyRetired, ("runtime", "/srv/over-client"));
+        int asked = 0;
+        IGameHost Of(string name)
+        {
+            if (name != "nas") return _host;
+            if (++asked == 2) nas.Failures["journal-read-all"] = FakeServerHost.TransportFailure;
+            return nas;
+        }
+
+        var report = await RunRecovery.RecoverAsync(TwoHosts(), Of, "run-cut", false, TimeSpan.FromSeconds(5));
+
+        Assert.False(report.Recovered);
+        Assert.Contains("host nas", Assert.Single(report.Steps, step => step.What == "post-recovery status").Outcome, StringComparison.Ordinal);
+    }
+
+    [Fact] public async Task TheLeaseHostIsAlwaysAmongTheHostsThePostRecoveryCheckReads()
+    {
+        RunThatLeftACopy("run-cut");
+        var nas = PoweredOffNas();
+
+        var report = await RecoverWithAsync(nas, "run-cut", leaseHost: "nas");
+
+        Assert.False(report.Recovered);
+        Assert.Contains("host nas", Assert.Single(report.Steps, step => step.What == "post-recovery status").Outcome, StringComparison.Ordinal);
+    }
+
     // A process that made copies on this machine and died: recover removes its unfinished and runtime copies (keeping what
     // changed) and hands its world, a run's save, over to its output.
     [Fact] public async Task RecoverRemovesADeadProcesssLocalCopiesAndHandsOverItsSave()
