@@ -29,7 +29,7 @@ A sandbox is a requirement of the agent's environment, not of this repository: c
 | NuGet HTTP cache (`NUGET_HTTP_CACHE_PATH`) | `~/.local/share/NuGet` (`http-cache` below it) | `~/.local/share/NuGet` (`http-cache` below it) | `%LOCALAPPDATA%\NuGet` (`v3-cache` below it) |
 | SDK file-based app (runfile) cache | `~/Library/Application Support/dotnet/runfile` | `$XDG_DATA_HOME/dotnet/runfile` (`~/.local/share/dotnet/runfile`) | `%TEMP%\dotnet\runfile` |
 
-`dotnet nuget locals all --list` prints the two NuGet folders on your machine. The runfile cache has no environment override; allow its folder.
+`dotnet nuget locals all --list` prints the two NuGet folders on your machine. The runfile folder moves with `XDG_DATA_HOME` on Linux and with `TEMP` on Windows, not with a NuGet variable: allow the folder it resolves to in your environment.
 
 The host-observation tests (`validate.cs` runs them) list processes and the TCP port table . A sandbox must allow both, or run validation outside it (for example in CI). The repository does not detect or work around a sandbox that denies them.
 

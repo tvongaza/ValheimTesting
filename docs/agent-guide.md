@@ -24,9 +24,7 @@ For reusable synthetic ground and multi-zone height/paint state, read [Test terr
 1. Read the local repository's instructions and check branch/worktree status. Keep other agents' edits and active sessions intact.
 2. Check [package ownership and versions](package-versions.md). A pure unit project uses `Valheim.Testing`; an external native driver uses `Valheim.Testing.Game`, and adds `Valheim.Testing.GameSessions` for `TargetedRegression` or a session (`GameSession`, `PinnedServerRun`, other machines). ValheimCLI core, packs and adapters are separate **game-side** assemblies. Never copy external test-library DLLs into BepInEx.
    For a load check from otherwise unmodded game installs, [NativeSmoke](packages/Valheim.Testing.NativeSmoke.md#a-server-side-mod-server-load) accepts a reviewed loader package and a coherent ValheimCLI bundle. A server and clean client use separately pinned loader packages. These options are in this checkout's candidate tool until its next release; the currently published tool may not have them.
-3. For framework development, bootstrap the exact ValheimCLI dependency, then run local validation:
-
-   The two commands (bootstrap, then validate) are the same on every OS and are written out only in [CONTRIBUTING.md](../CONTRIBUTING.md#set-up-and-validate-locally).
+3. For framework development, bootstrap the exact ValheimCLI dependency, then run local validation. The two commands are the same on every OS; [CONTRIBUTING.md](../CONTRIBUTING.md#set-up-and-validate-locally) is their home.
 
    For a public API or reference change, also run `dotnet tool restore` and `dotnet run scripts/api-docs.cs`, which
    checks the rendered pages for machine-local paths. A pull request changes no package version, pin or public-api list
