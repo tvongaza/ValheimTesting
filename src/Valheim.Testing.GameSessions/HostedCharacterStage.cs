@@ -171,7 +171,7 @@ internal static class HostedCharacterStage
     private static async Task DropStageAsync(IGameHost host, string staging, TimeSpan timeout)
     {
         var reply = await host.RunAsync(host.Shell.Kind == HostShellKind.PowerShell ? WindowsDropStage : BashDropStage,
-            new Dictionary<string, string> { ["stage"] = staging }, timeout).ConfigureAwait(false);
+            new Dictionary<string, string> { ["stage"] = staging, ["root"] = HostPath.Parent(staging) }, timeout).ConfigureAwait(false);
         reply.EnsureSuccess($"Removing character staging on {host.Name}");
         if (InteractiveClient.Line(reply.Stdout, "VT-CHAR-STAGE-DROPPED") == null)
             throw new HostOperationException($"Character staging cleanup on {host.Name} was not proven", reply);
@@ -310,6 +310,7 @@ internal static class HostedCharacterStage
         echo 'VT-CHAR-RETIRED'
         """).ReplaceLineEndings("\n");
 
-    internal static readonly string WindowsDropStage = "if ([IO.Directory]::Exists($stage)) { [IO.Directory]::Delete($stage, $true) }; 'VT-CHAR-STAGE-DROPPED'";
-    internal static readonly string BashDropStage = "if [ -d \"$stage\" ]; then rm -rf -- \"$stage\"; fi; echo VT-CHAR-STAGE-DROPPED";
+    // Variables: stage, root (the folder holding it).
+    internal static readonly string WindowsDropStage = ProtectedPaths.PowerShellInside + ProtectedPaths.PowerShellRemove + "Remove-VtTree $stage $root; 'VT-CHAR-STAGE-DROPPED'";
+    internal static readonly string BashDropStage = "set -u\n" + ProtectedPaths.BashInside + ProtectedPaths.BashRemove + "vt_remove \"$stage\" \"$root\" || exit 3; echo VT-CHAR-STAGE-DROPPED";
 }

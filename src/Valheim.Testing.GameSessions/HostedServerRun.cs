@@ -824,10 +824,10 @@ internal static class HostedRunScripts
         'VT-RETIRED ' + $bytes + ' ' + $kept
         """.ReplaceLineEndings("\n");
 
-    public static readonly string WindowsDropKept = """
+    public static readonly string WindowsDropKept = ProtectedPaths.PowerShellInside + ProtectedPaths.PowerShellRemove + """
         if (-not $run -or $run -match '[\\/]' -or $run -eq '.' -or $run -eq '..') { exit 3 }
         if ([IO.Path]::GetFileName($keep) -cne 'runtime-changes' -or [IO.Path]::GetFileName([IO.Path]::GetDirectoryName($keep)) -cne $run) { exit 3 }
-        if ([IO.Directory]::Exists($keep)) { [IO.Directory]::Delete($keep, $true) }
+        Remove-VtTree $keep ([IO.Path]::GetDirectoryName($keep))
         'VT-DROPPED'
         """.ReplaceLineEndings("\n");
 
@@ -875,12 +875,11 @@ internal static class HostedRunScripts
         """.ReplaceLineEndings("\n");
 
     // Removes the run's runtime-changes directory on the host once it was fetched; only <run>/runtime-changes.
-    public static readonly string DropKept = """
-        set -u
+    public static readonly string DropKept = "set -u\n" + ProtectedPaths.BashInside + ProtectedPaths.BashRemove + """
         case "$run" in ''|*/*|.|..) exit 3;; esac
         [ "$(basename -- "$keep")" = runtime-changes ] || exit 3
         [ "$(basename -- "$(dirname -- "$keep")")" = "$run" ] || exit 3
-        rm -rf -- "$keep" || exit 3
+        vt_remove "$keep" "$(dirname -- "$keep")" || exit 3
         echo "VT-DROPPED"
         """.ReplaceLineEndings("\n");
 }

@@ -181,4 +181,12 @@ internal static class HostPath
         foreach (string part in parts) path += (path.EndsWith(separator) ? "" : separator.ToString()) + (windows ? part.Replace('/', '\\') : part);
         return path;
     }
+
+    /// <summary>The folder holding <paramref name="path"/> (either separator), or empty when it has none: a host script refuses an empty root.</summary>
+    internal static string Parent(string path)
+    {
+        string trimmed = path.TrimEnd('/', '\\');
+        int at = trimmed.LastIndexOfAny(['/', '\\']);
+        return at > 0 ? trimmed[..at] : "";
+    }
 }

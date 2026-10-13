@@ -541,18 +541,17 @@ internal static class HostInstallScripts
         """.ReplaceLineEndings("\n");
 
     // Variables: source, dest, skip (names of top-level entries left out, one per line; none copies everything).
-    public static readonly string Copy = """
-        set -u
+    public static readonly string Copy = "set -u\n" + ProtectedPaths.BashInside + ProtectedPaths.BashRemove + """
         if [ ! -d "$source" ]; then echo "VT-COPY missing"; exit 0; fi
         if [ -e "$dest" ]; then echo "VT-COPY exists"; exit 0; fi
         mkdir -p -- "$(dirname -- "$dest")" && mkdir -- "$dest" || exit 3
         if [ -z "${skip:-}" ]; then
-            if ! cp -a -- "$source/." "$dest/"; then rm -rf -- "$dest"; exit 3; fi
+            if ! cp -a -- "$source/." "$dest/"; then vt_remove "$dest" "$(dirname -- "$dest")"; exit 3; fi
         else
             shopt -s nullglob dotglob
             for entry in "$source"/*; do
                 if printf '%s\n' "$skip" | grep -Fqx -- "${entry##*/}"; then continue; fi
-                if ! cp -a -- "$entry" "$dest/"; then rm -rf -- "$dest"; exit 3; fi
+                if ! cp -a -- "$entry" "$dest/"; then vt_remove "$dest" "$(dirname -- "$dest")"; exit 3; fi
             done
         fi
         echo "VT-COPY copied"
@@ -560,22 +559,21 @@ internal static class HostInstallScripts
 
     // macOS cp -a can fail while copying protected extended attributes from a Steam install. The runtime
     // contract pins file bytes and execute modes, not quarantine metadata; ditto copies those without xattrs.
-    public static readonly string MacCopy = """
-        set -u
+    public static readonly string MacCopy = "set -u\n" + ProtectedPaths.BashInside + ProtectedPaths.BashRemove + """
         if [ ! -d "$source" ]; then echo 'VT-COPY missing'; exit 0; fi
         if [ -e "$dest" ]; then echo 'VT-COPY exists'; exit 0; fi
         mkdir -p -- "$(dirname -- "$dest")" && mkdir -- "$dest" || exit 3
         shopt -s nullglob dotglob
         for entry in "$source"/*; do
             if printf '%s\n' "$skip" | grep -Fqx -- "${entry##*/}"; then continue; fi
-            if ! ditto --noextattr --noqtn "$entry" "$dest/${entry##*/}"; then rm -rf -- "$dest"; exit 3; fi
+            if ! ditto --noextattr --noqtn "$entry" "$dest/${entry##*/}"; then vt_remove "$dest" "$(dirname -- "$dest")"; exit 3; fi
         done
         echo 'VT-COPY copied'
         """.ReplaceLineEndings("\n");
 
     // Variables: source, dest, skip (as the bash copy's; names compare ignoring case). The source may be a game install; only a
     // new destination can be written.
-    public static readonly string PowerShellCopy = """
+    public static readonly string PowerShellCopy = ProtectedPaths.PowerShellInside + ProtectedPaths.PowerShellRemove + """
         if (-not [IO.Directory]::Exists($source)) { 'VT-COPY missing'; exit 0 }
         if ([IO.Directory]::Exists($dest) -or [IO.File]::Exists($dest)) { 'VT-COPY exists'; exit 0 }
         $skipped = @($skip -split "`n" | Where-Object { $_ })
@@ -597,7 +595,7 @@ internal static class HostInstallScripts
                     else { [IO.File]::Copy($entry, (Join-Path $to ([IO.Path]::GetFileName($entry)))) }
                 }
             }
-        } catch { [IO.Directory]::Delete($dest, $true); throw }
+        } catch { Remove-VtTree $dest ([IO.Path]::GetDirectoryName($dest)); throw }
         'VT-COPY copied'
         """.ReplaceLineEndings("\n");
 

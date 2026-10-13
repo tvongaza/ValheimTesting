@@ -339,4 +339,116 @@ public sealed class LinkRuleTests : IDisposable
         Assert.True(Directory.Exists(keep));
         Assert.Equal("not ours", File.ReadAllText(Path.Combine(elsewhere, "precious.txt")));
     }
+
+    // ---- The rest of the host scripts' recursive deletes (#743): each is below an explicit root, through the one remover ----
+
+    private static string Run(LocalGameHost host, string bash, string powershell) => host.Shell.Kind == HostShellKind.Bash ? bash : powershell;
+
+    // The character staging folder goes, and a stage beyond a link out of its root is refused with nothing deleted.
+    [Theory]
+    [MemberData(nameof(Shells))]
+    public async Task DroppingTheCharacterStageRemovesItAndRefusesOneBeyondALinkOutOfItsRoot(string shell)
+    {
+        string root = Folder("characters-root"), stage = Path.Combine(root, "character-stage"), elsewhere = Elsewhere("elsewhere");
+        Directory.CreateDirectory(stage);
+        File.WriteAllText(Path.Combine(stage, "disposable.fch"), "a copy");
+        var host = Shell(shell);
+        string script = Run(host, HostedCharacterStage.BashDropStage, HostedCharacterStage.WindowsDropStage);
+
+        var dropped = (await host.RunAsync(script, new Dictionary<string, string> { ["stage"] = stage, ["root"] = root }, Generous)).EnsureSuccess("drop");
+        Assert.Contains("VT-CHAR-STAGE-DROPPED", dropped.Stdout);
+        Assert.False(Directory.Exists(stage));
+
+        Directory.CreateDirectory(Path.Combine(elsewhere, "character-stage"));
+        File.WriteAllText(Path.Combine(elsewhere, "character-stage", "precious.txt"), "not ours either");
+        string door = Path.Combine(root, "door");
+        DirectoryLinks.Create(door, elsewhere);
+        var refused = await host.RunAsync(script, new Dictionary<string, string> { ["stage"] = Path.Combine(door, "character-stage"), ["root"] = root }, Generous);
+        Assert.True(refused.Failed, refused.Describe() + refused.Stderr);
+        Assert.DoesNotContain("VT-CHAR-STAGE-DROPPED", refused.Stdout);
+        Assert.Equal("not ours either", File.ReadAllText(Path.Combine(elsewhere, "character-stage", "precious.txt")));
+    }
+
+    // The apply step removes its staging folder, and refuses a runtime path that resolves beyond a link out of the runtime.
+    [Theory]
+    [MemberData(nameof(Shells))]
+    public async Task ApplyingAProfileRemovesItsStagingAndRefusesAFolderBeyondALinkOutOfTheRuntime(string shell)
+    {
+        string parent = Folder("vt-prep-apply"), runtime = Path.Combine(parent, "runtime"), stage = Path.Combine(parent, "staging");
+        foreach (string name in new[] { "plugins", "scripts", "config", "patchers" }) Directory.CreateDirectory(Path.Combine(runtime, "BepInEx", name));
+        Directory.CreateDirectory(Path.Combine(stage, "BepInEx", "plugins"));
+        File.WriteAllText(Path.Combine(stage, "BepInEx", "plugins", "mod.dll"), "the mod");
+        var host = Shell(shell);
+        string script = Run(host, HostedRuntimeStage.BashApply, HostedRuntimeStage.WindowsApply);
+        string names = Convert.ToBase64String(Encoding.UTF8.GetBytes("BepInEx/plugins/mod.dll"));
+        Dictionary<string, string> Variables(string loader) => new()
+        {
+            ["runtime"] = runtime, ["stage"] = stage, ["parent"] = parent, ["files"] = names, ["loader"] = loader, ["preserveConfig"] = "false",
+        };
+
+        // BepInEx is a link out of the runtime: nothing below it is deleted, and the staging stays for recovery.
+        string elsewhere = Elsewhere("elsewhere");
+        Directory.CreateDirectory(Path.Combine(elsewhere, "plugins"));
+        File.WriteAllText(Path.Combine(elsewhere, "plugins", "precious.txt"), "not ours either");
+        string real = Path.Combine(runtime, "BepInEx"), moved = Path.Combine(parent, "BepInEx-real");
+        Directory.Move(real, moved);
+        DirectoryLinks.Create(real, elsewhere);
+        var refused = await host.RunAsync(script, Variables(""), Generous);
+        Assert.True(refused.Failed, refused.Describe() + refused.Stderr);
+        Assert.Equal("not ours either", File.ReadAllText(Path.Combine(elsewhere, "plugins", "precious.txt")));
+        Assert.True(Directory.Exists(stage));
+
+        // The ordinary case: the files land, the old folders are replaced and the staging is gone.
+        DirectoryLinks.Remove(real);
+        Directory.Move(moved, real);
+        var applied = (await host.RunAsync(script, Variables(""), Generous)).EnsureSuccess("apply");
+        Assert.Contains("VT-STAGED", applied.Stdout);
+        Assert.Equal("the mod", File.ReadAllText(Path.Combine(runtime, "BepInEx", "plugins", "mod.dll")));
+        Assert.False(Directory.Exists(stage));
+    }
+
+    // A loader entry beyond a link out of the runtime is refused as well (the entries come from the pins, but the host decides).
+    [Theory]
+    [MemberData(nameof(Shells))]
+    public async Task ApplyingAProfileRefusesALoaderEntryBeyondALinkOutOfTheRuntime(string shell)
+    {
+        string parent = Folder("vt-prep-loader"), runtime = Path.Combine(parent, "runtime"), stage = Path.Combine(parent, "staging");
+        foreach (string name in new[] { "plugins", "scripts", "config", "patchers" }) Directory.CreateDirectory(Path.Combine(runtime, "BepInEx", name));
+        Directory.CreateDirectory(stage);
+        string elsewhere = Elsewhere("elsewhere");
+        Directory.CreateDirectory(Path.Combine(elsewhere, "core"));
+        File.WriteAllText(Path.Combine(elsewhere, "core", "precious.txt"), "not ours either");
+        DirectoryLinks.Create(Path.Combine(runtime, "door"), elsewhere);
+        var host = Shell(shell);
+
+        var refused = await host.RunAsync(Run(host, HostedRuntimeStage.BashApply, HostedRuntimeStage.WindowsApply), new Dictionary<string, string>
+        {
+            ["runtime"] = runtime, ["stage"] = stage, ["parent"] = parent, ["files"] = "", ["loader"] = "door/core", ["preserveConfig"] = "false",
+        }, Generous);
+
+        Assert.True(refused.Failed, refused.Describe() + refused.Stderr);
+        Assert.Equal("not ours either", File.ReadAllText(Path.Combine(elsewhere, "core", "precious.txt")));
+        Assert.True(Directory.Exists(stage));
+    }
+
+    // The kept-changes folder goes as the link it may be, never emptied through it (a regression guard for the move to the remover: the old
+    // rm -rf and Directory.Delete already unlinked a link).
+    [Theory]
+    [MemberData(nameof(Shells))]
+    public async Task DroppingTheKeptChangesRemovesThemAndUnlinksALinkedFolder(string shell)
+    {
+        string run = Folder("run-kept"), keep = Path.Combine(run, "runtime-changes"), elsewhere = Elsewhere("elsewhere");
+        Directory.CreateDirectory(keep);
+        File.WriteAllText(Path.Combine(keep, "changed.txt"), "kept");
+        var host = Shell(shell);
+        string script = Run(host, HostedRunScripts.DropKept, HostedRunScripts.WindowsDropKept);
+
+        (await host.RunAsync(script, new Dictionary<string, string> { ["keep"] = keep, ["run"] = "run-kept" }, Generous)).EnsureSuccess("drop");
+        Assert.False(Directory.Exists(keep));
+
+        DirectoryLinks.Create(keep, elsewhere);
+        (await host.RunAsync(script, new Dictionary<string, string> { ["keep"] = keep, ["run"] = "run-kept" }, Generous)).EnsureSuccess("drop link");
+        Assert.False(Directory.Exists(keep));
+        Assert.Equal("not ours", File.ReadAllText(Path.Combine(elsewhere, "precious.txt")));
+    }
 }

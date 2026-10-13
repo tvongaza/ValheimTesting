@@ -197,7 +197,7 @@ internal static partial class HostedRuntimeStage
         if (host.Shell.Kind is not (HostShellKind.Bash or HostShellKind.PowerShell))
             throw new PlatformNotSupportedException("Runtime preparation needs a bash or PowerShell host.");
         if (files.Count == 0) throw new ArgumentException("Select at least one pinned plugin file.", nameof(files));
-        RequireStaging(host, destination[..destination.LastIndexOfAny(['/', '\\'])], staging);
+        RequireStaging(host, HostPath.Parent(destination), staging);
         // Whether the disposable runtime and its staging lie outside the install that runs never change is decided on the host,
         // with links resolved there: a runtime directory reached through a link into the install is inside it.
         await HostInstall.RequireApartAsync(host, source, [destination, staging], "the source install", timeout, cancellation).ConfigureAwait(false);
@@ -252,22 +252,23 @@ internal static partial class HostedRuntimeStage
     internal static bool IsStageable(string relativePath) =>
         SafePath.IsMatch(relativePath) && !relativePath.Split('/').Any(part => part is "." or "..") && !relativePath.StartsWith(' ');
 
-    internal static readonly string WindowsApply = """
+    // Variables: runtime, stage, parent (the folder holding both), files, loader, preserveConfig. Every delete is below its root: the
+    // runtime's own BepInEx folders and loader entries below the runtime, the staging folder below the parent.
+    internal static readonly string WindowsApply = ProtectedPaths.PowerShellInside + ProtectedPaths.PowerShellRemove + """
         $utf8 = New-Object Text.UTF8Encoding $false
         if ($preserveConfig -eq 'true') {
             [IO.File]::Copy((Join-Path $runtime 'BepInEx\config\BepInEx.cfg'), (Join-Path $stage 'source-BepInEx.cfg'))
         }
         foreach ($name in @('plugins', 'scripts', 'config', 'patchers')) {
             $dir = Join-Path $runtime ('BepInEx\' + $name)
-            if ([IO.Directory]::Exists($dir)) { [IO.Directory]::Delete($dir, $true) }
+            Remove-VtTree $dir $runtime
             [void][IO.Directory]::CreateDirectory($dir)
         }
         # loader: the loader's files and folders (InstallPins), one per line, when a reviewed package replaces them; else empty.
         foreach ($entry in ($loader -split "`n")) {
             if (-not $entry) { continue }
             $path = Join-Path $runtime $entry
-            if ([IO.File]::Exists($path)) { [IO.File]::Delete($path) }
-            elseif ([IO.Directory]::Exists($path)) { [IO.Directory]::Delete($path, $true) }
+            Remove-VtTree $path $runtime
         }
         foreach ($line in ($files -split "`n")) {
             if (-not $line) { continue }
@@ -280,23 +281,22 @@ internal static partial class HostedRuntimeStage
         if ($preserveConfig -eq 'true') {
             [IO.File]::Copy((Join-Path $stage 'source-BepInEx.cfg'), (Join-Path $runtime 'BepInEx\config\BepInEx.cfg'))
         }
-        [IO.Directory]::Delete($stage, $true)
+        Remove-VtTree $stage $parent
         'VT-STAGED selected files only'
         """.ReplaceLineEndings("\n");
 
-    internal static readonly string BashApply = """
-        set -eu
+    internal static readonly string BashApply = "set -eu\n" + ProtectedPaths.BashInside + ProtectedPaths.BashRemove + """
         if [ "$preserveConfig" = true ]; then
           cp "$runtime/BepInEx/config/BepInEx.cfg" "$stage/source-BepInEx.cfg"
         fi
         for name in plugins scripts config patchers; do
-          rm -rf -- "$runtime/BepInEx/$name"
+          vt_remove "$runtime/BepInEx/$name" "$runtime" || { echo "vt: refused to remove $runtime/BepInEx/$name" >&2; exit 3; }
           mkdir -p -- "$runtime/BepInEx/$name"
         done
         # loader: the loader's files and folders (InstallPins), one per line, when a reviewed package replaces them; else empty.
         while IFS= read -r entry; do
           [ -n "$entry" ] || continue
-          rm -rf -- "$runtime/$entry"
+          vt_remove "$runtime/$entry" "$runtime" || { echo "vt: refused to remove $runtime/$entry" >&2; exit 3; }
         done <<< "$loader"
         while IFS= read -r line; do
           [ -n "$line" ] || continue
@@ -307,7 +307,7 @@ internal static partial class HostedRuntimeStage
         if [ "$preserveConfig" = true ]; then
           cp "$stage/source-BepInEx.cfg" "$runtime/BepInEx/config/BepInEx.cfg"
         fi
-        rm -rf -- "$stage"
+        vt_remove "$stage" "$parent" || { echo "vt: refused to remove $stage" >&2; exit 3; }
         echo 'VT-STAGED selected files only'
         """.ReplaceLineEndings("\n");
 
