@@ -70,7 +70,6 @@
 // `git archive` copy. A candidate is never released (versions refuses it).
 #:package NuGet.Versioning@7.9.0
 using System.Net;
-using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -89,7 +88,7 @@ const string CliCommit = "releasedCliCommit";
 // The MSBuild files every packed project imports: a change to one is a change to each package's build.
 string[] SharedBuildInputs = ["Directory.Build.props", "Directory.Build.targets", "src/Directory.Build.props", "src/Directory.Build.targets"];
 Regex ForkLink = new(@"https://github\.com/tvongaza/valheimCLI/blob/(?<version>[0-9a-f]{40})/(?<path>[^#?)\s]+)(?:#(?<anchor>[^)\s]*))?", RegexOptions.IgnoreCase);
-string root = FindRoot();
+string root = RepositoryPaths.FindRoot();
 string[] packed = Directory.GetDirectories(Path.Combine(root, "src"), "Valheim.Testing*", SearchOption.TopDirectoryOnly)
     .Select(Path.GetFileName).OfType<string>()
     .Where(id => File.Exists(Path.Combine(root, "src", id, id + ".csproj"))).Order(StringComparer.Ordinal).ToArray();
@@ -837,16 +836,6 @@ static string ReadText(string path, out Encoding encoding)
 static bool IsCandidate(string version) => version.Contains("-candidate", StringComparison.OrdinalIgnoreCase);
 
 static string ProjectFile(string name) => $"src/{name}/{name}.csproj";
-
-static string ScriptPath([CallerFilePath] string path = "") => path;
-
-static string FindRoot()
-{
-    foreach (string start in new[] { Environment.CurrentDirectory, Path.GetDirectoryName(ScriptPath()) ?? "" })
-        for (DirectoryInfo? dir = new DirectoryInfo(start); dir != null; dir = dir.Parent)
-            if (File.Exists(Path.Combine(dir.FullName, "cli-dependency.json"))) return dir.FullName;
-    throw new InvalidOperationException("Run from inside the ValheimTesting repository.");
-}
 
 record Pin(string File, int Line, string Id, string Version, int Index = -1, bool Declares = false);
 // Changed: a package's source differs from its published version's (bump gives it a new one), not a comparison that failed.

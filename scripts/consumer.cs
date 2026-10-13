@@ -26,7 +26,6 @@
 // TargetedRegression builds from the current candidate or released GameSessions package outside this checkout.
 // The source example uses a project reference for local editing; the consumer swaps only that reference for the exact package.
 using System.Diagnostics;
-using System.Runtime.CompilerServices;
 using System.Security;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -35,7 +34,7 @@ const string NuGetOrg = "https://api.nuget.org/v3/index.json";
 const string FlatContainer = "https://api.nuget.org/v3-flatcontainer";
 string[] tools = ["Valheim.Testing.Bindings.Tool", "Valheim.Testing.NativeSmoke"];
 
-string root = FindRoot();
+string root = RepositoryPaths.FindRoot();
 string[] packed = Directory.GetDirectories(Path.Combine(root, "src"), "Valheim.Testing*", SearchOption.TopDirectoryOnly)
     .Select(Path.GetFileName).OfType<string>()
     .Where(id => File.Exists(Path.Combine(root, "src", id, id + ".csproj"))).Order(StringComparer.Ordinal).ToArray();
@@ -412,16 +411,4 @@ static void CopyDirectory(string from, string to)
     foreach (string file in Directory.GetFiles(from)) File.Copy(file, Path.Combine(to, Path.GetFileName(file)));
     foreach (string dir in Directory.GetDirectories(from))
         if (Path.GetFileName(dir) is not ("bin" or "obj")) CopyDirectory(dir, Path.Combine(to, Path.GetFileName(dir)));
-}
-
-static string ScriptPath([CallerFilePath] string path = "") => path;
-
-// The repository root holds cli-dependency.json. Search upward from the working directory first: CI path mapping can
-// rewrite the compile-time source path CallerFilePath reports.
-static string FindRoot()
-{
-    foreach (string start in new[] { Environment.CurrentDirectory, Path.GetDirectoryName(ScriptPath()) ?? "" })
-        for (DirectoryInfo? dir = new DirectoryInfo(start); dir != null; dir = dir.Parent)
-            if (File.Exists(Path.Combine(dir.FullName, "cli-dependency.json"))) return dir.FullName;
-    throw new InvalidOperationException("Run from inside the ValheimTesting repository.");
 }

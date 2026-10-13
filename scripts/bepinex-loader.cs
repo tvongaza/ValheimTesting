@@ -10,6 +10,9 @@ try
 {
     if (args is ["capture", string root, string name, string version, string output])
     {
+        string[] paths = RepositoryPaths.Resolve(root, output);
+        root = paths[0];
+        output = paths[1];
         if (File.Exists(output)) throw new IOException($"{output} already exists; choose a new manifest so an existing reviewed package is not silently replaced.");
         var package = BepInExLoaderPackage.Capture(root, name, version);
         package.Write(output);
@@ -18,11 +21,12 @@ try
     }
     if (args is ["check", string manifest])
     {
+        manifest = RepositoryPaths.Resolve(manifest)[0];
         var package = BepInExLoaderPackage.Read(manifest);
         Console.WriteLine($"PASS: {package.Identity}: {package.Files.Count} loader/core file(s) match.");
         return 0;
     }
-    Console.Error.WriteLine("Usage: dotnet run scripts/bepinex-loader.cs -- capture ROOT NAME VERSION MANIFEST | check MANIFEST");
+    Console.Error.WriteLine("Usage: dotnet run scripts/bepinex-loader.cs -- capture ROOT NAME VERSION MANIFEST | check MANIFEST. Relative paths are relative to the repository root.");
     return 2;
 }
 catch (Exception error) when (error is IOException or InvalidDataException or ArgumentException or InvalidOperationException)

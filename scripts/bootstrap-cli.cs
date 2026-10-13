@@ -8,15 +8,14 @@
 // only, never its working tree.
 using System.Diagnostics;
 using System.Formats.Tar;
-using System.Runtime.CompilerServices;
 using System.Text.Json;
 
-string root = FindRoot();
+string root = RepositoryPaths.FindRoot();
 string? sourceArg = null;
 for (int i = 0; i < args.Length; i++)
 {
-    if (args[i] == "--source" && i + 1 < args.Length) sourceArg = args[++i];
-    else { Console.Error.WriteLine("usage: dotnet run scripts/bootstrap-cli.cs [-- --source <git repository>]"); return 2; }
+    if (args[i] == "--source" && i + 1 < args.Length) sourceArg = RepositoryPaths.ResolvePath(root, args[++i]);
+    else { Console.Error.WriteLine("usage: dotnet run scripts/bootstrap-cli.cs [-- --source <git repository>]. Relative paths are relative to the repository root."); return 2; }
 }
 
 using JsonDocument pinDoc = JsonDocument.Parse(File.ReadAllText(Path.Combine(root, "cli-dependency.json")));
@@ -35,7 +34,7 @@ string temp = Path.Combine(Path.GetTempPath(), "valheim-cli-dependency-" + Guid.
 Directory.CreateDirectory(temp);
 try
 {
-    string repo = sourceArg != null ? Path.GetFullPath(sourceArg) : Path.Combine(temp, "checkout");
+    string repo = sourceArg ?? Path.Combine(temp, "checkout");
     if (sourceArg == null)
     {
         Run("git", "init", "-q", repo);
@@ -134,21 +133,9 @@ static string Sha256(string path)
     return Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(stream));
 }
 
-static string ScriptPath([CallerFilePath] string path = "") => path;
-
 // MSBuild splits -p: values on ';' and ','; escape them (and '%') so each value arrives whole.
 static string Property(string name, string value) =>
     "-p:" + name + "=" + value.Replace("%", "%25").Replace(";", "%3B").Replace(",", "%2C");
-
-// The repository root holds cli-dependency.json. Search upward from the working directory first:
-// CI path mapping can rewrite the compile-time source path CallerFilePath reports.
-static string FindRoot()
-{
-    foreach (string start in new[] { Environment.CurrentDirectory, Path.GetDirectoryName(ScriptPath()) ?? "" })
-        for (DirectoryInfo? dir = new DirectoryInfo(start); dir != null; dir = dir.Parent)
-            if (File.Exists(Path.Combine(dir.FullName, "cli-dependency.json"))) return dir.FullName;
-    throw new InvalidOperationException("Run from inside the ValheimTesting repository.");
-}
 
 static void Run(string file, params string[] arguments)
 {

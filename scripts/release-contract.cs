@@ -6,14 +6,13 @@
 // Run after this checkout's versions are published and the NuGet.org-only consumer passes.
 #:project ../src/Valheim.Testing.Game/Valheim.Testing.Game.csproj
 using System.IO.Compression;
-using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
 using Valheim.Testing.Game;
 
-string root = FindRoot();
+string root = RepositoryPaths.FindRoot();
 string? output = null;
 for (int i = 0; i < args.Length; i++)
 {
@@ -124,7 +123,7 @@ string[] requiredBuiltIns = CliCapabilities.Toolkit.ToArray();
             throw new InvalidDataException("The pinned ValheimCLI bundle lacks required schema-1 capability " + capability);
     }
 }
-string destination = Path.GetFullPath(output);
+string destination = RepositoryPaths.ResolvePath(root, output);
 Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
 using (var stream = File.Create(destination))
 using (var json = new Utf8JsonWriter(stream, new JsonWriterOptions { Indented = true }))
@@ -175,7 +174,7 @@ return 0;
 
 static int Usage(string error)
 {
-    Console.Error.WriteLine("release-contract: " + error + ". Usage: dotnet run scripts/release-contract.cs -- --output FILE");
+    Console.Error.WriteLine("release-contract: " + error + ". Usage: dotnet run scripts/release-contract.cs -- --output FILE. Relative paths are relative to the repository root.");
     return 2;
 }
 
@@ -201,12 +200,3 @@ static async Task<byte[]> GetBytes(HttpClient http, string url)
         }
     }
 }
-
-static string FindRoot()
-{
-    foreach (string start in new[] { Environment.CurrentDirectory, Path.GetDirectoryName(ScriptPath()) ?? "" })
-        for (DirectoryInfo? dir = new DirectoryInfo(start); dir != null; dir = dir.Parent)
-            if (File.Exists(Path.Combine(dir.FullName, "cli-dependency.json"))) return dir.FullName;
-    throw new InvalidOperationException("Run from inside ValheimTesting.");
-}
-static string ScriptPath([CallerFilePath] string path = "") => path;

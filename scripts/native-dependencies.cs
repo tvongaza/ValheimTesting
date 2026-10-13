@@ -13,6 +13,9 @@ try
 {
 if (args is ["resolve", string requestFile, string output])
 {
+    string[] paths = RepositoryPaths.Resolve(requestFile, output);
+    requestFile = paths[0];
+    output = paths[1];
     var request = NativeDependencyRequest.Read(requestFile);
     var plan = NativeDependencyResolver.Resolve(request);
     plan.Write(output);
@@ -28,11 +31,12 @@ if (args is ["resolve", string requestFile, string output])
 }
 if (args is ["check", string lockFile])
 {
+    lockFile = RepositoryPaths.Resolve(lockFile)[0];
     var plan = NativeDependencyLock.ReadReady(lockFile);
     Console.WriteLine($"PASS: {lockFile} pins {plan.Mods.Count} mod(s), {plan.Plugins.Count} dependency DLL(s) and {plan.CliFiles.Count} ValheimCLI file(s).");
     return 0;
 }
-Console.Error.WriteLine("Usage: dotnet run scripts/native-dependencies.cs -- resolve request.json dependency-lock.json | check dependency-lock.json");
+Console.Error.WriteLine("Usage: dotnet run scripts/native-dependencies.cs -- resolve request.json dependency-lock.json | check dependency-lock.json. Relative paths are relative to the repository root.");
 return 2;
 }
 catch (Exception error) when (error is IOException or InvalidOperationException or ArgumentException)
