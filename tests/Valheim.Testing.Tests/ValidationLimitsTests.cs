@@ -1,8 +1,8 @@
 using Xunit;
 
 // #719: every test command scripts/validate.cs starts has a soft limit (a warning) and a hard limit (stopped, failed, the tests in
-// flight named). These run the real script against a tiny test project, with the limits scaled down through the variables the
-// script reads for this purpose. They start dotnet test several times, so they run with the other local-shell integration tests.
+// flight named). The process-level checks run the real script against one built fixture, including one hard-limit run; message
+// formatting also uses deterministic fake TRX/blame files. It stays with the other local-shell integration tests.
 [Trait("Category", "CiShell")]
 public sealed class ValidationLimitsTests : IClassFixture<ValidationLimitsTests.ProbeProject>
 {
@@ -25,6 +25,7 @@ public sealed class ValidationLimitsTests : IClassFixture<ValidationLimitsTests.
         Has(run, "slowest tests: LimitsProbe.ProbeTests.PassesAfterTheSoftLimit");
         Has(run, "::warning title=Test command over the soft limit::SOFT LIMIT:");
         Lacks(run, "HARD LIMIT");
+        Assert.Single(Directory.GetFiles(_probe.Results("PassesAfterTheSoftLimit"), "*.trx", SearchOption.AllDirectories));
     }
 
     [Fact]
@@ -38,24 +39,30 @@ public sealed class ValidationLimitsTests : IClassFixture<ValidationLimitsTests.
     }
 
     [Fact]
-    public async Task AOneProjectRunKeepsItsTrx()
+    public async Task ARunPastTheHardLimitStopsTheHostFlushesBlameKillsTheTreeAndNamesTheTestInFlight()
     {
-        var run = await _probe.Run("PassesQuickly", soft: 0.01, hard: 300, githubActions: false);
-        run.AssertSucceeded();
-        Has(run, "SOFT LIMIT: dotnet test");
-        Has(run, "slowest tests: LimitsProbe.ProbeTests.PassesQuickly");
-        Assert.Single(Directory.GetFiles(_probe.Results("PassesQuickly"), "*.trx", SearchOption.AllDirectories));
-    }
+        var run = await _probe.Run("NeverFinishes", soft: 2, hard: 20, githubActions: false);
 
-    [Fact]
-    public async Task ARunPastTheHardLimitIsStoppedAndFailsNamingTheTestInFlight()
-    {
-        var run = await _probe.Run("NeverFinishes", soft: 2, hard: 75, githubActions: false);
-        Assert.True(run.ExitCode != 0, $"expected the run to fail\n{run.Output}");
+        Assert.NotEqual(0, run.ExitCode);
         Has(run, "HARD LIMIT:");
+        Has(run, "stopped 1 test host process(es); waiting up to 10 s for the blame sequence to flush");
+        Has(run, "blame sequence flushed; killing the process tree");
         Has(run, "FAILED: over the hard limit");
         Has(run, "started and not completed: LimitsProbe.ProbeTests.NeverFinishes");
         Lacks(run, "::warning");
+    }
+
+    [Fact]
+    public void LimitReportsNameTestsFromFakeTrxAndBlameAndExplainTheXunitConsoleGap()
+    {
+        string results = _probe.FakeResults();
+        string warning = ValidationLimitReports.SoftLimit("dotnet test probe", TimeSpan.FromSeconds(8), TimeSpan.FromSeconds(3), results);
+        Assert.Contains("SOFT LIMIT: dotnet test probe", warning, StringComparison.Ordinal);
+        Assert.Contains("slowest tests: LimitsProbe.Slower 7.0s; LimitsProbe.Faster 1.0s", warning, StringComparison.Ordinal);
+        Assert.Contains("started and not completed: LimitsProbe.InFlight", Assert.Single(ValidationLimitReports.IncompleteTests(results, _probe.FixtureDirectory)), StringComparison.Ordinal);
+        Assert.EndsWith("; no test names: net48 xunit console leg",
+            ValidationLimitReports.HardLimitFailure("dotnet build probe -t:RunTestsOnBothFrameworks", TimeSpan.FromSeconds(11), TimeSpan.FromSeconds(10), "net48 xunit console leg"),
+            StringComparison.Ordinal);
     }
 
     // #735: --split runs neutral tests on Linux only and each OS-specific class on its OS; a class without the trait runs everywhere.
@@ -85,20 +92,30 @@ public sealed class ValidationLimitsTests : IClassFixture<ValidationLimitsTests.
         BuildRun run = await _probe.RunTarget(soft: 0.01);
 
         run.AssertSucceeded();
-        Assert.Equal("ran", File.ReadAllText(_probe.TargetMarker).Trim());
         string command = $"dotnet build {_probe.Project} -m:1 -t:WriteMarker";
         Has(run, "start: " + command);
         Has(run, "SOFT LIMIT: " + command);
+        Has(run, "slowest tests: LimitsProbe.Target.Fake");
+        string properties = File.ReadAllText(_probe.TargetMarker);
+        Assert.Contains("LogFileName=results.trx", properties, StringComparison.Ordinal);
+        Assert.Contains("|true|true|5m|none|", properties, StringComparison.Ordinal);
+        Assert.Single(Directory.GetFiles(_probe.TargetResults, "*.trx", SearchOption.AllDirectories));
         string transcript = File.ReadAllText(Path.Combine(_probe.TargetResults, "validate.log"));
         Assert.Contains("start: " + command, transcript, StringComparison.Ordinal);
         Assert.Contains("SOFT LIMIT: " + command, transcript, StringComparison.Ordinal);
     }
 
     [Fact]
-    public async Task TheOneProjectModeRejectsEveryOtherShapeWithUsage()
+    public void SplitIsAcceptedBeforeOrAfterTheModeAndOtherShapesReportUsage()
     {
         string root = FixtureProjects.RepositoryRoot();
         string results = _probe.Results("invalid");
+        foreach (string[] arguments in new[] { new[] { "--split", "--ci-main-tests" }, new[] { "--ci-main-tests", "--split" } })
+        {
+            ValidationInvocation parsed = ValidationInvocation.Parse(arguments);
+            Assert.True(parsed.Split);
+            Assert.True(parsed.CiMainTests);
+        }
         string[][] invalid =
         [
             ["--unknown", root, _probe.Project, results, "FullyQualifiedName~PassesQuickly"],
@@ -110,11 +127,14 @@ public sealed class ValidationLimitsTests : IClassFixture<ValidationLimitsTests.
             ["--test-project", root, _probe.Project, results, "--target", ""],
             ["--test-project", root, _probe.Project, results, "FullyQualifiedName~PassesQuickly", "extra"],
             ["--test-project", root, _probe.Project, results, "--target", "WriteMarker", "--split"],
-            ["--split", "--ci-build-only"],
+            ["--split", "--split", "--ci-build-only"],
         ];
 
         foreach (string[] arguments in invalid)
-            (await _probe.RunArguments(arguments)).AssertFailedWith("usage: dotnet run scripts/validate.cs");
+        {
+            var error = Assert.Throws<ArgumentException>(() => ValidationInvocation.Parse(arguments));
+            Assert.Contains("usage: dotnet run scripts/validate.cs", error.Message, StringComparison.Ordinal);
+        }
     }
 
     private static void Has(BuildRun run, string text) =>
@@ -123,7 +143,7 @@ public sealed class ValidationLimitsTests : IClassFixture<ValidationLimitsTests.
     private static void Lacks(BuildRun run, string text) =>
         Assert.False(run.Output.Contains(text, StringComparison.Ordinal), $"did not expect \"{text}\" in (exit {run.ExitCode})\n{run.Output}");
 
-    /// <summary>A test project with a quick test, one slower than a scaled soft limit and one that never ends, built once.</summary>
+    /// <summary>A test project with a quick test, one slower than a scaled soft limit and one hard-limit hang, built once.</summary>
     public sealed class ProbeProject : IAsyncLifetime
     {
         private readonly string _directory = Path.Combine(Path.GetTempPath(), "vt-limits-" + Guid.NewGuid().ToString("N"));
@@ -146,7 +166,11 @@ public sealed class ValidationLimitsTests : IClassFixture<ValidationLimitsTests.
                   <ItemGroup>
                     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.10.0" /><PackageReference Include="xunit" Version="2.8.1" /><PackageReference Include="xunit.runner.visualstudio" Version="2.8.1" />
                   </ItemGroup>
-                  <Target Name="WriteMarker"><WriteLinesToFile File="$(MSBuildProjectDirectory)/target.marker" Lines="ran" Overwrite="true" /></Target>
+                  <Target Name="WriteMarker">
+                    <MakeDir Directories="$(VSTestResultsDirectory)" />
+                    <WriteLinesToFile File="$(VSTestResultsDirectory)/target.trx" Lines="&lt;TestRun&gt;&lt;UnitTestResult testName='LimitsProbe.Target.Fake' duration='00:00:04' /&gt;&lt;/TestRun&gt;" Overwrite="true" />
+                    <WriteLinesToFile File="$(MSBuildProjectDirectory)/target.marker" Lines="$(VSTestLogger)|$(VSTestBlame)|$(VSTestBlameHang)|$(VSTestBlameHangTimeout)|$(VSTestBlameHangDumpType)|$(VSTestResultsDirectory)" Overwrite="true" />
+                  </Target>
                 </Project>
                 """);
             File.WriteAllText(Path.Combine(project, "ProbeTests.cs"), """
@@ -176,6 +200,9 @@ public sealed class ValidationLimitsTests : IClassFixture<ValidationLimitsTests.
             _script = Path.Combine(_directory, "validate-probe", "validate.cs");
             Directory.CreateDirectory(Path.GetDirectoryName(_script)!);
             File.Copy(Path.Combine(FixtureProjects.RepositoryRoot(), "scripts", "validate.cs"), _script, overwrite: true);
+            File.Copy(Path.Combine(FixtureProjects.RepositoryRoot(), "scripts", "Shared", "ValidationSupport.cs"), Path.Combine(Path.GetDirectoryName(_script)!, "ValidationSupport.cs"), overwrite: true);
+            File.WriteAllText(Path.Combine(Path.GetDirectoryName(_script)!, "Directory.Build.props"),
+                "<Project><ItemGroup><Compile Include=\"ValidationSupport.cs\" /></ItemGroup></Project>");
             // Restore and compile now, so the scaled limits below measure the test run and not the first build. The project is
             // named by the very path validate.cs will pass to dotnet test (not found from the working directory, which a temp
             // folder behind a symbolic link such as macOS's /var spells differently): another spelling is another project to
@@ -214,10 +241,6 @@ public sealed class ValidationLimitsTests : IClassFixture<ValidationLimitsTests.
                 }, timeoutMinutes: 5);
         }
 
-        public Task<BuildRun> RunArguments(params string[] arguments) =>
-            FixtureProjects.Dotnet(FixtureProjects.RepositoryRoot(),
-                ["run", _script, "--", .. arguments], CleanEnvironment(), timeoutMinutes: 5);
-
         /// <summary>The tests a run passed, by name, from the TRX validate.cs keeps for it.</summary>
         public string[] Passed(string test, bool split)
         {
@@ -227,6 +250,17 @@ public sealed class ValidationLimitsTests : IClassFixture<ValidationLimitsTests.
         }
 
         public string Results(string test, bool split = false) => Path.Combine(_directory, "results-" + test + (split ? "-split" : ""));
+
+        public string FakeResults()
+        {
+            string results = Path.Combine(_directory, "fake-results");
+            Directory.CreateDirectory(results);
+            File.WriteAllText(Path.Combine(results, "fake.trx"),
+                "<TestRun><UnitTestResult testName='LimitsProbe.Faster' duration='00:00:01' /><UnitTestResult testName='LimitsProbe.Slower' duration='00:00:07' /></TestRun>");
+            File.WriteAllText(Path.Combine(results, "Sequence_fake.xml"),
+                "<Sequence><Test DisplayName='LimitsProbe.Done' Completed='True' /><Test DisplayName='LimitsProbe.InFlight' Completed='False' /></Sequence>");
+            return results;
+        }
 
         private static Dictionary<string, string?> CleanEnvironment() => new()
         {

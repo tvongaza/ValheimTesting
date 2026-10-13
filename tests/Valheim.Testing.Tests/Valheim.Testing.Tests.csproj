@@ -16,6 +16,7 @@
     <Compile Include="../../tools/dev-loop/dev-loop.cs" Link="DevLoop/dev-loop.cs" />
     <Compile Include="../../scripts/versioned-api-docs.cs" Link="Tools/versioned-api-docs.cs" />
     <Compile Include="../../scripts/Shared/RepositoryPaths.cs" Link="Tools/RepositoryPaths.cs" />
+    <Compile Include="../../scripts/Shared/ValidationSupport.cs" Link="Tools/ValidationSupport.cs" />
     <!-- The ObserveCheck example's flow without its CliTransport entry point (ObserveCheckTests). -->
     <Compile Include="../../examples/ObserveCheck/ObserveCheck.cs" Link="ObserveCheck/ObserveCheck.cs" />
     <!-- Compiles small ValheimCLI-shaped assemblies at test time for the capability manifest tests; none is committed. -->

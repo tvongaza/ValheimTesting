@@ -89,6 +89,22 @@ public sealed class TestRunnersTargetsTests : IClassFixture<TestRunnersFixture>
         Assert.Equal(new[] { "net10.0: passed", "net48: passed (1 tests)" }, TestRunnersFixture.Summary(run));
     }
 
+    [Fact]
+    public async Task AModernRunUsesTheOuterTargetsVstestEvidenceProperties()
+    {
+        string results = Path.Combine(_fixture.Root, "target-results");
+        BuildRun run = await _fixture.Run(TestRunnersFixture.Fixture, "-f", "net10.0",
+            "-p:VSTestTestCaseFilter=FullyQualifiedName~Passes", "-p:VSTestLogger=trx%3BLogFileName=target.trx",
+            "-p:VSTestResultsDirectory=" + results, "-p:VSTestBlame=true", "-p:VSTestBlameHang=true",
+            "-p:VSTestBlameHangTimeout=5m", "-p:VSTestBlameHangDumpType=none");
+
+        run.AssertSucceeded();
+        Assert.True(File.Exists(Path.Combine(results, "target.trx")), run.Output);
+        string targets = File.ReadAllText(Path.Combine(FixtureProjects.RepositoryRoot(), "tools", "test-runners", "Valheim.TestRunners.targets"));
+        Assert.Contains("--blame-hang-timeout &quot;$(VSTestBlameHangTimeout)&quot;", targets, StringComparison.Ordinal);
+        Assert.Contains("--blame-hang-dump-type &quot;$(VSTestBlameHangDumpType)&quot;", targets, StringComparison.Ordinal);
+    }
+
     [NetFrameworkFact]
     public async Task ShellCharactersInAFilterReachBothRunners()
     {
