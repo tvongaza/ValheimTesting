@@ -171,6 +171,22 @@ public sealed class ThisMachineTests : IDisposable
         using (EnvironmentInventory.UseMachine(mac)) Assert.Equal(log, SteamSessionLog.LocalPath());
     }
 
+    // Linux hosts run the dedicated server only (#708): an inventory listing a client on one is refused when it is read, so no
+    // Steam account check ever asks a Linux host (#740).
+    [Fact] public void AClientRecipeOnALinuxHostIsRefused()
+    {
+        string file = Path.Combine(_root, "linux-client.json");
+        File.WriteAllText(file, """
+            {
+              "hosts": { "lab": { "kind": "ssh", "platform": "linux", "shell": "bash", "destination": "tester@lab", "lock": "/vt/lock" } },
+              "environments": [ { "name": "lab-client", "host": "lab", "roles": ["client"], "install": "/opt/valheim", "runtime": "/vt/runs", "cliPort": 5700 } ],
+              "leaseHost": "lab", "leaseDirectory": "/vt/leases"
+            }
+            """);
+        var refused = Assert.Throws<ArgumentException>(() => EnvironmentInventory.Read(file, new FakeMachine()));
+        Assert.Contains("The client lab-client: Linux hosts run the dedicated server only; start the client on Windows or macOS.", refused.Message);
+    }
+
     // An inventory file's install is the explicit override: with no Steam root found, the listed environment is used as written.
     [Fact] public void AnInventoryInstallIsUsedWhenSteamIsElsewhere()
     {
@@ -402,8 +418,8 @@ public sealed class ThisMachineTests : IDisposable
 }
 
 // #709: a host script's one copy of the Steam-root rule per shell, run through this machine's real shell (bash, or pwsh on
-// Windows). A root named explicitly wins; with none, bash takes this OS's standard path under HOME (pointed at a temporary folder
-// here) and pwsh the user's registered SteamPath, read only and compared with the C# owner's own reading of it.
+// Windows). A root named explicitly wins; with none, bash takes macOS's standard path under HOME (pointed at a temporary folder
+// here; a Linux host runs no client script) and pwsh the user's registered SteamPath, read only and compared with the C# owner's own reading of it.
 public sealed class SteamRootScriptTests : IDisposable
 {
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(60);
@@ -433,7 +449,7 @@ public sealed class SteamRootScriptTests : IDisposable
     [Fact] public async Task WithNoneGivenTheRootIsThisPlatformsDefault()
     {
         string expected = OperatingSystem.IsWindows() ? new LocalSteamLocator().RegistrySteamPath()?.Replace('/', '\\') ?? ""
-            : OperatingSystem.IsMacOS() ? _home.Path + "/Library/Application Support/Steam" : _home.Path + "/.steam/steam";
+            : _home.Path + "/Library/Application Support/Steam";
         Assert.Equal(expected, await RootAsync("", _home.Path));
     }
 }

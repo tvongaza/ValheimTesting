@@ -132,8 +132,9 @@ public sealed class SteamAccountInUseTests : IDisposable
     [Theory]
     [InlineData("  4242   501 /Applications/Valheim.app/Contents/MacOS/Valheim", "VT-PLAYING process 4242")]
     [InlineData("  4242   501 /tmp/vt run/Valheim.app/Contents/MacOS/Valheim", "VT-PLAYING process 4242")]
-    [InlineData("  4242  1000 valheim.x86_64", "VT-PLAYING no")]
-    [InlineData("  4242   501 valheim.x86_64\n  5151   501 /opt/valheim/valheim.x86_64", "VT-PLAYING process 4242,5151")]
+    [InlineData("  4242  1000 /Applications/Valheim.app/Contents/MacOS/Valheim", "VT-PLAYING no")]
+    [InlineData("  4242   501 Valheim\n  5151   501 /Applications/Valheim.app/Contents/MacOS/Valheim", "VT-PLAYING process 4242,5151")]
+    [InlineData("  4242   501 /opt/valheim/valheim.x86_64", "VT-PLAYING no")] // a Linux game: no Linux host is asked (#740)
     [InlineData("  4242   501 /opt/valheim_server.x86_64", "VT-PLAYING no")]
     [InlineData("  4242   501 /usr/bin/ordinary", "VT-PLAYING no")]
     public async Task TheBashPlayingCheckListsThisUsersValheim(string processes, string expected)

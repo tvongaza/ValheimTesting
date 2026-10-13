@@ -292,7 +292,7 @@ public sealed class CampaignPreflightTests : IDisposable
         Assert.Contains("ELIGIBLE: the inventory has a server and a client environment, and this machine's journal holds no run going or left unrecovered.", eligible.ToString());
     }
 
-    [Fact]
+    [ClientHostFact] // the client is on this machine
     public async Task FakeHostedClientStillChecksTheLocalSteamProcess()
     {
         string inventory = Write("local-inventory.json", new

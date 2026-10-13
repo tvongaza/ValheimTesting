@@ -111,16 +111,12 @@ internal sealed record SteamDetection(string? Root, string RootRule, string? Rea
     internal const string RegistryValue = @"HKCU\Software\Valve\Steam SteamPath";
 
     /// <summary>
-    /// A bash host's (macOS, Linux) copy of the rule: sets <c>steam</c> to the script's <c>steam</c> variable when it is given
-    /// (a folder named explicitly), else to this OS's standard path. Whether it exists is the script's to check.
+    /// A macOS host's copy of the rule, for the client scripts (a Linux host runs the dedicated server only, and no script there
+    /// reads Steam): sets <c>steam</c> to the script's <c>steam</c> variable when it is given (a folder named explicitly), else to
+    /// <c>~/Library/Application Support/Steam</c>. Whether it exists is the script's to check.
     /// </summary>
     internal static readonly string BashRoot = """
-        if [ -z "${steam:-}" ]; then
-          case "$(uname -s)" in
-            Darwin) steam="${HOME:-/nonexistent}/Library/Application Support/Steam" ;;
-            *) steam="${HOME:-/nonexistent}/.steam/steam" ;;
-          esac
-        fi
+        if [ -z "${steam:-}" ]; then steam="${HOME:-/nonexistent}/Library/Application Support/Steam"; fi
 
         """.ReplaceLineEndings("\n");
 

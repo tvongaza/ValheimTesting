@@ -511,12 +511,6 @@ public static class HostedCampaignPreparation
             }
             await Task.WhenAll(group.Select(async item =>
             {
-                // Linux hosts run the dedicated server only (#708): nothing else about a client there is worth checking.
-                if (item.Name != "server" && inputs.Profile.Hosts[group.Key].Platform == "linux")
-                {
-                    failures.Add(new(item.Name, "client host", GameLaunch.LinuxClientRefusal));
-                    return;
-                }
                 if (!localHost)
                     try
                     {

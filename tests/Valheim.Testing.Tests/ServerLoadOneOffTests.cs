@@ -608,7 +608,7 @@ public sealed class ServerLoadOneOffTests : IDisposable
         bool windows = OperatingSystem.IsWindows();
         File.WriteAllText(file, JsonSerializer.Serialize(new
         {
-            hosts = new { lab = new { kind = "ssh", platform = "linux", shell = "bash", destination = "tester@lab", @lock = "/vt/lock" } },
+            hosts = new { lab = new { kind = "ssh", platform = "macos", shell = "bash", destination = "tester@lab", @lock = "/vt/lock" } }, // a client host: Windows or macOS (#708)
             environments = new object[]
             {
                 new { name = "lab-server", host = "lab", roles = new[] { "server" }, install = "/opt/server", runtime = "/vt/runs", cliPort = 5700, gamePort = 2496 },
@@ -757,7 +757,7 @@ public sealed class ServerLoadOneOffTests : IDisposable
         string file = Path.Combine(_rig.Root, "lab.json");
         File.WriteAllText(file, JsonSerializer.Serialize(new
         {
-            hosts = new { lab = new { kind = "ssh", platform = "linux", shell = "bash", destination = "tester@lab", @lock = "/vt/lock" } },
+            hosts = new { lab = new { kind = "ssh", platform = "macos", shell = "bash", destination = "tester@lab", @lock = "/vt/lock" } }, // a client host: Windows or macOS (#708)
             environments = new object[]
             {
                 new { name = "lab-client", host = "lab", roles = new[] { "client" }, install = "/opt/valheim", runtime = "/vt/runs", cliPort = 5700 },

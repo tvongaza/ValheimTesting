@@ -54,9 +54,8 @@ internal static class SteamAccountInUse
         if ($mine.Count -ne 0) { 'VT-PLAYING process ' + ($mine -join ',') } elseif ($unowned.Count -ne 0) { 'VT-PLAYING unowned ' + ($unowned -join ',') } else { 'VT-PLAYING no' }
         """.ReplaceLineEndings("\n");
 
-    // macOS and Linux: this user's processes named Valheim (the macOS app, the tool's copies included) or valheim.x86_64 (a person's own
-    // Linux game: a Steam account plays on one computer at a time, whatever starts it). Steam's
-    // console_log ("Game process added/removed ... ProcID N") is not read: it would add only a game under another name, and after a
+    // macOS (the only bash host with a client; the inventory refuses a client on Linux): this user's processes named Valheim (the
+    // macOS app, the tool's copies included). Steam's console_log ("Game process added/removed ... ProcID N") is not read: it would add only a game under another name, and after a
     // Steam crash its unremoved entry plus a reused process id would refuse a campaign for an unrelated process.
     public static readonly string Bash = """
         set -u
@@ -66,7 +65,7 @@ internal static class SteamAccountInUse
             { line=$0; sub(/^[[:space:]]+/, "", line); pid=line; sub(/[[:space:]].*$/, "", pid); rest=line; sub(/^[0-9]+[[:space:]]+/, "", rest)
               owner=rest; sub(/[[:space:]].*$/, "", owner); path=rest; sub(/^[0-9]+[[:space:]]+/, "", path)
               name=path; sub(/^.*\//, "", name)
-              if (owner==me && (name=="Valheim" || name=="valheim.x86_64")) { out=out (out=="" ? "" : ",") pid } }
+              if (owner==me && name=="Valheim") { out=out (out=="" ? "" : ",") pid } }
             END { print out }') || exit 4
         if [ -n "$ids" ]; then echo "VT-PLAYING process $ids"; else echo "VT-PLAYING no"; fi
         """.ReplaceLineEndings("\n");
