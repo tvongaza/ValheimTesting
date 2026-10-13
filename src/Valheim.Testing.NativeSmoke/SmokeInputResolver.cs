@@ -77,11 +77,16 @@ internal static class SmokeInputResolver
         return recipe;
     }
 
-    internal static (string? Manifest, ShippedLoader.Choice? Shipped) Loader(string role, EnvironmentRecipe recipe,
-        string? explicitManifest, Func<string, string, ShippedLoader.Choice?>? shipped)
+    /// <summary>
+    /// A role's loader: the given package, else the environment's <c>loaderPackage</c>, else on a Windows or Linux host the pinned
+    /// BepInExPack (<paramref name="pinned"/>, <see cref="ShippedLoader.Choose"/> in a real run). The install's own loader is never chosen
+    /// there (#711); a macOS host keeps its explicit package or its install's native loader.
+    /// </summary>
+    internal static (string? Manifest, ShippedLoader.Choice? Shipped) Loader(string role, EnvironmentRecipe recipe, string platform,
+        string? explicitManifest, ShippedLoader.Rule? pinned)
     {
         string? manifest = explicitManifest == null ? recipe.LoaderPackage : Path.GetFullPath(explicitManifest);
-        var automatic = manifest == null ? shipped?.Invoke(role, recipe.Install) : null;
+        var automatic = manifest == null ? pinned?.Invoke(role, recipe.Install, platform) : null;
         return (manifest ?? automatic?.Manifest, automatic);
     }
 

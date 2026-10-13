@@ -5,7 +5,7 @@ using Valheim.Testing.GameSessions;
 internal static class ServerLoadComparison
 {
     public static async Task<int> RunAsync(string[] args, Func<string[], Task<int>>? runArm = null,
-        Func<string, string, ShippedLoader.Choice?>? shippedLoader = null,
+        ShippedLoader.Rule? shippedLoader = null,
         Func<NativeDependencyRequest, NativeDependencyLock>? resolve = null,
         Func<string, NativeDependencyLock, string, CancellationToken, string?, Task<string>>? buildAdapter = null,
         Func<string[], ServerLoad.Seams, Task<int>>? runArmWithSeams = null,
@@ -14,7 +14,8 @@ internal static class ServerLoadComparison
         // Real arms always use one frozen environment. A scripted arm may opt in to
         // exercise that path without launching the game.
         freezeInputs |= runArm == null && runArmWithSeams == null;
-        shippedLoader ??= ShippedLoader.Instead;
+        // The pinned-loader rule extracts the real pack into this machine's data root: on for real arms, and for a test that passes one.
+        shippedLoader ??= runArm == null && runArmWithSeams == null ? ShippedLoader.Choose : null;
         resolve ??= NativeDependencyResolver.Resolve;
         buildAdapter ??= SmokeAdapter.BuildAsync;
         using var cancel = new CancellationTokenSource();
@@ -42,8 +43,12 @@ internal static class ServerLoadComparison
                 ? ModInputStage.ChooseDedicated(options, parsed.ServerOnly, Path.Combine(output, "choice")) : null;
             var serverRecipe = selected?.Server ?? new EnvironmentRecipe { Install = Path.GetFullPath(options["--server"]) };
             string server = serverRecipe.Install;
-            var (loaderManifest, automaticLoader) = SmokeInputResolver.Loader("server", serverRecipe, options.GetValueOrDefault("--loader-package"), shippedLoader);
-            var armSeams = new ServerLoad.Seams(Loader: ShippedLoader.Instead, FrozenServerLoader: automaticLoader);
+            // The server's platform as the arms' own stage reads it: its host in the chosen inventory (this machine for --server).
+            var (loaderManifest, automaticLoader) = SmokeInputResolver.Loader("server", serverRecipe,
+                selected?.Inventory.Hosts[serverRecipe.Host].Platform ?? HostProfile.CurrentPlatform,
+                options.GetValueOrDefault("--loader-package"), shippedLoader);
+            if (automaticLoader != null) ShippedLoader.Print("server", automaticLoader);
+            var armSeams = new ServerLoad.Seams(Loader: ShippedLoader.Choose, FrozenServerLoader: automaticLoader);
             runArm ??= arm => runArmWithSeams == null
                 ? ServerLoad.RunAsync(arm, armSeams) : runArmWithSeams(arm, armSeams);
             var serverLoader = loaderManifest == null ? null : BepInExLoaderPackage.Read(loaderManifest);

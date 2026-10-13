@@ -5,26 +5,14 @@ using Valheim.Testing.Game;
 using Xunit;
 using Valheim.Testing.GameSessions;
 
-// The BepInExPack Valheim.Testing.GameSessions ships (valheim-test carries it) for an install whose own Doorstop proxy and configuration do not match (#256): which
-// installs take it, how it is extracted once and reused, and what is refused. Fake files only; nothing launches.
+// The pinned BepInExPack every Windows and Linux profile runs on (#711): which platform takes which manifest, how the pack is
+// extracted once and reused, and what is refused. Fake files only; nothing launches.
 public sealed class ShippedLoaderTests : IDisposable
 {
     private readonly string _root = Path.Combine(Path.GetTempPath(), "shipped-loader-" + Guid.NewGuid().ToString("N"));
     private const string Doorstop4 = "[General]\nenabled = true\ntarget_assembly = BepInEx\\core\\BepInEx.Preloader.dll\n";
-    private const string Doorstop3 = "[UnityDoorstop]\nenabled=true\ntargetAssembly=BepInEx\\core\\BepInEx.Preloader.dll\n";
 
     public void Dispose() { if (Directory.Exists(_root)) Directory.Delete(_root, recursive: true); }
-
-    private string Install(string name, string proxy, string config)
-    {
-        string install = Path.Combine(_root, name);
-        Directory.CreateDirectory(Path.Combine(install, "BepInEx", "core"));
-        File.WriteAllText(Path.Combine(install, "BepInEx", "core", "BepInEx.Preloader.dll"), "preloader");
-        File.WriteAllText(Path.Combine(install, "BepInEx", "core", "BepInEx.dll"), "core");
-        File.WriteAllText(Path.Combine(install, "winhttp.dll"), proxy);
-        File.WriteAllText(Path.Combine(install, "doorstop_config.ini"), config);
-        return install;
-    }
 
     // A BepInExPack-shaped zip: Thunderstore metadata at the top, the game files under the pack's folder.
     internal static byte[] Pack(params (string Name, string Text)[] extra)
@@ -38,6 +26,7 @@ public sealed class ShippedLoaderTests : IDisposable
                 ("BepInExPack_Valheim/winhttp.dll", "MZ target_assembly"), ("BepInExPack_Valheim/doorstop_config.ini", Doorstop4),
                 ("BepInExPack_Valheim/BepInEx/core/BepInEx.Preloader.dll", "preloader"), ("BepInExPack_Valheim/BepInEx/core/BepInEx.dll", "core"),
                 ("BepInExPack_Valheim/BepInEx/config/BepInEx.cfg", "[Logging]\n"),
+                ("BepInExPack_Valheim/doorstop_libs/libdoorstop_x64.so", "linux doorstop"),
             }.Concat(extra))
             {
                 var entry = zip.CreateEntry(name);
@@ -51,22 +40,6 @@ public sealed class ShippedLoaderTests : IDisposable
 
     internal static ShippedLoader.LoaderPin Pin(byte[] zip) =>
         new("BepInExPack_Valheim", "5.4.2351", Convert.ToHexStringLower(SHA256.HashData(zip)), "BepInExPack_Valheim");
-
-    [Fact] public void OnlyAMismatchedOrUnrecognisedDoorstopPairIsTheShippedLoadersCase()
-    {
-        Assert.Null(BepInExLoaderPackage.DoorstopMismatch(Install("coherent4", "MZ target_assembly", Doorstop4)));
-        Assert.Null(BepInExLoaderPackage.DoorstopMismatch(Install("coherent3", "MZ targetAssembly", Doorstop3)));
-        // Gale's Doorstop 4 proxy beside BepInExPack's Doorstop 3 file, the PC's own case.
-        Assert.Contains("Doorstop 4", BepInExLoaderPackage.DoorstopMismatch(Install("gale", "MZ target_assembly", Doorstop3)));
-        Assert.Contains("Doorstop 3", BepInExLoaderPackage.DoorstopMismatch(Install("old-proxy", "MZ targetAssembly", Doorstop4)));
-        Assert.Contains("not a Doorstop proxy this check recognises", BepInExLoaderPackage.DoorstopMismatch(Install("unknown", "MZ neither", Doorstop4)));
-        // Any other loader fault is the install's own refusal, not this case: a disabled loader, a redirected target, no pair at all.
-        Assert.Null(BepInExLoaderPackage.DoorstopMismatch(Install("disabled", "MZ target_assembly", Doorstop4.Replace("enabled = true", "enabled = false"))));
-        Assert.Null(BepInExLoaderPackage.DoorstopMismatch(Install("redirected", "MZ target_assembly", Doorstop4.Replace("BepInEx.Preloader.dll", "Other.dll"))));
-        string bare = Path.Combine(_root, "bare");
-        Directory.CreateDirectory(bare);
-        Assert.Null(BepInExLoaderPackage.DoorstopMismatch(bare));
-    }
 
     [Fact] public void TheShippedPackIsExtractedOnceReusedAndReplacedWhenAFileChanged()
     {
@@ -144,118 +117,50 @@ public sealed class ShippedLoaderTests : IDisposable
         Assert.False(File.Exists(Path.Combine(_root, "d2", "loader", "escaped.txt")));
     }
 
-    // A real BepInEx.dll of that assembly version in the install's core (the fakes above are text, which reads as unknown).
-    internal static string WithCore(string install, Version version)
-    {
-        var builder = new System.Reflection.Emit.PersistedAssemblyBuilder(new System.Reflection.AssemblyName("BepInEx") { Version = version }, typeof(object).Assembly);
-        builder.DefineDynamicModule("BepInEx.dll");
-        builder.Save(Path.Combine(install, "BepInEx", "core", "BepInEx.dll"));
-        return install;
-    }
-
-    // BepInEx before 5.4.23.5 cannot reach Unity 6's log writer (BepInEx/BepInEx#755, fixed by #1264): its install takes the
-    // shipped pack even with a coherent Doorstop pair; 5.4.23.5 and later, another major and an unreadable core keep their own.
-    [Theory]
-    [InlineData("5.4.22.0", true)]
-    [InlineData("5.4.23.4", true)]
-    [InlineData("5.4.23.5", false)]
-    [InlineData("5.4.24.0", false)]
-    [InlineData("6.0.0.0", false)]
-    public void AnInstallWithBepInExBefore54235TakesTheShippedPack(string version, bool takes)
-    {
-        byte[] zip = Pack();
-        string install = WithCore(Install("core-" + version, "MZ target_assembly", Doorstop4), Version.Parse(version));
-        var choice = ShippedLoader.Instead("server", install, () => (new MemoryStream(zip), Pin(zip)), Path.Combine(_root, "data"));
-        Assert.Equal(takes, choice != null);
-        if (choice == null) return;
-        Assert.Contains($"BepInEx {version} is older than 5.4.23.5", choice.Reason);
-        Assert.Contains("BepInEx/BepInEx#755", choice.Reason);
-        Assert.DoesNotContain("Doorstop proxy", choice.Reason);
-        Assert.Contains("the install is not changed", choice.Reason);
-    }
-
-    // A macOS install keeps its own (native arm64) loader whatever its BepInEx: the pack's Doorstop library is x64.
-    [Fact] public void AMacInstallWithAnOldBepInExKeepsItsOwnLoader()
-    {
-        byte[] zip = Pack();
-        string install = WithCore(Install("mac-old", "MZ target_assembly", Doorstop4), new Version(5, 4, 22, 0));
-        Directory.CreateDirectory(Path.Combine(install, GameLaunch.ClientMacBundle));
-        Assert.Null(ShippedLoader.Instead("client", install, () => (new MemoryStream(zip), Pin(zip)), Path.Combine(_root, "data")));
-    }
-
-    [Fact] public void AnOldBepInExBehindAMismatchedPairNamesBothReasons()
-    {
-        byte[] zip = Pack();
-        string install = WithCore(Install("gale-old", "MZ target_assembly", Doorstop3), new Version(5, 4, 22, 0));
-        var choice = ShippedLoader.Instead("client", install, () => (new MemoryStream(zip), Pin(zip)), Path.Combine(_root, "data"));
-        Assert.Contains("Doorstop proxy and configuration do not match", choice!.Reason);
-        Assert.Contains("BepInEx 5.4.22.0 is older than 5.4.23.5", choice.Reason);
-    }
-
-    [Fact] public void AMismatchedInstallTakesTheShippedPackAndACoherentOneKeepsItsOwn()
+    // #711: a Windows profile takes the pack with its proxy; a Linux profile the same pack without the Windows proxy and its
+    // configuration (a bash host refuses them); a macOS profile keeps its own. The line names the pin, its SHA-256 and source.
+    [Fact] public void WindowsAndLinuxProfilesRunOnThePinnedPackAndMacOSKeepsItsOwn()
     {
         byte[] zip = Pack();
         string data = Path.Combine(_root, "data");
-        int asked = 0;
-        (Stream, ShippedLoader.LoaderPin)? Shipped() { asked++; return (new MemoryStream(zip), Pin(zip)); }
-        var choice = ShippedLoader.Instead("client", Install("gale", "MZ target_assembly", Doorstop3), Shipped, data);
-        Assert.NotNull(choice);
-        Assert.Contains("Doorstop 4", choice!.Reason);
-        Assert.Contains("BepInExPack_Valheim 5.4.2351", choice.Reason);
-        Assert.Contains("the install is not changed", choice.Reason);
-        Assert.Equal("MZ target_assembly", File.ReadAllText(Path.Combine(_root, "gale", "winhttp.dll")));
-        Assert.Equal("doorstop_config.ini", Path.GetFileName(Directory.GetFiles(BepInExLoaderPackage.Read(choice.Manifest).Root, "*.ini").Single()));
+        int opened = 0;
+        var pinned = new ShippedLoader.Pinned(Pin(zip), "the test pin", () => { opened++; return new MemoryStream(zip); });
+        var windows = ShippedLoader.For("client", "C:/game", "windows", pinned, data)!;
+        var package = BepInExLoaderPackage.Read(windows.Manifest);
+        Assert.Contains("winhttp.dll", package.Files.Keys);
+        Assert.Contains("C:/game's disposable profile runs on the pinned BepInExPack_Valheim 5.4.2351", windows.Reason);
+        Assert.Contains($"sha256 {Pin(zip).Sha256}, from the test pin", windows.Reason);
+        Assert.Contains("the install's own loader is not used", windows.Reason);
 
-        Assert.Null(ShippedLoader.Instead("client", Install("coherent", "MZ target_assembly", Doorstop4), Shipped, data));
-        Assert.Equal(1, asked); // a coherent install never opens the shipped pack
-        // A build that carries no pack leaves the mismatch to the preflight's own refusal.
-        Assert.Null(ShippedLoader.Instead("client", Install("gale2", "MZ target_assembly", Doorstop3), () => null, data));
+        var linux = ShippedLoader.For("server", "/srv/valheim", "linux", pinned, data)!;
+        Assert.Equal(ShippedLoader.LinuxManifest, Path.GetFileName(linux.Manifest));
+        var linuxPackage = BepInExLoaderPackage.Read(linux.Manifest);
+        Assert.DoesNotContain("winhttp.dll", linuxPackage.Files.Keys);
+        Assert.DoesNotContain("doorstop_config.ini", linuxPackage.Files.Keys);
+        Assert.Contains("doorstop_libs/libdoorstop_x64.so", linuxPackage.Files.Keys);
+        linuxPackage.RequireFor(ClientPlatform.Linux, "test");
+
+        Assert.Null(ShippedLoader.For("client", "/Applications/Valheim", "macos", pinned, data));
+        Assert.Equal(2, opened); // macOS never opens the pack
+        Assert.Throws<ArgumentException>(() => ShippedLoader.For("client", "x", "beos", pinned, data));
     }
 
-    // #438: an install on another host gets the same choice, from its BepInEx core and Doorstop pair read through that host's shell
-    // (nothing written there); the reason names the host. A macOS host keeps its own loader without a read, and an install on
-    // this machine is read in place.
-    [Fact] public async Task AnInstallOnAnotherHostIsJudgedFromItsFilesThere()
+    // A build without the pack refuses a Windows or Linux profile rather than falling back to the install's loader.
+    [Fact] public void APinWithoutItsZipIsRefusedNotReplacedByTheInstallsLoader()
     {
-        byte[] zip = Pack();
-        string data = Path.Combine(_root, "data");
-        var windows = new HostProfile { Kind = "ssh", Platform = "windows" };
-        Task<ShippedLoader.Choice?> On(FakeServerHost host, HostProfile profile, string install) =>
-            ShippedLoader.OnHostAsync("server", host, profile, install, TimeSpan.FromSeconds(5), CancellationToken.None, () => (new MemoryStream(zip), Pin(zip)), data);
-        FakeServerHost Host(string name, Version core, string config)
-        {
-            var host = new FakeServerHost(name, Path.Combine(_root, name), windows: true);
-            string install = host.Local(@"C:\game\server");
-            Directory.CreateDirectory(install);
-            foreach (string file in Directory.GetFiles(WithCore(Install(name + "-source", "MZ target_assembly", config), core), "*", SearchOption.AllDirectories))
-            {
-                string target = Path.Combine(install, Path.GetRelativePath(Path.Combine(_root, name + "-source"), file));
-                Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-                File.Copy(file, target);
-            }
-            return host;
-        }
+        var pinned = new ShippedLoader.Pinned(Pin(Pack()), "the test pin", () => null);
+        Assert.Contains("never runs on its install's own loader", Assert.Throws<InvalidDataException>(() =>
+            ShippedLoader.For("client", "C:/game", "windows", pinned, Path.Combine(_root, "data"))).Message);
+        Assert.Null(ShippedLoader.For("client", "/game", "macos", pinned, Path.Combine(_root, "data")));
+    }
 
-        var old = Host("old", new Version(5, 4, 22, 0), Doorstop4);
-        string before = Convert.ToHexString(File.ReadAllBytes(old.Local(@"C:\game\server\BepInEx\core\BepInEx.dll")));
-        var choice = await On(old, windows, @"C:\game\server");
-        Assert.NotNull(choice);
-        Assert.Contains(@"old:C:\game\server's BepInEx 5.4.22.0 is older than 5.4.23.5", choice!.Reason);
-        Assert.Equal("BepInExPack_Valheim", BepInExLoaderPackage.Read(choice.Manifest).Name);
-        Assert.Equal(before, Convert.ToHexString(File.ReadAllBytes(old.Local(@"C:\game\server\BepInEx\core\BepInEx.dll"))));
-        Assert.All(old.Scripts, script => Assert.Equal("preflight-read", script)); // reads only
-
-        var gale = Host("gale", new Version(5, 4, 23, 5), Doorstop3);
-        Assert.Contains("Doorstop proxy and configuration do not match", (await On(gale, windows, @"C:\game\server"))!.Reason);
-        Assert.Null(await On(Host("current", new Version(5, 4, 23, 5), Doorstop4), windows, @"C:\game\server"));
-        // A Linux host has no Doorstop pair to compare; its core's age still decides.
-        Assert.NotNull(await On(Host("linux", new Version(5, 4, 22, 0), Doorstop4), new HostProfile { Kind = "ssh", Platform = "linux" }, @"C:\game\server"));
-        var mac = Host("mac", new Version(5, 4, 22, 0), Doorstop4);
-        Assert.Null(await On(mac, new HostProfile { Kind = "ssh", Platform = "macos" }, @"C:\game\server"));
-        Assert.Empty(mac.Scripts);
-        // This machine: read in place, the same as server-load's choice.
-        string local = WithCore(Install("local-old", "MZ target_assembly", Doorstop4), new Version(5, 4, 22, 0));
-        var here = await On(new FakeServerHost("unused", Path.Combine(_root, "unused"), windows: true), new HostProfile { Kind = "local", Platform = "windows" }, local);
-        Assert.Contains(local + "'s BepInEx 5.4.22.0 is older", here!.Reason);
+    // The pin is loader-dependency.json, embedded with the build.
+    [Fact] public void ThePinIsTheEmbeddedLoaderDependency()
+    {
+        var pinned = ShippedLoader.BuiltIn();
+        using var repository = System.Text.Json.JsonDocument.Parse(File.ReadAllText(Path.Combine(FixtureProjects.RepositoryRoot(), "loader-dependency.json")));
+        string Text(string name) => repository.RootElement.GetProperty(name).GetString()!;
+        Assert.Equal(new ShippedLoader.LoaderPin(Text("name"), Text("version"), Text("sha256"), Text("root")), pinned.Pin);
+        Assert.Equal("loader-dependency.json", pinned.Source);
     }
 }

@@ -139,7 +139,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         HostedCampaignPreparation.Check(manifestFile);
         hosts["client-a"].SteamUserReply = "VT-STEAMUSER unreadable\n";
         hosts["client-b"].SteamUserReply = "VT-STEAMUSER account 303\n"; // client-c's identity: one account, two simultaneous clients.
-        var hostReport = await HostedCampaignPreparation.InspectAsync(manifestFile, TimeSpan.FromSeconds(30), name => hosts[name]);
+        var hostReport = await HostedCampaignPreparation.InspectAsync(manifestFile, TimeSpan.FromSeconds(30), name => hosts[name], pinnedLoader: null);
         Assert.Contains(hostReport.Problems, problem => problem.Actor == "client-a" && problem.Input == "Steam identity");
         // client-c's standard folders do not exist yet: refused, naming each path tried on its host.
         var folders = Assert.Single(hostReport.Problems, problem => problem.Actor == "client-c" && problem.Input == "character folders");
@@ -148,7 +148,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         Assert.Contains(hostReport.Problems, problem => problem.Actor == "clients" && problem.Input == "Steam identities" && problem.Message.Contains("client-b, client-c"));
         Assert.All(hosts.Values, host => Assert.DoesNotContain(host.Scripts, script => script is "ship" or "copy" or "start"));
         var identities = await Assert.ThrowsAsync<ArgumentException>(() => HostedCampaignPreparation.PrepareAsync(manifestFile,
-            Path.Combine(_rig.Root, "bad-identities"), TimeSpan.FromSeconds(30), name => hosts[name]));
+            Path.Combine(_rig.Root, "bad-identities"), TimeSpan.FromSeconds(30), name => hosts[name], pinnedLoader: null));
         Assert.Contains("client-a Steam identity", identities.Message);
         Assert.Contains("client-b, client-c use the same signed-in Steam account", identities.Message);
         Assert.All(hosts.Values, host => Assert.DoesNotContain("ship", host.Scripts));
@@ -156,7 +156,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         hosts["client-b"].SteamUserReply = "VT-STEAMUSER account 202\n";
         Directory.CreateDirectory(hosts["client-c"].Local(@"C:\Users\tester\AppData\LocalLow\IronGate\Valheim\characters_local"));
         Directory.CreateDirectory(hosts["client-c"].Local(@"C:\Program Files (x86)\Steam\userdata"));
-        var resolvedReport = await HostedCampaignPreparation.InspectAsync(manifestFile, TimeSpan.FromSeconds(30), name => hosts[name]);
+        var resolvedReport = await HostedCampaignPreparation.InspectAsync(manifestFile, TimeSpan.FromSeconds(30), name => hosts[name], pinnedLoader: null);
         Assert.True(resolvedReport.Ready, string.Join("; ", resolvedReport.Problems.Select(problem => problem.Message)));
         var clientC = resolvedReport.Actors.Single(actor => actor.Name == "client-c");
         Assert.Equal((@"C:\Users\tester\AppData\LocalLow\IronGate\Valheim\characters_local", @"C:\Program Files (x86)\Steam\userdata"),
@@ -176,7 +176,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         foreach (var host in hosts.Values) host.BeforeShip = overlap.EnterAsync;
         string output = Path.Combine(_rig.Root, "prepared");
         string[] prepared;
-        await using (var campaign = await HostedCampaignPreparation.PrepareAsync(manifestFile, output, TimeSpan.FromSeconds(30), name => hosts[name]))
+        await using (var campaign = await HostedCampaignPreparation.PrepareAsync(manifestFile, output, TimeSpan.FromSeconds(30), name => hosts[name], pinnedLoader: null))
         {
             var profile = campaign.Environment;
             Assert.NotNull(profile.Server!.PreparedSourceFiles);
@@ -255,7 +255,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         sharedHost.BeforeShip = sharedOverlap.EnterAsync;
         int claimsBefore = sharedHost.Claims.Count, checksBefore = 0;
         await using (var campaign = await HostedCampaignPreparation.PrepareAsync(sameHostManifestFile,
-            Path.Combine(_rig.Root, "shared-host-prepared"), TimeSpan.FromSeconds(30), name => hosts[name]))
+            Path.Combine(_rig.Root, "shared-host-prepared"), TimeSpan.FromSeconds(30), name => hosts[name], pinnedLoader: null))
         {
             Assert.Equal(claimsBefore + 1, sharedHost.Claims.Count);
             Assert.True(sharedOverlap.Seen, "Server and client setup on one host should overlap under its single claim.");
@@ -272,7 +272,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         // A game can exit while its Mac GUI agent stays loaded. That host's character and profile
         // must remain journalled until recovery proves the agent was removed.
         var blockedCampaign = await HostedCampaignPreparation.PrepareAsync(sameHostManifestFile,
-            Path.Combine(_rig.Root, "blocked-agent-prepared"), TimeSpan.FromSeconds(30), name => hosts[name]);
+            Path.Combine(_rig.Root, "blocked-agent-prepared"), TimeSpan.FromSeconds(30), name => hosts[name], pinnedLoader: null);
         string blockedRuntime = blockedCampaign.Copies.Single(copy => copy.Actor == "client-a").Runtime;
         var blocked = await new RunRetirement(null, "").CampaignAsync(blockedCampaign, ["server"], blockedHosts: ["server"]);
         Assert.Single(blocked);
@@ -286,7 +286,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         // VALHEIM_TESTING_KEEP_RUNTIME=1 keeps every actor's install (the disposable characters still go), and a second retire
         // by the same owner touches nothing, not even what the first one kept.
         var keptCampaign = await HostedCampaignPreparation.PrepareAsync(sameHostManifestFile, Path.Combine(_rig.Root, "kept-prepared"),
-            TimeSpan.FromSeconds(30), name => hosts[name]);
+            TimeSpan.FromSeconds(30), name => hosts[name], pinnedLoader: null);
         var retirement = new RunRetirement(null, "");
         RunRetirement.KeepOverride.Value = true;
         try { Assert.Empty(await retirement.CampaignAsync(keptCampaign, [])); }
@@ -356,18 +356,18 @@ public sealed class NativeDependencyResolverTests : IDisposable
 
         // A sealed file changed in the source: refused in the preflight, read only, naming the file.
         mac.MacBundleInspect = "VT-BUNDLE broken 1 " + Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes("file modified: /game/source/Valheim.app/Contents/Info.plist"));
-        var broken = await HostedCampaignPreparation.InspectAsync(manifestFile, TimeSpan.FromSeconds(30), name => hosts[name]);
+        var broken = await HostedCampaignPreparation.InspectAsync(manifestFile, TimeSpan.FromSeconds(30), name => hosts[name], pinnedLoader: null);
         var refusal = Assert.Single(broken.Problems, problem => problem.Actor == "player" && problem.Input == "macOS app bundle");
         Assert.Contains("Info.plist", refusal.Message);
         Assert.Contains("Verify the game's files in Steam", refusal.Message);
 
         // Files only added inside it (BepInEx preloader logs): fixable; the preflight passes.
         mac.MacBundleInspect = "VT-BUNDLE fixable 2 " + Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes("Contents/MacOS/preloader_1.log\nContents/MacOS/preloader_2.log"));
-        var fixable = await HostedCampaignPreparation.InspectAsync(manifestFile, TimeSpan.FromSeconds(30), name => hosts[name]);
+        var fixable = await HostedCampaignPreparation.InspectAsync(manifestFile, TimeSpan.FromSeconds(30), name => hosts[name], pinnedLoader: null);
         Assert.True(fixable.Ready, string.Join("; ", fixable.Problems.Select(problem => problem.Message)));
 
         // Prepared: the profile launches the source bundle, which is only ever read, and nothing is copied into a new bundle.
-        await using (var campaign = await HostedCampaignPreparation.PrepareAsync(manifestFile, Path.Combine(_rig.Root, "mac-accepted"), TimeSpan.FromSeconds(30), name => hosts[name]))
+        await using (var campaign = await HostedCampaignPreparation.PrepareAsync(manifestFile, Path.Combine(_rig.Root, "mac-accepted"), TimeSpan.FromSeconds(30), name => hosts[name], pinnedLoader: null))
         {
             Assert.Equal("/game/source", campaign.Environment.Clients["player"].PreparedGameRoot);
             Assert.Contains("Valheim.app/Contents/MacOS/Valheim", campaign.Listings["player"].Files.Keys);
@@ -462,7 +462,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         hosts["pc"].SteamUserReply = "VT-STEAMUSER unreadable\n";
         File.WriteAllText(Path.Combine(hosts["pc"].Local(@"C:\game\server"), "doorstop_config.ini"), "[UnityDoorstop]\nenabled=true\ntargetAssembly=BepInEx\\core\\BepInEx.Preloader.dll\n");
         hosts["pc"].GameActive = true;
-        var report = await HostedCampaignPreparation.InspectAsync(faulty, TimeSpan.FromSeconds(30), name => hosts[name]);
+        var report = await HostedCampaignPreparation.InspectAsync(faulty, TimeSpan.FromSeconds(30), name => hosts[name], pinnedLoader: null);
         Assert.False(report.Ready);
         void Has(string actor, string input, string text) => Assert.True(report.Problems.Any(problem => problem.Actor == actor && problem.Input == input && problem.Message.Contains(text, StringComparison.Ordinal)),
             $"expected {actor} {input} containing \"{text}\" in: " + string.Join(" | ", report.Problems.Select(problem => $"{problem.Actor} {problem.Input}: {problem.Message}")));
@@ -484,9 +484,23 @@ public sealed class NativeDependencyResolverTests : IDisposable
         hosts["pc"].SteamUserReply = "VT-STEAMUSER account 101\n";
         File.WriteAllText(Path.Combine(hosts["pc"].Local(@"C:\game\server"), "doorstop_config.ini"), "[General]\nenabled=true\ntarget_assembly=BepInEx\\core\\BepInEx.Preloader.dll\n");
         hosts["pc"].GameActive = false;
-        var ready = await HostedCampaignPreparation.InspectAsync(clean, TimeSpan.FromSeconds(30), name => hosts[name]);
+        var ready = await HostedCampaignPreparation.InspectAsync(clean, TimeSpan.FromSeconds(30), name => hosts[name], pinnedLoader: null);
         Assert.True(ready.Ready, string.Join("; ", ready.Problems.Select(problem => $"{problem.Actor} {problem.Input}: {problem.Message}")));
         Assert.Equal(["pc", "pc", "laptop"], ready.Actors.Select(actor => actor.Host));
+
+        // #711: with the pinned-loader rule (a fake pack here), every actor that names no package is asked with its host's
+        // platform and its install's own loader is not read: the server's Doorstop mix no longer matters.
+        File.WriteAllText(Path.Combine(hosts["pc"].Local(@"C:\game\server"), "doorstop_config.ini"), "[UnityDoorstop]\nenabled=true\ntargetAssembly=BepInEx\\core\\BepInEx.Preloader.dll\n");
+        byte[] pack = ShippedLoaderTests.Pack();
+        var asked = new System.Collections.Concurrent.ConcurrentBag<string>();
+        var pinned = await HostedCampaignPreparation.InspectAsync(clean, TimeSpan.FromSeconds(30), name => hosts[name], (actor, install, platform) =>
+        {
+            asked.Add($"{actor} {install} {platform}");
+            return ShippedLoader.For(actor, install, platform, new ShippedLoader.Pinned(ShippedLoaderTests.Pin(pack), "the test pin", () => new MemoryStream(pack)),
+                Path.Combine(_rig.Root, "six-pinned-data"));
+        });
+        Assert.True(pinned.Ready, string.Join("; ", pinned.Problems.Select(problem => $"{problem.Actor} {problem.Input}: {problem.Message}")));
+        Assert.Equal(new[] { @"client-a pc:C:\game\client windows", @"client-b laptop:C:\game\client windows", @"server pc:C:\game\server windows" }, asked.Order(StringComparer.Ordinal));
 
         // #258 step 8b: the same actors without a dedicated server, one client to host the world and the other its peer. The
         // preflight is the same, without a server role; join (a server's address) is refused without a server.
@@ -502,7 +516,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
             }
             : (object)new { inventory, world, join, clients = new Dictionary<string, object> { ["client-a"] = new { dependencyLock = clientLock, character = Character(storeA, "one", "vt-one") } } });
         string serverless = Hosted("six-hosted.json", null);
-        var hostedReady = await HostedCampaignPreparation.InspectAsync(serverless, TimeSpan.FromSeconds(30), name => hosts[name]);
+        var hostedReady = await HostedCampaignPreparation.InspectAsync(serverless, TimeSpan.FromSeconds(30), name => hosts[name], pinnedLoader: null);
         Assert.True(hostedReady.Ready, string.Join("; ", hostedReady.Problems.Select(problem => $"{problem.Actor} {problem.Input}: {problem.Message}")));
         Assert.Equal(["client-a", "client-b"], hostedReady.Actors.Select(actor => actor.Name));
         Assert.Equal(["pc", "laptop"], hostedReady.Actors.Select(actor => actor.Host));
@@ -525,13 +539,14 @@ public sealed class NativeDependencyResolverTests : IDisposable
     // RunCampaignAsync: one report from the campaign's preflight through the run to retiring the prepared install, with the
     // prepared environment in memory (no profile.json, plan.json or campaign-times.json); a plan that disagrees with the
     // campaign is refused in Preflight before any host is contacted.
-    // #438: a session's actor that names no loader package, whose install on another host has BepInEx before 5.4.23.5, runs its
-    // disposable copy on the shipped BepInExPack, as server-load's do: the choice is printed and recorded (<actor>LoaderShipped)
-    // and the source install is unchanged. Negative control: with the rule off the copy keeps the install's own BepInEx.
+    // #711: a session's actor that names no loader package, on a Windows host, runs its disposable copy on the pinned
+    // BepInExPack whatever its install holds, as server-load's do: the choice names the pin and its SHA-256 in provenance
+    // (<actor>LoaderShipped) and the source install is unchanged. Negative control: with the rule off the copy keeps the
+    // install's own BepInEx.
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
-    public async Task ASessionActorWithAnOldBepInExOnAnotherHostRunsOnTheShippedLoader(bool rule)
+    public async Task ASessionActorThatNamesNoLoaderRunsOnThePinnedPack(bool rule)
     {
         string tag = rule ? "shipped" : "own";
         string serverDll = _rig.Write($"loader-{tag}/Server.dll", RegressionRig.Assembly("Server", new("example.server")));
@@ -548,7 +563,6 @@ public sealed class NativeDependencyResolverTests : IDisposable
         File.WriteAllText(Path.Combine(source, GameLaunch.ServerWindowsExecutable), "server");
         File.WriteAllText(Path.Combine(source, "winhttp.dll"), "MZ target_assembly");
         File.WriteAllText(Path.Combine(source, "doorstop_config.ini"), "[General]\nenabled=true\ntarget_assembly=BepInEx\\core\\BepInEx.Preloader.dll\n");
-        ShippedLoaderTests.WithCore(source, new Version(5, 4, 22, 0));
         byte[] sourceCore = File.ReadAllBytes(Path.Combine(source, "BepInEx", "core", "BepInEx.dll"));
         string inventory = Path.Combine(_rig.Root, $"loader-{tag}-inventory.json");
         File.WriteAllText(inventory, JsonSerializer.Serialize(new
@@ -575,8 +589,8 @@ public sealed class NativeDependencyResolverTests : IDisposable
             Hooks = new FakeRunHooks
             {
                 Host = _ => host, Connect = _ => server.Connect(), StateWaits = false, RunId = "run-test",
-                ShippedLoader = rule ? (actor, on, profile, install) => ShippedLoader.OnHostAsync(actor, on, profile, install, TimeSpan.FromSeconds(30), CancellationToken.None,
-                    () => (new MemoryStream(zip), ShippedLoaderTests.Pin(zip)), Path.Combine(_rig.Root, "loader-data")) : null,
+                PinnedLoader = rule ? (actor, install, platform) => ShippedLoader.For(actor, install, platform,
+                    new ShippedLoader.Pinned(ShippedLoaderTests.Pin(zip), "the test pin", () => new MemoryStream(zip)), Path.Combine(_rig.Root, "loader-data")) : null,
             },
         };
         var plan = new SitePlan
@@ -595,7 +609,9 @@ public sealed class NativeDependencyResolverTests : IDisposable
         Assert.Equal(sourceCore, File.ReadAllBytes(Path.Combine(source, "BepInEx", "core", "BepInEx.dll"))); // the install is never changed
         if (rule)
         {
-            Assert.Contains(@"pc:C:\game\source's BepInEx 5.4.22.0 is older than 5.4.23.5", provenance.GetProperty("serverLoaderShipped").GetString());
+            string shipped = provenance.GetProperty("serverLoaderShipped").GetString()!;
+            Assert.Contains(@"pc:C:\game\source's disposable profile runs on the pinned BepInExPack_Valheim 5.4.2351", shipped);
+            Assert.Contains("sha256 " + ShippedLoaderTests.Pin(zip).Sha256 + ", from the test pin", shipped);
             Assert.Equal("core", System.Text.Encoding.UTF8.GetString(copiedCore!)); // the shipped pack's core
         }
         else
@@ -1414,7 +1430,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
                 ["peer"] = new { dependencyLock = clientLock, environmentCandidates = new[] { "laptop-client" }, differentHostFrom = new[] { "host" }, character = Character(storeB, "peerb", "vt-peer") },
             },
         }));
-        var preflight = await HostedCampaignPreparation.InspectAsync(manifest, TimeSpan.FromSeconds(30), name => hosts[name]);
+        var preflight = await HostedCampaignPreparation.InspectAsync(manifest, TimeSpan.FromSeconds(30), name => hosts[name], pinnedLoader: null);
         Assert.True(preflight.Ready, string.Join("; ", preflight.Problems.Select(problem => $"{problem.Actor} {problem.Input}: {problem.Message}")));
 
         // The host: at its menu until it hosts; an open Steam server while it does. The peer joins it by its Steam ID.

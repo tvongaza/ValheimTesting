@@ -373,12 +373,12 @@ public sealed class EnvironmentInventoryTests : IDisposable
             ["vm"] = new("vm", Path.Combine(_root, "vm"), windows: true) { SteamUserReply = "VT-STEAMUSER account 1\n" },
             ["mac"] = new("mac", Path.Combine(_root, "mac"), windows: true) { SteamUserReply = "VT-STEAMUSER account 2\n" },
         };
-        var report = await HostedCampaignPreparation.InspectAsync(campaignFile, TimeSpan.FromSeconds(3), name => hosts[name]);
+        var report = await HostedCampaignPreparation.InspectAsync(campaignFile, TimeSpan.FromSeconds(3), name => hosts[name], pinnedLoader: null);
         Assert.Contains(report.Problems, problem => problem.Input == "Steam identities" && problem.Message.Contains("same signed-in Steam account"));
         Assert.All(hosts.Values, host => Assert.DoesNotContain(host.Scripts, script => script is "copy" or "start"));
 
         hosts["vm"].SteamUserReply = "VT-STEAMUSER account 2\n";
-        report = await HostedCampaignPreparation.InspectAsync(campaignFile, TimeSpan.FromSeconds(3), name => hosts[name]);
+        report = await HostedCampaignPreparation.InspectAsync(campaignFile, TimeSpan.FromSeconds(3), name => hosts[name], pinnedLoader: null);
         Assert.DoesNotContain(report.Problems, problem => problem.Input is "Steam identity" or "Steam identities");
     }
 }

@@ -105,14 +105,11 @@ internal sealed class RunJournal
     /// This machine's journal (<c>journal</c> beside its default lock, under ValheimTesting's data folder), where copies made
     /// on this machine (<see cref="WorldFixture"/>) are journalled in process, without a shell.
     /// </summary>
-    internal static string LocalDirectory => s_localFlow.Value
-        ?? (LocalSteamLocator.SimulatedDataRoot.Value is { } fake ? Path.Combine(fake.Directory, "journal") : null)
-        ?? LocalDirectoryDefault ?? Path.Combine(new LocalSteamLocator().DataRoot, "journal");
+    internal static string LocalDirectory => s_localFlow.Value ?? Path.Combine(new LocalSteamLocator().DataRoot, "journal");
 
-    // Test seams: this machine's journal is the real machine's, never a simulated machine's (EnvironmentInventory.ThisMachine
-    // may describe another platform's folders). Tests point it at a temporary folder, for all tests or for one test's flow;
-    // a no-game test outside this assembly uses a Fakes.FakeDataRoot scope.
-    internal static string? LocalDirectoryDefault { get; set; }
+    // Test seam: this machine's journal is the real machine's, never a simulated machine's (EnvironmentInventory.ThisMachine
+    // may describe another platform's folders). It follows the data root (a FakeDataRoot scope, or the test default of
+    // LocalSteamLocator.DataRootDefault); one test's flow may point it at a temporary folder of its own.
     private static readonly AsyncLocal<string?> s_localFlow = new();
     internal static IDisposable UseLocalDirectory(string directory)
     {

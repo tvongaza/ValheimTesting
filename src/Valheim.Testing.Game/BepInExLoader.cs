@@ -5,8 +5,8 @@ using System.Text;
 namespace Valheim.Testing.Game;
 
 // A Windows Doorstop proxy and configuration that cannot start BepInEx together: from different Doorstop versions (a mod
-// manager's proxy beside BepInExPack's file), or a proxy no check recognises. The one loader fault a reviewed package can
-// stand in for without hiding another (BepInExLoaderPackage.DoorstopMismatch).
+// manager's proxy beside BepInExPack's file), or a proxy no check recognises. Refused before launch for a run on an
+// install's own loader; a Windows profile runs on the pinned pack or a reviewed package instead (#711).
 internal sealed class DoorstopPairingException(string message) : InvalidOperationException(message);
 
 // The BepInEx loader policy every launch (GameLaunch) shares: the files a BepInEx launch needs, the Windows Doorstop

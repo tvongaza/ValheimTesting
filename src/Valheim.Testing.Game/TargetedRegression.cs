@@ -23,7 +23,7 @@ public sealed class RegressionInputs
     /// <summary>An optional game-side test probe: a plugin that serves the scenario's observations.</summary>
     public RegressionFile? Probe { get; set; }
     public RegressionMod Mod { get; set; } = new();
-    /// <summary>Config files to place in <c>BepInEx/config</c>, by file name. Without <c>valheimCLI.valheimCLI.cfg</c> one is written with the client's port.</summary>
+    /// <summary>Config files to place in <c>BepInEx/config</c>, by file name. Without <c>valheimCLI.valheimCLI.cfg</c> one is written with the client's port. A <c>BepInEx.cfg</c> here replaces the loader's default; the install's own is never used (#711).</summary>
     public Dictionary<string, string> Configs { get; set; } = [];
     /// <summary>BepInEx preloader patchers to place in <c>BepInEx/patchers</c>; none by default.</summary>
     public List<RegressionFile> Patchers { get; set; } = [];

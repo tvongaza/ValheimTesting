@@ -47,8 +47,10 @@ internal sealed class FakeMachine(string platform = "windows") : ISteamLocator
             OsArchitecture = RuntimeInformation.OSArchitecture,
             Home = Path.Combine(Path.GetTempPath(), "vt-no-steam-home"), DataRoot = Path.Combine(Path.GetTempPath(), "vt-no-steam-data"),
         };
-        // Every copy a test makes is journalled here, never in the test machine's own ValheimTesting folder.
-        RunJournal.LocalDirectoryDefault = Path.Combine(Path.GetTempPath(), "vt-no-steam-data", "journal");
+        // ValheimTesting's own folder on this machine (the pinned bundle and pack, the run journal) is a temporary one too, so no
+        // test writes the test machine's real folder. It is the real machine's (LocalSteamLocator), not the simulated
+        // inventory machine's above, which may describe another platform's folders.
+        LocalSteamLocator.DataRootDefault = Path.Combine(Path.GetTempPath(), "vt-no-steam-data");
     }
 }
 

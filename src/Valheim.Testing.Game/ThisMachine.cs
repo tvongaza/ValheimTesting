@@ -42,7 +42,11 @@ internal sealed class LocalSteamLocator : ISteamLocator
     // Set only by Fakes.FakeDataRoot: the innermost open scope, whose folder a no-game test uses as ValheimTesting's own.
     // scripts/validate.cs watches the real folder with the same platform rules: change both together.
     internal static readonly AsyncLocal<Fakes.FakeDataRoot?> SimulatedDataRoot = new();
-    public string DataRoot => SimulatedDataRoot.Value?.Directory ?? Platform switch
+    // Test seam: the folder every test of an assembly uses in place of the real one when no FakeDataRoot scope is open (its
+    // module initializer sets it). The one owner of ValheimTesting's folder on this machine: the pinned bundle and pack, the
+    // run journal, holds and detached runs all resolve through DataRoot.
+    internal static string? DataRootDefault { get; set; }
+    public string DataRoot => SimulatedDataRoot.Value?.Directory ?? DataRootDefault ?? Platform switch
     {
         "windows" => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ValheimTesting"),
         "macos" => Path.Combine(Home, "Library", "Application Support", "ValheimTesting"),

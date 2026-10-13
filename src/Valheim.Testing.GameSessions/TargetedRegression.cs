@@ -90,7 +90,7 @@ public sealed class TargetedRegression
 
     private void RequireDirectClientDesktop() => DirectClientDesktop.Require(DirectClientSession());
 
-    internal const string CliPlugin = "valheimCLI.valheimCLI", CliConfig = "valheimCLI.valheimCLI.cfg", BepInExConfig = "BepInEx.cfg";
+    internal const string CliPlugin = "valheimCLI.valheimCLI", CliConfig = "valheimCLI.valheimCLI.cfg";
     private static readonly string[] StagedFolders = ["plugins", "patchers", "config", "scripts"];
     // What a copy of the prepared install leaves out: everything BepInEx loads or writes besides its core.
     // ValheimCLI's own extension owners are logical command groups in the default plugin.
@@ -115,8 +115,29 @@ public sealed class TargetedRegression
     public string Install { get; }
     /// <summary>The client's ValheimCLI port: the client environment's.</summary>
     public int Port { get; }
-    /// <summary>The client environment's loader package, when it names one.</summary>
-    public string? LoaderPackage { get; }
+    /// <summary>
+    /// The client's loader package: the client environment's, else on Windows or Linux the toolkit's pinned BepInExPack (#711), chosen once;
+    /// null only for a macOS install's own native loader.
+    /// </summary>
+    public string? LoaderPackage
+    {
+        get
+        {
+            if (_environmentLoader != null) return _environmentLoader;
+            if (!_loaderChosen)
+            {
+                _pinnedLoader = PinnedLoader("client", Game);
+                _loaderChosen = true;
+                if (_pinnedLoader != null) ShippedLoader.Print("client", _pinnedLoader);
+            }
+            return _pinnedLoader?.Manifest;
+        }
+    }
+    private readonly string? _environmentLoader;
+    private ShippedLoader.Choice? _pinnedLoader;
+    private bool _loaderChosen;
+    /// <summary>The pinned-loader rule for an environment that names no package (<see cref="ShippedLoader.Local"/>); a test replaces it.</summary>
+    internal Func<string, string, ShippedLoader.Choice?> PinnedLoader { get; init; } = ShippedLoader.Local;
     /// <summary>The effective client slice selected by the inputs or inventory.</summary>
     public string Architecture { get; }
     /// <summary>What the inventory detected and assumed for this machine (<see cref="EnvironmentInventory.Detected"/>), for a caller to print.</summary>
@@ -158,7 +179,7 @@ public sealed class TargetedRegression
                 "name a client environment on this machine.");
         ClientEnvironment = recipe.Name;
         _lockPath = host.Lock;
-        Game = recipe.Install; Port = recipe.CliPort; LoaderPackage = recipe.LoaderPackage;
+        Game = recipe.Install; Port = recipe.CliPort; _environmentLoader = recipe.LoaderPackage;
         Architecture = ClientArchitectureChoice.Select(inputs.Client.Architecture, recipe.Architecture,
             host.Platform, EnvironmentInventory.ThisMachine.OsArchitecture);
         string parent = Path.Combine(recipe.Runtime, "vt-prep-regression-" + inputs.Name + "-" + _journal.RunId);
@@ -168,8 +189,6 @@ public sealed class TargetedRegression
         Detected = inventory.Detected;
         if (RegressionInputs.Inside(Install, Game) || RegressionInputs.Inside(Game, Install))
             throw new ArgumentException($"The disposable install {Install} and the game {Game} overlap: give the client environment a runtime outside its install.");
-        if (LoaderPackage != null && inputs.Configs.Keys.Any(name => name.Equals(BepInExConfig, StringComparison.OrdinalIgnoreCase)))
-            throw new ArgumentException($"configs.{BepInExConfig}: the client environment's loader package pins BepInEx.cfg; edit and recapture that package instead of overriding its configuration during staging.");
         var scenario = (scenarioCapabilities ?? []).Distinct(StringComparer.Ordinal).ToList();
         if (scenario.Any(path => path == null || path.Split('/') is not [{ Length: > 0 }, { Length: > 0 }]))
             throw new ArgumentException("Name each scenario capability as owner/command.", nameof(scenarioCapabilities));
@@ -369,6 +388,7 @@ public sealed class TargetedRegression
             report.Provenance["clientEnvironment"] = ClientEnvironment;
             if (LoaderPackage is { } loaderPath)
                 report.Provenance["bepInExPackage"] = BepInExLoaderPackage.Read(loaderPath).Identity;
+            if (_pinnedLoader != null) report.Provenance["clientLoaderShipped"] = _pinnedLoader.Reason;
             if (Inputs.Client.CharacterStore is { } store)
             {
                 string save = SaveDirectory ?? HostedWorld.DefaultSaveDirectory(GameLaunch.DetectClient(Game));

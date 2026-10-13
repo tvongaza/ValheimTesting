@@ -95,7 +95,7 @@ if (pinDoc.RootElement.TryGetProperty("bundle", out JsonElement bundlePin))
     await FetchPinned("ValheimCLI bundle", Path.Combine(feed, "valheimcli-bundle.zip"), bundlePin.GetProperty("url").GetString()!, bundlePin.GetProperty("sha256").GetString()!);
 else
     Console.WriteLine("No ValheimCLI plugin bundle is pinned in cli-dependency.json yet: GameSessions builds without one, and valheim-test asks for --cli-files or VALHEIMCLI_BUNDLE.");
-// The BepInExPack GameSessions embeds for a disposable copy whose own Doorstop pair does not match (loader-dependency.json).
+// The BepInExPack GameSessions embeds, which every Windows and Linux profile runs on (loader-dependency.json, #711).
 using (JsonDocument loaderPin = JsonDocument.Parse(File.ReadAllText(Path.Combine(root, "loader-dependency.json"))))
     await FetchPinned(loaderPin.RootElement.GetProperty("name").GetString()! + " " + loaderPin.RootElement.GetProperty("version").GetString()!,
         Path.Combine(feed, "bepinexpack-valheim.zip"), loaderPin.RootElement.GetProperty("url").GetString()!, loaderPin.RootElement.GetProperty("sha256").GetString()!);

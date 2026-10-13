@@ -135,11 +135,12 @@ internal static partial class HostedRuntimeStage
                 throw new InvalidOperationException($"The source Valheim.app on {host.Name} cannot launch: {refusal}");
         }
         const string settings = BepInExSettings.RelativePath;
-        bool preserveSourceSettings = BepInExSettings.Choose(
-            game.Files.ContainsKey(settings), loaderPackage?.Files.ContainsKey(settings) == true,
-            explicitlySelectedSettings) == BepInExSettingsOrigin.Source;
-        // The source loader is copied only when no reviewed package replaces it. No plugin or patcher from
-        // the source is allowed into the profile, even if the source install was already modded.
+        bool macOS = kind == HostedRuntimeKind.Server ? HostInstall.DetectServer(game) == ServerPlatform.MacOS : MacAppBundle.IsMacClient(game);
+        bool preserveSourceSettings = BepInExSettings.Choose(game.Files.ContainsKey(settings),
+            loaderPackage?.Files.ContainsKey(settings), explicitlySelectedSettings, macOS) == BepInExSettingsOrigin.Source;
+        // The source loader is copied only when no reviewed package replaces it (a macOS install's own loader); its BepInEx.cfg
+        // as BepInExSettings decides. No plugin or patcher from the source is allowed into the profile, even if the source
+        // install was already modded.
         var sourceLoader = loaderPackage == null
             ? game.Files.Keys.Where(path => InstallPins.IsLoaderFile(path,
                     windows ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal) ||

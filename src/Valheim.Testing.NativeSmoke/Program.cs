@@ -65,7 +65,7 @@ try
     // the scenario and the dependency lock: one stage, shared with build and server-load.
     var stage = await ModInputStage.RunAsync(new ModInputStage.Request(ModInputStage.Route.Hosted, output, options!,
         new HashSet<string>(StringComparer.Ordinal), // start's one switch, --hold, is its run's own
-        mods!, roots!, optionalReferences!, buildDependencies!) { Shipped = ShippedLoader.Instead, Progress = progress }, cancel.Token).ConfigureAwait(false);
+        mods!, roots!, optionalReferences!, buildDependencies!) { Shipped = ShippedLoader.Choose, Progress = progress }, cancel.Token).ConfigureAwait(false);
     var selectedMods = stage.Mods;
     string game = stage.Compile.Recipe.Install;
     string architecture = stage.ClientArchitecture!;

@@ -13,8 +13,8 @@
          This package makes disposable client copies, and valheim-test takes the set from here too (PinnedCliBundle). -->
     <EmbeddedResource Include="../../cli-dependency.json" LogicalName="cli-dependency.json" />
     <EmbeddedResource Include="../../.packages/valheimcli-bundle.zip" LogicalName="valheimcli-bundle.zip" Condition="Exists('../../.packages/valheimcli-bundle.zip')" />
-    <!-- The pinned BepInExPack (loader-dependency.json) a disposable copy takes when its install's own Doorstop pair does not
-         match; bootstrap-cli.cs fetches it into .packages and checks it. A build without it carries none and refuses as before. -->
+    <!-- The pinned BepInExPack (loader-dependency.json) every Windows and Linux profile runs on (#711); bootstrap-cli.cs fetches
+         it into .packages and checks it. A build without it carries none and refuses such a profile. -->
     <EmbeddedResource Include="../../loader-dependency.json" LogicalName="loader-dependency.json" />
     <EmbeddedResource Include="../../.packages/bepinexpack-valheim.zip" LogicalName="bepinexpack-valheim.zip" Condition="Exists('../../.packages/bepinexpack-valheim.zip')" />
   </ItemGroup>

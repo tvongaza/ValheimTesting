@@ -10,7 +10,7 @@ namespace Valheim.Testing.GameSessions;
 /// by the same stage owner (<see cref="HostedRuntimeStage.PrepareProfileAsync"/> on this machine as a <see cref="LocalGameHost"/>):
 /// the install's BepInEx plugins, scripts, config and patchers are staged into the profile without any ValheimCLI build of its
 /// own, and with the ValheimCLI set the run checks against (the plan's <see cref="ClientRunPlan.CliManifest"/>, else the toolkit's
-/// pinned bundle); a Doorstop pair that does not match takes the shipped BepInExPack (<see cref="ShippedLoader"/>); a macOS
+/// pinned bundle); a Windows profile runs on the pinned BepInExPack, never the install's loader (<see cref="ShippedLoader"/>); a macOS
 /// source bundle is checked so macOS opens it without a dialog. The profile is journalled before it is made (this machine's run
 /// journal, so <c>valheim-test env status</c> and <c>env recover</c> see it) and retired after the client closes. The plan is
 /// bound to the profile: its game and loader roots, install pins, the staged set's plugin pins and manifest (<see cref="ClientRunPlan.Prepared"/>).
@@ -46,8 +46,8 @@ internal sealed class LocalClientCopy
     /// holds the profiles (<c>runs/local-clients</c>); profiles on this machine are journalled as <see cref="WorldFixture"/>'s are, in
     /// process and without the host lock, which a run with its server here holds;
     /// <paramref name="host"/> is this machine (a test passes its own); <paramref name="cliBundle"/> the pinned set when the plan
-    /// names none (default <see cref="PinnedCliBundle.Source"/>); <paramref name="loader"/> the shipped-loader decision (default
-    /// <see cref="ShippedLoader.Instead(string, string)"/>).
+    /// names none (default <see cref="PinnedCliBundle.Source"/>); <paramref name="loader"/> the pinned-loader rule (default
+    /// <see cref="ShippedLoader.Local"/>).
     /// </summary>
     internal static async Task<LocalClientCopy> PrepareAsync(string actor, ClientRunPlan plan, CancellationToken cancellation,
         string? dataRoot = null, IGameHost? host = null, Func<CliBundleSource?>? cliBundle = null, Func<string, string, ShippedLoader.Choice?>? loader = null)
@@ -77,7 +77,8 @@ internal sealed class LocalClientCopy
         string parent = Path.Combine(root, "vt-prep-" + journal.RunId + "-" + actor + "-" + Guid.NewGuid().ToString("N")[..8]);
         string runtime = Path.Combine(parent, "runtime"), stage = Path.Combine(parent, "staging");
 
-        var choice = (loader ?? ShippedLoader.Instead)(actor, source);
+        var choice = (loader ?? ShippedLoader.Local)(actor, source);
+        if (choice != null) ShippedLoader.Print(actor, choice);
         var loaderPackage = choice == null ? null : BepInExLoaderPackage.Read(choice.Manifest);
         string? config = null;
         try
@@ -135,7 +136,7 @@ internal sealed class LocalClientCopy
 
     // The files staged into the profile: the install's own plugins, scripts, config and patchers without any ValheimCLI build
     // (another build loaded beside the staged set is what the static check refuses), and the staged set in BepInEx/plugins.
-    // A loader package (the shipped BepInExPack) brings its own files, its BepInEx.cfg among them: the install's are left out.
+    // A loader package (the pinned BepInExPack) brings its own files, its BepInEx.cfg among them: the install's are left out.
     private static List<HostedRuntimeFile> Selection(string source, CliCapabilityManifest manifest, CliSetLocation location, ClientRunPlan plan,
         BepInExLoaderPackage? loader, out string? config, out List<string> replaced)
     {
@@ -145,8 +146,7 @@ internal sealed class LocalClientCopy
         config = null;
         var settingsOrigin = BepInExSettings.Choose(
             File.Exists(Path.Combine(source, "BepInEx", "config", "BepInEx.cfg")),
-            loader?.Files.ContainsKey(BepInExSettings.RelativePath) == true,
-            explicitExists: false);
+            loader?.Files.ContainsKey(BepInExSettings.RelativePath), explicitExists: false, macOS: OperatingSystem.IsMacOS());
         foreach (string folder in new[] { "plugins", "scripts", "config", "patchers" })
         {
             string directory = Path.Combine(source, "BepInEx", folder);

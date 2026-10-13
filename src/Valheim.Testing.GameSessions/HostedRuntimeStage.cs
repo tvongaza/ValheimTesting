@@ -49,7 +49,8 @@ internal static partial class HostedRuntimeStage
             bool windowsPackage = loaderPackage.Files.ContainsKey(BepInExLoader.WindowsProxy);
             if (windowsPackage != (shell == HostShellKind.PowerShell))
                 throw new InvalidDataException("The reviewed loader package does not match the host platform.");
-            foreach (var (relative, sha) in loaderPackage.Files)
+            // A BepInEx.cfg the plan selects replaces the package's default (#711); any other overlap is refused.
+            foreach (var (relative, sha) in loaderPackage.Files.Where(file => !(explicitlySelectedSettings && selected.Comparer.Equals(file.Key, BepInExSettings.RelativePath))))
                 if (!selected.TryAdd(relative, (Path.Combine(loaderPackage.Root, relative.Replace('/', Path.DirectorySeparatorChar)), sha)))
                     throw new InvalidDataException("A selected runtime file overrides a reviewed loader file: " + relative);
         }
