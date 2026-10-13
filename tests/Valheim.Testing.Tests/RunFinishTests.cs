@@ -32,8 +32,8 @@ public sealed class RunFinishTests : IDisposable
         Assert.Empty(others);
         // RunJournalStatus reads the entry and never writes one.
         string status = File.ReadAllText(Path.Combine(source, "Valheim.Testing.GameSessions", "RunJournalStatus.cs"));
-        Assert.DoesNotContain("JournalEntry.Of(JournalEntry.RunEnded", status);
-        Assert.DoesNotContain("AppendAsync(", status);
+        Assert.DoesNotContain("JournalEntry.Of(", status);
+        Assert.DoesNotContain("Append", status);
         // start reports every outcome to the owner, with no guard of its own (#581's ownershipStarted): the owner alone knows
         // whether the run journalled anything. Ending a real start after a journalled profile needs a launched client, so its
         // journal rule is tested below on the real TargetedRegression staging start uses.
