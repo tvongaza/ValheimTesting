@@ -965,7 +965,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         FakeInstalls.World(world);
         // This machine, as the detection reads it: Steam with Valheim Dedicated Server installed.
         var machine = new FakeMachine(windows ? "windows" : "linux") { SteamPath = windows ? @"C:\Steam" : null };
-        string steam = windows ? @"C:\Steam" : "/home/tester/.local/share/Steam";
+        string steam = windows ? @"C:\Steam" : "/home/tester/.steam/steam";
         machine.Directories.Add(steam);
         string install = machine.App(steam, "896660", "Valheim dedicated server", windows ? GameLaunch.ServerWindowsExecutable : GameLaunch.ServerLinuxExecutable);
         string runs = HostPath.Join(machine.DataRoot, "runs", "local-server");

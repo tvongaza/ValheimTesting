@@ -159,7 +159,7 @@ public sealed class EnvironmentInventory
 
         var steam = SteamDetection.Find(machine, SteamDetection.GameApp, SteamDetection.DedicatedServerApp);
         if (steam.Root != null && machine.DirectoryExists(HostPath.Join(steam.Root, "userdata"))) SteamUserData = HostPath.Join(steam.Root, "userdata");
-        _detected.Add(steam.Root == null ? "Steam: not found (tried " + string.Join(", ", steam.RootsTried) + ")"
+        _detected.Add(steam.Root == null ? "Steam: not found: " + steam.Reason
             : $"Steam: {steam.Root} (from {steam.RootRule}); libraries {string.Join(", ", steam.Libraries)}");
         // A Linux machine has no client environment: Linux hosts run the dedicated server only.
         string? noGame = GameLaunch.LinuxClientRefusal;
@@ -240,7 +240,7 @@ public sealed class EnvironmentInventory
         missing = app.Install != null
             ? $"No {title} (Steam app {appId}) on this machine: {app.Install} has no {executable}."
             : $"No {title} (Steam app {appId}) on this machine: " + (steam.Root == null
-                ? "Steam was not found (tried " + string.Join(", ", steam.RootsTried) + ")."
+                ? steam.NotFound
                 : "tried " + string.Join(", ", app.Tried) + ".");
         return null;
     }

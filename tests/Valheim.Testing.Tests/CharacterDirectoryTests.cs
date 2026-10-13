@@ -41,14 +41,11 @@ public sealed class CharacterDirectoryTests : IDisposable
     public async Task LeftOutFoldersResolveToThePlatformsStandardPaths(string shell, string platform)
     {
         string characters = Make(Standard(platform));
-        // Windows: Steam's registered SteamPath, written with
-        // forward slashes as Steam writes it (the registry value itself is this machine's, so the test passes it as steamroot).
-        string steam = Make("Program Files/Steam");
-        string userdata = platform switch
-        {
-            "macos" => Make("Library/Application Support/Steam/userdata"), _ => Make("Program Files/Steam/userdata"),
-        };
-        var resolved = await Resolve(shell, platform, Character(), platform == "windows" ? steam.Replace('\\', '/') : "");
+        // The host's Steam root is this machine's own (its registry value, its home), so the test names one: on Windows with forward
+        // slashes, as Steam writes its registered path. SteamRootScriptTests covers each platform's default root.
+        string steam = Make(platform == "windows" ? "Program Files/Steam" : "Library/Application Support/Steam");
+        string userdata = Make(platform == "windows" ? "Program Files/Steam/userdata" : "Library/Application Support/Steam/userdata");
+        var resolved = await Resolve(shell, platform, Character(), platform == "windows" ? steam.Replace('\\', '/') : steam);
         Assert.Null(resolved.Missing);
         Assert.Equal(Path.GetFullPath(characters), Path.GetFullPath(resolved.Characters!));
         Assert.Equal(Path.GetFullPath(userdata), Path.GetFullPath(resolved.UserData!));
@@ -57,13 +54,13 @@ public sealed class CharacterDirectoryTests : IDisposable
     [Theory, MemberData(nameof(Platforms))]
     public async Task AMissingFolderIsReportedWithEveryPathTried(string shell, string platform)
     {
-        var resolved = await Resolve(shell, platform, Character(), platform == "windows" ? Path.Combine(_home.Path, "no-steam").Replace('\\', '/') : "");
+        var resolved = await Resolve(shell, platform, Character(), Path.Combine(_home.Path, "no-steam"));
         Assert.NotNull(resolved.Missing);
         Assert.Null(resolved.Characters); Assert.Null(resolved.UserData); // Nothing missing is reported as resolved.
         Assert.Contains("characters_local (tried " + _home.Path, resolved.Missing);
         Assert.Contains("characters_local", resolved.Missing);
         Assert.Contains("Steam userdata (tried ", resolved.Missing);
-        if (platform == "macos") Assert.Contains(_home.Path + "/Library/Application Support/Steam/userdata", resolved.Missing);
+        Assert.Contains(Path.Combine(_home.Path, "no-steam", "userdata"), resolved.Missing);
     }
 
     [Theory, MemberData(nameof(Platforms))]

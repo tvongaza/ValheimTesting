@@ -181,7 +181,7 @@ public sealed class SteamAccountHold : IAsyncDisposable, ILeasedSteamAccount
 /// <summary>Reads which Steam account a host's user is signed in to, through the host's own shell. Only account ids leave the host.</summary>
 internal static class SteamSignedInUsers
 {
-    /// <param name="steamDirectory">A Steam directory to read first (tests); the host user's usual ones otherwise.</param>
+    /// <param name="steamDirectory">The host's Steam root, named explicitly (tests); otherwise the host's own (<see cref="SteamDetection"/>'s rule).</param>
     public static async Task<(SteamSignedInState State, uint? AccountId, string Detail)> ReadAsync(IGameHost host, TimeSpan timeout, CancellationToken cancellation, string steamDirectory = "")
     {
         var invoked = DateTimeOffset.UtcNow;
@@ -204,20 +204,15 @@ internal static class SteamSignedInUsers
         };
     }
 
-    // Linux and macOS: the account Steam last signed in, from the first loginusers.vdf found. This file does not prove
+    // Linux and macOS: the account Steam last signed in, from loginusers.vdf under the host's Steam root. This file does not prove
     // Steam is running or that the remembered account still has an active session.
     // Older clients mark it MostRecent "1"; the current macOS client (September 2026) writes no MostRecent key at all and records
     // each user's last sign-in as Timestamp, so without any MostRecent key the single newest Timestamp is that account, and a tie or
-    // no Timestamp is unreadable. A user is a bare "<SteamID64>" line; only its id is printed. Variable: steam (optional Steam directory).
-    public static readonly string Bash = ShellPhases.Bash + """
+    // no Timestamp is unreadable. A user is a bare "<SteamID64>" line; only its id is printed. Variable: steam (optional Steam root).
+    public static readonly string Bash = ShellPhases.Bash + SteamDetection.BashRoot + """
         set -u
-        found=
-        for f in ${steam:+"$steam/config/loginusers.vdf"} "${HOME:-/nonexistent}/Library/Application Support/Steam/config/loginusers.vdf" \
-            "${HOME:-/nonexistent}/.local/share/Steam/config/loginusers.vdf" "${HOME:-/nonexistent}/.steam/steam/config/loginusers.vdf" \
-            "${HOME:-/nonexistent}/.var/app/com.valvesoftware.Steam/.local/share/Steam/config/loginusers.vdf"; do
-            if [ -f "$f" ]; then found=$f; break; fi
-        done
-        if [ -z "$found" ]; then echo "VT-STEAMUSER unreadable the host user has no loginusers.vdf in its Steam directories"; exit 0; fi
+        found="$steam/config/loginusers.vdf"
+        if [ ! -f "$found" ]; then echo "VT-STEAMUSER unreadable the host user has no loginusers.vdf under its Steam root"; exit 0; fi
         if [ ! -r "$found" ]; then echo "VT-STEAMUSER unreadable the host user cannot read its loginusers.vdf"; exit 0; fi
         awk '
             { line = tolower($0) }

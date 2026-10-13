@@ -18,9 +18,9 @@ public sealed class HostedCampaignCharacter
     /// </summary>
     public string CharactersLocalDirectory { get; set; } = "";
     /// <summary>
-    /// Optional: the client host's Steam <c>userdata</c>, searched for a same-named Steam Cloud character. Left out, the first that
-    /// exists on that host: Windows Steam's registered <c>SteamPath</c>, then <c>Program Files (x86)\Steam</c>; macOS
-    /// <c>~/Library/Application Support/Steam</c>.
+    /// Optional: the client host's Steam <c>userdata</c>, searched for a same-named Steam Cloud character. Left out, <c>userdata</c>
+    /// under that host's Steam root (the same rule as this machine's inventory: Windows Steam's registered <c>SteamPath</c>; macOS
+    /// <c>~/Library/Application Support/Steam</c>). Set it for Steam in any other folder.
     /// </summary>
     public string SteamUserDataDirectory { get; set; } = "";
 
@@ -60,7 +60,7 @@ internal static class HostedCharacterStage
     /// Resolves the character's folders on its client host: each given one as given, each left out from the host's standard
     /// paths (a Windows or a macOS host's). <see cref="CharacterDirectories.Missing"/>
     /// names the folder and every path tried when one does not exist. <paramref name="userHome"/> replaces the host user's home
-    /// in controlled tests.
+    /// for <c>characters_local</c> and <paramref name="steamRoot"/> the host's Steam root, in controlled tests.
     /// </summary>
     internal static async Task<CharacterDirectories> ResolveDirectoriesAsync(IGameHost host, HostedCampaignCharacter input,
         TimeSpan timeout, CancellationToken cancellation, string userHome = "", string steamRoot = "")
@@ -69,7 +69,7 @@ internal static class HostedCharacterStage
             new Dictionary<string, string>
             {
                 ["characters"] = input.CharactersLocalDirectory, ["userdata"] = input.SteamUserDataDirectory,
-                ["userhome"] = userHome, ["steamroot"] = steamRoot,
+                ["userhome"] = userHome, ["steam"] = steamRoot,
             }, timeout, cancellation).ConfigureAwait(false);
         reply.EnsureSuccess($"Resolving the character folders on {host.Name}");
         string? characters = null, userdata = null;
@@ -220,43 +220,31 @@ internal static class HostedCharacterStage
 
         """;
 
-    // A macOS host's (the only one that runs bash for a client). Variables: characters, userdata, userhome and steamroot (each may be
-    // empty; userhome and steamroot only for controlled tests). One "found" or "tried" line per path considered.
-    internal static readonly string BashDirectories = """
+    // A macOS host's (the only one that runs bash for a client). Variables: characters, userdata, userhome and steam (each may be
+    // empty; userhome and steam only for controlled tests). One "found" or "tried" line per path considered.
+    internal static readonly string BashDirectories = (SteamDetection.BashRoot + """
         set -u
         home=${userhome:-$HOME}
-        set -- "$home/Library/Application Support/Steam/userdata"
-        if [ -n "$userdata" ]; then set -- "$userdata"; fi
-        for folder in "$@"; do
-          echo "VT-CHARDIR userdata tried $folder"
-          if [ -d "$folder" ]; then echo "VT-CHARDIR userdata found $folder"; break; fi
-        done
+        folder=${userdata:-$steam/userdata}
+        echo "VT-CHARDIR userdata tried $folder"
+        if [ -d "$folder" ]; then echo "VT-CHARDIR userdata found $folder"; fi
         standard="$home/Library/Application Support/IronGate/Valheim/characters_local"
         folder=${characters:-$standard}
         echo "VT-CHARDIR characters tried $folder"
         if [ -d "$folder" ]; then echo "VT-CHARDIR characters found $folder"; fi
-        """.ReplaceLineEndings("\n");
+        """).ReplaceLineEndings("\n");
 
-    // A Windows host's (the only one that runs PowerShell).
-    internal static readonly string PowerShellDirectories = """
+    // A Windows host's (the only one that runs PowerShell). With no Steam root, the registry value is what was tried.
+    internal static readonly string PowerShellDirectories = (SteamDetection.PowerShellRoot + $$"""
         $userHomeDir = if ($userhome) { $userhome } elseif ($env:USERPROFILE) { $env:USERPROFILE } else { [Environment]::GetFolderPath('UserProfile') }
-        $candidates = @()
-        $steam = $steamroot
-        if (-not $steam) { try { $steam = (Get-ItemProperty -Path 'HKCU:\Software\Valve\Steam' -Name SteamPath -ErrorAction Stop).SteamPath } catch { } }
-        # Steam writes its registered path with forward slashes.
-        if ($steam) { $candidates += [IO.Path]::Combine(($steam -replace '/', '\'), 'userdata') }
-        $x86 = [Environment]::GetEnvironmentVariable('ProgramFiles(x86)')
-        if ($x86 -and -not $steamroot) { $candidates += [IO.Path]::Combine($x86, 'Steam', 'userdata') }
-        if ($userdata) { $candidates = @($userdata) }
-        foreach ($candidate in $candidates) {
-            "VT-CHARDIR userdata tried $candidate"
-            if ([IO.Directory]::Exists($candidate)) { "VT-CHARDIR userdata found $candidate"; break }
-        }
+        $folder = if ($userdata) { $userdata } elseif ($steam) { [IO.Path]::Combine($steam, 'userdata') } else { '{{SteamDetection.RegistryValue}} (not set: Steam has not run for this user)' }
+        "VT-CHARDIR userdata tried $folder"
+        if ([IO.Directory]::Exists($folder)) { "VT-CHARDIR userdata found $folder" }
         $standard = [IO.Path]::Combine($userHomeDir, 'AppData', 'LocalLow', 'IronGate', 'Valheim', 'characters_local')
         $folder = if ($characters) { $characters } else { $standard }
         "VT-CHARDIR characters tried $folder"
         if ([IO.Directory]::Exists($folder)) { "VT-CHARDIR characters found $folder" }
-        """.ReplaceLineEndings("\n");
+        """).ReplaceLineEndings("\n");
 
     internal static readonly string WindowsInstall = (WindowsOwned + """
         if (-not [IO.Directory]::Exists($characters) -or -not [IO.Directory]::Exists($userdata)) { 'VT-CHAR missing-directory'; exit 0 }

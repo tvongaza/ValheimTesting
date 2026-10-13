@@ -128,32 +128,17 @@ internal static class SteamSessionLogOnHost
         catch (Exception) { return false; }
     }
 
-    // Steam's connection_log on the host and its length ("VT-STEAMLOG <bytes> <path>"): Windows finds Steam from the user's SteamPath,
-    // the machine's InstallPath, then Program Files; bash tries the user's usual Steam directories.
-    // Variable: steam (an optional Steam directory to try first; tests).
-    public static readonly string FindPowerShell = """
-        $dirs = @()
-        if ($steam) { $dirs += $steam }
-        $p = [Microsoft.Win32.Registry]::GetValue('HKEY_CURRENT_USER\Software\Valve\Steam', 'SteamPath', $null)
-        if ($p) { $dirs += [string]$p }
-        $p = [Microsoft.Win32.Registry]::GetValue('HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node\Valve\Steam', 'InstallPath', $null)
-        if ($p) { $dirs += [string]$p }
-        $x86 = [Environment]::GetFolderPath('ProgramFilesX86')
-        if ($x86) { $dirs += (Join-Path $x86 'Steam') }
-        foreach ($d in $dirs) {
-            $f = [IO.Path]::GetFullPath([IO.Path]::Combine($d, 'logs', 'connection_log.txt'))
-            if ([IO.File]::Exists($f)) { 'VT-STEAMLOG ' + (New-Object IO.FileInfo $f).Length + ' ' + $f; exit 0 }
-        }
-        'VT-STEAMLOG none'
-        """.ReplaceLineEndings("\n");
+    // Steam's connection_log on the host and its length ("VT-STEAMLOG <bytes> <path>"), under the host's Steam root
+    // (SteamDetection's rule). Variable: steam (the Steam root, named explicitly; tests).
+    public static readonly string FindPowerShell = (SteamDetection.PowerShellRoot + """
+        $f = if ($steam) { [IO.Path]::GetFullPath([IO.Path]::Combine($steam, 'logs', 'connection_log.txt')) } else { '' }
+        if ($f -and [IO.File]::Exists($f)) { 'VT-STEAMLOG ' + (New-Object IO.FileInfo $f).Length + ' ' + $f } else { 'VT-STEAMLOG none' }
+        """).ReplaceLineEndings("\n");
 
-    public static readonly string FindBash = """
+    public static readonly string FindBash = (SteamDetection.BashRoot + """
         set -u
-        for d in ${steam:+"$steam"} "${HOME:-/nonexistent}/Library/Application Support/Steam" "${HOME:-/nonexistent}/.local/share/Steam" \
-            "${HOME:-/nonexistent}/.steam/steam" "${HOME:-/nonexistent}/.var/app/com.valvesoftware.Steam/.local/share/Steam"; do
-            f="$d/logs/connection_log.txt"
-            if [ -f "$f" ]; then size=$(wc -c < "$f") || exit 4; echo "VT-STEAMLOG $(printf '%s' "$size" | tr -d ' \t') $f"; exit 0; fi
-        done
+        f="$steam/logs/connection_log.txt"
+        if [ -f "$f" ]; then size=$(wc -c < "$f") || exit 4; echo "VT-STEAMLOG $(printf '%s' "$size" | tr -d ' \t') $f"; exit 0; fi
         echo "VT-STEAMLOG none"
-        """.ReplaceLineEndings("\n");
+        """).ReplaceLineEndings("\n");
 }

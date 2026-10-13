@@ -196,8 +196,9 @@ public sealed class ServerLoadOneOffTests : IDisposable
         var machine = new FakeMachine(HostProfile.CurrentPlatform);
         string steam = machine.Platform switch
         {
-            "windows" => @"C:\Program Files (x86)\Steam", "macos" => "/Users/tester/Library/Application Support/Steam", _ => "/home/tester/.local/share/Steam",
+            "windows" => @"C:\Program Files (x86)\Steam", "macos" => "/Users/tester/Library/Application Support/Steam", _ => "/home/tester/.steam/steam",
         };
+        if (machine.Platform == "windows") machine.SteamPath = steam;
         machine.Directories.Add(steam);
         machine.Directories.Add(HostPath.Join(steam, "userdata"));
         game = machine.App(steam, "892970", "Valheim", machine.Platform switch
@@ -779,7 +780,10 @@ public sealed class ServerLoadOneOffTests : IDisposable
         Assert.Contains("Give --game", Assert.Throws<ArgumentException>(() => ModInputStage.ChooseHosted(new Dictionary<string, string>(), Path.Combine(_rig.Root, "none"))).Message);
         Assert.Contains("--inventory", Assert.Throws<ArgumentException>(() => ModInputStage.ChooseHosted(
             new Dictionary<string, string> { ["--game"] = _rig.Game, ["--inventory"] = "f.json" }, Path.Combine(_rig.Root, "both"))).Message);
-        Assert.Contains("--steam-userdata", Assert.Throws<DirectoryNotFoundException>(() => SmokeInputs.SteamUserdata(new Dictionary<string, string>())).Message);
+        // No Steam here: the one remedy is --steam-userdata (an inventory install cannot supply userdata).
+        string noUserdata = Assert.Throws<DirectoryNotFoundException>(() => SmokeInputs.SteamUserdata(new Dictionary<string, string>())).Message;
+        Assert.Contains("--steam-userdata", noUserdata);
+        Assert.DoesNotContain("inventory file", noUserdata);
     }
 
     [ClientHostFact] public void StartChoosesWithoutWritingUntilOutputPassesSourceProtection()
