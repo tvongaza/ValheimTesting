@@ -6,7 +6,7 @@
 
 `Valheim.Testing` is the pure library: declared terrain, exact replay of captured samples, pinned world-dump fixtures, terrain rendering and parity checks, and `StaticOverride` for scoped changes to statics and environment variables. It targets netstandard2.0, so it runs in a net48 (Mono) test leg as well as on modern .NET, and has no Unity, Valheim or ValheimCLI dependency. Use it in a mod's unit tests to feed declared inputs into the mod's real decisions; use [`Valheim.Testing.Doubles`](Valheim.Testing.Doubles.md) when those decisions call game types, and [`Valheim.Testing.Game`](Valheim.Testing.Game.md) for what only the running game shows.
 
-**Example:** [SharedWorld](../../examples/SharedWorld/README.md) composes terrain, checks a zone seam with the terrain doubles and checks a grid dump against its source, with a negative control for each, and no game. The released version to pin is in the [package table](../getting-started.md#package-versions-and-feeds).
+**Example:** [SharedWorld](../../examples/SharedWorld/README.md) composes terrain, checks a zone seam with the terrain doubles and checks a grid dump against its source, with a negative control for each, and no game. The released version to pin is in the [package table](../package-versions.md).
 
 ## Types a test calls
 

@@ -65,6 +65,22 @@ dotnet test tests/Valheim.Testing.Tests/Valheim.Testing.Tests.csproj -c Release
 
 Keep existing target frameworks and package boundaries. For public API or package changes, identify the affected package and compatibility implications in the pull request, and update dependent examples when needed; the version follows at the release. Do not replace an exact dependency pin with whichever sibling checkout happens to build.
 
+### Try an unpublished build in a mod
+
+`dotnet run scripts/validate.cs` packs every package into the ignored `.packages` feed as `<Version>-candidate.<id>`; the file names show the id. To test a mod against one, reference that exact version in the mod's test project and add the feed to its restore. NuGet.org still supplies xUnit and ordinary dependencies. From your mod checkout:
+
+```sh
+dotnet restore path/to/MyMod.Tests.csproj -p:RestoreAdditionalProjectSources=/absolute/path/ValheimTesting/.packages
+```
+
+`RestoreAdditionalProjectSources` adds the feed and keeps your configured NuGet.org source. Do not add NuGet.org as a second `--source`. Inside this checkout, `NuGet.Config` offers the `.packages` feed already; a candidate never stands in for a published version. A `valheim-test` built from source pins candidate Game and GameSessions versions. `valheim-test init` refuses it unless you pass the feed that holds them. Add `server` after `init` for the server consumer:
+
+```sh
+valheim-test init --candidate-feed /absolute/path/ValheimTesting/.packages --output NEW_DIR
+```
+
+It still refuses when the feed lacks either exact package.
+
 ## Extend the synthetic world
 
 The synthetic world supplies **declared inputs to real mod code**. It is not a replacement implementation of Unity, Valheim's generator or the terrain compiler.

@@ -193,7 +193,7 @@ jobs:
             echo
             cat dist/notes/packages.md
             echo
-            echo "The new packages and their SHA-256 checksums are attached. Pin exact versions; see [package versions and feeds](https://github.com/$GITHUB_REPOSITORY/blob/main/docs/getting-started.md#package-versions-and-feeds)."
+            echo "The new packages and their SHA-256 checksums are attached. Pin exact versions; see [package versions](https://github.com/$GITHUB_REPOSITORY/blob/main/docs/package-versions.md)."
             if [ ${#docs[@]} -gt 0 ]; then
               echo "This coordinated 0.1 release also attaches its source-built API reference archive. The same SHA256SUMS covers it; after the API Pages workflow deploys, the online snapshot is listed at https://tvongaza.github.io/ValheimTesting/versions/."
             fi

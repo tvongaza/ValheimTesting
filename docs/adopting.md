@@ -22,7 +22,7 @@ The doubles also model selected ZDO, RPC, console and ownership behavior; they a
 
 **Code that uses game types:** follow [ModWithTests](../examples/ModWithTests/README.md). It includes the complete project file, linked mod source, isolated world setup, independent assertions, run commands and expected output. Its packages restore from NuGet.org; no framework checkout or ValheimCLI is needed.
 
-Use the [package availability table](getting-started.md#package-versions-and-feeds) for released versus source-only preview versions. Do not infer availability from a version in a PR. Keep test dependencies out of the shipped mod.
+Use the [package availability table](package-versions.md) for released versus source-only preview versions. Do not infer availability from a version in a PR. Keep test dependencies out of the shipped mod.
 
 **Contributing to the framework itself:** clone it and run its bootstrap and full validation as described in [CONTRIBUTING.md](../CONTRIBUTING.md#set-up-and-validate-locally). That workflow builds the exact ValheimCLI dependency and all examples; it is not a prerequisite for every consumer.
 

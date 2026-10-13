@@ -1,6 +1,6 @@
 # Shared terrain and zone fixtures
 
-Use these helpers for broad tests of real mod code without starting Valheim. The pure `Valheim.Testing` package targets netstandard2.0 and has no Unity or ValheimCLI dependency. See [getting started](getting-started.md) for the exact package version and local feed setup; [SharedWorld](../examples/SharedWorld/README.md) is a runnable example.
+Use these helpers for broad tests of real mod code without starting Valheim. The pure `Valheim.Testing` package targets netstandard2.0 and has no Unity or ValheimCLI dependency. See [package versions](package-versions.md) for the exact package version and [CONTRIBUTING](../CONTRIBUTING.md#try-an-unpublished-build-in-a-mod) for local feed setup; [SharedWorld](../examples/SharedWorld/README.md) is a runnable example.
 
 ## Declare the ground
 

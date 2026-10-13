@@ -206,25 +206,10 @@ void PreparePackagePages()
         if (releaseVersion != null)
             content = content.Replace("[Current preview API reference](https://tvongaza.github.io/ValheimTesting/)",
                 "[This release's API reference](https://tvongaza.github.io/ValheimTesting/versions/" + releaseVersion + "/)");
-        content = Regex.Replace(content, @"(?<=\]\()(?<target>(?!https?://|#)[^)\r\n]+)(?=\))", match =>
-        {
-            string target = match.Groups["target"].Value;
-            int fragment = target.IndexOf('#');
-            string path = fragment < 0 ? target : target[..fragment];
-            if (path.Length == 0) return target;
-            string full = Path.GetFullPath(Path.Combine(source, path));
-            bool directory = Directory.Exists(full);
-            if (!File.Exists(full) && !directory) throw new FileNotFoundException($"The {package} guide links to a missing file: {target}", full);
-            if (Path.GetDirectoryName(full) == source && packagePages.Contains(Path.GetFileNameWithoutExtension(full)))
-                return target;
-            string relative = Path.GetRelativePath(root, full).Replace('\\', '/');
-            if (relative.StartsWith("../", StringComparison.Ordinal)) throw new InvalidDataException($"Package guide link leaves the repository: {target}");
-            return "https://github.com/tvongaza/ValheimTesting/" + (directory ? "tree/" : "blob/") + revision + "/" + relative +
-                (fragment < 0 ? "" : target[fragment..]);
-        });
+        content = RewriteLinks(content, source, source, package + " guide", revision);
         string sourceLink = "https://github.com/tvongaza/ValheimTesting/tree/" + revision;
         string versionsLink = "https://github.com/tvongaza/ValheimTesting/blob/" + revision +
-            "/docs/getting-started.md#package-versions-and-feeds";
+            "/docs/package-versions.md";
         int headingEnd = content.IndexOf('\n');
         if (headingEnd < 0 || !content.StartsWith("# " + package + "\n", StringComparison.Ordinal))
             throw new InvalidDataException($"The {package} guide needs its package heading first.");
@@ -236,7 +221,40 @@ void PreparePackagePages()
         content = content[..(headingEnd + 1)] + "\n" + banner + "\n" + content[(headingEnd + 1)..];
         File.WriteAllText(Path.Combine(destination, package + ".md"), content);
     }
+    // docs/package-versions.md reads the same on GitHub and in the site: its packages/<name>.md links reach docs/packages on
+    // GitHub and the copies above in the site. DocFX builds this uncommitted copy beside them.
+    string docs = Path.Combine(root, "docs");
+    string versions = RewriteLinks(File.ReadAllText(Path.Combine(docs, "package-versions.md")), docs, source, "package versions page", revision);
+    if (releaseVersion != null)
+    {
+        // The release's own versions are recorded after it is published, so this revision still lists the previous ones.
+        int end = versions.IndexOf('\n');
+        versions = versions[..(end + 1)] + "\n> Release `" + releaseVersion + "` from source [`" + revision[..12] +
+            "`](https://github.com/tvongaza/ValheimTesting/tree/" + revision + "). The versions below are the ones recorded at this source revision; " +
+            "this release's packages are on NuGet.org.\n" + versions[(end + 1)..];
+    }
+    File.WriteAllText(Path.Combine(root, "docs", "reference", "package-versions.md"), versions);
 }
+
+// A relative link in a copied page stays when it names a package guide; any other target points at the same file at this
+// source revision. baseDirectory is where the page lives in the repository.
+string RewriteLinks(string content, string baseDirectory, string source, string owner, string revision) =>
+    Regex.Replace(content, @"(?<=\]\()(?<target>(?!https?://|#)[^)\r\n]+)(?=\))", match =>
+    {
+        string target = match.Groups["target"].Value;
+        int fragment = target.IndexOf('#');
+        string path = fragment < 0 ? target : target[..fragment];
+        if (path.Length == 0) return target;
+        string full = Path.GetFullPath(Path.Combine(baseDirectory, path));
+        bool directory = Directory.Exists(full);
+        if (!File.Exists(full) && !directory) throw new FileNotFoundException($"The {owner} links to a missing file: {target}", full);
+        if (Path.GetDirectoryName(full) == source && packagePages.Contains(Path.GetFileNameWithoutExtension(full)))
+            return target;
+        string relative = Path.GetRelativePath(root, full).Replace('\\', '/');
+        if (relative.StartsWith("../", StringComparison.Ordinal)) throw new InvalidDataException($"The {owner} links outside the repository: {target}");
+        return "https://github.com/tvongaza/ValheimTesting/" + (directory ? "tree/" : "blob/") + revision + "/" + relative +
+            (fragment < 0 ? "" : target[fragment..]);
+    });
 
 // The committed lists against the builds.
 int CheckLists()

@@ -6,7 +6,7 @@
 
 `Valheim.Testing.Doubles` lets a unit-test project compile and run a mod's pure-logic source files without Unity, Valheim, BepInEx or Jotunn. It is a source package: its files compile into your test project and stand in for the game's types under their real names, so the mod's own source, linked unchanged, calls them as it would call the game. Use it for decisions, persistence formats, RPC handlers, registrations and anything else a mod computes from game types. Use `Valheim.Testing.Game` against a real server for what only the game shows: rendering, physics, timing, real networking, and the game's behaviour beyond what is listed here.
 
-**Example:** [ModWithTests](../../examples/ModWithTests/README.md) is a complete package-consuming project that links real mod source and runs five tests. The released version to pin is in the [package table](../getting-started.md#package-versions-and-feeds).
+**Example:** [ModWithTests](../../examples/ModWithTests/README.md) is a complete package-consuming project that links real mod source and runs five tests. The released version to pin is in the [package table](../package-versions.md).
 
 The member index, [Valheim.Testing.Doubles.members.txt](Valheim.Testing.Doubles.members.txt), lists every type and member, one per line, and marks the ones the game does not have (`[TestOnly]` in source: test switches, recorders and fixture shorthands such as `ZNet.Peers` or `Heightmap.Registered`); mod code must not call those, because it compiles against the doubles and fails against the game. Members marked `internal` are the doubles' own plumbing; they compile into your test assembly, so mod code could reach them, but the game shows nothing of the kind. The doubles' tests generate that index and refuse an unmarked member the game lacks, using a capture of the pinned game, BepInEx and Jotunn assemblies (`tools/doubles-members/capture-game-members.cs`). A release's diff of the index is the list of names that may collide with your own partials.
 
@@ -215,7 +215,7 @@ The doubles normally compile into the test assembly, so a type's assembly is the
 [assembly: System.Runtime.CompilerServices.InternalsVisibleTo("MyMod.Tests")]
 ```
 
-The test project then references this project instead of the package. Such a project references `Valheim.Testing` itself (the package's dependency does not flow through `PrivateAssets="all"`), so pin it to at least the `Valheim.Testing` version the Doubles package lists as its dependency on NuGet.org (the two versions can differ; see the [setup table](../getting-started.md#package-versions-and-feeds)). Partial additions to the doubles (a `Heightmap` hook, extra members) must live in the `assembly_valheim` project, because a partial type cannot span assemblies. A component the test assembly declares is then foreign, as another mod's would be.
+The test project then references this project instead of the package. Such a project references `Valheim.Testing` itself (the package's dependency does not flow through `PrivateAssets="all"`), so pin it to at least the `Valheim.Testing` version the Doubles package lists as its dependency on NuGet.org (the two versions can differ; see the [package table](../package-versions.md)). Partial additions to the doubles (a `Heightmap` hook, extra members) must live in the `assembly_valheim` project, because a partial type cannot span assemblies. A component the test assembly declares is then foreign, as another mod's would be.
 
 ## Limits
 

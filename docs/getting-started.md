@@ -1,84 +1,123 @@
 # Get started
 
-*Assistant-written (Claude).*
+Add one unit test to your BepInEx mod and run it without Valheim. Unit tests need the .NET 10 SDK and nothing else, on any OS; Visual Studio 2026 with the **.NET desktop development** workload brings it. Native checks run on the Windows PC where Steam installed Valheim; [the last section](#what-a-native-check-needs) says what they need.
 
-The unit tests need only the .NET 10 SDK, on any OS; no game. The usual setup for the native checks is the **Windows PC where Valheim is installed through Steam**: an owned dedicated server and an owned client run there, both started from test copies of the Steam installs. Other hosts, Linux servers and containers, macOS and several machines are in [platforms](platforms.md); none of them is needed to start.
+## Steps
 
-1. **Install the .NET 10 SDK** (Visual Studio 2026 with the .NET desktop development workload brings it, and the .NET Framework 4.8 targeting pack for `net48` test legs).
-2. **Add a test project** beside your mod, reference one package from the table below, and link the mod's source files. [ModWithTests](../examples/ModWithTests/README.md) is a complete project to copy; [Bring your mod](adopting.md) helps choose the layer.
-3. **Run it** with `dotnet test` or the IDE's test runner. No game, Steam or ValheimCLI is needed for this layer, and the packages restore from NuGet.org.
-4. **For a native check**, follow [one Windows PC](packages/Valheim.Testing.Game.md#on-one-windows-pc): Valheim and the Valheim Dedicated Server tool from Steam, PowerShell 7 ([host shells](platforms.md#host-shells)), test copies with BepInEx and ValheimCLI, and FullLifecycle's native session test.
+### 1. Run the example
 
-Test packages belong in test projects, never in a production mod or a player's plugins folder. Existing xUnit tests stay where they are. To investigate a plugin that will not load, or a failure only two mods together show, use [Debug a mod load or mod conflict](debugging-mods.md). For the edit-build-test loop against your own game copy, see [tools/dev-loop](../tools/dev-loop/README.md). To develop this framework itself, follow [the contributor bootstrap](../CONTRIBUTING.md#set-up-and-validate-locally).
-
-## Package versions and feeds
-
-The toolkit packages are all on NuGet.org. The versions below are the **newest releases**, and every copyable snippet and example in these docs pins exactly them: they come from [`toolkit-versions.json`](../toolkit-versions.json), the one record of what is released, and follow each release (CI fails while a documented pin is older). Pin exact versions in your own test project and move them when you choose; a newly published package does not change a passing test. The release workflow separately tests every newly published version from NuGet.org.
-
-| Package | Released version | Use |
-|---|---|---|
-| [Valheim.Testing](https://www.nuget.org/packages/Valheim.Testing) | `0.1.0-preview.14` | Composable terrain, zone state, recorded-input replay and scoped static overrides; no ValheimCLI dependency |
-| [Valheim.Testing.Game](https://www.nuget.org/packages/Valheim.Testing.Game) | `0.1.0-preview.62` | External game observations, owned sessions, comparisons and reports |
-| [Valheim.Testing.GameSessions](https://www.nuget.org/packages/Valheim.Testing.GameSessions) | `0.1.0-preview.24` | Game sessions: a dedicated server, clients and hosted worlds as one run (`GameSession`, `PinnedServerRun`), on this PC or on other machines, with Steam-account leases and recovery ([page](packages/Valheim.Testing.GameSessions.md)); depends on exactly the Game it was built with |
-| [Valheim.Testing.Cli](https://www.nuget.org/packages/Valheim.Testing.Cli) | `0.1.0-preview.18` | ValheimCLI's client transport, packaged from pinned ValheimCLI source; consumed by the Game package |
-| [Valheim.Testing.Adapter](https://www.nuget.org/packages/Valheim.Testing.Adapter) | `0.1.0-preview.9` | Source for a mod's game-side test adapter plugin: registration with ValheimCLI and the owned-session identity ([page](packages/Valheim.Testing.Adapter.md)) |
-| [Valheim.Testing.Doubles](https://www.nuget.org/packages/Valheim.Testing.Doubles) | `0.1.0-preview.15` | Unity/Valheim/BepInEx/Jotunn doubles as source, so a unit-test project compiles the mod's pure-logic files without the game ([page](packages/Valheim.Testing.Doubles.md)) |
-| [Valheim.Testing.Bindings](https://www.nuget.org/packages/Valheim.Testing.Bindings) | `0.1.0-preview.3` | Library: checks offline that a built mod's references into the game assemblies still bind, and names the mod methods that use each missing member ([page](packages/Valheim.Testing.Bindings.md)) |
-| [Valheim.Testing.Bindings.Tool](https://www.nuget.org/packages/Valheim.Testing.Bindings.Tool) | `0.1.0-preview.3` | The same check as the `valheim-bindings` .NET tool, for a mod's CI; not a project reference |
-
-Versions need not match each other. They restore from NuGet.org with no extra setup. To try an unpublished build instead, add the local `.packages` feed alongside NuGet.org, which still supplies xUnit and ordinary dependencies, and reference the exact version `validate.cs` packed: `<Version>-candidate.<id>`, as the file names in `.packages` show (the id is a hash of the package inputs, so a build of other sources never shares it). For example, from your mod checkout:
+Clone the repository and run the example project as it is:
 
 ```sh
-dotnet restore path/to/MyMod.Tests.csproj -p:RestoreAdditionalProjectSources=/absolute/path/ValheimTesting/.packages
+git clone https://github.com/tvongaza/ValheimTesting.git
+cd ValheimTesting/examples/ModWithTests
+dotnet test MyMod.Tests/MyMod.Tests.csproj -c Release
 ```
 
-`RestoreAdditionalProjectSources` adds the feed and keeps your configured NuGet.org source. Avoid passing NuGet.org as a second `--source`: with .NET SDK 10.0.401 on Windows, restore treated that URL as a local folder and failed.
+It passes with **5 passed, 0 failed** and exits 0. The example is a miniature mod: `MyMod/` holds one source file, and `MyMod.Tests/` links that file and tests it with `Valheim.Testing.Doubles`, which supplies the Unity, Valheim, BepInEx and Jotunn types the file uses.
 
-Pin only the package your test project needs:
+### 2. Add the test project to your mod
+
+Copy [`MyMod.Tests/`](../examples/ModWithTests/MyMod.Tests/MyMod.Tests.csproj) next to your mod project. In its `.csproj`, change the `Compile Include` to one source file of your mod and keep the Doubles `PackageReference`:
 
 ```xml
-<!-- Pure test project; not the production mod project. -->
-<PackageReference Include="Valheim.Testing" Version="[0.1.0-preview.14]" />
-<!-- A separate external system-test project instead uses: -->
-<PackageReference Include="Valheim.Testing.Game" Version="[0.1.0-preview.62]" />
-<!-- and, to run a game session (a server and clients as one run): -->
-<PackageReference Include="Valheim.Testing.GameSessions" Version="[0.1.0-preview.24]" />
-<!-- A game-side test adapter plugin compiles the adapter source: -->
-<PackageReference Include="Valheim.Testing.Adapter" Version="[0.1.0-preview.9]" PrivateAssets="all" />
-<!-- A test that checks a built mod DLL against the game's assemblies in code: -->
-<PackageReference Include="Valheim.Testing.Bindings" Version="[0.1.0-preview.3]" />
+<Compile Include="../YourMod/YourRule.cs" Link="Mod/YourRule.cs" />
+<PackageReference Include="Valheim.Testing.Doubles" Version="[0.1.0-preview.15]" PrivateAssets="all" />
 ```
 
-Brackets mean an exact NuGet version. Pure helpers target netstandard2.0; external game tools and examples target net10.0. Keep the game-side plugin's existing target framework.
+Reference no game assembly and no plugin project: the doubles have the game's type names. Keep Harmony patches and `Awake` out of the linked file.
 
-The binding check needs no project reference in most mods. Install the tool in the CI job that builds the plugin and run it on the built DLL against the game's `Managed` directory ([CI step](packages/Valheim.Testing.Bindings.md#in-ci)):
+### 3. Write the test
+
+Replace `DrySiteTests.cs` with a test of a small decision from your mod; in this excerpt, `DrySiteRule` stands for your type. `ValheimWorldScope` installs synthetic terrain and restores the previous world on disposal. This is the first of the example's tests:
+
+```csharp
+using MyMod;
+using UnityEngine;
+using Valheim.Testing;
+using Valheim.Testing.Doubles;
+using Xunit;
+
+// The game doubles use process-wide singletons, just as the game does.
+[assembly: CollectionBehavior(DisableTestParallelization = true)]
+
+public class DrySiteTests
+{
+    [Theory]
+    [InlineData(29f, false)]   // Under water.
+    [InlineData(31.5f, true)]  // Exactly the promised minimum clearance.
+    [InlineData(40f, true)]   // Safely above it.
+    public void RequiresGroundAtLeastClearanceAboveWater(float ground, bool expected)
+    {
+        using var world = new ValheimWorldScope().WithTerrain(new PlaneTerrain(ground));
+        Assert.Equal(expected, DrySiteRule.CanPlace(new Vector3(0, 100, 0), 30f, 1.5f));
+    }
+}
+```
+
+From your mod checkout, run it:
 
 ```sh
-dotnet tool install Valheim.Testing.Bindings.Tool --version 0.1.0-preview.3 --tool-path .tools
-.tools/valheim-bindings MyMod/bin/Release/MyMod.dll --game-dir "path/to/valheim_Data/Managed"
+dotnet test MyMod.Tests/MyMod.Tests.csproj -c Release
 ```
 
-Reference the `Valheim.Testing.Bindings` library only from a test that calls `BindingCheck.Check` itself, for example to assert on the report. Neither belongs in the production plugin project, and both need the game's assemblies, so neither runs in a CI job without them.
+A passing run exits 0. A failed assertion returns nonzero. Visual Studio 2026, Rider and VS Code with C# Dev Kit discover the project with no extra setup. If the project also targets `net48`, Rider needs Mono on macOS and Linux; see [running both frameworks](../examples/ModWithTests/README.md#also-test-on-net-framework).
 
-## Using Visual Studio, Rider or VS Code
+<!-- TODO(docs): capture output -->
 
-The test projects are ordinary SDK-style xUnit projects, so IDE test runners discover them with no extra setup. The external tools and tests target net10.0, which needs an IDE that supports .NET 10:
+### 4. Run it on every push
 
-| IDE | Where tests appear | Notes |
+Copy the example's [workflow](../examples/ModWithTests/.github/workflows/tests.yml) to `.github/workflows/tests.yml` in your repository and change the project path if yours differs. It installs the .NET 10 SDK and runs the same `dotnet test` on a hosted Ubuntu runner, with no game and no secrets ([GitHub Actions](adopting.md#run-your-tests-in-github-actions)).
+
+## Check the result
+
+For a control, change `>=` to `>` in [DrySiteRule.cs](../examples/ModWithTests/MyMod/DrySiteRule.cs): the boundary case must fail. Restore the rule afterwards.
+
+A passing test proves the mod's decision on declared inputs. It does not prove the real world is dry, that a collider exists, or that a client receives terrain. [Bring your mod](adopting.md#choose-your-first-layer) matches each behaviour to a layer.
+
+## Code without game types
+
+If the code under test uses no Unity or Valheim type, reference `Valheim.Testing` from your existing test project instead and pass an `ITerrain` into the real production method:
+
+```xml
+<PackageReference Include="Valheim.Testing" Version="[0.1.0-preview.14]" />
+```
+
+Every other package and version is in the [package table](package-versions.md).
+
+## Problems
+
+| Problem | Cause | Fix |
 |---|---|---|
-| Visual Studio 2026 (Windows) | Test Explorer | Install the **.NET desktop development** workload; it includes the .NET Framework 4.8 targeting pack used by net48 test legs, which run natively on Windows. |
-| JetBrains Rider (Windows, macOS, Linux) | Unit Tests window | net48 test legs need Mono on macOS/Linux. |
-| VS Code with C# Dev Kit | Testing panel | Same .NET 10 SDK requirement. |
+| A package does not restore | The pin names an unpublished version | Pin an exact version from the [package table](package-versions.md) |
+| The compiler reports a missing game member | The doubles do not model it | Read the [doubles contract](packages/Valheim.Testing.Doubles.md); extend the partial type locally |
+| Duplicate or conflicting game types | The test project references Unity, Valheim or the plugin DLL | Link the source files instead; reference no game assembly |
+| Tests fail only when run together | The doubles are process-wide singletons | Keep `[assembly: CollectionBehavior(DisableTestParallelization = true)]` |
+| A mod or adapter build cannot find the game | Your Steam library is not in the default folder | Pass `-p:ValheimPath=<folder>`, or set `VALHEIM_PATH` before starting the IDE ([game references](../tools/game-references/README.md#use-them)) |
+| A test adapter build asks for `CliDll` | The adapter compiles against the exact ValheimCLI core it runs with | Pass `-p:CliDll=<path>`, or set `CliDll` before starting the IDE ([game references](../tools/game-references/README.md#use-them)) |
 
-Open your test project directly or add it to your own solution. A separate testing solution is optional. Published packages restore from NuGet.org; unpublished candidates need the local feed above.
+More in [Apply it to your checkout](../examples/ModWithTests/README.md#apply-it-to-your-checkout) and [a layout that builds on hosted CI](adopting.md#a-layout-that-builds-on-hosted-ci).
 
-Two things the command line passes explicitly are set another way in an IDE:
+## What a native check needs
 
-- **Game install path.** Mod projects read Valheim's assemblies from the default Steam folder. If your Steam library is elsewhere, set a `VALHEIM_INSTALL` environment variable before starting the IDE, where the project supports it (the test adapters do), or follow the mod's own build instructions.
-- **The game-side test adapter** (`*.TestAdapter`) is deliberately not in the testing solution: it must compile against the exact ValheimCLI build you install. Build it from a terminal with `-p:CliDll=...`, or set a `CliDll` environment variable before starting the IDE.
+One Windows PC with Valheim and the free Valheim Dedicated Server tool from Steam, the Steam client running and signed in, and PowerShell 7 ([host shells](platforms.md#host-shells)). A `--server-only` run does not need Steam. `valheim-test` stages a disposable profile with its pinned BepInEx loader and ValheimCLI for each install and leaves the install untouched. <!-- TODO(docs): verify after #711 -->
 
-External runners are console programs. To run one from the IDE, set its command-line arguments in the project's debug or run settings (Visual Studio: project **Properties → Debug → Open debug launch profiles UI**; Rider: **Run → Edit Configurations**). Native runs still need a disposable game install, world and character.
+```sh
+dotnet tool install Valheim.Testing.NativeSmoke --version 0.1.0-preview.31 --global
+valheim-test env preflight
+valheim-test server-load --mod /path/to/ServerMod.dll
+```
 
-## Package pages
+<!-- TODO(docs): capture output -->
 
-Each package's contract, failure semantics and limits are on its page: [Valheim.Testing](packages/Valheim.Testing.md), [Valheim.Testing.Doubles](packages/Valheim.Testing.Doubles.md), [Valheim.Testing.Game](packages/Valheim.Testing.Game.md), [Valheim.Testing.GameSessions](packages/Valheim.Testing.GameSessions.md), [Valheim.Testing.Adapter](packages/Valheim.Testing.Adapter.md), [Valheim.Testing.Bindings](packages/Valheim.Testing.Bindings.md), [Valheim.Testing.Bindings.Tool](packages/Valheim.Testing.Bindings.Tool.md), [Valheim.Testing.Cli](packages/Valheim.Testing.Cli.md) and [Valheim.Testing.NativeSmoke](packages/Valheim.Testing.NativeSmoke.md). The [candidate API reference](https://tvongaza.github.io/ValheimTesting/) inventories the public declarations; the [compatibility-policy draft](reference/compatibility.md) records the decisions still needed before stable packages.
+`env preflight` checks this machine before anything is copied: the run journal and host lock, game processes, ValheimCLI ports, the client desktop and whether Steam is running. `server-load` loads the mod on an owned dedicated server, joins one clean client, prints `SERVER_JOIN_PASS` and writes `result.json` and `junit.xml` under a new `valheim-test-runs/` directory in this machine's ValheimTesting data root. From a directory with exactly one mod project, you can omit `--mod`.
+
+Next: [Debug a mod load or mod conflict](debugging-mods.md) walks through the first run; [one Windows PC](packages/Valheim.Testing.Game.md#on-one-windows-pc) describes the setup; read the [runtime hygiene checklist](runtime-hygiene.md) before you launch. Other hosts are in [platforms](platforms.md).
+
+## Related
+
+- [Bring your mod](adopting.md): which layer tests which behaviour
+- [Examples](../examples/README.md): from the first unit test to a native session test
+- [Packages](package-versions.md): every package, version and pin
+- [Candidate API reference](https://tvongaza.github.io/ValheimTesting/): every public declaration
+
