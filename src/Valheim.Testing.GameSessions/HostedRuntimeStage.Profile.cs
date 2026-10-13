@@ -255,7 +255,7 @@ internal static partial class HostedRuntimeStage
                     var cleanup = await host.RunAsync(windows ? WindowsCleanup : BashCleanup,
                         new Dictionary<string, string> {
                             ["runtime"] = created ? destination : "", ["stage"] = shipped ? staging : "",
-                            ["parent"] = destination[..destination.LastIndexOfAny(['/', '\\'])],
+                            ["parent"] = HostPath.Parent(destination),
                         }, timeout, CancellationToken.None).ConfigureAwait(false);
                     cleanup.EnsureSuccess($"Cleaning failed profile preparation on {host.Name}");
                     if (InteractiveClient.Line(cleanup.Stdout, "VT-STAGE-CLEANED") == null)

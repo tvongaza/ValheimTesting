@@ -431,7 +431,8 @@ public sealed class LinkRuleTests : IDisposable
         Assert.True(Directory.Exists(stage));
     }
 
-    // The kept-changes folder goes as the link it may be, never emptied through it.
+    // The kept-changes folder goes as the link it may be, never emptied through it (a regression guard for the move to the remover: the old
+    // rm -rf and Directory.Delete already unlinked a link).
     [Theory]
     [MemberData(nameof(Shells))]
     public async Task DroppingTheKeptChangesRemovesThemAndUnlinksALinkedFolder(string shell)

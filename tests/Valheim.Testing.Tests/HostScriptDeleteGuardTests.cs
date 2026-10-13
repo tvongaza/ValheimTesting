@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using Valheim.Testing.GameSessions;
 using Xunit;
 
 // #743: every recursive delete in the text of a host script goes through the one remover in ProtectedPaths (vt_remove for bash,
@@ -12,8 +13,10 @@ public sealed class HostScriptDeleteGuardTests
     private static readonly (string Name, Regex Pattern)[] Patterns =
     [
         ("bash rm -r", new Regex(@"\brm\s+(?:-\S+\s+)*(?:-[A-Za-z]*[rR][A-Za-z]*|--recursive)\b", RegexOptions.CultureInvariant)),
-        ("PowerShell Remove-Item -Recurse", new Regex(@"\b(?:Remove-Item|ri|del|rd|rm)\b[^\r\n]*\s-Recurse\b", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase)),
-        ("[IO.Directory]::Delete(path, $true)", new Regex(@"\[(?:System\.)?IO\.Directory\]::Delete\([^)\r\n]*,\s*\$true\b", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase)),
+        ("PowerShell Remove-Item -Recurse", new Regex(@"\b(?:Remove-Item|ri|del|rd|rm)\b[^\r\n]*\s-r(?:ec\w*)?\b", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase)),
+        ("[IO.Directory]::Delete(path, $true)", new Regex(@"\[(?:System\.)?IO\.Directory\]::Delete\([^\r\n]*,\s*\$true\s*\)", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase)),
+        ("DirectoryInfo.Delete($true)", new Regex(@"\.Delete\(\s*\$true\s*\)", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase)),
+        ("find -delete", new Regex(@"\bfind\b[^\r\n]*\s-delete\b", RegexOptions.CultureInvariant)),
         ("cmd rmdir /s", new Regex(@"\b(?:rmdir|rd)\s+/s\b", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase)),
     ];
 
@@ -76,6 +79,12 @@ public sealed class HostScriptDeleteGuardTests
     [InlineData("[IO.Directory]::Delete($stage, $true)")]
     [InlineData("if ([IO.Directory]::Exists($d)) { [System.IO.Directory]::Delete($d,$true) }")]
     [InlineData("rmdir /s /q \"%d%\"")]
+    [InlineData("[IO.Directory]::Delete((Join-Path $a 'b'), $true)")]
+    [InlineData("Remove-Item -LiteralPath $p -r -Force")]
+    [InlineData("Remove-Item -LiteralPath $p -Rec -Force")]
+    [InlineData("(Get-Item -LiteralPath $p).Delete($true)")]
+    [InlineData("find \"$d\" -mindepth 1 -delete")]
+    [InlineData("find \"$d\" -exec rm -rf {} +")]
     public void ABareRecursiveDeleteIsRefused(string line) =>
         Assert.Single(BareRecursiveDeletes("script.cs", "var text = \"\"\"\n    " + line + "\n    \"\"\";"));
 
@@ -94,6 +103,8 @@ public sealed class HostScriptDeleteGuardTests
     [InlineData("// Remove-Item -Recurse in a C# comment")]
     [InlineData("Directory.Delete(payload, recursive: true);")]
     [InlineData("Directory.Delete(_root, true);")]
+    [InlineData("[IO.Directory]::Delete((Join-Path $a 'b'))")]
+    [InlineData("find \"$d\" -name '*.log' -print")]
     [InlineData("grep -r pattern \"$dir\"")]
     [InlineData("cp -r \"$source\" \"$dest\"")]
     public void ADeleteThroughTheOwnerOrANonRecursiveOneIsAllowed(string line) =>
@@ -106,4 +117,10 @@ public sealed class HostScriptDeleteGuardTests
         var found = BareRecursiveDeletes("src/X.cs", "a\nb\n        rm -rf -- \"$x\"\nc").ToList();
         Assert.Equal("src/X.cs:3: bash rm -r: rm -rf -- \"$x\"", Assert.Single(found));
     }
+
+    // The wrapper is sent as -EncodedCommand inside one command line (cmd.exe's limit is 8191 characters, with the shell's own path and flags
+    // in front); it was 6716 before #743 moved its cleanup off a recursive delete.
+    [Fact]
+    public void ThePowerShellWrapperStaysWellUnderTheCommandLineLimit() =>
+        Assert.True(ScriptedGameHost.EncodedPowerShellWrapper.Length < 7200, "The encoded wrapper is " + ScriptedGameHost.EncodedPowerShellWrapper.Length + " characters.");
 }

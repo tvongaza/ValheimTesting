@@ -18,6 +18,7 @@ internal static class HostScripts
         "printf \"\\n[vt-exit] %d\\n\" \"$r\" >&2; exit \"$r\"; fi; " +
         "rm -f \"$d/script\" \"$d/upload\"; rmdir \"$d\" 2> /dev/null; echo \"vt: the script did not arrive intact\" >&2; exit 125";
 
+    // Its temporary folder holds exactly the script and the upload, so cleanup deletes those two files and then the folder: nothing recursive.
     // Sent as -EncodedCommand, so its length (not the script's) meets the command-line limit. Runs under PowerShell 7 (pwsh)
     // on Windows. The script's line goes to a temporary file, the secrets line only into memory (the process variable
     // VT_SECRETS while the script runs), the rest of stdin to the upload file. Output goes through Console.Out as UTF-8, so it
@@ -28,13 +29,7 @@ internal static class HostScripts
         $ProgressPreference = 'SilentlyContinue'
         $vtErr = [Console]::Error
         $vtDir = Join-Path ([IO.Path]::GetTempPath()) ('vt-' + [Guid]::NewGuid().ToString('N'))
-        # The wrapper's own folder holds exactly the script and the upload: those two files, then the folder, so nothing recursive.
-        function Remove-VtTemp {
-            try {
-                foreach ($vtName in @('script.ps1', 'upload')) { if ([IO.File]::Exists((Join-Path $vtDir $vtName))) { [IO.File]::Delete((Join-Path $vtDir $vtName)) } }
-                if ([IO.Directory]::Exists($vtDir)) { [IO.Directory]::Delete($vtDir) }
-            } catch { }
-        }
+        function Remove-VtTemp { try { foreach ($vtName in 'script.ps1', 'upload') { [IO.File]::Delete((Join-Path $vtDir $vtName)) }; [IO.Directory]::Delete($vtDir) } catch { } }
         try {
             $vtIn = [Console]::OpenStandardInput()
             $vtLines = @((New-Object IO.MemoryStream), (New-Object IO.MemoryStream))

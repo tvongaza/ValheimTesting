@@ -197,7 +197,7 @@ internal static partial class HostedRuntimeStage
         if (host.Shell.Kind is not (HostShellKind.Bash or HostShellKind.PowerShell))
             throw new PlatformNotSupportedException("Runtime preparation needs a bash or PowerShell host.");
         if (files.Count == 0) throw new ArgumentException("Select at least one pinned plugin file.", nameof(files));
-        RequireStaging(host, destination[..destination.LastIndexOfAny(['/', '\\'])], staging);
+        RequireStaging(host, HostPath.Parent(destination), staging);
         // Whether the disposable runtime and its staging lie outside the install that runs never change is decided on the host,
         // with links resolved there: a runtime directory reached through a link into the install is inside it.
         await HostInstall.RequireApartAsync(host, source, [destination, staging], "the source install", timeout, cancellation).ConfigureAwait(false);
