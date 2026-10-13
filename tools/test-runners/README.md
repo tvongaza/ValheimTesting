@@ -1,23 +1,21 @@
 # Test runner for both target frameworks
 
-`Valheim.TestRunners.targets` runs one test project on modern .NET and on .NET Framework, reports each, and fails if either fails. It is an MSBuild file for your repository, not a package: copy it in and import it from the test project.
+`Valheim.TestRunners.targets` runs one test project on modern .NET and on .NET Framework. It reports each run and fails if either fails. It is an MSBuild file, not a package: copy it into your repository and import it from the test project.
 
-## Why both
+The game runs mods on its own Mono, which implements .NET Framework 4.x, so mods target `net48`. Your fast everyday loop is `net10.0`. A suite that targets both catches formatting, LINQ, reflection, missing-API and Mono differences before the game does. `Valheim.Testing` and `Valheim.Testing.Doubles` compile for both.
 
-The game runs mods on its own Mono, which implements .NET Framework 4.x; mods target `net48`. The fast everyday loop is modern .NET (`net10.0`). The two differ in ways a test can hit: string and float formatting, collection and LINQ behaviour, reflection over generics, missing APIs that only fail when compiled for `net48`, and the Mono runtime's own bugs. A suite that targets both (`<TargetFrameworks>net48;net10.0</TargetFrameworks>`) catches those before the game does. `Valheim.Testing` and `Valheim.Testing.Doubles` compile for both.
-
-Plain `dotnet test` on such a project also tries the `net48` leg, which on macOS aborts. The target runs each framework the way that works on each system:
+Plain `dotnet test` on such a project also tries the `net48` leg, and that aborts on macOS. The target runs each framework in the way that works on each system:
 
 | Framework | macOS / Linux | Windows |
 |---|---|---|
 | `net10.0` (and any other modern TFM) | `dotnet test -f net10.0` | `dotnet test -f net10.0` |
 | `net48` (and any other .NET Framework TFM) | `dotnet build -f net48`, then the xunit v2 console runner under Mono | `dotnet build -f net48`, then the xunit v2 console runner on .NET Framework |
 
-Both OSes use the same console runner for `net48`, so a filter selects the same tests everywhere.
+Both systems use the same console runner for `net48`, so a filter selects the same tests everywhere.
 
 ## Use it
 
-Copy `Valheim.TestRunners.targets` into your repository, for example into `build/`, and import it at the end of the test project:
+Copy `Valheim.TestRunners.targets` into your repository, for example into `build/`. Then import it at the end of the test project:
 
 ```xml
 <Project Sdk="Microsoft.NET.Sdk">
@@ -34,7 +32,7 @@ Copy `Valheim.TestRunners.targets` into your repository, for example into `build
 </Project>
 ```
 
-Then, on every OS:
+Run these commands from the folder that contains `MyMod.Tests`. They are the same on every OS:
 
 ```sh
 dotnet build MyMod.Tests/MyMod.Tests.csproj -t:RunTestsOnBothFrameworks
@@ -43,15 +41,7 @@ dotnet build MyMod.Tests/MyMod.Tests.csproj -t:RunTestsOnBothFrameworks -f net48
 dotnet test MyMod.Tests/MyMod.Tests.csproj -f net10.0                                  # the fast loop alone
 ```
 
-| Setting | Meaning |
-|---|---|
-| `-f TFM` | Run only this target framework. Without it, every framework the project targets, in the project's order |
-| `-c C` | Build configuration, default `Debug` |
-| `-p:VSTestTestCaseFilter=EXPR` | `dotnet test`'s own filter property, for every framework; translated for the console runner (below) |
-
-Other `-p:` properties apply to the target, not to the builds and test runs it starts; set what those need in the project or the environment, or run `dotnet test -f net10.0` with its own options for the modern leg.
-
-Every selected framework runs even if an earlier one failed. The output ends with one line per framework, and the build fails if any line is not `passed`:
+The output ends with one line per framework:
 
 ```text
 == summary
@@ -59,21 +49,54 @@ net48: FAILED (tests, exit 1)
 net10.0: passed
 ```
 
-The console runner writes an XML report (`obj/<configuration>/net48/xunit-console.xml`), and a .NET Framework leg that ran no tests fails (`net48: FAILED (no tests ran)`) even though the runner exited 0: a filter that matches nothing, or tests the runner cannot discover, must not pass silently. A passing leg shows its count, `net48: passed (5 tests)`. A build failure shows as `net48: FAILED (build, exit 1)`, a project without the console runner as `net48: not run (no xunit.runner.console)`.
+Every selected framework runs, even after an earlier one fails. The build fails if any line is not `passed`.
 
-Nothing runs, and the build fails with an error saying why, when the project does not target a .NET Framework and a modern framework in `<TargetFrameworks>` (with `-f`, one of them), when `-f` names a framework the project does not target, when the filter is one the console runner cannot express, or when a .NET Framework leg needs Mono and `mono` is not on PATH.
+### Settings
+
+| Setting | Meaning |
+|---|---|
+| `-f TFM` | Run only this framework. Without it, every framework the project targets, in the project's order |
+| `-c C` | Build configuration, default `Debug` |
+| `-p:VSTestTestCaseFilter=EXPR` | `dotnet test`'s own filter, for every framework; translated for the console runner ([Filters](#filters)) |
+
+### Summary lines
+
+| Output line | Meaning |
+|---|---|
+| `net10.0: passed` | The modern leg passed. |
+| `net48: passed (5 tests)` | The .NET Framework leg passed, with its test count. |
+| `net48: FAILED (tests, exit 1)` | Tests failed. |
+| `net48: FAILED (build, exit 1)` | The `net48` build failed. |
+| `net48: FAILED (no tests ran)` | The filter matched nothing, or the runner found no tests. |
+| `net48: not run (no xunit.runner.console)` | The project has no console runner reference. |
+
+A .NET Framework leg that ran no tests fails even when the runner exits 0. The console runner writes its report to `obj/<configuration>/net48/xunit-console.xml`.
+
+### Refusals
+
+In these cases nothing runs, and the build fails with an error that says why:
+
+| Condition | What to do |
+|---|---|
+| `<TargetFrameworks>` lacks a .NET Framework or a modern framework | Target both, such as `net48;net10.0`, or use `dotnet test` |
+| `-f` names a framework the project does not target | Choose one of the project's frameworks with `-f` |
+| The console runner cannot express the filter | Simplify the filter, or run `-f net10.0` alone |
+| A .NET Framework leg on macOS or Linux, and `mono` is not on PATH | Install Mono, or run `-f net10.0` alone |
 
 ## What the project needs
 
 - `<TargetFrameworks>` with a .NET Framework TFM and a modern one, and xunit v2.
-- The console runner, as a package reference: `<PackageReference Include="xunit.runner.console" Version="2.8.1" PrivateAssets="all" />` (use your xunit version), in the project before the import or in `Directory.Build.props`. The targets file asks restore for its folder (`GeneratePathProperty`) and runs that version's `tools/net48/xunit.console.exe`.
-- On macOS and Linux, Mono on PATH: `brew install mono` on macOS, `sudo apt-get install --no-install-recommends mono-devel` on Debian or Ubuntu (`mono-runtime` alone lacks the `System.Runtime` and `netstandard` facades the console runner loads; `mono-complete` works too, but adds about 28 MB of documentation and tools). `dotnet test -f net10.0` runs the modern leg without it. Windows needs nothing extra: .NET Framework 4.8 is part of the system.
+- The console runner as a package reference, in the project before the import or in `Directory.Build.props`. Use your xunit version: `<PackageReference Include="xunit.runner.console" Version="2.8.1" PrivateAssets="all" />`. The targets file asks restore for its folder (`GeneratePathProperty`) and runs that version's `tools/net48/xunit.console.exe`.
+- On macOS and Linux, Mono on PATH:
+  - macOS: `brew install mono`
+  - Debian or Ubuntu: `sudo apt-get install --no-install-recommends mono-devel`. `mono-runtime` alone lacks the `System.Runtime` and `netstandard` facades the console runner loads. `mono-complete` also works.
+- On Windows, nothing extra. .NET Framework 4.8 is part of the system.
 
-[Run tests in CI](../../docs/guides/run-tests-in-ci.md#4-optional-add-a-net-framework-leg) shows the project changes and the workflow.
+To run both legs in GitHub Actions, see [Run tests in CI](../../docs/guides/run-tests-in-ci.md).
 
 ## Filters
 
-`dotnet test` takes the filter as written. The console runner has no filter expressions: it ORs options of one kind and ANDs different kinds. So only filters whose meaning survives translate, terms of one kind joined by `|`:
+`dotnet test` takes the filter as written. The console runner has no filter expressions: it ORs options of one kind and ANDs different kinds. The target translates only terms of one kind joined by `|`:
 
 | Filter term | Console option |
 |---|---|
@@ -81,18 +104,33 @@ Nothing runs, and the build fails with an error saying why, when the project doe
 | `FullyQualifiedName=Namespace.Class.Method` | `-method "Namespace.Class.Method"` |
 | `Trait=value` (any trait name, such as `Category=Slow`) | `-trait "Trait=value"` |
 
-Property names compare case-insensitively, as in `dotnet test`. The values are quoted for the shell, so characters such as a generic class's backtick reach the runner as written. Anything else stops the build before anything runs: `&`, `!=`, parentheses, a method term OR'd with a trait term, and the test properties the console cannot select by (`DisplayName`, `Name`, `ClassName`, `TestCategory`, `Priority`, `Id`), which as a trait would match no test. Simplify the filter, or run `dotnet test -f net10.0` alone.
+Property names compare case-insensitively, as in `dotnet test`. The target quotes values for the shell, so a generic class's backtick reaches the runner as written.
+
+The target refuses these filters before anything runs:
+
+- `&`, `!=` and parentheses.
+- A method term OR'd with a trait term.
+- `DisplayName`, `Name`, `ClassName`, `TestCategory`, `Priority` and `Id`. As a trait, they would match no test.
 
 ## Mono and parallel tests
 
-Tests that share process-wide state must not run in parallel on any runtime: the game doubles are singletons, as the game's are, so a suite that uses them sets `[assembly: CollectionBehavior(DisableTestParallelization = true)]` (as [ModWithTests](../../examples/ModWithTests/MyMod.Tests/DrySiteTests.cs) does).
+Tests that share process-wide state must not run in parallel on any runtime. The game doubles are singletons, so a suite that uses them sets `[assembly: CollectionBehavior(DisableTestParallelization = true)]`, as `DrySiteTests.cs` in [ModWithTests](../../examples/ModWithTests/README.md) does.
 
-Mono adds a limit of its own. A mod's suite whose test collections ran in parallel under Mono aborted in native assembly-loading code (`mono_assembly_names_equal_flags`, under `mono_domain_assembly_search`) in 3 of 8 runs; with parallelization disabled it ran clean 6 times of 6, and either half of the suite alone was always clean. That is a race, so those counts are the evidence rather than a proof. The same suite takes well under a second, so serialising it costs nothing. The target therefore passes `-parallel none` to the console runner under Mono. On Windows the assembly's own setting applies. If a Mono run dies with a native stack trace rather than a test failure, check that it ran serially before looking elsewhere.
+Under Mono, the target passes `-parallel none` to the console runner. On Windows, the assembly's own setting applies. If a Mono run dies with a native stack trace instead of a test failure, check that it ran serially.
 
 ## In GitHub Actions
 
-Hosted runners have no Mono: install it in the job (`sudo apt-get install -y --no-install-recommends mono-devel` on `ubuntu-latest`, `brew install mono` on `macos-latest`), or run the .NET Framework leg on `windows-latest`, which needs nothing. The command is the same on all three. This repository's `test-runners` job does all three with the ModWithTests example; see [test.yml](../../.github/workflows/test.yml).
+Hosted runners have no Mono. The command is the same on every runner image; only the setup differs:
 
-## Tests
+| Runner image | Setup step |
+|---|---|
+| `windows-latest` | None |
+| `ubuntu-latest` | `sudo apt-get install -y --no-install-recommends mono-devel` |
+| `macos-latest` | `brew install mono` |
 
-`TestRunnersTargetsTests` in `tests/Valheim.Testing.Tests` imports the targets file into fixture test projects that target `net10.0` and `net48`. On every OS: the filter translation table, and the refusals (an untranslatable filter, a project with one framework, a `-f` framework the project does not target, and on macOS and Linux missing Mono) stop before anything builds. On Windows, and elsewhere when Mono is on PATH: real runs where both frameworks pass, a filter with shell characters reaches both runners, a failure only on .NET Framework fails the run, a modern failure still runs .NET Framework, a filter that selects no test fails the `net48` leg, a missing console runner and a build failure are reported. The `test-runners` CI job runs the target for real on all three systems, on a copy of ModWithTests that targets both frameworks, and then with an added test that fails only on .NET Framework, which must fail the run while `-f net10.0` still passes, and with a filter that selects no test, which must fail the `net48` leg.
+## Limits
+
+- Supports xunit v2 projects only.
+- Other `-p:` properties apply to the target, not to the builds and test runs it starts. Set what those need in the project or the environment. Alternatively, run `dotnet test -f net10.0` with its own options.
+- The console runner limits filters to the forms in [Filters](#filters).
+- On macOS and Linux, the .NET Framework leg needs Mono.

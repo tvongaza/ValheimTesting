@@ -175,7 +175,7 @@ Never include game/Unity assemblies, decompiled game source, private saves, cred
 
 ### Docs check
 
-The `docs` CI job runs `dotnet run scripts/pins.cs -- docs`, offline, so a docs problem is never hidden behind a release the pins have not caught up with. It fails on a Markdown heading that names a version or a date (name the concept; history belongs in release notes; only files named `native-validation-*.md`, the dated records, may date a heading, and their links are checked like any other), on a link to a `review/` branch, on a valheimCLI fork page linked at anything but a full commit, and on a relative link, or one to this repository's `main`, whose file or heading anchor does not exist. Each package's reference is its page under [docs/packages](docs/packages/); describe what the package does there, not when it changed.
+The `docs` CI job runs `dotnet run scripts/pins.cs -- docs`, offline, so a docs problem is never hidden behind a release the pins have not caught up with. It fails on a Markdown heading that names a version or a date (name the concept; history belongs in release notes), on a link to a `review/` branch, on a valheimCLI fork page linked at anything but a full commit, and on a relative link, or one to this repository's `main`, whose file or heading anchor does not exist. Each package's reference is its page under [docs/packages](docs/packages/); describe what the package does there, not when it changed.
 
 ## Notes for coding agents
 

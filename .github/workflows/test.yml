@@ -435,7 +435,7 @@ jobs:
           git diff --exit-code
   docs:
     name: docs (headings and links)
-    # The Markdown pages (#278): no heading names a version or a date (native-validation records are exempt), no link goes
+    # The Markdown pages (#278): no heading names a version or a date, no link goes
     # to a review branch or to a valheimCLI fork page at anything but a full commit, and every relative link, and every link
     # to this repository's main branch, reaches an existing file and heading anchor. Offline, so it is not hidden while the
     # pins job waits for a release record.

@@ -1,20 +1,19 @@
 # ScriptEngine extension reload check
 
-A toolkit maintainer's check of ValheimCLI's ScriptEngine extension lifecycle (`ExtensionReload`), not an example for mod authors. This is a bounded real-game check. It attaches
-through the shipped ValheimCLI transport; it does not launch or stop Valheim, create a
-world, or select a character. It works at the main menu.
+This is a maintainer's check of ValheimCLI's ScriptEngine extension lifecycle (`ExtensionReload`). It is not an example for mod authors. It attaches to a running game at the main menu through the ValheimCLI transport. It installs revision A of a probe extension, replaces it with revision B, then removes it. It does not launch or stop Valheim, create a world, or select a character.
 
-Keep the ValheimCLI core in `BepInEx/plugins`. Enable ScriptEngine's `LoadOnStart` and
-`EnableFileSystemWatcher`. Use an **empty, dedicated** `BepInEx/scripts` directory:
-ScriptEngine reloads every script when any DLL changes. Do not run this against a
-session whose scripts or game state belong to somebody else.
+## Before you run it
 
-Build two revisions of the example probe in [`ReloadProbe/`](ReloadProbe/Plugin.cs), a ScriptEngine script that
-registers the `example.probe` extension. It compiles against your game install and the exact ValheimCLI core the game
-runs, through [`tools/game-references`](../game-references/README.md) (`-p:ValheimPath=`, or `VALHEIM_PATH`,
-and `-p:CliDll=`), never in this repository's CI. The probe embeds symbols because ScriptEngine expects symbols when
-loading an assembly. The outputs contain the probe only (no game or ValheimCLI assembly is copied); do not copy a
-second ValheimCLI assembly into scripts.
+- Keep the ValheimCLI core in `BepInEx/plugins`.
+- Enable ScriptEngine's `LoadOnStart` and `EnableFileSystemWatcher`.
+- Use an empty, dedicated `BepInEx/scripts` directory. ScriptEngine reloads every script when any DLL changes.
+- Run it only against a session you own.
+
+## Use
+
+The probe in [`ReloadProbe/`](ReloadProbe/Plugin.cs) is a ScriptEngine script that registers the `example.probe` extension. It builds against your game and the exact core the game runs, through [`tools/game-references`](../game-references/README.md). Pass `-p:ValheimPath=` (or set `VALHEIM_PATH`) and `-p:CliDll=`. It never builds in this repository's CI.
+
+From the repository root, build both probe revisions and the driver, then run the driver:
 
 ```sh
 # From this repository; CliDll is the valheimCLI.dll installed in the game's BepInEx/plugins.
@@ -30,49 +29,52 @@ dotnet tools/reload-check/bin/Release/net10.0/ReloadCheck.dll \
   /absolute/disposable-game/BepInEx/scripts /absolute/results/reload.json /private/menu-pins.txt
 ```
 
-The probe moved here from ValheimCLI (commit `d112140`, `examples/ReloadProbe`) on 30 September 2026. Its code is
-unchanged apart from a provenance comment; its project file now takes the game and core through `tools/game-references`
-instead of ValheimCLI's own build properties.
+On success the driver prints this line:
 
-Use the actual ValheimCLI port instead of `5555`. This check is local: DLL replacement
-must reach the same game as the loopback connection. Supply a strict pins file listing the installed core, ScriptEngine and all other loaded plugins (and an exact world UID if run in a world). The driver requires the probe absent initially, then pins its A/B MD5 from the supplied artifacts and requires absence again after removal. It never trusts a running-game snapshot to invent an expected hash.
+```text
+PASS: A -> B reload, active cancellation, resource cleanup, removed command, stable core and connection, final unregister.
+```
 
-Every command, including expected refusals and the second waiting connection, gets a `cli_expect --strict` preflight. During replacement only the explicit new pins are polled until they hold; no gameplay command bypasses a mismatch. If the game's persistent `[Expectations]` file is enabled, the fixture owner must keep its staged expectations consistent as well; this driver does not disable or overwrite that guard.
+The probe outputs contain the probe only, with embedded symbols, because ScriptEngine expects them. Do not copy a second ValheimCLI assembly into `scripts`.
 
-The check keeps one control connection open throughout. It installs A, verifies
-its command and owned GameObject, starts a bounded waiting command on a second
-connection, then atomically replaces A with B. It requires:
+## Arguments
 
-- A new extension instance and revision B responding on the original connection.
-- A's active request ending with `extension_unloaded` and A's instance token.
-- A's removed command returning `no_extension_command` rather than executing old code.
-- Exactly one probe resource after replacement: A's resource was destroyed.
-- An unchanged ValheimCLI core build identity and load time.
-- No registered probe after deleting its file, with ValheimCLI still responding.
+| Position | Argument | Meaning |
+|---|---|---|
+| 1 | `<port>` | The actual ValheimCLI port on `127.0.0.1` (replace `5555`) |
+| 2 | `<probe-A.dll>` | Absolute path to revision A |
+| 3 | `<probe-B.dll>` | Absolute path to revision B (`-p:ProbeRevision=B`) |
+| 4 | `<empty-scripts-dir>` | The dedicated `BepInEx/scripts`; refused if it holds a DLL |
+| 5 | `<report.json>` | Where the evidence report is written |
+| 6 | `<pins-file>` | Strict pins: core, ScriptEngine, every other loaded plugin, world UID |
 
-The atomic replacement and the registration waits are the toolkit's `ExtensionReload`
-(`Install`, `WaitForReplacement`, `WaitForRemoval`), which other hot-reload smoke tests can use.
+The check is local. The DLL replacement must reach the same game as the loopback connection. Include the world UID in the pins file only if you run in a world.
 
-The probe logs iterator disposal and registered cleanup separately, including the
-number of active waits. The runner writes structured evidence and exits nonzero
-on failure. It removes its deployed probe in `finally`; the session owner remains
-responsible for shutdown and checking restoration. Reports can contain local
-paths from `cli_build`; review before publishing.
+The driver pins the probe absent first, then to each DLL's MD5, then absent again. Every command gets a `cli_expect --strict` preflight. If the game's `[Expectations]` file is enabled, keep it consistent; the driver does not change it.
 
-## Native evidence
+## What the check requires
 
-On 26 September 2026 the check passed on real native ARM64 Mac Valheim (1.0.16, Unity 6000.0.75f1), launched
-headlessly at the main menu with BepInEx 5.4.23.5 and ScriptEngine 11.1. Both
-cleanup callbacks ran with zero active waits. The ValheimCLI core was unchanged.
+| Requirement | Proved by |
+|---|---|
+| B is a new instance and answers on the original connection | `example.probe/hello` returns revision `0.2.0` and a new instance |
+| A's active request ends with A's instance token | `example.probe/wait` on a second connection returns `extension_unloaded` |
+| A's removed command cannot run old code | `example.probe/removed` returns `no_extension_command` |
+| A's resource was destroyed | `hello` reports exactly one lease |
+| Core build identity and load time are unchanged | `cli_build` output matches the first reading |
+| Deleting the file unregisters the probe | `WaitForRemoval` passes, then `cli_build` still answers |
 
-This establishes read-only active-command cancellation, replacement, owned
-GameObject cleanup, command removal, and connection continuity. It does not test
-world mutations, delayed quiescence after a mutation, queued mutation cancellation,
-client rendering, or actual assembly memory reclamation. Those are not implied
-by a successful ScriptEngine replacement. The pure lifecycle tests cover the
-additional gate and quiescence cases; Roads save/restart scenarios remain separate.
+The replacement and the waits are `ExtensionReload.Install`, `WaitForReplacement` and `WaitForRemoval`. Other hot-reload smoke tests can use them.
 
-No BepInEx warning/error was logged. Unity emitted Apple native-library and
-headless resource-upload errors; this is not a claim of a clean graphics startup.
+## Results
 
-The required pins-file argument and strict per-command/reload preflights were added afterward. They compile and have controlled-transport tests; the revised driver then passed the strict A/B/absent reload campaign recorded in [the native validation report](../../docs/native-validation-20260927.md).
+| Exit code | Meaning |
+|---|---|
+| `0` | Every requirement held |
+| `1` | A step failed; the message goes to standard error |
+| `2` | Wrong number of arguments; prints the usage line |
+
+The report holds `passed` and an `evidence` list of commands, replies and checks. It can contain local paths from `cli_build`, so review it before publishing. The probe logs iterator disposal and registered cleanup separately. The driver deletes only the probe it installed. You shut down the game and check restoration.
+
+## Limits
+
+The check does not cover world mutations, delayed quiescence after a mutation, queued mutation cancellation, client rendering, or actual assembly memory reclamation.

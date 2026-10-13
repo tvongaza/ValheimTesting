@@ -9,7 +9,7 @@ You need two packages:
 - `Valheim.Testing` declares the ground. It targets netstandard2.0 and has no Unity dependency.
 - `Valheim.Testing.Doubles` holds the zones.
 
-Pin both from the [package table](../package-versions.md). Set up the doubles as [Setup](../packages/Valheim.Testing.Doubles.md#setup) describes. If you are unsure this is the right layer, see [choose a test layer](choose-a-test-layer.md).
+Pin both from the [package table](../package-versions.md). Set up the doubles as [Install](../packages/Valheim.Testing.Doubles.md#install) describes. If you are unsure this is the right layer, see [choose a test layer](choose-a-test-layer.md).
 
 Derive expected values independently of the code under test. Declare them in the fixture, and never read them from your mod's output.
 
@@ -75,7 +75,7 @@ In your test, replace the stand-in loop with a call to your mod's writer. [`Prog
 | `TerrainAssert.OnlyChangedWithin` | A write stayed inside an area |
 | `TerrainAssert.SeamAgrees(west, east)` | Two neighbours agree on their shared vertices |
 
-The full assertion API is in [terrain snapshots and assertions](../packages/Valheim.Testing.Doubles.md#terrain-snapshots-and-assertions).
+The full assertion API is in [terrain snapshots and assertions](../reference/doubles-world.md#terrain-snapshots-and-assertions).
 
 ### 3. Optional: dumps, pictures and parity
 
@@ -85,7 +85,7 @@ To use a grid dump as input, load it as an `ITerrain`:
 var dump = GridDumpTerrain.Load("terrace.csv");
 ```
 
-For CSV rules and query answers, see [read a grid dump](../packages/Valheim.Testing.md#read-a-grid-dump). For a native dump used as a pinned input, see [pinned world dumps](../world-dump-contract.md).
+For CSV rules and query answers, see [read a grid dump](../packages/Valheim.Testing.md#read-a-grid-dump). For a native dump used as a pinned input, see [pinned world dumps](../reference/world-dump-contract.md).
 
 To draw a picture for human review, render the terrain to a PNG:
 
@@ -144,8 +144,8 @@ These fixtures model declared terrain and mutable zone state. They do not reprod
 
 - [SharedWorld](../../examples/SharedWorld/README.md): the runnable example for this guide.
 - [`Valheim.Testing`](../packages/Valheim.Testing.md): reference for terrain types, dumps, rendering and parity.
-- [Terrain snapshots and assertions](../packages/Valheim.Testing.Doubles.md#terrain-snapshots-and-assertions) in `Valheim.Testing.Doubles`.
-- [Pinned world dumps](../world-dump-contract.md): capture and verify a native dump.
+- [Terrain snapshots and assertions](../reference/doubles-world.md#terrain-snapshots-and-assertions) in `Valheim.Testing.Doubles`.
+- [Pinned world dumps](../reference/world-dump-contract.md): capture and verify a native dump.
 - [ObserveCheck `capture`](../../examples/ObserveCheck/README.md#capture-record-a-bounded-grid-for-exact-replay): record a bounded grid for exact replay.
 - [Choose a test layer](choose-a-test-layer.md).
 
