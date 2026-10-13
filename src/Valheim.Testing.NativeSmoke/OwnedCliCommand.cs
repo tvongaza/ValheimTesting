@@ -77,16 +77,17 @@ internal static class OwnedCliCommand
         { error.WriteLine("REFUSED: " + failure.Message); return 3; }
     }
 
-    // Only the built-in screenshot is redirected into private evidence. A malformed invocation is
-    // refused before it can write an arbitrary file selected by the caller.
+    // Only the built-in screenshot is redirected into private evidence. The one argument it takes is its supersize, 1..4;
+    // a name is refused, since the owned runner chooses the destination and a caller's name would be silently dropped.
     internal static int? ScreenshotSupersize(string command)
     {
         string[] parts = command.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
         if (parts.Length == 0 || parts[0] != "cli_screenshot") return null;
-        if (parts.Length > 3 || parts.Length == 3 &&
-            (!int.TryParse(parts[2], NumberStyles.None, CultureInfo.InvariantCulture, out int size) || size is < 1 or > 4))
-            throw new ArgumentException("cli_screenshot accepts an optional name and supersize 1..4; the owned runner writes it to private evidence.");
-        return parts.Length == 3 ? int.Parse(parts[2], CultureInfo.InvariantCulture) : 1;
+        if (parts.Length == 1) return 1;
+        if (parts.Length == 2 && int.TryParse(parts[1], NumberStyles.None, CultureInfo.InvariantCulture, out int size) && size is >= 1 and <= 4)
+            return size;
+        throw new ArgumentException("cli_screenshot takes only a supersize, 1..4 (cli_screenshot 2); it takes no name, because the owned runner " +
+            "chooses the destination and writes the image to private run evidence.");
     }
 
     internal static bool IsExactProcess(Process process, OwnedClientCommandLease lease) =>

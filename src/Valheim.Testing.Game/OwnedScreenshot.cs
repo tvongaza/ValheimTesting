@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text;
 
 namespace Valheim.Testing.Game;
@@ -72,17 +73,14 @@ internal static class OwnedScreenshot
             cancellation.ThrowIfCancellationRequested();
             var reply = actor.Execute(request.Command, requireAccepted: false);
             string? queued = reply.Line("OK: screenshot queued path=");
-            string? named = queued?["OK: screenshot queued path=".Length..]
-                .Split(" size=", 2, StringSplitOptions.None)[0].Trim('"');
-            if (!reply.Accepted || named == null)
+            if (!reply.Accepted || queued == null)
                 return Write(request, reply.Accepted, false, reply.Refusal ?? reply.ErrorCode ??
                     reply.Message ?? "ValheimCLI did not queue a screenshot", null);
-            if (!string.Equals(Path.GetFullPath(named), request.Image,
-                    OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+            if (!ImageEvidence.NamesPath(queued, request.Image, ImageEvidence.LocalIgnoresCase, local: true))
                 return Write(request, true, false, "ValheimCLI named a different screenshot destination; no external file was collected", null);
             var clock = System.Diagnostics.Stopwatch.StartNew(); // Monotonic: a wall-clock step must not expire the wait.
-            string? hash;
-            while ((hash = CompletePngHash(request.Image)) == null)
+            ImageEvidence.Verified? image;
+            while ((image = ImageEvidence.VerifyPng(request.Image)) == null)
             {
                 cancellation.ThrowIfCancellationRequested();
                 TimeSpan left = writeTimeout - clock.Elapsed;
@@ -94,7 +92,7 @@ internal static class OwnedScreenshot
                 int fired = WaitHandle.WaitAny([signal, cancellation.WaitHandle], left < recheckEvery ? left : recheckEvery);
                 if (fired == 1) cancellation.ThrowIfCancellationRequested();
             }
-            return Write(request, true, true, "captured", hash);
+            return Write(request, true, true, "captured", image);
         }
         catch (OperationCanceledException)
         {
@@ -116,33 +114,13 @@ internal static class OwnedScreenshot
         catch (UnauthorizedAccessException) { }
     }
 
-    private static Outcome Write(Request request, bool accepted, bool complete, string status, string? hash)
+    private static Outcome Write(Request request, bool accepted, bool complete, string status, ImageEvidence.Verified? image)
     {
-        using (var result = new FileStream(request.Result, FileMode.CreateNew, FileAccess.Write, FileShare.Read))
-            JsonSerializer.Serialize(result, new
-            { accepted, complete, status, image = request.RelativeImage, sha256 = hash, utc = DateTimeOffset.UtcNow });
-        return new Outcome(accepted, complete, status, hash, request.RelativeImage, request.Result);
-    }
-
-    private static string? CompletePngHash(string path)
-    {
-        try
+        ImageEvidence.WriteSidecar(request.Result, "owned-screenshot", new JsonObject
         {
-            // FileShare.Read refuses a writer that still has the PNG open. The same handle supplies
-            // the completeness check and hash, so evidence never hashes a different set of bytes.
-            using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
-            if (file.Length is < 20 or > 100_000_000) return null;
-            Span<byte> header = stackalloc byte[8];
-            Span<byte> trailer = stackalloc byte[12];
-            file.ReadExactly(header);
-            file.Seek(-12, SeekOrigin.End);
-            file.ReadExactly(trailer);
-            if (!header.SequenceEqual(new byte[] { 137, 80, 78, 71, 13, 10, 26, 10 }) ||
-                !trailer[..8].SequenceEqual(new byte[] { 0, 0, 0, 0, 73, 69, 78, 68 })) return null;
-            file.Seek(0, SeekOrigin.Begin);
-            return FileHash.Sha256(file);
-        }
-        catch (IOException) { return null; }
-        catch (UnauthorizedAccessException) { return null; }
+            ["accepted"] = accepted, ["complete"] = complete, ["status"] = status, ["image"] = request.RelativeImage,
+            ["sha256"] = image?.Sha256, ["bytes"] = image?.Bytes,
+        });
+        return new Outcome(accepted, complete, status, image?.Sha256, request.RelativeImage, request.Result);
     }
 }

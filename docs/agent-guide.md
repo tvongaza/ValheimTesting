@@ -79,7 +79,7 @@ For an owned Windows one-shot run that is **still running**, a second terminal c
 
 ```text
 valheim-test cli --evidence /path/to/run/evidence/smoke --phase menu --command "cli_manifest"
-valheim-test cli --evidence /path/to/run/evidence/smoke --phase world --command "cli_screenshot inspection"
+valheim-test cli --evidence /path/to/run/evidence/smoke --phase world --command "cli_screenshot 2"
 ```
 
 The tool checks the recorded PID and exact start time, then verifies strict pins derived from the run's original plan before issuing one command. `world` is available after the owned client hosts its fixture or joins the dedicated fixture in `server-load --hold`; it refuses before world entry and after leaving. Use `--expect-strict FILE` with an independently prepared pin file for other world states. A main-thread stall can make this command time out; `--timeout-seconds 1..15` bounds each command. This passthrough currently runs beside a Windows desktop client, not against arbitrary attached or remote games. Screenshot and other cheat commands still require the disposable character's cheat gate to be acknowledged; the passthrough never enables cheats itself. The run's evidence can include private paths and account data, so review it before sharing.

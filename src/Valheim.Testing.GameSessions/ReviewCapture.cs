@@ -101,7 +101,7 @@ public static class ReviewCapture
                 capture = client.Execute(command).RequireLine("OK: CAPTURE ", "capture did not complete");
             }
             finally { client.CommandTimeout = previousTimeout; }
-            if (!capture.Contains("path=" + hostImage + " ", StringComparison.Ordinal))
+            if (!ImageEvidence.NamesPath(capture, hostImage, ignoreCase: shell == HostShellKind.PowerShell, local: false))
                 throw new InvalidDataException("The game saved a different image path: " + capture);
             // The fetch is the one asynchronous step; wait for it off any caller's synchronization context.
             var copied = Task.Run(() => fetch(plan.HostDirectory, staging, cancellation), CancellationToken.None).GetAwaiter().GetResult();
@@ -110,18 +110,17 @@ public static class ReviewCapture
             string[] files = Directory.GetFiles(staging, "*", SearchOption.AllDirectories);
             if (files.Length != 1 || Path.GetFileName(files[0]) != plan.Id + ".png")
                 throw new InvalidDataException("The fetched capture has an unexpected filename.");
-            byte[] png = File.ReadAllBytes(files[0]);
-            if (!CompletePng(png)) throw new InvalidDataException("The fetched image is not a complete PNG.");
-            string sha = FileHash.Sha256(png);
+            var png = ImageEvidence.VerifyPng(files[0])
+                ?? throw new InvalidDataException("The fetched image is not a complete PNG.");
             string sidecarSha = ReviewLease.WriteSidecar(Path.Combine(staging, plan.Id + ".json"), "human-review-still", plan.Id, plan.WorldUid, plan.GameBuild, plan.PluginPins, new
             {
                 location = new { plan.Arrival.X, y = plan.Arrival.Height, plan.Arrival.Z },
                 conditions = new { plan.Weather, plan.TimeOfDay, plan.MistOff, plan.ClutterOff, plan.CameraDistance, plan.CameraHeight, plan.CameraAzimuthDegrees, plan.Supersize },
-                initialState = original, captureReply = capture, imageSha256 = sha, imageBytes = png.LongLength,
+                initialState = original, captureReply = capture, image = plan.Id + ".png", sha256 = png.Sha256, bytes = png.Bytes,
             });
             string image = Path.Combine(plan.EvidenceDirectory, plan.Id + ".png");
             string metadata = Path.Combine(plan.EvidenceDirectory, plan.Id + ".json");
-            receipt = new ReviewCaptureReceipt(image, metadata, sha, png.LongLength)
+            receipt = new ReviewCaptureReceipt(image, metadata, png.Sha256, png.Bytes)
             { Evidence = new("review-still", plan.Id, plan.WorldUid, metadata, sidecarSha) };
         }
         catch (Exception error) { failure = error; }
@@ -166,8 +165,4 @@ public static class ReviewCapture
         if (!absolute || host.Split('/').Any(part => part is "." or ".."))
             throw new ArgumentException("The host image directory must be absolute and contain no traversal segments.");
     }
-
-    private static bool CompletePng(byte[] bytes) => bytes.Length >= 20 &&
-        bytes.AsSpan(0, 8).SequenceEqual(new byte[] { 137, 80, 78, 71, 13, 10, 26, 10 }) &&
-        bytes.AsSpan(bytes.Length - 8, 8).SequenceEqual(new byte[] { 73, 69, 78, 68, 174, 66, 96, 130 });
 }

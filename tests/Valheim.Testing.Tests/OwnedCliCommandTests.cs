@@ -133,4 +133,32 @@ public sealed class OwnedCliCommandTests
         }
         finally { Directory.Delete(output, recursive: true); }
     }
+
+    [Theory]
+    [InlineData("cli_screenshot", 1)]
+    [InlineData("cli_screenshot 2", 2)]
+    [InlineData("  cli_screenshot   4 ", 4)]
+    public void ALoneIntegerIsTheSupersize(string command, int expected) =>
+        Assert.Equal(expected, OwnedCliCommand.ScreenshotSupersize(command));
+
+    [Theory]
+    [InlineData("cli_screenshot inspection")]
+    [InlineData("cli_screenshot inspection 2")]
+    [InlineData("cli_screenshot 0")]
+    [InlineData("cli_screenshot 5")]
+    [InlineData("cli_screenshot -1")]
+    [InlineData("cli_screenshot 2 3")]
+    public void AScreenshotNameOrABadSupersizeIsRefusedWithTheReason(string command)
+    {
+        var refused = Assert.Throws<ArgumentException>(() => OwnedCliCommand.ScreenshotSupersize(command));
+        Assert.Contains("takes only a supersize", refused.Message);
+        Assert.Contains("no name", refused.Message);
+    }
+
+    [Theory]
+    [InlineData("cli_screenshot_path64 abc")]
+    [InlineData("cli_screenshots 2")]
+    [InlineData("cli_manifest")]
+    [InlineData("")]
+    public void OtherCommandsAreNotScreenshots(string command) => Assert.Null(OwnedCliCommand.ScreenshotSupersize(command));
 }
