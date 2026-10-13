@@ -79,11 +79,17 @@ internal static class ModInputStage
         }
     }
 
-    public static async Task<Inputs> RunAsync(Request request, CancellationToken cancellation)
+    /// <summary>
+    /// Steps 1 and 2 alone: the game and loader choice and the output guard, with the core, the CLI inputs and the capability
+    /// list the dependency lock is requested with. It builds no mod, probes no host and writes nothing into the output; like
+    /// the whole stage it extracts the pinned loader and ValheimCLI bundle into the data root. A wrapper
+    /// that needs the choice before it runs the stage (<c>server-load-ab</c> before its two arms, <c>server-load-phases</c>
+    /// before its first phase) takes it from here instead of deciding its own (#745). <see cref="RunAsync"/> starts with it.
+    /// </summary>
+    public static Inputs Choose(Request request)
     {
         var options = request.Options;
         string output = request.Output;
-        var given = ModBuild.ParseDependencies(request.Dependencies);
 
         // 1. The game and loader choice.
         string compileRole = request.Route switch
@@ -138,13 +144,45 @@ internal static class ModInputStage
         else if (request.Route == Route.Dedicated) Console.WriteLine("client: none (--server-only)");
 
         // 2. Every output is outside every selected source before anything is written.
-        string? cliManifest = null, cliFiles = null;
+        string cliManifest = "", cliFiles = "";
         if (request.Route != Route.Build) (cliManifest, cliFiles) = SmokeInputs.Cli(options);
-        SmokeOutput.RefuseResolved(output, cliFiles, inventory, [server?.Recipe, client?.Recipe], server?.LoaderRoot, client?.LoaderRoot);
+        SmokeOutput.RefuseResolved(output, request.Route == Route.Build ? null : cliFiles, inventory, [server?.Recipe, client?.Recipe],
+            server?.LoaderRoot, client?.LoaderRoot);
         if (options.TryGetValue("--bake-fixture", out string? bake))
             FixtureBake.RefuseOutput(Path.GetFullPath(bake), new[] { output, server?.Recipe.Install, client?.Recipe.Install,
                 options.TryGetValue("--world-fixture", out string? fixture) ? Path.GetFullPath(fixture) : null }.OfType<string>().ToArray());
         request.Progress.OutputChecked = true;
+
+        // 6 (below) requests the dependency lock with these.
+        IReadOnlyList<string> capabilities = request.Route == Route.Hosted ? CliCapabilities.HostedRounds
+            : client == null ? [SessionCapabilities[0]] : SessionCapabilities;
+        return new Inputs(request.Route, inventory, compile, server, client, architecture, choice.Join, [], "", options.GetValueOrDefault("--build-inputs"))
+        {
+            Core = core, CliManifest = cliManifest, CliFiles = cliFiles, Capabilities = capabilities.ToList(), SteamRuntimePackage = steamRuntime,
+        };
+    }
+
+    /// <summary>
+    /// The dependency lock of a selection of mods against the chosen game, core, ValheimCLI and capabilities: the one request
+    /// shape of the stage's step 6 and of an A/B run's before and after locks. <paramref name="resolve"/> is a test seam.
+    /// </summary>
+    internal static NativeDependencyLock Resolve(Inputs inputs, IReadOnlyList<string> mods, IReadOnlyList<string> searchRoots,
+        IReadOnlyList<string> optionalReferences, Func<NativeDependencyRequest, NativeDependencyLock>? resolve = null) =>
+        (resolve ?? NativeDependencyResolver.Resolve)(SmokeDependencyInputs.Request(mods, inputs.Compile.Recipe.Install, inputs.Core,
+            inputs.CliManifest, inputs.CliFiles, searchRoots, optionalReferences, inputs.Capabilities));
+
+    public static async Task<Inputs> RunAsync(Request request, CancellationToken cancellation)
+    {
+        var options = request.Options;
+        string output = request.Output;
+        var given = ModBuild.ParseDependencies(request.Dependencies);
+        var inputs = Choose(request);
+        var inventory = inputs.Inventory;
+        var client = inputs.Client;
+        var compile = inputs.Compile;
+        string game = compile.Recipe.Install, core = inputs.Core;
+        string? cliManifest = request.Route == Route.Build ? null : inputs.CliManifest;
+        string? cliFiles = request.Route == Route.Build ? null : inputs.CliFiles;
 
         // 3. The inputs that already exist are checked before any host is probed, so an unrelated slow or transient desktop
         // or Steam check cannot mask a pure input error (#626): the selected mod and its build inputs, the scenario DLL.
@@ -173,8 +211,7 @@ internal static class ModInputStage
         }
 
         // 4. The read-only host checks, before any build: a run that cannot start is refused before minutes of compiling.
-        var inputs = new Inputs(request.Route, inventory, compile, server, client, architecture, choice.Join, mods, selection, buildInputs)
-            { Core = core, SteamRuntimePackage = steamRuntime };
+        inputs = inputs with { Mods = mods, ModSelection = selection, BuildInputs = buildInputs };
         if (request.Route != Route.Build)
         {
             var problems = await LocalHostPreflight.InspectAsync(inventory,
@@ -209,10 +246,7 @@ internal static class ModInputStage
         string selectedInventory = request.Route == Route.Hosted
             ? RecordHostedClient(inventory, client!, output)
             : SmokeInputResolver.RecordSelected(inventory, output, inputs.Actors.Select(actor => actor.Recipe));
-        IReadOnlyList<string> capabilities = request.Route == Route.Hosted ? CliCapabilities.HostedRounds
-            : client == null ? [SessionCapabilities[0]] : SessionCapabilities;
-        var dependencies = NativeDependencyResolver.Resolve(SmokeDependencyInputs.Request(mods, game, core, cliManifest!, cliFiles!,
-            roots, request.OptionalReferences, capabilities));
+        var dependencies = Resolve(inputs, mods, roots, request.OptionalReferences);
         Directory.CreateDirectory(output);
         if (buildInputs != null) File.Copy(buildInputs, Path.Combine(output, "build-inputs.json"));
         dependencies.Write(Path.Combine(output, "dependencies.lock.json"));
@@ -221,7 +255,7 @@ internal static class ModInputStage
         if (verified != null) ModBuild.RequireResolvedDependencies(verified, dependencies);
         return inputs with
         {
-            CliManifest = cliManifest!, CliFiles = cliFiles!, SearchRoots = roots, Capabilities = capabilities.ToList(),
+            SearchRoots = roots,
             Scenario = scenario, SelectedInventory = selectedInventory, Dependencies = dependencies,
         };
     }

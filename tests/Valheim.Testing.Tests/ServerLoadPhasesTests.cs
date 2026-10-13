@@ -1,4 +1,6 @@
 using System.Text.Json;
+using Valheim.Testing.Game;
+using Valheim.Testing.GameSessions;
 using Xunit;
 
 public sealed class ServerLoadPhasesTests : IDisposable
@@ -12,7 +14,7 @@ public sealed class ServerLoadPhasesTests : IDisposable
         Directory.CreateDirectory(fixture);
         File.WriteAllText(Path.Combine(fixture, "world.fwl"), "source world");
         string server = Path.Combine(_root, "server");
-        Directory.CreateDirectory(server);
+        Directory.CreateDirectory(Path.Combine(server, InstallPins.CoreDirectory)); // the core the mod resolves against
         File.WriteAllText(Path.Combine(server, "server-marker"), "source server");
         File.WriteAllText(Path.Combine(_root, "first.dll"), "first plugin");
         File.WriteAllText(Path.Combine(_root, "second.dll"), "second plugin");
@@ -111,6 +113,35 @@ public sealed class ServerLoadPhasesTests : IDisposable
         Assert.Equal(0, calls);
         Assert.False(Directory.Exists(output));
         Assert.Equal("source server", File.ReadAllText(Path.Combine(server, "server-marker")));
+    }
+
+    // #745: the phases take the server's loader from the mod-input stage, so the pinned pack a phase will run with (#711) is
+    // protected too, not only a --loader-package or an environment's loaderPackage.
+    [Fact]
+    public async Task ThePinnedLoaderChosenByTheStageIsProtectedBeforeAnyWrite()
+    {
+        using var rig = new RegressionRig();
+        var source = BepInExLoaderPackage.Capture(rig.Game, "pinned-pack", "1");
+        string root = Path.Combine(_root, "pinned-loader");
+        foreach (string relative in source.Files.Keys)
+        {
+            string destination = Path.Combine(root, relative.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+            File.Copy(Path.Combine(rig.Game, relative.Replace('/', Path.DirectorySeparatorChar)), destination);
+        }
+        string manifest = Path.Combine(_root, "pinned-loader.json");
+        BepInExLoaderPackage.Capture(root, "pinned-pack", "2").Write(manifest);
+        string output = Path.Combine(root, "phase-run");
+        var asked = new List<string>();
+        int calls = 0;
+
+        int result = await ServerLoadPhases.RunAsync(["--plan", Plan(), "--output", output], _ => { calls++; return Task.FromResult(0); },
+            (role, _, _) => { asked.Add(role); return new ShippedLoader.Choice(manifest, "the pinned pack"); });
+
+        Assert.Equal(3, result);
+        Assert.Equal(["server"], asked);
+        Assert.Equal(0, calls);
+        Assert.False(Directory.Exists(output));
     }
 
     [Fact]

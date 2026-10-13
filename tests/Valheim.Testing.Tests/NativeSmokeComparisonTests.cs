@@ -45,7 +45,7 @@ public sealed class NativeSmokeComparisonTests : IDisposable
         string companion = _rig.Write("companion/Companion.dll", RegressionRig.Assembly("Companion", new("example.companion")));
         string steam = Path.Combine(_rig.Root, "steam-userdata");
         string output = Path.Combine(steam, "comparison-evidence");
-        string[] args = [.. Arguments(output, _rig.Parent, companion), "--client", Path.Combine(_rig.Root, "client"), "--steam-userdata", steam];
+        string[] args = [.. Arguments(output, _rig.Parent, companion, serverOnly: false), "--client", Path.Combine(_rig.Root, "client"), "--steam-userdata", steam];
         int calls = 0;
         int result = await ServerLoadComparison.RunAsync(args, _ =>
         {
@@ -133,8 +133,7 @@ public sealed class NativeSmokeComparisonTests : IDisposable
     {
         string companion = _rig.Write("companion/Companion.dll", RegressionRig.Assembly("Companion", new("example.companion")));
         string output = Path.Combine(_rig.Root, "parsed-comparison");
-        string[] arguments = [.. Arguments(output, _rig.Parent, companion),
-            "--server-only", "--optional-reference", "Optional.Plugin"];
+        string[] arguments = [.. Arguments(output, _rig.Parent, companion), "--optional-reference", "Optional.Plugin"];
         var arms = new List<ServerLoad.Arguments>();
         int result = await ServerLoadComparison.RunAsync(arguments, args =>
         {
@@ -164,13 +163,13 @@ public sealed class NativeSmokeComparisonTests : IDisposable
         string output = Path.Combine(_rig.Root, "frozen-comparison");
         var arms = new List<ServerLoad.Arguments>();
         int result = await ServerLoadComparison.RunAsync(
-            [.. Arguments(output, _rig.Parent, companion), "--server-only"],
+            Arguments(output, _rig.Parent, companion),
             args =>
             {
                 Assert.True(ServerLoad.TryRead(args, out var parsed, out string error), error);
                 arms.Add(parsed!);
                 return Task.FromResult(0);
-            }, freezeInputs: true);
+            });
         Assert.Equal(0, result);
         Assert.Equal(2, arms.Count);
         string frozen = Path.Combine(output, "selection", "environments.json");
@@ -196,7 +195,7 @@ public sealed class NativeSmokeComparisonTests : IDisposable
         string output = Path.Combine(_rig.Root, "frozen-choice-ab");
         var arguments = Arguments(output, _rig.Parent, companion).ToList();
         arguments.RemoveRange(0, 2); // The inventory supplies the server.
-        arguments.AddRange(["--inventory", inventory, "--server-only"]);
+        arguments.AddRange(["--inventory", inventory]);
         int resolved = 0;
         int result = await ServerLoadComparison.RunAsync([.. arguments],
             resolve: request =>
@@ -204,7 +203,7 @@ public sealed class NativeSmokeComparisonTests : IDisposable
                 if (++resolved == 1) Inventory(Path.Combine(_rig.Root, "changed-after-selection"));
                 return NativeDependencyResolver.Resolve(request);
             },
-            runArm: _ => Task.FromResult(0), freezeInputs: true);
+            runArm: _ => Task.FromResult(0));
 
         Assert.Equal(0, result);
         Assert.Equal(2, resolved);
@@ -248,7 +247,7 @@ public sealed class NativeSmokeComparisonTests : IDisposable
         arguments.RemoveRange(0, 2); // The inventory, not --server, owns this server's loader choice.
         int adapterAt = arguments.IndexOf("--adapter");
         arguments.RemoveRange(adapterAt, 2); // Exercise the adapter build's selected-core argument.
-        arguments.AddRange(["--inventory", inventory, "--server-only"]);
+        arguments.AddRange(["--inventory", inventory]);
         if (explicitPackage) arguments.AddRange(["--loader-package", explicitChoice.Manifest]);
         string adapter = _rig.Write("adapter/NativeSmoke.SessionAdapter.dll",
             RegressionRig.Assembly("NativeSmoke.SessionAdapter", new(SmokeSessionContract.SessionAdapterPluginGuid)));
@@ -310,7 +309,8 @@ public sealed class NativeSmokeComparisonTests : IDisposable
         Assert.Equal(1, calls);
     }
 
-    private string[] Arguments(string output, string first, string second, bool searchRoot = true)
+    // Server-only unless a test selects a client: the stage chooses a client for a joined run, and this machine has no Steam client here.
+    private string[] Arguments(string output, string first, string second, bool searchRoot = true, bool serverOnly = true)
     {
         string adapter = _rig.Write("adapter/NativeSmoke.SessionAdapter.dll",
             RegressionRig.Assembly("NativeSmoke.SessionAdapter", new(SmokeSessionContract.SessionAdapterPluginGuid)));
@@ -321,6 +321,7 @@ public sealed class NativeSmokeComparisonTests : IDisposable
             "--cli-files", Path.Combine(_rig.Root, "cli"), "--output", output,
         };
         if (searchRoot) args.AddRange(["--search-root", Path.Combine(_rig.Root, "deps")]);
+        if (serverOnly) args.Add("--server-only");
         return [.. args];
     }
 }
