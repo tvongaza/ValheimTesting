@@ -187,7 +187,7 @@ internal static class HostedWorldOnHost
     // Moves the world's own entries from $worlds into $to (created): <name>, <name>.* and the game's <name>_backup* (the name's own
     // case; any case on Windows, whose folders ignore it). Every destination is checked first, and none may exist: nothing is
     // ever overwritten, merged or deleted. Across volumes (Windows) an entry is copied, then removed from where it was.
-    internal static readonly string WindowsMoveOut = """
+    internal static readonly string WindowsMoveOut = ProtectedPaths.PowerShellInside + ProtectedPaths.PowerShellRemove + """
         $ErrorActionPreference = 'Stop'
         $lower = $name.ToLowerInvariant()
         [void][IO.Directory]::CreateDirectory($to)
@@ -205,7 +205,7 @@ internal static class HostedWorldOnHost
             $entry = $move[0]; $dest = $move[1]
             if ([IO.Path]::GetPathRoot($entry) -ne [IO.Path]::GetPathRoot($dest)) {
                 Copy-Item -LiteralPath $entry -Destination $dest -Recurse
-                Remove-Item -LiteralPath $entry -Recurse -Force
+                Remove-VtTree $entry $worlds
             }
             elseif ([IO.Directory]::Exists($entry)) { [IO.Directory]::Move($entry, $dest) }
             else { [IO.File]::Move($entry, $dest) }

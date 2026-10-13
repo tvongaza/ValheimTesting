@@ -14,9 +14,9 @@ internal static class HostScripts
     public const string BashWrapper =
         "d=$(mktemp -d) || exit 125; " +
         "if IFS= read -r s && IFS= read -r k && printf %s \"$s\" | base64 -d > \"$d/script\" && cat > \"$d/upload\"; then " +
-        "VT_UPLOAD=\"$d/upload\" VT_SECRETS=\"$k\" \"$BASH\" \"$d/script\" < /dev/null; r=$?; rm -rf \"$d\"; " +
+        "VT_UPLOAD=\"$d/upload\" VT_SECRETS=\"$k\" \"$BASH\" \"$d/script\" < /dev/null; r=$?; rm -f \"$d/script\" \"$d/upload\"; rmdir \"$d\" 2> /dev/null; " +
         "printf \"\\n[vt-exit] %d\\n\" \"$r\" >&2; exit \"$r\"; fi; " +
-        "rm -rf \"$d\"; echo \"vt: the script did not arrive intact\" >&2; exit 125";
+        "rm -f \"$d/script\" \"$d/upload\"; rmdir \"$d\" 2> /dev/null; echo \"vt: the script did not arrive intact\" >&2; exit 125";
 
     // Sent as -EncodedCommand, so its length (not the script's) meets the command-line limit. Runs under PowerShell 7 (pwsh)
     // on Windows. The script's line goes to a temporary file, the secrets line only into memory (the process variable
@@ -28,6 +28,13 @@ internal static class HostScripts
         $ProgressPreference = 'SilentlyContinue'
         $vtErr = [Console]::Error
         $vtDir = Join-Path ([IO.Path]::GetTempPath()) ('vt-' + [Guid]::NewGuid().ToString('N'))
+        # The wrapper's own folder holds exactly the script and the upload: those two files, then the folder, so nothing recursive.
+        function Remove-VtTemp {
+            try {
+                foreach ($vtName in @('script.ps1', 'upload')) { if ([IO.File]::Exists((Join-Path $vtDir $vtName))) { [IO.File]::Delete((Join-Path $vtDir $vtName)) } }
+                if ([IO.Directory]::Exists($vtDir)) { [IO.Directory]::Delete($vtDir) }
+            } catch { }
+        }
         try {
             $vtIn = [Console]::OpenStandardInput()
             $vtLines = @((New-Object IO.MemoryStream), (New-Object IO.MemoryStream))
@@ -58,7 +65,7 @@ internal static class HostScripts
             try { $vtFile.Write($vtBuffer, $vtRest, $vtRead - $vtRest); $vtIn.CopyTo($vtFile) } finally { $vtFile.Dispose() }
         } catch {
             $vtErr.WriteLine('vt: ' + $_.Exception.Message)
-            Remove-Item -LiteralPath $vtDir -Recurse -Force -ErrorAction SilentlyContinue
+            Remove-VtTemp
             exit 125
         }
         $vtCode = 1
@@ -72,7 +79,7 @@ internal static class HostScripts
             $vtErr.WriteLine(($_ | Out-String).Trim())
         } finally {
             [Environment]::SetEnvironmentVariable('VT_SECRETS', $null)
-            Remove-Item -LiteralPath $vtDir -Recurse -Force -ErrorAction SilentlyContinue
+            Remove-VtTemp
         }
         [Console]::Out.Flush()
         $vtErr.WriteLine()
@@ -141,15 +148,14 @@ internal static class HostScripts
         """.ReplaceLineEndings("\n");
 
     // $record is SOURCE.txt's text (what was shipped); the archive's hash is appended to it.
-    private static readonly string BashShip = """
-        set -u
+    private static readonly string BashShip = "set -u\n" + ProtectedPaths.BashInside + ProtectedPaths.BashRemove + """
         if [ -e "$dest" ]; then echo "VT-SHIP exists"; exit 0; fi
         if command -v sha256sum > /dev/null 2>&1; then got=$(sha256sum < "$VT_UPLOAD"); else got=$(shasum -a 256 < "$VT_UPLOAD"); fi || exit 3
         got=${got%% *}
         if [ "$got" != "$sha256" ]; then echo "VT-SHIP hash $got"; exit 0; fi
         mkdir -p -- "$(dirname -- "$dest")" && mkdir -- "$dest" || exit 3
-        if ! tar -xf "$VT_UPLOAD" -C "$dest"; then rm -rf -- "$dest"; exit 3; fi
-        if [ -e "$dest/SOURCE.txt" ]; then rm -rf -- "$dest"; echo "VT-SHIP source-txt"; exit 0; fi
+        if ! tar -xf "$VT_UPLOAD" -C "$dest"; then vt_remove "$dest" "$(dirname -- "$dest")"; exit 3; fi
+        if [ -e "$dest/SOURCE.txt" ]; then vt_remove "$dest" "$(dirname -- "$dest")" || exit 3; echo "VT-SHIP source-txt"; exit 0; fi
         printf '%ssha256=%s\n' "$record" "$sha256" > "$dest/SOURCE.txt" || exit 3
         echo "VT-SHIP shipped $got"
         """.ReplaceLineEndings("\n");
@@ -165,7 +171,7 @@ internal static class HostScripts
         function Get-VtSha256([string]$path) { (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant() }
         """;
 
-    private static readonly string PowerShellShip = (PowerShellSha256 + """
+    private static readonly string PowerShellShip = (ProtectedPaths.PowerShellInside + ProtectedPaths.PowerShellRemove + PowerShellSha256 + """
 
         if (Test-Path -LiteralPath $dest) { 'VT-SHIP exists'; exit 0 }
         $got = Get-VtSha256 $env:VT_UPLOAD
@@ -176,8 +182,8 @@ internal static class HostScripts
         """ + PowerShellTar + """
 
         & $tar -xf $env:VT_UPLOAD -C $dest
-        if ($LASTEXITCODE -ne 0) { Remove-Item -LiteralPath $dest -Recurse -Force; throw ('tar exited with ' + $LASTEXITCODE) }
-        if (Test-Path -LiteralPath (Join-Path $dest 'SOURCE.txt')) { Remove-Item -LiteralPath $dest -Recurse -Force; 'VT-SHIP source-txt'; exit 0 }
+        if ($LASTEXITCODE -ne 0) { Remove-VtTree $dest (Split-Path -Parent $dest); throw ('tar exited with ' + $LASTEXITCODE) }
+        if (Test-Path -LiteralPath (Join-Path $dest 'SOURCE.txt')) { Remove-VtTree $dest (Split-Path -Parent $dest); 'VT-SHIP source-txt'; exit 0 }
         [IO.File]::WriteAllText((Join-Path $dest 'SOURCE.txt'), $record + 'sha256=' + $sha256 + "`n", (New-Object Text.UTF8Encoding $false))
         'VT-SHIP shipped ' + $got
         """).ReplaceLineEndings("\n");
@@ -185,7 +191,7 @@ internal static class HostScripts
     // Windows SSH uses SFTP/SCP for the archive: some Win32-OpenSSH PowerShell sessions stop consuming binary stdin
     // partway through a larger upload. The script receives only a generated basename, verifies the archive hash and
     // removes that basename even when extraction fails. The source archive is never an extraction target.
-    public static readonly string PowerShellShipFile = (PowerShellSha256 + """
+    public static readonly string PowerShellShipFile = (ProtectedPaths.PowerShellInside + ProtectedPaths.PowerShellRemove + PowerShellSha256 + """
 
         if ($uploadName -cnotmatch '^vt-upload-[0-9a-f]{32}\.tar$') { throw 'Invalid archive name' }
         # SCP's relative destination lands in the SSH user's home on Windows and Unix.
@@ -206,13 +212,13 @@ internal static class HostScripts
                         if ($LASTEXITCODE -ne 0) { throw ('tar exited with ' + $LASTEXITCODE) }
                         if (Test-Path -LiteralPath (Join-Path $dest 'SOURCE.txt')) {
                             'VT-SHIP source-txt'
-                            [IO.Directory]::Delete($dest, $true)
+                            Remove-VtTree $dest (Split-Path -Parent $dest)
                         } else {
                             [IO.File]::WriteAllText((Join-Path $dest 'SOURCE.txt'), $record + 'sha256=' + $sha256 + "`n", (New-Object Text.UTF8Encoding $false))
                             'VT-SHIP shipped ' + $got
                         }
                     } catch {
-                        if ([IO.Directory]::Exists($dest)) { [IO.Directory]::Delete($dest, $true) }
+                        Remove-VtTree $dest (Split-Path -Parent $dest)
                         throw
                     }
                 }

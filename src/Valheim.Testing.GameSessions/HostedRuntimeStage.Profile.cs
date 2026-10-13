@@ -212,7 +212,7 @@ internal static partial class HostedRuntimeStage
             string names = string.Join('\n', selected.Keys.Select(Encode));
             var applied = await host.RunAsync(windows ? WindowsApply : BashApply,
                 new Dictionary<string, string> {
-                    ["runtime"] = destination, ["stage"] = staging, ["files"] = names,
+                    ["runtime"] = destination, ["stage"] = staging, ["parent"] = HostPath.Parent(destination), ["files"] = names,
                     ["loader"] = loaderPackage == null ? "" : string.Join('\n', InstallPins.LoaderEntries),
                     ["preserveConfig"] = preserveSourceSettings ? "true" : "false",
                 }, timeout, cancellation).ConfigureAwait(false);
