@@ -27,7 +27,8 @@ public sealed record WorldIdentity(string Name, string SeedName, int Seed, long 
     {
         fixture = Path.GetFullPath(fixture);
         if (!Directory.Exists(fixture)) throw new DirectoryNotFoundException("The fixture world does not exist: " + fixture);
-        var relative = Directory.EnumerateFiles(fixture, "*", SearchOption.AllDirectories).Select(path => Path.GetRelativePath(fixture, path)).ToList();
+        var relative = Directory.EnumerateFiles(fixture, "*", SearchOption.AllDirectories).Select(path => Path.GetRelativePath(fixture, path))
+            .Where(path => path != WorldFixture.ProvenanceFile).ToList();
         string name = HostedWorld.NameOf(relative);
         var metadata = relative.Select(path => (Path: path, Match: Regex.Match(path.Replace('\\', '/'), @"^" + Regex.Escape(name) + @"/_main\.(\d+)\.fwl2$", RegexOptions.CultureInvariant)))
             .Where(file => file.Match.Success).OrderBy(file => long.Parse(file.Match.Groups[1].Value, CultureInfo.InvariantCulture)).Select(file => file.Path).ToList();

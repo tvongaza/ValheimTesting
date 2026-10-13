@@ -103,7 +103,7 @@ public sealed class ToolkitProvenanceTests : IDisposable
         report.Write(_output);
         using var result = JsonDocument.Parse(File.ReadAllText(Path.Combine(_output, "result.json")));
         var root = result.RootElement;
-        Assert.Equal(4, root.GetProperty("Schema").GetInt32());
+        Assert.Equal(5, root.GetProperty("Schema").GetInt32());
         var toolkit = root.GetProperty("Toolkit");
         var packages = toolkit.GetProperty("Packages").EnumerateArray().ToDictionary(package => package.GetProperty("Id").GetString()!);
         // Game's own references are listed even before anything used them: Valheim.Testing and the transport.

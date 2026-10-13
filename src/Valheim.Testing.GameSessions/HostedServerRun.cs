@@ -3,6 +3,8 @@ using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using Valheim.Testing.Game;
+using valheimCLI;
+using valheim_cli.Testing;
 
 namespace Valheim.Testing.GameSessions;
 
@@ -27,6 +29,10 @@ internal sealed class HostedServerRun : IServerPlacement
     private HostListing? _runtime;
     private HostListing? _loader;
     private InstallPins? _preparedPins;
+    private IReadOnlyDictionary<string, string>? _preparedPluginFiles;
+    private readonly SortedDictionary<string, string> _pinOrigins = new(StringComparer.Ordinal);
+    private readonly SortedDictionary<string, string> _sourceCliPins = new(StringComparer.Ordinal);
+    private IReadOnlyList<string> _replacedCliPaths = [];
     private HostedWorld? _macWorld;
     private MacServerLists? _macLists;
     private bool _serverMayRun;
@@ -96,6 +102,12 @@ internal sealed class HostedServerRun : IServerPlacement
     public string WorldDirectory { get; private set; }
     /// <summary>The profile's game files on the host (the listing a campaign's server profile records too), once staged.</summary>
     public IReadOnlyDictionary<string, string> RuntimeHashes => _runtime?.Files ?? new Dictionary<string, string>();
+    /// <summary>The standalone run's pin groups and whether each came from the input plan or the staged profile.</summary>
+    internal IReadOnlyDictionary<string, string> PinOrigins => _pinOrigins;
+    /// <summary>Source ValheimCLI pins the input plan supplied and the run checked before replacing those files.</summary>
+    internal IReadOnlyDictionary<string, string> SourceCliPins => _sourceCliPins;
+    /// <summary>Install-relative ValheimCLI paths the standalone profile replaced with its coherent staged set.</summary>
+    internal IReadOnlyList<string> ReplacedCliPaths => _replacedCliPaths;
 
     /// <summary>Refuses an environment and plan that cannot run a server on the environment's server host, before anything is touched.</summary>
     public static HostedServerRun Create(ResolvedEnvironment profile, ServerRunPlan plan, string runner, IHostedRunHooks? hooks = null) =>
@@ -212,8 +224,8 @@ internal sealed class HostedServerRun : IServerPlacement
                 await JournalAsync(Host, Role.Host, "server", _macLists.Captured(), cancellation).ConfigureAwait(false);
                 await _macLists.IsolateAsync(HostedTimeouts.Quick, cancellation).ConfigureAwait(false);
             }).ConfigureAwait(false);
-        // Only an unpinned plan may leave out the manifest; the install is then recorded as found.
-        bool verified = pinned || plan.Runtime.Sha256.Count != 0;
+        // A supplied manifest remains an expected pin. A standalone strict run may omit it and bind the profile listing below.
+        bool verified = plan.Runtime.Sha256.Count != 0;
         if (Prepared)
         {
             // The campaign's preparation made the one profile; it must still be exactly what the preparation listed and bound.
@@ -223,11 +235,13 @@ internal sealed class HostedServerRun : IServerPlacement
                 if (verified) HostInstall.RequireSame(plan.Runtime.Sha256, _runtime, "prepared runtime");
                 _loader = GameDirectory == RuntimeDirectory ? _runtime :
                     await HostInstall.ListAsync(Host, RuntimeDirectory, HostedTimeouts.Long, null, cancellation).ConfigureAwait(false);
+                plan.RequireStagedPlugins();
             }).ConfigureAwait(false);
             return;
         }
         await report.StepAsync(StepPhase.Setup, verified ? "check the server host's install against the pinned runtime and stage its profile"
-            : "stage the server's profile from its install as found", () => StageProfileAsync(report, plan, pinned, verified, cancellation)).ConfigureAwait(false);
+            : pinned ? "stage the server's profile and pin it as found" : "stage the server's profile from its install as found",
+            () => StageProfileAsync(report, plan, pinned, verified, cancellation)).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -243,6 +257,9 @@ internal sealed class HostedServerRun : IServerPlacement
     /// </summary>
     private async Task StageProfileAsync(ScenarioReport report, ServerRunPlan plan, bool pinned, bool verified, CancellationToken cancellation)
     {
+        InstallPins? expectedRuntimePins = plan.RuntimePins;
+        var pluginPinsFromPlan = plan.Pins.Where(pin => !Expectations.IsWorldKey(pin.Key))
+            .ToDictionary(pin => pin.Key, pin => pin.Value, StringComparer.Ordinal);
         var bundle = _hooks.CliSet() ?? throw new InvalidDataException("This build of Valheim.Testing.GameSessions carries no pinned ValheimCLI bundle " +
             "(it was built without one); a standalone dedicated server's profile stages it in place of the install's own ValheimCLI.");
         var (cli, cliFiles, setFolder) = InstallSelection.ReadCliSet(bundle.Manifest);
@@ -264,11 +281,49 @@ internal sealed class HostedServerRun : IServerPlacement
         if (verified)
             HostInstall.RequireSame(HostInstall.WithoutSkipped(plan.Runtime.Sha256, HostedRuntimeStage.RuntimeSkips, source.Names), source, "server install",
                 source.Files.Keys.Where(path => HostInstall.Skipped(path, HostedRuntimeStage.RuntimeSkips, source.Names)));
+        Dictionary<string, string>? stagedPins = null;
+        var stagedPinsFromPlan = new HashSet<string>(StringComparer.Ordinal);
         if (pinned)
-            HostInstall.CheckPins(RequiredRuntimePins(plan),
-                source, "server install");
-        if (selection.Replaced.Count != 0)
-            Console.WriteLine($"server: the profile stages ValheimCLI {cli.Build} in place of the install's own {string.Join(", ", selection.Replaced)}.");
+        {
+            if (plan.RuntimePins != null) HostInstall.CheckPins(plan.RuntimePins, source, "server install");
+            stagedPins = InstallSelection.BindCliPins(HostedCampaignPreparation.PluginPins("server", selection.Files, pluginPinsFromPlan), cli, setFolder);
+            var cliSetFiles = cliFiles.Located.Select(file => Path.GetFullPath(file.Path)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var sourceCliExpected = pluginPinsFromPlan.Where(pin => CliBuildManifest.IsCliPlugin(pin.Key) &&
+                (!stagedPins.TryGetValue(pin.Key, out string? staged) || !staged.Equals(pin.Value, StringComparison.OrdinalIgnoreCase)))
+                .ToDictionary(pin => pin.Key, pin => pin.Value, StringComparer.Ordinal);
+            var sourcePins = sourceCliExpected.Count == 0 ? new Dictionary<string, string>(StringComparer.Ordinal) :
+                HostedCampaignPreparation.PluginPins("server install", selection.ReplacedFiles, sourceCliExpected,
+                    selection.Files.Where(file => !cliSetFiles.Contains(Path.GetFullPath(file.Source))).Concat(selection.ReplacedFiles));
+            foreach (var (plugin, expected) in pluginPinsFromPlan)
+            {
+                if (stagedPins.TryGetValue(plugin, out string? found) && found.Equals(expected, StringComparison.OrdinalIgnoreCase))
+                {
+                    stagedPinsFromPlan.Add(plugin);
+                    continue;
+                }
+                // A profile always replaces the install's own ValheimCLI with the toolkit's coherent set. A supplied pin for
+                // that source build remains an expected input and is checked before replacement; the staged pin is observed.
+                sourcePins.TryGetValue(plugin, out string? replaced);
+                if (CliBuildManifest.IsCliPlugin(plugin) && replaced != null && replaced.Equals(expected, StringComparison.OrdinalIgnoreCase))
+                {
+                    _sourceCliPins[plugin] = replaced;
+                    continue;
+                }
+                string detail = found == null ? "the staged selection does not contain it." : $"the staged build is {found}.";
+                if (CliBuildManifest.IsCliPlugin(plugin) && replaced != null)
+                    detail = $"the staged build is {found}, and the install build it replaces is {replaced}.";
+                throw new InvalidOperationException($"The server profile would not hold the plan's pinned plugin {plugin}={expected}: " + detail);
+            }
+        }
+        _replacedCliPaths = selection.Replaced.Order(StringComparer.Ordinal).ToArray();
+        if (_replacedCliPaths.Count != 0)
+        {
+            string replaced = string.Join(", ", _replacedCliPaths);
+            Console.WriteLine($"server: the profile stages ValheimCLI {cli.Build} in place of the install's own {replaced}.");
+            report.Provenance["replacedValheimCliPaths"] = replaced;
+        }
+        if (_sourceCliPins.Count != 0)
+            report.Provenance["sourceValheimCliPins"] = string.Join(" ", _sourceCliPins.Select(pin => pin.Key + "=" + pin.Value));
         // Journalled before the profile: an interrupted preparation leaves a record of every path it may own.
         await JournalAsync(Host, Role.Host, "server", JournalEntry.Of(JournalEntry.CopyIntended, ("runtime", RuntimeDirectory), ("stage", StagingDirectory),
             ("parent", RunDirectory), ("runtimeKind", "server"), ("launchRoot", Role.Install)), cancellation).ConfigureAwait(false);
@@ -300,13 +355,30 @@ internal sealed class HostedServerRun : IServerPlacement
         await JournalAsync(Host, Role.Host, "server", JournalEntry.Of(JournalEntry.CopyDone, ("runtime", RuntimeDirectory),
             ("files", profile.Loader.Files.Count.ToString(CultureInfo.InvariantCulture)), ("runtimeKind", "server"),
             ("launchRoot", profile.GameRoot)), cancellation).ConfigureAwait(false);
-        if (verified) plan.Runtime = new PinnedDirectory { Source = profile.Game.Root, Sha256 = new Dictionary<string, string>(profile.Game.Files, StringComparer.Ordinal) };
         if (pinned)
         {
+            plan.Runtime = new PinnedDirectory { Source = profile.Game.Root, Sha256 = new Dictionary<string, string>(profile.Game.Files, StringComparer.Ordinal) };
             plan.RuntimePins = _preparedPins = profile.Pins;
-            plan.Pins = InstallSelection.BindCliPins(plan.Pins, cli, setFolder);
+            if (stagedPins == null) throw new InvalidOperationException("The standalone profile's staged plugin pins were not prepared.");
+            plan.Pins = plan.Pins.Where(pin => Expectations.IsWorldKey(pin.Key)).Concat(stagedPins)
+                .ToDictionary(pin => pin.Key, pin => pin.Value, StringComparer.Ordinal);
+            _preparedPluginFiles = ProfilePluginFiles(profile.Loader);
+            _pinOrigins["runtimeManifest"] = verified ? "plan" : "observed";
+            _pinOrigins["runtimePins"] = expectedRuntimePins != null && Same(expectedRuntimePins, profile.Pins) ? "plan" : "observed";
+            foreach (string plugin in stagedPins.Keys.Order(StringComparer.Ordinal))
+                _pinOrigins["plugins." + plugin] = stagedPinsFromPlan.Contains(plugin) ? "plan" : "observed";
+            plan.RequireStagedPlugins();
         }
     }
+
+    private static bool Same(InstallPins expected, InstallPins enforced) =>
+        expected.Game.Equals(enforced.Game, StringComparison.OrdinalIgnoreCase) &&
+        expected.Loader.Equals(enforced.Loader, StringComparison.OrdinalIgnoreCase) &&
+        expected.Patchers.Equals(enforced.Patchers, StringComparison.OrdinalIgnoreCase);
+
+    private static Dictionary<string, string> ProfilePluginFiles(HostListing profile) => profile.Files
+        .Where(file => HostedRuntimeStage.IsStartupPlugin(file.Key))
+        .ToDictionary(file => file.Key, file => file.Value, profile.Names);
 
     /// <summary>For a crossplay plan: the server's <c>libparty.so</c> loads on the server host (<see cref="CrossplayLibraries"/>).</summary>
     public Task CheckCrossplayAsync(ScenarioReport report, ServerRunPlan plan, CancellationToken cancellation)
@@ -371,7 +443,7 @@ internal sealed class HostedServerRun : IServerPlacement
         JournalEntry.Of(JournalEntry.CopyDone, ("runtime", WorldDirectory), ("files", listing.Files.Count.ToString(CultureInfo.InvariantCulture)), ("verified", "true"));
 
     private static InstallPins RequiredRuntimePins(ServerRunPlan plan) => plan.RuntimePins ??
-        throw new ArgumentException("Pin the runtime's game build, loader and patchers in runtimePins, or opt out explicitly with \"pinning\": \"none\".");
+        throw new InvalidOperationException("The standalone profile was not bound to its observed runtime pins.");
 
     /// <summary>The server's executable and its pins, on the listings of its profile and its game, before anything launches.</summary>
     public void CheckRuntime(ScenarioReport report, ServerRunPlan plan, bool pinned)
@@ -433,7 +505,7 @@ internal sealed class HostedServerRun : IServerPlacement
         {
             HostInstall.CheckProfilePinsAsync(Host, _preparedPins, GameDirectory, LoaderDirectory, source,
                 "prepared server profile before launch", HostedTimeouts.Long, cancellation,
-                Role.PreparedSourceFiles).GetAwaiter().GetResult();
+                Role.PreparedSourceFiles, _preparedPluginFiles).GetAwaiter().GetResult();
         }
         string local = Path.Combine(output, "boot-" + n), bootDirectory = HostPath.Join(RunDirectory, "boot-" + n);
         // The stop's quit budget, journalled so env recover gives the server the same time to save (#665).

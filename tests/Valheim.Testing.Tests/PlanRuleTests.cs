@@ -76,10 +76,10 @@ public sealed class PlanRuleTests
         Assert.Equal("runtime/extra", plan.Expand("{runtime}/extra", "runtime", "world"));
     }
     [Theory][InlineData("any")][InlineData("12345678")][InlineData("absent")]
-    public void ARequiredPluginNeedsAFullMd5(string pin) { var plan = Valid(); plan.Pins["my.mod"] = pin; Refused(plan); }
-    [Fact] public void AMissingRequiredPluginIsRefused() { var plan = Valid(); plan.Pins.Remove("my.mod"); Refused(plan); }
+    public void AListedPluginNeedsAFullMd5(string pin) { var plan = Valid(); plan.Pins["my.mod"] = pin; Refused(plan); }
+    [Fact] public void AMissingPluginPinIsObservedAfterStaging() { var plan = Valid(); plan.Pins.Remove("my.mod"); Validate(plan); }
     [Fact] public void EveryOtherListedPluginNeedsAnExactPinToo() { var plan = Valid(); plan.Pins["other.mod"] = "any"; Refused(plan); plan.Pins["other.mod"] = new('3', 32); Validate(plan); }
-    [Fact] public void ThePersistentWorldIdentityIsRequired() { var plan = Valid(); plan.Pins.Remove("worlduid"); Refused(plan); }
+    [Fact] public void AnOmittedWorldIdentityIsObservedFromTheFixture() { var plan = Valid(); plan.Pins.Remove("worlduid"); Validate(plan); }
     [Fact] public void AWorldFileHashPinWouldGoStaleAfterASaveAndIsRefused() { var plan = Valid(); plan.Pins["worldfiles"] = new('f', 32); Refused(plan); }
     [Theory][InlineData("")][InlineData("valheim_server.exe")][InlineData("valheim_server.x86_64")]
     public void TheExecutableIsOptionalOrAKnownServerName(string file) { var plan = Valid(); plan.Executable = file; Validate(plan); }
@@ -132,10 +132,10 @@ public sealed class PlanRuleTests
     [Fact] public void AGraphicalServerIsRefused() { var plan = Valid(); plan.Arguments = ["-batchmode", "-savedir", "{world}"]; Refused(plan); }
     [Theory][InlineData(80)][InlineData(70000)]
     public void APortOutsideTheUnprivilegedRangeIsRefused(int port) { var plan = Valid(); plan.Port = port; Refused(plan); }
-    [Fact] public void RelativeOrUnhashedSourcesAreRefused()
+    [Fact] public void RelativeOrMalformedSourcesAreRefusedButHashesMayBeObserved()
     {
         var plan = Valid(); plan.World.Source = "world"; Refused(plan);
-        plan = Valid(); plan.Runtime.Sha256.Clear(); Refused(plan);
+        plan = Valid(); plan.Runtime.Sha256.Clear(); plan.World.Sha256.Clear(); Validate(plan);
         plan = Valid(); plan.World.Sha256["worlds_local/test.db"] = "abc"; Refused(plan);
     }
 

@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Valheim.Testing.Game;
+using valheimCLI;
 
 namespace Valheim.Testing.GameSessions;
 
@@ -98,10 +99,11 @@ public sealed class HostedRunOptions<TPlan> where TPlan : class
 /// <item>Reads the plan and places its server: on this machine, from the install the plan's runtime names, or with
 /// <c>--inventory</c> on a host (below); checks the host before writing anything there.</item>
 /// <item>Records provenance: plan, runner and toolkit hashes, mode, platform, <c>crossplay</c>, the profile, the world copy and their input hashes.</item>
-/// <item>Takes the host's lock, checks the install against the pinned runtime and <see cref="ServerRunPlan.RuntimePins"/>,
-/// stages the server's disposable loader profile from it (the install is never changed) and binds the plan to it, copies and
-/// verifies the pinned world (kept for inspection) and places it beside the profile, and checks the profile's executable and
-/// its game build, loader and patchers (recorded as provenance).</item>
+/// <item>Takes the host's lock, checks every runtime or plugin pin the plan supplies, stages the server's disposable loader
+/// profile from the install (which is never changed), and binds omitted pins from that profile. It copies the world, checking
+/// a supplied manifest or pinning its hashes as found, reads a world UID from the fixture only when the plan supplied neither
+/// <c>worlduid</c> nor <c>world</c>, places the copy beside the profile, and checks the profile's executable and its game build,
+/// loader, patchers, required plugins and staged plugin set before launch.</item>
 /// <item><c>validate</c> stops there. Otherwise: checks the CLI port is free, starts the <see cref="GameSession"/>'s owned
 /// server (<see cref="ServerActor"/>) from the profile with per-boot logs (<c>boot-N.*</c>) and recorded commands
 /// (<c>connection-N.jsonl</c>), waits on the dedicated startup events, establishes test access and runs the scenario with the
@@ -115,6 +117,8 @@ public sealed class HostedRunOptions<TPlan> where TPlan : class
 /// <see cref="EnvironmentPinning.Warning"/> once the plan is read, copies fixtures without a manifest as found, records the
 /// runtime's hashes without checking them, and marks <c>result.json</c>, <c>junit.xml</c>, <c>input-hashes.json</c>,
 /// <c>boot-N.process.json</c>, <c>connection-N.jsonl</c> and the result banner "environment not pinned".
+/// A default strict standalone plan with omitted pins is different: the run enforces the values it observed from the staged
+/// profile and fixture, records their <c>PinOrigins</c> as <c>observed</c>, and never carries the unpinned marker.
 /// <para>
 /// Without <c>--inventory</c> the server's host is this machine (a <c>local</c> host whose one environment is the plan's install);
 /// with <c>--inventory &lt;environments.json&gt;</c> it is a host of the private environment inventory instead:
@@ -665,18 +669,60 @@ public static class PinnedServerRun
                     report.Provenance["freeBytesBeforeCopies"] = free.ToString(CultureInfo.InvariantCulture);
             });
             phase = StepPhase.Setup;
-            // Only an unpinned plan may leave out a manifest; its copy is then recorded as found.
-            bool Verified(PinnedDirectory fixture) => pinned || fixture.Sha256.Count != 0;
+            // A supplied manifest remains an expected pin. A strict standalone run binds an omitted one from the copy as found.
+            bool Verified(PinnedDirectory fixture) => fixture.Sha256.Count != 0;
             WorldFixture CopyOf(PinnedDirectory fixture) =>
                 Verified(fixture) ? WorldFixture.Copy(fixture.Source, output, fixture.Sha256) : WorldFixture.CopyAsFound(fixture.Source, output);
+            bool worldManifestFromPlan = plan.World.Sha256.Count != 0;
+            // world=any or world=<name> is already a plan-supplied identity expectation. In particular, prepare-server uses
+            // world=any with an intentionally empty new-world directory that the game populates on first boot.
+            bool worldIdentityFromPlan = plan.Pins.ContainsKey("worlduid") || plan.Pins.ContainsKey("world");
             await hosted.LockAndPrepareRuntimeAsync(report, plan, pinned, cancellation.Token).ConfigureAwait(false);
-            report.Step(StepPhase.Setup, Verified(plan.World) ? "copy and verify pinned world" : "copy unpinned world as found", () => { world = CopyOf(plan.World); world.Preserve = true; });
+            report.Step(StepPhase.Setup, Verified(plan.World) ? "copy and verify pinned world" : pinned ? "copy the world and pin it as found" : "copy unpinned world as found", () =>
+            {
+                world = CopyOf(plan.World); world.Preserve = true;
+                if (!pinned) return;
+                if (!worldManifestFromPlan)
+                    plan.World = new PinnedDirectory { Source = world.DirectoryPath, Sha256 = new Dictionary<string, string>(world.SourceHashes, StringComparer.Ordinal) };
+                if (!worldIdentityFromPlan)
+                {
+                    var pins = new Dictionary<string, string>(plan.Pins, StringComparer.Ordinal)
+                    {
+                        ["worlduid"] = WorldIdentity.Read(Directory.Exists(Path.Combine(world.DirectoryPath, "worlds_local"))
+                            ? Path.Combine(world.DirectoryPath, "worlds_local") : world.DirectoryPath).UidText,
+                    };
+                    plan.Pins = pins;
+                }
+            });
             await hosted.ShipWorldAsync(report, world!.DirectoryPath, output, cancellation.Token).ConfigureAwait(false);
             string runtimeDirectory = hosted.RuntimeDirectory, worldDirectory = hosted.WorldDirectory;
             report.Provenance["runtime"] = runtimeDirectory; report.Provenance["world"] = world!.DirectoryPath;
             report.Provenance["hostWorld"] = worldDirectory;
+            var pinOrigins = new SortedDictionary<string, string>(StringComparer.Ordinal);
+            // ApplyTo already rewrites a campaign to its prepared profiles and fixture. PinOrigins describes only a standalone
+            // input plan whose supplied expectations can be distinguished from values this run observed and bound.
+            if (pinned && campaign == null)
+            {
+                foreach (var origin in hosted.PinOrigins) pinOrigins.Add(origin.Key, origin.Value);
+                pinOrigins["worldManifest"] = worldManifestFromPlan ? "plan" : "observed";
+                pinOrigins["worldUid"] = worldIdentityFromPlan ? "plan" : "observed";
+                report.RecordPinOrigins(pinOrigins);
+                if (pinOrigins.Values.Contains("observed", StringComparer.Ordinal))
+                    report.Provenance["pins"] = "pins observed, not reviewed";
+            }
             File.WriteAllText(Path.Combine(output, "input-hashes.json"), JsonSerializer.Serialize(
-                EnvironmentPinning.Stamp(new() { ["runtime"] = hosted.RuntimeHashes, ["world"] = world.SourceHashes }, pinned), new JsonSerializerOptions { WriteIndented = true }));
+                EnvironmentPinning.Stamp(new()
+                {
+                    ["runtime"] = hosted.RuntimeHashes,
+                    ["runtimePins"] = pinned ? plan.RuntimePins : null,
+                    ["plugins"] = pinned ? plan.Pins.Where(pin => !Expectations.IsWorldKey(pin.Key))
+                        .ToDictionary(pin => pin.Key, pin => pin.Value, StringComparer.Ordinal) : null,
+                    ["sourceValheimCliPins"] = pinned ? hosted.SourceCliPins : null,
+                    ["replacedValheimCliPaths"] = pinned ? hosted.ReplacedCliPaths : null,
+                    ["world"] = world.SourceHashes,
+                    ["worldUid"] = pinned ? plan.Pins.GetValueOrDefault("worlduid") : null,
+                    ["pinOrigins"] = pinned ? pinOrigins : null,
+                }, pinned), new JsonSerializerOptions { WriteIndented = true }));
             hosted.CheckRuntime(report, plan, pinned);
             await hosted.CheckCrossplayAsync(report, plan, cancellation.Token).ConfigureAwait(false);
             if (mode == "validate") report.Step(StepPhase.Setup, "prepared only; no game launched", () => { });

@@ -40,6 +40,7 @@ public static class HostInstall
     private static readonly Regex Sha256Line = new(@"^(\\?)([0-9a-f]{64}) [ *]\./(.+)$", RegexOptions.CultureInvariant);
     private static readonly Regex FileLine = new(@"^VT-FILE ([0-9a-f]{64}) ([A-Za-z0-9+/=]+)$", RegexOptions.CultureInvariant);
     private static readonly Regex GameAssembly = new(@"^(?<managed>[^/]+_Data/Managed|[^/]+\.app/Contents/Resources/Data/Managed|valheim_server/Data/Managed)/assembly_valheim\.dll$", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+    internal static readonly string[] ProfilePinPaths = [.. InstallPins.PinPaths, "BepInEx/plugins", "BepInEx/scripts"];
 
     /// <summary>
     /// Hashes every regular file under <paramref name="root"/> on the host (links are refused, as <see cref="WorldFixture"/>
@@ -235,17 +236,27 @@ public static class HostInstall
     // both the launch folder and original game immediately before a profile process starts.
     internal static async Task CheckProfilePinsAsync(IGameHost host, InstallPins pinned, string gameRoot,
         string loaderRoot, string sourceRoot, string kind, TimeSpan timeout, CancellationToken cancellation,
-        IReadOnlyDictionary<string, string>? sourceFiles = null)
+        IReadOnlyDictionary<string, string>? sourceFiles = null,
+        IReadOnlyDictionary<string, string>? pluginFiles = null)
     {
-        var game = await ListAsync(host, gameRoot, timeout, InstallPins.PinPaths, cancellation).ConfigureAwait(false);
+        bool oneProfileRoot = loaderRoot == gameRoot;
+        var game = await ListAsync(host, gameRoot, timeout, pluginFiles != null && oneProfileRoot ? ProfilePinPaths : InstallPins.PinPaths, cancellation).ConfigureAwait(false);
         var loader = loaderRoot == gameRoot ? game :
-            await ListAsync(host, loaderRoot, timeout, InstallPins.PinPaths, cancellation).ConfigureAwait(false);
+            await ListAsync(host, loaderRoot, timeout, pluginFiles == null ? InstallPins.PinPaths : null, cancellation).ConfigureAwait(false);
         var source = sourceFiles == null && sourceRoot == gameRoot ? game :
             await ListAsync(host, sourceRoot, timeout, sourceFiles == null ? InstallPins.PinPaths : null, cancellation).ConfigureAwait(false);
         if (sourceFiles != null) RequireSame(sourceFiles, source, "source game before profile launch");
         if (!Pins(source, loader).Game.Equals(pinned.Game, StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException($"The source game changed after its loader profile was staged for {kind}; refuse this launch and prepare a new profile.");
         CheckPins(pinned, game, loader, kind);
+        if (pluginFiles != null)
+        {
+            var found = loader.Files.Where(file => file.Key.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) &&
+                (file.Key.StartsWith("BepInEx/plugins/", StringComparison.OrdinalIgnoreCase) ||
+                 file.Key.StartsWith("BepInEx/scripts/", StringComparison.OrdinalIgnoreCase)))
+                .ToDictionary(file => file.Key, file => file.Value, loader.Names);
+            RequireSame(pluginFiles, new HostListing(loader.HostName, loader.Shell, loader.Root, found, []), kind + " plugins");
+        }
     }
 
     private static HostListing Combined(HostListing game, HostListing profile)

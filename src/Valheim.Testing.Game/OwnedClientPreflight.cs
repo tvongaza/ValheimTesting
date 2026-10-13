@@ -96,6 +96,17 @@ internal static class OwnedClientPreflight
     /// </summary>
     internal static void RequireScriptsLoad(string install, IReadOnlyDictionary<string, string> pins, Dictionary<string, List<string>> located)
     {
+        string config = Path.Combine(install, Config, ScriptEngineConfig);
+        RequireScriptsLoad(pins, located, File.Exists(config) ? config : null);
+    }
+
+    /// <summary>
+    /// The ScriptEngine startup check for an already selected profile payload. <paramref name="config"/> is the selected
+    /// ScriptEngine configuration file, or null when the payload selects none. Paths in <paramref name="located"/> are the
+    /// profile-relative DLL paths that the same payload selection will stage.
+    /// </summary>
+    internal static void RequireScriptsLoad(IReadOnlyDictionary<string, string> pins, Dictionary<string, List<string>> located, string? config)
+    {
         string scripts = Slash(Scripts) + "/";
         var inScripts = located.Where(entry => entry.Value[0].StartsWith(scripts, StringComparison.OrdinalIgnoreCase)).Select(entry => $"{entry.Key} ({entry.Value[0]})").Order(StringComparer.Ordinal).ToList();
         if (inScripts.Count == 0) return;
@@ -109,11 +120,10 @@ internal static class OwnedClientPreflight
             !enginePaths[0].StartsWith(Slash(Plugins) + "/", StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException($"The plan pins {listed} in {Slash(Scripts)}, but ScriptEngine ({ScriptEngine}) must itself be installed in {Slash(Plugins)}. " +
                 "A ScriptEngine DLL in scripts cannot load itself or the other scripts; move and pin it in plugins, " + remedy);
-        string config = Path.Combine(install, Config, ScriptEngineConfig);
-        string? loadOnStart = File.Exists(config) ? IniValue(config, "General", "LoadOnStart") : null;
+        string? loadOnStart = config != null ? IniValue(config, "General", "LoadOnStart") : null;
         if (!string.Equals(loadOnStart, "true", StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException($"The plan pins {listed} in {Slash(Scripts)}, but ScriptEngine will not load them at start: " +
-                (File.Exists(config) ? $"{Slash(Config)}/{ScriptEngineConfig} has [General] LoadOnStart = {loadOnStart ?? "(not set)"}" : $"{Slash(Config)}/{ScriptEngineConfig} does not exist yet, and LoadOnStart defaults to false") +
+                (config != null ? $"{Slash(Config)}/{ScriptEngineConfig} has [General] LoadOnStart = {loadOnStart ?? "(not set)"}" : $"{Slash(Config)}/{ScriptEngineConfig} does not exist yet, and LoadOnStart defaults to false") +
                 ", so ScriptEngine loads scripts only on its reload key and the client never answers. Set [General] LoadOnStart = true, " + remedy);
     }
 

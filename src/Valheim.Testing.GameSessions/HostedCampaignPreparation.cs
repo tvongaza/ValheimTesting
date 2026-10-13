@@ -185,7 +185,7 @@ public sealed class PreparedHostedCampaign : IAsyncDisposable
             Sha256 = new Dictionary<string, string>(Listings["server"].Files, StringComparer.Ordinal) };
         plan.RuntimePins = Pins("server");
         // The selected files' own hashes replace the plan's plugin pins; its world expectations stay, worlduid is the fixture's.
-        plan.Pins = Bound(plan.Pins, PluginPins("server"));
+        plan.Pins = Bound(plan.Pins, HostedCampaignPreparation.PluginPins("server", Selections["server"], plan.Pins));
         plan.Pins["worlduid"] = identity.UidText;
         plan.Port = _profile.Server.CliPort;
         foreach (var (name, client) in clients)
@@ -236,7 +236,7 @@ public sealed class PreparedHostedCampaign : IAsyncDisposable
             client.PreparedSourceGameRoot = client.Install;
             client.PreparedSourceGameHash = client.InstallPins.Game;
         }
-        client.Pins = Bound(client.Pins, PluginPins(name));
+        client.Pins = Bound(client.Pins, HostedCampaignPreparation.PluginPins(name, Selections[name], client.Pins));
         client.Character = manifest.Clients[name].Character?.FileName ??
             throw new ArgumentException($"Client {name} has no registered character.");
         string path = Path.Combine(Path.GetFullPath(outputDirectory), name + "-cli-manifest.json");
@@ -622,20 +622,70 @@ public static class HostedCampaignPreparation
             observedSteamIds, sourceListings, characterDirectories) { Loaders = loaders };
     }
 
-    /// <summary>The BepInEx plugins among a role's selected files, by GUID, with each DLL's MD5.</summary>
-    internal static Dictionary<string, string> PluginPins(string role, IEnumerable<HostedRuntimeFile> files)
+    /// <summary>
+    /// The startup-loaded BepInEx plugins among a role's selected files, by GUID, with each DLL's MD5. DLLs in
+    /// <c>BepInEx/scripts</c> are included only when the selected ScriptEngine is itself in <c>BepInEx/plugins</c> and has
+    /// <c>LoadOnStart = true</c>. A non-loading script is otherwise left out of the in-game pin set; when
+    /// <paramref name="planned"/> explicitly pins one, the existing ScriptEngine startup refusal explains why it cannot load.
+    /// <paramref name="startupFiles"/> may describe the whole payload whose startup settings apply while <paramref name="files"/>
+    /// limits which DLLs are hashed, as when checking only ValheimCLI files that profile staging replaces.
+    /// </summary>
+    internal static Dictionary<string, string> PluginPins(string role, IEnumerable<HostedRuntimeFile> files,
+        IReadOnlyDictionary<string, string>? planned = null, IEnumerable<HostedRuntimeFile>? startupFiles = null)
     {
+        var selection = files.ToArray();
+        var startup = startupFiles?.ToArray() ?? selection;
         var pins = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var file in files.Where(file => file.RelativePath.StartsWith("BepInEx/plugins/", StringComparison.OrdinalIgnoreCase) &&
-                                               file.RelativePath.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)))
+        var scripts = new List<(HostedRuntimeFile File, PluginAssembly Metadata)>();
+        static bool In(string path, string folder) => path.StartsWith("BepInEx/" + folder + "/", StringComparison.OrdinalIgnoreCase);
+        static PluginAssembly? Read(HostedRuntimeFile file)
         {
-            PluginAssembly metadata;
-            try { metadata = PluginMetadata.Read(file.Source); }
-            catch (Exception error) when (error is BadImageFormatException or InvalidDataException) { continue; }
+            try { return PluginMetadata.Read(file.Source); }
+            catch (Exception error) when (error is BadImageFormatException or InvalidDataException) { return null; }
+        }
+        void Add(HostedRuntimeFile file, PluginAssembly metadata)
+        {
             foreach (var plugin in metadata.Plugins)
                 if (!pins.TryAdd(plugin.Guid, FileHash.Md5(file.Source)))
                     throw new InvalidDataException($"The {role} runtime selects BepInEx plugin {plugin.Guid} more than once.");
         }
+        foreach (var file in selection.Where(file => HostedRuntimeStage.IsStartupPlugin(file.RelativePath)))
+            if (Read(file) is { } metadata)
+            {
+                if (In(file.RelativePath, "scripts")) scripts.Add((file, metadata));
+                else Add(file, metadata);
+            }
+
+        var startupLocated = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        foreach (var file in startup.Where(file => HostedRuntimeStage.IsStartupPlugin(file.RelativePath)))
+            if (Read(file) is { } metadata)
+                foreach (var plugin in metadata.Plugins)
+                {
+                    if (!startupLocated.TryGetValue(plugin.Guid, out var paths)) startupLocated[plugin.Guid] = paths = [];
+                    paths.Add(file.RelativePath);
+                }
+        const string scriptEngineConfig = "BepInEx/config/" + OwnedClientPreflight.ScriptEngineConfig;
+        string? config = startup.FirstOrDefault(file => file.RelativePath.Equals(scriptEngineConfig, StringComparison.OrdinalIgnoreCase))?.Source;
+        bool scriptsLoad = startupLocated.TryGetValue(OwnedClientPreflight.ScriptEngine, out var enginePaths) &&
+            enginePaths.Any(path => In(path, "plugins")) && config != null &&
+            string.Equals(OwnedClientPreflight.IniValue(config, "General", "LoadOnStart"), "true", StringComparison.OrdinalIgnoreCase);
+        if (!scriptsLoad)
+        {
+            var pinnedScripts = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+            foreach (var (file, metadata) in scripts)
+                foreach (var plugin in metadata.Plugins)
+                    if (planned?.TryGetValue(plugin.Guid, out string? value) == true && value != "absent")
+                        pinnedScripts[plugin.Guid] = [file.RelativePath];
+            if (pinnedScripts.Count != 0)
+            {
+                if (enginePaths != null)
+                    pinnedScripts[OwnedClientPreflight.ScriptEngine] = enginePaths.OrderBy(path => In(path, "plugins") ? 0 : 1).ToList();
+                var startupPins = pinnedScripts.Keys.ToDictionary(plugin => plugin, _ => "any", StringComparer.Ordinal);
+                OwnedClientPreflight.RequireScriptsLoad(startupPins, pinnedScripts, config);
+            }
+            return pins;
+        }
+        foreach (var (file, metadata) in scripts) Add(file, metadata);
         return pins;
     }
 
@@ -717,7 +767,7 @@ public static class HostedCampaignPreparation
     private static void AgreeingPins(Inputs inputs, string role, IReadOnlyDictionary<string, string> pins, List<string> problems)
     {
         if (!inputs.Selections.TryGetValue(role, out var files)) return;
-        var selected = PluginPins(role, files);
+        var selected = PluginPins(role, files, pins);
         foreach (var (guid, value) in pins.Where(pin => !Expectations.IsWorldKey(pin.Key)).OrderBy(pin => pin.Key, StringComparer.Ordinal))
             if (value == "absent" && selected.ContainsKey(guid))
                 problems.Add($"The plan pins plugin {guid} absent for {role}, but its dependency lock selects it.");
@@ -798,6 +848,7 @@ public static class HostedCampaignPreparation
                     if (!File.Exists(file.Source)) throw new FileNotFoundException("The selected file is missing: " + file.Source, file.Source);
                     if (!paths.Add(file.RelativePath)) throw new InvalidDataException("Selected file is installed more than once: " + file.RelativePath);
                 }
+                _ = PluginPins(name, files); // Metadata is checked; only scripts configured to load join the staged pin set.
                 selected[name] = files;
             });
             if (name == "server") continue;

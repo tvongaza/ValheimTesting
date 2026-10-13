@@ -52,14 +52,32 @@ public sealed class ScenarioReport
     /// <summary>
     /// The <c>result.json</c> schema: 2 since steps carry a phase and the four states are reported; 3 since every result names
     /// the toolkit that ran (<see cref="Toolkit"/>) and each actor's in-game plugin hashes (<see cref="Plugins"/>);
-    /// 4 since loaded assembly identities are separate from package coordinates.
+    /// 4 since loaded assembly identities are separate from package coordinates; 5 since standalone runs record whether
+    /// each pin group came from the plan or was observed from what the run staged.
     /// </summary>
-    public int Schema => 4;
+    public int Schema => 5;
     private readonly object _stepGate = new();
     /// <summary>The run name written into both result files and each JUnit phase suite.</summary>
     public string Name { get; }
     /// <summary>Caller-supplied source, fixture and environment facts written into <c>result.json</c>.</summary>
     public Dictionary<string, string> Provenance { get; } = new();
+    private readonly SortedDictionary<string, string> _pinOrigins = new(StringComparer.Ordinal);
+    /// <summary>
+    /// Each standalone-run pin group (<c>runtimeManifest</c>, <c>runtimePins</c>, <c>worldManifest</c>, <c>worldUid</c>
+    /// and <c>plugins.&lt;guid&gt;</c>) to <c>plan</c> when supplied and checked, or <c>observed</c> when bound from what
+    /// the run staged. Other run kinds leave the map empty.
+    /// </summary>
+    public IReadOnlyDictionary<string, string> PinOrigins => _pinOrigins;
+    /// <summary>Records a standalone run's complete pin-origin map before the report is written.</summary>
+    internal void RecordPinOrigins(IEnumerable<KeyValuePair<string, string>> origins)
+    {
+        ArgumentNullException.ThrowIfNull(origins);
+        foreach (var (pin, origin) in origins)
+        {
+            if (origin is not ("plan" or "observed")) throw new ArgumentException("A pin origin is plan or observed.", nameof(origins));
+            _pinOrigins[pin] = origin;
+        }
+    }
     /// <summary>The toolkit packages, ValheimCLI transport and runner that ran, each released, candidate or unreleased (read when written).</summary>
     public ToolkitProvenance Toolkit => ToolkitProvenance.Capture();
     private readonly SortedDictionary<string, IReadOnlyDictionary<string, string>> _plugins = new(StringComparer.Ordinal);
