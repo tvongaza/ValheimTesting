@@ -572,7 +572,8 @@ public sealed partial class HostedServerRunTests : IDisposable
         // Each started process carries its command line's hash, read on the host right after the start (#257 Q2's third fact).
         Assert.All(journal.Where(record => record.Entry.Kind == JournalEntry.ProcessStarted), record =>
             Assert.Equal(FakeServerHost.CommandLineSha256(record.Entry.Fields["pid"]), record.Entry.Fields["commandLineSha256"]));
-        Assert.Equal([JournalEntry.LockHeld, JournalEntry.LockReleased, JournalEntry.RunEnded], journal.Where(record => record.Actor == "run").Select(record => record.Entry.Kind));
+        Assert.Equal([JournalEntry.LockIntended, JournalEntry.LockHeld, JournalEntry.LockReleased, JournalEntry.RunEnded],
+            journal.Where(record => record.Actor == "run").Select(record => record.Entry.Kind));
         Assert.Equal("passed", journal.Last(record => record.Actor == "run").Entry.Fields["state"]);
         Assert.True(JournalIndex(host, JournalEntry.ProcessIntended) < host.Runs.ToList().FindIndex(run => run.Script == "start"));
         // Every owned server boot gets its test access, the restart's included; no runner option turns it off (#257 Q5).
@@ -800,16 +801,56 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.Equal(host.Claims, host.Releases);
     }
 
-    [Fact] public async Task AnotherRunsLockRefusesTheRunBeforeTheHostIsTouched()
+    [Fact] public async Task AnotherRunsLockRefusesAfterOnlyTheExactClaimIntentAndAtomicClaimAttempt()
     {
         var host = NewHost(NewServer()); host.HeldBy = "other-runner run-x [0123]";
         var (plan, profile) = Write(host);
         Assert.Equal(1, await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["run", plan, Output], Options(host, NewServer())));
         var step = Step("take the server host's lock");
         Assert.False(step.GetProperty("Passed").GetBoolean()); Assert.Contains("other-runner run-x [0123]", step.GetProperty("Error").GetString());
-        Assert.Empty(host.Runs);
+        Assert.Equal(["journal", "lock", "journal"], host.Scripts);
+        var journal = await RunJournalOnHost.ReadAsync(host, "/var/tmp/vt/journal", RunId, TimeSpan.FromSeconds(5));
+        Assert.Equal([JournalEntry.LockIntended, JournalEntry.RunEnded], journal.Where(record => record.Actor == "run").Select(record => record.Entry.Kind));
+        Assert.DoesNotContain(journal, record => record.Entry.Kind == JournalEntry.LockHeld);
         Assert.Empty(host.Releases);
         Assert.DoesNotContain("release the server host's lock", StepNames());
+    }
+
+    [Fact]
+    public async Task CancellationAfterTheAtomicClaimStillJournalsTheHeldLockAndReturnsItsHandle()
+    {
+        var host = NewHost();
+        using var cancellation = new CancellationTokenSource();
+        host.BeforeScript = script => { if (script == "lock") cancellation.Cancel(); };
+        var journal = new RunJournal("run-cancelled-lock-note");
+
+        var held = await JournaledHostLock.AcquireAsync(host, "/var/tmp/vt/lock", "test owner", journal,
+            "/var/tmp/vt/journal", "run", TimeSpan.FromSeconds(5), cancellation.Token);
+        Assert.True(cancellation.IsCancellationRequested);
+        host.BeforeScript = null;
+        await held.ReleaseAsync(CancellationToken.None);
+
+        var records = await RunJournalOnHost.ReadAsync(host, "/var/tmp/vt/journal", journal.RunId, TimeSpan.FromSeconds(5));
+        Assert.Equal([JournalEntry.LockIntended, JournalEntry.LockHeld, JournalEntry.LockReleased],
+            records.Select(record => record.Entry.Kind));
+        Assert.Equal(host.Claims, host.Releases);
+    }
+
+    [Fact]
+    public async Task AFailedReleaseNoteWarnsAfterTheLockIsAlreadyFree()
+    {
+        var host = NewHost();
+        var journal = new RunJournal("run-release-note-failure");
+        var held = await JournaledHostLock.AcquireAsync(host, "/var/tmp/vt/lock", "test owner", journal,
+            "/var/tmp/vt/journal", "run", TimeSpan.FromSeconds(5));
+        host.JournalFailsFor = JournalEntry.LockReleased;
+
+        var released = await held.ReleaseAsync();
+
+        Assert.Equal(HostLockState.Released, released.State);
+        Assert.Equal(host.Claims, host.Releases);
+        var records = await RunJournalOnHost.ReadAsync(host, "/var/tmp/vt/journal", journal.RunId, TimeSpan.FromSeconds(5));
+        Assert.Equal([JournalEntry.LockIntended, JournalEntry.LockHeld], records.Select(record => record.Entry.Kind));
     }
 
     // #257 step 5: cleanup never runs on the cancelled token. A Ctrl+C during the scenario still lets the copy be retired and
@@ -1124,7 +1165,8 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.Equal("77", clientJournal.Single(record => record.Entry.Kind == JournalEntry.ProcessStarted).Entry.Fields["pid"]);
         Assert.Equal(FakeServerHost.CommandLineSha256("77"), clientJournal.Single(record => record.Entry.Kind == JournalEntry.ProcessStarted).Entry.Fields["commandLineSha256"]);
         // The run ends in every journal it wrote (#667): the client host's too, not only the server's.
-        Assert.Equal([JournalEntry.LockHeld, JournalEntry.LockReleased, JournalEntry.RunEnded], clientJournal.Where(record => record.Actor == "run").Select(record => record.Entry.Kind));
+        Assert.Equal([JournalEntry.LockIntended, JournalEntry.LockHeld, JournalEntry.LockReleased, JournalEntry.RunEnded],
+            clientJournal.Where(record => record.Actor == "run").Select(record => record.Entry.Kind));
         Assert.Equal("passed", clientJournal.Single(record => record.Entry.Kind == JournalEntry.RunEnded).Entry.Fields["state"]);
         Assert.True(JournalIndex(clientHost, JournalEntry.ProcessIntended) < clientHost.Runs.ToList().FindIndex(run => run.Script == "client-start"));
         // The earlier log moved aside first, the new one was awaited from its start; only that client was stopped.

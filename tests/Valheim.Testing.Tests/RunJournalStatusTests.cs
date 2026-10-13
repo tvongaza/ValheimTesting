@@ -44,6 +44,68 @@ public sealed class RunJournalStatusTests : IDisposable
 
     private static JournalRunStatus Run(JournalStatusReport report, string run) => Assert.Single(report.Runs, status => status.Run == run);
 
+    [Fact] public async Task DetachedSupervisorIsLiveThenRecoverableAndRecoveryRemovesOnlyItsExactTask()
+    {
+        var host = new FakeServerHost("pc", Path.Combine(_root, "windows"), kind: GameHostKind.Local, windows: true);
+        var liveTask = new WindowsScheduledTask("ValheimTesting-detached-run-live", "ValheimTesting detached run run-live",
+            @"C:\Program Files\PowerShell\7\pwsh.exe", @"C:\vt\live\launcher.ps1", @"C:\vt\live\tool", @"TEST\runner");
+        var deadTask = new WindowsScheduledTask("ValheimTesting-detached-run-dead", "ValheimTesting detached run run-dead",
+            @"C:\Program Files\PowerShell\7\pwsh.exe", @"C:\vt\dead\launcher.ps1", @"C:\vt\dead\tool", @"TEST\runner");
+        var otherTask = new WindowsScheduledTask("ValheimTesting-detached-run-other", "ValheimTesting detached run run-other",
+            @"C:\Program Files\PowerShell\7\pwsh.exe", @"C:\vt\other\launcher.ps1", @"C:\vt\other\tool", @"TEST\runner");
+        var changedTask = new WindowsScheduledTask("ValheimTesting-detached-run-changed", "ValheimTesting detached run run-changed",
+            @"C:\Program Files\PowerShell\7\pwsh.exe", @"C:\vt\changed\launcher.ps1", @"C:\vt\changed\tool", @"TEST\runner");
+        host.ScheduledTasks[liveTask.Label] = (liveTask, WindowsScheduledTask.State.Running);
+        host.ScheduledTasks[deadTask.Label] = (deadTask, WindowsScheduledTask.State.Running);
+        host.ScheduledTasks[otherTask.Label] = (otherTask, WindowsScheduledTask.State.Stopped);
+        host.ScheduledTasks[changedTask.Label] = (changedTask with { PrincipalUserId = @"TEST\another-user" }, WindowsScheduledTask.State.Running);
+        static (string, string)[] Fields(WindowsScheduledTask task) => task.Entry(JournalEntry.ScheduledTaskIntended,
+            ("control", task.Launcher[..task.Launcher.LastIndexOf('\\')]), ("output", @"C:\evidence"))
+            .Fields.Select(field => (field.Key, field.Value)).ToArray();
+        Line(host, "run-live", "detached", JournalRunner.Current, JournalEntry.ScheduledTaskStarted, Fields(liveTask));
+        Line(host, "run-dead", "detached", Gone, JournalEntry.ScheduledTaskIntended, Fields(deadTask));
+        Line(host, "run-other", "detached", Gone, JournalEntry.ScheduledTaskIntended, Fields(otherTask));
+        Line(host, "run-forged", "detached", Gone, JournalEntry.ScheduledTaskIntended, Fields(otherTask));
+        Line(host, "run-changed", "detached", Gone, JournalEntry.ScheduledTaskIntended, Fields(changedTask));
+        var hosts = new Dictionary<string, HostProfile> { ["pc"] = new() { Kind = "local", Platform = "windows", Shell = "pwsh", Lock = "/var/tmp/vt/lock" } };
+
+        var before = await RunJournalStatus.InspectAsync(hosts, _ => host, TimeSpan.FromSeconds(5));
+        Assert.Equal(JournalRunState.Live, Run(before, "run-live").State);
+        Assert.Equal(JournalRunState.Recoverable, Run(before, "run-dead").State);
+        var text = new StringWriter(); RunJournalStatus.Write(before, text, json: false);
+        Assert.Contains("RECOVERABLE run-dead", text.ToString());
+        Assert.Contains("valheim-test env recover --run run-dead", text.ToString());
+        Assert.Equal(JournalRunState.Unrecoverable, Run(before, "run-forged").State);
+        Assert.Equal(JournalRunState.Unrecoverable, Run(before, "run-changed").State);
+        Assert.NotNull((await RunRecovery.RecoverAsync(hosts, _ => host, "run-forged", teardown: false, TimeSpan.FromSeconds(5))).Refused);
+        Assert.NotNull((await RunRecovery.RecoverAsync(hosts, _ => host, "run-changed", teardown: false, TimeSpan.FromSeconds(5))).Refused);
+        Assert.Contains(otherTask.Label, host.ScheduledTasks.Keys);
+        Assert.Contains(changedTask.Label, host.ScheduledTasks.Keys);
+
+        var recovered = await RunRecovery.RecoverAsync(hosts, _ => host, "run-dead", teardown: false, TimeSpan.FromSeconds(5));
+        Assert.True(recovered.Clean);
+        Assert.DoesNotContain(deadTask.Label, host.ScheduledTasks.Keys);
+        Assert.Contains(liveTask.Label, host.ScheduledTasks.Keys);
+        Assert.Contains(otherTask.Label, host.ScheduledTasks.Keys);
+        Assert.Contains(changedTask.Label, host.ScheduledTasks.Keys);
+        Assert.Equal(JournalRunState.Ended, Run(await RunJournalStatus.InspectAsync(hosts, _ => host, TimeSpan.FromSeconds(5)), "run-dead").State);
+    }
+
+    [Fact] public async Task RecoveryReleasesAnExactLockClaimJournalledBeforeAcquisitionWhenItsRunnerIsDead()
+    {
+        const string run = "run-lock-intent", claimant = "campaign-prepare run-lock-intent pc [0123456789abcdef0123456789abcdef]";
+        _host.Claims.Add(claimant);
+        Line(_host, run, "run", Gone, JournalEntry.LockIntended, ("lock", "/var/tmp/vt/lock"), ("claimant", claimant));
+
+        var before = await InspectAsync();
+        Assert.Equal(JournalRunState.Recoverable, Run(before, run).State);
+        Assert.Equal("lock", Assert.Single(Run(before, run).Items).Kind);
+        var recovered = await RunRecovery.RecoverAsync(Hosts("pc"), _ => _host, run, teardown: false, TimeSpan.FromSeconds(5));
+        Assert.True(recovered.Clean, string.Join("\n", recovered.Steps));
+        Assert.Contains(claimant, _host.Releases);
+        Assert.Equal(JournalRunState.Ended, Run(await InspectAsync(), run).State);
+    }
+
     [Fact] public async Task RecoveryRecordsAnEndOnlyAfterLocalProofThatAnInterruptedRunLeftNothing()
     {
         const string old = "run-unsealed", live = "run-live";

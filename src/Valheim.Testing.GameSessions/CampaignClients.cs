@@ -18,7 +18,8 @@ internal sealed class CampaignClients
     private readonly object _clientState = new();
     private readonly SemaphoreSlim _clientLockGate = new(1, 1);
     private readonly string _owner;
-    private readonly List<(string Host, HostLock Lock)> _clientLocks = [];
+    private readonly RunJournal _runJournal;
+    private readonly List<(string Host, JournaledHostLock Lock)> _clientLocks = [];
     private readonly List<(string Host, IOwnedProcess Process)> _localMacProcesses = [];
     private readonly Dictionary<string, string> _pendingMacAgents = new(StringComparer.Ordinal);
     private readonly List<ClientAccount> _accounts = [];
@@ -33,6 +34,7 @@ internal sealed class CampaignClients
         Func<IGameHost, string, string, JournalEntry, CancellationToken, Task> journal)
     {
         Profile = profile; RunId = runId; _owner = owner; _hooks = hooks; _serverHost = serverHost; _journal = journal;
+        _runJournal = new RunJournal(runId);
     }
 
     public ResolvedEnvironment Profile { get; }
@@ -52,8 +54,6 @@ internal sealed class CampaignClients
         try { await JournalAsync(host, hostName, actor, entry, CancellationToken.None).ConfigureAwait(false); }
         catch (Exception error) { Console.Error.WriteLine($"Warning: could not journal {entry.Kind} for {actor} on {hostName}: {error.Message}"); }
     }
-    private Task NoteLockAsync(IGameHost host, string hostName, HostLock held, string kind) =>
-        NoteAsync(host, hostName, "run", JournalEntry.Of(kind, ("lock", held.Path), ("claimant", held.Owner)));
     private static JournalEntry LeaseEntry(string kind, SteamAccountHold hold, params (string Key, string Value)[] more) =>
         JournalEntry.Of(kind, [("account", hold.Account), ("pool", hold.Pool), ("owner", hold.Owner), ("leaseId", hold.LeaseId),
             ("number", hold.LeaseNumber.ToString(CultureInfo.InvariantCulture)), ("directory", hold.LeaseDirectory), .. more]);
@@ -328,9 +328,9 @@ internal sealed class CampaignClients
         {
             bool held; lock (_clientState) held = _clientLocks.Any(item => item.Host == hostName);
             if (held) return;
-            var taken = await host.AcquireLockAsync(hostProfile.Lock, _owner, HostedTimeouts.Quick, cancellation).ConfigureAwait(false);
+            var taken = await JournaledHostLock.AcquireAsync(host, hostProfile.Lock, _owner, _runJournal,
+                RunJournal.DirectoryFor(hostProfile), "run", HostedTimeouts.Quick, cancellation).ConfigureAwait(false);
             lock (_clientState) _clientLocks.Add((hostName, taken));
-            await NoteLockAsync(host, hostName, taken, JournalEntry.LockHeld).ConfigureAwait(false);
         }
         finally { _clientLockGate.Release(); }
     }
@@ -382,19 +382,14 @@ internal sealed class CampaignClients
     /// <summary>Releases each client host's lock this run took, as its own step; a host where an owned local Mac client may still run keeps it.</summary>
     public async Task ReleaseLocksAsync(Func<string, Func<Task>, Task> step)
     {
-        List<(string Host, HostLock Lock)> locks;
+        List<(string Host, JournaledHostLock Lock)> locks;
         lock (_clientState) locks = [.. _clientLocks];
         foreach (var (name, held) in locks) await step($"release client host {name}'s lock", () =>
             (_localMacProcesses.Any(item => item.Host == name && !item.Process.HasExited) || HasPendingMacAgent(name))
                 ? throw new HostLockException(new HostLockResult(HostLockState.Unknown, held.Owner,
                     $"Kept {held.Path} on {name}: an owned Mac client or its GUI agent may still run. Confirm both are stopped before releasing this lock."))
-                : ReleaseAndNoteAsync(HostNamed(name), name, held)).ConfigureAwait(false);
+                : ReleaseAsync(held)).ConfigureAwait(false);
     }
 
-    private async Task ReleaseAndNoteAsync(IGameHost host, string hostName, HostLock held)
-    {
-        var result = await held.ReleaseAsync().ConfigureAwait(false);
-        if (result.State is not (HostLockState.Released or HostLockState.Free)) throw new HostLockException(result);
-        await NoteLockAsync(host, hostName, held, JournalEntry.LockReleased).ConfigureAwait(false);
-    }
+    private static async Task ReleaseAsync(JournaledHostLock held) => await held.ReleaseAsync().ConfigureAwait(false);
 }

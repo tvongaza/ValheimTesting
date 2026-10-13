@@ -24,7 +24,7 @@ internal sealed class HostedServerRun : IServerPlacement
     private readonly string _owner;
     // The campaign's clients, their leases and their hosts' locks: owned by CampaignClients, as in a campaign without a server.
     private readonly CampaignClients _clientActors;
-    private HostLock? _lock;
+    private JournaledHostLock? _lock;
     private CliTunnel? _tunnel;
     private HostListing? _runtime;
     private HostListing? _loader;
@@ -60,7 +60,7 @@ internal sealed class HostedServerRun : IServerPlacement
         _clientActors = new CampaignClients(profile, runId, _owner, hooks, (role.Host, host), JournalAsync);
     }
 
-    // The run's journal on each host it touches (RunJournal): a process is journalled before it starts, a lock once held.
+    // The run's journal on each host it touches (RunJournal): a process and an exact lock claimant are journalled before their effects.
     private readonly RunJournal _journal;
     private Task JournalAsync(IGameHost host, string hostName, string actor, JournalEntry entry, CancellationToken cancellation) =>
         _journal.AppendAsync(host, RunJournal.DirectoryFor(Profile.Hosts[hostName]), actor, entry, HostedTimeouts.Quick, cancellation);
@@ -70,9 +70,6 @@ internal sealed class HostedServerRun : IServerPlacement
         try { await JournalAsync(host, hostName, actor, entry, CancellationToken.None).ConfigureAwait(false); }
         catch (Exception error) { Console.Error.WriteLine($"Warning: could not journal {entry.Kind} for {actor} on {hostName}: {error.Message}"); }
     }
-    private Task NoteLockAsync(IGameHost host, string hostName, HostLock held, string kind) =>
-        NoteAsync(host, hostName, "run", JournalEntry.Of(kind, ("lock", held.Path), ("claimant", held.Owner)));
-
     /// <summary>Whether the runtime is a campaign's prepared profile (verified in place) rather than one this run stages.</summary>
     public bool Prepared { get; }
 
@@ -191,8 +188,8 @@ internal sealed class HostedServerRun : IServerPlacement
         // A Windows host that can register no server task is refused before the profile (a campaign's preflight asked already).
         if (Host.Shell.Kind == HostShellKind.PowerShell)
             await report.StepAsync(StepPhase.Setup, "the server host can start a server task", () => HostServer.RequireTaskLogonAsync(Host, HostedTimeouts.Quick, cancellation)).ConfigureAwait(false);
-        await report.StepAsync(StepPhase.Setup, "take the server host's lock", async () => _lock = await Host.AcquireLockAsync(HostProfile.Lock, _owner, HostedTimeouts.Quick, cancellation).ConfigureAwait(false)).ConfigureAwait(false);
-        await NoteLockAsync(Host, Role.Host, _lock!, JournalEntry.LockHeld).ConfigureAwait(false);
+        await report.StepAsync(StepPhase.Setup, "take the server host's lock", async () => _lock = await JournaledHostLock.AcquireAsync(
+            Host, HostProfile.Lock, _owner, _journal, RunJournal.DirectoryFor(HostProfile), "run", HostedTimeouts.Quick, cancellation).ConfigureAwait(false)).ConfigureAwait(false);
         // Everything this run writes on the host lies under its run directory, which must lie outside the install that runs never
         // change: decided on the host, with links resolved there (a prepared campaign's preparation checked its own profile too).
         await HostInstall.RequireApartAsync(Host, Role.Install, [RunDirectory], "the install", HostedTimeouts.Quick, cancellation).ConfigureAwait(false);
@@ -663,22 +660,10 @@ internal sealed class HostedServerRun : IServerPlacement
         await _clientActors.ReleaseLocksAsync(Try).ConfigureAwait(false);
         if (_lock != null)
             await Try("release the server host's lock", () => serverStopped && !_clientActors.HasPendingMacAgent(Role.Host)
-                ? ReleaseAndNoteAsync(Host, Role.Host, _lock)
+                ? _lock.ReleaseAsync()
                 : throw new HostLockException(new HostLockResult(HostLockState.Unknown, _lock.Owner,
                     $"Kept {_lock.Path} on {Host.Name}: the owned server or a Mac GUI client agent there may still run. Use env recover after it has stopped."))).ConfigureAwait(false);
         return failures;
-    }
-
-    private async Task ReleaseAndNoteAsync(IGameHost host, string hostName, HostLock held)
-    {
-        await ReleaseAsync(held).ConfigureAwait(false);
-        await NoteLockAsync(host, hostName, held, JournalEntry.LockReleased).ConfigureAwait(false);
-    }
-
-    private static async Task ReleaseAsync(HostLock held)
-    {
-        var result = await held.ReleaseAsync().ConfigureAwait(false);
-        if (result.State is not (HostLockState.Released or HostLockState.Free)) throw new HostLockException(result);
     }
 
     // The started game's command line should be the one its launch journalled: where it is not, a run interrupted before its

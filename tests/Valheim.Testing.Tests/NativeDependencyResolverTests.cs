@@ -599,14 +599,13 @@ public sealed class NativeDependencyResolverTests : IDisposable
         }));
         byte[] zip = ShippedLoaderTests.Pack();
         byte[]? copiedCore = null;
-        int runStarted = 0;
         host.AfterApply = runtime => copiedCore = File.ReadAllBytes(Path.Combine(runtime, "BepInEx", "core", "BepInEx.dll"));
         var options = new PinnedServerRunOptions<SitePlan>
         {
             Name = "loader-" + tag, ReadPlan = _ => throw new InvalidOperationException("A campaign plan is in memory."),
             Mod = new("test.mod/session", "TEST_SESSION_TOKEN"),
             Scenario = (_, _) => Task.CompletedTask,
-            RunStarted = run => { Assert.True(RunJournal.SafeName(run)); Assert.Null(copiedCore); runStarted++; },
+            RunId = "run-detached-owner",
             Hooks = new FakeRunHooks
             {
                 Host = _ => host, Connect = _ => server.Connect(), StateWaits = false, RunId = "run-test",
@@ -626,7 +625,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         Assert.True(exit == 0, result.ToString());
         var provenance = result.GetProperty("Provenance");
         Assert.NotNull(copiedCore);
-        Assert.Equal(1, runStarted);
+        Assert.Equal("run-detached-owner", provenance.GetProperty("runId").GetString());
         Assert.Equal(sourceCore, File.ReadAllBytes(Path.Combine(source, "BepInEx", "core", "BepInEx.dll"))); // the install is never changed
         if (rule)
         {
@@ -741,6 +740,12 @@ public sealed class NativeDependencyResolverTests : IDisposable
         // was made (the first journal entry precedes the profile seed), then done, retired, and the run's end.
         string runId = result.GetProperty("Provenance").GetProperty("runId").GetString()!;
         var journal = await RunJournalOnHost.ReadAsync(host, @"C:\locks\journal", runId, TimeSpan.FromSeconds(5));
+        Assert.Equal([JournalEntry.LockIntended, JournalEntry.LockHeld, JournalEntry.LockReleased],
+            journal.Where(record => record.Actor == "run" && record.Entry.Kind.StartsWith("lock-", StringComparison.Ordinal))
+                .Select(record => record.Entry.Kind));
+        var preparationClaim = journal.First(record => record.Entry.Kind == JournalEntry.LockIntended).Entry.Fields["claimant"];
+        Assert.Equal(preparationClaim, journal.First(record => record.Entry.Kind == JournalEntry.LockHeld).Entry.Fields["claimant"]);
+        Assert.Equal(preparationClaim, journal.First(record => record.Entry.Kind == JournalEntry.LockReleased).Entry.Fields["claimant"]);
         Assert.Equal([JournalEntry.CopyIntended, JournalEntry.CopyDone, JournalEntry.CopyRetired],
             journal.Where(record => record.Actor == "server").Select(record => record.Entry.Kind));
         // The server run's world copy on the host is journalled too, before its ship, and handed over as the run's evidence (under
@@ -775,6 +780,9 @@ public sealed class NativeDependencyResolverTests : IDisposable
         Assert.Equal(JournalEntry.CopyKept, (await RunJournalOnHost.ReadAsync(host, @"C:\locks\journal", "run-test", TimeSpan.FromSeconds(5)))
             .Last(record => record.Entry.Kind.StartsWith("copy-", StringComparison.Ordinal)).Entry.Kind);
         Assert.Equal("unknown", Assert.Single(unknownJournal, record => record.Entry.Kind == JournalEntry.RunEnded).Entry.Fields["state"]);
+        // This negative control deliberately kept its exact claim. The independent cases below start on a free fake host.
+        string keptClaim = Assert.Single(host.Claims.Except(host.Releases));
+        Assert.Equal(HostLockState.Released, (await host.ReleaseLockAsync(@"C:\locks\campaign.lock", keptClaim, TimeSpan.FromSeconds(5))).State);
 
         // A host retire that fails keeps the install and what it kept beside it (not fetched yet): nothing else removes it.
         Directory.Delete(host.Local(@"C:\runs\run-test"), true);
@@ -788,7 +796,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         Assert.Equal(2, Directory.GetDirectories(host.Local(@"C:\runs"), "vt-prep-*").Count(directory => Directory.Exists(Path.Combine(directory, "runtime"))));
         Assert.DoesNotContain(failedRetire.GetProperty("Steps").EnumerateArray(), step => step.GetProperty("Name").GetString()!.StartsWith("remove the prepared install ", StringComparison.Ordinal));
 
-        // A journal entry that cannot be written stops the run before its effect: no profile is made that the journal does not name.
+        // A lock intent that cannot be journalled stops the run before the claim and before any profile effect.
         int copiesBefore = host.Scripts.Count(script => script == "profile-seed");
         host.Failures["journal"] = new HostResult(HostOutcome.Exited, 4, "", "No space left on device", TimeSpan.Zero, false);
         string unjournalledOutput = Path.Combine(_rig.Root, "run-campaign-unjournalled");
@@ -798,7 +806,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         var unjournalled = JsonDocument.Parse(File.ReadAllText(Path.Combine(unjournalledOutput, "result.json"))).RootElement;
         var prepare = unjournalled.GetProperty("Steps").EnumerateArray().Single(step => step.GetProperty("Name").GetString() == "check the hosts and prepare every actor's disposable install");
         Assert.False(prepare.GetProperty("Passed").GetBoolean());
-        Assert.Contains("Journalling copy-intended", prepare.GetProperty("Error").GetString());
+        Assert.Contains("Journalling lock-intended", prepare.GetProperty("Error").GetString());
 
         // A preparation that fails after its copy was journalled ends its run in the journal, cleanup proven.
         host.Failures["apply-stage"] = new HostResult(HostOutcome.Exited, 3, "", "Access to the path is denied", TimeSpan.Zero, false);
@@ -896,6 +904,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         var serverCopying = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var serverReleased = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var journalledAfterServerReleased = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        int serverJournalsAfterRelease = 0;
         bool serverWasCopying = false, serverDoneWhileSiblingCopied = false, journalledBeforeSiblingSettled = false;
         hosts["server"].Hang.Add("profile-seed");
         // The fake host answers at once; a real ship takes time. Yielding here lets client-a's preparation run beside the server's
@@ -907,7 +916,10 @@ public sealed class NativeDependencyResolverTests : IDisposable
         {
             events.Enqueue(host + ":" + name);
             if (name == "profile-seed" && host == "server") serverCopying.TrySetResult();
-            if (name == "journal" && serverReleased.Task.IsCompleted) journalledAfterServerReleased.TrySetResult();
+            // The exact lifecycle journals lock-released immediately after the release. A second journal call would be the
+            // premature run end this test guards; the correct run end waits for the sibling preparation to settle.
+            if (host == "server" && name == "journal" && serverReleased.Task.IsCompleted &&
+                Interlocked.Increment(ref serverJournalsAfterRelease) > 1) journalledAfterServerReleased.TrySetResult();
         }
         hosts["server"].BeforeScript = name => Observe("server", name);
         hosts["client-a"].BeforeScript = name =>

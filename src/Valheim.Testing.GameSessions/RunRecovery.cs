@@ -122,6 +122,22 @@ internal static class RunRecovery
             ? Note(process.Host, Settled(process.Actor, directory)) : Task.CompletedTask;
         bool Local(JournalItem item) => item.Fields.GetValueOrDefault("local") == "true" && hosts[item.Host].Kind == "local";
 
+        // 0. A detached supervisor's OS task first. Its exact definition is checked again before it is stopped and removed;
+        // a failed removal keeps every directory the task may still use.
+        foreach (var taskItem in Of("scheduled-task"))
+        {
+            string what = "scheduled task " + taskItem.What;
+            try
+            {
+                var task = WindowsScheduledTask.FromJournal(taskItem.Fields, runId);
+                bool removed = await task.RetireAsync(connections[taskItem.Host], timeout, cancellation).ConfigureAwait(false);
+                Step(taskItem.Host, what, removed ? "ended and removed" : "already gone");
+                await Note(taskItem.Host, task.Entry(JournalEntry.ScheduledTaskRetired)).ConfigureAwait(false);
+            }
+            catch (Exception error) when (error is not OperationCanceledException)
+            { Step(taskItem.Host, what, "not removed: " + error.Message, failed: true); }
+        }
+
         // 1. Every process on every host first: until all are proven gone, nothing they may use is touched anywhere.
         foreach (var group in Of("process").GroupBy(item => item.Host, StringComparer.Ordinal))
         {
@@ -218,6 +234,15 @@ internal static class RunRecovery
             {
                 string path = copy.What;
                 if (!Directory.Exists(path)) { Step(copy.Host, what, "already gone"); await Note(copy.Host, JournalEntry.Of(JournalEntry.CopyRetired, ("runtime", path), ("local", "true"))).ConfigureAwait(false); continue; }
+                if (copy.Fields.GetValueOrDefault("cleanup") == "delete")
+                {
+                    var evidence = JournalOwnedDirectory.Retire(runId, copy.Fields);
+                    Step(copy.Host, what, "removed (discard-only owned directory)" +
+                        (evidence.Count == 0 ? "" : "; evidence kept in " + string.Join(", ", evidence)));
+                    await Note(copy.Host, JournalEntry.Of(JournalEntry.CopyRetired, ("runtime", path), ("local", "true"),
+                        ("cleanup", "delete"), ("ownerId", copy.Fields["ownerId"]), ("purpose", copy.Fields.GetValueOrDefault("purpose") ?? ""))).ConfigureAwait(false);
+                    continue;
+                }
                 if (!OwnedCopies.IsCopyName(path)) throw new InvalidDataException("not a valheim-test-<32 hex> copy directory");
                 var found = OwnedCopies.Find(path);
                 if (found.Count == 0)
