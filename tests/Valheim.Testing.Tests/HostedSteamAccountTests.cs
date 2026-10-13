@@ -44,8 +44,8 @@ public sealed partial class HostedServerRunTests
             return Task.CompletedTask;
         }, plain.Client, new ScriptedTransport())));
         // Today's steps, exactly: nothing is leased and no account is recorded.
-        Assert.Equal(new[] { "enough free disk space for the copies", "take the server host's lock", "copy and verify pinned runtime on the server host", "copy and verify pinned world", "ship and verify the world copy on the server host",
-                "copied runtime has the plan's server executable", "copied runtime is the pinned game build, loader and patchers",
+        Assert.Equal(new[] { "enough free disk space for the copies", "take the server host's lock", "check the server host's install against the pinned runtime and stage its profile", "copy and verify pinned world", "ship and verify the world copy on the server host",
+                "server runtime has the plan's server executable", "server runtime is the pinned game build, loader and patchers",
                 "CLI port is free on the server host", "open the loopback CLI tunnel to the server host", "start and verify owned dedicated fixture", "stop only owned server",
                 "fetch the server host's world copy", "remove the server host's runtime copy, keeping what the run changed", "close the CLI tunnel", "release client host mac-gpu's lock", "release the server host's lock", "scan run logs" }, StepNamesIn(plainOutput));
         var plainProvenance = ResultIn(plainOutput).GetProperty("Provenance").EnumerateObject().Select(entry => entry.Name).ToList();

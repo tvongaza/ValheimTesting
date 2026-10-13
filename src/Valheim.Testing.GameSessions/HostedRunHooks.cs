@@ -29,6 +29,8 @@ internal interface IHostedRunHooks
     RunCancellation Cancellation(out bool owned);
     /// <summary>The pinned loader for an actor that names none, on a host of that platform (<see cref="ShippedLoader.Choose"/>), or null (macOS).</summary>
     ShippedLoader.Choice? PinnedLoader(string actor, string install, string platform);
+    /// <summary>The ValheimCLI set a standalone dedicated server's profile stages (<see cref="PinnedCliBundle.Source"/>), or null when this build carries none.</summary>
+    CliBundleSource? CliSet();
 }
 
 /// <summary>The real hosted-run hooks: ssh and local hosts, CLI sockets, the pool's leases, this machine's session.</summary>
@@ -49,4 +51,5 @@ internal sealed class HostedRunHooks : IHostedRunHooks
         ClientSession.Launch(plan, output, account, cancellation, processStarted);
     public RunCancellation Cancellation(out bool owned) { owned = true; return new RunCancellation(); }
     public ShippedLoader.Choice? PinnedLoader(string actor, string install, string platform) => ShippedLoader.Choose(actor, install, platform);
+    public CliBundleSource? CliSet() => PinnedCliBundle.Source();
 }

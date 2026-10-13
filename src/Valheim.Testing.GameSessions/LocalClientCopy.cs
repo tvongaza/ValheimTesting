@@ -63,11 +63,7 @@ internal sealed class LocalClientCopy
         string manifestPath = plan.CliManifest ?? (cliBundle ?? (() => PinnedCliBundle.Source()))()?.Manifest
             ?? throw new InvalidDataException("This build of Valheim.Testing.GameSessions carries no pinned ValheimCLI bundle (it was built without one). " +
                 "Name the ValheimCLI set to stage with the client plan's cliManifest (its DLLs beside it), or run your install in place (--in-place).");
-        var manifest = CliCapabilityManifest.Read(manifestPath);
-        string setFolder = Path.GetDirectoryName(Path.GetFullPath(manifestPath))!;
-        var location = manifest.Locate(Directory.EnumerateFiles(setFolder, "*.dll"), "beside its manifest", othersLoad: false);
-        if (location.Problems.Count != 0)
-            throw new InvalidDataException($"The ValheimCLI set to stage ({manifestPath}) is not complete: {string.Join("; ", location.Problems.Select(problem => problem.Message))}.");
+        var (manifest, location, setFolder) = InstallSelection.ReadCliSet(manifestPath);
 
         string data = dataRoot ?? CliBundle.DataRoot;
         host ??= new LocalGameHost("this machine", HostShell.ThisMachine);
@@ -144,10 +140,7 @@ internal sealed class LocalClientCopy
         if (plan.Pinned)
         {
             plan.InstallPins = profile.Pins;
-            var pins = plan.Pins.Where(pin => !CliBuildManifest.IsCliPlugin(pin.Key)).ToDictionary(pin => pin.Key, pin => pin.Value, StringComparer.Ordinal);
-            string md5 = FileHash.Md5(Path.Combine(setFolder, manifest.Plugin.File));
-            foreach (string guid in manifest.Plugin.Plugins) pins[guid] = md5;
-            plan.Pins = pins;
+            plan.Pins = InstallSelection.BindCliPins(plan.Pins, manifest, setFolder);
         }
         plan.CliManifest = Path.GetFullPath(manifestPath);
         plan.Prepared = true;

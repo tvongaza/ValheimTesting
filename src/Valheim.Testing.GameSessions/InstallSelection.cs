@@ -75,6 +75,33 @@ internal sealed class InstallSelection : IDisposable
         }
     }
 
+    /// <summary>
+    /// The ValheimCLI set a profile stages: the capability manifest at <paramref name="manifestPath"/> and its DLLs beside it (as a
+    /// bundle holds them), refused when a DLL it names is missing or differs. Returns the manifest, the located DLLs and their folder.
+    /// </summary>
+    internal static (CliCapabilityManifest Manifest, CliSetLocation Location, string Folder) ReadCliSet(string manifestPath)
+    {
+        var manifest = CliCapabilityManifest.Read(manifestPath);
+        string folder = Path.GetDirectoryName(Path.GetFullPath(manifestPath))!;
+        var location = manifest.Locate(Directory.EnumerateFiles(folder, "*.dll"), "beside its manifest", othersLoad: false);
+        if (location.Problems.Count != 0)
+            throw new InvalidDataException($"The ValheimCLI set to stage ({manifestPath}) is not complete: {string.Join("; ", location.Problems.Select(problem => problem.Message))}.");
+        return (manifest, location, folder);
+    }
+
+    /// <summary>
+    /// A plan's plugin <paramref name="pins"/> bound to the ValheimCLI set its profile staged: every ValheimCLI pin the plan carried
+    /// is replaced by the staged core's plugins at that file's MD5 (as the session derives them), from <paramref name="setFolder"/>
+    /// beside its <paramref name="cli"/> manifest. The plan's other pins (its mods, the world) stay as they are.
+    /// </summary>
+    internal static Dictionary<string, string> BindCliPins(IReadOnlyDictionary<string, string> pins, CliCapabilityManifest cli, string setFolder)
+    {
+        var bound = pins.Where(pin => !CliBuildManifest.IsCliPlugin(pin.Key)).ToDictionary(pin => pin.Key, pin => pin.Value, StringComparer.Ordinal);
+        string md5 = FileHash.Md5(Path.Combine(setFolder, cli.Plugin.File));
+        foreach (string guid in cli.Plugin.Plugins) bound[guid] = md5;
+        return bound;
+    }
+
     private static async Task<(List<HostedRuntimeFile> Files, List<string> Replaced)> SelectAsync(IGameHost host, HostedRuntimeKind role,
         string install, HostListing source, CliCapabilityManifest cli, CliSetLocation cliFiles, BepInExLoaderPackage? loader, string work,
         TimeSpan timeout, CancellationToken cancellation)

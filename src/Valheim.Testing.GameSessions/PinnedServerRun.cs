@@ -118,9 +118,11 @@ public sealed class HostedRunOptions<TPlan> where TPlan : class
 /// <para>
 /// With <c>--inventory &lt;environments.json&gt;</c> the dedicated server runs on a host of the private environment inventory instead:
 /// the first server environment in inventory order whose host (Linux with bash over SSH, in a container or this machine, or
-/// Windows with PowerShell) and ports fit the plan, its choice and reason recorded as <c>serverEnvironment</c>. The runner takes that host's lock for the run, copies the host's install into
-/// a new run directory there and verifies every file against the plan's runtime manifest, ships the verified world copy and
-/// verifies it there, makes the executable, patcher and <see cref="ServerRunPlan.RuntimePins"/> checks on the host's copy,
+/// Windows with PowerShell) and ports fit the plan, its choice and reason recorded as <c>serverEnvironment</c>. The runner takes that host's lock for the run, checks
+/// the host's install against the plan's runtime manifest and <see cref="ServerRunPlan.RuntimePins"/>, stages a disposable loader
+/// profile of it in a new run directory there (the install's own mods on the pinned loader and ValheimCLI set, the install never
+/// changed) and binds the plan to that profile, ships the verified world copy and verifies it there, makes the executable and pin
+/// checks on the profile,
 /// checks the CLI port on the host, reaches ValheimCLI only through a loopback tunnel (<see cref="IGameHost.OpenCliTunnelAsync"/>),
 /// starts each boot with <see cref="HostServer"/> and waits for its listening line in the host's log, and at teardown stops only
 /// the process it started, fetches each boot's logs (<c>boot-N/</c>) and the world copy (<c>host-world/</c>), closes the tunnel
@@ -589,6 +591,7 @@ public static class PinnedServerRun
                 report.MarkNotPinned("the plan sets pinning \"none\"");
             }
             ResolvedEnvironment? environment = given;
+            string? serverLoaderPackage = null; // an inventory recipe's reviewed loader package for a standalone server's profile
             if (campaign is var (manifestFile, bind))
             {
                 // Stages 1 and 2 never copy: every independent problem is reported before the first host write.
@@ -628,7 +631,8 @@ public static class PinnedServerRun
             {
                 // A standalone run has one actor to place: its dedicated server. Clients are a campaign's.
                 var inventory = EnvironmentInventory.Read(inventoryPath);
-                var (placed, assignment) = inventory.PlaceServer(plan);
+                var (placed, assignment, loaderPackage) = inventory.PlaceServer(plan);
+                serverLoaderPackage = loaderPackage;
                 if (inventory.Detected.Count != 0) report.Provenance["inventoryDetected"] = string.Join("; ", inventory.Detected);
                 environment = placed;
                 report.Provenance["inventorySha256"] = FileHash.Sha256(inventoryPath);
@@ -636,8 +640,8 @@ public static class PinnedServerRun
             }
             if (environment != null)
             {
-                // The runtime is the server host's install, copied and checked there; nothing local is read for it.
-                hosted = HostedServerRun.Create(environment, plan, options.Name, options.Hooks, prepared: prepared != null, prepared?.Journal.RunId);
+                // The runtime is a profile of the server host's install, checked and staged there; nothing local is read for it.
+                hosted = HostedServerRun.Create(environment, plan, options.Name, options.Hooks, prepared: prepared != null, prepared?.Journal.RunId, serverLoaderPackage);
                 if (RunJournal.ThisProcess.RunId != hosted.RunId) hostedRun = RunJournal.UseRun(hosted.RunId);
                 report.Provenance.TryAdd("runId", hosted.RunId); // a standalone hosted run's; a campaign's is already there
                 hosted.Record(report.Provenance);
@@ -674,7 +678,7 @@ public static class PinnedServerRun
             bool Verified(PinnedDirectory fixture) => pinned || fixture.Sha256.Count != 0;
             WorldFixture CopyOf(PinnedDirectory fixture) =>
                 Verified(fixture) ? WorldFixture.Copy(fixture.Source, output, fixture.Sha256) : WorldFixture.CopyAsFound(fixture.Source, output);
-            if (hosted != null) await hosted.LockAndCopyRuntimeAsync(report, plan, pinned, cancellation.Token).ConfigureAwait(false);
+            if (hosted != null) await hosted.LockAndPrepareRuntimeAsync(report, plan, pinned, cancellation.Token).ConfigureAwait(false);
             else report.Step(StepPhase.Setup, Verified(plan.Runtime) ? "copy and verify pinned runtime" : "copy unpinned runtime as found", () => { runtime = CopyOf(plan.Runtime); runtime.Preserve = true; });
             report.Step(StepPhase.Setup, Verified(plan.World) ? "copy and verify pinned world" : "copy unpinned world as found", () => { world = CopyOf(plan.World); world.Preserve = true; });
             if (hosted != null) await hosted.ShipWorldAsync(report, world!.DirectoryPath, output, cancellation.Token).ConfigureAwait(false);
@@ -686,7 +690,6 @@ public static class PinnedServerRun
             if (hosted != null)
             {
                 hosted.CheckRuntime(report, plan, pinned);
-                await hosted.CheckWindowsLoaderAsync(report, cancellation.Token).ConfigureAwait(false);
                 await hosted.CheckCrossplayAsync(report, plan, cancellation.Token).ConfigureAwait(false);
             }
             else
@@ -750,7 +753,7 @@ public static class PinnedServerRun
                     }
                     catch (Exception error) { Console.Error.WriteLine("Teardown: " + error.Message); definite = true; } // Recorded as its failed step.
             }
-            // One owner retires what the run leaves (#257): a hosted run's teardown retires its copy and the campaign's characters
+            // One owner retires what the run leaves (#257): a hosted run's teardown retires its profile and the campaign's characters
             // and installs under the locks it holds; a campaign whose server run was never created is retired here.
             var retirement = new RunRetirement(report, output);
             if (hosted != null)

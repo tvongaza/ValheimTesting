@@ -311,22 +311,22 @@ public static class EnvironmentRuns
 
     /// <summary>
     /// A standalone run's one actor, the dedicated server: the first server environment in inventory order whose host and
-    /// ports can run <paramref name="plan"/>, with the reason it was chosen. Clients go through a campaign, which declares them.
+    /// ports can run <paramref name="plan"/>, with the reason it was chosen and the recipe's reviewed loader package (null: the
+    /// server's profile runs on the pinned one). Clients go through a campaign, which declares them.
     /// </summary>
-    internal static (ResolvedEnvironment Environment, EnvironmentAssignment Assignment) PlaceServer(this EnvironmentInventory inventory, ServerRunPlan plan)
+    internal static (ResolvedEnvironment Environment, EnvironmentAssignment Assignment, string? LoaderPackage) PlaceServer(this EnvironmentInventory inventory, ServerRunPlan plan)
     {
         ArgumentNullException.ThrowIfNull(plan);
         var skipped = new List<string>();
         foreach (var recipe in inventory.Environments.Where(recipe => recipe.Roles.Contains("server")))
         {
             var role = recipe.Role();
-            if (recipe.LoaderPackage != null)
-            { skipped.Add(recipe.Name + ": it names a loaderPackage, which only a campaign's preparation applies"); continue; }
             if (HostedServerRun.Refusal(inventory.Hosts[recipe.Host], role, plan) is { } refusal) { skipped.Add(recipe.Name + ": " + refusal); continue; }
             var environment = new ResolvedEnvironment { Hosts = inventory.Hosts, Server = role };
             environment.Validate();
             return (environment, new EnvironmentAssignment("server", recipe.Name, "dedicated-server", recipe.Host,
-                skipped.Count == 0 ? "first server recipe in inventory order" : "first server recipe that can run the plan after " + string.Join("; ", skipped)));
+                skipped.Count == 0 ? "first server recipe in inventory order" : "first server recipe that can run the plan after " + string.Join("; ", skipped)),
+                recipe.LoaderPackage);
         }
         throw new ArgumentException("No server environment in the inventory can run this plan" +
             (skipped.Count == 0 ? ": it lists none." : ": " + string.Join("; ", skipped)) + MissingNote(inventory));
