@@ -109,6 +109,64 @@ internal static class ProtectedPaths
         """.ReplaceLineEndings("\n");
 
     /// <summary>
+    /// Removal under a root, for a bash host script that already holds <see cref="BashInside"/> (it uses <c>vt_physical</c>).
+    /// <c>vt_remove PATH ROOT</c> deletes PATH only when it lies strictly below ROOT once links are resolved, and returns 3 and
+    /// deletes nothing when it does not, when either cannot be resolved or when PATH is not absolute. A PATH that is itself a link
+    /// (to a directory or a file, dangling or not) is unlinked and its target is never entered or emptied; the link only has to
+    /// stand inside ROOT. A PATH that does not exist is already gone. A trailing slash on PATH is dropped first: BSD <c>rm</c> follows
+    /// <c>link/</c>. This is the one delete of a folder a host script was handed by name (a runtime copy, a staging folder, a journalled path).
+    /// </summary>
+    internal static readonly string BashRemove = """
+        vt_remove() {
+            local path=$1 root=$2 base real
+            case "$path" in /*) ;; *) return 3;; esac
+            while [ "$path" != / ] && [ "${path%/}" != "$path" ]; do path=${path%/}; done
+            base=$(vt_physical "$root") || return 3
+            [ "$base" != / ] || return 3
+            if [ -L "$path" ]; then
+                real=$(vt_physical "$(dirname -- "$path")") || return 3
+                case "$real" in "$base"|"$base"/*) ;; *) return 3;; esac
+                rm -f -- "$path"
+                return
+            fi
+            [ -e "$path" ] || return 0
+            real=$(vt_physical "$path") || return 3
+            case "$real" in "$base"/*) ;; *) return 3;; esac
+            rm -rf -- "$path"
+        }
+
+        """.ReplaceLineEndings("\n");
+
+    /// <summary>
+    /// <see cref="BashRemove"/> for a Windows host's PowerShell 7, put after <see cref="PowerShellInside"/>. <c>Remove-VtTree $path $root</c>
+    /// unlinks a symlink or junction without entering it, deletes a folder or file only when it lies strictly below the root once
+    /// links are resolved, and throws (deleting nothing) otherwise. A path that does not exist is already gone.
+    /// </summary>
+    internal static readonly string PowerShellRemove = """
+        function Remove-VtTree([string]$path, [string]$root) {
+            $sep = [IO.Path]::DirectorySeparatorChar
+            $comparison = [StringComparison]::OrdinalIgnoreCase
+            $path = $path.TrimEnd([char[]]@('\', '/'))
+            $base = (Get-VtPhysical $root).TrimEnd($sep)
+            if (-not $base) { throw ('Refusing to remove below the volume root: ' + $path) }
+            $attributes = $null
+            try { $attributes = [IO.File]::GetAttributes($path) } catch [IO.FileNotFoundException] { } catch [IO.DirectoryNotFoundException] { }
+            if ($null -eq $attributes) { return }
+            $isDirectory = [bool]($attributes -band [IO.FileAttributes]::Directory)
+            if ($attributes -band [IO.FileAttributes]::ReparsePoint) {
+                $real = (Get-VtPhysical ([IO.Path]::GetDirectoryName($path))).TrimEnd($sep)
+                if (-not ([string]::Equals($real, $base, $comparison) -or $real.StartsWith($base + $sep, $comparison))) { throw ('Refusing to remove a link outside ' + $root + ': ' + $path) }
+                if ($isDirectory) { [IO.Directory]::Delete($path) } else { [IO.File]::Delete($path) }
+                return
+            }
+            $real = (Get-VtPhysical $path).TrimEnd($sep)
+            if (-not $real.StartsWith($base + $sep, $comparison)) { throw ('Refusing to remove outside ' + $root + ': ' + $path) }
+            if ($isDirectory) { [IO.Directory]::Delete($path, $true) } else { [IO.File]::Delete($path) }
+        }
+
+        """.ReplaceLineEndings("\n");
+
+    /// <summary>
     /// The host side of <see cref="Contains"/> for a Windows host's PowerShell 7 (pwsh).
     /// <c>Get-VtPhysical $path</c> returns the path's physical location, walked from the root down as <see cref="Resolve"/> walks:
     /// each symlink or junction met is replaced by its target (a relative one joined to the link's physical parent) and the walk

@@ -212,11 +212,25 @@ internal static partial class HostedRuntimeStage
     internal static async Task RetireAsync(IGameHost host, string destination, string staging, TimeSpan timeout, CancellationToken cancellation = default, string? runId = null)
     {
         string parent = RequirePrepared(host, destination, runId);
+        RequireStaging(host, parent, staging);
         var result = await host.RunAsync(host.Shell.Kind == HostShellKind.PowerShell ? WindowsCleanup : BashCleanup,
             new Dictionary<string, string> { ["runtime"] = destination, ["stage"] = staging, ["parent"] = parent }, timeout, cancellation).ConfigureAwait(false);
         result.EnsureSuccess($"Retiring prepared runtime on {host.Name}");
         if (InteractiveClient.Line(result.Stdout, "VT-STAGE-CLEANED") == null)
             throw new HostOperationException($"Unexpected cleanup reply from {host.Name}", result);
+    }
+
+    /// <summary>
+    /// Refuses a staging path that is not the copy's own: empty (a world copy has none) or <c>&lt;parent&gt;/staging</c>, the sibling
+    /// preparation names. It arrives from a journal on recovery, which a hand edit or corruption could aim anywhere.
+    /// </summary>
+    internal static void RequireStaging(IGameHost host, string parent, string staging)
+    {
+        if (staging.Length == 0) return;
+        bool windows = host.Shell.Kind == HostShellKind.PowerShell;
+        string Same(string path) => windows ? path.Replace('/', '\\') : path;
+        if (!string.Equals(Same(staging), Same(parent) + (windows ? @"\" : "/") + "staging", windows ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+            throw new ArgumentException($"The staging directory must be {parent}/staging, beside the runtime; not removing {staging}.", nameof(staging));
     }
 
     /// <summary>
@@ -300,9 +314,11 @@ internal static partial class HostedRuntimeStage
         echo 'VT-STAGED selected files only'
         """.ReplaceLineEndings("\n");
 
-    internal static readonly string WindowsCleanup = """
+    // Only the runtime and its staging folder, each below the run's own parent, through the one remover (ProtectedPaths): a link is
+    // unlinked, never emptied, and a path that resolves outside the parent is refused with nothing deleted. Variables: runtime, stage, parent.
+    internal static readonly string WindowsCleanup = ProtectedPaths.PowerShellInside + ProtectedPaths.PowerShellRemove + """
         foreach ($path in @($runtime, $stage)) {
-            if ($path -and [IO.Directory]::Exists($path)) { [IO.Directory]::Delete($path, $true) }
+            if ($path) { Remove-VtTree $path $parent }
         }
         if ($parent -and [IO.Directory]::Exists($parent) -and [IO.Directory]::GetFileSystemEntries($parent).Length -eq 0) {
             [IO.Directory]::Delete($parent)
@@ -310,11 +326,11 @@ internal static partial class HostedRuntimeStage
         'VT-STAGE-CLEANED'
         """.ReplaceLineEndings("\n");
 
-    internal static readonly string BashCleanup = """
-        set -eu
-        if [ -n "$runtime" ]; then rm -rf -- "$runtime"; fi
-        if [ -n "$stage" ]; then rm -rf -- "$stage"; fi
-        if [ -n "$parent" ] && [ -d "$parent" ]; then rmdir "$parent" 2>/dev/null || true; fi
+    internal static readonly string BashCleanup = "set -eu\n" + ProtectedPaths.BashInside + ProtectedPaths.BashRemove + """
+        if [ -z "$parent" ]; then echo 'vt: no parent folder to remove below' >&2; exit 3; fi
+        if [ -n "$runtime" ]; then vt_remove "$runtime" "$parent" || { echo "vt: refused to remove $runtime" >&2; exit 3; }; fi
+        if [ -n "$stage" ]; then vt_remove "$stage" "$parent" || { echo "vt: refused to remove $stage" >&2; exit 3; }; fi
+        if [ -d "$parent" ]; then rmdir "$parent" 2>/dev/null || true; fi
         echo 'VT-STAGE-CLEANED'
         """.ReplaceLineEndings("\n");
 }

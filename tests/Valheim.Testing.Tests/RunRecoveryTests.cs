@@ -861,6 +861,29 @@ public sealed class RunRecoveryTests : IDisposable
         }
     }
 
+    // #738: the staging path is read from the journal. One that is not the copy's own <parent>/staging (a corrupt or hand-edited
+    // line) is refused before any host script runs: the copy and the named folder both stay, and the recovery reports it.
+    [Theory]
+    [InlineData("/srv/runs/server/someone-else")]
+    [InlineData("/srv/runs/server/vt-prep-cut-server/../someone-else")]
+    [InlineData("/srv/runs/server/vt-prep-cut-server/runtime")]
+    public async Task RecoverRefusesAJournalledStagingPathThatIsNotTheCopysOwn(string stage)
+    {
+        Directory.CreateDirectory(Path.Combine(_host.Local(Prep + "/runtime"), "BepInEx"));
+        Directory.CreateDirectory(_host.Local("/srv/runs/server/someone-else"));
+        File.WriteAllText(_host.Local("/srv/runs/server/someone-else/precious.txt"), "not ours");
+        Line(_host, "run-stray-stage", "server", Gone, JournalEntry.CopyIntended, ("runtime", Prep + "/runtime"), ("stage", stage), ("parent", Prep));
+        Line(_host, "run-stray-stage", "server", Gone, JournalEntry.CopyDone, ("runtime", Prep + "/runtime"), ("files", "1"));
+
+        var report = await RecoverAsync("run-stray-stage");
+
+        Assert.False(report.Recovered);
+        Assert.Contains("not removed: The staging directory must be", Assert.Single(report.Steps, step => step.What == "copy " + Prep + "/runtime").Outcome);
+        Assert.DoesNotContain("cleanup-stage", _host.Scripts);
+        Assert.True(Directory.Exists(_host.Local(Prep + "/runtime")));
+        Assert.Equal("not ours", File.ReadAllText(_host.Local("/srv/runs/server/someone-else/precious.txt")));
+    }
+
     // A copy whose logs could not be kept stays, for a later recovery; teardown keeps a kept copy's logs as recover does.
     [Fact] public async Task ACopyWhoseLogsCannotBeKeptStaysAndTeardownKeepsAKeptCopysLogs()
     {
