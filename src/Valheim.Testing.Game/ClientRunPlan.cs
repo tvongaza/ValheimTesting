@@ -62,6 +62,12 @@ public sealed class ClientRunPlan
     /// <summary>The immutable source game of an owned profile; checked again immediately before launch.</summary>
     [JsonIgnore] internal string? PreparedSourceGameRoot { get; set; }
     [JsonIgnore] internal string? PreparedSourceGameHash { get; set; }
+    /// <summary>Where the disposable profile's enforced pins came from. Never read from a plan file.</summary>
+    [JsonIgnore] internal SortedDictionary<string, string> PreparedPinOrigins { get; set; } = new(StringComparer.Ordinal);
+    /// <summary>Supplied source ValheimCLI pins checked before profile replacement. Never read from a plan file.</summary>
+    [JsonIgnore] internal Dictionary<string, string> PreparedSourceCliPins { get; set; } = new(StringComparer.Ordinal);
+    /// <summary>Install-relative ValheimCLI paths the profile replaced. Never read from a plan file.</summary>
+    [JsonIgnore] internal IReadOnlyList<string> PreparedReplacedCliPaths { get; set; } = [];
     /// <summary>
     /// An owned client whose <see cref="Install"/> is still the source of the disposable copy its run will make: the checks that
     /// read the install's ValheimCLI files wait for the copy, and its ValheimCLI pins are the staged set's.
@@ -152,17 +158,11 @@ public sealed class ClientRunPlan
     public int ArrivalSeconds { get; set; } = 120;
     /// <summary>
     /// Owned only: the install's game build, loader and patchers by SHA256 (<see cref="Valheim.Testing.Game.InstallPins.Of"/>),
-    /// checked before launch. Required for an owned client unless <see cref="Pinning"/> is <c>none</c>. An attached
-    /// client's install is its operator's and is not read, so its build is not pinned (the game refuses a join only across
-    /// network versions).
+    /// checked against the source before a disposable profile is staged. When omitted for a disposable profile, the staged
+    /// values are observed and enforced. An in-place client requires them. An attached client's install is its operator's and
+    /// is not read, so its build is not pinned (the game refuses a join only across network versions).
     /// </summary>
     public InstallPins? InstallPins { get; set; }
-    /// <summary>
-    /// <c>strict</c>, the default when omitted, or <c>none</c>: the explicit opt-out. An unpinned client lists no
-    /// <see cref="Pins"/> or <see cref="InstallPins"/>, its actor runs without <c>cli_expect</c> (warned at start) and its
-    /// command record starts with the "environment not pinned" marker.
-    /// </summary>
-    public string Pinning { get; set; } = EnvironmentPinning.Strict;
     /// <summary>
     /// The ValheimCLI extension commands (<c>owner/command</c>, such as <c>valheim.world/terrain</c>) the run uses beyond what
     /// its runner requires itself (<see cref="ClientRounds"/> adds <see cref="CliCapabilities.HostedRounds"/>). Checked
@@ -186,9 +186,6 @@ public sealed class ClientRunPlan
     /// </summary>
     [JsonIgnore] public string CliPreflight => !Owned ? "live only: an attached client's files are its operator's"
         : InPlace && CliManifest == null ? "live only: static check not run: your install, run in place" : "static and live";
-    /// <summary>Whether <see cref="Pinning"/> is <c>strict</c>; refuses any value but <c>strict</c> or <c>none</c>.</summary>
-    [JsonIgnore] public bool Pinned => EnvironmentPinning.IsStrict(Pinning, "The client's");
-
     public bool Owned => Mode == "owned";
     /// <summary><see cref="Architecture"/> as the launch takes it; an omitted value uses this client's host default.</summary>
     [JsonIgnore] public ClientArchitecture LaunchArchitecture => Architecture switch
@@ -220,12 +217,10 @@ public sealed class ClientRunPlan
     /// <summary>
     /// The rules every client section follows, plus <paramref name="absentPlugins"/>, which must be pinned <c>absent</c>
     /// when the claim is what a client without them sees (a server-only mod). An owned client pins its install
-    /// (<see cref="InstallPins"/>). An explicitly unpinned client (<see cref="Pinning"/> <c>none</c>) must leave out every
-    /// pin, and <paramref name="absentPlugins"/> are then not checked.
+    /// (<see cref="InstallPins"/>). A disposable profile may omit pins; its owner observes and binds the staged values.
     /// </summary>
     public void Validate(params string[] absentPlugins)
     {
-        bool pinned = Pinned;
         if (Mode is not ("owned" or "attach")) throw new ArgumentException("Client mode is owned or attach.");
         // The install is a path on the client's machine, which on another host is not this one (a Windows
         // client driven from macOS): a full path in either style is accepted here; launching checks it where it runs.
@@ -261,19 +256,13 @@ public sealed class ClientRunPlan
             if (token != null && (token.Length == 0 || token.Any(char.IsWhiteSpace))) throw new ArgumentException("Join address, character and password variable must be single tokens.");
         ClientTimeouts.RequireStartAndJoin(StartSeconds, JoinSeconds);
         if (ArrivalSeconds is < 10 or > 600 || BepInExSeconds is < 5 or > 1800) throw new ArgumentException("Client timeouts are out of range.");
-        HostWorld?.Validate(pinned);
+        HostWorld?.Validate();
         if (Capabilities == null || Capabilities.Any(path => path == null || path.Split('/') is not [{ Length: > 0 }, { Length: > 0 }] || path.Any(char.IsWhiteSpace)) || Capabilities.Distinct(StringComparer.Ordinal).Count() != Capabilities.Length)
             throw new ArgumentException("Name each of the client's capabilities once, as owner/command.");
         if (CliManifest != null && !Owned)
             throw new ArgumentException("An attached client's files are its operator's: leave out cliManifest. Its capabilities are checked live once it answers.");
         if (CliManifest != null && !Path.IsPathFullyQualified(CliManifest))
             throw new ArgumentException("Give the full path of the client's cliManifest.");
-        if (!pinned)
-        {
-            if (Pins.Count != 0 || InstallPins != null)
-                throw new ArgumentException("A client with pinning \"none\" lists no pins and no installPins: nothing would check them. Remove them, or remove \"pinning\" to keep strict pins.");
-            return;
-        }
         if (Pins.ContainsKey("worlduid") || Pins.ContainsKey("world")) throw new ArgumentException("Leave the world out of the client pins; the runner pins the server's world.");
         // A disposable copy's ValheimCLI pins are its staged set's (bound when the copy is made); any other client pins its own.
         if (!CopySource && (!Pins.TryGetValue(CliCapabilityManifest.PluginGuid, out var cli) || cli.Length != 32 || !cli.All(Uri.IsHexDigit)))
@@ -283,9 +272,9 @@ public sealed class ClientRunPlan
         foreach (var pin in Pins)
             if (pin.Value != "absent" && (pin.Value.Length != 32 || !pin.Value.All(Uri.IsHexDigit))) throw new ArgumentException($"Client plugin {pin.Key} needs an exact MD5 or absent.");
         _ = MenuExpectations; // Parses the pins before anything launches.
-        if (Owned)
-            (InstallPins ?? throw new ArgumentException("Pin the owned client's game build, loader and patchers in installPins (InstallPins.Of computes them), or opt out explicitly with \"pinning\": \"none\"."))
-                .Validate("client install");
+        if (InstallPins != null) InstallPins.Validate("client install");
+        else if (Owned && !CopySource)
+            throw new ArgumentException("Pin the in-place owned client's game build, loader and patchers in installPins (InstallPins.Of computes them). A disposable profile may omit them and pins what it stages as found.");
     }
 
     // The owned install's platform where the plan shows it: the install on this machine, or a Windows-style path to another
@@ -299,10 +288,10 @@ public sealed class ClientRunPlan
         return System.Text.RegularExpressions.Regex.IsMatch(Install, @"^([A-Za-z]:[\\/]|\\\\)") ? ClientPlatform.Windows : null;
     }
 
-    /// <summary>Strict pins at the menu: plugins only. <see cref="EnvironmentPinning.None"/> for an unpinned client.</summary>
-    public string MenuExpectations => !Pinned ? EnvironmentPinning.None : Expect(Pins.Select(p => p.Key + "=" + p.Value));
-    /// <summary>Strict pins once joined: plugins and the server's world. <see cref="EnvironmentPinning.None"/> for an unpinned client.</summary>
-    public string WorldExpectations(string worldUid) => !Pinned ? EnvironmentPinning.None : Expect(Pins.Select(p => p.Key + "=" + p.Value).Append("worlduid=" + worldUid));
+    /// <summary>Strict pins at the menu: plugins only.</summary>
+    public string MenuExpectations => Expect(Pins.Select(p => p.Key + "=" + p.Value));
+    /// <summary>Strict pins once joined: plugins and the server's world.</summary>
+    public string WorldExpectations(string worldUid) => Expect(Pins.Select(p => p.Key + "=" + p.Value).Append("worlduid=" + worldUid));
     /// <summary>
     /// The static preflight of the run, after <see cref="Validate"/> and before anything is copied or started; every fact it
     /// needs is on disk here. A hosting client's fixture must still be its pinned files and must hold the world
@@ -312,7 +301,7 @@ public sealed class ClientRunPlan
     /// <c>BepInEx/plugins</c> or <c>BepInEx/scripts</c> (a hash typed by hand or a wrong staged file matches none), a pinned
     /// plugin in <c>scripts</c> has ScriptEngine pinned and set to <c>LoadOnStart</c>, and ValheimCLI's standing expectations
     /// file, when its config sets one, parses one pin per line, names a world when strict, and agrees with the plan's pins and
-    /// hosted world. An unpinned client skips the plugin checks, which need pins. With a <see cref="CliManifest"/>, last, the
+    /// hosted world. With a <see cref="CliManifest"/>, last, the
     /// install's ValheimCLI files must be exactly its set and provide its own requested pack capabilities
     /// (<see cref="CheckCliManifest"/>). A mod adapter's extensions are confirmed after the client loads.
     /// An attached client's install is its operator's and is not read. <see cref="ClientSession.Launch(ClientRunPlan, string, CancellationToken)"/>
@@ -345,13 +334,13 @@ public sealed class ClientRunPlan
             // The copy's loader is the pinned pack on Windows (#711) and its ValheimCLI is the staged set: both are
             // checked on the copy before its launch.
             var kept = Pins.Where(pin => !CliBuildManifest.IsCliPlugin(pin.Key)).ToDictionary(pin => pin.Key, pin => pin.Value, StringComparer.Ordinal);
-            OwnedClientPreflight.Check(Install, kept, Pinned, HostWorld, hostWorldName);
+            OwnedClientPreflight.Check(Install, kept, HostWorld, hostWorldName);
             CheckCliManifest(capabilities);
             return null;
         }
         if (InPlace) OwnedClientPreflight.RequireInPlace(Install);
         var start = ClientSession.StartInfo(this, GameLaunch.CurrentClientHost); // The install's loader and slices.
-        OwnedClientPreflight.Check(LoaderRoot, Pins, Pinned, HostWorld, hostWorldName);
+        OwnedClientPreflight.Check(LoaderRoot, Pins, HostWorld, hostWorldName);
         CheckCliManifest(capabilities);
         return start;
     }
@@ -387,11 +376,9 @@ public sealed class ClientRunPlan
     public void CheckInstallPins()
     {
         if (!Owned) return;
-        if (Pinned)
-        {
-            var pins = InstallPins ?? throw new ArgumentException("Pin the owned client's game build, loader and patchers in installPins, or opt out explicitly with \"pinning\": \"none\".");
-            pins.Check(Install, LoaderRoot, "client install");
-        }
+        if (InstallPins is { } pins) pins.Check(Install, LoaderRoot, "client install");
+        else if (!CopySource)
+            throw new ArgumentException("Pin the in-place owned client's game build, loader and patchers in installPins.");
         if (PreparedSourceGameRoot is { } source && PreparedSourceGameHash is { } expected &&
             !Valheim.Testing.Game.InstallPins.GameHash(source).Equals(expected, StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("The source game changed after its loader profile was staged. Refuse this launch and prepare a new profile against the current game build.");

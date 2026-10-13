@@ -7,7 +7,7 @@ using Valheim.Testing.GameSessions;
 // check, BepInExLoader.RequireWindowsLoader. One test per path, each naming its install; the hosted server run's own step
 // and the remote client preflight are in HostedServerRunTests (AHostedWindowsServerRunRefusesAMixedDoorstopBeforeItStarts,
 // ARemoteWindowsClientRefusesMixedLoaderAndInheritedStandingPinsBeforeLaunch). An install pinned before its proxy was
-// replaced is refused by the loader pin as well (PinningTests).
+// replaced is refused by the loader pin as well (PinsTests).
 public sealed class DoorstopMixPathsTests : IDisposable
 {
     private readonly string _root = Directory.CreateTempSubdirectory("doorstop-mix-").FullName;

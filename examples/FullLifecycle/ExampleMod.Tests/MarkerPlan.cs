@@ -34,9 +34,6 @@ public sealed class MarkerPlan : ServerRunPlan
     /// <summary>The plan's rules, on a read plan or on a session's plan once bound to its prepared actors.</summary>
     public static MarkerPlan Validated(MarkerPlan plan)
     {
-        // The scenario joins and checks by the pinned world uid, so this example has no unpinned mode.
-        if (!plan.Pinned || plan.Client is { Pinned: false })
-            throw new ArgumentException("This example runs with strict pins only: remove \"pinning\".");
         plan.ValidateServerPlan([ModPlugin, AdapterPlugin, "valheimCLI.valheimCLI"], SessionTokenVariable);
         plan.RequireScenario(ScenarioName);
         var client = plan.Client ?? throw new ArgumentException("The scenario looks from a client: add the client section.");

@@ -62,7 +62,6 @@ public static class ReviewCapture
         ArgumentNullException.ThrowIfNull(fetch);
         ArgumentNullException.ThrowIfNull(arrive);
         Validate(plan, shell);
-        if (!server.Pinned || !client.Pinned) throw new InvalidOperationException("A review capture requires strict server and client pins.");
         string staging = ReviewLease.Stage(plan.EvidenceDirectory);
         var begin = client.RequireCapability("valheim.observe/review-begin");
         var restore = client.RequireCapability("valheim.observe/review-restore");

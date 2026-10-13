@@ -185,9 +185,6 @@ public sealed class RegressionBundleTests : IDisposable
         edited["Passed"] = JsonSerializer.SerializeToElement(true);
         File.WriteAllText(result, JsonSerializer.Serialize(edited));
         Assert.Contains("result.json says Passed=True, but its steps say a step failed", Assert.Throws<InvalidOperationException>(() => RegressionBundle.Create(_rig.Spec(), _rig.Output(), _rig.Sources)).Message);
-        // An unpinned run is no evidence of which build ran.
-        File.WriteAllText(result, original.Replace("\"Pinning\": \"strict\"", "\"Pinning\": \"none\""));
-        Assert.Contains("result.json records pinning none", Assert.Throws<InvalidOperationException>(() => RegressionBundle.Create(_rig.Spec(), _rig.Output(), _rig.Sources)).Message);
         File.WriteAllText(result, original);
         // A trace of another build.
         _rig.Evidence("parent", pass: false, md5: FileHash.Md5(_rig.Rig.Candidate));
@@ -361,7 +358,7 @@ internal sealed class BundleRig : IDisposable
         "using Valheim.Testing.Game;\n\npublic static class Scenario\n{\n" + (line.Length == 0 ? "" : line + "\n") +
         "    public const string Name = \"example-regression\";\n    public static void Measure(ClientRound round) => round.Step(\"the mod marks the ground\", () => { });\n}\n");
 
-    /// <summary>One arm's evidence as a template run writes it, its trace pinning <paramref name="md5"/> for the mod (the arm's own by default).</summary>
+    /// <summary>One arm's evidence as a template run writes it, with its trace carrying <paramref name="md5"/> for the mod (the arm's own by default).</summary>
     public void Evidence(string arm, bool pass, string? md5 = null, string extraPins = "", string toolkit = "Valheim.Testing.Game 0.1.0-preview.17", string error = "2 markers stand there; expected 1.")
     {
         var staged = _regression.Stage(arm);
@@ -479,7 +476,7 @@ internal sealed class BundleRig : IDisposable
     public void Dispose() { _regression.Remove(); Rig.Dispose(); }
 
     /// <summary>
-    /// The GameSessions version a run records: this build's (#683), as the valheim-test tool pins it. A bundle pinning that
+    /// The GameSessions version a run records: this build's (#683), as the valheim-test tool pins it. A bundle carrying that
     /// package must name it, and the fake feed serves it.
     /// </summary>
     internal static readonly string GameSessionsVersion = SmokeProject.GameSessionsVersion;

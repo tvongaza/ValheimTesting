@@ -54,9 +54,6 @@ public class LifecyclePlan : ServerRunPlan
 
     private void Validate()
     {
-        // The scenario joins and checks by the pinned world uid, so this suite has no unpinned mode.
-        if (!Pinned || ClientSections.Any(client => client is { Pinned: false }))
-            throw new ArgumentException("This suite runs with strict pins only: remove \"pinning\".");
         ValidateServerPlan([ModPlugin, AdapterPlugin, "valheimCLI.valheimCLI"], SessionTokenVariable);
         RequireScenario([.. Scenarios]);
         ValidateScenario();

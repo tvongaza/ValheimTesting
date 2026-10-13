@@ -61,7 +61,7 @@ internal sealed class HostedWorldLifecycle(ClientRunPlan plan, string output, Ca
             if (_world != null) throw new InvalidOperationException("The fixture world is placed already.");
             saveDirectory = _saveDirectory ?? throw new InvalidOperationException("Check the client's save directory before placing the fixture world.");
         }
-        var world = site != null ? site.Place(Section, output, plan.Pinned, cancellation) : HostedWorld.Place(Section, saveDirectory, output, plan.Pinned);
+        var world = site != null ? site.Place(Section, output, cancellation) : HostedWorld.Place(Section, saveDirectory, output);
         lock (_state) _world = world;
     }
     /// <summary>The three preparation steps in <paramref name="report"/>: preflight, save directory, placement; the placed world's name is recorded.</summary>
@@ -114,5 +114,5 @@ internal interface IHostedWorldSite
     /// <summary>The client's <c>worlds_local</c> on its machine.</summary>
     string WorldsDirectory { get; }
     /// <summary>Copies the fixture into <paramref name="output"/> (verified) and into <see cref="WorldsDirectory"/>, refusing a world already named for it.</summary>
-    HostedWorld Place(HostWorldPlan plan, string output, bool pinned, CancellationToken cancellation);
+    HostedWorld Place(HostWorldPlan plan, string output, CancellationToken cancellation);
 }

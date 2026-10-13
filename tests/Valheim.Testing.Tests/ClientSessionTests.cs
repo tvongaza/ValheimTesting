@@ -45,19 +45,6 @@ public sealed class ClientSessionTests : IDisposable
         Assert.Equal(1, process.Stops);
     }
 
-    [Fact] public void AnExplicitlyUnpinnedClientCannotSendADiagnosticGameCommand()
-    {
-        var plan = Owned(Path.GetFullPath("client-install"));
-        plan.Capabilities = ["test/absent"]; // Failure after the unpinned environment check.
-        var transport = new ScriptedTransport();
-        GameActor? diagnosticActor = null;
-        Assert.Throws<InvalidOperationException>(() => ClientSession.Launch(plan, _output,
-            () => new FakeOwnedProcess(99), () => transport, (_, _) => Task.CompletedTask,
-            default, null, null, failureEvidence: (_, actor, _) => diagnosticActor = actor));
-        Assert.Null(diagnosticActor);
-        Assert.DoesNotContain(transport.Commands, command => command.StartsWith("cli_screenshot_path64 ", StringComparison.Ordinal));
-    }
-
     [Fact] public void AFailedWorldRoundCapturesEvidenceOnlyOnceBeforeStopping()
     {
         var process = new FakeOwnedProcess(99);
@@ -70,23 +57,6 @@ public sealed class ClientSessionTests : IDisposable
             session.CaptureFailure();
         }
         Assert.Equal(1, captures);
-        Assert.Equal(1, process.Stops);
-    }
-
-    [Fact] public void AWorldRoundThatWasUnpinnedKeepsProcessEvidenceWithoutAGameCommand()
-    {
-        var process = new FakeOwnedProcess(99);
-        var transport = new ScriptedTransport();
-        GameActor? diagnosticActor = null;
-        using (var session = ClientSession.Launch(Plan(), _output, () => process, () => transport,
-            (_, _) => Task.CompletedTask, default, null, null,
-            failureEvidence: (_, actor, _) => diagnosticActor = actor))
-        {
-            session.Actor.VerifyEnvironment(EnvironmentPinning.None);
-            session.CaptureFailure();
-        }
-        Assert.Null(diagnosticActor);
-        Assert.DoesNotContain(transport.Commands, command => command.StartsWith("cli_screenshot_path64 ", StringComparison.Ordinal));
         Assert.Equal(1, process.Stops);
     }
 
@@ -118,11 +88,6 @@ public sealed class ClientSessionTests : IDisposable
         Assert.Contains("CLI refused", File.ReadAllText(Path.Combine(refused, "client-failure-diagnostic.json")));
         Assert.Single(transport.Commands.Where(command => command.StartsWith("cli_screenshot_path64 ", StringComparison.Ordinal)));
 
-        actor.VerifyEnvironment(EnvironmentPinning.None);
-        string unpinned = Path.Combine(_output, "unpinned");
-        ClientFailureEvidence.CaptureLocal(new ExactProcess(current.Id, start), actor, plan, unpinned);
-        Assert.Single(transport.Commands.Where(command => command.StartsWith("cli_screenshot_path64 ", StringComparison.Ordinal)));
-        Assert.Contains("not attempted", File.ReadAllText(Path.Combine(unpinned, "client-failure-diagnostic.json")));
     }
 
     private sealed class ExactProcess(int id, string start) : IOwnedProcess, IClientProcessIdentity
@@ -266,10 +231,10 @@ public sealed class ClientSessionTests : IDisposable
         Assert.Equal(outcome, session.Stopped!.Outcome); Assert.True(process.HasExited);
     }
 
-    // An unpinned owned plan for a synthetic install, so only the architecture decides what the launch does.
+    // A minimal owned plan for a synthetic install, so only the architecture decides what the launch does.
     private static ClientRunPlan Owned(string install, string? architecture = null) => new()
     {
-        Mode = "owned", Install = install, Port = 5556, Join = "127.0.0.1:2456", Character = "Tester", Pinning = "none", Architecture = architecture ?? "",
+        Mode = "owned", Install = install, Port = 5556, Join = "127.0.0.1:2456", Character = "Tester", Architecture = architecture ?? "",
     };
 
     [Theory] [InlineData("x64", "-x86_64", false)] [InlineData("arm64", "-arm64", true)]
@@ -351,6 +316,11 @@ public sealed class ClientSessionTests : IDisposable
         ClientRunPlan Plan(string root, string? architecture = null)
         {
             var plan = Owned(root, architecture); plan.InPlace = inPlace;
+            if (inPlace)
+            {
+                plan.InstallPins = new() { Game = new string('c', 64), Loader = new string('d', 64), Patchers = new string('e', 64) };
+                plan.Pins[CliCapabilityManifest.PluginGuid] = new string('a', 32);
+            }
             Assert.Equal(!inPlace, plan.CopySource);
             return plan;
         }

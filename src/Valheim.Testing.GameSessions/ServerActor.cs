@@ -49,7 +49,7 @@ public sealed class ServerActor : IOwnedServer, IDisposable
             lock (_logs) _logs.AddRange(started.Logs);
             try
             {
-                File.WriteAllText(Path.Combine(output, "boot-" + n + ".process.json"), JsonSerializer.Serialize(EnvironmentPinning.Stamp(started.Facts, plan.Pinned)));
+                File.WriteAllText(Path.Combine(output, "boot-" + n + ".process.json"), JsonSerializer.Serialize(started.Facts));
                 started.Started?.Invoke();
             }
             catch
@@ -64,7 +64,7 @@ public sealed class ServerActor : IOwnedServer, IDisposable
                 throw;
             }
             return started.Process;
-        }, () => new RecordingTransport(placement.Connect(), Path.Combine(output, "connection-" + ++connection + ".jsonl"), plan.Pinned ? null : EnvironmentPinning.NotPinned),
+        }, () => new RecordingTransport(placement.Connect(), Path.Combine(output, "connection-" + ++connection + ".jsonl")),
             world, plan.ExpectCommand, sessionCapability, TimeSpan.FromSeconds(plan.StartupSeconds), TimeSpan.FromSeconds(plan.CommandSeconds), cancellation: cancellation)
         {
             QuitTimeout = TimeSpan.FromSeconds(plan.QuitSeconds), Events = placement.Events(plan),

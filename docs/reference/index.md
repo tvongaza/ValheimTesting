@@ -27,7 +27,7 @@ Two gaps are deliberate. The source-included game-name doubles sit outside the n
 | [`CompositeTerrain`](xref:Valheim.Testing.CompositeTerrain) | Declaring synthetic terrain |
 | [`WorldFixture`](xref:Valheim.Testing.Game.WorldFixture) | Copying a pinned world |
 | [`DisposableCharacterStore`](xref:Valheim.Testing.Game.DisposableCharacterStore) | Registering a disposable character, from a game-created local save |
-| [`GameActor`](xref:Valheim.Testing.Game.GameActor) | Pinning and observing a game process |
+| [`GameActor`](xref:Valheim.Testing.Game.GameActor) | Verifying pins and observing a game process |
 | [`PinnedServerRun`](xref:Valheim.Testing.GameSessions.PinnedServerRun) | Owning the server lifecycle |
 
 An API page excerpts one call. For a complete scenario, follow the [guides](../index.md#find-the-guide-for-your-task).

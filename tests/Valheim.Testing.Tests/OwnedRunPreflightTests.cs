@@ -326,7 +326,7 @@ public sealed class OwnedRunPreflightTests : IDisposable
         File.WriteAllBytes(Path.Combine(fixture, "SealFixture.fwl"), Metadata("SealFixture", -123456789));
         File.WriteAllText(Path.Combine(fixture, "SealFixture.db"), "world");
         var plan = new HostWorldPlan { World = new() { Source = fixture, Sha256 = new(WorldFixture.Manifest(fixture)) }, WorldUid = "450017353" };
-        plan.Validate(pinned: true);
+        plan.Validate();
         var error = Assert.Throws<InvalidOperationException>(plan.Preflight);
         Assert.Contains("hostWorld.worldUid is 450017353", error.Message);
         Assert.Contains("holds world SealFixture with UID -123456789 (SealFixture.fwl)", error.Message);

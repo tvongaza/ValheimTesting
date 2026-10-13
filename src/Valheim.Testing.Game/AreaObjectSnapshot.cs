@@ -35,7 +35,6 @@ public sealed record AreaObjectSnapshot(string Site, string WorldUid, int X, int
         if (Math.Abs((long)x) > 20000 || Math.Abs((long)z) > 20000 || radius is < 1 or > 64)
             throw new ArgumentOutOfRangeException(nameof(radius), "Use a centre in the supported world range and a 1..64 m radius.");
         if (readinessTimeout <= TimeSpan.Zero || readinessTimeout > TimeSpan.FromMinutes(2)) throw new ArgumentOutOfRangeException(nameof(readinessTimeout));
-        if (!server.Pinned || !client.Pinned) throw new InvalidOperationException("Area snapshots require strict pins on both actors.");
 
         var started = DateTimeOffset.UtcNow;
         var commands = new List<ObservedCommand>();

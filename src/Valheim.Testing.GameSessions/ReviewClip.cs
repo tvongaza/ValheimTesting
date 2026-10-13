@@ -46,7 +46,6 @@ public static class ReviewClip
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(fetch);
         Validate(plan);
-        if (!client.Pinned) throw new InvalidOperationException("A review clip requires strict client pins.");
         string staging = ReviewLease.Stage(plan.EvidenceDirectory);
         var state = new SessionControl(client).Read();
         if (!state.WorldReady || !state.PlayerReady || state.Dedicated || state.WorldUid != plan.WorldUid)

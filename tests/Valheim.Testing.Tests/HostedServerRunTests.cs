@@ -27,6 +27,20 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.True(JsonSerializer.Deserialize<GameRole>(JsonSerializer.Serialize(explicitRole))!.RuntimeExplicit);
     }
 
+    // These direct hosted-client tests stand in for campaign preparation: bind the staged CLI and install pins that preparation supplies.
+    private ClientRunPlan PreparedClient(FakeServerHost host, int startSeconds = 30, int bepInExSeconds = 60, bool connect = true)
+    {
+        string install = host.Local("/Users/tester/valheim");
+        string cli = Path.Combine(install, "BepInEx", "plugins", "valheimCLI.dll");
+        Directory.CreateDirectory(Path.GetDirectoryName(cli)!);
+        File.Copy(Path.Combine(TestCliSet.Source.Files, "valheimCLI.dll"), cli, overwrite: true);
+        return new ClientRunPlan
+        {
+            Mode = "owned", Architecture = "x64", Install = _root, Port = 5578, StartSeconds = startSeconds,
+            BepInExSeconds = bepInExSeconds, LaunchArguments = connect ? ["+connect", "linux-box:2456"] : [],
+            InstallPins = InstallPins.Of(install), Pins = new() { [CliCapabilityManifest.PluginGuid] = TestCliSet.CorePin },
+        };
+    }
     [Fact] public void AWindowsPwshDedicatedServerProfileIsAcceptedBeforeAnyHostOperation()
     {
         var host = NewHost();
@@ -64,7 +78,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         var profile = TestEnvironment.Read(profilePath);
         profile.Server!.Runtime = Install + "/runs";
         var hosted = HostedServerRun.Create(profile, plan, "test", new FakeRunHooks { Host = _ => host, RunId = RunId });
-        var error = await Assert.ThrowsAsync<ArgumentException>(() => hosted.LockAndPrepareRuntimeAsync(new ScenarioReport("inside"), plan, pinned: true, CancellationToken.None));
+        var error = await Assert.ThrowsAsync<ArgumentException>(() => hosted.LockAndPrepareRuntimeAsync(new ScenarioReport("inside"), plan, CancellationToken.None));
         Assert.Contains("overlaps the install", error.Message);
         Assert.Contains("apart", host.Scripts);
         Assert.DoesNotContain("profile-seed", host.Scripts);
@@ -84,7 +98,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.Equal(RunDirectory, hosted.RunDirectory); // world and boot evidence stay in the run's own directory
         File.AppendAllText(Path.Combine(host.Local(Install), GameLaunch.ServerLinuxExecutable), " changed after preparation");
         var report = new ScenarioReport("prepared runtime");
-        await Assert.ThrowsAnyAsync<Exception>(() => hosted.LockAndPrepareRuntimeAsync(report, plan, pinned: true, CancellationToken.None));
+        await Assert.ThrowsAnyAsync<Exception>(() => hosted.LockAndPrepareRuntimeAsync(report, plan, CancellationToken.None));
         var step = Assert.Single(report.Steps, step => step.Name == "verify the prepared runtime on the server host");
         Assert.False(step.Passed);
         Assert.Contains(GameLaunch.ServerLinuxExecutable, step.Error);
@@ -107,7 +121,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         var hosted = HostedServerRun.Create(environment, plan, "test", new FakeRunHooks { Host = _ => host, RunId = RunId }, prepared: true);
         Assert.Equal(Install, hosted.GameDirectory);
         Assert.Equal(owned, hosted.LoaderDirectory);
-        await hosted.LockAndPrepareRuntimeAsync(new ScenarioReport("prepared profile"), plan, pinned: true, CancellationToken.None);
+        await hosted.LockAndPrepareRuntimeAsync(new ScenarioReport("prepared profile"), plan, CancellationToken.None);
         File.AppendAllText(Directory.EnumerateFiles(host.Local(Install), "assembly_valheim.dll", SearchOption.AllDirectories).Single(), "steam update");
         var launch = GameLaunch.ForServerWithLoader(Install, owned, ["-batchmode"], null, ServerPlatform.Linux);
         var error = Assert.ThrowsAny<Exception>(() => ((IServerPlacement)hosted).Start(1, launch, Output, TimeSpan.FromSeconds(120), CancellationToken.None));
@@ -116,7 +130,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.False(Directory.Exists(Path.Combine(Output, "boot-1")));
     }
 
-    [Fact] public async Task APreparedWindowsProfileRefusesAChangedUnpinnedSourceFileBeforeBoot()
+    [Fact] public async Task APreparedWindowsProfileRefusesAChangedSourceFileBeforeBoot()
     {
         var host = new FakeServerHost("windows-server", Mirror, windows: true);
         var (planPath, profilePath) = Write(host, hostPlatform: "windows", hostShell: "pwsh");
@@ -130,7 +144,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         environment.Server.PreparedSourceRoot = source;
         environment.Server.PreparedSourceFiles = (await HostInstall.ListAsync(host, source, TimeSpan.FromSeconds(30))).Files;
         var hosted = HostedServerRun.Create(environment, plan, "test", new FakeRunHooks { Host = _ => host, RunId = RunId }, prepared: true);
-        await hosted.LockAndPrepareRuntimeAsync(new ScenarioReport("prepared profile"), plan, pinned: true, CancellationToken.None);
+        await hosted.LockAndPrepareRuntimeAsync(new ScenarioReport("prepared profile"), plan, CancellationToken.None);
         File.WriteAllText(Path.Combine(host.Local(source), "unrelated-source-file.txt"), "changed after preparation");
 
         var launch = GameLaunch.ForServerWithLoader(owned, owned, ["-batchmode"], null, ServerPlatform.Windows);
@@ -176,7 +190,7 @@ public sealed partial class HostedServerRunTests : IDisposable
     }
 
     // The host's install (the runtime the plan pins) and a local world; returns the plan and the profile.
-    private (string Plan, string Profile) Write(FakeServerHost host, int planPort = 5577, string hostPlatform = "linux", string hostShell = "bash", bool withClient = false, bool unpinned = false,
+    private (string Plan, string Profile) Write(FakeServerHost host, int planPort = 5577, string hostPlatform = "linux", string hostShell = "bash", bool withClient = false,
         bool crossplay = false, string portOption = "-port", string gamePort = "2456", object? steamAccounts = null, string? steamAccount = null,
         string doorstopConfig = DoorstopMixPathsTests.Doorstop4Config, string clientPlatform = "macos")
     {
@@ -204,14 +218,14 @@ public sealed partial class HostedServerRunTests : IDisposable
         var plan = new Dictionary<string, object>
         {
             ["scenario"] = "smoke",
-            ["runtime"] = new { source = install, sha256 = unpinned ? new Dictionary<string, string>() : WorldFixture.Manifest(install) },
+            ["runtime"] = new { source = install, sha256 = WorldFixture.Manifest(install) },
             ["world"] = new { source = world, sha256 = WorldFixture.Manifest(world) },
             ["arguments"] = new[] { "-batchmode", "-nographics", "-savedir", "{world}", portOption, gamePort, "-logFile", "{runtime}/toolkit-unity.log" },
-            ["pins"] = unpinned ? new Dictionary<string, string>() : new Dictionary<string, string> { ["worlduid"] = "1" },
+            ["pins"] = new Dictionary<string, string> { ["worlduid"] = "1" },
             ["port"] = planPort,
         };
         if (crossplay) plan["crossplay"] = true;
-        if (unpinned) plan["pinning"] = "none"; else plan["runtimePins"] = InstallPins.Of(install);
+        plan["runtimePins"] = InstallPins.Of(install);
         string planPath = Path.Combine(_root, "plan.json");
         File.WriteAllText(planPath, JsonSerializer.Serialize(plan));
         var hosts = new Dictionary<string, object>
@@ -262,6 +276,9 @@ public sealed partial class HostedServerRunTests : IDisposable
         var pins = new Dictionary<string, string>(StringComparer.Ordinal);
         if (shape == "full")
         {
+            string sourceCli = Path.Combine(host.Local(Install), "BepInEx", "plugins", "valheimCLI.dll");
+            Directory.CreateDirectory(Path.GetDirectoryName(sourceCli)!);
+            File.Copy(Path.Combine(TestCliSet.Source.Files, "valheimCLI.dll"), sourceCli, overwrite: true);
             runtime["sha256"] = JsonSerializer.SerializeToNode(WorldFixture.Manifest(host.Local(Install)));
             fixture["sha256"] = JsonSerializer.SerializeToNode(WorldFixture.Manifest(world));
             pins["worlduid"] = DefaultSmokeWorld.Uid;
@@ -294,7 +311,6 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.True(code == 0, File.ReadAllText(Path.Combine(Output, "result.json")));
 
         var result = Result();
-        Assert.Equal("strict", result.GetProperty("Pinning").GetString());
         Assert.Equal("pins observed, not reviewed", result.GetProperty("Provenance").GetProperty("pins").GetString());
         var origins = result.GetProperty("PinOrigins");
         Assert.All(origins.EnumerateObject(), origin => Assert.Equal("observed", origin.Value.GetString()));
@@ -305,22 +321,24 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.False(result.GetProperty("Provenance").TryGetProperty("environment", out _));
 
         var inputs = JsonDocument.Parse(File.ReadAllText(Path.Combine(Output, "input-hashes.json"))).RootElement;
-        Assert.Equal("strict", inputs.GetProperty("pinning").GetString());
         Assert.Equal(DefaultSmokeWorld.Uid, inputs.GetProperty("worldUid").GetString());
         Assert.Equal(FileHash.Md5(mod), inputs.GetProperty("plugins").GetProperty("test.mod").GetString());
         Assert.Equal("observed", inputs.GetProperty("pinOrigins").GetProperty("runtimePins").GetString());
-        Assert.DoesNotContain(EnvironmentPinning.NotPinned, File.ReadAllText(Path.Combine(Output, "input-hashes.json")));
     }
 
-    [Fact] public async Task AStandalonePlanWithEveryPinKeepsPlanOriginsWhenTheEnforcedValuesMatch()
+    [Fact] public async Task AStandalonePlanWithEveryPinRecordsTheCliReplacementAsObserved()
     {
         var host = NewHost();
         var (plan, profile, _) = PinPlan(host, "full");
         Assert.Equal(0, await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["validate", plan, Output], Options(host, null)));
         var origins = Result().GetProperty("PinOrigins");
         Assert.NotEmpty(origins.EnumerateObject());
-        Assert.All(origins.EnumerateObject(), origin => Assert.Equal("plan", origin.Value.GetString()));
-        Assert.False(Result().GetProperty("Provenance").TryGetProperty("pins", out _));
+        Assert.All(origins.EnumerateObject().Where(origin => origin.Name != "plugins." + CliCapabilityManifest.PluginGuid),
+            origin => Assert.Equal("plan", origin.Value.GetString()));
+        Assert.Equal("observed", origins.GetProperty("plugins." + CliCapabilityManifest.PluginGuid).GetString());
+        Assert.Equal(TestCliSet.CorePin, JsonDocument.Parse(File.ReadAllText(Path.Combine(Output, "input-hashes.json"))).RootElement
+            .GetProperty("sourceValheimCliPins").GetProperty(CliCapabilityManifest.PluginGuid).GetString());
+        Assert.Equal("pins observed, not reviewed", Result().GetProperty("Provenance").GetProperty("pins").GetString());
     }
 
     [Fact] public async Task AStandaloneMixedPlanChecksWhatItGivesAndObservesTheRest()
@@ -380,10 +398,26 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.Equal("BepInEx/plugins/valheimCLI.dll", provenance.GetProperty("replacedValheimCliPaths").GetString());
     }
 
+    [Fact] public async Task AStandaloneStagedCliMatchDoesNotSkipTheSuppliedSourcePinCheck()
+    {
+        var host = NewHost();
+        var (planPath, profilePath, _) = PinPlan(host, "full");
+        string installCli = Path.Combine(host.Local(Install), "BepInEx", "plugins", "valheimCLI.dll");
+        File.WriteAllBytes(installCli, RegressionRig.Assembly("valheimCLI-drifted-source", new("valheimCLI.valheimCLI")));
+        var plan = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(planPath))!;
+        plan["runtime"]!["sha256"] = JsonSerializer.SerializeToNode(WorldFixture.Manifest(host.Local(Install)));
+        File.WriteAllText(planPath, plan.ToJsonString());
+
+        Assert.Equal(1, await PinnedServerRun.MainAsync(TestEnvironment.Read(profilePath), ["validate", planPath, Output], Options(host, null)));
+        var step = Assert.Single(Result().GetProperty("Steps").EnumerateArray(), item =>
+            item.GetProperty("Name").GetString() == "check the server host's install against the pinned runtime and stage its profile");
+        Assert.Contains("install build it replaces", step.GetProperty("Error").GetString());
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task UnpinnedSourceCliCopiesDoNotInspectNonLoadingOrDuplicateReplacements(bool alsoInPlugins)
+    public async Task SourceCliCopiesDoNotInspectNonLoadingOrDuplicateReplacements(bool alsoInPlugins)
     {
         var host = NewHost();
         var (plan, profile, _) = PinPlan(host, "observed");
@@ -999,20 +1033,21 @@ public sealed partial class HostedServerRunTests : IDisposable
         var host = NewHost();
         var (planPath, profilePath) = Write(host);
         Directory.CreateDirectory(Path.Combine(host.Local(Install), "BepInEx", "plugins"));
-        File.WriteAllText(Path.Combine(host.Local(Install), "BepInEx", "plugins", "valheimCLI.dll"), "the install's own ValheimCLI");
+        string installCli = Path.Combine(host.Local(Install), "BepInEx", "plugins", "valheimCLI.dll");
+        File.WriteAllText(installCli, "the install's own ValheimCLI");
         string mod = Path.Combine(host.Local(Install), "BepInEx", "plugins", "Mod.dll");
         File.WriteAllBytes(mod, RegressionRig.Assembly("ExampleMod", new("example.mod")));
         var plan = ServerRunPlan.Read<ServerRunPlan>(planPath);
         plan.Runtime.Sha256 = new(WorldFixture.Manifest(host.Local(Install)));
         var installPins = plan.RuntimePins = InstallPins.Of(host.Local(Install));
-        plan.Pins["valheimCLI.valheimCLI"] = TestCliSet.CorePin;
+        string sourceCliPin = plan.Pins["valheimCLI.valheimCLI"] = FileHash.Md5(installCli);
         plan.Pins["example.mod"] = FileHash.Md5(mod);
         var before = WorldFixture.Manifest(host.Local(Install));
         string package = LinuxLoaderPackage("pinned-pack");
         var hosted = HostedServerRun.Create(TestEnvironment.Read(profilePath), plan, "test",
             new FakeRunHooks { Host = _ => host, RunId = RunId, PinnedLoader = (_, _, platform) => platform == "linux" ? new ShippedLoader.Choice(package, "the pinned test pack") : null }, prepared: false);
         var report = new ScenarioReport("bind");
-        await hosted.LockAndPrepareRuntimeAsync(report, plan, pinned: true, CancellationToken.None);
+        await hosted.LockAndPrepareRuntimeAsync(report, plan, CancellationToken.None);
 
         Assert.Equal((Install, RunDirectory + "/runtime"), (hosted.GameDirectory, hosted.LoaderDirectory));
         string profile = host.Local(RunDirectory + "/runtime");
@@ -1021,13 +1056,15 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.Equal(installPins.Game, plan.RuntimePins.Game);
         Assert.Equal((Install, before.Count), (plan.Runtime.Source, plan.Runtime.Sha256.Count)); // the profile's game is the install, on Linux
         Assert.Equal(TestCliSet.CorePin, plan.Pins["valheimCLI.valheimCLI"]);
+        Assert.Equal(sourceCliPin, hosted.SourceCliPins["valheimCLI.valheimCLI"]);
+        Assert.Equal("observed", hosted.PinOrigins["plugins.valheimCLI.valheimCLI"]);
         Assert.Equal(FileHash.Md5(mod), plan.Pins["example.mod"]);
         Assert.Equal(File.ReadAllBytes(Path.Combine(TestCliSet.Source.Files, "valheimCLI.dll")), File.ReadAllBytes(Path.Combine(profile, "BepInEx", "plugins", "valheimCLI.dll")));
         Assert.Equal(File.ReadAllBytes(mod), File.ReadAllBytes(Path.Combine(profile, "BepInEx", "plugins", "Mod.dll")));
         Assert.Equal("pinned-pack doorstop_libs/libdoorstop_x64.so", File.ReadAllText(Path.Combine(profile, "doorstop_libs", "libdoorstop_x64.so")));
         Assert.Equal("the pinned test pack", report.Provenance["serverLoaderShipped"]);
         Assert.Equal(before, WorldFixture.Manifest(host.Local(Install)));
-        hosted.CheckRuntime(report, plan, pinned: true);
+        hosted.CheckRuntime(report, plan);
         Assert.All(report.Steps, step => Assert.True(step.Passed, step.Name + ": " + step.Error));
     }
 
@@ -1062,7 +1099,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         File.WriteAllText(Path.Combine(clientInstall, "BepInEx", "LogOutput.log"), "an earlier run's log\n");
         var (plan, profile) = Write(host, withClient: true);
         var clientTransport = new ScriptedTransport();
-        var client = new ClientRunPlan { Mode = "owned", Architecture = "x64", Install = _root, Port = 5578, Pinning = "none", StartSeconds = 30, LaunchArguments = ["+connect", "linux-box:2456"] };
+        var client = PreparedClient(clientHost);
         int? pid = null;
         int code = await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["run", plan, Output], Options(host, server, run =>
         {
@@ -1121,7 +1158,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         long before = new FileInfo(steamLog).Length;
         clientHost.BeforeScript = name => { if (name == "client-start") File.AppendAllText(steamLog, signedOut ? SteamAccountInUseTests.SteamDup2 : SteamAccountInUseTests.Healthy); };
         var (plan, profile) = Write(host, withClient: true);
-        var client = new ClientRunPlan { Mode = "owned", Architecture = "x64", Install = _root, Port = 5578, Pinning = "none", StartSeconds = 30, LaunchArguments = ["+connect", "linux-box:2456"] };
+        var client = PreparedClient(clientHost);
         Exception? failed = null;
         int code = await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["run", plan, Output], Options(host, server, run =>
         {
@@ -1150,11 +1187,11 @@ public sealed partial class HostedServerRunTests : IDisposable
         File.WriteAllText(Path.Combine(local, "winhttp.dll"), "MZ fake"); // a proxy that shows no Doorstop version
         File.WriteAllText(Path.Combine(local, "doorstop_config.ini"), "[General]\nenabled=true\ntarget_assembly=BepInEx\\core\\BepInEx.Preloader.dll\n");
         var unrecognised = await Assert.ThrowsAsync<DoorstopPairingException>(() => HostClientPreflight.CheckAsync(host, install, ClientPlatform.Windows,
-            new ClientRunPlan { Mode = "owned", Pinning = "none" }, TimeSpan.FromSeconds(5), default));
+            new ClientRunPlan { Mode = "owned" }, TimeSpan.FromSeconds(5), default));
         Assert.Contains("not a Doorstop proxy this check recognises", unrecognised.Message);
         File.WriteAllText(Path.Combine(local, "winhttp.dll"), "MZ target_assembly"); // Doorstop 4 signature
         File.WriteAllText(Path.Combine(local, "doorstop_config.ini"), "[UnityDoorstop]\nenabled=true\ntargetAssembly=BepInEx\\core\\BepInEx.Preloader.dll\n");
-        var plan = new ClientRunPlan { Mode = "owned", Pinning = "none", Pins = new() { ["valheimCLI.valheimCLI"] = new string('a', 32) } };
+        var plan = new ClientRunPlan { Mode = "owned", Pins = new() { ["valheimCLI.valheimCLI"] = new string('a', 32) } };
         var mismatch = await Assert.ThrowsAsync<DoorstopPairingException>(() =>
             HostClientPreflight.CheckAsync(host, install, ClientPlatform.Windows, plan, TimeSpan.FromSeconds(5), default));
         DoorstopMixPathsTests.AssertRefusal(mismatch, "client install on windows-client",
@@ -1188,7 +1225,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         string config = Path.Combine(install, "doorstop_config.ini");
         File.WriteAllText(config, "[General]\nenabled=true\ntarget_assembly=BepInEx\\core\\BepInEx.Preloader.dll\n");
         var host = new LocalGameHost("windows-client", HostShell.Pwsh);
-        var plan = new ClientRunPlan { Mode = "owned", Pinning = "none" };
+        var plan = new ClientRunPlan { Mode = "owned" };
         await HostClientPreflight.CheckAsync(host, install, ClientPlatform.Windows, plan, TimeSpan.FromSeconds(30), default);
         File.WriteAllText(config, "[UnityDoorstop]\nenabled=true\ntargetAssembly=BepInEx\\core\\BepInEx.Preloader.dll\n");
         var error = await Assert.ThrowsAsync<DoorstopPairingException>(() =>
@@ -1230,7 +1267,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         string clientInstall = clientHost.Local("/Users/tester/valheim");
         FakeInstalls.MacClient(clientInstall);
         var (plan, profile) = Write(host, withClient: true);
-        var client = new ClientRunPlan { Mode = "owned", Architecture = "x64", Install = _root, Port = 5578, Pinning = "none", StartSeconds = 300, BepInExSeconds = 30 };
+        var client = PreparedClient(clientHost, startSeconds: 300, bepInExSeconds: 30, connect: false);
         Exception? failure = null;
         Assert.Equal(1, await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["run", plan, Output], Options(host, server, run =>
         {
@@ -1258,7 +1295,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         clientHost.PreloaderReply = (fresh ? $"VT-PRELOADER fresh {B("preloader_20261005_190000.log")} {B("[Fatal  :   BepInEx] Could not find BepInEx.Preloader.Core")}\n" : "") +
             $"VT-PRELOADER stale {B("preloader_20260101_000000.log")} -\nVT-PRELOADER-END\n";
         var (plan, profile) = Write(host, withClient: true);
-        var client = new ClientRunPlan { Mode = "owned", Architecture = "x64", Install = _root, Port = 5578, Pinning = "none", StartSeconds = 300, BepInExSeconds = 30 };
+        var client = PreparedClient(clientHost, startSeconds: 300, bepInExSeconds: 30, connect: false);
         Exception? failure = null;
         await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["run", plan, Output], Options(host, server, run =>
         {

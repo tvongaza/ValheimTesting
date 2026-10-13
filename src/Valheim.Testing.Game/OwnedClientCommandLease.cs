@@ -13,7 +13,6 @@ internal sealed record OwnedClientCommandLease(int Pid, string StartFileTimeUtc,
 
     internal static void Write(string output, int pid, string startFileTimeUtc, ClientRunPlan plan)
     {
-        if (!plan.Pinned) return; // No strict expectation can be derived from an unpinned plan.
         var lease = new OwnedClientCommandLease(pid, startFileTimeUtc, plan.Port, plan.Install);
         string path = Path.Combine(output, FileName);
         string json = JsonSerializer.Serialize(lease, new JsonSerializerOptions { WriteIndented = true });
@@ -51,7 +50,7 @@ internal sealed record OwnedClientCommandLease(int Pid, string StartFileTimeUtc,
     // after the client has verified that exact world; a concurrent diagnostic must never read half a pin set.
     internal static void WriteVerifiedWorld(string output, ClientRunPlan plan, string worldUid)
     {
-        if (!plan.Pinned || !File.Exists(Path.Combine(output, FileName))) return;
+        if (!File.Exists(Path.Combine(output, FileName))) return;
         string path = Path.Combine(output, WorldPins);
         string[] pins = [.. plan.Pins.Select(pair => pair.Key + "=" + pair.Value), "worlduid=" + worldUid];
         if (!OperatingSystem.IsWindows())

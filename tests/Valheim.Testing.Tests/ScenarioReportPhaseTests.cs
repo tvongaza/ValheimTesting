@@ -49,18 +49,15 @@ public sealed class ScenarioReportPhaseTests : IDisposable
     [Fact] public void JUnitHasOneSuitePerPhaseInPhaseOrder()
     {
         var report = Run(scenario: false);
-        report.MarkNotPinned("trying it out");
         report.Write(_output);
         var root = XDocument.Load(Path.Combine(_output, "junit.xml")).Root!;
         Assert.Equal("testsuites", root.Name.LocalName);
-        Assert.Equal(("5", "1"), (root.Attribute("tests")!.Value, root.Attribute("failures")!.Value));
+        Assert.Equal(("4", "1"), (root.Attribute("tests")!.Value, root.Attribute("failures")!.Value));
         var suites = root.Elements("testsuite").ToList();
         Assert.Equal(new[] { "phases / preflight", "phases / setup", "phases / scenario", "phases / cleanup" }, suites.Select(s => s.Attribute("name")!.Value));
         Assert.Equal(new[] { "0", "0", "1", "0" }, suites.Select(s => s.Attribute("failures")!.Value));
         Assert.NotNull(suites[2].Element("testcase")!.Element("failure"));
-        // The unpinned marker sits in the Preflight suite only.
-        Assert.Equal("1", suites[0].Attribute("skipped")!.Value);
-        Assert.All(suites.Skip(1), s => Assert.Null(s.Attribute("skipped")));
+        Assert.All(suites, s => Assert.Null(s.Attribute("skipped")));
     }
 
     [Fact] public async Task EvidenceRecordsThePhaseOfTheStepItWasAttachedIn()

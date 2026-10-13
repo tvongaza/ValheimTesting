@@ -157,11 +157,6 @@ public sealed class CrossplayPlanTests : IDisposable
             p => p.Pins.Remove("valheimCLI.valheimCLI"),
         })
             Assert.Throws<ArgumentException>(() => HostingClient(change).Validate());
-        // Explicitly unpinned: no pins and no fixture hashes, but still the exact world UID.
-        var unpinned = HostingClient(p => { p.Pinning = "none"; p.Pins.Clear(); p.HostWorld!.World.Sha256.Clear(); });
-        unpinned.Validate();
-        unpinned.HostWorld!.WorldUid = "";
-        Assert.Throws<ArgumentException>(() => unpinned.Validate());
     }
 
     public sealed class ClientPlan : ServerRunPlan { public ClientRunPlan? Client { get; set; } }

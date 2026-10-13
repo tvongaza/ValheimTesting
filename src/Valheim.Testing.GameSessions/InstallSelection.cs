@@ -34,6 +34,80 @@ internal sealed class InstallSelection : IDisposable
     /// <summary>The relative paths of <see cref="ReplacedFiles"/>.</summary>
     internal IReadOnlyList<string> Replaced => ReplacedFiles.Select(file => file.RelativePath).ToArray();
 
+    internal sealed record BoundPins(Dictionary<string, string> Plugins, IReadOnlySet<string> FromPlan,
+        IReadOnlyDictionary<string, string> SourceCliPins)
+    {
+        /// <summary>Each bound plugin's origin as <c>plugins.&lt;guid&gt;</c>: <c>plan</c> when supplied, else <c>observed</c>.</summary>
+        internal IEnumerable<KeyValuePair<string, string>> PluginOrigins() => Plugins.Keys.Order(StringComparer.Ordinal)
+            .Select(plugin => new KeyValuePair<string, string>("plugins." + plugin, FromPlan.Contains(plugin) ? "plan" : "observed"));
+    }
+
+    /// <summary>
+    /// Checks every supplied install and plugin pin against this source selection before the profile replaces its loader or
+    /// ValheimCLI, then returns the complete startup plugin set the profile will enforce. Every supplied ValheimCLI pin is a
+    /// source-install expectation; the coherent replacement set is bound separately as observed. Omitted plugins are observed
+    /// from the selection.
+    /// </summary>
+    internal BoundPins BindPins(string role, InstallPins? expectedInstallPins, IReadOnlyDictionary<string, string> planned,
+        CliCapabilityManifest cli, string setFolder)
+    {
+        if (expectedInstallPins != null) HostInstall.CheckPins(expectedInstallPins, Source, role + " install");
+        var staged = BindCliPins(HostedCampaignPreparation.PluginPins(role, Files, planned), cli, setFolder);
+        var fromPlan = new HashSet<string>(StringComparer.Ordinal);
+        var cliSetFiles = Files.Where(file => file.RelativePath.StartsWith("BepInEx/plugins/", StringComparison.OrdinalIgnoreCase) &&
+                Path.GetFullPath(file.Source).StartsWith(Path.GetFullPath(setFolder) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+            .Select(file => Path.GetFullPath(file.Source)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var sourceCliExpected = planned.Where(pin => CliBuildManifest.IsCliPlugin(pin.Key))
+            .ToDictionary(pin => pin.Key, pin => pin.Value, StringComparer.Ordinal);
+        var sourcePins = sourceCliExpected.Count == 0 ? new Dictionary<string, string>(StringComparer.Ordinal) :
+            HostedCampaignPreparation.PluginPins(role + " install", ReplacedFiles, sourceCliExpected,
+                Files.Where(file => !cliSetFiles.Contains(Path.GetFullPath(file.Source))).Concat(ReplacedFiles));
+        // The core has one stable file name even when an old or synthetic build has no readable BepInEx metadata. The file was
+        // selected as ValheimCLI by that name, so its supplied core GUID pin can still be checked against its source bytes.
+        if (sourceCliExpected.ContainsKey(CliCapabilityManifest.PluginGuid) && !sourcePins.ContainsKey(CliCapabilityManifest.PluginGuid))
+        {
+            var cores = ReplacedFiles.Where(file => Path.GetFileName(file.RelativePath).Equals(cli.Plugin.File, StringComparison.OrdinalIgnoreCase)).ToArray();
+            if (cores.Length == 1) sourcePins[CliCapabilityManifest.PluginGuid] = FileHash.Md5(cores[0].Source);
+        }
+        var checkedSourceCli = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var (plugin, expected) in planned)
+        {
+            if (CliBuildManifest.IsCliPlugin(plugin))
+            {
+                sourcePins.TryGetValue(plugin, out string? sourceFound);
+                if (expected == "absent" && sourceFound == null)
+                {
+                    checkedSourceCli[plugin] = expected;
+                    continue;
+                }
+                if (sourceFound != null && sourceFound.Equals(expected, StringComparison.OrdinalIgnoreCase))
+                {
+                    checkedSourceCli[plugin] = sourceFound;
+                    continue;
+                }
+                staged.TryGetValue(plugin, out string? stagedFound);
+                string sourceDetail = sourceFound == null ? "the install build it replaces does not contain it"
+                    : $"the install build it replaces is {sourceFound}";
+                throw new InvalidOperationException($"The {role} profile would not hold the plan's pinned plugin {plugin}={expected}: " +
+                    $"the staged build is {stagedFound ?? "absent"}, and {sourceDetail}.");
+            }
+            if (expected == "absent" && !staged.ContainsKey(plugin))
+            {
+                staged[plugin] = expected;
+                fromPlan.Add(plugin);
+                continue;
+            }
+            if (staged.TryGetValue(plugin, out string? found) && found.Equals(expected, StringComparison.OrdinalIgnoreCase))
+            {
+                fromPlan.Add(plugin);
+                continue;
+            }
+            string detail = found == null ? "the staged selection does not contain it." : $"the staged build is {found}.";
+            throw new InvalidOperationException($"The {role} profile would not hold the plan's pinned plugin {plugin}={expected}: " + detail);
+        }
+        return new(staged, fromPlan, checkedSourceCli);
+    }
+
     /// <summary>Removes the local folder holding fetched files and the generated config. The install is never touched.</summary>
     public void Dispose()
     {

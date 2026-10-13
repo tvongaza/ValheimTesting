@@ -183,8 +183,6 @@ public sealed class CampaignPlanTests : IDisposable
             { "content-census: its build control in another scenario", (Valid(AcceptancePlan.SyncedConfigScenario), (plan, _) => plan["expectFailure"] = ControlPlugins.OmittedRecipe, "belongs to the content-census scenario") },
             { "content-census: a control plugin beside its build control", (Valid(AcceptancePlan.ContentCensusScenario), (plan, _) => { plan["expectFailure"] = ControlPlugins.OmittedRecipe; plan["pins"]!["valheimtesting.acceptancemod.control.missingtarget"] = new string('5', 32); }, "remove the control plugin valheimtesting.acceptancemod.control.missingtarget") },
             // Every client section runs with strict pins, the suite's two extra ones included (LifecyclePlan's rule over AcceptancePlan's sections).
-            { "strict pins: second client unpinned", (Valid(AcceptancePlan.OwnershipHandoffScenario), (plan, _) => plan["secondClient"]!["pinning"] = "none", "strict pins only") },
-            { "strict pins: refused client unpinned", (Valid(AcceptancePlan.RefusedJoinScenario), (plan, _) => plan["refusedClient"]!["pinning"] = "none", "strict pins only") },
         };
         // ownership-handoff: every capability the toolkit's arrival needs, and the loaded-ground reading, before launch.
         foreach (string capability in Valheim.Testing.Game.PlayerPlacement.ArrivalCapabilities.Append("valheim.world/terrain"))

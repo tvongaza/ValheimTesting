@@ -15,7 +15,7 @@ public sealed class HostWorldPlan
     /// <summary>
     /// The fixture, in either layout the game (1.0.16) loads: a chunked save as Valheim 1.0 writes it, one directory
     /// <c>&lt;name&gt;/</c> at the root holding <c>_main.&lt;n&gt;.fwl2</c> and its chunks; or the older pair, one
-    /// <c>&lt;name&gt;.fwl</c> at the root with its data beside it (<c>&lt;name&gt;.db</c>). Every entry is named for the world. Pinned by SHA256 (<see cref="WorldFixture.Manifest"/>) unless the client plan's pinning is <c>none</c>.
+    /// <c>&lt;name&gt;.fwl</c> at the root with its data beside it (<c>&lt;name&gt;.db</c>). Every entry is named for the world and pinned by SHA256 (<see cref="WorldFixture.Manifest"/>).
     /// </summary>
     public PinnedDirectory World { get; set; } = new();
     /// <summary>
@@ -35,14 +35,13 @@ public sealed class HostWorldPlan
     public int SaveSeconds { get; set; } = 120;
 
     /// <summary>
-    /// Refuses the section before anything is copied: an unpinned or unnamed fixture (hashes are required when
-    /// <paramref name="pinned"/>; listed hashes must name one world), no exact world UID, a relative save directory or a
-    /// save timeout out of range.
+    /// Refuses the section before anything is copied: a fixture without a manifest or name, no exact world UID, a relative save
+    /// directory or a save timeout out of range.
     /// </summary>
-    public void Validate(bool pinned)
+    public void Validate()
     {
-        World.Validate(pinned);
-        if (World.Sha256.Count != 0) _ = HostedWorld.NameOf(World.Sha256.Keys);
+        World.Validate();
+        _ = HostedWorld.NameOf(World.Sha256.Keys);
         if (!long.TryParse(WorldUid, NumberStyles.Integer, CultureInfo.InvariantCulture, out _))
             throw new ArgumentException("hostWorld.worldUid: give the fixture world's exact UID. The host must load that world, and the game silently creates a fresh one when it is missing.");
         if (SaveDirectory != null && !Path.IsPathFullyQualified(SaveDirectory))
@@ -102,14 +101,13 @@ public sealed class HostedWorld : IDisposable
         new(name, worldUid, worlds, copy, output, host, collect);
 
     /// <summary>
-    /// Copies <paramref name="plan"/>'s fixture into <paramref name="output"/> (verified against its hashes, or recorded as
-    /// found for an unpinned plan without them) and then into <paramref name="saveDirectory"/>'s <c>worlds_local</c>.
+    /// Copies <paramref name="plan"/>'s fixture into <paramref name="output"/>, verifies its hashes, and then copies it into
+    /// <paramref name="saveDirectory"/>'s <c>worlds_local</c>.
     /// </summary>
-    public static HostedWorld Place(HostWorldPlan plan, string saveDirectory, string output, bool pinned)
+    public static HostedWorld Place(HostWorldPlan plan, string saveDirectory, string output)
     {
         if (!Path.IsPathFullyQualified(saveDirectory)) throw new ArgumentException("Give the client's data directory as a full path.", nameof(saveDirectory));
-        bool verified = pinned || plan.World.Sha256.Count != 0;
-        var copy = verified ? WorldFixture.Copy(plan.World.Source, output, plan.World.Sha256) : WorldFixture.CopyAsFound(plan.World.Source, output);
+        var copy = WorldFixture.Copy(plan.World.Source, output, plan.World.Sha256);
         copy.Preserve = true;
         string name = NameOf(copy.SourceHashes.Keys);
         string worlds = Path.Combine(saveDirectory, "worlds_local");

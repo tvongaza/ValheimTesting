@@ -49,54 +49,12 @@ internal static class FakeInstalls
     }
 }
 
-// Install pins (game build, loader, patchers) and the explicit, reported opt-out. Tests that read the warning
-// capture only their own stderr writes (StderrCapture): other classes run at the same time and warn about their own actors.
-public sealed class PinningTests : IDisposable
+// Install, plugin and world pins.
+public sealed class PinsTests : IDisposable
 {
-    private readonly string _root = Directory.CreateTempSubdirectory("pinning-").FullName;
+    private readonly string _root = Directory.CreateTempSubdirectory("pins-").FullName;
     public void Dispose() => Directory.Delete(_root, recursive: true);
     private string Install => Path.Combine(_root, "install");
-
-    private static string Stderr(Action action) => StderrCapture.Of(action);
-
-    // Reproduces #142: another test class's unpinned actor warns while a pinned run's stderr is captured. The foreign
-    // write is on its own execution flow, as a test of another class is, and is made deterministically mid-capture.
-    [Fact] public void ACaptureHoldsOnlyItsOwnWarningsWhileAnotherTestWarns()
-    {
-        // This test fails with the previous global-swap Stderr helper, as the separate negative-control run confirmed.
-        // Do not install that helper here: even a brief process-global swap can capture another parallel test's output.
-        string own = WhileAnotherTestWarns(Stderr);
-        Assert.DoesNotContain("not pinned", own);
-        // What the action writes, from threads and tasks it starts too, is still its own.
-        Assert.Equal(new[] { "own line", "own thread", "own task" }, own.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries));
-    }
-
-    private static string WhileAnotherTestWarns(Func<Action, string> capture)
-    {
-        using var capturing = new ManualResetEventSlim(); using var written = new ManualResetEventSlim();
-        Thread other;
-        using (ExecutionContext.SuppressFlow())
-        {
-            other = new Thread(() =>
-            {
-                capturing.Wait();
-                new GameActor("other test", new ScriptedTransport()).VerifyEnvironment(EnvironmentPinning.None);
-                written.Set();
-            });
-            other.Start();
-        }
-        try
-        {
-            return capture(() =>
-            {
-                capturing.Set(); Assert.True(written.Wait(TimeSpan.FromSeconds(30)));
-                Console.Error.WriteLine("own line");
-                var started = new Thread(() => Console.Error.WriteLine("own thread")); started.Start(); started.Join();
-                Task.Run(() => Console.Error.WriteLine("own task")).GetAwaiter().GetResult();
-            });
-        }
-        finally { capturing.Set(); other.Join(); }
-    }
 
     // ---- install pins ----
 
@@ -240,7 +198,7 @@ public sealed class PinningTests : IDisposable
         Assert.Equal(expected, InstallPins.Of(Install).Loader);
     }
 
-    // The loader identity covers every file a launch requires (#364's one list), so no required file can change unpinned.
+    // The loader identity covers every file a launch requires (#364's one list), so no required file can change unnoticed.
     [Fact] public void TheLoaderPinCoversEveryFileALaunchRequires()
     {
         foreach (string file in BepInExLoader.LoaderFiles(ClientPlatform.Windows).Concat(BepInExLoader.LoaderFiles(ClientPlatform.Linux)).Concat(GameLaunch.MacDoorstopFiles))
@@ -267,14 +225,13 @@ public sealed class PinningTests : IDisposable
 
     // ---- server plans ----
 
-    private static ServerRunPlan Plan(string? pinning = null)
+    private static ServerRunPlan Plan()
     {
         var plan = new ServerRunPlan
         {
             Runtime = new() { Source = Path.GetTempPath() }, World = new() { Source = Path.GetTempPath() },
             Arguments = ["-batchmode", "-nographics", "-savedir", "{world}"],
         };
-        if (pinning != null) plan.Pinning = pinning;
         return plan;
     }
     private static void Pin(ServerRunPlan plan)
@@ -292,7 +249,6 @@ public sealed class PinningTests : IDisposable
         plan.RuntimePins = null;
         plan.Pins.Clear(); plan.Runtime.Sha256.Clear(); plan.World.Sha256.Clear();
         plan.ValidateServerPlan(["my.mod"], "TOKEN");
-        Assert.True(plan.Pinned);
     }
 
     [Fact] public void ASlowNetworkGenerationHasOneBoundedServerStartupBudget()
@@ -304,43 +260,13 @@ public sealed class PinningTests : IDisposable
         Assert.Contains("time budget", Assert.Throws<ArgumentException>(() => plan.ValidateServerPlan(["my.mod"], "TOKEN")).Message);
     }
 
-    [Fact] public void AnUnpinnedPlanNeedsNoPinsAndMayListNone()
-    {
-        var plan = Plan("none");
-        plan.ValidateServerPlan(["my.mod"], "TOKEN"); // No worlduid, no MD5s, no manifests, no runtime pins.
-        Assert.False(plan.Pinned); Assert.Equal(EnvironmentPinning.None, plan.ExpectCommand);
-        // Pins beside the opt-out would look enforced while nothing checks them.
-        plan.Pins["worlduid"] = "1"; Assert.Contains("lists no pins", Assert.Throws<ArgumentException>(() => plan.ValidateServerPlan([], "TOKEN")).Message); plan.Pins.Clear();
-        plan.RuntimePins = new() { Game = new string('c', 64), Loader = new string('d', 64), Patchers = new string('e', 64) };
-        Assert.Throws<ArgumentException>(() => plan.ValidateServerPlan([], "TOKEN")); plan.RuntimePins = null;
-        // The other plan rules still apply.
-        plan.Arguments = ["-batchmode"]; Assert.Throws<ArgumentException>(() => plan.ValidateServerPlan([], "TOKEN"));
-    }
-
-    // Negative control: the opt-out is never a default, a near spelling or an environment setting.
-    [Theory]
-    [InlineData("None")] [InlineData("")] [InlineData("off")] [InlineData("strict ")]
-    public void OnlyTheExactOptOutUnpins(string value)
-    {
-        var plan = Plan(value);
-        Assert.Contains("\"strict\"", Assert.Throws<ArgumentException>(() => plan.ValidateServerPlan([], "TOKEN")).Message);
-        Assert.Throws<ArgumentException>(() => new ClientRunPlan { Pinning = value }.Pinned);
-    }
-
-    [Fact] public void AnOmittedPinningIsStrictWhateverTheEnvironmentSays()
+    [Fact] public void TheRemovedPlanFieldIsRefusedAsUnknown()
     {
         string path = Path.Combine(_root, "plan.json");
-        File.WriteAllText(path, JsonSerializer.Serialize(new
-        {
-            runtime = new { source = _root, sha256 = new Dictionary<string, string>() }, world = new { source = _root, sha256 = new Dictionary<string, string>() },
-            arguments = new[] { "-batchmode", "-nographics", "-savedir", "{world}" },
-            environment = new Dictionary<string, string> { ["VALHEIM_TESTING_PINNING"] = "none", ["PINNING"] = "none" },
-        }));
-        var plan = ServerRunPlan.Read<ServerRunPlan>(path);
-        Assert.Equal(EnvironmentPinning.Strict, plan.Pinning); Assert.True(plan.Pinned);
-        plan.ValidateServerPlan([], "TOKEN"); // Missing pins are observed by a standalone runner, not an opt-out.
-        File.WriteAllText(path, """{"pinning": null}""");
-        Assert.Throws<ArgumentException>(() => ServerRunPlan.Read<ServerRunPlan>(path).Pinned);
+        string removed = "pin" + "ning";
+        File.WriteAllText(path, "{\"" + removed + "\":\"none\"}");
+        Assert.Throws<JsonException>(() => ServerRunPlan.Read<ServerRunPlan>(path));
+        Assert.Throws<JsonException>(() => ClientPlanFile.Read<ClientRunPlan>(path));
     }
 
     // ---- the runner ----
@@ -355,7 +281,7 @@ public sealed class PinningTests : IDisposable
         using var machine = LocalServerMachine.Use();
         return await PinnedServerRun.MainAsync(args, options);
     }
-    private string WritePlan(object? pinning = null, InstallPins? runtimePins = null, bool manifests = true)
+    private string WritePlan(InstallPins? runtimePins = null, bool manifests = true)
     {
         Directory.CreateDirectory(Path.Combine(World, "worlds_local"));
         File.WriteAllText(Path.Combine(World, "worlds_local", "Test.db"), "world");
@@ -366,8 +292,7 @@ public sealed class PinningTests : IDisposable
             ["arguments"] = new[] { "-batchmode", "-nographics", "-savedir", "{world}" },
             ["port"] = FreePort(),
         };
-        if (pinning != null) plan["pinning"] = pinning;
-        else { plan["pins"] = new Dictionary<string, string> { ["worlduid"] = "1" }; plan["runtimePins"] = runtimePins ?? InstallPins.Of(Runtime); }
+        plan["pins"] = new Dictionary<string, string> { ["worlduid"] = "1" }; plan["runtimePins"] = runtimePins ?? InstallPins.Of(Runtime);
         string path = Path.Combine(_root, "plan-" + Guid.NewGuid().ToString("N") + ".json");
         File.WriteAllText(path, JsonSerializer.Serialize(plan));
         return path;
@@ -379,11 +304,10 @@ public sealed class PinningTests : IDisposable
     }
     private PinnedServerRunOptions<ServerRunPlan> Options(FakeOwnedServer? server = null) => new()
     {
-        Name = "pinning-smoke", Hooks = Machine.Hooks(),
+        Name = "pins-smoke", Hooks = Machine.Hooks(),
         ReadPlan = path => { var plan = ServerRunPlan.Read<ServerRunPlan>(path); plan.ValidateServerPlan([], "TEST_SESSION_TOKEN"); return plan; },
         Mod = new("test.mod/session", "TEST_SESSION_TOKEN"),
         Scenario = (session, _) => { session.Server!.Game.Execute("cli_extension test.mod/session"); return Task.CompletedTask; },
-        // The plan's own expectations: strict pins, or EnvironmentPinning.None for an unpinned plan.
         SessionOverride = server == null ? null : plan => server.Session(TimeSpan.FromSeconds(60), expectations: plan.ExpectCommand),
     };
     private static JsonElement Result(string output) => JsonDocument.Parse(File.ReadAllText(Path.Combine(output, "result.json"))).RootElement;
@@ -414,81 +338,18 @@ public sealed class PinningTests : IDisposable
         Assert.Equal(0, await RunHere(["validate", WritePlan(), output + "-repinned"], Options()));
     }
 
-    [Fact] public async Task AnUnpinnedRunRunsWarnsAndMarksEveryReportAndEvidenceFile()
-    {
-        string plan = WritePlan(pinning: "none", manifests: false);
-        string output = Path.Combine(_root, "out");
-        const string mode = "run";
-        var server = new FakeOwnedServer("test.mod");
-        int code = 0;
-        string stderr = Stderr(() => code = RunHere([mode, plan, output], Options(server)).GetAwaiter().GetResult());
-        Assert.Equal(0, code);
-        Assert.Contains("WARNING: environment not pinned: pinning-smoke", stderr);
-        var result = Result(output);
-        Assert.True(result.GetProperty("Passed").GetBoolean());
-        Assert.Equal("none", result.GetProperty("Pinning").GetString());
-        Assert.StartsWith("environment not pinned", result.GetProperty("Provenance").GetProperty("environment").GetString());
-        Assert.Equal(InstallPins.Of(Runtime).Loader, result.GetProperty("Provenance").GetProperty("runtimeLoaderSha256").GetString());
-        var names = result.GetProperty("Steps").EnumerateArray().Select(s => s.GetProperty("Name").GetString()).ToList();
-        Assert.Contains("stage the server's profile from its install as found", names); Assert.Contains("copy unpinned world as found", names);
-        Assert.Contains("record the unpinned server runtime's game build, loader and patchers", names);
-        if (mode == "run") Assert.DoesNotContain(server.Events, e => e.StartsWith("pins", StringComparison.Ordinal)); // No cli_expect was sent.
-        // The marker sits in the Preflight suite: the pinning decision is made before anything is copied.
-        var junit = XDocument.Load(Path.Combine(output, "junit.xml")).Root!.Elements("testsuite").Single(s => s.Attribute("name")!.Value.EndsWith(" / preflight", StringComparison.Ordinal));
-        Assert.Equal("1", junit.Attribute("skipped")!.Value);
-        Assert.Contains(junit.Elements("properties").Elements("property"), p => p.Attribute("name")!.Value == "environment" && p.Attribute("value")!.Value.StartsWith("environment not pinned"));
-        Assert.Contains(junit.Elements("testcase"), c => c.Attribute("name")!.Value == "environment not pinned" && c.Element("skipped") != null);
-        // Every evidence file the runner wrote carries the marker.
-        var evidence = Directory.GetFiles(output).Where(f => Path.GetExtension(f) is ".json" or ".jsonl" or ".xml").ToList();
-        Assert.Contains(Path.Combine(output, "input-hashes.json"), evidence);
-        Assert.All(evidence, file => Assert.Contains("environment not pinned", File.ReadAllText(file)));
-    }
-
-    [Fact] public void APinnedRunCarriesNoMarker()
-    {
-        string output = Path.Combine(_root, "out"), plan = WritePlan();
-        int code = 0;
-        string stderr = Stderr(() => code = RunHere(["validate", plan, output], Options()).GetAwaiter().GetResult());
-        Assert.Equal(0, code);
-        Assert.DoesNotContain("not pinned", stderr);
-        Assert.Equal("strict", Result(output).GetProperty("Pinning").GetString());
-        Assert.All(Directory.GetFiles(output), file => Assert.DoesNotContain("environment not pinned", File.ReadAllText(file)));
-    }
-
-    // ---- actors and clients ----
-
-    [Fact] public void AnUnpinnedActorRunsWithoutPinChecksWarnsOnceAndCanBePinnedAgain()
-    {
-        var transport = new ScriptedTransport().On("look", _ => ScriptedTransport.Ok("OK"));
-        var actor = new GameActor("observer", transport);
-        Assert.Throws<InvalidOperationException>(() => actor.Execute("look")); // Still refused until verified or explicitly unpinned.
-        string stderr = Stderr(() =>
-        {
-            actor.VerifyEnvironment(EnvironmentPinning.None); actor.Execute("look");
-            actor.InvalidateEnvironment(); actor.VerifyEnvironment(EnvironmentPinning.None); actor.Execute("look");
-        });
-        Assert.False(actor.Pinned);
-        Assert.Equal(new[] { "look", "look" }, transport.Commands);
-        Assert.Single(stderr.Split('\n'), line => line.Contains("WARNING: environment not pinned: game actor \"observer\""));
-        // A transition still needs an explicit decision.
-        actor.InvalidateEnvironment(); Assert.Throws<InvalidOperationException>(() => actor.Execute("look"));
-        actor.VerifyEnvironment("cli_expect worlduid=1"); actor.Execute("look");
-        Assert.True(actor.Pinned);
-        Assert.Equal(new[] { "look", "look", "cli_expect --strict worlduid=1", "cli_expect --strict worlduid=1", "look" }, transport.Commands.Select(c => c.StartsWith("cli_expect") ? "cli_expect --strict worlduid=1" : c));
-        // Nothing but the exact value opts out.
-        Assert.Throws<ArgumentException>(() => actor.VerifyEnvironment("None"));
-        Assert.Throws<ArgumentException>(() => actor.VerifyEnvironment(""));
-    }
-
+    // ---- clients ----
     private static ClientRunPlan Client(string mode) => new()
     {
         Mode = mode, Install = mode == "owned" ? Path.GetFullPath("client-install") : "", Port = 5556, Join = "127.0.0.1:2456", Character = "Tester",
         Pins = new() { ["valheimCLI.valheimCLI"] = new string('a', 32), ["my.mod"] = "absent" },
     };
 
-    [Fact] public void AnOwnedStrictClientNeedsInstallPinsAndAnAttachedOneMayNotHaveThem()
+    [Fact] public void AnOwnedDisposableClientMayObserveInstallPinsButAnInPlaceOneMustSupplyThem()
     {
         var owned = Client("owned");
+        owned.Validate("my.mod");
+        owned.InPlace = true;
         Assert.Contains("installPins", Assert.Throws<ArgumentException>(() => owned.Validate("my.mod")).Message);
         owned.InstallPins = new() { Game = new string('c', 64), Loader = new string('d', 64), Patchers = new string('e', 64) };
         owned.Validate("my.mod");
@@ -507,20 +368,4 @@ public sealed class PinningTests : IDisposable
         Assert.False(File.Exists(Path.Combine(output, "client-process.json")));
     }
 
-    [Fact] public void AnUnpinnedClientIsWarnedAndItsRecordsAreMarked()
-    {
-        var plan = Client("attach"); plan.Pinning = EnvironmentPinning.None;
-        Assert.Contains("lists no pins", Assert.Throws<ArgumentException>(() => plan.Validate("my.mod")).Message);
-        plan.Pins.Clear(); plan.Validate("my.mod");
-        Assert.Equal(EnvironmentPinning.None, plan.MenuExpectations); Assert.Equal(EnvironmentPinning.None, plan.WorldExpectations("7"));
-        var output = Directory.CreateDirectory(Path.Combine(_root, "client-out")).FullName;
-        var transport = new ScriptedTransport();
-        string stderr = Stderr(() => { using var session = ClientSession.Attach(plan, output, transport); Assert.False(session.Actor.Pinned); });
-        Assert.Contains("WARNING: environment not pinned", stderr);
-        Assert.DoesNotContain(transport.Commands, c => c.StartsWith("cli_expect", StringComparison.Ordinal));
-        using var first = JsonDocument.Parse(File.ReadLines(Path.Combine(output, "client-commands.jsonl")).First());
-        Assert.Equal("environment not pinned", first.RootElement.GetProperty("environment").GetString());
-        // An owned unpinned client skips the install pins too, but keeps the patcher-names check.
-        var owned = Client("owned"); owned.Pinning = EnvironmentPinning.None; owned.Pins.Clear(); owned.Validate("my.mod");
-    }
 }

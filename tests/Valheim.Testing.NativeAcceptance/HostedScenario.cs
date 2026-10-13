@@ -57,12 +57,10 @@ public sealed class HostedPlan
         if (plan.Peer is { } peer)
         {
             if (!peer.JoinsHost) throw new ArgumentException("The peer joins the host: set its joinsHost.");
-            if (!peer.Pinned) throw new ArgumentException("This suite runs with strict pins only: remove the peer's \"pinning\".");
             foreach (string plugin in new[] { AcceptancePlan.ModPlugin, AcceptancePlan.AdapterPlugin })
                 if (!peer.Pins.TryGetValue(plugin, out var md5) || md5 == "absent")
                     throw new ArgumentException($"The peer runs AcceptanceMod and its adapter: pin {plugin} by its MD5.");
         }
-        if (!plan.Client.Pinned) throw new ArgumentException("This suite runs with strict pins only: remove \"pinning\".");
         LogScanner.CheckClassifications(plan.LogScan);
         foreach (string plugin in new[] { AcceptancePlan.ModPlugin, AcceptancePlan.AdapterPlugin })
             if (!plan.Client.Pins.TryGetValue(plugin, out var md5) || md5 == "absent")

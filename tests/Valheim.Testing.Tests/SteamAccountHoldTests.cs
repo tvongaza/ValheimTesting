@@ -283,7 +283,7 @@ public sealed class SteamAccountHoldTests : IDisposable
         Assert.Contains("valheim-test env recover --run run-9", error.Message);
     }
 
-    private ClientRunPlan Plan(string mode = "owned") => new() { Mode = mode, Install = mode == "owned" ? _root.Path : "", Port = 5556, Pinning = "none" };
+    private ClientRunPlan Plan(string mode = "owned") => new() { Mode = mode, Install = mode == "owned" ? _root.Path : "", Port = 5556 };
 
     [Fact] public async Task AClientStartsOnlyOnAHeldCheckedLease()
     {

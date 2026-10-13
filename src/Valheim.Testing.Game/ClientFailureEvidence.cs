@@ -33,7 +33,7 @@ internal static class ClientFailureEvidence
                     facts["responding"] = Try(() => process.Responding);
                     if (!process.HasExited)
                     {
-                        if (actor?.Pinned == true) facts["screenshot"] = Screenshot(actor, output);
+                        if (actor != null) facts["screenshot"] = Screenshot(actor, output);
                         else BootstrapStatus(plan, facts);
                     }
                 }
@@ -62,7 +62,7 @@ internal static class ClientFailureEvidence
         try
         {
             using var transport = new CliTransport(plan.Host, plan.Port);
-            var status = transport.ReadStatus(); // Independent read-only socket; no unpinned game command is sent.
+            var status = transport.ReadStatus(); // Independent read-only socket; no game command is sent before pins are verified.
             facts["cliStatus"] = status;
             facts["screenshot"] = "not attempted: strict pins are unavailable before menu readiness; STATUS answered but a screenshot cannot be authorized yet";
         }

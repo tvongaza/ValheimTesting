@@ -383,7 +383,7 @@ jobs:
           # The pairing (#336): a released Valheim.Testing older than the released Doubles depends on.
           sed -i -E 's/("Valheim\.Testing": ")[^"]+"/\10.1.0-preview.6"/' toolkit-versions.json
           dotnet run scripts/pins.cs -- write
-          refused check "depends on Valheim.Testing [0-9]*, but the released Valheim.Testing is 0.1.0-preview.6: a page pinning both"
+          refused check "depends on Valheim.Testing [0-9]*, but the released Valheim.Testing is 0.1.0-preview.6: a page that pins both"
           # Candidates may sit on main between releases; release.yml refuses them.
           sed -i -E 's/("packageVersion": "[^"]+)"/\1-candidate.0000000"/' cli-dependency.json
           refused versions "cli-dependency.json:[0-9]*: names the candidate version"

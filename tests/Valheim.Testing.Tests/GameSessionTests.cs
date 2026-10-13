@@ -358,6 +358,39 @@ public sealed class GameSessionTests : IDisposable
         Assert.Throws<ObjectDisposedException>(() => session.OpenClient(Plan()));
     }
 
+    [Fact] public async Task APreparedClientsPinOriginsReachTheRunReport()
+    {
+        var report = new ScenarioReport("session");
+        var placement = new Placement(this, (_, _) => Task.CompletedTask);
+        await using var session = new GameSession(report, _root, WorldUid, Server, [], CancellationToken.None)
+        { ResolveClient = (_, name) => (name ?? "client", placement) };
+        await session.StartAsync();
+        var plan = Plan();
+        plan.PreparedLaunchMode = "profile";
+        plan.PreparedSourceGameRoot = Path.GetFullPath("source-client-install");
+        plan.InstallPins = new InstallPins
+        {
+            Game = new string('1', 64),
+            Loader = new string('2', 64),
+            Patchers = new string('3', 64),
+        };
+        plan.PreparedPinOrigins["installPins"] = "observed";
+        plan.PreparedPinOrigins["plugins." + CliCapabilityManifest.PluginGuid] = "observed";
+        using (session.OpenClient(plan)) { }
+        plan.InstallPins = null; // Profile retirement restores an omitted source-plan value after the report captured the bound values.
+        Assert.Equal("observed", report.PinOrigins["client.installPins"]);
+        Assert.Equal("observed", report.PinOrigins["client.plugins." + CliCapabilityManifest.PluginGuid]);
+        Assert.Equal("pins observed, not reviewed", report.Provenance["pins"]);
+        Assert.Contains(plan.PreparedSourceGameRoot, report.Provenance["clientInstall"]);
+        string output = Path.Combine(_root, "prepared-client-result");
+        report.Write(output);
+        using var result = JsonDocument.Parse(File.ReadAllText(Path.Combine(output, "result.json")));
+        var provenance = result.RootElement.GetProperty("Provenance");
+        Assert.Equal(new string('1', 64), provenance.GetProperty("clientGameSha256").GetString());
+        Assert.Equal(new string('2', 64), provenance.GetProperty("clientLoaderSha256").GetString());
+        Assert.Equal(new string('3', 64), provenance.GetProperty("clientPatchersSha256").GetString());
+    }
+
     [Fact] public async Task ARunnerWithItsOwnCleanupTearsAFailedStartDownItself()
     {
         var report = new ScenarioReport("session");

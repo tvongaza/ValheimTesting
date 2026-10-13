@@ -4,7 +4,7 @@ Traps that make a native test hang, fail for an unrelated reason, or pass withou
 
 ## What the toolkit enforces
 
-These rules hold whenever a run goes through the toolkit's runners with strict pins; a plan that opts out with `"pinning": "none"` gives up the world and plugin pins, and a hand-written driver that bypasses the runners has to keep the rules itself.
+These rules hold whenever a run goes through the toolkit's runners, which always enforce strict pins. A hand-written driver that bypasses the runners has to keep the rules itself.
 
 | Rule | Why | Enforced by |
 |---|---|---|

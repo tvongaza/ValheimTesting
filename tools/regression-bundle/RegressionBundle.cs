@@ -517,7 +517,7 @@ public static class RegressionBundle
 
     // ---- the arms' evidence ----
 
-    private sealed record ResultFile(string Name, Dictionary<string, string> Provenance, List<StepResult> Steps, bool Passed, string? Pinning, ResultToolkit? Toolkit = null)
+    private sealed record ResultFile(string Name, Dictionary<string, string> Provenance, List<StepResult> Steps, bool Passed, ResultToolkit? Toolkit = null)
     {
         // The selected package's version from result.json (schema 3). Only older Game runs used a bare provenance entry.
         public string? PackageVersion(string id) => Toolkit?.Packages?.FirstOrDefault(package => package.Id == id) is { Version: { } version }
@@ -592,14 +592,12 @@ public static class RegressionBundle
         try { result = JsonSerializer.Deserialize<ResultFile>(File.ReadAllText(resultPath)) ?? throw new JsonException("empty"); }
         catch (JsonException error) { throw new InvalidOperationException($"{where}: result.json is not a scenario report ({error.Message}).", error); }
         if (result.Steps == null || result.Provenance == null) throw new InvalidOperationException($"{where}: result.json has no steps or provenance; it is not a scenario report.");
-        if (result.Pinning != EnvironmentPinning.Strict)
-            throw new InvalidOperationException($"{where}: result.json records pinning {result.Pinning ?? "(none)"}: only a strictly pinned run is evidence of which builds ran.");
         bool stepsPassed = result.Steps.Count > 0 && result.Steps.All(step => step.Passed);
         if (result.Passed != stepsPassed)
             throw new InvalidOperationException($"{where}: result.json says Passed={result.Passed}, but its steps say {(stepsPassed ? "every step passed" : "a step failed")}: the file was edited after the run.");
         var suite = XDocument.Load(junitPath).Root ?? throw new InvalidDataException($"{where}: junit.xml is empty.");
         // junit.xml holds one suite per phase, in phase order (a schema-1 report has one suite and every step in Scenario).
-        var cases = suite.Descendants("testcase").Where(test => test.Attribute("name")?.Value != EnvironmentPinning.NotPinned).ToList();
+        var cases = suite.Descendants("testcase").ToList();
         var disagreements = new List<string>();
         if (cases.Count != result.Steps.Count) disagreements.Add($"{cases.Count} test cases for {result.Steps.Count} steps");
         foreach (var (step, test) in result.Steps.OrderBy(step => step.Phase).Zip(cases))
@@ -657,7 +655,7 @@ public static class RegressionBundle
         var files = new[] { resultPath, junitPath, tracePath, manifestPath }.Where(File.Exists).Select(path => new BundleEvidence(name, Path.GetFileName(path), FileHash.Sha256(path))).ToList();
         // What the evidence shows of the private environment: the world's name and any machine path a provenance value holds.
         var privateNames = result.Provenance.Where(entry => entry.Key == "hostWorld" || LooksLikePath(entry.Value)).Select(entry => entry.Value).Concat(pins.Worlds).ToList();
-        string check = $"arm {name}: result.json agrees with junit.xml ({result.Steps.Count} steps, strict pinning) and with the declared {arm.Expect}" +
+        string check = $"arm {name}: result.json agrees with junit.xml ({result.Steps.Count} steps, strict pins) and with the declared {arm.Expect}" +
             (arm.FailingStep != null ? $" at \"{arm.FailingStep}\"" : "") + $"; {pins.ModPins} strict pins of {plugin} in the command trace, all {md5}" + (run != null ? "; run-manifest.json agrees" : "");
         return new(new(name, commit, md5, sha256, sha256Source, arm.Expect, failed == null, result.Steps.Count(step => step.Passed), result.Steps.Count,
             failed == null ? null : $"{failed.Name}: {failed.Error}"), pins, files, check, result.PackageVersion(spec.Toolkit.PackageId), privateNames, guids);

@@ -67,7 +67,7 @@ public sealed class ClientSession : IDisposable, IWorldPins
         _failureCaptured = true;
         // A later round can explicitly unpin an otherwise successfully opened client. Its process and logs
         // remain useful evidence, but diagnostics may not send a game command without strict expectations.
-        TryCaptureFailure(_failureEvidence, _process, Actor.Pinned ? Actor : null, _output);
+        TryCaptureFailure(_failureEvidence, _process, Actor, _output);
     }
 
     // The world's identity is not in a joining client's launch plan. Only publish a diagnostic
@@ -148,7 +148,7 @@ public sealed class ClientSession : IDisposable, IWorldPins
         account?.RequireReady(null); // Before the session assumes the client.
         var transport = connect();
         GameActor actor;
-        try { actor = new GameActor("client", new RecordingTransport(transport, CommandLog(output), plan.Pinned ? null : EnvironmentPinning.NotPinned)); }
+        try { actor = new GameActor("client", new RecordingTransport(transport, CommandLog(output))); }
         catch { transport.Dispose(); throw; }
         try
         {
@@ -319,7 +319,7 @@ public sealed class ClientSession : IDisposable, IWorldPins
         bool pinsVerified = false;
         try
         {
-            File.WriteAllText(Path.Combine(output, "client-process.json"), JsonSerializer.Serialize(EnvironmentPinning.Stamp(new() { ["pid"] = process.Id, ["startedUtc"] = DateTime.UtcNow, ["install"] = plan.Install, ["architecture"] = GameLaunch.PlanName(architecture) }, plan.Pinned)));
+            File.WriteAllText(Path.Combine(output, "client-process.json"), JsonSerializer.Serialize(new Dictionary<string, object?> { ["pid"] = process.Id, ["startedUtc"] = DateTime.UtcNow, ["install"] = plan.Install, ["architecture"] = GameLaunch.PlanName(architecture) }));
             using (var abandon = CancellationTokenSource.CreateLinkedTokenSource(cancellation))
             {
                 var exited = process.WaitForExitAsync(abandon.Token);
@@ -334,12 +334,12 @@ public sealed class ClientSession : IDisposable, IWorldPins
                 waiting.GetAwaiter().GetResult(); // A readiness failure (a plugin-load error, a closed state connection) ends startup.
             }
             var transport = connect();
-            try { actor = new GameActor("client", new RecordingTransport(transport, CommandLog(output), plan.Pinned ? null : EnvironmentPinning.NotPinned)); }
+            try { actor = new GameActor("client", new RecordingTransport(transport, CommandLog(output))); }
             catch { transport.Dispose(); throw; }
             actor.VerifyEnvironment(plan.MenuExpectations);
             if (plan.Capabilities.Any())
                 CliCapabilities.Require(actor, plan.Capabilities); // Live, after any static manifest check.
-            pinsVerified = actor.Pinned;
+            pinsVerified = true;
             // The local one-shot start path opens this session directly, without DesktopClientSession. Make its
             // exact process and strict menu/world pins available to the separate valheim-test cli invocation too.
             if (pinsVerified && process is ILocalClientProcessIdentity identity)

@@ -14,7 +14,7 @@ public sealed partial class HostedServerRunTests
         string clientInstall = clientHost.Local("/Users/tester/valheim");
         FakeInstalls.MacClient(clientInstall);
         var (plan, profile) = Write(host, withClient: true);
-        var client = new ClientRunPlan { Mode = "owned", Architecture = "x64", Install = _root, Port = 5578, Pinning = "none", StartSeconds = 30, LaunchArguments = ["+connect", "linux-box:2456"] };
+        var client = PreparedClient(clientHost);
         int code = await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["run", plan, Output], Options(host, server, run =>
         {
             run.OpenClient(client); // Never closed: the scenario fails first.

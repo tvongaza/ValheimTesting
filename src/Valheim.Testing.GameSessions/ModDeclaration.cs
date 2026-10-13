@@ -7,7 +7,7 @@ namespace Valheim.Testing.GameSessions;
 /// the Harmony patches it applies. With <see cref="HarmonyCapability"/>, <see cref="Owner"/> and <see cref="Patches"/>, a
 /// <see cref="GameSession"/> checks at runtime-ready, as the Setup step "server: the mod's Harmony patches are applied", that
 /// every declared patch is applied on its owned server (<see cref="RequirePatchesApplied"/>) when the server's pins load the
-/// mod (<see cref="Plugin"/> pinned to a build) or the plan is unpinned, so no scenario runs on a server where the mod is
+/// mod (<see cref="Plugin"/> pinned to a build), so no scenario runs on a server where the mod is
 /// loaded but not patched in. Clients are not checked by the session yet.
 /// </summary>
 public sealed record ModDeclaration(string SessionCapability, string SessionTokenVariable)

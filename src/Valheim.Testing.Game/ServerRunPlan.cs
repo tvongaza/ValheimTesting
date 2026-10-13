@@ -50,15 +50,6 @@ public partial class ServerRunPlan
     /// profile when omitted; supplied values remain expected pins and are checked against the source install before staging.
     /// </summary>
     public InstallPins? RuntimePins { get; set; }
-    /// <summary>
-    /// <c>strict</c>, the default when omitted, or <c>none</c>: an explicit opt-out for trying the toolkit before keeping
-    /// pins. An unpinned plan lists no <see cref="Pins"/> or <see cref="RuntimePins"/> and may leave out the fixture
-    /// hashes (copies are then recorded as found); the runner warns at start and marks every report and evidence file
-    /// "environment not pinned" (<see cref="EnvironmentPinning"/>).
-    /// </summary>
-    public string Pinning { get; set; } = EnvironmentPinning.Strict;
-    /// <summary>Whether <see cref="Pinning"/> is <c>strict</c>; refuses any value but <c>strict</c> or <c>none</c>.</summary>
-    [JsonIgnore] public bool Pinned => EnvironmentPinning.IsStrict(Pinning, "The plan's");
     public int Port { get; set; } = 5577;
     public int StartupSeconds { get; set; } = 300;
     public int CommandSeconds { get; set; } = 30;
@@ -88,8 +79,7 @@ public partial class ServerRunPlan
     /// full fixture hashes and <see cref="RuntimePins"/>. A standalone runner observes omitted pins from what it stages;
     /// after that binding, every <paramref name="requiredPlugins"/> entry must be in the staged plugin set.
     /// Each log scan classification names a known pattern
-    /// with a reason. <c>-crossplay</c> comes only from <see cref="Crossplay"/> (<see cref="CheckCrossplay"/>). An explicitly unpinned plan (<see cref="Pinning"/> <c>none</c>) follows the same rules without the
-    /// pins, which it must leave out, and may leave out the fixture hashes.
+    /// with a reason. <c>-crossplay</c> comes only from <see cref="Crossplay"/> (<see cref="CheckCrossplay"/>).
     /// </summary>
     public void ValidateServerPlan(IEnumerable<string> requiredPlugins, string sessionTokenVariable)
     {
@@ -99,7 +89,6 @@ public partial class ServerRunPlan
             ArgumentException.ThrowIfNullOrWhiteSpace(plugin);
             return plugin;
         }).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
-        bool pinned = Pinned;
         Runtime.Validate(requireHashes: false); World.Validate(requireHashes: false);
         CheckLogScan();
         if (Port < 1024 || Port > 65535 || StartupSeconds < 1 || StartupSeconds > MaximumStartupSeconds || CommandSeconds < 1 || CommandSeconds > 120 || QuitSeconds < 0 || QuitSeconds > MaximumQuitSeconds)
@@ -115,12 +104,6 @@ public partial class ServerRunPlan
             !Arguments.Contains("-batchmode") || !Arguments.Contains("-nographics"))
             throw new ArgumentException("Dedicated launch requires -batchmode -nographics and exactly one -savedir {world}.");
         CheckCrossplay();
-        if (!pinned)
-        {
-            if (Pins.Count != 0 || RuntimePins != null)
-                throw new ArgumentException("A plan with pinning \"none\" lists no pins and no runtimePins: nothing would check them. Remove them, or remove \"pinning\" to keep strict pins.");
-            return;
-        }
         var errors = new List<string>();
         var parsed = Expectations.ParseLines(Pins.Select(x => x.Key + "=" + x.Value), errors);
         if (errors.Count != 0) throw new ArgumentException("Invalid environment pins: " + string.Join("; ", errors));
@@ -137,7 +120,6 @@ public partial class ServerRunPlan
     /// </summary>
     internal void RequireStagedPlugins()
     {
-        if (!Pinned) return;
         var missing = _requiredPlugins.Where(plugin => !Pins.TryGetValue(plugin, out string? value) || value == "absent").ToArray();
         if (missing.Length != 0)
             throw new InvalidOperationException($"The staged server profile is missing required plugin{(missing.Length == 1 ? "" : "s")} {string.Join(", ", missing)}. Install the mod and its test adapter in the source install, or select them in the campaign dependency lock.");
@@ -169,21 +151,14 @@ public partial class ServerRunPlan
     }
     /// <summary>The plan's log scan classifications are well formed (the runner checks them for every plan).</summary>
     public void CheckLogScan() => LogScanner.CheckClassifications(LogScan);
-    /// <summary>
-    /// With expected <see cref="RuntimePins"/>, refuses a runtime whose game build, loader or patchers differ. Otherwise
-    /// returns the runtime's pins as observed. An explicitly unpinned plan also only observes them for the report.
-    /// </summary>
-    public InstallPins CheckRuntimePins(string runtime) => Pinned && RuntimePins != null
-        ? RuntimePins.Check(runtime, "runtime") : InstallPins.Of(runtime);
     public void CheckOutput(string output)
     {
         foreach (string source in new[] { Runtime.Source, World.Source })
             if (ProtectedPaths.Contains(source, output))
                 throw new ArgumentException("Output must be outside both pinned sources.");
     }
-    /// <summary>The strict <c>cli_expect</c> command, or <see cref="EnvironmentPinning.None"/> for an unpinned plan (see <see cref="GameActor.VerifyEnvironment"/>).</summary>
-    public string ExpectCommand => !Pinned ? EnvironmentPinning.None :
-        Expectations.ExpectCommand(Expectations.ParseLines(Pins.Select(x => x.Key + "=" + x.Value), new()), strict: true);
+    /// <summary>The strict <c>cli_expect</c> command for the plan's complete bound pins.</summary>
+    public string ExpectCommand => Expectations.ExpectCommand(Expectations.ParseLines(Pins.Select(x => x.Key + "=" + x.Value), new()), strict: true);
     /// <summary>
     /// The file the arguments' <c>-logFile</c> names, expanded (for example <c>{runtime}/toolkit-unity.log</c>), or null. The game
     /// writes all its own lines there, lobby lines included; BepInEx's log carries them only when BepInEx copies Unity's log.
