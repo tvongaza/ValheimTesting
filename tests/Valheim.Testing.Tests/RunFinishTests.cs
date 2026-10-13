@@ -34,6 +34,12 @@ public sealed class RunFinishTests : IDisposable
         string status = File.ReadAllText(Path.Combine(source, "Valheim.Testing.GameSessions", "RunJournalStatus.cs"));
         Assert.DoesNotContain("JournalEntry.Of(JournalEntry.RunEnded", status);
         Assert.DoesNotContain("AppendAsync(", status);
+        // start reports every outcome to the owner, with no guard of its own (#581's ownershipStarted): the owner alone knows
+        // whether the run journalled anything. Ending a real start after a journalled profile needs a launched client, so its
+        // journal rule is tested below on the real TargetedRegression staging start uses.
+        string start = File.ReadAllText(Path.Combine(source, "Valheim.Testing.NativeSmoke", "Program.cs"));
+        Assert.Contains("if (!await RunFinish.EndAsync(runJournal, new RunEnd(exitCode == 0 ? RunOutcome.Passed : RunOutcome.Failed, journalClean)))", start);
+        Assert.DoesNotContain("ownershipStarted", start);
         // Negative control: the pattern finds the per-path writers this issue removed.
         Assert.Matches(NamesAnEnd, "RunJournal.ThisProcess.AppendLocal(\"run\", JournalEntry.Of(JournalEntry.RunEnded,");
         Assert.Matches(NamesAnEnd, "var last = abandoned != null ? JournalEntry.Of(JournalEntry.CleanupAbandoned, (\"reason\", abandoned))");
@@ -41,7 +47,8 @@ public sealed class RunFinishTests : IDisposable
 
     // The #581 drift: start wrote its end only once a character was intended, so a start whose dependency check failed after
     // its profile was journalled and retired never wrote one. Here the real TargetedRegression journals and retires its profile,
-    // the check refuses (the character is missing), and start reports the failure to the owner as it does.
+    // the check refuses (the character is missing), and the run's flow reports the failure to the owner as start does (the
+    // scan above holds start to that call). A client host only: a Linux machine runs no start client (#708).
     [ClientHostFact] public async Task AStartThatFailsAfterItsProfileWasJournalledRecordsAnEndAnotherMachineReadsAsEnded()
     {
         using var rig = new RegressionRig();
@@ -114,6 +121,38 @@ public sealed class RunFinishTests : IDisposable
             Assert.True(await RunFinish.EndAsync(run, new RunEnd(RunOutcome.Failed, CleanupProven: true)));
         Assert.False(Directory.Exists(Path.Combine(local, refused)));
         Assert.Empty(await RunJournalOnHost.ReadAsync(station, Journal, refused, time));
+    }
+
+    // This machine's journal written in process and through its own shell, spelled in another case where the file system
+    // ignores case, is one journal: the run's end goes there once.
+    [Fact] public async Task ThisMachinesJournalIsOnePlaceHoweverItIsReachedAndSpelled()
+    {
+        if (OperatingSystem.IsLinux()) return; // Case tells two directories apart there.
+        string local = Path.Combine(_root, "local-journal");
+        string runId = RunJournal.NewRunId();
+        using (var run = RunJournal.UseRun(runId))
+        {
+            RunJournal.ThisProcess.AppendLocal(WorldFixture.Actor, JournalEntry.Of(JournalEntry.CopyIntended, ("runtime", "/w")));
+            await new RunJournal(runId).AppendAsync(new LocalGameHost("local", HostShell.ThisMachine), local.ToUpperInvariant(), "server",
+                JournalEntry.Of(JournalEntry.LockHeld, ("lock", "/l"), ("claimant", "c")), TimeSpan.FromSeconds(30));
+            Assert.True(await RunFinish.EndAsync(run, new RunEnd(RunOutcome.Passed, CleanupProven: true)));
+        }
+        Assert.Single(Records(local, runId), record => record.Entry.Kind == JournalEntry.RunEnded);
+        Assert.Equal(2, Records(local, runId).Count(record => record.Entry.Kind != JournalEntry.RunEnded));
+    }
+
+    // A write in process that failed left nothing, so the run's end does not go there (a refusal stays a refusal).
+    [Fact] public async Task AJournalThisMachineCouldNotWriteGetsNoEnd()
+    {
+        string blocked = Path.Combine(_root, "blocked-journal");
+        File.WriteAllText(blocked, "a file where the journal directory would go");
+        string runId = RunJournal.NewRunId();
+        using (var run = RunJournal.UseRun(runId))
+        {
+            Assert.ThrowsAny<IOException>(() => RunJournal.ThisProcess.AppendLocal("run", JournalEntry.Of(JournalEntry.LockHeld, ("lock", "/l"), ("claimant", "c")), blocked));
+            Assert.Empty(run.Places);
+            Assert.True(await RunFinish.EndAsync(run, new RunEnd(RunOutcome.Failed, CleanupProven: true)));
+        }
     }
 
     [Fact] public async Task AnAbandonedCleanupIsRecordedInsteadOfAnEndAndAJournalThatCannotTakeItIsReported()

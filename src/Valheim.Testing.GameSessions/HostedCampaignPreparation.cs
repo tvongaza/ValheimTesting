@@ -919,8 +919,8 @@ public static class HostedCampaignPreparation
         }
         var journal = new RunJournal(runId ?? RunJournal.NewRunId());
         string id = journal.RunId;
-        // A preparation under its own new id is its run's whole flow, so a failed one ends that run (RunFinish); a runner that
-        // passed its run id ends the run itself, after the rest of its cleanup.
+        // A preparation under its own new id (a library caller's) ends that run itself when it fails (RunFinish); a prepared
+        // campaign it returns is its caller's to end. A runner that passed its run id ends the run itself, after the rest of its cleanup.
         using var ownRun = runId == null ? RunJournal.UseRun(id) : null;
         var copies = new ConcurrentBag<(string Host, string Actor, string Runtime, string Stage)>();
         var stagedCharacters = new ConcurrentBag<(string Host, string Actor, HostedCampaignCharacter Character)>();

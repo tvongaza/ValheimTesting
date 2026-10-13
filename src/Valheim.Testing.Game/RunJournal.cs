@@ -220,7 +220,6 @@ internal sealed class RunJournal
     internal void AppendLocal(string actor, JournalEntry entry, string? journal = null)
     {
         string root = Path.GetFullPath(journal ?? LocalDirectory);
-        Journalled(RunId, LocalPlace(root), (again, last, _) => { AppendLocal(again, last, root); return Task.CompletedTask; }, TimeSpan.Zero);
         string directory = Path.Combine(root, RunId);
         string line = Line(actor, entry) + "\n";
         lock (s_localWrite)
@@ -233,14 +232,21 @@ internal sealed class RunJournal
                     using var stream = new FileStream(Path.Combine(directory, actor + ".jsonl"), FileMode.Append, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete);
                     byte[] bytes = new UTF8Encoding(false).GetBytes(line);
                     stream.Write(bytes);
-                    return;
+                    break;
                 }
                 catch (IOException) when (attempt < 20) { Thread.Sleep(50); }
         }
+        // Noted once written: a write in process that threw left nothing here, so the run's end need not come here either.
+        Journalled(RunId, LocalPlace(root), (again, last, _) => { AppendLocal(again, last, root); return Task.CompletedTask; }, TimeSpan.Zero);
     }
 
-    /// <summary>The place key of a journal on this machine, however it is written (in process or through the local shell).</summary>
-    internal static string LocalPlace(string journal) => "this machine|" + Path.TrimEndingDirectorySeparator(Path.GetFullPath(journal));
+    /// <summary>The place key of a journal on this machine, however it is written (in process or through the local shell).
+    /// Windows and macOS file systems ignore case, so one directory spelled two ways is one place.</summary>
+    internal static string LocalPlace(string journal)
+    {
+        string path = Path.TrimEndingDirectorySeparator(Path.GetFullPath(journal));
+        return "this machine|" + (OperatingSystem.IsWindows() || OperatingSystem.IsMacOS() ? path.ToUpperInvariant() : path);
+    }
 
     // One journal line: when, which run and actor, what, and the runner that wrote it.
     internal string Line(string actor, JournalEntry entry)
