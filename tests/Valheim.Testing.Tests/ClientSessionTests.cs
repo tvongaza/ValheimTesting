@@ -22,7 +22,7 @@ public sealed class ClientSessionTests : IDisposable
     {
         var plan = Plan();
         OwnedClientCommandLease.Write(_output, 99, "test-start", plan);
-        Assert.Throws<WaitTimeoutException>(() => ClientSession.Launch(plan, _output, () => new FakeOwnedProcess(99),
+        Assert.Throws<WaitTimeoutException>(() => ClientSession.Launch(plan, _output, () => new RunningIdentifiedProcess(99, "test-start"),
             () => new ScriptedTransport(), (_, _) => throw new WaitTimeoutException("menu", TimeSpan.Zero, null)));
         Assert.False(File.Exists(Path.Combine(_output, OwnedClientCommandLease.FileName)));
         Assert.False(File.Exists(Path.Combine(_output, OwnedClientCommandLease.MenuPins)));
@@ -135,7 +135,7 @@ public sealed class ClientSessionTests : IDisposable
         public void Dispose() { }
     }
 
-    private sealed class RunningIdentifiedProcess(int id, string start) : IOwnedProcess, IClientProcessIdentity
+    private sealed class RunningIdentifiedProcess(int id, string start) : IOwnedProcess, ILocalClientProcessIdentity
     {
         private readonly TaskCompletionSource<int> _exited = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public int Id => id;
@@ -146,9 +146,19 @@ public sealed class ClientSessionTests : IDisposable
         public void Dispose() { }
     }
 
-    [Fact] public void LocalWindowsOwnedClientRecordsItsExactProcessAndStrictPinsForAPassthrough()
+    private sealed class RemoteIdentifiedProcess(int id, string start) : IOwnedProcess, IClientProcessIdentity
     {
-        if (!OperatingSystem.IsWindows()) return;
+        private readonly TaskCompletionSource<int> _exited = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public int Id => id;
+        public string StartFileTimeUtc => start;
+        public bool HasExited { get; private set; }
+        public Task<int> WaitForExitAsync(CancellationToken cancellation) => _exited.Task;
+        public void Stop(TimeSpan timeout) { HasExited = true; _exited.TrySetResult(0); }
+        public void Dispose() { }
+    }
+
+    [Fact] public void LocalOwnedClientRecordsItsExactProcessAndStrictPinsForAPassthrough()
+    {
         var process = new RunningIdentifiedProcess(99, "123456789");
         var plan = Plan();
         plan.HostWorld = new HostWorldPlan { WorldUid = "fixture-uid" };
@@ -165,13 +175,32 @@ public sealed class ClientSessionTests : IDisposable
         Assert.False(File.Exists(Path.Combine(_output, OwnedClientCommandLease.MenuPins)));
     }
 
+    [Fact] public void RemoteOwnedClientNeitherWritesNorRetiresTheLocalCommandLease()
+    {
+        var plan = Plan();
+        OwnedClientCommandLease.Write(_output, 77, "local-start", plan);
+        string originalLease = File.ReadAllText(Path.Combine(_output, OwnedClientCommandLease.FileName));
+        string originalPins = File.ReadAllText(Path.Combine(_output, OwnedClientCommandLease.MenuPins));
+        var remote = new RemoteIdentifiedProcess(99, "remote-start");
+
+        using (ClientSession.Launch(plan, _output, () => remote, () => new ScriptedTransport(),
+            (_, _) => Task.CompletedTask))
+        {
+            Assert.Equal(originalLease, File.ReadAllText(Path.Combine(_output, OwnedClientCommandLease.FileName)));
+            Assert.Equal(originalPins, File.ReadAllText(Path.Combine(_output, OwnedClientCommandLease.MenuPins)));
+        }
+
+        Assert.True(remote.HasExited);
+        Assert.Equal(originalLease, File.ReadAllText(Path.Combine(_output, OwnedClientCommandLease.FileName)));
+        Assert.Equal(originalPins, File.ReadAllText(Path.Combine(_output, OwnedClientCommandLease.MenuPins)));
+    }
+
     [Fact] public void AChangedWorldCannotPublishDiagnosticPins()
     {
         var plan = Plan();
         var transport = new ScriptedTransport();
-        using var session = ClientSession.Launch(plan, _output, () => new FakeOwnedProcess(99),
+        using var session = ClientSession.Launch(plan, _output, () => new RunningIdentifiedProcess(99, "test-start"),
             () => transport, (_, _) => Task.CompletedTask);
-        OwnedClientCommandLease.Write(_output, 99, "test-start", plan);
         string worldPins = Path.Combine(_output, OwnedClientCommandLease.WorldPins);
         File.WriteAllText(worldPins, "worlduid=1111"); // An earlier world's pins: a failed publish must not leave them standing.
         transport.PinsHold = false; // The game changed world before the joined world could be verified.

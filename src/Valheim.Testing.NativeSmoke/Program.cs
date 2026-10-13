@@ -13,7 +13,7 @@ if (args is ["help" or "--help"])
     Console.WriteLine(EnvCommand.Usage + " (list, preflight and status read only; recover and teardown clear what a run left)");
     Console.WriteLine(ForegroundHold.FinishUsage + " (asks the live owner of a held run to finish and clean up)");
     Console.WriteLine(DetachedSession.Usage + " (experimental local detached dedicated server; Task Scheduler on Windows)");
-    Console.WriteLine(OwnedCliCommand.Usage + " (one strictly pinned command to a running owned Windows client)");
+    Console.WriteLine(OwnedCliCommand.Usage + " (one strictly pinned command to a running owned client)");
     Console.WriteLine(SessionCommand.Usage + " (read only; --hosts adds the host checks)");
     Console.WriteLine(MacSteamRuntimeCommand.Usage + " (review and pin SteamCMD's Mac server libraries)");
     return 0;

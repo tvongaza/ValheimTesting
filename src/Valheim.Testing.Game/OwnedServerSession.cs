@@ -39,6 +39,10 @@ internal interface IClientProcessIdentity
     string StartFileTimeUtc { get; }
 }
 
+// Only a process on this machine can publish a lease for a separate local valheim-test invocation.
+// HostedClientProcess deliberately has only IClientProcessIdentity: its PID and start identity belong to its host.
+internal interface ILocalClientProcessIdentity : IClientProcessIdentity { }
+
 /// <summary>
 /// What an owned server's startup waits on instead of retrying connections. The process exit is always watched.
 /// Without <see cref="CliLog"/>, connecting falls back to bounded retries at the session's poll interval.
@@ -445,7 +449,7 @@ public sealed class OwnedServerSession : IOwnedServer, IDisposable
 // Starts one direct executable (an owned server, or an owned client through ClientSession); launch scripts must exec/wait, never detach a child.
 // The PID handshake refuses a daemonized server. No process-name discovery/kill. A clean stop asks only this process to quit
 // (Quit); the kill fallback ends this process and its children.
-public sealed class DirectServerProcess : IOwnedProcess, IClientProcessIdentity
+public sealed class DirectServerProcess : IOwnedProcess, ILocalClientProcessIdentity
 {
     private readonly Process _process;
     // The profile's account and host lock still need a conservative exit answer after ClientSession disposes this handle.

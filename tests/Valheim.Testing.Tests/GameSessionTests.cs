@@ -17,7 +17,7 @@ public sealed class GameSessionTests : IDisposable
 
     private readonly List<FakeOwnedProcess> _serverProcesses = [];
     private readonly ManualResetEventSlim _serverLaunched = new();
-    private readonly Dictionary<string, FakeOwnedProcess> _clientProcesses = [];
+    private readonly Dictionary<string, LocalFakeOwnedProcess> _clientProcesses = [];
     private readonly Dictionary<string, ScriptedTransport> _clientTransports = [];
 
     private bool _patchApplied = true;
@@ -96,8 +96,8 @@ public sealed class GameSessionTests : IDisposable
         public ClientSession Open(string name, ClientRunPlan plan, string output, CancellationToken cancellation)
         {
             var transport = test.ClientTransport();
-            FakeOwnedProcess process;
-            lock (test._clientProcesses) { process = test._clientProcesses[name] = new FakeOwnedProcess(700 + test._clientProcesses.Count); test._clientTransports[name] = transport; }
+            LocalFakeOwnedProcess process;
+            lock (test._clientProcesses) { process = test._clientProcesses[name] = new LocalFakeOwnedProcess(700 + test._clientProcesses.Count); test._clientTransports[name] = transport; }
             var session = ClientSession.Launch(plan, output, () => process, () => transport, (_, token) => ready(name, token), cancellation);
             lock (test._clientProcesses) test._openedClients.Add(name);
             return session;

@@ -6,6 +6,30 @@ internal static class Program
 {
     private static void Main(string[] args)
     {
+        if (args is ["tcp-listener"])
+        {
+            using var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+            listener.Start();
+            using var process = System.Diagnostics.Process.GetCurrentProcess();
+            Console.WriteLine(string.Join(' ', ((System.Net.IPEndPoint)listener.LocalEndpoint).Port, process.Id,
+                process.StartTime.ToFileTimeUtc().ToString(System.Globalization.CultureInfo.InvariantCulture)));
+            Console.Out.Flush();
+            Thread.Sleep(TimeSpan.FromMinutes(2));
+            return;
+        }
+        if (args is ["tcp-listener6", var portText])
+        {
+            int port = int.Parse(portText, System.Globalization.CultureInfo.InvariantCulture);
+            using var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.IPv6Loopback, port);
+            listener.Server.DualMode = false;
+            listener.Start();
+            using var process = System.Diagnostics.Process.GetCurrentProcess();
+            Console.WriteLine(string.Join(' ', ((System.Net.IPEndPoint)listener.LocalEndpoint).Port, process.Id,
+                process.StartTime.ToFileTimeUtc().ToString(System.Globalization.CultureInfo.InvariantCulture)));
+            Console.Out.Flush();
+            Thread.Sleep(TimeSpan.FromMinutes(2));
+            return;
+        }
         if (args is ["run-cancellation", var cancellationMarker])
         {
             using var cancellation = new Valheim.Testing.GameSessions.RunCancellation();

@@ -12,7 +12,7 @@ public sealed class HostingClientActorTests : IDisposable
     private const string WorldUid = "4242", Name = "HostFixture", HostSteamId = "76561198000000001";
     private readonly string _root = Directory.CreateTempSubdirectory("hosting-client-").FullName;
     private readonly PreflightInstall _install = PreflightInstall.Create(); // An owned host's install that passes the preflight.
-    private readonly FakeOwnedProcess _hostProcess = new(77);
+    private readonly LocalFakeOwnedProcess _hostProcess = new(77);
     private readonly List<string> _commands = []; // Host and peer commands in the order they arrived.
     private string Output => Path.Combine(_root, "out");
     private string Fixture => Path.Combine(_root, "fixture");
