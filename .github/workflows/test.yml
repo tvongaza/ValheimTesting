@@ -540,6 +540,8 @@ jobs:
     defaults:
       run:
         shell: bash
+    env:
+      VT_TEST_RUNNER_PREFIX: dotnet run scripts/validate.cs -- --test-project "$GITHUB_WORKSPACE" "$RUNNER_TEMP/mod/MyMod.Tests/MyMod.Tests.csproj"
     steps:
       - uses: actions/checkout@v7
         with:
@@ -595,12 +597,11 @@ jobs:
           grep -q 'Include="xunit.runner.console"' "$project"
           grep -q 'Valheim.TestRunners.targets' "$project"
           rm "$project.orig"
-      # validate.cs owns the soft and hard limits and transcript for every invocation of the test-running target (#719, #729).
-      # The copied consumer target owns its nested runners, so this outer build cannot name tests in flight without putting
-      # repository CI plumbing in Valheim.TestRunners.targets; its hard-limit evidence names the target command instead.
+      # validate.cs owns the soft and hard limits, TRX, blame sequence and transcript for every invocation of the
+      # test-running target (#719, #729). The net48 xunit console leg has no testhost, so a hard limit explicitly says it has no names.
       - name: Both frameworks pass
         timeout-minutes: 14
-        run: dotnet run scripts/validate.cs -- --test-project "$GITHUB_WORKSPACE" "$RUNNER_TEMP/mod/MyMod.Tests/MyMod.Tests.csproj" "$RUNNER_TEMP/test-runner-results/pass" --target RunTestsOnBothFrameworks
+        run: ${{ env.VT_TEST_RUNNER_PREFIX }} "$RUNNER_TEMP/test-runner-results/pass" --target RunTestsOnBothFrameworks
       - name: Add a test that fails only on .NET Framework
         run: |
           cat > "$RUNNER_TEMP/mod/MyMod.Tests/Net48OnlyFailure.cs" <<'CS'
@@ -617,25 +618,23 @@ jobs:
               }
           }
           CS
-      - name: Negative control - .NET Framework failure fails the run
+      - name: Negative controls and single-framework run
         timeout-minutes: 14
         run: |
-          set +e
-          dotnet run scripts/validate.cs -- --test-project "$GITHUB_WORKSPACE" "$RUNNER_TEMP/mod/MyMod.Tests/MyMod.Tests.csproj" "$RUNNER_TEMP/test-runner-results/net48-failure" --target RunTestsOnBothFrameworks | tee "$RUNNER_TEMP/net48-failure.log"
-          status="${PIPESTATUS[0]}"
-          set -e
-          if [ "$status" = 0 ] || ! grep -q 'net48: FAILED (tests, exit 1)' "$RUNNER_TEMP/net48-failure.log"; then echo "::error::a net48-only failure must fail the run; it exited $status"; exit 1; fi
-      - name: Negative control - modern framework still passes
-        timeout-minutes: 14
-        run: dotnet run scripts/validate.cs -- --test-project "$GITHUB_WORKSPACE" "$RUNNER_TEMP/mod/MyMod.Tests/MyMod.Tests.csproj" "$RUNNER_TEMP/test-runner-results/net10-only" --target RunTestsOnBothFrameworks -f net10.0
-      - name: Negative control - no .NET Framework tests fails the run
-        timeout-minutes: 14
-        run: |
-          set +e
-          dotnet run scripts/validate.cs -- --test-project "$GITHUB_WORKSPACE" "$RUNNER_TEMP/mod/MyMod.Tests/MyMod.Tests.csproj" "$RUNNER_TEMP/test-runner-results/net48-no-tests" --target RunTestsOnBothFrameworks -f net48 -p:VSTestTestCaseFilter=FullyQualifiedName~NoSuchTest | tee "$RUNNER_TEMP/net48-no-tests.log"
-          status="${PIPESTATUS[0]}"
-          set -e
-          if [ "$status" = 0 ] || ! grep -q 'net48: FAILED (no tests ran)' "$RUNNER_TEMP/net48-no-tests.log"; then echo "::error::a net48 leg that ran no tests must fail the run; it exited $status"; exit 1; fi
+          expect_failure() { # $1 result/log name, $2 expected text; remaining arguments go to the target
+            local name=$1 expected=$2 status
+            shift 2
+            set +e
+            ${{ env.VT_TEST_RUNNER_PREFIX }} "$RUNNER_TEMP/test-runner-results/$name" --target RunTestsOnBothFrameworks "$@" | tee "$RUNNER_TEMP/$name.log"
+            status="${PIPESTATUS[0]}"
+            set -e
+            if [ "$status" = 0 ] || ! grep -q "$expected" "$RUNNER_TEMP/$name.log"; then
+              echo "::error::$name must fail with '$expected'; it exited $status"; exit 1
+            fi
+          }
+          expect_failure net48-failure 'net48: FAILED (tests, exit 1)'
+          ${{ env.VT_TEST_RUNNER_PREFIX }} "$RUNNER_TEMP/test-runner-results/net10-only" --target RunTestsOnBothFrameworks -f net10.0
+          expect_failure net48-no-tests 'net48: FAILED (no tests ran)' -f net48 -p:VSTestTestCaseFilter=FullyQualifiedName~NoSuchTest
       - name: Keep test evidence on failure
         if: failure() || cancelled()
         uses: actions/upload-artifact@v7

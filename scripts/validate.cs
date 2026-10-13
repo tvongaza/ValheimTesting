@@ -24,6 +24,8 @@
 // signal to split or speed it up. Past the hard limit (10 minutes) its test host is stopped, so the blame sequence names the tests in
 // flight, and the process tree is killed: validation fails. VT_VALIDATE_SOFT_LIMIT_SECONDS and VT_VALIDATE_HARD_LIMIT_SECONDS scale
 // both down, for the tests of this mechanism (ValidationLimitsTests) only.
+// A RunTestsOnBothFrameworks hard limit during the net48 xunit console leg cannot name tests: xunit.console.exe is not a testhost
+// on Windows or under Mono, so there is no blame collector to flush.
 //
 // VT_VALIDATE_HEARTBEAT_SECONDS=N (the macOS CI job sets 60; #736 investigation) adds a "heartbeat:" line every N seconds that names the
 // running command and the machine's processes, free disk and, on macOS, free memory level.
@@ -41,25 +43,17 @@ using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Xml.Linq;
 
-const string Usage = "usage: dotnet run scripts/validate.cs [--skip-ci-shell|--only-ci-shell|--ci-main-tests|--ci-timed 1|2|3|--ci-build-only|--test-project ROOT PROJECT RESULTS [FILTER|--target TARGET [ARGUMENTS]]] [--split]";
-bool split = args is [.., "--split"];
-string[] mode = split ? args[..^1] : args;
-bool skipCiShell = mode.SequenceEqual(["--skip-ci-shell"]);
-bool onlyCiShell = mode.SequenceEqual(["--only-ci-shell"]);
-bool ciMainTests = mode.SequenceEqual(["--ci-main-tests"]);
-bool ciBuildOnly = mode.SequenceEqual(["--ci-build-only"]);
-bool testProjectTest = mode is ["--test-project", _, _, _] ||
-    mode is ["--test-project", _, _, _, var filter] && filter != "--target";
-bool testProjectTarget = mode is ["--test-project", _, _, _, "--target", var target, ..] && !string.IsNullOrWhiteSpace(target);
-bool testProject = testProjectTest || testProjectTarget;
-const int TimedShardCount = 3; // the timed shards of --ci-timed; the workflow's toolkit matrix lists the same N
-int ciTimed = mode is ["--ci-timed", var shardNumber] && int.TryParse(shardNumber, out int shardIndex) && shardIndex >= 1 && shardIndex <= TimedShardCount ? shardIndex : 0;
-if ((mode.Length != 0 && !skipCiShell && !onlyCiShell && !ciMainTests && !ciBuildOnly && !testProject && ciTimed == 0) ||
-    args.Count(argument => argument == "--split") != (split ? 1 : 0) || split && testProjectTarget)
-    throw new ArgumentException(Usage);
-// A one-project run names its repository and paths absolutely: a file-based app's working directory is the SDK's choice (#766).
-if (testProject && (mode.Skip(1).Take(3).Any(path => !Path.IsPathFullyQualified(path)) || !File.Exists(Path.Combine(mode[1], "cli-dependency.json"))))
-    throw new ArgumentException(Usage + "; --test-project needs three absolute paths, and ROOT holds cli-dependency.json");
+ValidationInvocation invocation = ValidationInvocation.Parse(args);
+bool split = invocation.Split;
+string[] mode = invocation.Mode;
+bool skipCiShell = invocation.SkipCiShell;
+bool onlyCiShell = invocation.OnlyCiShell;
+bool ciMainTests = invocation.CiMainTests;
+bool ciBuildOnly = invocation.CiBuildOnly;
+bool testProjectTest = invocation.TestProjectTest;
+bool testProjectTarget = invocation.TestProjectTarget;
+bool testProject = invocation.TestProject;
+int ciTimed = invocation.CiTimed;
 string root = testProject ? mode[1] : FindRoot();
 string workingDirectory = testProject ? Path.GetDirectoryName(mode[2])! : root;
 string? splitFilter = split ? SplitFilter() : null;
@@ -122,7 +116,7 @@ var timedMethods = manifest.Where(method => method.Seconds.ContainsKey(timingOs)
 var timedShards = timedMethods.GroupBy(method => method.Name[..method.Name.LastIndexOf('.')])
     .SelectMany(group =>
     {
-        double[] loads = new double[TimedShardCount];
+        double[] loads = new double[ValidationInvocation.TimedShardCount];
         return group.OrderByDescending(method => method.Seconds).ThenBy(method => method.Name, StringComparer.Ordinal)
             .Select(method =>
             {
@@ -250,32 +244,37 @@ void Test(string project, params string[] extra)
     TestCommand(output, arguments.ToArray());
 }
 
-// Some projects own a test-running build target (tools/test-runners/Valheim.TestRunners.targets). The workflow still routes that
-// command through Execute, so the outer test run gets the same soft and hard limits and transcript as a direct dotnet test.
+// Some projects own a test-running build target (tools/test-runners/Valheim.TestRunners.targets). Give its modern-framework
+// dotnet test leg the same TRX and blame settings as a direct run, then put the outer build under the same limits too.
 void TestTarget(string project, string target, params string[] extra)
 {
     string output = Path.Combine(results, Path.GetFileNameWithoutExtension(project));
-    TestCommand(output, ["build", project, "-m:1", "-t:" + target, .. extra]);
+    string[] arguments = ["build", project, "-m:1", "-t:" + target, .. extra,
+        "-p:VSTestLogger=trx%3BLogFileName=results.trx", "-p:VSTestResultsDirectory=" + output,
+        "-p:VSTestBlame=true", "-p:VSTestBlameHang=true", "-p:VSTestBlameHangTimeout=5m", "-p:VSTestBlameHangDumpType=none"];
+    TestCommand(output, arguments, Net48XunitConsoleCouldRun(target, extra) ? "net48 xunit console leg" : null);
 }
 
-void TestCommand(string output, string[] arguments)
+void TestCommand(string output, string[] arguments, string? noTestNamesReason = null)
 {
     if (Directory.Exists(output)) Directory.Delete(output, recursive: true);
-    try { Execute("dotnet", arguments, output); }
+    try { Execute("dotnet", arguments, output, noTestNamesReason); }
     catch
     {
-        if (Directory.Exists(output))
-            foreach (string sequence in Directory.GetFiles(output, "Sequence_*.xml", SearchOption.AllDirectories))
-            {
-                XElement root;
-                // A command killed with its whole tree can leave a half-written sequence; the original failure must still surface.
-                try { root = XDocument.Load(sequence).Root!; }
-                catch (System.Xml.XmlException) { Note($"unreadable blame sequence: {Path.GetRelativePath(results, sequence)}"); continue; }
-                foreach (var test in root.Elements("Test").Where(t => (string?)t.Attribute("Completed") != "True"))
-                    Note($"started and not completed: {(string?)test.Attribute("DisplayName")} ({Path.GetRelativePath(results, sequence)})");
-            }
+        foreach (string line in ValidationLimitReports.IncompleteTests(output, results)) Note(line);
         throw;
     }
+}
+
+bool Net48XunitConsoleCouldRun(string target, string[] extra)
+{
+    if (target != "RunTestsOnBothFrameworks") return false;
+    string? framework = extra.Select((argument, index) => (argument, index))
+        .Where(item => (item.argument is "-f" or "--framework") && item.index + 1 < extra.Length)
+        .Select(item => extra[item.index + 1]).LastOrDefault();
+    string? property = extra.LastOrDefault(argument => argument.StartsWith("-p:TargetFramework=", StringComparison.OrdinalIgnoreCase));
+    framework ??= property?.Split('=', 2)[1];
+    return framework == null || framework.StartsWith("net4", StringComparison.OrdinalIgnoreCase);
 }
 
 // The tests of this OS's share under --split (#735): the test command's own filter, if any, and the split's. Repository validation
@@ -310,7 +309,7 @@ void Run(string file, params string[] arguments) => Execute(file, arguments, nul
 
 // Runs a command and fails on a non-zero exit. A test command (testResults: where its results go) also has the soft and hard
 // limits of #719; this is the one place that enforces them.
-void Execute(string file, string[] arguments, string? testResults)
+void Execute(string file, string[] arguments, string? testResults, string? noTestNamesReason = null)
 {
     string command = file + " " + string.Join(' ', arguments);
     Note("start: " + command);
@@ -337,15 +336,22 @@ void Execute(string file, string[] arguments, string? testResults)
         {
             Note($"could not stop the test host ({ex.Message}); killing the process tree without a blame sequence");
         }
-        if (stopped == 0 || !process.WaitForExit(TimeSpan.FromSeconds(60)))
+        bool cannotNameTests = stopped == 0 && noTestNamesReason != null;
+        if (stopped != 0)
         {
-            if (stopped != 0) Note("the command did not exit within 60 s of its test host being stopped; killing its process tree");
-            try { process.Kill(entireProcessTree: true); }
-            catch (InvalidOperationException) { /* It exited between the check and the kill. */ }
-            process.WaitForExit();
+            Note($"stopped {stopped} test host process(es); waiting up to 10 s for the blame sequence to flush");
+            Note(WaitForReadableBlameSequence(testResults!, TimeSpan.FromSeconds(10))
+                ? "blame sequence flushed; killing the process tree"
+                : "no readable blame sequence after 10 s; killing the process tree");
         }
-        Note($"FAILED: over the hard limit of {Elapsed(hardLimit)} after {Elapsed(clock.Elapsed)}: {command}");
-        throw new InvalidOperationException($"Validation command passed its {Elapsed(hardLimit)} hard limit and was stopped: {command}");
+        else Note("no test host was found; killing the process tree");
+        try { process.Kill(entireProcessTree: true); }
+        catch (InvalidOperationException) { /* It exited after its test host was stopped. */ }
+        process.WaitForExit();
+        string? unavailable = cannotNameTests ? noTestNamesReason : null;
+        Note(ValidationLimitReports.HardLimitFailure(command, clock.Elapsed, hardLimit, unavailable));
+        throw new InvalidOperationException($"Validation command passed its {Elapsed(hardLimit)} hard limit and was stopped: {command}" +
+            (unavailable == null ? "" : $"; no test names: {unavailable}"));
     }
     if (testResults != null && clock.Elapsed > softLimit) SoftLimitWarning(command, clock.Elapsed, testResults);
     if (process.ExitCode != 0)
@@ -358,24 +364,27 @@ void Execute(string file, string[] arguments, string? testResults)
     DataRootUnchanged(command);
 }
 
+// Stopping only the host gives vstest's blame collector a bounded chance to finish its sequence before the whole command
+// tree is killed. This polls only the read-only evidence; the stop and tree kill are each issued once.
+static bool WaitForReadableBlameSequence(string testResults, TimeSpan timeout)
+{
+    var clock = Stopwatch.StartNew();
+    while (clock.Elapsed < timeout)
+    {
+        if (Directory.Exists(testResults))
+            foreach (string sequence in Directory.GetFiles(testResults, "Sequence_*.xml", SearchOption.AllDirectories))
+                try { _ = XDocument.Load(sequence); return true; }
+                catch (Exception error) when (error is System.Xml.XmlException or IOException) { }
+        Thread.Sleep(100);
+    }
+    return false;
+}
+
 // The warning of a test command that ended past the soft limit: the command, its duration and its slowest tests from this
 // run's TRX (the logger writes it when the run ends, so it is not available while the command is still going).
 void SoftLimitWarning(string command, TimeSpan elapsed, string testResults)
 {
-    string slowest = "the slowest tests are unknown: this run wrote no TRX";
-    // Test removed the folder before the run, so any TRX in it is this run's.
-    string? trx = Directory.Exists(testResults) ? Directory.GetFiles(testResults, "*.trx", SearchOption.AllDirectories).FirstOrDefault() : null;
-    if (trx != null)
-    {
-        XDocument document;
-        try { document = XDocument.Load(trx); }
-        catch (System.Xml.XmlException) { document = new XDocument(new XElement("TestRun")); slowest = "the slowest tests are unknown: the TRX is unreadable"; }
-        var tests = document.Descendants().Where(e => e.Name.LocalName == "UnitTestResult")
-            .Select(e => (Name: (string?)e.Attribute("testName") ?? "?", Duration: TimeSpan.TryParse((string?)e.Attribute("duration"), out var d) ? d : TimeSpan.Zero))
-            .OrderByDescending(t => t.Duration).Take(5).ToArray();
-        if (tests.Length > 0) slowest = "slowest tests: " + string.Join("; ", tests.Select(t => $"{t.Name} {t.Duration.TotalSeconds:F1}s"));
-    }
-    string message = $"SOFT LIMIT: {command} took {Elapsed(elapsed)}, over the {Elapsed(softLimit)} soft limit; split, refactor or speed it up; {slowest}";
+    string message = ValidationLimitReports.SoftLimit(command, elapsed, softLimit, testResults);
     Note(message);
     if (Environment.GetEnvironmentVariable("GITHUB_ACTIONS") == "true")
     {

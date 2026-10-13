@@ -139,6 +139,14 @@
       <_ValheimNetFramework Condition="'$(TargetFrameworkIdentifier)' == '.NETFramework'">true</_ValheimNetFramework>
       <_ValheimStatus />
       <_ValheimLine />
+      <!-- validate.cs passes these standard VSTest properties to the outer target so its modern dotnet test keeps a TRX
+           and blame sequence. An ordinary consumer that does not set them keeps the original command. -->
+      <_ValheimVSTestOptions Condition="'$(VSTestLogger)' != ''">$(_ValheimVSTestOptions) --logger &quot;$(VSTestLogger)&quot;</_ValheimVSTestOptions>
+      <_ValheimVSTestOptions Condition="'$(VSTestResultsDirectory)' != ''">$(_ValheimVSTestOptions) --results-directory &quot;$(VSTestResultsDirectory)&quot;</_ValheimVSTestOptions>
+      <_ValheimVSTestOptions Condition="'$(VSTestBlame)' == 'true' And '$(VSTestBlameHang)' != 'true'">$(_ValheimVSTestOptions) --blame</_ValheimVSTestOptions>
+      <_ValheimVSTestOptions Condition="'$(VSTestBlameHang)' == 'true'">$(_ValheimVSTestOptions) --blame-hang</_ValheimVSTestOptions>
+      <_ValheimVSTestOptions Condition="'$(VSTestBlameHangTimeout)' != ''">$(_ValheimVSTestOptions) --blame-hang-timeout &quot;$(VSTestBlameHangTimeout)&quot;</_ValheimVSTestOptions>
+      <_ValheimVSTestOptions Condition="'$(VSTestBlameHangDumpType)' != ''">$(_ValheimVSTestOptions) --blame-hang-dump-type &quot;$(VSTestBlameHangDumpType)&quot;</_ValheimVSTestOptions>
     </PropertyGroup>
     <ValheimTestFilter Condition="'$(VSTestTestCaseFilter)' != ''" Filter="$(VSTestTestCaseFilter)">
       <Output TaskParameter="DotnetTestArguments" PropertyName="_ValheimFilterOption" />
@@ -147,7 +155,7 @@
 
     <!-- Modern frameworks: dotnet test. -->
     <Message Condition="!$(_ValheimNetFramework)" Importance="high" Text="== $(TargetFramework) (dotnet test)" />
-    <Exec Condition="!$(_ValheimNetFramework)" Command="&quot;$(_ValheimDotnet)&quot; test &quot;$(MSBuildProjectFullPath)&quot; -f $(TargetFramework) -c $(Configuration) --no-restore -nologo$(_ValheimFilterOption)"
+    <Exec Condition="!$(_ValheimNetFramework)" Command="&quot;$(_ValheimDotnet)&quot; test &quot;$(MSBuildProjectFullPath)&quot; -f $(TargetFramework) -c $(Configuration) --no-restore -nologo$(_ValheimFilterOption)$(_ValheimVSTestOptions)"
           EnvironmentVariables="MSBUILDDISABLENODEREUSE=1" IgnoreExitCode="true" IgnoreStandardErrorWarningFormat="true"
           StandardOutputImportance="high" StandardErrorImportance="high">
       <Output TaskParameter="ExitCode" PropertyName="_ValheimStatus" />

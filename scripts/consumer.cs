@@ -173,9 +173,13 @@ try
     string doublesPin = $"Include=\"Valheim.Testing.Doubles\" Version=\"[{manifest["Valheim.Testing.Doubles"]}]\"";
     string modText = Regex.Replace(File.ReadAllText(modProject), @"Include=""Valheim\.Testing\.Doubles"" Version=""\[[^\]]+\]""", doublesPin);
     if (!modText.Contains(doublesPin)) throw new InvalidOperationException("ModWithTests no longer pins an exact Valheim.Testing.Doubles version.");
+    const string consumerWarnings = "<WarningsAsErrors>$(WarningsAsErrors);CS0612;CS0618;SYSLIB0050;SYSLIB0051</WarningsAsErrors>";
+    modText = modText.Replace("<IsTestProject>true</IsTestProject>", "<IsTestProject>true</IsTestProject>" + consumerWarnings, StringComparison.Ordinal);
+    if (!modText.Contains(consumerWarnings, StringComparison.Ordinal)) throw new InvalidOperationException("ModWithTests no longer has the expected test-project property group.");
     File.WriteAllText(modProject, modText);
-    Run(env, mod, "dotnet", "test", "MyMod.Tests/MyMod.Tests.csproj", "-c", "Release", "-p:WarningsAsErrors=CS0612%3BCS0618%3BSYSLIB0050%3BSYSLIB0051",
-        "--blame-hang-timeout", "5m", "--blame-hang-dump-type", "none");
+    // validate.cs is the one owner of every test command's soft/hard limits, TRX, blame sequence and transcript (#719, #776).
+    Run(env, mod, "dotnet", "run", Path.Combine(root, "scripts", "validate.cs"), "--", "--test-project", root, modProject,
+        Path.Combine(root, "artifacts", "validate", "consumer"));
 
     // Adapter: the source package compiled into a net48 game-side adapter, as in the compile check but from the package.
     string adapter = Path.Combine(work, "adapter");
