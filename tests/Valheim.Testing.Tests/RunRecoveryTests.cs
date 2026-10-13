@@ -364,7 +364,7 @@ public sealed class RunRecoveryTests : IDisposable
         Assert.True(report.Recovered, string.Join("\n", report.Steps));
         Assert.Equal(JournalRunState.Recoverable, report.Before);
         Assert.Equal([("41", "9041"), ("91152", "134357104986630869")], _host.Stops.Order());
-        Assert.Contains(report.Steps, step => step.What == "process 91152 (started 134357104986630869)" && step.Outcome == "stopped");
+        Assert.Contains(report.Steps, step => step.What == "process 91152 (started 134357104986630869)" && step.Outcome == "quit when asked");
         var after = Assert.Single((await StatusAsync()).Runs);
         Assert.Equal(JournalRunState.Ended, after.State);
         Assert.Empty(after.Items);
@@ -373,6 +373,43 @@ public sealed class RunRecoveryTests : IDisposable
         int before = _host.Scripts.Count;
         Assert.Equal(JournalRunState.Ended, Assert.Single((await StatusAsync()).Runs).State);
         Assert.DoesNotContain("pid-file", _host.Scripts.Skip(before));
+    }
+
+    // #665: recovery stops each process as its own run would have: asked to quit first, given the quit budget its boot journalled
+    // (the plan's QuitSeconds, here more than the default) or the server plan's default, and killed only after that; a server
+    // as the server's stop asks it, a client as its session asks it, and on macOS both by the one Mac stop, which checks the
+    // journalled command line again itself.
+    [Theory]
+    [InlineData("linux")]
+    [InlineData("macos")]
+    [InlineData("windows")]
+    public async Task RecoveryAsksEachProcessToQuitWithTheBudgetItsBootJournalled(string platform)
+    {
+        const string run = "run-quit-budget";
+        var host = new FakeServerHost("pc", Path.Combine(_root, platform), windows: platform == "windows");
+        host.Running(42, "9042");
+        host.Running(43, "9043");
+        Line(host, run, "server", Gone, JournalEntry.ProcessStarted, ("pid", "42"), ("startIdentity", "9042"),
+            ("commandLineSha256", FakeServerHost.CommandLineSha256("42")), ("bootDirectory", "/srv/runs/q/boot-1"), ("quitSeconds", "300"));
+        Line(host, run, "client", Gone, JournalEntry.ProcessStarted, ("pid", "43"), ("startIdentity", "9043"),
+            ("commandLineSha256", FakeServerHost.CommandLineSha256("43")), ("launchDirectory", "/srv/runs/q/client-1"));
+        var hosts = new Dictionary<string, HostProfile> { ["pc"] = new() { Kind = "ssh", Platform = platform, Lock = "/var/tmp/vt/lock" } };
+
+        var report = await RunRecovery.RecoverAsync(hosts, _ => host, run, false, TimeSpan.FromSeconds(5));
+
+        Assert.True(report.Recovered, string.Join("\n", report.Steps));
+        var stops = host.Runs.Where(call => call.Script == "stop").ToDictionary(call => call.Variables["game"], call => call.Variables);
+        Assert.Equal("300", stops["42"]["quit"]);
+        Assert.Equal(((int)ClientSession.DefaultQuitTimeout.TotalSeconds).ToString(System.Globalization.CultureInfo.InvariantCulture), stops["43"]["quit"]);
+        if (platform == "macos")
+            Assert.All(stops, stop => Assert.Equal(FakeServerHost.CommandLineSha256(stop.Key), stop.Value["commandLine"]));
+        else
+        {
+            Assert.Equal("INT", stops["42"]["signal"]);
+            Assert.Equal(ProcessQuit.WindowsConsoleControlScript, stops["42"]["quitHelper"]);
+            Assert.Equal("TERM", stops["43"]["signal"]);
+        }
+        Assert.Contains(report.Steps, step => step.What == "process 42 (started 9042)" && step.Outcome == "quit when asked");
     }
 
     [Fact] public async Task RemoteMacLostLaunchReplyStopsItsExactClientAndRetiresItsGuiAgent()

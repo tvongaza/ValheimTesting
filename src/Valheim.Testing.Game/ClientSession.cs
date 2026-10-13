@@ -44,7 +44,9 @@ public sealed class ClientSession : IDisposable, IWorldPins
     public IReadOnlyList<RunLog> Logs { get; }
 
     /// <summary>How long disposing waits for the owned client to quit (its profile save) after asking it, before it kills it. Default one minute.</summary>
-    public TimeSpan QuitTimeout { get; set; } = TimeSpan.FromMinutes(1);
+    public TimeSpan QuitTimeout { get; set; } = DefaultQuitTimeout;
+    // The default above, which env recover also gives a client process (its journal names no quit budget).
+    internal static readonly TimeSpan DefaultQuitTimeout = TimeSpan.FromMinutes(1);
     /// <summary>How the owned client ended once disposed; null before that, and for an attached client.</summary>
     public ProcessStop? Stopped { get; private set; }
 

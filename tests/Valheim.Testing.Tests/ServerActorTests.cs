@@ -43,7 +43,7 @@ public sealed class ServerActorTests : IDisposable
         public string RuntimeDirectory => runtime;
         public string WorldDirectory => world;
         public ServerPlatform? Platform => null;
-        public ServerBoot Start(int boot, GameLaunch launch, string output, CancellationToken cancellation)
+        public ServerBoot Start(int boot, GameLaunch launch, string output, TimeSpan quit, CancellationToken cancellation)
         {
             Launches.Add(launch);
             var process = server.Launch(launch.Environment[TokenVariable]);

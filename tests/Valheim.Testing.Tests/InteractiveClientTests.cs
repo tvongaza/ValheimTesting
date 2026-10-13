@@ -130,7 +130,7 @@ public class InteractiveClientTests
         Assert.Contains(MacProfile + "/BepInEx/core/BepInEx.Preloader.dll", launch.RequiredFiles);
         var fake = new FakeLauncher()
             .Exits(0, Reply("VT-INTERACTIVE started 5412 391851"), FakeLauncher.Report(0))
-            .Exits(0, Reply("VT-AGENT removed", "VT-STOP quit"), FakeLauncher.Report(0));
+            .Exits(0, Reply("VT-STOP quit", "VT-AGENT removed"), FakeLauncher.Report(0));
         var process = await InteractiveClient.StartAsync(MacHost(fake), launch, MacLaunch, Timeout);
         Assert.Equal(5412, process.Id);
         string start = FakeLauncher.Script(fake.Calls[0]);
@@ -147,12 +147,46 @@ public class InteractiveClientTests
     {
         var fake = new FakeLauncher()
             .Exits(0, Reply("VT-INTERACTIVE started 5412 391851"), FakeLauncher.Report(0))
-            .Exits(0, Reply("VT-AGENT kept", "VT-STOP quit"), FakeLauncher.Report(0));
+            .Exits(0, Reply("VT-STOP quit", "VT-AGENT kept"), FakeLauncher.Report(0));
         var launch = GameLaunch.ForClientWithLoader(MacInstall, MacProfile, [], null, ClientPlatform.MacOS,
             ClientArchitecture.Arm64, macDoorstop: "libdoorstop.dylib");
         var process = await InteractiveClient.StartAsync(MacHost(fake), launch, MacLaunch, Timeout);
         await Assert.ThrowsAsync<HostOperationException>(() => process.StopAsync(TimeSpan.FromSeconds(10)));
         Assert.False(process.HasExited);
+    }
+
+    // The stop's verdict is the error (#665): a game still running, or unreadable, keeps its agent, and says so rather than
+    // reporting the agent it never tried to remove.
+    [Theory]
+    [InlineData("VT-STOP running", typeof(InvalidOperationException), "still running")]
+    [InlineData("VT-STOP unproven", typeof(HostOperationException), "could not be read")]
+    public async Task ARemoteMacStopThatLeftTheGameRunningSaysSo(string reply, Type error, string says)
+    {
+        var fake = new FakeLauncher()
+            .Exits(0, Reply("VT-INTERACTIVE started 5412 391851"), FakeLauncher.Report(0))
+            .Exits(0, Reply(reply), FakeLauncher.Report(0));
+        var launch = GameLaunch.ForClientWithLoader(MacInstall, MacProfile, [], null, ClientPlatform.MacOS,
+            ClientArchitecture.Arm64, macDoorstop: "libdoorstop.dylib");
+        var process = await InteractiveClient.StartAsync(MacHost(fake), launch, MacLaunch, Timeout);
+        var thrown = await Assert.ThrowsAnyAsync<Exception>(() => process.StopAsync(TimeSpan.FromSeconds(10)));
+        Assert.IsType(error, thrown);
+        Assert.Contains(says, thrown.Message);
+        Assert.DoesNotContain("agent", thrown.Message);
+        Assert.False(process.HasExited);
+    }
+
+    // A Mac process that could not be read when a wait round ended is not known to have exited: the wait goes on (#665).
+    [Fact] public async Task AMacWaitGoesOnThroughARoundThatCouldNotReadTheProcess()
+    {
+        var fake = new FakeLauncher()
+            .Exits(0, Reply("VT-INTERACTIVE started 5412 391851"), FakeLauncher.Report(0))
+            .Exits(0, Reply("VT-WAIT unproven"), FakeLauncher.Report(0))
+            .Exits(0, Reply("VT-WAIT exited 7"), FakeLauncher.Report(0));
+        var launch = GameLaunch.ForClientWithLoader(MacInstall, MacProfile, [], null, ClientPlatform.MacOS,
+            ClientArchitecture.Arm64, macDoorstop: "libdoorstop.dylib");
+        var process = await InteractiveClient.StartAsync(MacHost(fake), launch, MacLaunch, Timeout);
+        Assert.Equal(7, await process.WaitForExitAsync(CancellationToken.None));
+        Assert.Equal(3, fake.Calls.Count);
     }
 
     [Fact] public async Task AnUnreadableMacProcessIsNotReportedAsExitedOrStopped()
@@ -169,12 +203,12 @@ public class InteractiveClientTests
             };
             // A ps failure while kill -0 still sees the process must retain ownership.
             string unreadable = "ps() { return 1; }\n";
-            var wait = await host.RunAsync(unreadable + InteractiveScripts.MacWait, variables, TimeSpan.FromSeconds(5));
+            var wait = await host.RunAsync(unreadable + MacProcess.Wait, variables, TimeSpan.FromSeconds(5));
             var stop = await host.RunAsync(unreadable + InteractiveScripts.MacStop, variables, TimeSpan.FromSeconds(5));
             Assert.True(wait.Succeeded, wait.Describe());
             Assert.True(stop.Succeeded, stop.Describe());
             Assert.Contains("VT-WAIT unproven", wait.Stdout);
-            Assert.Contains("VT-STOP unproven", stop.Stdout);
+            Assert.Equal("VT-STOP unproven", stop.Stdout.Trim());
             Assert.False(child.HasExited);
         }
         finally { if (!child.HasExited) child.Kill(); await child.WaitForExitAsync(); }
@@ -203,7 +237,8 @@ public class InteractiveClientTests
         }
         if (OperatingSystem.IsWindows()) return;
         foreach (string script in new[] { InteractiveScripts.MacStart, InteractiveScripts.MacLauncher,
-            InteractiveScripts.MacStop, InteractiveScripts.MacWait, InteractiveScripts.MacAgentRetire })
+            InteractiveScripts.MacStop, MacProcess.Wait, InteractiveScripts.MacAgentRetire,
+            HostServerScripts.MacStart, MacProcess.Stop, HostProcessProbe.Mac })
         {
             using var process = Process.Start(new ProcessStartInfo("/bin/bash", "-n")
             {

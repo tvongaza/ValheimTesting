@@ -104,20 +104,36 @@ internal static partial class HostedRuntimeStage
         if ($busy.Count -ne 0) { 'VT-GAME busy ' + ((@($busy) | Select-Object -Unique) -join ',') } else { 'VT-GAME idle' }
         """;
     // ps errors remain errors. A dedicated server elsewhere does not use the client's character files. The runtimes are one
-    // per line; awk takes them as one value, so the lines are joined with a byte no path holds (\034) and split again.
-    internal static readonly string BashProcessCheck = """
+    // per line. The folder a game's executable was started from and each runtime are compared as written and once resolved on
+    // the host (ProtectedPaths' vt_physical), so a game started under /tmp is found running from a /private/tmp runtime and the
+    // reverse (#665). A game whose path ps does not give is unknown, never idle.
+    internal static readonly string BashProcessCheck = ProtectedPaths.BashInside + """
         processes=$(ps -axo pid=,comm=) || exit 4
-        roots=$(printf '%s' "$runtime" | tr '\n' '\034')
-        if printf '%s\n' "$processes" | awk -v roots="$roots" -v client="$clientSession" '
-          BEGIN { n=split(roots, root, "\034") }
+        # One line per game process: its ID, 1 when it is a client in this run's desktop session (else 0), and its executable.
+        games=$(printf '%s\n' "$processes" | awk -v client="$clientSession" '
           { line=$0; sub(/^[[:space:]]+/, "", line); pid=line; sub(/[[:space:]].*$/, "", pid); path=line; sub(/^[0-9]+[[:space:]]+/, "", path);
-            name=path; sub(/^.*\//, "", name); hit=0;
+            name=path; sub(/^.*\//, "", name);
             macServer=(name=="Valheim" && path ~ /\/valheim_server\/Valheim$/);
-            game=(name=="Valheim" || index(name,"valheim_server")==1);
-            if (client=="true" && name=="Valheim" && !macServer) hit=1;
-            for (i=1; i<=n; i++) if (game && root[i]!="") { if (index(path,root[i] "/")==1) hit=1; if (index(path,"/")!=1) unknown=1 }
-            if (hit) busy=busy (busy=="" ? "" : ",") pid }
-          END { if (unknown) print "VT-GAME unknown"; else if (busy!="") print "VT-GAME busy " busy; else print "VT-GAME idle" }'; then :; else exit 4; fi
+            if (name!="Valheim" && index(name,"valheim_server")!=1) next;
+            print pid, ((client=="true" && name=="Valheim" && !macServer) ? 1 : 0), path }') || exit 4
+        busy=; unknown=
+        while read -r pid hit path; do
+          [ -n "$pid" ] || continue
+          while IFS= read -r root; do
+            [ -n "$root" ] || continue
+            case "$path" in /*) ;; *) unknown=1; continue ;; esac
+            # The folder it was started from (an executable that is itself a link still runs from where it was started), and the
+            # runtime, each resolved when this user can: a folder this user cannot enter (another user's) is compared as written.
+            folder=${path%/*}; [ -n "$folder" ] || folder=/
+            physical=$(vt_physical "$root") || physical=$root
+            resolved=$(vt_physical "$folder") || resolved=$folder
+            for candidate in "$folder" "$resolved"; do
+              case "$candidate" in "$root"|"$root"/*|"$physical"|"$physical"/*) hit=1 ;; esac
+            done
+          done <<< "$runtime"
+          [ "$hit" != 1 ] || busy="${busy:+$busy,}$pid"
+        done <<< "$games"
+        if [ -n "$unknown" ]; then echo 'VT-GAME unknown'; elif [ -n "$busy" ]; then echo "VT-GAME busy $busy"; else echo 'VT-GAME idle'; fi
         """;
 
     /// <summary>

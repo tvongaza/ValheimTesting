@@ -64,6 +64,8 @@ public partial class ServerRunPlan
     /// once, without the game's shutdown. Default 120, at most 1800.
     /// </summary>
     public int QuitSeconds { get; set; } = 120;
+    // The maximum above, which env recover never exceeds whatever a journal says.
+    internal const int MaximumQuitSeconds = 1800;
     /// <summary>
     /// This run's severities for the teardown log scan's patterns (<see cref="LogScanner.Names"/>), each with a written
     /// reason, for example <c>"rpc-method-missing": { "severity": "Failure", "reason": "..." }</c>; under a new name, a pattern
@@ -89,7 +91,7 @@ public partial class ServerRunPlan
         bool pinned = Pinned;
         Runtime.Validate(pinned); World.Validate(pinned);
         CheckLogScan();
-        if (Port < 1024 || Port > 65535 || StartupSeconds < 1 || StartupSeconds > MaximumStartupSeconds || CommandSeconds < 1 || CommandSeconds > 120 || QuitSeconds < 0 || QuitSeconds > 1800)
+        if (Port < 1024 || Port > 65535 || StartupSeconds < 1 || StartupSeconds > MaximumStartupSeconds || CommandSeconds < 1 || CommandSeconds > 120 || QuitSeconds < 0 || QuitSeconds > MaximumQuitSeconds)
             throw new ArgumentException("Invalid port or time budget.");
         if (!string.IsNullOrEmpty(Executable) && Executable != GameLaunch.ServerWindowsExecutable && Executable != GameLaunch.ServerLinuxExecutable && Executable != GameLaunch.ServerMacExecutable)
             throw new ArgumentException($"Executable must be omitted, {GameLaunch.ServerWindowsExecutable}, {GameLaunch.ServerLinuxExecutable} or {GameLaunch.ServerMacExecutable} (relative to the copied runtime's root).");

@@ -169,12 +169,13 @@ public sealed class HostServerProcess : IOwnedProcess, IAsyncDisposable
         while (true)
         {
             var waitScript = _platform switch { ClientPlatform.Windows => InteractiveScripts.WindowsWait,
-                ClientPlatform.MacOS => HostServerScripts.MacWait, _ => InteractiveScripts.LinuxWait };
+                ClientPlatform.MacOS => MacProcess.Wait, _ => InteractiveScripts.LinuxWait };
             var result = (await _host.RunAsync(waitScript,
                 Variables(("seconds", "600")), TimeSpan.FromSeconds(660), cancellation).ConfigureAwait(false))
                 .EnsureSuccess($"Waiting for server process {Id} on {HostName}");
             string? verdict = InteractiveClient.Line(result.Stdout, "VT-WAIT ");
-            if (verdict == "running") continue;
+            // A process that could not be read (macOS) is not known to have exited: wait on.
+            if (verdict is "running" or "unproven") continue;
             if (verdict != null && verdict.StartsWith("exited ", StringComparison.Ordinal))
             {
                 _exited = true;
@@ -205,21 +206,7 @@ public sealed class HostServerProcess : IOwnedProcess, IAsyncDisposable
             var outcome = HostServerStop.AlreadyGone;
             if (!_killed)
             {
-                string seconds = Math.Max(1, (int)Math.Ceiling(timeout.TotalSeconds)).ToString(CultureInfo.InvariantCulture);
-                string quitSeconds = ((int)Math.Ceiling(quit.TotalSeconds)).ToString(CultureInfo.InvariantCulture);
-                var stopScript = _platform switch { ClientPlatform.Windows => HostServerScripts.WindowsStop,
-                    ClientPlatform.MacOS => HostServerScripts.MacStop, _ => InteractiveScripts.LinuxStop };
-                var result = (await _host.RunAsync(stopScript,
-                    Variables(("seconds", seconds), ("quit", quitSeconds), ("signal", "INT"), ("quitHelper", ProcessQuit.WindowsConsoleControlScript)),
-                    quit + timeout + TimeSpan.FromSeconds(30), cancellation).ConfigureAwait(false)).EnsureSuccess($"Stopping server process {Id} on {HostName}");
-                outcome = InteractiveClient.Line(result.Stdout, "VT-STOP ") switch
-                {
-                    "quit" => HostServerStop.Quit,
-                    "stopped" => HostServerStop.Stopped,
-                    "gone" => HostServerStop.AlreadyGone,
-                    "running" => throw new InvalidOperationException($"Server process {Id} on {HostName} was still running {WaitText.Seconds(timeout)} after it was killed."),
-                    _ => throw new HostOperationException($"Unexpected reply while stopping server process {Id} on {HostName}", result),
-                };
+                outcome = await StopOnHostAsync(_host, _platform, Id, StartIdentity, BootDirectory, quit, timeout, cancellation).ConfigureAwait(false);
                 _killed = true; _exited = true;
             }
             if (!_kept)
@@ -234,6 +221,42 @@ public sealed class HostServerProcess : IOwnedProcess, IAsyncDisposable
             return outcome;
         }
         finally { _stopping.Release(); }
+    }
+
+    /// <summary>
+    /// The one stop of a server process on its host, for this boot and for <see cref="RunRecovery"/>: asks it to quit (SIGINT, or
+    /// Ctrl+Break on Windows) and gives it <paramref name="quit"/> (none when zero), then kills it and waits up to
+    /// <paramref name="timeout"/>. Only the process with that ID and start identity is touched (on macOS by
+    /// <see cref="MacProcess"/>'s one stop). A process still running after the kill, or one that could not be read, throws.
+    /// </summary>
+    internal static async Task<HostServerStop> StopOnHostAsync(IGameHost host, ClientPlatform platform, int pid, string start, string directory,
+        TimeSpan quit, TimeSpan timeout, CancellationToken cancellation)
+    {
+        WaitText.RequireTimeout(timeout);
+        if (quit < TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(quit));
+        string what = $"Server process {pid} on {host.Name}";
+        string? verdict;
+        HostResult? result = null;
+        if (platform == ClientPlatform.MacOS) verdict = await MacProcess.StopAsync(host, what, pid, start, quit, timeout, null, cancellation).ConfigureAwait(false);
+        else
+        {
+            var variables = new Dictionary<string, string>
+            {
+                ["game"] = pid.ToString(CultureInfo.InvariantCulture), ["start"] = start, ["dir"] = directory, ["seconds"] = WaitText.WholeSeconds(timeout, minimum: 1),
+                ["quit"] = WaitText.WholeSeconds(quit), ["signal"] = "INT", ["quitHelper"] = ProcessQuit.WindowsConsoleControlScript,
+            };
+            result = (await host.RunAsync(platform == ClientPlatform.Windows ? HostServerScripts.WindowsStop : InteractiveScripts.LinuxStop, variables,
+                quit + timeout + TimeSpan.FromSeconds(30), cancellation).ConfigureAwait(false)).EnsureSuccess($"Stopping server process {pid} on {host.Name}");
+            verdict = InteractiveClient.Line(result.Stdout, "VT-STOP ");
+        }
+        return verdict switch
+        {
+            "quit" => HostServerStop.Quit,
+            "stopped" => HostServerStop.Stopped,
+            "gone" => HostServerStop.AlreadyGone,
+            "running" => throw new InvalidOperationException($"{what} was still running {WaitText.Seconds(timeout)} after it was killed."),
+            _ => throw new HostOperationException($"Unexpected reply while stopping {what}", result!),
+        };
     }
 
     /// <summary>The <see cref="IOwnedProcess"/> stop: <see cref="StopAsync(TimeSpan, CancellationToken)"/>, waited for.</summary>

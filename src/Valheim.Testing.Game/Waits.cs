@@ -32,6 +32,8 @@ internal static class WaitText
         if (timeout <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(timeout), "A wait needs an explicit, positive timeout.");
     }
     public static string Seconds(TimeSpan elapsed) => elapsed.TotalSeconds.ToString("0.0", CultureInfo.InvariantCulture) + " s";
+    // A budget as a host script's whole seconds, rounded up (never under minimum): a host script's waits count whole seconds.
+    public static string WholeSeconds(TimeSpan budget, int minimum = 0) => Math.Max(minimum, (int)Math.Ceiling(budget.TotalSeconds)).ToString(CultureInfo.InvariantCulture);
     public static string Context(IReadOnlyList<string>? lines) =>
         lines is not { Count: > 0 } ? "" : " Lines before it:" + string.Concat(lines.Select(line => Environment.NewLine + "  " + line));
 }
