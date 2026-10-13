@@ -82,7 +82,8 @@ public sealed class LocalClientCopyTests : IDisposable
         Assert.Equal(FileHash.Sha256(Path.Combine(_rig.Root, "cli", "valheimCLI.dll")), FileHash.Sha256(Path.Combine(copy.Runtime, "BepInEx", "plugins", "valheimCLI.dll")));
         Assert.False(File.Exists(Path.Combine(copy.Runtime, "BepInEx", "plugins", "Valheim.Cli.Standard.dll")));
         Assert.True(File.Exists(Path.Combine(copy.Runtime, "BepInEx", "plugins", "Unrelated.dll")));
-        Assert.True(File.Exists(Path.Combine(copy.Runtime, "BepInEx", "config", "BepInEx.cfg")));
+        // The install's own BepInEx.cfg, as the profile stage decides it (no loader package here).
+        Assert.Equal(File.ReadAllText(Path.Combine(source, "BepInEx", "config", "BepInEx.cfg")), File.ReadAllText(Path.Combine(copy.Runtime, "BepInEx", "config", "BepInEx.cfg")));
         string cliConfig = File.ReadAllText(Path.Combine(copy.Runtime, "BepInEx", "config", "valheimCLI.valheimCLI.cfg"));
         Assert.Contains("Port = 5556", cliConfig);
         Assert.Contains("AllowOnServerClients = true", cliConfig);
@@ -252,6 +253,25 @@ public sealed class LocalClientCopyTests : IDisposable
         Assert.Equal(BepInExLoaderPackage.Read(package).Loader, plan.InstallPins!.Loader);
         Assert.Equal(before, Tree(_rig.Game));
         await copy.RetireAsync();
+    }
+
+    // A running client is refused before the install is read (#730): no listing of a game in use, nothing made.
+    [ClientHostFact] public async Task ARunningClientIsRefusedBeforeTheInstallIsRead()
+    {
+        var plan = Plan(_rig.Game);
+        plan.CliManifest = CliSet();
+        var host = new FakeServerHost("this machine", Path.Combine(_rig.Root, "mirror"), kind: GameHostKind.Local, windows: OperatingSystem.IsWindows())
+        { GameActive = true, GameProcessIds = "4242" };
+        string data = Path.Combine(_rig.Root, "data");
+        using var journalDirectory = RunJournal.UseLocalDirectory(Path.Combine(data, "journal"));
+        var busy = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            LocalClientCopy.PrepareAsync("client", plan, default, data, host, loader: (_, _) => null));
+        Assert.Contains("4242", busy.Message);
+        Assert.Contains("game-process", host.Scripts);
+        Assert.DoesNotContain("list", host.Scripts);
+        Assert.DoesNotContain("fetch", host.Scripts);
+        Assert.False(Directory.Exists(Path.Combine(data, "runs")));
+        Assert.False(plan.Prepared);
     }
 
     // A copy whose named set is not complete, or a build with no pinned bundle and no named set, is refused before anything is copied.
