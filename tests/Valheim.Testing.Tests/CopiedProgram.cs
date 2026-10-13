@@ -71,12 +71,19 @@ public sealed class CopiedProgramTests : IDisposable
     {
         if (OperatingSystem.IsWindows()) return; // A stub runs unsigned on macOS too, so its scratch-file path is exercised there as well.
         string source = File.Exists("/usr/bin/true") ? "/usr/bin/true" : "/bin/true";
+        // The refusal is Linux's (ETXTBSY); macOS has no such race, so there one round exercises the scratch-file path and the stress would only
+        // price macOS's slow process starts (300 rounds took about 140 s in CI).
+        int rounds = OperatingSystem.IsLinux() ? 300 : 1;
+        const string content = "#!/bin/sh\nexit 0\n";
         WhileOtherThreadsStartPrograms(source, () =>
         {
-            for (int round = 0; round < 300; round++)
+            for (int round = 0; round < rounds; round++)
             {
                 string stub = Path.Combine(_root, "stub-" + round);
-                CopiedProgram.WriteScript(stub, "#!/bin/sh\nexit 0\n");
+                CopiedProgram.WriteScript(stub, content);
+                Assert.Equal(content, File.ReadAllText(stub));
+                if (!OperatingSystem.IsWindows())
+                    Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute, File.GetUnixFileMode(stub));
                 StartAndExpectSuccess(stub);
             }
         });
