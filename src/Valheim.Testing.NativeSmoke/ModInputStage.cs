@@ -81,7 +81,8 @@ internal static class ModInputStage
 
     /// <summary>
     /// Steps 1 and 2 alone: the game and loader choice and the output guard, with the core, the CLI inputs and the capability
-    /// list the dependency lock is requested with. It reads and builds nothing, probes no host and writes nothing. A wrapper
+    /// list the dependency lock is requested with. It builds no mod, probes no host and writes nothing into the output; like
+    /// the whole stage it extracts the pinned loader and ValheimCLI bundle into the data root. A wrapper
     /// that needs the choice before it runs the stage (<c>server-load-ab</c> before its two arms, <c>server-load-phases</c>
     /// before its first phase) takes it from here instead of deciding its own (#745). <see cref="RunAsync"/> starts with it.
     /// </summary>

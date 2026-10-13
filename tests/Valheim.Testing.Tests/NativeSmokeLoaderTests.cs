@@ -133,7 +133,7 @@ public sealed class NativeSmokeLoaderTests : IDisposable
             RegressionRig.Assembly("NativeSmoke.SessionAdapter", new(SmokeSessionContract.SessionAdapterPluginGuid)));
         var arms = new List<string[]>();
         int result = await ServerLoadComparison.RunAsync(
-            ["--server", _rig.Game, "--mod", _rig.Parent, "--mod", partner,
+            ["--server", _rig.Game, "--server-only", "--mod", _rig.Parent, "--mod", partner,
                 "--remove-mod", partner, "--loader-package", manifest,
                 "--cli-manifest", _rig.CliManifest(save: true, full: true), "--cli-files", Path.Combine(_rig.Root, "cli"),
                 "--search-root", Path.Combine(_rig.Root, "deps"), "--adapter", adapter,

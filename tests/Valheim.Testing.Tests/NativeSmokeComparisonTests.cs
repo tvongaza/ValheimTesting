@@ -45,7 +45,6 @@ public sealed class NativeSmokeComparisonTests : IDisposable
         string companion = _rig.Write("companion/Companion.dll", RegressionRig.Assembly("Companion", new("example.companion")));
         string steam = Path.Combine(_rig.Root, "steam-userdata");
         string output = Path.Combine(steam, "comparison-evidence");
-        Directory.CreateDirectory(Path.Combine(_rig.Root, "client"));
         string[] args = [.. Arguments(output, _rig.Parent, companion, serverOnly: false), "--client", Path.Combine(_rig.Root, "client"), "--steam-userdata", steam];
         int calls = 0;
         int result = await ServerLoadComparison.RunAsync(args, _ =>

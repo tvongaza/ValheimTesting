@@ -65,7 +65,9 @@ internal static class ServerLoadComparison
             // Both arms receive identical arguments and the same packaged fixture; only the selected DLL is omitted.
             // Pin the source installs and explicit assets as well as dependency files before launching either arm.
             var directoryInputs = new[] { stage.CliFiles }
-                .Concat(stage.Actors.SelectMany(actor => new[] { actor.Recipe.Install, actor.LoaderRoot }.OfType<string>()))
+                // A client on another machine has no install here to pin (its loader package is a local file either way).
+                .Concat(stage.Actors.SelectMany(actor => new[] { stage.Inventory.Hosts[actor.Recipe.Host].Kind == "local" ? actor.Recipe.Install : null,
+                    actor.LoaderRoot }.OfType<string>()))
                 .Concat(parsed.PluginDirectories.Select(Path.GetFullPath))
                 .Distinct(StringComparer.Ordinal)
                 .ToDictionary(path => path, WorldFixture.Manifest, StringComparer.Ordinal);

@@ -72,14 +72,11 @@ internal static class ServerLoadPhases
             // The server and its loader as the stage chooses them, even when they came from an inventory or the pinned pack, with
             // the stage's output guard. The aggregate output is written before the first server-load command, so that command's
             // own protected-path check is too late to keep this wrapper out of the source install or loader package.
-            string[] firstArgs = BuildArgs(plan.CommonArgs, phases[0].phase.Args, fixture,
-                phases[0].evidence, phases[0].checkpoint);
-            if (!ServerLoad.TryRead(firstArgs, out var parsed, out string parseError, allowImplicitMod: false))
+            // The request is the first phase's own server-load command, without the bake and world fixtures: those belong to
+            // each phase, under this output, and the output itself is what the stage guards.
+            if (!ServerLoad.TryRead([.. plan.CommonArgs, .. phases[0].phase.Args, "--server-only"], out var parsed, out string parseError, allowImplicitMod: false))
                 throw new InvalidDataException("Invalid first server-load phase: " + parseError);
-            // The bake and world fixtures are the phases' own, under or beside this output.
-            var stageOptions = parsed!.Options.Where(option => option.Key is not ("--bake-fixture" or "--world-fixture"))
-                .ToDictionary(option => option.Key, option => option.Value, StringComparer.Ordinal);
-            _ = ModInputStage.Choose(new ModInputStage.Request(ModInputStage.Route.Dedicated, output, stageOptions, parsed.Switches,
+            _ = ModInputStage.Choose(new ModInputStage.Request(ModInputStage.Route.Dedicated, output, parsed!.Options, parsed.Switches,
                 parsed.Mods, parsed.Roots, parsed.Optional, parsed.BuildDependencies) { Shipped = shippedLoader });
             var inputs = CaptureInputs(planFile, plan);
             FixtureBake.RefuseOutput(output, inputs.Where(input => input.Files != null).Select(input => input.Path).ToArray());
