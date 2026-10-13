@@ -131,7 +131,7 @@ public static class ServerFixture
             report.Provenance["worldUid"] = facts.Uid; report.Provenance["worldSeed"] = facts.Seed;
             report.Provenance["drySite"] = Describe(sites.Dry); report.Provenance["wetSite"] = Describe(sites.Wet);
             // The world the game created and saved, fetched from the server's run directory once it stopped: the plan's fixture is
-            // a copy of it without the shipment's own SOURCE.txt, which a later run's ship writes again.
+            // a copy of it without the shipment's own SOURCE.txt (a later run's ship writes it again) or this preparation's note.
             string fetched = Path.Combine(run, "host-world"), world = Path.Combine(output, "world");
             string planPath = Path.Combine(output, "plan.json");
             report.Step("write and validate the plan", () =>
@@ -140,7 +140,7 @@ public static class ServerFixture
                 foreach (string file in Directory.EnumerateFiles(fetched, "*", SearchOption.AllDirectories))
                 {
                     string relative = Path.GetRelativePath(fetched, file);
-                    if (relative == "SOURCE.txt") continue;
+                    if (relative is "SOURCE.txt" or "NEW-WORLD.txt") continue;
                     Directory.CreateDirectory(Path.GetDirectoryName(Path.Combine(world, relative))!);
                     File.Copy(file, Path.Combine(world, relative));
                 }

@@ -141,7 +141,7 @@ internal sealed class HostedServerRun : IServerPlacement
         // A Windows profile's launch folder hard-links the install's files (HostedRuntimeStage's profile seed), which only one volume can do.
         if (hostProfile.Platform == "windows" && !SameWindowsVolume(role.Install, role.Runtime))
             return $"its runtime folder {role.Runtime} is on another volume than its install {role.Install}: a Windows dedicated server runs from a profile " +
-                "that hard-links the install's files, so put the environment's runtime folder on the install's NTFS volume (without --inventory, the run's output folder).";
+                "that hard-links the install's files, so put the environment's runtime folder on the install's NTFS volume (without an inventory, this machine's is in ValheimTesting's data folder: use --inventory with a server environment whose runtime is there).";
         if (GamePort(plan) is int gamePort && gamePort != role.GamePort)
             return $"the plan's -port {gamePort} is not its gamePort {role.GamePort}.";
         return null;
