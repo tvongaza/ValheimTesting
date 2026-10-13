@@ -32,8 +32,8 @@ internal static partial class HostedRuntimeStage
     /// <summary>
     /// The top-level entries of an install that a launch folder never takes from it: <c>logs</c>, where Steam writes a dedicated
     /// server's own runtime output (<c>connection_log_*.txt</c>, <c>stats_log.txt</c>), none of it the game's or the loader's
-    /// files (#257). The one definition: the profile's links and a standalone hosted server's runtime copy
-    /// (<see cref="HostedServerRun"/>) both take it from here.
+    /// files (#257). The one definition: a profile's links and the check of a standalone server's install against its plan's
+    /// runtime manifest (<see cref="HostedServerRun"/>) both take it from here.
     /// </summary>
     internal static readonly string[] RuntimeSkips = ["logs"];
 
@@ -298,7 +298,7 @@ internal static partial class HostedRuntimeStage
             $to = Join-Path $runtime $relative
             [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($to))
             try { New-Item -ItemType HardLink -Path $to -Target $from -ErrorAction Stop | Out-Null }
-            catch { throw "The source game and disposable launch folder must support hard links on one volume: move the folder that holds the profile ($runtime) onto the NTFS volume of $source. A volume without hard links cannot hold a profile; an owned client can instead run its install as it is (inPlace, --in-place). $($_.Exception.Message)" }
+            catch { throw "The source game and disposable launch folder must support hard links on one volume: move the folder that holds the profile ($runtime; a dedicated server's or campaign actor's is its environment's runtime folder) onto the NTFS volume of $source. A volume without hard links cannot hold a profile; an owned client can instead run its install as it is (inPlace, --in-place). $($_.Exception.Message)" }
         }
         foreach ($line in ($files -split "`n")) {
             if (-not $line) { continue }

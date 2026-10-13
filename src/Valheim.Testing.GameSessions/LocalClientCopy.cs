@@ -144,10 +144,7 @@ internal sealed class LocalClientCopy
         if (plan.Pinned)
         {
             plan.InstallPins = profile.Pins;
-            var pins = plan.Pins.Where(pin => !CliBuildManifest.IsCliPlugin(pin.Key)).ToDictionary(pin => pin.Key, pin => pin.Value, StringComparer.Ordinal);
-            string md5 = FileHash.Md5(Path.Combine(setFolder, manifest.Plugin.File));
-            foreach (string guid in manifest.Plugin.Plugins) pins[guid] = md5;
-            plan.Pins = pins;
+            plan.Pins = InstallSelection.BindCliPins(plan.Pins, manifest, setFolder);
         }
         plan.CliManifest = Path.GetFullPath(manifestPath);
         plan.Prepared = true;

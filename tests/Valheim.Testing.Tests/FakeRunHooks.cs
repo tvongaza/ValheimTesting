@@ -24,6 +24,8 @@ internal sealed class FakeRunHooks : IHostedRunHooks
     public RunCancellation? Cancellation { get; init; }
     /// <summary>The pinned-loader rule for the run's actors (#711); none by default, so a test's fake installs keep their own fake loader.</summary>
     public ShippedLoader.Rule? PinnedLoader { get; init; }
+    /// <summary>The ValheimCLI set a standalone server's profile stages; by default the tests' own (<see cref="TestCliSet"/>), never this build's bundle.</summary>
+    public Func<CliBundleSource?>? CliSet { get; init; }
 
     IGameHost IHostedRunHooks.CreateHost(ResolvedEnvironment environment, string name) => Host?.Invoke(name) ?? Real.CreateHost(environment, name);
     IGameTransport IHostedRunHooks.Connect(string address, int port) => Connect?.Invoke(port) ?? Real.Connect(address, port);
@@ -35,10 +37,37 @@ internal sealed class FakeRunHooks : IHostedRunHooks
     ClientSession IHostedRunHooks.LaunchLocalMac(ClientRunPlan plan, string output, SteamAccountHold? account, CancellationToken cancellation, Action<IOwnedProcess>? processStarted) =>
         LocalMacLaunch != null ? LocalMacLaunch(plan, output, account, cancellation, processStarted) : Real.LaunchLocalMac(plan, output, account, cancellation, processStarted);
     ShippedLoader.Choice? IHostedRunHooks.PinnedLoader(string actor, string install, string platform) => PinnedLoader?.Invoke(actor, install, platform);
+    CliBundleSource? IHostedRunHooks.CliSet() => CliSet != null ? CliSet() : TestCliSet.Source;
     RunCancellation IHostedRunHooks.Cancellation(out bool owned)
     {
         if (Cancellation == null) return Real.Cancellation(out owned);
         owned = false;
         return Cancellation;
     }
+}
+
+/// <summary>
+/// A ValheimCLI set for no-game tests: one core plugin (<c>valheimCLI.dll</c>, the GUID <c>valheimCLI.valheimCLI</c>) with its
+/// capability manifest beside it, as a bundle holds them. Made once per test process, in its own temporary folder.
+/// </summary>
+internal static class TestCliSet
+{
+    private static readonly Lazy<CliBundleSource> Made = new(() =>
+    {
+        string folder = Directory.CreateTempSubdirectory("vt-test-cli-set-").FullName;
+        string core = Path.Combine(folder, "valheimCLI.dll");
+        File.WriteAllBytes(core, RegressionRig.Assembly("valheimCLI", new("valheimCLI.valheimCLI", "0.4.0")));
+        string manifest = Path.Combine(folder, CliBundle.ManifestFile);
+        new CliCapabilityManifest
+        {
+            Build = "valheimCLI test set",
+            Plugin = new() { File = "valheimCLI.dll", Sha256 = FileHash.Sha256(core), Plugins = ["valheimCLI.valheimCLI"] },
+        }.Write(manifest);
+        return new CliBundleSource(manifest, folder, "the tests' ValheimCLI set");
+    });
+
+    /// <summary>The set: its manifest and the folder of its DLLs.</summary>
+    public static CliBundleSource Source => Made.Value;
+    /// <summary>The MD5 a plan's ValheimCLI pin takes once bound to a profile that staged this set.</summary>
+    public static string CorePin => FileHash.Md5(Path.Combine(Source.Files, "valheimCLI.dll"));
 }

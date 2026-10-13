@@ -6,7 +6,7 @@ using Xunit;
 using Valheim.Testing.GameSessions;
 
 // #257's interrupted-run faults for a hosted run: Ctrl+C while a client waits for its startup, and a standalone run's own
-// runtime and world copies on the server host, journalled before their scripts run.
+// server profile and world copy on the server host, journalled before their scripts run.
 public sealed partial class HostedServerRunTests
 {
     private static Dictionary<string, HostProfile> LinuxBox() => new() { ["linux-box"] = new() { Kind = "ssh", Lock = "/var/tmp/vt/lock" } };
@@ -52,7 +52,7 @@ public sealed partial class HostedServerRunTests
         Assert.Equal(new[] { ("77", "555") }, clientHost.Stops);
         Assert.True(Assert.Single(clientHost.Tunnels).Stopped);
         Assert.Equal(clientHost.Claims, clientHost.Releases); Assert.Single(clientHost.Claims);
-        // The server stopped by its identity, its runtime copy retired, its lock released.
+        // The server stopped by its identity, its profile retired, its lock released.
         Assert.Equal(new[] { ("1", "9001") }, host.Stops);
         Assert.False(Directory.Exists(host.Local(RunDirectory + "/runtime")));
         Assert.Equal(host.Claims, host.Releases);
@@ -68,10 +68,10 @@ public sealed partial class HostedServerRunTests
         Assert.Contains(JournalEntry.MacAgentIntended, playerKinds);
     }
 
-    // Gap 3: a standalone run's runtime copy and world copy on the server host are each journalled before their script runs,
-    // done once verified, then retired (the runtime) or handed over as the run's evidence (the world, which stays beside the
-    // boot logs); env status then finds nothing of the run left. A copy the journal cannot name is never made.
-    [Fact] public async Task AStandaloneRunJournalsItsHostCopiesBeforeTheirScriptsAndMakesNoCopyItCannotJournal()
+    // Gap 3: a standalone run's server profile (#730) and world copy on the server host are each journalled before their scripts
+    // run, done once made and verified, then retired (the profile) or handed over as the run's evidence (the world, which stays
+    // beside the boot logs); env status then finds nothing of the run left. A profile or copy the journal cannot name is never made.
+    [Fact] public async Task AStandaloneRunJournalsItsProfileAndWorldBeforeTheirScriptsAndMakesNothingItCannotJournal()
     {
         var server = NewServer(); var host = NewHost(server);
         var (plan, profile) = Write(host);
@@ -83,45 +83,65 @@ public sealed partial class HostedServerRunTests
         Assert.Equal("true", journal.Last(record => record.Entry.Kind == JournalEntry.CopyRetired).Entry.Fields["handedOver"]);
         Assert.All(journal.Where(record => record.Entry.Kind.StartsWith("copy-", StringComparison.Ordinal)), record => Assert.Equal("server", record.Actor));
         var scripts = host.Runs.ToList();
-        Assert.True(CopyJournalIndex(host, JournalEntry.CopyIntended, runtime) is >= 0 and var intended && intended < scripts.FindIndex(run => run.Script == "copy"));
-        Assert.True(CopyJournalIndex(host, JournalEntry.CopyIntended, world) is >= 0 and var shipped && shipped < scripts.FindIndex(run => run.Script == "ship"));
+        // The profile's staging folder is its first write, the world's ship the world's.
+        Assert.True(CopyJournalIndex(host, JournalEntry.CopyIntended, runtime) is >= 0 and var intended && intended < scripts.FindIndex(run => run.Script == "ship"));
+        Assert.True(CopyJournalIndex(host, JournalEntry.CopyIntended, world) is >= 0 and var shipped && shipped < scripts.FindIndex(run => run.Script == "ship" && run.Variables["dest"] == world));
         Assert.True(Directory.Exists(host.Local(world))); // the run's evidence, as before
         var status = Assert.Single((await RunJournalStatus.InspectAsync(LinuxBox(), _ => host, TimeSpan.FromSeconds(5))).Runs);
         Assert.Equal(JournalRunState.Ended, status.State);
         Assert.Empty(status.Items);
 
-        // A copy-intended line that cannot be written: no copy, no ship, nothing started.
+        // A copy-intended line that cannot be written: no profile, no ship, nothing started.
         var server2 = NewServer(); var host2 = new FakeServerHost("linux-box", Path.Combine(_root, "mirror-2"), server2) { JournalFailsFor = JournalEntry.CopyIntended };
         var (plan2, profile2) = Write(host2);
         Assert.Equal(1, await PinnedServerRun.MainAsync(TestEnvironment.Read(profile2), ["run", plan2, Path.Combine(_root, "output-2")], Options(host2, server2)));
-        Assert.DoesNotContain(host2.Runs, run => run.Script is "copy" or "ship" or "start");
+        Assert.DoesNotContain(host2.Runs, run => run.Script is "profile-seed" or "ship" or "start");
         Assert.False(Directory.Exists(host2.Local(runtime)));
         Assert.Equal(host2.Claims, host2.Releases);
     }
 
-    // Gap 3: a copy whose reply was lost (it was made, but the run never heard so) is still the run's: its teardown removes it.
-    // When that removal fails too, the copy stays open in the journal, env status names it, and env recover removes it. A
-    // world ship that failed partway is removed by the teardown.
-    [Fact] public async Task ACopyWhoseReplyWasLostIsRemovedByTheRunOrElseByEnvRecover()
+    // Gap 3: a profile whose staging failed part-way (here its apply failed on the host) is removed by the stage's own cleanup and
+    // journalled retired. When that cleanup is not proven (its reply was lost: an unknown outcome), the run's teardown removes the
+    // partial profile and its staging; when
+    // that fails too, the profile stays open in the journal, env status names it, and env recover removes it. A world ship that
+    // failed partway is removed by the teardown.
+    private static readonly HostResult ApplyFailed = new(HostOutcome.Exited, 3, "", "cp: cannot create regular file: No space left on device", TimeSpan.Zero, false);
+
+    [Fact] public async Task APartialProfileIsRemovedByItsStageOrTheRunOrElseByEnvRecover()
     {
-        string runtime = RunDirectory + "/runtime", world = RunDirectory + "/world";
+        string runtime = RunDirectory + "/runtime", staging = RunDirectory + "/staging", world = RunDirectory + "/world";
         var server = NewServer(); var host = NewHost(server);
-        host.AfterCopy = _ => throw new IOException("copy reply lost after copy");
+        host.Failures["apply-stage"] = ApplyFailed;
         var (plan, profile) = Write(host);
         Assert.Equal(1, await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["run", plan, Output], Options(host, server)));
-        Assert.False(Directory.Exists(host.Local(runtime)));
-        Assert.Equal([(JournalEntry.CopyIntended, runtime), (JournalEntry.CopyRetired, runtime)],
-            Copies(await RunJournalOnHost.ReadAsync(host, "/var/tmp/vt/journal", RunId, TimeSpan.FromSeconds(5))));
+        Assert.False(Directory.Exists(host.Local(runtime))); Assert.False(Directory.Exists(host.Local(staging)));
+        var journal = await RunJournalOnHost.ReadAsync(host, "/var/tmp/vt/journal", RunId, TimeSpan.FromSeconds(5));
+        Assert.Equal([(JournalEntry.CopyIntended, runtime), (JournalEntry.CopyRetired, runtime)], Copies(journal));
+        Assert.Equal("true", journal.Single(record => record.Entry.Kind == JournalEntry.CopyRetired).Entry.Fields["failed"]);
         Assert.Equal(JournalRunState.Ended, Assert.Single((await RunJournalStatus.InspectAsync(LinuxBox(), _ => host, TimeSpan.FromSeconds(5))).Runs).State);
+        Assert.DoesNotContain("ship and verify the world copy on the server host", StepNames());
 
-        // The run's own removal fails as well: the partial copy is left, and the journal says so.
+        // The stage's own cleanup is not proven (its reply is lost too): the teardown removes the partial profile, journalled.
+        var server1 = NewServer(); var host1 = new FakeServerHost("linux-box", Path.Combine(_root, "mirror-1"), server1);
+        host1.Failures["apply-stage"] = ApplyFailed;
+        int cleanups = 0;
+        host1.BeforeScript = name => { if (name == "cleanup-stage" && ++cleanups == 1) host1.Failures["cleanup-stage"] = FakeServerHost.TransportFailure; else host1.Failures.Remove("cleanup-stage"); };
+        var (plan1, profile1) = Write(host1);
+        Assert.Equal(3, await PinnedServerRun.MainAsync(TestEnvironment.Read(profile1), ["run", plan1, Path.Combine(_root, "output-1")], Options(host1, server1)));
+        Assert.Equal(2, cleanups);
+        Assert.False(Directory.Exists(host1.Local(runtime))); Assert.False(Directory.Exists(host1.Local(staging)));
+        Assert.Equal([(JournalEntry.CopyIntended, runtime), (JournalEntry.CopyRetired, runtime)],
+            Copies(await RunJournalOnHost.ReadAsync(host1, "/var/tmp/vt/journal", RunId, TimeSpan.FromSeconds(5))));
+        Assert.Empty(Assert.Single((await RunJournalStatus.InspectAsync(LinuxBox(), _ => host1, TimeSpan.FromSeconds(5))).Runs).Items);
+
+        // The run's own removal fails as well: the partial profile is left, and the journal says so.
         var server2 = NewServer(); var host2 = new FakeServerHost("linux-box", Path.Combine(_root, "mirror-2"), server2);
-        host2.AfterCopy = _ => throw new IOException("copy reply lost after copy");
-        host2.Failures["retire"] = new HostResult(HostOutcome.Exited, 3, "", "rm: cannot remove: Device or resource busy", TimeSpan.Zero, false);
+        host2.Failures["apply-stage"] = ApplyFailed;
+        host2.Failures["cleanup-stage"] = new HostResult(HostOutcome.Exited, 3, "", "rm: cannot remove: Device or resource busy", TimeSpan.Zero, false);
         var (plan2, profile2) = Write(host2);
         Assert.Equal(1, await PinnedServerRun.MainAsync(TestEnvironment.Read(profile2), ["run", plan2, Path.Combine(_root, "output-2")], Options(host2, server2)));
-        host2.Failures.Remove("retire");
-        Assert.True(Directory.Exists(host2.Local(runtime)));
+        host2.Failures.Remove("cleanup-stage");
+        Assert.True(Directory.Exists(host2.Local(runtime))); Assert.True(Directory.Exists(host2.Local(staging)));
         var before = Assert.Single((await RunJournalStatus.InspectAsync(LinuxBox(), _ => host2, TimeSpan.FromSeconds(5))).Runs);
         Assert.Equal(JournalRunState.Recoverable, before.State);
         var left = Assert.Single(before.Items);
@@ -129,14 +149,15 @@ public sealed partial class HostedServerRunTests
         var recovery = await RunRecovery.RecoverAsync(LinuxBox(), _ => host2, RunId, teardown: false, TimeSpan.FromSeconds(5));
         Assert.True(recovery.Recovered, string.Join("\n", recovery.Steps));
         Assert.False(Directory.Exists(host2.Local(runtime)));
-        Assert.Contains(host2.Runs, run => run.Script == "cleanup-stage" && run.Variables["runtime"] == runtime);
+        Assert.Contains(host2.Runs, run => run.Script == "cleanup-stage" && run.Variables["runtime"] == runtime && run.Variables["stage"] == staging);
+        Assert.False(Directory.Exists(host2.Local(staging)));
         var after = Assert.Single((await RunJournalStatus.InspectAsync(LinuxBox(), _ => host2, TimeSpan.FromSeconds(5))).Runs);
         Assert.Equal(JournalRunState.Ended, after.State);
         Assert.Empty(after.Items);
 
         // A world ship that fails partway: the partial world copy goes at teardown, journalled.
         var server3 = NewServer(); var host3 = new FakeServerHost("linux-box", Path.Combine(_root, "mirror-3"), server3);
-        host3.AfterShip = _ => throw new IOException("ship reply lost after copy");
+        host3.AfterShip = dir => { if (dir == host3.Local(world)) throw new IOException("ship reply lost after copy"); };
         var (plan3, profile3) = Write(host3);
         Assert.Equal(1, await PinnedServerRun.MainAsync(TestEnvironment.Read(profile3), ["run", plan3, Path.Combine(_root, "output-3")], Options(host3, server3)));
         Assert.False(Directory.Exists(host3.Local(world)));

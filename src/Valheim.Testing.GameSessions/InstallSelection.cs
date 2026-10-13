@@ -75,6 +75,19 @@ internal sealed class InstallSelection : IDisposable
         }
     }
 
+    /// <summary>
+    /// A plan's plugin <paramref name="pins"/> bound to the ValheimCLI set its profile staged: every ValheimCLI pin the plan carried
+    /// is replaced by the staged core's plugins at that file's MD5 (as the session derives them), from <paramref name="setFolder"/>
+    /// beside its <paramref name="cli"/> manifest. The plan's other pins (its mods, the world) stay as they are.
+    /// </summary>
+    internal static Dictionary<string, string> BindCliPins(IReadOnlyDictionary<string, string> pins, CliCapabilityManifest cli, string setFolder)
+    {
+        var bound = pins.Where(pin => !CliBuildManifest.IsCliPlugin(pin.Key)).ToDictionary(pin => pin.Key, pin => pin.Value, StringComparer.Ordinal);
+        string md5 = FileHash.Md5(Path.Combine(setFolder, cli.Plugin.File));
+        foreach (string guid in cli.Plugin.Plugins) bound[guid] = md5;
+        return bound;
+    }
+
     private static async Task<(List<HostedRuntimeFile> Files, List<string> Replaced)> SelectAsync(IGameHost host, HostedRuntimeKind role,
         string install, HostListing source, CliCapabilityManifest cli, CliSetLocation cliFiles, BepInExLoaderPackage? loader, string work,
         TimeSpan timeout, CancellationToken cancellation)
