@@ -49,6 +49,13 @@ internal static partial class HostServerScripts
             close $writer;
             my $reply = <$reader>;
             print $reply if defined $reply;
+            # Handoff is complete only after the supervisor has identified the game and written its pid file. Before that,
+            # the detached session still belongs to this launcher: kill the whole session on any failed handoff so
+            # a game which started but could not be identified does not outlive the caller.
+            if (!defined $reply || $reply !~ /^VT-SERVER started /) {
+              kill "KILL", -$supervisor;
+              waitpid($supervisor, 0);
+            }
             exit(defined $reply ? 0 : 3);
           }
           close $reader;
