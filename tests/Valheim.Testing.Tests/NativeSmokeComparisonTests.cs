@@ -156,6 +156,24 @@ public sealed class NativeSmokeComparisonTests : IDisposable
         Assert.Equal(Path.Combine(output, "after"), arms[1].Options["--output"]);
     }
 
+    [Fact]
+    public async Task ServerLoadComparisonLabelsEachArmLogSummary()
+    {
+        string companion = _rig.Write("companion/Companion.dll", RegressionRig.Assembly("Companion", new("example.companion")));
+        string output = Path.Combine(_rig.Root, "labelled-summary-comparison");
+        var labels = new List<string?>();
+
+        int result = await ServerLoadComparison.RunAsync(Arguments(output, _rig.Parent, companion),
+            runArmWithSeams: (_, seams) =>
+            {
+                labels.Add(seams.SummaryLabel);
+                return Task.FromResult(0);
+            });
+
+        Assert.Equal(0, result);
+        Assert.Equal(["before", "after"], labels);
+    }
+
     [Fact] public async Task BothArmsUseOneFrozenSelectedEnvironment()
     {
         string companion = _rig.Write("companion/Companion.dll",

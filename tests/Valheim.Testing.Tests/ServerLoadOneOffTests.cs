@@ -79,6 +79,27 @@ public sealed class ServerLoadOneOffTests : IDisposable
     }
 
     [Fact]
+    public async Task ServerLoadPrintsTheCampaignLogSummary()
+    {
+        string output = Path.Combine(_rig.Root, "log-summary");
+        using var written = new StringWriter();
+        int result = await ServerLoad.RunAsync(Arguments(output, "--server-only"),
+            new ServerLoad.Seams(Inspect: _ => Task.FromResult(Ready),
+                Campaign: (_, _, _, evidence, _) =>
+                {
+                    var report = new ScenarioReport("server load");
+                    report.Logs.Add(new LogFileScan("server BepInEx log", "server.log", true, null,
+                        [new(LogScanner.UnknownWarning, LogSeverity.Warning, null, 2, 4, "warning")]));
+                    report.Write(evidence);
+                    return Task.FromResult(0);
+                }, SummaryOutput: written));
+
+        Assert.Equal(0, result);
+        Assert.Equal("log scan: 1/1 logs present; failure=0 warning=2 expected=0 required-missing=0; " +
+            "most frequent: server BepInEx log/unknown-warning x2", written.ToString().Trim());
+    }
+
+    [Fact]
     public async Task BuiltAdapterBindsCompiledSourceAndDllIntoTheCampaignResult()
     {
         using var dataRoot = new FakeDataRoot(Path.Combine(_rig.Root, "machine"));

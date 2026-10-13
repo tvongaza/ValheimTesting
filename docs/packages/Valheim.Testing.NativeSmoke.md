@@ -97,6 +97,22 @@ valheim-test server-load --mod /path/to/ServerMod.dll
 
 You can invoke `valheim-test start` through SSH on a Windows PC. Before it stages a fixture or profile, it checks that the SSH user has exactly one desktop session and Steam is running there. From SSH's session 0 it starts the owned client in that desktop through a temporary scheduled task. From an ordinary terminal already in a desktop session, it uses the direct owned-client launch instead. If Steam is absent or the session changes between the check and launch, the run refuses. Leave the desktop unlocked for a native run; a locked desktop can leave the game stalled at its first scene, which the startup deadline and kept logs will report. On shutdown, a session-0 run asks the game to close through a second short-lived desktop task. The run records whether the window close was actually requested and whether the client quit cleanly or needed a kill; process identity is checked again before either action. Its logs are kept with the result.
 
+### Migrate an older edit-build-test command
+
+Use `valheim-test start --project MOD.csproj` for a client mod, adding `--scenario-project TEST.csproj` when the round needs mod-specific assertions. Relative project, scenario and selected-input paths are resolved from the directory where `valheim-test` is run. The older YAML plan entry point has no direct equivalent in this tool: move its commands and assertions into an [`IOneShotHostedScenario` or `IOneShotServerScenario`](#run-a-mod-owned-scenario-with-the-same-preparation).
+
+On Windows only, one interactive command can use `--hold` followed by `valheim-test cli --evidence RUN/evidence/smoke --phase world --command "COMMAND"` from another terminal; the passthrough verifies the run's strict pins before sending the command. The passthrough refuses on macOS and Linux. On those platforms, write the checks as a [mod-owned scenario](#run-a-mod-owned-scenario-with-the-same-preparation), or create an editable [`init` consumer](#your-own-assertions-init).
+
+The teardown log scan runs automatically. Each one-shot arm prints one line with the failure, warning and expected totals plus the three most frequent role/pattern counts; A/B output labels both lines. `result.json` keeps every pattern's severity, count and first occurrence. To change classifications beyond `--expected-log-error`, use the [`valheim-test init` consumer](#your-own-assertions-init): its `regression.json` can use `logScan` to make a specific warning pattern fail, define a mod-owned pattern, or name an expected line, always with a reason. A direct `start` invocation rewrites its generated `regression.json` and has no `logScan` input of its own. This replaces a blanket fail-on-warning switch and a presentation-only grouping by BepInEx source or number-masked message: it keeps the actionable pattern and first occurrence instead. See [Log scan at teardown](Valheim.Testing.Game.md#log-scan-at-teardown).
+
+| Older setting | `valheim-test` replacement |
+|---|---|
+| `VALHEIM_PATH` | `start --game DIR`, or `--inventory FILE --client-env NAME`; the selected install is read while the mod and loader are staged in a disposable profile |
+| `VALHEIM_CLI` | No separate executable: use one staged build through `--cli-manifest FILE --cli-files DIR`, `VALHEIMCLI_BUNDLE`, or the bundle pinned into the tool |
+| `VALHEIM_EXPECTATIONS` | No standing pins file for `start`: the tool derives strict plugin and world pins from the exact staged build; on Windows, `valheim-test cli --expect-strict FILE` accepts independently prepared pins for another world state |
+
+The old stop-after behavior is now the default cleanup; `--hold` is the explicit exception. The environment inventory owns the ValheimCLI port. `--join-seconds` bounds world entry, while the lifecycle steps use their own bounded waits. A non-default build configuration can still be produced by the mod's normal build and selected with `--mod DLL`; `--project` uses the tool's controlled private build.
+
 ## A client-side mod: start
 
 ```sh

@@ -186,7 +186,6 @@ public sealed class OsSplitTests
                 sources[Path.GetRelativePath(root, file).Replace('\\', '/')] = File.ReadAllText(file);
         }
         Assert.Contains("tests/Valheim.Testing.Tests/TerrainRendererTests.cs", sources.Keys);
-        Assert.Contains("tools/dev-loop/dev-loop.cs", sources.Keys);
         Assert.Contains("tools/regression-bundle/RegressionBundle.cs", sources.Keys);
         return sources;
     }
@@ -233,7 +232,7 @@ internal static class OsSplitGuard
 
     // The toolkit test project's symbols in CI (Release, net10.0, its DefineConstants), so a helper is read as it is compiled.
     private static readonly CSharpParseOptions Options = new(LanguageVersion.Preview,
-        preprocessorSymbols: ["DEV_LOOP_TESTS", "VERSIONED_API_DOCS_TESTS", "RELEASE", "TRACE", "NET", "NETCOREAPP", "NET10_0", "NET10_0_OR_GREATER"]);
+        preprocessorSymbols: ["VERSIONED_API_DOCS_TESTS", "RELEASE", "TRACE", "NET", "NETCOREAPP", "NET10_0", "NET10_0_OR_GREATER"]);
 
     public sealed record Result(IReadOnlyList<string> Refusals, IReadOnlyDictionary<string, string> Classes);
 

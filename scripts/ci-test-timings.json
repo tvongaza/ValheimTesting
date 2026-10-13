@@ -4,7 +4,6 @@
   {"Name": "BepInExLoaderPackageTests.APlainGameWithoutBepInExCanUseAnExplicitLoaderPackage", "Seconds": {"Windows": 8.75}},
   {"Name": "BepInExLoaderPackageTests.AReviewedPackageIsTheProfilesLoaderWithoutChangingTheSource", "Seconds": {"Windows": 15.92}},
   {"Name": "BepInExLoaderPackageTests.AnX64OnlyMacLoaderIsRefusedBeforeItCanBecomeARemoteServerProfile", "Seconds": {"macOS": 10.63}},
-  {"Name": "DevLoopTests.RunsAsAFileBasedScript", "Seconds": {"macOS": 4.65}},
   {"Name": "GameReferencesBuildTests.AddsAndRemovesListedAssemblies", "Seconds": {"macOS": 3.08}},
   {"Name": "GameReferencesBuildTests.FindsTheMacDedicatedServerLayout", "Seconds": {"macOS": 3.75}},
   {"Name": "HostInstallListingTests.AFileNamePatternMatchesIgnoringCase", "Seconds": {"Windows": 6.91}},

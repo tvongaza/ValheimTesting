@@ -39,9 +39,14 @@ internal static class ServerLoadComparison
                 parsed.Mods, parsed.Roots, parsed.Optional, parsed.BuildDependencies) { Shipped = shippedLoader, ClientArchitecture = clientArchitecture, Progress = progress });
             var server = stage.Server!;
             string serverInstall = server.Recipe.Install, serverCore = stage.Core;
-            var armSeams = new ServerLoad.Seams(Loader: ShippedLoader.Choose, FrozenServerLoader: server.Shipped);
-            runArm ??= arm => runArmWithSeams == null
-                ? ServerLoad.RunAsync(arm, armSeams) : runArmWithSeams(arm, armSeams);
+            Task<int> RunArm(string name, string[] arm)
+            {
+                if (runArm != null) return runArm(arm);
+                var armSeams = new ServerLoad.Seams(Loader: ShippedLoader.Choose,
+                    FrozenServerLoader: server.Shipped, SummaryLabel: name);
+                return runArmWithSeams == null
+                    ? ServerLoad.RunAsync(arm, armSeams) : runArmWithSeams(arm, armSeams);
+            }
             var roots = parsed.Roots.Select(Path.GetFullPath).ToList();
             var optional = parsed.Optional.ToList();
             var before = ModInputStage.Resolve(stage, mods, roots, optional, resolve);
@@ -108,7 +113,7 @@ internal static class ServerLoadComparison
                 if (!options.ContainsKey("--adapter")) Add("--adapter", [adapter]);
                 return [.. arm];
             }
-            int beforeResult = await runArm(Arm("before", omit: false));
+            int beforeResult = await RunArm("before", Arm("before", omit: false));
             // A native failure is precisely the case where removing one mod can be informative. An input refusal
             // cannot establish a mod interaction, so do not launch another arm after one.
             if (beforeResult != 0 && beforeResult != 1)
@@ -122,7 +127,7 @@ internal static class ServerLoadComparison
             foreach (var (path, hash) in fileInputs)
                 if (!FileHash.Sha256(path).Equals(hash, StringComparison.OrdinalIgnoreCase))
                     throw new InvalidDataException("A fixed A/B input changed after the first arm: " + path);
-            int afterResult = await runArm(Arm("after", omit: true));
+            int afterResult = await RunArm("after", Arm("after", omit: true));
             Console.WriteLine(beforeResult == 0 && afterResult == 0
                 ? "SERVER_MODSET_AB_PASS: both arms loaded the same fixture with exactly one selected mod removed."
                 : $"SERVER_MODSET_AB_FAIL: full set exit {beforeResult}, removed-mod set exit {afterResult}; inspect both private arm results before attributing the difference.");

@@ -158,6 +158,7 @@ try
                 journalClean = false;
                 report.RecordFailure(StepPhase.Cleanup, "owned client process was not proved stopped", failure);
             }
+        Console.WriteLine(NativeSmokeLogSummary.Format(report.Logs, inputs.Mod.Arms.Count > 1 ? arm : null));
         // Final-arm evidence is written once after the copy-cleanup verdict in finally.
         report.Provenance["runId"] = runId;
         lastArm = report; lastArmOutput = armOutput;
