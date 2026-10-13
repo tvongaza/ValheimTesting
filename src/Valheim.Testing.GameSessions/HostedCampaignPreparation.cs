@@ -883,27 +883,13 @@ public static class HostedCampaignPreparation
         Func<string, IGameHost>? hostFactory, ShippedLoader.Rule? pinnedLoader, CancellationToken cancellation = default) =>
         PrepareAsync(InspectInputs(manifestFile), outputDirectory, timeout, hostFactory, cancellation, plans: null, shippedLoader: pinnedLoader);
 
-    // A preparation that failed ends its run in the journal of every host it was to touch, best effort: the entry is a record,
-    // and the preparation's own failure is the one to report.
-    private static async Task JournalEndAsync(RunJournal journal, ResolvedEnvironment profile, IEnumerable<(string Name, GameRole Role, HostedCampaignRole Input)> roles,
-        Func<string, IGameHost>? hostFactory, TimeSpan timeout, bool cleaned)
-    {
-        foreach (string hostName in roles.Select(item => item.Role.Host).Distinct(StringComparer.OrdinalIgnoreCase))
-            try
-            {
-                await journal.AppendAsync(hostFactory?.Invoke(hostName) ?? profile.CreateHost(hostName), RunJournal.DirectoryFor(profile.Hosts[hostName]), "run",
-                    JournalEntry.Of(JournalEntry.RunEnded, ("state", "failed in preparation"), ("cleanupVerified", cleaned ? "true" : "false")), timeout, CancellationToken.None).ConfigureAwait(false);
-            }
-            catch (Exception error) { Console.Error.WriteLine($"Warning: could not journal the failed preparation's end on {hostName}: {error.Message}"); }
-    }
-
     /// <summary>
     /// Prepares every actor under run <paramref name="runId"/> (one is minted when null): each actor's install is
     /// <c>&lt;runtime&gt;/vt-prep-&lt;runId&gt;-&lt;actor&gt;</c>, and every copy and character is journalled on its host before it is made
     /// (<see cref="RunJournal"/>).
     /// </summary>
     /// <remarks>A failed preparation removes what it made before it throws; <paramref name="cleanupStep"/> (the runner's report, as a
-    /// Cleanup step) records that removal, so the result and the journal's <c>run-ended</c> judge the same cleanup (#424).
+    /// Cleanup step) records that removal, so the result and the journal's <c>run-ended</c> (written by the runner, <see cref="RunFinish"/>) judge the same cleanup (#424).
     /// <paramref name="plans"/> are the runner's client plans by name: a client whose plan hosts its own world needs no ValheimCLI
     /// mutation access (<see cref="CliServerConfig.RequiresClientMutations"/>); null (the manifest-only overloads, which cannot know who hosts) or a client with no plan here is treated as joined. There is no default: a caller states it.</remarks>
     internal static async Task<PreparedHostedCampaign> PrepareAsync(Inspection inspection, string outputDirectory, TimeSpan timeout,
@@ -933,6 +919,9 @@ public static class HostedCampaignPreparation
         }
         var journal = new RunJournal(runId ?? RunJournal.NewRunId());
         string id = journal.RunId;
+        // A preparation under its own new id (a library caller's) ends that run itself when it fails (RunFinish); a prepared
+        // campaign it returns is its caller's to end. A runner that passed its run id ends the run itself, after the rest of its cleanup.
+        using var ownRun = runId == null ? RunJournal.UseRun(id) : null;
         var copies = new ConcurrentBag<(string Host, string Actor, string Runtime, string Stage)>();
         var stagedCharacters = new ConcurrentBag<(string Host, string Actor, HostedCampaignCharacter Character)>();
         var listings = new ConcurrentDictionary<string, HostListing>(StringComparer.Ordinal);
@@ -1026,10 +1015,10 @@ public static class HostedCampaignPreparation
             }
             catch (Exception cleanup)
             {
-                await JournalEndAsync(journal, profile, roles, hostFactory, timeout, cleaned: false).ConfigureAwait(false);
+                if (ownRun != null) await RunFinish.EndAsync(ownRun, new RunEnd(RunOutcome.Failed, CleanupProven: false)).ConfigureAwait(false);
                 throw new AggregateException("Campaign preparation failed and cleanup was not proven.", original, cleanup);
             }
-            await JournalEndAsync(journal, profile, roles, hostFactory, timeout, cleaned: true).ConfigureAwait(false);
+            if (ownRun != null) await RunFinish.EndAsync(ownRun, new RunEnd(RunOutcome.Failed, CleanupProven: true)).ConfigureAwait(false);
             throw;
         }
     }

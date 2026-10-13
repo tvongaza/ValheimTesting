@@ -22,7 +22,14 @@ internal static class RunJournalOnHost
         }, timeout, cancellation).ConfigureAwait(false)).EnsureSuccess($"Journalling {entry.Kind} for {actor} on {host.Name}");
         if (InteractiveClient.Line(result.Stdout, "VT-JOURNALED") == null)
             throw new HostOperationException($"The run journal on {host.Name} did not confirm {entry.Kind} for {actor}", result);
+        // Noted once the host confirmed it: the run's end goes to every journal that holds the run (RunFinish). A write the host
+        // never confirmed is the run's failure, and env recover settles whatever it may have left.
+        RunJournal.Journalled(run.RunId, Place(host, journal), (again, last, time) => run.AppendAsync(host, journal, again, last, time), timeout);
     }
+
+    // This machine's journal is one place whether written in process or through its own shell; another host's is its name and directory.
+    private static string Place(IGameHost host, string journal) =>
+        host is LocalGameHost ? RunJournal.LocalPlace(journal) : host.Name + "|" + journal;
 
     /// <summary>Every entry of run <paramref name="runId"/> on <paramref name="host"/>, in the order written per actor.</summary>
     public static async Task<IReadOnlyList<JournalRecord>> ReadAsync(IGameHost host, string journal, string runId, TimeSpan timeout, CancellationToken cancellation = default)

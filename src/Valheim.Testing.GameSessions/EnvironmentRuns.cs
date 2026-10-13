@@ -131,8 +131,13 @@ public static class EnvironmentRuns
         // Its end, which its gone machine can no longer journal: only for a run whose end no readable journal holds.
         if (released != 0 && (known == null || known.State == JournalRunState.Unknown))
         {
-            await Note(JournalEntry.Of(JournalEntry.RunEnded, ("state", "abandoned: its machine is gone"), ("cleanupVerified", "false"))).ConfigureAwait(false);
-            output.WriteLine($"Journalled run {runId} as ended on {inventory.LeaseHost}: its machine is gone.");
+            try
+            {
+                await RunFinish.RecordForGoneRunnerAsync(journal, host, RunJournal.DirectoryFor(leaseProfile), new RunEnd(RunOutcome.MachineGone, CleanupProven: false),
+                    timeout, cancellation).ConfigureAwait(false);
+                output.WriteLine($"Journalled run {runId} as ended on {inventory.LeaseHost}: its machine is gone.");
+            }
+            catch (Exception error) when (error is not OperationCanceledException) { output.WriteLine($"  the run's end could not be journalled on {inventory.LeaseHost}: {error.Message}"); }
         }
         return whole;
     }

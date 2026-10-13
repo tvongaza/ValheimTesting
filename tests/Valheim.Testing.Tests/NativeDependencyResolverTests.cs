@@ -786,7 +786,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         // The partial copy is the campaign's from its intent, so the preparation's cleanup retires it and journals that.
         Assert.Equal([JournalEntry.CopyIntended, JournalEntry.CopyRetired], failedJournal.Where(record => record.Actor == "server").Select(record => record.Entry.Kind));
         var failedEnd = Assert.Single(failedJournal, record => record.Entry.Kind == JournalEntry.RunEnded).Entry.Fields;
-        Assert.Equal(("failed in preparation", "true"), (failedEnd["state"], failedEnd["cleanupVerified"]));
+        Assert.Equal(("failed", "true"), (failedEnd["state"], failedEnd["cleanupVerified"]));
         // The result and its JUnit say what the journal says (#424): the preparation's own cleanup is a passing Cleanup step.
         Assert.Equal((true, 1, 0), CleanupOf(failedPrepOutput));
 
@@ -800,7 +800,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         string uncleanedRun = JsonDocument.Parse(File.ReadAllText(Path.Combine(uncleanedOutput, "result.json"))).RootElement.GetProperty("Provenance").GetProperty("runId").GetString()!;
         var uncleanedEnd = Assert.Single(await RunJournalOnHost.ReadAsync(host, @"C:\locks\journal", uncleanedRun, TimeSpan.FromSeconds(5)),
             record => record.Entry.Kind == JournalEntry.RunEnded).Entry.Fields;
-        Assert.Equal(("failed in preparation", "false"), (uncleanedEnd["state"], uncleanedEnd["cleanupVerified"]));
+        Assert.Equal(("failed", "false"), (uncleanedEnd["state"], uncleanedEnd["cleanupVerified"]));
         var (verified, cleanupSteps, cleanupFailures) = CleanupOf(uncleanedOutput);
         Assert.Equal((false, true), (verified, cleanupSteps >= 1 && cleanupFailures >= 1));
     }
@@ -936,7 +936,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
             Assert.Equal(name, intended.Actor);
             Assert.Contains($"vt-prep-{runId}-{name}", intended.Entry.Fields["runtime"]);
             var ended = Assert.Single(journal, record => record.Entry.Kind == JournalEntry.RunEnded).Entry.Fields;
-            Assert.Equal(("failed in preparation", "true"), (ended["state"], ended["cleanupVerified"]));
+            Assert.Equal(("failed", "true"), (ended["state"], ended["cleanupVerified"]));
             Assert.Equal(JournalEntry.RunEnded, journal.OrderBy(record => record.Utc).Last().Entry.Kind);
             // Every prepared copy and its staging folder are gone; the host's lock was released.
             string runs = host.Local(@"C:\runs");

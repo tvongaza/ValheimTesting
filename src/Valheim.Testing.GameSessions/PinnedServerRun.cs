@@ -372,16 +372,6 @@ public static class PinnedServerRun
         return inspection;
     }
 
-    // The journal's last word on each host the campaign prepared: how the run ended and whether its cleanup was proven, or that its
-    // cleanup was abandoned, which leaves the run for env recover (it never journals an end it did not reach).
-    private static async Task JournalCampaignEndAsync(PreparedHostedCampaign prepared, JournalEntry last, bool abandoned)
-    {
-        foreach (string hostName in prepared.Copies.Select(copy => copy.Host).Distinct(StringComparer.OrdinalIgnoreCase))
-            try { await prepared.Journal.AppendAsync(prepared.HostFor(hostName), prepared.JournalOf(hostName), "run", last,
-                abandoned ? TimeSpan.FromSeconds(15) : prepared.Timeout).ConfigureAwait(false); } // the user asked to get out
-            catch (Exception error) { Console.Error.WriteLine($"Warning: could not journal the run's end on {hostName}: {error.Message}"); }
-    }
-
     /// <summary>
     /// Runs a hosted plan on a campaign without a dedicated server (#258 step 8b): one of the named clients hosts the campaign's
     /// fixture world (its plan section's <c>hostWorld</c>) and the others are its peers (<c>joinsHost</c>), each on the host the
@@ -409,7 +399,7 @@ public static class PinnedServerRun
         GameSession? game = null;
         PreparedHostedCampaign? prepared = null;
         CampaignClients? actors = null;
-        IDisposable? journalRun = null;
+        RunJournal.RunScope? journalRun = null;
         IReadOnlyDictionary<string, ClientRunPlan>? named = null;
         var phase = StepPhase.Preflight;
         try
@@ -534,10 +524,8 @@ public static class PinnedServerRun
             bool unknownOutcome = !report.Passed && unknown != null && !definite;
             if (unknownOutcome) report.Provenance["outcome"] = "unknown: " + unknown;
             abandoned = cancellation.Abandoned;
-            var last = abandoned != null ? JournalEntry.Of(JournalEntry.CleanupAbandoned, ("reason", abandoned))
-                : JournalEntry.Of(JournalEntry.RunEnded, ("state", report.Passed ? "passed" : unknownOutcome ? "unknown" : "failed"),
-                    ("cleanupVerified", report.CleanupVerified ? "true" : "false"));
-            if (prepared != null) await JournalCampaignEndAsync(prepared, last, abandoned != null).ConfigureAwait(false);
+            // The run's last word in every journal it wrote (RunFinish): how it ended, or that its cleanup was abandoned.
+            if (journalRun != null) await RunFinish.EndAsync(journalRun, RunEnd.Of(report, unknownOutcome, abandoned)).ConfigureAwait(false);
             journalRun?.Dispose();
             if (ownOutput)
             {
@@ -578,8 +566,9 @@ public static class PinnedServerRun
         string output = Path.GetFullPath(outputArgument);
         bool ownOutput = false, pinned = true, definite = false, unknownOutcome = false;
         string? unknown = null, abandoned = null;
-        // A run with its own id (a campaign's, a hosted run's) journals this machine's copies under it too: one journal run per run.
-        IDisposable? journalRun = null;
+        // A run with its own id (a campaign's, a hosted run's, a local run's) journals this machine's copies under it too: one
+        // journal run per run. A hosted run whose id differs from its campaign's (a test's fixed id) is a second run inside it.
+        RunJournal.RunScope? journalRun = null, hostedRun = null;
         var phase = StepPhase.Preflight; // Where a failure outside any step happened: before copying, until the scenario, or in it.
         // A host operation with an unknown outcome is not a failure of the test; anything else is.
         void Classify(Exception error) { if (HostedServerRun.UnknownOutcome(error) is { } why) unknown ??= why; else definite = true; }
@@ -649,12 +638,16 @@ public static class PinnedServerRun
             {
                 // The runtime is the server host's install, copied and checked there; nothing local is read for it.
                 hosted = HostedServerRun.Create(environment, plan, options.Name, options.Hooks, prepared: prepared != null, prepared?.Journal.RunId);
-                if (RunJournal.ThisProcess.RunId != hosted.RunId) { journalRun?.Dispose(); journalRun = RunJournal.UseRun(hosted.RunId); }
+                if (RunJournal.ThisProcess.RunId != hosted.RunId) hostedRun = RunJournal.UseRun(hosted.RunId);
+                report.Provenance.TryAdd("runId", hosted.RunId); // a standalone hosted run's; a campaign's is already there
                 hosted.Record(report.Provenance);
                 platform = hosted.HostProfile.Platform switch { "windows" => ServerPlatform.Windows, "macos" => ServerPlatform.MacOS, _ => ServerPlatform.Linux };
             }
             else
             {
+                // A local run's copies are journalled under its own id, so its end goes where they went.
+                journalRun = RunJournal.UseRun(RunJournal.NewRunId());
+                report.Provenance["runId"] = journalRun.RunId;
                 // The runtime's contents decide its platform; checked on the pinned source so a wrong host fails before copying.
                 platform = GameLaunch.DetectServer(plan.Runtime.Source); plan.CheckExecutable(platform);
                 if (mode != "validate") ServerRunPlan.CheckLaunchHost(platform, GameLaunch.LocalServerPlatform);
@@ -781,15 +774,13 @@ public static class PinnedServerRun
             // The run lets go of this machine's copies before its end is journalled, so the end stays the run's last line: the
             // copies it keeps (their owner records go; see OwnedCopies) are journalled as kept or handed over first.
             runtime?.Dispose(); world?.Dispose();
-            // The journal's last word on each host the campaign prepared: how the run ended and whether its cleanup was proven, or
-            // that its cleanup was abandoned, which leaves the run for env recover (it never journals an end it did not reach).
+            // The run's last word in every journal it wrote, on its hosts and this machine (RunFinish): how it ended and whether its
+            // cleanup was proven, or that its cleanup was abandoned, which leaves the run for env recover.
             abandoned = cancellation.Abandoned;
-            var last = abandoned != null ? JournalEntry.Of(JournalEntry.CleanupAbandoned, ("reason", abandoned))
-                : JournalEntry.Of(JournalEntry.RunEnded, ("state", report.Passed ? "passed" : unknownOutcome ? "unknown" : "failed"),
-                    ("cleanupVerified", report.CleanupVerified ? "true" : "false"));
-            if (prepared != null) await JournalCampaignEndAsync(prepared, last, abandoned != null).ConfigureAwait(false);
-            else if (hosted != null)
-                await hosted.JournalEndAsync(last).ConfigureAwait(false);
+            var end = RunEnd.Of(report, unknownOutcome, abandoned);
+            if (hostedRun != null) await RunFinish.EndAsync(hostedRun, end).ConfigureAwait(false);
+            if (journalRun != null) await RunFinish.EndAsync(journalRun, end).ConfigureAwait(false);
+            hostedRun?.Dispose();
             journalRun?.Dispose();
             if (ownOutput)
             {
