@@ -2,8 +2,6 @@
 
 [Current preview API reference](https://tvongaza.github.io/ValheimTesting/). The package's README is this guide; use its versioned source commit from the package metadata when checking an older preview.
 
-*Assistant-written (Claude).*
-
 `Valheim.Testing.Doubles` lets a unit-test project compile and run a mod's pure-logic source files without Unity, Valheim, BepInEx or Jotunn. It is a source package: its files compile into your test project and stand in for the game's types under their real names, so the mod's own source, linked unchanged, calls them as it would call the game. Use it for decisions, persistence formats, RPC handlers, registrations and anything else a mod computes from game types. Use `Valheim.Testing.Game` against a real server for what only the game shows: rendering, physics, timing, real networking, and the game's behaviour beyond what is listed here.
 
 **Example:** [ModWithTests](../../examples/ModWithTests/README.md) is a complete package-consuming project that links real mod source and runs five tests. The released version to pin is in the [package table](../package-versions.md).
@@ -14,7 +12,7 @@ Value signatures ending in `{ get; }` cannot be assigned by mod code. The index 
 
 ## Setup
 
-In the unit-test project, not the mod project. It needs C# 10 and works on net48 and modern .NET. Reference it with `PrivateAssets="all"` (it is a development dependency), and do not also reference the game's assemblies: the doubles use the same names.
+The steps are in [Test logic that uses game types](../guides/test-logic-that-uses-game-types.md). In the unit-test project, not the mod project. It needs C# 10 and works on net48 and modern .NET. Reference it with `PrivateAssets="all"` (it is a development dependency), and do not also reference the game's assemblies: the doubles use the same names.
 
 ```xml
 <PropertyGroup><LangVersion>10</LangVersion></PropertyGroup> <!-- or newer; net48 test legs default to C# 7.3 -->
@@ -186,36 +184,6 @@ The doubles do not model config sync. ServerSync and Jotunn push the server's va
 Every `HarmonyPatch` constructor (argument types, `ArgumentType` variations, `MethodType`), `HarmonyPriority`, `HarmonyBefore` and `HarmonyAfter` record their target in `info`; `HarmonyMethod.Merge` combines a class's attributes. These follow HarmonyX 2.9.0, the Harmony BepInEx 5 ships. `new Harmony(id).PatchAll()` lists the patch classes it finds in `Patches`, and patches nothing: no target is resolved or checked, so a test around `PatchAll` passes even when the patch would never run or its target does not exist. Call the prefix or postfix yourself, and check targets natively. `Traverse` and `AccessTools` reach members of any visibility on real objects, as HarmonyX's do; a typed `Traverse` read casts and throws on another type.
 
 A `ModuleInitializerAttribute` polyfill lets a net48 test project use `[ModuleInitializer]`. Define `VALHEIM_TESTING_NO_POLYFILLS` if the project declares its own.
-
-## Your own partials and stubs
-
-Every type is `partial`: add the members your mod calls in your own files, and keep only mod-specific behaviour there. A project that already has its own stand-ins for game types must follow the doubles' shapes, or delete its copies:
-
-- Types live in the game's namespaces: `Transform` is `UnityEngine.Transform`, so a project's own `partial class Transform` belongs in `namespace UnityEngine`; `Mathf` is a struct, so a project partial is `partial struct Mathf`. The global socket and RPC types (`ISocket`, `SocketDouble`, `ZSteamSocket`, `ZPlayFabSocket`, `ZRpc`, `SyncedList`, `OnlineBackendType`) and `Steamworks.CSteamID`, `Splatform.Platform` and `Splatform.PlatformUserID` collide with stubs of the same names.
-- `GameObject.Position`/`Rotation` and `Transform.position` are properties: `go.Position.x = 1` does not compile (CS1612), nor does passing them by `ref`/`out`.
-- `GetComponent<T>` matches base types and interfaces: `GetComponent<MonoBehaviour>()` returns the `ZNetView`, `GetComponent<Component>()` the `Transform`. `ZNetScene` is a `MonoBehaviour` and `GetPrefab(string)` looks up by name hash. `HarmonyPatch` derives from `HarmonyAttribute` and is not sealed.
-- `Terminal.ConsoleCommand`'s constructors take the game's `hideBehindDevCommands` after `allowInDevBuild` (stored in `HideBehindDevCommands`). The `RoutedMethod` and `ZRpc.RpcMethod` delegate holders have no public constructor.
-- `ZDOMan`, `ZRoutedRpc`, `WorldGenerator`, `ManualLogSource` and Jotunn's `CustomRPC` declare their parameterless constructor (marked `[TestOnly]`): a project partial must not declare one too.
-- A net48 test project that declares its own `ModuleInitializerAttribute` deletes it or defines `VALHEIM_TESTING_NO_POLYFILLS`.
-
-Members the game does not have are not doubled either: `AnimatorUpdateMode.AnimatePhysics` (the game's Unity has only `Fixed`) is absent. When a release adds names, the [member index](Valheim.Testing.Doubles.members.txt) diff shows which may clash with a project's own; delete the project's copy or rename it.
-
-## A doubles assembly named assembly_valheim
-
-The doubles normally compile into the test assembly, so a type's assembly is the test assembly. Some mod code asks where a type comes from: it checks `type.Assembly.GetName().Name == "assembly_valheim"` to tell the game's components from other mods', or it resolves `Type.GetType("ZNetScene, assembly_valheim")`. For that code, put the doubles in their own class library named after the game's assembly, and give the test assembly access to its internals:
-
-```xml
-<!-- MyMod.Doubles/MyMod.Doubles.csproj -->
-<PropertyGroup><AssemblyName>assembly_valheim</AssemblyName><RootNamespace></RootNamespace><LangVersion>10</LangVersion></PropertyGroup>
-<ItemGroup><PackageReference Include="Valheim.Testing.Doubles" Version="[0.1.0-preview.15]" /></ItemGroup>
-```
-
-```csharp
-// MyMod.Doubles/AssemblyInfo.cs
-[assembly: System.Runtime.CompilerServices.InternalsVisibleTo("MyMod.Tests")]
-```
-
-The test project then references this project instead of the package. Such a project references `Valheim.Testing` itself (the package's dependency does not flow through `PrivateAssets="all"`), so pin it to at least the `Valheim.Testing` version the Doubles package lists as its dependency on NuGet.org (the two versions can differ; see the [package table](../package-versions.md)). Partial additions to the doubles (a `Heightmap` hook, extra members) must live in the `assembly_valheim` project, because a partial type cannot span assemblies. A component the test assembly declares is then foreign, as another mod's would be.
 
 ## Limits
 

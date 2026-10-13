@@ -1,11 +1,51 @@
 # SharedWorld
 
-**Audience:** a mod author whose mod reads or writes terrain. **Concept:** the pure terrain library, with declared expectations and no game.
+This example tests terrain logic against the terrain doubles and declared expectations, with no game.
 
-Run `dotnet run --project examples/SharedWorld -c Release` from the repository root. No Valheim, Steam, ValheimCLI or native binaries are needed; the terrain doubles from `Valheim.Testing.Doubles` compile into the example as they do into a mod's test project. Exit 0 and `PASS` mean the declared fixture expectations passed.
+## Files
 
-Builds a sloped background and a rectangular terrace and loads two adjacent zones from it as the game holds them (a `Heightmap` and `TerrainComp` each, through `ValheimWorldScope`). A stand-in writer raises the shared column in the west zone only; `TerrainAssert.SeamAgrees` must fail, a `TerrainSnapshot` shows the east zone untouched, and after the same write reaches the east zone's copy of the edge the seam check passes. Expected heights are declared by the fixture, not read from a mod's output.
+| File | What it holds |
+|---|---|
+| `Program.cs` | The fixture and every check. |
+| `SharedWorld.csproj` | The project. The terrain doubles from `Valheim.Testing.Doubles` compile into it. |
 
-It then writes the same ground as a small grid dump in `cli_world_dump`'s CSV layout, reads it with `GridDumpTerrain`, checks it against the composed terrain at every node with `TerrainParity`, and checks that the same dump shifted one node east fails. Pass a file path (`dotnet run --project examples/SharedWorld -c Release -- terrace.png`) to also write a PNG of the dump with the terrace outlined.
+## What it checks
 
-The stand-in writer illustrates the boundary; real mods call their own writer against the same doubles. See the [fixture guide](../../docs/shared-world.md). This is not a Valheim save, native paint layout or physics simulation.
+1. It loads a sloped background with a terrace as two adjacent zones through `ValheimWorldScope`.
+2. It raises the shared column in the west zone only. `TerrainAssert.SeamAgrees` must fail, and a `TerrainSnapshot` shows the east zone untouched.
+3. It applies the same write to the east zone. Then the seam check passes.
+4. It reads the same ground as a grid dump with `GridDumpTerrain`. It checks the dump with `TerrainParity` at every node.
+5. It checks that the same dump, shifted one node east, fails.
+
+The fixture declares the expected values. They are not read from a mod's output.
+
+## Run
+
+You need only the .NET 10 SDK. From the repository root, run:
+
+```sh
+dotnet run --project examples/SharedWorld -c Release
+```
+
+If every check passes, the run exits 0 and prints this line:
+
+```text
+PASS: composed terrain, a one-sided seam write caught by the terrain doubles and then fixed, grid dump parity with a shifted-grid control. No game used.
+```
+
+If you also want a PNG of the dump with the terrace outlined, pass a file path:
+
+```sh
+dotnet run --project examples/SharedWorld -c Release -- terrace.png
+```
+
+The run writes the PNG to that path.
+
+## Limits
+
+This is not a Valheim save or a physics simulation. The stand-in writer only shows the seam boundary. Your mod calls its own writer against the same doubles.
+
+## Related
+
+- [Test terrain decisions](../../docs/guides/test-terrain-decisions.md)
+- [`Valheim.Testing` package](../../docs/packages/Valheim.Testing.md)

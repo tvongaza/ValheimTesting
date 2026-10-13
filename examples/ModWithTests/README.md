@@ -1,56 +1,35 @@
 # First test of your mod's code
 
-**Audience:** a mod author starting to test. **Concept:** unit-test the source file the mod ships, with shared game doubles.
+This miniature mod and its xUnit project test the mod's real source file with the game doubles from `Valheim.Testing.Doubles`. You need the .NET 10 SDK and NuGet access. You do not need Valheim, Steam or a server.
 
-This is a miniature mod source tree plus a complete xUnit consumer project. It tests the **same source file the mod would ship**, using game doubles supplied by a NuGet source package. It needs the .NET 10 SDK and package restore access, but no Valheim, Steam, Unity, ValheimCLI or server. No plugin is built or installed.
+## Files
 
-## Run this example
+| File | What it holds | What you replace in your mod |
+|---|---|---|
+| [MyMod/DrySiteRule.cs](MyMod/DrySiteRule.cs) | The mod's rule: generator ground at least 1.5 m above water. | Your existing implementation. |
+| [MyMod.Tests/MyMod.Tests.csproj](MyMod.Tests/MyMod.Tests.csproj) | Links the production source with `Compile Include`. | Link your source. Reference the testing package only here. |
+| [MyMod.Tests/DrySiteTests.cs](MyMod.Tests/DrySiteTests.cs) | `ValheimWorldScope` installs synthetic terrain, then restores the previous world. | Your inputs and independent expectations. |
+| [.github/workflows/tests.yml](.github/workflows/tests.yml) | Runs the tests on pushes to `main`, on pull requests and by hand. | Laid out for your mod's root. It does not run here. |
 
-The example pins the newest release, `Valheim.Testing.Doubles` `0.1.0-preview.15`, which restores from NuGet.org together with its `Valheim.Testing` dependency. The pin follows each release (this repository rewrites it from [`toolkit-versions.json`](../../toolkit-versions.json)); in your mod, move it when you choose. From this directory, or from a copy of it anywhere:
+## Run it
+
+From this directory:
 
 ```sh
 dotnet test MyMod.Tests/MyMod.Tests.csproj -c Release
 ```
 
-Inside a ValheimTesting checkout, the repository's `NuGet.Config` also offers the local `.packages` feed; its locally packed builds carry a `-candidate.<id>` version, so they never stand in for the published one, but run from a copy outside the checkout to be sure you test the published package. Success is **5 passed, 0 failed**, exit 0. A failed assertion returns nonzero. Two checks keep the example honest: this repository's CI runs it from a copy outside the checkout against NuGet.org only, as a mod's workflow would, and the framework validation runs a copy pinned to the current source's Doubles version, restored from freshly packed packages rather than the doubles source directory.
+Success is **5 passed, 0 failed**, exit 0. A failed assertion returns nonzero.
 
-## Understand the files
+The project pins `Valheim.Testing.Doubles` `0.1.0-preview.15` from NuGet.org. Inside a ValheimTesting checkout, `NuGet.Config` also offers the local `.packages` feed. To be sure you test the published package, run from a copy outside the checkout.
 
-| File | What you replace in your mod |
-|---|---|
-| [MyMod/DrySiteRule.cs](MyMod/DrySiteRule.cs) | Your existing implementation; this example accepts generator ground at least 1.5 m above a supplied water level. |
-| [MyMod.Tests/MyMod.Tests.csproj](MyMod.Tests/MyMod.Tests.csproj) | Link your production source with `Compile Include`. Reference the testing package **only here**. |
-| [MyMod.Tests/DrySiteTests.cs](MyMod.Tests/DrySiteTests.cs) | Your declared inputs and independent expectations. `ValheimWorldScope` installs synthetic terrain and restores the previous world on disposal. |
-| [.github/workflows/tests.yml](.github/workflows/tests.yml) | A GitHub Actions workflow that runs the test project on every push and pull request. It does not run in this repository; it is laid out for your mod's root. |
+The five tests cover submerged ground, the exact allowed boundary, dry ground, sampling at x/z instead of the object's y, and the previous world returning after a throw.
 
-The tests cover submerged ground, the exact allowed boundary, dry ground, horizontal x/z sampling instead of the object's y, and isolation after an exception. For a quick control, change `>=` to `>` in the mod source: the boundary case must fail. Restore the original rule afterwards. Do not copy the rule into the tests; that would test a substitute implementation.
+To see a test fail, change `>=` to `>` in `MyMod/DrySiteRule.cs`. The boundary case fails. Restore the rule afterwards.
 
-## Apply it to your checkout
+## Next
 
-1. Create `MyMod.Tests/` alongside your mod project and copy the test project structure. Keep the production plugin's framework, references and output unchanged.
-2. Replace the linked example source with a small decision from your own mod. If it pulls in the whole plugin lifecycle, extract that decision into a production helper first; do not rewrite it inside the test project.
-3. Reference `Valheim.Testing.Doubles` with `PrivateAssets="all"`. Do **not** reference Unity, Valheim or the built plugin DLL in the same project: the package supplies types with those names. For already engine-free code, use a normal project reference and `Valheim.Testing` instead.
-4. Restore and run it from your mod checkout with `dotnet test MyMod.Tests/MyMod.Tests.csproj -c Release`. Released versions need no feed setup; to try an unpublished toolkit build, add a local feed as described in [Try an unpublished build in a mod](../../CONTRIBUTING.md#try-an-unpublished-build-in-a-mod).
-5. Add the project to your own solution or open it directly in your IDE. There is no requirement to have a Roads or MWL testing solution.
-6. Keep singleton-using tests nonparallel. Use fresh scope builders, and reset your mod's own static state separately. Scope disposal restores references, not deep copies of pre-existing objects.
-7. Run the tests on every push and pull request: copy [.github/workflows/tests.yml](.github/workflows/tests.yml) to the same path in your repository and change the project path if yours differs. See [running your tests in GitHub Actions](../../docs/adopting.md#run-your-tests-in-github-actions).
-
-If compilation reports a missing game member, check the [documented doubles contract](../../docs/packages/Valheim.Testing.Doubles.md). Extend a partial type locally for a mod-specific seam, or contribute reusable behavior with a test. A no-op stub is not evidence that the game's behavior works.
-
-## Also test on .NET Framework
-
-The game runs your mod on Mono, a .NET Framework 4.x runtime; this example tests on `net10.0` only. To run the same tests on `net48` too, copy [`Valheim.TestRunners.targets`](../../tools/test-runners/README.md) into your repository and change three lines of the project:
-
-```xml
-<TargetFrameworks>net48;net10.0</TargetFrameworks>   <!-- instead of <TargetFramework>net10.0</TargetFramework> -->
-<PackageReference Include="xunit.runner.console" Version="2.8.1" PrivateAssets="all" />
-<Import Project="../Valheim.TestRunners.targets" />   <!-- last in the project -->
-```
-
-and run both with `dotnet build MyMod.Tests/MyMod.Tests.csproj -t:RunTestsOnBothFrameworks` on any OS (Mono on macOS or Linux). It prints one result per framework and fails if either fails. Plain `dotnet test` on a project that targets both also runs the `net48` leg through the test platform, which is not dependable off Windows (it aborts on macOS), so keep the workflow's `dotnet test` to one framework with `-f net10.0`, and add a job for the target: on `windows-latest` it needs nothing more; on `ubuntu-latest` install Mono first with `sudo apt-get install -y --no-install-recommends mono-devel`. This repository's `test-runners` CI job makes exactly these three changes to a copy of this example and runs the target on all three systems.
-
-## What this proves, and the next layer
-
-This tests the mod's decision on known generator inputs. It does **not** prove the real world is dry, that a collider exists, or that a client receives terrain. It is deliberately not a BepInEx plugin or a simulation of the native game.
-
-For a first native check, follow [Adopting the framework: the next layer](../../docs/adopting.md#add-one-native-check-only-when-needed). Start with an existing observer on a prepared fixture; introduce a mod adapter only when the observation or action your scenario needs is missing. The mod owns that scenario and its expectations.
+- To adapt this to your mod, see [Test logic that uses game types](../../docs/guides/test-logic-that-uses-game-types.md).
+- To run the tests in CI and add the `net48` leg, see [Run tests in CI](../../docs/guides/run-tests-in-ci.md).
+- If you are new to the toolkit, start at [Get started](../../docs/getting-started.md).
+- These tests check the rule on known generator inputs. They do not prove that the real world is dry, that a collider exists, or that a client receives terrain. For those checks, [choose a test layer](../../docs/guides/choose-a-test-layer.md).

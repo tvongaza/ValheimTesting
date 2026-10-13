@@ -4,7 +4,7 @@ Contributions from mod developers and their coding agents are welcome. A useful 
 
 Use the [issues](https://github.com/tvongaza/ValheimTesting/issues) to describe a gap or propose a larger API change. Small, focused fixes can go straight to a [pull request](https://github.com/tvongaza/ValheimTesting/pulls) against `main`. Include the mod use case that motivated the change; a second consumer is useful evidence of reuse, not a prerequisite.
 
-Only adopting the library in your mod? Use [Bring your mod](docs/adopting.md) first. The bootstrap below is for framework contributions and unpublished Game APIs; it is not required to consume released pure packages.
+Only adopting the library in your mod? Use [Choose a test layer](docs/guides/choose-a-test-layer.md) first. The bootstrap below is for framework contributions and unpublished Game APIs; it is not required to consume released pure packages.
 
 ## Choose the right repository
 
@@ -27,7 +27,7 @@ For a fork, transport-package or command-pack update, follow the [ValheimCLI rel
 
 ## Set up and validate locally
 
-Fork the repository, clone your fork, and make a focused branch from current `main`. Check existing edits before starting. The [setup guide](docs/getting-started.md) covers prerequisites and package consumption. From the repository root:
+Fork the repository, clone your fork, and make a focused branch from current `main`. Check existing edits before starting. [Package versions](docs/package-versions.md) lists every package and pin. From the repository root:
 
 ```sh
 dotnet run scripts/bootstrap-cli.cs  # every OS: build the pinned ValheimCLI into the local package feed
@@ -90,7 +90,7 @@ The synthetic world supplies **declared inputs to real mod code**. It is not a r
 3. **Write down the contract.** Coordinates are horizontal x/z and vertical y in metres. Specify region boundaries, overlap order, biome and river behavior, valid parameters, missing-data behavior and any approximation. Composition currently replaces all facts together; it does not blend biomes. Do not silently change that rule.
 4. **Keep generated inputs separate from modified state.** Declared ground (`ITerrain`) is the generator's input; what a writer changes lives in the game's own `TerrainComp` arrays, which the terrain doubles hold per zone. Adjacent zones have separate edge storage so a missing update remains detectable (`TerrainAssert.SeamAgrees`). A snapshot is not a native save.
 5. **Test the useful boundaries independently.** Cover inside/outside and exact boundary points, negative coordinates where relevant, overlap precedence, missing samples, and invalid inputs covered by the contract. Mutable-state contributions should check isolation in both directions and preservation of pre-existing values. Use small hand-derived expectations, not the model's own output to calculate its expected output.
-6. **Show a consumer.** Add or update a runnable [example](examples/README.md), or link the mod-side regression that calls the real implementation. Record limits in the [shared-world guide](docs/shared-world.md).
+6. **Show a consumer.** Add or update a runnable [example](examples/README.md), or link the mod-side regression that calls the real implementation. Record limits in the [terrain guide](docs/guides/test-terrain-decisions.md).
 
 A small fixture can expose a real distinction without reproducing game noise. This test uses existing APIs; it demonstrates a slope, a flat terrace and its half-open boundary:
 

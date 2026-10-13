@@ -10,7 +10,7 @@ Reusable test inputs, fixtures and assertions for Valheim mods. Most tests run w
 2. Copy [ModWithTests](examples/ModWithTests/README.md) beside your mod: a test project that links your mod's real source files and references `Valheim.Testing.Doubles` from NuGet.org.
 3. Run `dotnet test MyMod.Tests/MyMod.Tests.csproj`. No game, Steam or ValheimCLI is needed.
 
-Then [Bring your mod](docs/adopting.md) helps choose the layer for each behaviour, [Get started](docs/getting-started.md) runs your first test, [package versions](docs/package-versions.md) lists every package and pin, and the [examples](examples/README.md) go up to native checks with owned game processes. Supported hosts and limits are in [platforms](docs/platforms.md). New to BepInEx and Harmony? The community wiki's [overview](https://github.com/Valheim-Modding/Wiki/wiki/Best-Practices) explains the concepts; check its older samples against 1.0 ([wiki caveats](docs/runtime-hygiene.md#wiki-pages-that-predate-10)). A plugin that will not load, or two mods that conflict: [debugging guide](docs/debugging-mods.md).
+Then [Choose a test layer](docs/guides/choose-a-test-layer.md) picks the layer for each behaviour, [Get started](docs/getting-started.md) runs your first test, [package versions](docs/package-versions.md) lists every package and pin, and the [examples](examples/README.md) go up to native checks with owned game processes. Supported hosts and limits are in [platforms](docs/platforms.md). New to BepInEx and Harmony? The community wiki's [overview](https://github.com/Valheim-Modding/Wiki/wiki/Best-Practices) explains the concepts; check its older samples against 1.0 ([wiki caveats](docs/runtime-hygiene.md#wiki-pages-that-predate-10)). A plugin that will not load, or two mods that conflict: [debugging guide](docs/debugging-mods.md).
 
 To make the test workflow discoverable to your coding agent, [copy the ValheimTesting skill into your mod repository](docs/agent-skills.md).
 
@@ -44,12 +44,7 @@ The dependency goes **ValheimTesting → ValheimCLI**, never the reverse: the ga
 
 ## Test layers
 
-1. **Unit:** real mod decisions against small declared inputs and the doubles. Broad and fast.
-2. **Integration:** scenario drivers, adapters and fixtures against scripted replies and fake processes.
-3. **Bounded game checks:** a few zones on a disposable server and client; save, restart and replication when those boundaries change.
-4. **Human judgement:** a short look or walk when appearance or usability matters.
-
-Synthetic inputs are not Valheim's generator, a replay of a capture is not independent evidence of the game, and an incomplete observation fails rather than reading as zero.
+Unit, integration, bounded game checks and human judgement: [Choose a test layer](docs/guides/choose-a-test-layer.md) matches each behaviour to a layer and says what that layer cannot prove.
 
 ## Contribute
 

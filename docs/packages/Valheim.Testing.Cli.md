@@ -8,6 +8,6 @@ The code is ValheimCLI's own `Valheim.Cli.Testing` project, built unchanged from
 
 Read the [transport guide at the exact pinned fork commit](https://github.com/tvongaza/valheimCLI/blob/e596a7d984feaaa695f5c2999964b64e23fbfd92/docs/client-library.md) for its client, plan and reply contracts. The game-side commands and capability manifest also belong to that fork. A newer fork head may describe behavior this packaged revision does not have; check `cli-dependency.json` before using a newer example.
 
-Most test projects do not reference this package directly: use [Valheim.Testing.Game](https://www.nuget.org/packages/Valheim.Testing.Game), which depends on it. See the [getting-started guide](https://github.com/tvongaza/ValheimTesting/blob/main/docs/getting-started.md).
+Most test projects do not reference this package directly: use [Valheim.Testing.Game](https://www.nuget.org/packages/Valheim.Testing.Game), which depends on it. See the [package versions](https://github.com/tvongaza/ValheimTesting/blob/main/docs/package-versions.md).
 
 Unofficial community tooling; not affiliated with or endorsed by Iron Gate or Coffee Stain. Valheim is a trademark of Iron Gate AB.
