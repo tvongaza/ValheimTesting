@@ -134,7 +134,7 @@ public static class InteractiveClient
         string? task = windows ? TaskPrefix + Guid.NewGuid().ToString("N") : null;
         var variables = new Dictionary<string, string>
         {
-            ["install"] = launch.WorkingDirectory, ["dir"] = launchDirectory, ["spec"] = launch.Spec(), ["seconds"] = seconds,
+            ["install"] = launch.GameDirectory, ["dir"] = launchDirectory, ["spec"] = launch.Spec(), ["seconds"] = seconds,
             ["files"] = string.Join('\n', launch.RequiredFiles),
         };
         if (windows) { variables["task"] = task!; variables["launcher"] = InteractiveScripts.WindowsLauncher; }

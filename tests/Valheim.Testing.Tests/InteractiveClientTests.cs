@@ -126,6 +126,7 @@ public class InteractiveClientTests
         var launch = GameLaunch.ForClientWithLoader(MacInstall, MacProfile, ["+connect", "server.example:2456"],
             null, ClientPlatform.MacOS, ClientArchitecture.Arm64, macDoorstop: "libdoorstop.dylib");
         Assert.Equal(MacInstall + "/Valheim.app/Contents/MacOS/Valheim", launch.Executable);
+        Assert.Equal(MacProfile, launch.WorkingDirectory);
         Assert.Equal(MacProfile + "/libdoorstop.dylib", launch.Prepended["DYLD_INSERT_LIBRARIES"]);
         Assert.Contains(MacProfile + "/BepInEx/core/BepInEx.Preloader.dll", launch.RequiredFiles);
         var fake = new FakeLauncher()
@@ -134,11 +135,16 @@ public class InteractiveClientTests
         var process = await InteractiveClient.StartAsync(MacHost(fake), launch, MacLaunch, Timeout);
         Assert.Equal(5412, process.Id);
         string start = FakeLauncher.Script(fake.Calls[0]);
+        Assert.Contains("install='" + MacInstall + "'", start);
+        Assert.Contains("dir " + InteractiveClient.Base64(launch.WorkingDirectory), start);
         Assert.Contains("launchctl bootstrap", start);
         Assert.Contains("mkfifo", start);
         Assert.Contains("arch='arm64'", start);
         Assert.Contains("/launcher.sh", start);
         Assert.DoesNotContain("launchctl asuser", start);
+        Assert.Contains("dir) workdir=\"$text\"", InteractiveScripts.MacLauncher);
+        Assert.Contains("cd -- \"$workdir\"", InteractiveScripts.MacLauncher);
+        Assert.DoesNotContain("$dir/workdir", InteractiveScripts.MacStart + InteractiveScripts.MacLauncher);
         Assert.Equal(InteractiveStop.Quit, await process.StopAsync(TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(10)));
         Assert.Contains("launchctl bootout", FakeLauncher.Script(fake.Calls[1]));
     }

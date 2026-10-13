@@ -446,7 +446,7 @@ internal sealed class HostedServerRun : IServerPlacement
         JournalAsync(Host, Role.Host, "server", JournalEntry.Of(JournalEntry.ProcessIntended, ("bootDirectory", bootDirectory),
             ("expectedCommandLineSha256", expected), ("quitSeconds", quitSeconds)), cancellation).GetAwaiter().GetResult();
         try { process = HostServer.StartAsync(Host, launch, bootDirectory, HostedTimeouts.Quick, [BepInExLog, UnityLog], local,
-            logonSeams: null, cancellation: cancellation, logRoot: LoaderDirectory).GetAwaiter().GetResult(); }
+            logonSeams: null, cancellation: cancellation).GetAwaiter().GetResult(); }
         catch (Exception error) when (UnknownOutcome(error) != null)
         {
             // The start's reply was lost: a server may be running there that no session knows. The lock stays.

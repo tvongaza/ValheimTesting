@@ -36,7 +36,7 @@ public sealed class ServerActor : IOwnedServer, IDisposable
         int boot = 0, connection = 0;
         _session = new OwnedServerSession(token =>
         {
-            // The launch adds SteamAppId and, for Linux, the Doorstop loader variables BepInEx needs; the working directory is the runtime.
+            // The launch adds SteamAppId and the Doorstop loader variables BepInEx needs; a Unix profile starts in its owned loader root.
             var environment = plan.Environment.ToDictionary(entry => entry.Key, entry => plan.Expand(entry.Value, runtime, world));
             environment[sessionTokenVariable] = token;
             var launch = GameLaunch.ForServerWithLoader(placement.GameDirectory, placement.LoaderDirectory,

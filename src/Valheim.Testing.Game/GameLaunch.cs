@@ -38,24 +38,27 @@ public sealed partial class GameLaunch
         }
     }
 
-    private GameLaunch(bool server, ClientPlatform platform, bool forHost, string workingDirectory, string executable, IReadOnlyList<string> arguments,
+    private GameLaunch(bool server, ClientPlatform platform, bool forHost, string gameDirectory, string loaderDirectory, string executable, IReadOnlyList<string> arguments,
         IReadOnlyDictionary<string, string> environment, IReadOnlyDictionary<string, string> prepended, IReadOnlyList<string> requiredFiles,
-        ClientArchitecture macArchitecture = ClientArchitecture.X64, IEnumerable<string>? secretVariables = null,
-        bool isolatedLoader = false)
+        bool separateRoots, ClientArchitecture macArchitecture = ClientArchitecture.X64, IEnumerable<string>? secretVariables = null)
     {
-        IsServer = server; Platform = platform; ForHost = forHost; WorkingDirectory = workingDirectory; Executable = executable; Arguments = arguments;
+        IsServer = server; Platform = platform; ForHost = forHost; GameDirectory = gameDirectory;
+        // Windows profiles own the launch folder beside their executable. A Unix profile keeps the game in its source install,
+        // but every relative runtime write belongs under the owned loader profile.
+        WorkingDirectory = separateRoots ? loaderDirectory : gameDirectory;
+        Executable = executable; Arguments = arguments;
         Environment = environment; Prepended = prepended; RequiredFiles = requiredFiles; MacArchitecture = macArchitecture;
         var unset = BepInExLoader.Variables.Where(name => !environment.ContainsKey(name)).ToList();
         // A profile must not inherit a mod manager's injected libraries from the runner's shell. The profile's
         // own Doorstop paths are prepended after these names are cleared in ToStartInfo.
-        if (isolatedLoader)
+        if (separateRoots)
             unset.AddRange(platform == ClientPlatform.Linux ? ["LD_LIBRARY_PATH", "LD_PRELOAD"]
                 : platform == ClientPlatform.MacOS ? ["DYLD_LIBRARY_PATH", "DYLD_INSERT_LIBRARIES"] : []);
         Unset = unset;
         SecretVariables = Secrets(secretVariables, environment, prepended, Unset, platform == ClientPlatform.Windows ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
     }
 
-    /// <summary>The runtime or install directory: the process's working directory.</summary>
+    /// <summary>The directory the process starts in: its game directory, or an owned loader profile for a Unix profile launch.</summary>
     public string WorkingDirectory { get; }
     /// <summary>
     /// The game executable's full path. On macOS, <see cref="ToStartInfo"/> starts it through <c>/usr/bin/arch</c>, so the start
@@ -70,7 +73,7 @@ public sealed partial class GameLaunch
     public IReadOnlyDictionary<string, string> Prepended { get; }
     /// <summary>Inherited variables removed before the launch: Doorstop's, apart from the ones set here.</summary>
     public IReadOnlyList<string> Unset { get; }
-    /// <summary>Files the game and BepInEx loader need: relative to <see cref="WorkingDirectory"/> for a normal install, or absolute loader paths when a disposable profile supplies it.</summary>
+    /// <summary>Files the game and BepInEx loader need: relative to the game directory for a normal install, or absolute loader paths when a disposable profile supplies it.</summary>
     public IReadOnlyList<string> RequiredFiles { get; }
     /// <summary>
     /// Names of variables whose values come from this process's environment at launch and reach only the game's environment (a
@@ -79,6 +82,8 @@ public sealed partial class GameLaunch
     public IReadOnlyList<string> SecretVariables { get; }
 
     internal bool IsServer { get; }
+    // The source game root. A Unix profile's WorkingDirectory is its separate owned loader root.
+    internal string GameDirectory { get; }
     // The operating system the launch runs on (ClientPlatform is also the host type).
     internal ClientPlatform Platform { get; }
     internal bool ForHost { get; }
@@ -131,7 +136,9 @@ public sealed partial class GameLaunch
         if (macSteamRuntimeDirectory != null && platform != ServerPlatform.MacOS)
             throw new ArgumentException("A Mac Steam runtime is only for a macOS dedicated server.", nameof(macSteamRuntimeDirectory));
         if (platform == ServerPlatform.Windows && loader.Equals(runtime, StringComparison.OrdinalIgnoreCase)) loader = runtime;
-        if (platform == ServerPlatform.Windows && !loader.Equals(runtime, StringComparison.OrdinalIgnoreCase))
+        bool separateRoots = !loader.Equals(runtime,
+            platform == ServerPlatform.Windows ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+        if (platform == ServerPlatform.Windows && separateRoots)
             throw new ArgumentException("A Windows Doorstop proxy must be beside the server executable; use a launch folder that owns both.", nameof(loaderDirectory));
         string loaderKind = loader == runtime ? "runtime" : "loader";
         BepInExLoader.RequireCore(loader, loaderKind);
@@ -157,8 +164,7 @@ public sealed partial class GameLaunch
 
         var os = platform == ServerPlatform.Windows ? ClientPlatform.Windows : platform == ServerPlatform.Linux ? ClientPlatform.Linux : ClientPlatform.MacOS;
         var (set, prepended, required) = Loader(server: true, os, environment, names, LocalJoin(runtime), LocalJoin(loader),
-            !loader.Equals(runtime, platform == ServerPlatform.Windows ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal),
-            Relative(runtime, executable), macDoorstop == null ? null : Relative(loader, macDoorstop));
+            separateRoots, Relative(runtime, executable), macDoorstop == null ? null : Relative(loader, macDoorstop));
         if (macSteamRuntimeDirectory != null)
         {
             string steam = FullRuntime(macSteamRuntimeDirectory);
@@ -168,8 +174,8 @@ public sealed partial class GameLaunch
             prepended["DYLD_LIBRARY_PATH"] += ":" + steam;
             required = [.. required, clientLibrary];
         }
-        return new GameLaunch(server: true, os, forHost: false, runtime, executable, passed, set, prepended, required,
-            macArchitecture, isolatedLoader: loader != runtime);
+        return new GameLaunch(server: true, os, forHost: false, runtime, loader, executable, passed, set, prepended, required,
+            separateRoots, macArchitecture);
     }
 
     private static GameLaunch ServerOnHost(ServerPlatform platform, string runtime, IEnumerable<string> arguments,
@@ -201,9 +207,8 @@ public sealed partial class GameLaunch
             prepended["DYLD_LIBRARY_PATH"] += ":" + steam;
             required = [.. required, HostJoin(steam, false, "steamclient.dylib")];
         }
-        return new GameLaunch(server: true, os, forHost: true, root, HostJoin(root, windows, executable), passed, set, prepended, required,
-            macArchitecture: platform == ServerPlatform.MacOS ? ClientArchitecture.Arm64 : ClientArchitecture.X64,
-            isolatedLoader: separateRoots);
+        return new GameLaunch(server: true, os, forHost: true, root, loader, HostJoin(root, windows, executable), passed, set, prepended, required,
+            separateRoots, macArchitecture: platform == ServerPlatform.MacOS ? ClientArchitecture.Arm64 : ClientArchitecture.X64);
     }
 
     /// <summary>
@@ -259,7 +264,9 @@ public sealed partial class GameLaunch
         var (platform, executable) = ResolveClient(install, builtOn);
         if (platform == ClientPlatform.Windows && loader.Equals(install, StringComparison.OrdinalIgnoreCase)) loader = install;
         RequireX64(platform, architecture);
-        if (platform == ClientPlatform.Windows && !loader.Equals(install, StringComparison.OrdinalIgnoreCase))
+        bool separateRoots = !loader.Equals(install,
+            platform == ClientPlatform.Windows ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+        if (platform == ClientPlatform.Windows && separateRoots)
             throw new ArgumentException("A Windows Doorstop proxy must be beside the client executable; use a launch folder that owns both.", nameof(loaderDirectory));
         string loaderKind = loader == install ? "install" : "loader";
         BepInExLoader.RequireCore(loader, loaderKind);
@@ -276,10 +283,9 @@ public sealed partial class GameLaunch
             throw new ArgumentException($"A {platform} install path cannot contain ':'.", nameof(installDirectory));
 
         var (set, prepended, required) = Loader(server: false, platform, environment, names, LocalJoin(install), LocalJoin(loader),
-            !loader.Equals(install, platform == ClientPlatform.Windows ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal),
-            Relative(install, executable), macDoorstop == null ? null : Relative(loader, macDoorstop));
-        return new GameLaunch(server: false, platform, forHost: false, install, executable, passed, set, prepended, required,
-            architecture, isolatedLoader: loader != install);
+            separateRoots, Relative(install, executable), macDoorstop == null ? null : Relative(loader, macDoorstop));
+        return new GameLaunch(server: false, platform, forHost: false, install, loader, executable, passed, set, prepended, required,
+            separateRoots, architecture);
     }
 
     private static GameLaunch ClientOnHost(ClientPlatform platform, string install, IEnumerable<string> arguments, IReadOnlyDictionary<string, string>? environment,
@@ -308,8 +314,8 @@ public sealed partial class GameLaunch
         var join = (string relative) => HostJoin(root, windows, relative);
         var loaderJoin = (string relative) => HostJoin(loader, windows, relative);
         var (set, prepended, required) = Loader(server: false, platform, environment, names, join, loaderJoin, separateRoots, executable, macDoorstop);
-        return new GameLaunch(server: false, platform, forHost: true, root, HostJoin(root, windows, executable), passed, set, prepended, required,
-            macArchitecture: architecture, secretVariables: secretVariables, isolatedLoader: separateRoots);
+        return new GameLaunch(server: false, platform, forHost: true, root, loader, HostJoin(root, windows, executable), passed, set, prepended, required,
+            separateRoots, macArchitecture: architecture, secretVariables: secretVariables);
     }
 
     // The loader's part of every launch, one rule set for both roles, here and on a host: the caller's variables first, then

@@ -42,12 +42,13 @@ internal static partial class InteractiveScripts
         architecture=$(cat -- "$dir/arch") || exit 3
         case "$architecture" in arm64|x86_64) ;; *) exit 3 ;; esac
         decode() { printf '%s' "$1" | base64 -D && printf x; }
-        unsets=(); removed=(); sets=(); archOptions=("-$architecture"); args=()
+        workdir=; unsets=(); removed=(); sets=(); archOptions=("-$architecture"); args=()
         while IFS=' ' read -r kind value; do
           [ -n "$kind" ] || continue
           text=$(decode "$value") || exit 3
           text=${text%x}
           case "$kind" in
+            dir) workdir="$text" ;;
             unset) unsets+=(-u "$text"); removed+=("$text") ;;
             env) sets+=("$text") ;;
             prepend)
@@ -59,11 +60,12 @@ internal static partial class InteractiveScripts
             arg) args+=("$text") ;;
           esac
         done <<< "$spec"
+        [ -n "$workdir" ] || exit 3
         for value in $secrets; do
           text=$(decode "$value") || exit 3
           export "${text%x}"
         done
-        cd -- "$install" || exit 3
+        cd -- "$workdir" || exit 3
         # Bash ignores SIGINT in an asynchronous child. Restore the default disposition before
         # exec so a clean-quit request reaches Valheim instead of forcing a kill at the deadline.
         /usr/bin/perl -e '$SIG{INT} = "DEFAULT"; exec @ARGV or die "exec: $!"' \

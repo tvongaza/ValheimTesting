@@ -211,7 +211,8 @@ public class ClientLaunchTests
         var launch = GameLaunch.LocalClient(game.Root, [], null, ClientArchitecture.Arm64, true, ClientPlatform.MacOS, profile.Root);
         var start = launch.ToStartInfo();
         Assert.Contains(game.Executable, start.ArgumentList);
-        Assert.Equal(game.Root, start.WorkingDirectory);
+        Assert.Equal(profile.Root, start.WorkingDirectory);
+        Assert.NotEqual(game.Root, start.WorkingDirectory);
         Assert.Equal(Path.Combine(profile.Root, "BepInEx", "core", "BepInEx.Preloader.dll"), start.Environment["DOORSTOP_TARGET_ASSEMBLY"]);
         Assert.Equal(new[] { "-e", "DYLD_INSERT_LIBRARIES=" + Path.Combine(profile.Root, "libdoorstop.dylib") },
             ExportPair(start.ArgumentList.ToList(), "DYLD_INSERT_LIBRARIES"));
