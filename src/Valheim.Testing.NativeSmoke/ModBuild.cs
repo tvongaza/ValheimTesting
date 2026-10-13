@@ -48,7 +48,7 @@ internal static partial class ModBuild
             Console.WriteLine("Use --mod " + built.Mods[0] + " --build-inputs " + built.BuildInputs + " for the native run.");
             return 0;
         }
-        catch (Exception refused) when (refused is ArgumentException or IOException or InvalidDataException or InvalidOperationException or UnauthorizedAccessException or OperationCanceledException or PlatformNotSupportedException)
+        catch (Exception refused) when (refused is ArgumentException or IOException or InvalidDataException or InvalidOperationException or UnauthorizedAccessException or OperationCanceledException or PlatformNotSupportedException or JsonException or FormatException)
         {
             Console.Error.WriteLine("REFUSED: " + refused.Message);
             return 3;
@@ -96,7 +96,7 @@ internal static partial class ModBuild
                 string[] matches = Candidates(dependency + ".dll", searchRoots ?? [], core);
                 if (matches.Length == 0 || matches.Select(FileHash.Sha256).Distinct(StringComparer.Ordinal).Count() != 1)
                     throw new InvalidDataException($"{dependency} is a required third-party build dependency: found {matches.Length} missing or different copies in the loader core {core} and the --search-root inputs. " +
-                        $"Give --search-root DIR|{dependency}.dll with one copy, or --dependency {dependency}=DLL; nothing is downloaded, and the game's own BepInEx is not read.");
+                        $"Give --search-root DIR|{dependency}.dll with one copy, or --dependency {dependency}=DLL; nothing is downloaded, and the game's BepInEx plugins are not searched.");
                 selected[dependency] = matches.Order(StringComparer.Ordinal).First();
             }
         }

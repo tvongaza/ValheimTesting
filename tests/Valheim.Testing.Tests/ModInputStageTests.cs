@@ -110,6 +110,45 @@ public sealed class ModInputStageTests : IDisposable
         Assert.Contains("loaderPackage", build);
     }
 
+    // Pure input errors come before the host probes (#626); the host probes come before any build, so a run that cannot
+    // start is refused before minutes of compiling.
+    [Fact]
+    public async Task HostChecksComeAfterInputErrorsAndBeforeAnyBuild()
+    {
+        _rig.Write("game/" + GameLaunch.ServerWindowsExecutable, Encoding.UTF8.GetBytes("fake dedicated executable"));
+        string project = _rig.Write("mod/Unbuildable.csproj", Encoding.UTF8.GetBytes("<Project>never built</Project>"));
+        int probes = 0;
+        using var busy = LocalHostPreflight.ReplaceDefaultProbesForTest(new(
+            Processes: (_, _, _, _) => Task.CompletedTask, Port: (_, _, _, _) => Task.CompletedTask,
+            Lock: (_, _, _, _) => { probes++; return Task.FromResult(new HostLockResult(HostLockState.HeldByOther, "other", "another run holds it")); },
+            Journals: (_, _) => Task.FromResult<IReadOnlyList<CampaignPreflightProblem>>([]), Packaged: () => null));
+        ModInputStage.Request Request(string output, params (string Key, string Value)[] more)
+        {
+            var options = new Dictionary<string, string>
+            {
+                ["--server"] = _rig.Game, ["--project"] = project, ["--output"] = output,
+                ["--cli-manifest"] = _rig.CliManifest(save: true, full: true), ["--cli-files"] = Path.Combine(_rig.Root, "cli"),
+            };
+            foreach (var (key, value) in more) options[key] = value;
+            return new(ModInputStage.Route.Dedicated, output, options, new HashSet<string> { "--server-only" }, [], [], [], []);
+        }
+
+        string refused = Path.Combine(_rig.Root, "host-refused");
+        var failure = await Assert.ThrowsAsync<InvalidOperationException>(() => ModInputStage.RunAsync(Request(refused), CancellationToken.None));
+        Assert.Contains("another run holds it", failure.Message);
+        Assert.Equal(1, probes);
+        Assert.False(Path.Exists(refused)); // no build, lock or record was written
+
+        string steam = Path.Combine(_rig.Root, "steam-runtime");
+        // Not a Mac server, or (on a Mac) no such package: refused either way.
+        await Assert.ThrowsAnyAsync<IOException>(() => ModInputStage.RunAsync(
+            Request(Path.Combine(_rig.Root, "steam-refused"), ("--steam-runtime-package", steam)), CancellationToken.None));
+        string bake = Path.Combine(_rig.Game, "baked");
+        await Assert.ThrowsAsync<IOException>(() => ModInputStage.RunAsync(
+            Request(Path.Combine(_rig.Root, "bake-refused"), ("--bake-fixture", bake)), CancellationToken.None));
+        Assert.Equal(1, probes); // neither input error waited for a host probe
+    }
+
     // Build takes a role's install, environment and loader with the same options as the command that runs that role.
     [Fact]
     public void BuildParsesTheRunCommandsRoleOptions()

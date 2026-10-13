@@ -73,10 +73,6 @@ internal static class ServerLoad
             output = Output(parsed!);
             if (parsed.Options.TryGetValue("--adapter", out string? adapterFile) && !File.Exists(Path.GetFullPath(adapterFile)))
                 throw new FileNotFoundException("A selected file is missing: " + Path.GetFullPath(adapterFile), Path.GetFullPath(adapterFile));
-            // A bake target is new and apart from this run before the run writes anything; its installs are checked once chosen.
-            if (parsed.Options.TryGetValue("--bake-fixture", out string? bake))
-                FixtureBake.RefuseOutput(Path.GetFullPath(bake), new[] { output, parsed.Options.GetValueOrDefault("--world-fixture") }
-                    .OfType<string>().Select(Path.GetFullPath).ToArray());
             // The server and client, their loaders, the mod, its build inputs, the scenario and the dependency lock: one
             // stage, shared with build and start.
             var inputs = await ModInputStage.RunAsync(new ModInputStage.Request(ModInputStage.Route.Dedicated, output, parsed.Options,
@@ -128,16 +124,7 @@ internal static class ServerLoad
             ? Path.GetFullPath(requestedBake) : null;
         string? fixtureSource = parsed.Options.TryGetValue("--world-fixture", out string? requestedFixture)
             ? Path.GetFullPath(requestedFixture) : null;
-        if (bakeDestination != null)
-            FixtureBake.RefuseOutput(bakeDestination, new[] { output, serverInstall, client?.Recipe.Install, fixtureSource }.OfType<string>().ToArray());
-        string? steamRuntimePackage = parsed.Options.TryGetValue("--steam-runtime-package", out string? requestedSteam)
-            ? Path.GetFullPath(requestedSteam) : null;
-        if (steamRuntimePackage != null)
-        {
-            if (inputs.Inventory.Hosts[server.Host].Platform != "macos")
-                throw new InvalidDataException("--steam-runtime-package requires a Mac dedicated server profile.");
-            _ = MacSteamRuntimePackage.Read(steamRuntimePackage);
-        }
+        string? steamRuntimePackage = inputs.SteamRuntimePackage;
         string? adapter = parsed.Options.TryGetValue("--adapter", out string? adapterFile) ? Path.GetFullPath(adapterFile) : null;
         AdapterSourceInputs.Record? adapterSource = null;
         var mods = inputs.Mods;
