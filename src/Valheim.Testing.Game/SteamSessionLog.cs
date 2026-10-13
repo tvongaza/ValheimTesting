@@ -25,27 +25,11 @@ internal static class SteamSessionLog
     /// <summary>What a client's early exit adds when Steam logged the sign-out: the decided message.</summary>
     public static string ExitHint(string message) => " after Steam logged 'Logged In Elsewhere'. " + message;
 
-    /// <summary>This machine's Steam connection_log, or null when none is found.</summary>
-    public static string? LocalPath(string? home = null, string? steamDirectory = null)
+    /// <summary>This machine's Steam connection_log, under the root <see cref="SteamDetection"/> finds; null when there is none.</summary>
+    public static string? LocalPath()
     {
-        home ??= Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        var directories = new List<string>();
-        if (!string.IsNullOrEmpty(steamDirectory)) directories.Add(steamDirectory);
-        if (OperatingSystem.IsWindows())
-        {
-            if (Microsoft.Win32.Registry.GetValue(@"HKEY_CURRENT_USER\Software\Valve\Steam", "SteamPath", null) is string steamPath) directories.Add(steamPath);
-            if (Microsoft.Win32.Registry.GetValue(@"HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node\Valve\Steam", "InstallPath", null) is string installPath) directories.Add(installPath);
-            string programs = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
-            if (programs.Length != 0) directories.Add(Path.Combine(programs, "Steam"));
-        }
-        else
-        {
-            directories.Add(Path.Combine(home, "Library", "Application Support", "Steam"));
-            directories.Add(Path.Combine(home, ".local", "share", "Steam"));
-            directories.Add(Path.Combine(home, ".steam", "steam"));
-            directories.Add(Path.Combine(home, ".var", "app", "com.valvesoftware.Steam", ".local", "share", "Steam"));
-        }
-        return directories.Select(directory => Path.Combine(directory, "logs", "connection_log.txt")).FirstOrDefault(File.Exists);
+        var machine = EnvironmentInventory.ThisMachine;
+        return SteamDetection.FindRoot(machine).Root is { } root && HostPath.Join(root, "logs", "connection_log.txt") is var log && machine.FileExists(log) ? log : null;
     }
 
     /// <summary>Whether a local log holds the line after byte <paramref name="offset"/> (at most its last 4 MB). Never throws.</summary>

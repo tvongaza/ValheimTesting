@@ -58,7 +58,7 @@ internal sealed class FakeServerHost : IGameHost
     /// <summary>The crossplay library check's reply: by default libparty.so loads.</summary>
     public string PartyReply { get; set; } = "VT-LDD \tlibc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x1)\nVT-PARTY checked valheim_server_Data/Plugins/libparty.so 0\n";
     /// <summary>The signed-in Steam user check's reply.</summary>
-    public string SteamUserReply { get; set; } = "VT-STEAMUSER unreadable the host user has no loginusers.vdf in its Steam directories\n";
+    public string SteamUserReply { get; set; } = "VT-STEAMUSER unreadable the host user has no loginusers.vdf under its Steam root\n";
     /// <summary>Whether Valheim runs on this host, as SteamAccountInUse's scripts answer (#257): none by default.</summary>
     public string PlayingReply { get; set; } = "VT-PLAYING no\n";
     /// <summary>The host path of Steam's connection_log, as SteamSessionLog's scripts find it (#257); none by default, so no watch runs.</summary>
@@ -294,13 +294,13 @@ internal sealed class FakeServerHost : IGameHost
             case "character-folders":
             {
                 // The scripts' search, on this mirror (CharacterDirectoryTests runs the real scripts): a Windows host's user is
-                // C:\Users\tester with Steam in Program Files and no registered SteamPath, a macOS host's /Users/tester.
+                // C:\Users\tester with Steam registered in Program Files (x86), a macOS host's /Users/tester.
                 string home = v["userhome"].Length != 0 ? v["userhome"] : Windows ? @"C:\Users\tester" : "/Users/tester";
                 string Join(params string[] parts) => Windows ? string.Join('\\', parts) : string.Join('/', parts);
                 string characters = v["characters"].Length != 0 ? v["characters"] : Windows ? Join(home, "AppData", "LocalLow", "IronGate", "Valheim", "characters_local")
                     : home + "/Library/Application Support/IronGate/Valheim/characters_local";
-                string[] userdata = v["userdata"].Length != 0 ? [v["userdata"]] : Windows ? [@"C:\Program Files (x86)\Steam\userdata"]
-                    : [home + "/Library/Application Support/Steam/userdata"];
+                string[] userdata = v["userdata"].Length != 0 ? [v["userdata"]] : v["steam"].Length != 0 ? [Join(v["steam"], "userdata")]
+                    : Windows ? [@"C:\Program Files (x86)\Steam\userdata"] : ["/Users/tester/Library/Application Support/Steam/userdata"];
                 var reply = new StringBuilder();
                 if (Directory.Exists(Local(characters))) reply.Append("VT-CHARDIR characters found " + characters + "\n");
                 reply.Append("VT-CHARDIR characters tried " + characters + "\n");

@@ -48,15 +48,16 @@ internal static class SmokeInputs
         return (manifest, files);
     }
 
-    /// <summary>--steam-userdata, or this machine's, under the Steam root the inventory's detection found (on Windows its registered path).</summary>
+    /// <summary>--steam-userdata, or this machine's, under the Steam root SteamDetection finds (on Windows its registered path).</summary>
     internal static string SteamUserdata(IReadOnlyDictionary<string, string> options)
     {
         if (options.TryGetValue("--steam-userdata", out string? named)) return Path.GetFullPath(named);
-        EnvironmentInventory inventory;
-        try { inventory = EnvironmentInventory.Read(null); }
-        catch (ArgumentException failure) { throw new DirectoryNotFoundException("Steam userdata was not found: " + failure.Message + " Give --steam-userdata DIR for the account whose owned client will launch."); }
-        string userdata = inventory.SteamUserData ?? throw new DirectoryNotFoundException("Steam userdata was not found under " +
-            string.Join("; ", inventory.Detected.Where(line => line.StartsWith("Steam:", StringComparison.Ordinal))) + ". Give --steam-userdata.");
+        var machine = EnvironmentInventory.ThisMachine;
+        var (root, _, reason) = SteamDetection.FindRoot(machine);
+        string? userdata = root == null ? null : HostPath.Join(root, "userdata");
+        if (userdata == null || !machine.DirectoryExists(userdata))
+            throw new DirectoryNotFoundException("Steam userdata was not found: " + (reason ?? userdata + " does not exist") +
+                ". Give --steam-userdata DIR for the account whose owned client will launch.");
         Console.WriteLine($"steam userdata: {userdata} (detected: this machine)");
         return userdata;
     }

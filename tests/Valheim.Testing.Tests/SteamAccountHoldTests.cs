@@ -113,7 +113,7 @@ public sealed class SteamSignedInUserTests
     [InlineData("VT-STEAMUSER id 76561197960265729", SteamSignedInState.Matches, 1u)]
     [InlineData("VT-STEAMUSER account 2", SteamSignedInState.Matches, 2u)]
     [InlineData("VT-STEAMUSER none", SteamSignedInState.NotSignedIn, null)]
-    [InlineData("VT-STEAMUSER unreadable the host user has no loginusers.vdf in its Steam directories", SteamSignedInState.Unknown, null)]
+    [InlineData("VT-STEAMUSER unreadable the host user has no loginusers.vdf under its Steam root", SteamSignedInState.Unknown, null)]
     [InlineData("VT-STEAMUSER id lots", SteamSignedInState.Unknown, null)]
     [InlineData("VT-STEAMUSER id 76561197960265728", SteamSignedInState.Unknown, null)]
     [InlineData("VT-STEAMUSER id 18446744073709551615", SteamSignedInState.Unknown, null)]

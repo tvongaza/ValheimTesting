@@ -629,7 +629,7 @@ public sealed class TargetedRegressionTests : IDisposable
         string inputs = Path.Combine(run, "regression.json");
         _rig.Manifest().Write(inputs);
         var machine = new FakeMachine(HostProfile.CurrentPlatform);
-        string steam = machine.Platform switch { "windows" => @"C:\Steam", "macos" => "/Users/tester/Library/Application Support/Steam", _ => "/home/tester/.local/share/Steam" };
+        string steam = machine.Platform switch { "windows" => @"C:\Steam", "macos" => "/Users/tester/Library/Application Support/Steam", _ => "/home/tester/.steam/steam" };
         if (machine.Platform == "windows") machine.SteamPath = steam;
         machine.Directories.Add(steam);
         string detected = machine.App(steam, "892970", "Valheim", machine.Platform switch

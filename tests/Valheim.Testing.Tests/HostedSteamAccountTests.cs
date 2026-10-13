@@ -168,7 +168,7 @@ public sealed partial class HostedServerRunTests
     [InlineData("VT-STEAMUSER account 1", null)]
     [InlineData("VT-STEAMUSER id 76561197960265730", "reported another account than vt_client_one")]
     [InlineData("VT-STEAMUSER none", "account check on mac-gpu found no account")]
-    [InlineData("VT-STEAMUSER unreadable the host user has no loginusers.vdf in its Steam directories", "is inconclusive (the host user has no loginusers.vdf")]
+    [InlineData("VT-STEAMUSER unreadable the host user has no loginusers.vdf under its Steam root", "is inconclusive (the host user has no loginusers.vdf")]
     [InlineData("", "is inconclusive (unexpected reply")]
     public async Task TheSignedInCheckPassesOnlyTheLeasedAccount(string reply, string? refusal)
     {

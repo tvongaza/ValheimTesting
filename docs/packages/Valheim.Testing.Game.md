@@ -419,11 +419,13 @@ A public copy of a regression for review (scrubbed sources, a pinned project, th
 
 On one Windows PC with Valheim installed through Steam, there is nothing to write. With no inventory file (`EnvironmentInventory.Read(null)`, a campaign that leaves out `inventory`, or `valheim-test env list` and `env preflight` without `--inventory`), the inventory is this machine. It contains host `local`, with `local-server` from Valheim Dedicated Server (Steam app 896660) and `local-client` from Valheim (Steam app 892970).
 
-Steam is found as follows:
+Steam's root is only ever the native default, the same rule on this machine and in every host script:
 
-- Windows: the registered `HKCU\Software\Valve\Steam` `SteamPath`, then `Program Files (x86)\Steam`.
+- Windows: the registered `HKCU\Software\Valve\Steam` `SteamPath`.
 - macOS: `~/Library/Application Support/Steam`.
-- Linux: `~/.local/share/Steam`, `~/.steam/steam`, then the Flatpak's.
+- Linux: `~/.steam/steam`.
+
+Steam anywhere else (a Flatpak, another folder) is not searched. List the environment in an [inventory file](Valheim.Testing.GameSessions.md#game-hosts-and-the-environment-inventory) with its `install` instead; the refusal when Steam is not found says so.
 
 Each app is then found in every library `steamapps/libraryfolders.vdf` lists, through its `appmanifest_<id>.acf` `installdir`. An install counts only if its executable is there.
 

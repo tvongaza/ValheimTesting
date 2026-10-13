@@ -13,7 +13,6 @@ internal sealed class FakeMachine(string platform = "windows") : ISteamLocator
     public string DataRoot { get; init; } = platform == "windows" ? @"C:\Users\tester\AppData\Local\ValheimTesting"
         : platform == "macos" ? "/Users/tester/Library/Application Support/ValheimTesting" : "/home/tester/.local/share/ValheimTesting";
     public string? SteamPath { get; set; }
-    public string? ProgramFilesX86 { get; init; } = platform == "windows" ? @"C:\Program Files (x86)" : null;
     public HashSet<string> Directories { get; } = new(platform == "windows" ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
     public Dictionary<string, string> Files { get; } = new(platform == "windows" ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
     public string? RegistrySteamPath() => SteamPath;
@@ -21,6 +20,9 @@ internal sealed class FakeMachine(string platform = "windows") : ISteamLocator
     public bool FileExists(string path) => Files.ContainsKey(path);
     public string? ReadText(string path) => Files.GetValueOrDefault(path);
     public string OnDiskPath(string path) => Directories.TryGetValue(path, out string? actual) ? actual : path;
+    /// <summary>Links: a link's path and the folder it finally points to.</summary>
+    public Dictionary<string, string> Links { get; } = new(StringComparer.Ordinal);
+    public string? LinkTarget(string path) => Links.GetValueOrDefault(path);
 
     private char Separator => Platform == "windows" ? '\\' : '/';
     public void File(string path, string text = "")
@@ -111,13 +113,75 @@ public sealed class ThisMachineTests : IDisposable
         Assert.Equal(Path.Combine(_root, "missing"), new LocalSteamLocator().OnDiskPath(Path.Combine(_root, "missing")));
     }
 
-    [Fact] public void WithoutTheRegistryValueSteamIsFoundInProgramFiles()
+    // #709: the root is only ever the native default. On Windows that is the registered SteamPath alone: Steam in Program Files
+    // (x86) that never registered is not searched, and a registered folder that is gone is named as such.
+    [Fact] public void OnWindowsOnlyTheRegisteredSteamPathIsTheRoot()
     {
         var pc = new FakeMachine();
-        string game = pc.App(@"C:\Program Files (x86)\Steam", "892970", "Valheim", "valheim.exe");
-        var inventory = EnvironmentInventory.Read(null, pc);
-        Assert.Equal(game, Assert.Single(inventory.Environments).Install);
-        Assert.Contains(inventory.Detected, line => line.Contains("(from Program Files (x86))"));
+        pc.App(@"C:\Program Files (x86)\Steam", "892970", "Valheim", "valheim.exe");
+        var refused = Assert.Throws<ArgumentException>(() => EnvironmentInventory.Read(null, pc));
+        Assert.Contains(@"Steam was not found: HKCU\Software\Valve\Steam SteamPath is not set (Steam has not run for this user).", refused.Message);
+        pc.SteamPath = "d:/gone/steam";
+        refused = Assert.Throws<ArgumentException>(() => EnvironmentInventory.Read(null, pc));
+        Assert.Contains(@"HKCU\Software\Valve\Steam SteamPath names d:\gone\steam, which does not exist", refused.Message);
+    }
+
+    // Each platform's one default root, and nothing else: Linux's ~/.local/share/Steam and the Flatpak's are not searched.
+    [Theory]
+    [InlineData("windows", @"C:\Games\Steam")]
+    [InlineData("macos", "/Users/tester/Library/Application Support/Steam")]
+    [InlineData("linux", "/home/tester/.steam/steam")]
+    public void EachPlatformFindsSteamAtItsDefaultRootOnly(string platform, string root)
+    {
+        var machine = new FakeMachine(platform) { SteamPath = platform == "windows" ? root.Replace('\\', '/') : null };
+        machine.Directories.Add(root);
+        var steam = SteamDetection.Find(machine);
+        Assert.Equal((root, (string?)null, (string?)null), (steam.Root, steam.Reason, steam.NotFound));
+        Assert.Equal(platform == "windows" ? @"registry HKCU\Software\Valve\Steam SteamPath" : "standard path", steam.RootRule);
+
+        var elsewhere = new FakeMachine(platform);
+        foreach (string other in new[] { @"C:\Program Files (x86)\Steam", "/home/tester/.local/share/Steam", "/home/tester/.var/app/com.valvesoftware.Steam/.local/share/Steam" })
+            elsewhere.Directories.Add(other);
+        var missing = SteamDetection.Find(elsewhere);
+        Assert.Null(missing.Root);
+        // One actionable message: why, and how to give Steam in another folder explicitly.
+        Assert.StartsWith("Steam was not found: ", missing.NotFound);
+        Assert.EndsWith("Steam in another folder (a Flatpak or a custom one) is not searched: list the environment in an inventory file with its install.", missing.NotFound);
+        if (platform != "windows") Assert.Contains($"its standard path {root} does not exist", missing.NotFound);
+    }
+
+    // Linux's ~/.steam/steam links to the folder Steam's libraryfolders.vdf lists under its own name: one library, not two.
+    [Fact] public void ALinkedRootIsOneLibrary()
+    {
+        var linux = new FakeMachine("linux");
+        linux.Directories.Add("/home/tester/.steam/steam");
+        linux.Links["/home/tester/.steam/steam"] = "/home/tester/.local/share/Steam";
+        linux.File("/home/tester/.steam/steam/steamapps/libraryfolders.vdf",
+            "\"libraryfolders\"\n{\n\t\"0\"\n\t{\n\t\t\"path\"\t\t\"/home/tester/.local/share/Steam\"\n\t}\n\t\"1\"\n\t{\n\t\t\"path\"\t\t\"/mnt/games\"\n\t}\n}\n");
+        Assert.Equal(["/home/tester/.steam/steam", "/mnt/games"], SteamDetection.Find(linux).Libraries);
+    }
+
+    // This machine's Steam connection_log is found under the same root, with no library read.
+    [Fact] public void TheLocalSteamLogIsUnderTheDetectedRoot()
+    {
+        var mac = new FakeMachine("macos");
+        string log = "/Users/tester/Library/Application Support/Steam/logs/connection_log.txt";
+        using (EnvironmentInventory.UseMachine(mac)) Assert.Null(SteamSessionLog.LocalPath());
+        mac.File(log);
+        using (EnvironmentInventory.UseMachine(mac)) Assert.Equal(log, SteamSessionLog.LocalPath());
+    }
+
+    // An inventory file's install is the explicit override: with no Steam root found, the listed environment is used as written.
+    [Fact] public void AnInventoryInstallIsUsedWhenSteamIsElsewhere()
+    {
+        var linux = new FakeMachine("linux");
+        string flatpak = "/home/tester/.var/app/com.valvesoftware.Steam/.local/share/Steam";
+        string server = linux.App(flatpak, "896660", "Valheim dedicated server", "valheim_server.x86_64");
+        string file = Path.Combine(_root, "environments.json");
+        File.WriteAllText(file, $$"""{ "environments": [ { "name": "flatpak-server", "roles": ["server"], "install": "{{server}}" } ] }""");
+        var inventory = EnvironmentInventory.Read(file, linux);
+        Assert.Equal(server, Assert.Single(inventory.Environments).Install);
+        Assert.Contains("Steam: not found: its standard path /home/tester/.steam/steam does not exist", inventory.Detected);
     }
 
     // No dedicated server installed: the client stays, the server is reported missing with every manifest tried and what to do.
@@ -146,7 +210,7 @@ public sealed class ThisMachineTests : IDisposable
         Assert.Contains(inventory.Missing, line => line.Contains(game + " has no valheim.exe"));
     }
 
-    [Fact] public void NoSteamAtAllRefusesWithTheRootsTried()
+    [Fact] public void NoSteamAtAllRefusesWithTheRootTried()
     {
         var error = Assert.Throws<ArgumentException>(() => EnvironmentInventory.Read(null, new FakeMachine()));
         Assert.Contains("This machine has none", error.Message);
@@ -334,5 +398,42 @@ public sealed class ThisMachineTests : IDisposable
         Assert.Equal(HostProfile.CurrentPlatform, machine.Platform);
         Assert.True(Path.IsPathRooted(machine.DataRoot));
         _ = SteamDetection.Find(machine, SteamDetection.GameApp, SteamDetection.DedicatedServerApp);
+    }
+}
+
+// #709: a host script's one copy of the Steam-root rule per shell, run through this machine's real shell (bash, or pwsh on
+// Windows). A root named explicitly wins; with none, bash takes this OS's standard path under HOME (pointed at a temporary folder
+// here) and pwsh the user's registered SteamPath, read only and compared with the C# owner's own reading of it.
+public sealed class SteamRootScriptTests : IDisposable
+{
+    private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(60);
+    private readonly TempDirectory _home = new();
+    public void Dispose() => _home.Dispose();
+
+    private static async Task<string> RootAsync(string steam, string home)
+    {
+        var host = new LocalGameHost("here", HostShell.ThisMachine);
+        string script = host.Shell.Kind == HostShellKind.Bash
+            ? "HOME=$fakehome\n" + SteamDetection.BashRoot + "echo \"VT-STEAMROOT [$steam]\"\n"
+            : SteamDetection.PowerShellRoot + "'VT-STEAMROOT [' + $steam + ']'\n";
+        var reply = (await host.RunAsync(script, new Dictionary<string, string> { ["steam"] = steam, ["fakehome"] = home }, Timeout))
+            .EnsureSuccess("Finding the Steam root");
+        var match = System.Text.RegularExpressions.Regex.Match(reply.Stdout, @"VT-STEAMROOT \[(.*)\]");
+        Assert.True(match.Success, reply.Stdout);
+        return match.Groups[1].Value;
+    }
+
+    [Fact] public async Task AnExplicitRootWins()
+    {
+        string given = Path.Combine(_home.Path, "Flatpak Steam");
+        // Windows Steam writes its path with forward slashes; the script's root has backslashes either way.
+        Assert.Equal(given, await RootAsync(OperatingSystem.IsWindows() ? given.Replace('\\', '/') : given, _home.Path));
+    }
+
+    [Fact] public async Task WithNoneGivenTheRootIsThisPlatformsDefault()
+    {
+        string expected = OperatingSystem.IsWindows() ? new LocalSteamLocator().RegistrySteamPath()?.Replace('/', '\\') ?? ""
+            : OperatingSystem.IsMacOS() ? _home.Path + "/Library/Application Support/Steam" : _home.Path + "/.steam/steam";
+        Assert.Equal(expected, await RootAsync("", _home.Path));
     }
 }

@@ -171,8 +171,8 @@ public sealed class CampaignPreflightTests : IDisposable
         using var refusal = new StringWriter();
         Assert.Equal(3, await EnvCommand.RunAsync(["preflight", "--inventory", local], refused, refusal));
         Assert.Contains("Environment local-client needs absolute install and runtime paths on local", refusal.ToString());
-        // A Linux machine detects no client environment at all (#708); elsewhere it says what Steam search found nothing.
-        Assert.Contains(OperatingSystem.IsLinux() ? "Linux hosts run the dedicated server only" : "Steam was not found (tried", refusal.ToString());
+        // A Linux machine detects no client environment at all (#708); elsewhere it says why Steam was not found.
+        Assert.Contains(OperatingSystem.IsLinux() ? "Linux hosts run the dedicated server only" : "Steam was not found: ", refusal.ToString());
 
         // An empty file is refused, not a crash.
         File.WriteAllText(local, "null");
