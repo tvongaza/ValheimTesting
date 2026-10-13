@@ -254,6 +254,25 @@ public sealed class LocalClientCopyTests : IDisposable
         await copy.RetireAsync();
     }
 
+    // A running client is refused before the install is read (#730): no listing of a game in use, nothing made.
+    [ClientHostFact] public async Task ARunningClientIsRefusedBeforeTheInstallIsRead()
+    {
+        var plan = Plan(_rig.Game);
+        plan.CliManifest = CliSet();
+        var host = new FakeServerHost("this machine", Path.Combine(_rig.Root, "mirror"), kind: GameHostKind.Local, windows: OperatingSystem.IsWindows())
+        { GameActive = true, GameProcessIds = "4242" };
+        string data = Path.Combine(_rig.Root, "data");
+        using var journalDirectory = RunJournal.UseLocalDirectory(Path.Combine(data, "journal"));
+        var busy = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            LocalClientCopy.PrepareAsync("client", plan, default, data, host, loader: (_, _) => null));
+        Assert.Contains("4242", busy.Message);
+        Assert.Contains("game-process", host.Scripts);
+        Assert.DoesNotContain("list", host.Scripts);
+        Assert.DoesNotContain("fetch", host.Scripts);
+        Assert.False(Directory.Exists(Path.Combine(data, "runs")));
+        Assert.False(plan.Prepared);
+    }
+
     // A copy whose named set is not complete, or a build with no pinned bundle and no named set, is refused before anything is copied.
     [ClientHostFact] public async Task ACopyWithoutACompleteSetToStageIsRefusedBeforeAnythingIsCopied()
     {

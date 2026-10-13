@@ -80,12 +80,12 @@ internal sealed class LocalClientCopy
         var choice = (loader ?? ShippedLoader.Local)(actor, source);
         if (choice != null) ShippedLoader.Print(actor, choice);
         var loaderPackage = choice == null ? null : BepInExLoaderPackage.Read(choice.Manifest);
+        // One client per desktop session, and never a profile prepared while a game runs: refused before the install is read.
+        await HostedRuntimeStage.RequireStoppedAsync(host, StepTimeout, cancellation, clientSession: true).ConfigureAwait(false);
+        Console.WriteLine($"Preparing an owned mod profile for {source}; the game install stays in place.");
         using var selection = await InstallSelection.ReadAsync(host, HostedRuntimeKind.Client, source, manifest, location, loaderPackage,
             plan.Port, plan, StepTimeout, cancellation).ConfigureAwait(false);
-        // One client per desktop session, and never a profile prepared while a game runs.
-        await HostedRuntimeStage.RequireStoppedAsync(host, StepTimeout, cancellation, clientSession: true).ConfigureAwait(false);
         Directory.CreateDirectory(root);
-        Console.WriteLine($"Preparing an owned mod profile for {source}; the game install stays in place.");
         if (selection.Replaced.Count != 0)
             Console.WriteLine($"{actor}: the profile stages ValheimCLI {manifest.Build} in place of the install's own {string.Join(", ", selection.Replaced)}.");
         // Journalled before the profile: an interrupted preparation leaves a record of every path it may own.

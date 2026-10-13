@@ -67,12 +67,6 @@ public sealed class InstallSelectionTests : IDisposable
         }
     }
 
-    private static BepInExLoaderPackage Package(string root, params string[] files)
-    {
-        foreach (string relative in files) Put(root, relative, "package " + relative);
-        return BepInExLoaderPackage.Capture(root, "BepInExPack_Valheim", "5.4.2333");
-    }
-
     [ClientHostFact] public async Task ThisMachinesInstallIsReadInPlace()
     {
         var (manifest, location) = CliSet();
@@ -87,7 +81,7 @@ public sealed class InstallSelectionTests : IDisposable
             var files = selection.Files.ToDictionary(file => file.RelativePath, file => file.Source);
             // The install's own files are read where they are; the staged set's from beside its manifest.
             Assert.Equal(Path.Combine(game, "BepInEx", "plugins", "Unrelated.dll"), files["BepInEx/plugins/Unrelated.dll"]);
-            Assert.Equal(Path.Combine(game, "BepInEx", "config", "BepInEx.cfg"), files[BepInExSettings.RelativePath]);
+            Assert.DoesNotContain(BepInExSettings.RelativePath, files.Keys); // The profile stage decides the install's BepInEx.cfg.
             Assert.Equal(Path.Combine(_rig.Root, "cli", "valheimCLI.dll"), files["BepInEx/plugins/valheimCLI.dll"]);
             Assert.DoesNotContain("BepInEx/scripts/Renamed.dll", files.Keys);
             Assert.Equal(new[] { "BepInEx/plugins/valheimCLI.dll", "BepInEx/scripts/Renamed.dll" }, selection.Replaced.Order(StringComparer.Ordinal));
@@ -116,11 +110,11 @@ public sealed class InstallSelectionTests : IDisposable
             var fetched = host.Runs.Where(run => run.Script == "fetch").Select(run => run.Variables["dir"]).ToList();
             Assert.Equal(new[] { "/game/server/BepInEx/plugins", "/game/server/BepInEx/config", "/game/server/BepInEx/patchers" }, fetched);
             var files = selection.Files.ToDictionary(file => file.RelativePath, file => file.Source);
-            Assert.Equal(new[] { "BepInEx/config/BepInEx.cfg", "BepInEx/config/example.mod.cfg", CliServerConfig.RelativePath,
+            Assert.Equal(new[] { "BepInEx/config/example.mod.cfg", CliServerConfig.RelativePath,
                 "BepInEx/patchers/Patch.dll", "BepInEx/plugins/Mod/Mod.dll", "BepInEx/plugins/valheimCLI.dll" }, files.Keys.Order(StringComparer.Ordinal));
             Assert.Equal(new[] { "BepInEx/plugins/valheimCLI.dll" }, selection.Replaced);
             // Every install file is a local copy, with the listing's hash.
-            foreach (string relative in new[] { "BepInEx/plugins/Mod/Mod.dll", "BepInEx/config/BepInEx.cfg", "BepInEx/config/example.mod.cfg", "BepInEx/patchers/Patch.dll" })
+            foreach (string relative in new[] { "BepInEx/plugins/Mod/Mod.dll", "BepInEx/config/example.mod.cfg", "BepInEx/patchers/Patch.dll" })
             {
                 Assert.False(files[relative].StartsWith(Mirror, StringComparison.Ordinal));
                 Assert.Equal(selection.Source.Files[relative], FileHash.Sha256(files[relative]));
@@ -184,9 +178,8 @@ public sealed class InstallSelectionTests : IDisposable
             InstallSelection.ReadAsync(host, HostedRuntimeKind.Server, server, manifest, location, null, 5560, new ClientRunPlan(), Timeout));
     }
 
-    // Whether an install's own BepInEx.cfg stays beside a loader package that has none is the install's platform's rule: a macOS
-    // install keeps it, a Linux one does not. The platform is read from the install on its host, so either answer holds on
-    // every runner (a runner-platform rule gets one of the two wrong wherever it runs).
+    // BepInEx finds its folders as the install's filesystem does: a macOS install's BepInEx/Plugins is its plugins folder, a Linux
+    // install's is not. The platform is read from the install on its host, so either answer holds on every runner.
     [Fact] public async Task TheInstallsPlatformOnItsHostDecidesNotTheRunners()
     {
         var (manifest, location) = CliSet();
@@ -197,18 +190,26 @@ public sealed class InstallSelectionTests : IDisposable
         FakeInstalls.MacLoader(macInstall);
         Put(macInstall, "BepInEx/core/BepInEx.dll", "core");
         Put(macInstall, "BepInEx/core/BepInEx.Preloader.dll", "preloader");
-        Put(macInstall, "BepInEx/config/BepInEx.cfg", "[Logging]\nsource = true\n");
-        var macPackage = Package(Path.Combine(_rig.Root, "mac-package"), "BepInEx/core/BepInEx.dll", "BepInEx/core/BepInEx.Preloader.dll", "libdoorstop.dylib");
-        using (var selection = await InstallSelection.ReadAsync(mac, HostedRuntimeKind.Server, "/game/mac-server", manifest, location, macPackage, 5560, null, Timeout))
-            Assert.Contains(selection.Files, file => file.RelativePath == BepInExSettings.RelativePath);
+        Put(macInstall, "BepInEx/Plugins/Mod.dll", "the install's mod");
+        using (var selection = await InstallSelection.ReadAsync(mac, HostedRuntimeKind.Server, "/game/mac-server", manifest, location, null, 5560, null, Timeout))
+            Assert.Equal("the install's mod", File.ReadAllText(selection.Files.Single(file => file.RelativePath == "BepInEx/plugins/Mod.dll").Source));
+        Assert.Contains(mac.Runs, run => run.Script == "fetch" && run.Variables["dir"] == "/game/mac-server/BepInEx/Plugins");
 
         var linux = new FakeServerHost("linux-server", Path.Combine(Mirror, "linux"));
-        LinuxServer(linux, "/game/server");
-        var linuxPackage = Package(Path.Combine(_rig.Root, "linux-package"), "BepInEx/core/BepInEx.dll", "BepInEx/core/BepInEx.Preloader.dll", "doorstop_libs/libdoorstop_x64.so");
-        using (var selection = await InstallSelection.ReadAsync(linux, HostedRuntimeKind.Server, "/game/server", manifest, location, linuxPackage, 5560, null, Timeout))
+        string linuxInstall = LinuxServer(linux, "/game/server");
+        Put(linuxInstall, "BepInEx/Scripts/Ignored.dll", "a folder BepInEx does not read on Linux");
+        using (var selection = await InstallSelection.ReadAsync(linux, HostedRuntimeKind.Server, "/game/server", manifest, location, null, 5560, null, Timeout))
         {
-            Assert.DoesNotContain(selection.Files, file => file.RelativePath == BepInExSettings.RelativePath);
-            Assert.Contains(selection.Files, file => file.RelativePath == "BepInEx/config/example.mod.cfg");
+            Assert.DoesNotContain(selection.Files, file => file.Source.EndsWith("Ignored.dll", StringComparison.Ordinal));
+            Assert.Contains(selection.Files, file => file.RelativePath == "BepInEx/plugins/Mod/Mod.dll");
         }
+
+        // Two spellings of one folder on a case-sensitive macOS volume are refused, naming both. The mirror holds two spellings
+        // only where this runner's filesystem tells them apart.
+        Put(macInstall, "BepInEx/plugins/Other.dll", "another mod");
+        if (Directory.GetDirectories(Path.Combine(macInstall, "BepInEx")).Length != 3) return; // core, Plugins and plugins
+        var twice = await Assert.ThrowsAsync<InvalidDataException>(() =>
+            InstallSelection.ReadAsync(mac, HostedRuntimeKind.Server, "/game/mac-server", manifest, location, null, 5560, null, Timeout));
+        Assert.Contains("BepInEx/Plugins and BepInEx/plugins", twice.Message);
     }
 }
