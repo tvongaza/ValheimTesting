@@ -6,7 +6,8 @@
 //   dotnet run scripts/validate.cs -- --ci-main-tests  CI only: Windows toolkit tests excluding measured slow methods
 //   dotnet run scripts/validate.cs -- --ci-timed 1|2   CI only: one balanced slow-method shard
 //   dotnet run scripts/validate.cs -- --ci-build-only  CI only: Windows packaging and other test layers
-//   dotnet run scripts/validate.cs -- --limits-probe PROJECT RESULTS [FILTER]  tests of the time limits only: one test command
+//   dotnet run scripts/validate.cs -- --limits-probe PROJECT RESULTS [FILTER]  tests of validate.cs's test commands only: one command
+//   ... --split  with any mode above but --restricted-sandbox: CI pull requests: this OS's share of the toolkit tests (#735, below)
 //   sh scripts/validate.sh --restricted-sandbox  Selected no-host tests only; exits 4 (incomplete)
 //
 // Runs the library tests, compiles the adapter source package against reference stubs, builds every example, tool and script, runs
@@ -27,6 +28,11 @@
 // VT_VALIDATE_HEARTBEAT_SECONDS=N (the macOS CI job sets 60; #736 investigation) adds a "heartbeat:" line every N seconds that names the
 // running command and the machine's processes, free disk and, on macOS, free memory level.
 //
+// --split is the OS-aware split of a pull request's tests (#735), decided in SplitFilter and nowhere else. A test class carries at
+// most one [Trait("Os", ...)]: "neutral" runs on Linux only, "windows" on Windows, "unix" on Linux and macOS, "macos" on macOS; a
+// class without one is OS-sensitive and runs on every OS. Without --split (pushes to main, manual dispatches, local validation)
+// every OS runs every test. OsSplitTests guards which classes may be neutral (CONTRIBUTING.md states the rule).
+//
 // No command may create, change or remove anything in ValheimTesting's own folder on this machine (the run journal, host lock,
 // leases, runs and extracted bundles of the user running validation): tests use temporary folders (#411). Each command is
 // followed by a comparison with the folder as validation found it, and the first command that changed it fails, naming what.
@@ -38,17 +44,21 @@ using System.Text.Json;
 using System.Xml.Linq;
 
 string root = FindRoot();
-bool skipCiShell = args.SequenceEqual(["--skip-ci-shell"]);
-bool onlyCiShell = args.SequenceEqual(["--only-ci-shell"]);
-bool ciMainTests = args.SequenceEqual(["--ci-main-tests"]);
-bool ciBuildOnly = args.SequenceEqual(["--ci-build-only"]);
-bool restrictedSandbox = args.SequenceEqual(["--restricted-sandbox"]);
-bool limitsProbe = args is ["--limits-probe", _, _] or ["--limits-probe", _, _, _];
-int ciTimed = args is ["--ci-timed", "1"] ? 1 : args is ["--ci-timed", "2"] ? 2 : 0;
-if (args.Length != 0 && !skipCiShell && !onlyCiShell && !ciMainTests && !ciBuildOnly && !restrictedSandbox && !limitsProbe && ciTimed == 0)
-    throw new ArgumentException("usage: dotnet run scripts/validate.cs [--skip-ci-shell|--only-ci-shell|--ci-main-tests|--ci-timed 1|2|--ci-build-only|--restricted-sandbox|--limits-probe PROJECT RESULTS [FILTER]]");
+bool split = args.Contains("--split");
+string[] mode = args.Where(argument => argument != "--split").ToArray();
+bool skipCiShell = mode.SequenceEqual(["--skip-ci-shell"]);
+bool onlyCiShell = mode.SequenceEqual(["--only-ci-shell"]);
+bool ciMainTests = mode.SequenceEqual(["--ci-main-tests"]);
+bool ciBuildOnly = mode.SequenceEqual(["--ci-build-only"]);
+bool restrictedSandbox = mode.SequenceEqual(["--restricted-sandbox"]);
+bool limitsProbe = mode is ["--limits-probe", _, _] or ["--limits-probe", _, _, _];
+int ciTimed = mode is ["--ci-timed", "1"] ? 1 : mode is ["--ci-timed", "2"] ? 2 : 0;
+if ((mode.Length != 0 && !skipCiShell && !onlyCiShell && !ciMainTests && !ciBuildOnly && !restrictedSandbox && !limitsProbe && ciTimed == 0) ||
+    args.Count(argument => argument == "--split") > 1 || (split && restrictedSandbox))
+    throw new ArgumentException("usage: dotnet run scripts/validate.cs [--skip-ci-shell|--only-ci-shell|--ci-main-tests|--ci-timed 1|2|--ci-build-only|--limits-probe PROJECT RESULTS [FILTER]] [--split] | --restricted-sandbox");
+string? splitFilter = split ? SplitFilter() : null;
 // A probe writes beside its caller's choice, never over the results of the validation that runs the probing test.
-string results = limitsProbe ? Path.GetFullPath(args[2]) : Path.Combine(root, "artifacts", "validate");
+string results = limitsProbe ? Path.GetFullPath(mode[2]) : Path.Combine(root, "artifacts", "validate");
 Directory.CreateDirectory(results);
 string transcript = Path.Combine(results, "validate.log");
 File.WriteAllText(transcript, "");
@@ -70,9 +80,11 @@ using var heartbeat = heartbeatSeconds > 0
     ? new System.Threading.Timer(_ => Heartbeat(), null, TimeSpan.FromSeconds(heartbeatSeconds), TimeSpan.FromSeconds(heartbeatSeconds))
     : null;
 
+if (splitFilter != null) Note($"OS-aware split (#735): the toolkit tests' commands here select {splitFilter}; other test projects run whole");
+
 if (limitsProbe)
 {
-    Test(args[1], args.Length == 4 ? ["--filter", args[3]] : []);
+    Test(mode[1], mode.Length == 4 ? ["--filter", mode[3]] : []);
     return 0;
 }
 
@@ -206,7 +218,8 @@ RunScript("scripts/package-audit.cs", "--directory", feed, "--candidate");
 // A mod's view of what was just packed: outside this checkout, the candidate packages only from .packages and byte-identical
 // to it, the Cli from .packages too (its pin may not be published yet), every other package from NuGet.org.
 RunScript("scripts/consumer.cs", "--feed", "local", "--candidate", candidate);
-Note(skipCiShell || ciBuildOnly ? "CI validation passed; toolkit shards run in separate jobs." : "Local validation passed.");
+Note(skipCiShell || ciBuildOnly ? "CI validation passed; toolkit shards run in separate jobs."
+    : split ? "Validation passed for this OS's share of the toolkit tests (--split); the other OSes run the rest." : "Local validation passed.");
 return 0;
 
 static string ScriptPath([CallerFilePath] string path = "") => path;
@@ -246,7 +259,7 @@ void Test(string project, params string[] extra)
             "--blame-hang-dump-type", "none", "--results-directory", output };
         arguments.AddRange(["--logger", Environment.GetEnvironmentVariable("VT_CI_PROFILE") == "1"
             ? "trx;LogFileName=timings.trx" : "trx;LogFileName=results.trx"]);
-        arguments.AddRange(extra);
+        arguments.AddRange(Split(project, extra));
         Execute("dotnet", arguments.ToArray(), output);
     }
     catch
@@ -264,6 +277,28 @@ void Test(string project, params string[] extra)
         throw;
     }
 }
+
+// The tests of this OS's share under --split (#735): the test command's own filter, if any, and the split's. Only the toolkit tests
+// classify their classes (and the probe project of ValidationLimitsTests, which tests the split): the xunit adapter matches no test
+// at all when a filter names a trait no test in the project carries, so the other projects run whole. A split command must run a
+// test, so a filter that empties it fails rather than passes. Run settings after "--" stay last.
+string[] Split(string project, string[] extra)
+{
+    if (splitFilter == null || !(limitsProbe || project == "tests/Valheim.Testing.Tests/Valheim.Testing.Tests.csproj")) return extra;
+    const string noTestsFail = "RunConfiguration.TreatNoTestsAsError=true";
+    int filter = Array.IndexOf(extra, "--filter");
+    int settings = Array.IndexOf(extra, "--");
+    string[] selection = filter >= 0 ? [.. extra[..(filter + 1)], $"({extra[filter + 1]})&{splitFilter}", .. extra[(filter + 2)..]]
+        : settings < 0 ? [.. extra, "--filter", splitFilter] : [.. extra[..settings], "--filter", splitFilter, .. extra[settings..]];
+    return selection.Contains(noTestsFail) ? selection : selection.Contains("--") ? [.. selection, noTestsFail] : [.. selection, "--", noTestsFail];
+}
+
+// The one owner of the split (#735): which Os trait values this OS leaves out. A class without the trait runs everywhere.
+static string SplitFilter() =>
+    OperatingSystem.IsWindows() ? "Os!=neutral&Os!=unix&Os!=macos"
+    : OperatingSystem.IsMacOS() ? "Os!=neutral&Os!=windows"
+    : OperatingSystem.IsLinux() ? "Os!=windows&Os!=macos"
+    : throw new PlatformNotSupportedException("--split knows Windows, macOS and Linux only.");
 
 // Full validation invokes more file apps after its own entrypoint. Give those builds and runs the same SDK-cache fallback.
 void BuildScript(string script)

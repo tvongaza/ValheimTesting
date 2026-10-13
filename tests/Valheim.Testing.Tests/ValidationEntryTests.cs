@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using Xunit;
 
+[Trait("Os", "unix")]
 public sealed class ValidationEntryTests : IDisposable
 {
     private readonly string _root = Path.Combine(Path.GetTempPath(), "vt-validation-" + Guid.NewGuid().ToString("N"));

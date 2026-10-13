@@ -48,6 +48,26 @@ public sealed class ValidationLimitsTests : IClassFixture<ValidationLimitsTests.
         Lacks(run, "::warning");
     }
 
+    // #735: --split runs neutral tests on Linux only and each OS-specific class on its OS; a class without the trait runs everywhere.
+    // Without it, every OS runs every test (a push to main).
+    [Fact]
+    public async Task TheSplitRunsNeutralTestsOnLinuxOnlyAndOsSpecificTestsOnTheirOs()
+    {
+        string[] all = ["LimitsProbe.SplitMacos.Ran", "LimitsProbe.SplitNeutral.Ran", "LimitsProbe.SplitSensitive.Ran", "LimitsProbe.SplitUnix.Ran", "LimitsProbe.SplitWindows.Ran"];
+        var full = await _probe.Run("LimitsProbe.Split", soft: null, hard: null, githubActions: false);
+        full.AssertSucceeded();
+        Lacks(full, "OS-aware split");
+        Assert.Equal(all, _probe.Passed("LimitsProbe.Split", split: false));
+
+        var split = await _probe.Run("LimitsProbe.Split", soft: null, hard: null, githubActions: false, split: true);
+        split.AssertSucceeded();
+        Has(split, "OS-aware split (#735)");
+        string[] expected = OperatingSystem.IsWindows() ? ["LimitsProbe.SplitSensitive.Ran", "LimitsProbe.SplitWindows.Ran"]
+            : OperatingSystem.IsMacOS() ? ["LimitsProbe.SplitMacos.Ran", "LimitsProbe.SplitSensitive.Ran", "LimitsProbe.SplitUnix.Ran"]
+            : ["LimitsProbe.SplitNeutral.Ran", "LimitsProbe.SplitSensitive.Ran", "LimitsProbe.SplitUnix.Ran"];
+        Assert.Equal(expected, _probe.Passed("LimitsProbe.Split", split: true));
+    }
+
     private static void Has(BuildRun run, string text) =>
         Assert.True(run.Output.Contains(text, StringComparison.Ordinal), $"expected \"{text}\" in (exit {run.ExitCode})\n{run.Output}");
 
@@ -87,6 +107,13 @@ public sealed class ValidationLimitsTests : IClassFixture<ValidationLimitsTests.
                     [Fact] public void PassesAfterTheSoftLimit() => Thread.Sleep(TimeSpan.FromSeconds(6));
                     [Fact] public void NeverFinishes() => Thread.Sleep(TimeSpan.FromMinutes(30));
                 }
+
+                // The OS-aware split (#735): one class per Os trait value, and one without the trait.
+                [Trait("Os", "neutral")] public class SplitNeutral { [Fact] public void Ran() { } }
+                [Trait("Os", "windows")] public class SplitWindows { [Fact] public void Ran() { } }
+                [Trait("Os", "unix")] public class SplitUnix { [Fact] public void Ran() { } }
+                [Trait("Os", "macos")] public class SplitMacos { [Fact] public void Ran() { } }
+                public class SplitSensitive { [Fact] public void Ran() { } }
                 """);
             // A copy of the script, so the validation that runs these tests keeps its own build of it; it finds the repository
             // from the working directory.
@@ -108,9 +135,9 @@ public sealed class ValidationLimitsTests : IClassFixture<ValidationLimitsTests.
         }
 
         /// <summary>validate.cs's probe mode on one test of the project; null limits keep the script's own.</summary>
-        public Task<BuildRun> Run(string test, double? soft, double? hard, bool githubActions, double? heartbeat = null) =>
+        public Task<BuildRun> Run(string test, double? soft, double? hard, bool githubActions, double? heartbeat = null, bool split = false) =>
             FixtureProjects.Dotnet(FixtureProjects.RepositoryRoot(),
-                ["run", _script, "--", "--limits-probe", _project, Path.Combine(_directory, "results-" + test), "FullyQualifiedName~" + test],
+                ["run", _script, "--", "--limits-probe", _project, Results(test, split), "FullyQualifiedName~" + test, .. (split ? new[] { "--split" } : Array.Empty<string>())],
                 new Dictionary<string, string?>
                 {
                     ["VT_VALIDATE_SOFT_LIMIT_SECONDS"] = soft?.ToString(System.Globalization.CultureInfo.InvariantCulture),
@@ -119,5 +146,15 @@ public sealed class ValidationLimitsTests : IClassFixture<ValidationLimitsTests.
                     ["VT_CI_PROFILE"] = null,
                     ["VT_VALIDATE_HEARTBEAT_SECONDS"] = heartbeat?.ToString(System.Globalization.CultureInfo.InvariantCulture),
                 }, timeoutMinutes: 5);
+
+        /// <summary>The tests a run passed, by name, from the TRX validate.cs keeps for it.</summary>
+        public string[] Passed(string test, bool split)
+        {
+            string trx = Assert.Single(Directory.GetFiles(Results(test, split), "*.trx", SearchOption.AllDirectories));
+            return System.Xml.Linq.XDocument.Load(trx).Descendants().Where(e => e.Name.LocalName == "UnitTestResult" && (string?)e.Attribute("outcome") == "Passed")
+                .Select(e => (string?)e.Attribute("testName") ?? "").Order(StringComparer.Ordinal).ToArray();
+        }
+
+        private string Results(string test, bool split) => Path.Combine(_directory, "results-" + test + (split ? "-split" : ""));
     }
 }

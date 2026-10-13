@@ -1,7 +1,8 @@
 using Valheim.Testing;
 using Xunit;
 
-public class SharedWorldTests
+[Trait("Os", "neutral")]
+public sealed class SharedWorldTests
 {
     [Fact]
     public void RegionsComposeCliffTerraceAndBiomeWithoutChangingBackground()

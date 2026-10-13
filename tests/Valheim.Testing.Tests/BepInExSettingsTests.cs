@@ -3,6 +3,7 @@ using Xunit;
 
 namespace Valheim.Testing.Tests;
 
+[Trait("Os", "neutral")]
 public sealed class BepInExSettingsTests
 {
     [Theory]

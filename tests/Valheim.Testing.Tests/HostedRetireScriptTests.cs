@@ -3,6 +3,7 @@ using Xunit;
 using Valheim.Testing.GameSessions;
 
 // The retire script itself, in bash on this machine (Linux and macOS).
+[Trait("Os", "unix")]
 public sealed class HostedRetireScriptTests : IDisposable
 {
     private readonly string _root = Directory.CreateTempSubdirectory("hosted-retire-").FullName;

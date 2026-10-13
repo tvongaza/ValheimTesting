@@ -1,7 +1,8 @@
 using System.Text.Json;
 using Valheim.Testing.Game;
 using Xunit;
-public class PaintProbeTests
+[Trait("Os", "neutral")]
+public sealed class PaintProbeTests
 {
     private static readonly PaintExpectation Expected = new(32, 0, 1, 0, .5f, .25f);
     private static Observation Paint(float r=1,float g=0,float b=.5f,float a=.25f,bool complete=true,float x=32,string units="rgba01") =>

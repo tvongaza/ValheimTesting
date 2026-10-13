@@ -1,6 +1,7 @@
 using Valheim.Testing.Game;
 using Xunit;
 
+[Trait("Os", "neutral")]
 public sealed class TeleportTraceTests
 {
     private const string Complete = "OK: TELEPORT_TRACE id=7 distant=True requestedMs=0 movedMs=2000 areaReadyMs=3500 floorReadyMs=3600 doneMs=3620 floorAtDone=True final=100.25,42.5,-40";

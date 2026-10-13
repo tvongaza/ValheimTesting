@@ -3,6 +3,7 @@ using System.Text;
 using Valheim.Testing.GameSessions;
 using Xunit;
 
+[Trait("Os", "unix")]
 public sealed class ProfileLaunchEnvironmentTests
 {
     [Theory]
