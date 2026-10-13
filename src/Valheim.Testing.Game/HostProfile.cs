@@ -98,6 +98,9 @@ internal sealed class GameRole
     internal IReadOnlyDictionary<string, string>? PreparedSourceFiles { get; set; }
     /// <summary>The directory on the host under which each run makes its own disposable runtime copy, logs and evidence.</summary>
     public string Runtime { get; set; } = "";
+    internal string RuntimeReason { get; set; } = "";
+    /// <summary>Whether the inventory named <see cref="Runtime"/>, rather than accepting its detected default.</summary>
+    public bool RuntimeExplicit { get; set; } = true;
     /// <summary>The ValheimCLI port on the host's loopback.</summary>
     public int CliPort { get; set; }
     /// <summary>Server only: the game's UDP port (Valheim also uses the next one).</summary>

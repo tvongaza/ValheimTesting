@@ -150,10 +150,6 @@ internal sealed class HostedServerRun : IServerPlacement
             return "macOS crossplay's native library has no hosted preflight yet; omit -crossplay for a local smoke.";
         if (role.CliPort != plan.Port)
             return $"the plan's ValheimCLI port {plan.Port} is not its cliPort {role.CliPort}; the runtime's [Server] Port must be both.";
-        // A Windows profile's launch folder hard-links the install's files (HostedRuntimeStage's profile seed), which only one volume can do.
-        if (hostProfile.Platform == "windows" && !SameWindowsVolume(role.Install, role.Runtime))
-            return $"its runtime folder {role.Runtime} is on another volume than its install {role.Install}: a Windows dedicated server runs from a profile " +
-                "that hard-links the install's files, so put the environment's runtime folder on the install's NTFS volume (without an inventory, this machine's is in ValheimTesting's data folder: use --inventory with a server environment whose runtime is there).";
         if (GamePort(plan) is int gamePort && gamePort != role.GamePort)
             return $"the plan's -port {gamePort} is not its gamePort {role.GamePort}.";
         return null;
@@ -167,26 +163,6 @@ internal sealed class HostedServerRun : IServerPlacement
             CultureInfo.InvariantCulture, out int port) ? port : null;
     }
 
-    // The volume a Windows path is on, as written: its drive (C:) or its UNC share (\\server\share). Equal volumes ignore case. A
-    // folder mounted from another volume below the same drive is found by the profile seed, which refuses a link it cannot make.
-    internal static bool SameWindowsVolume(string first, string second)
-    {
-        static string Volume(string path)
-        {
-            string normal = path.Replace('/', '\\');
-            // A long path (\\?\C:\..., \\?\UNC\server\share\...) is on the volume it names.
-            if (normal.StartsWith(@"\\?\UNC\", StringComparison.OrdinalIgnoreCase)) normal = @"\\" + normal[8..];
-            else if (normal.StartsWith(@"\\?\", StringComparison.Ordinal)) normal = normal[4..];
-            if (normal.StartsWith(@"\\", StringComparison.Ordinal))
-            {
-                string[] parts = normal[2..].Split('\\', 3);
-                return parts.Length >= 2 ? @"\\" + parts[0] + @"\" + parts[1] : normal;
-            }
-            return normal.Length >= 2 && normal[1] == ':' ? normal[..2] : normal;
-        }
-        return string.Equals(Volume(first), Volume(second), StringComparison.OrdinalIgnoreCase);
-    }
-
     public void Record(IDictionary<string, string> provenance)
     {
         provenance["serverHost"] = Role.Host;
@@ -195,6 +171,11 @@ internal sealed class HostedServerRun : IServerPlacement
         provenance["hostRunDirectory"] = RunDirectory;
         provenance["runtimeSource"] = Role.Host + ":" + (Role.PreparedSourceRoot ?? Role.Install);
     }
+
+    /// <summary>The read-only Windows hard-link storage check, before this run takes a lock or stages its profile.</summary>
+    internal Task<string?> PreflightProfileStorageAsync(CancellationToken cancellation) =>
+        HostedRuntimeStage.RequireProfileStorageAsync(Host, Role.Install, Role.Runtime, HostedTimeouts.Quick, cancellation,
+            explicitRuntime: Role.RuntimeExplicit);
 
     /// <summary>
     /// Takes the server host's lock, then readies the server's profile: a campaign's prepared one is verified where it is; a

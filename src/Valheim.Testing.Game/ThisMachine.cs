@@ -16,7 +16,7 @@ internal interface ISteamLocator
     Architecture OsArchitecture { get; }
     /// <summary>The user's home folder.</summary>
     string Home { get; }
-    /// <summary>ValheimTesting's own folder on this machine: runs, leases and the host lock live under it.</summary>
+    /// <summary>ValheimTesting's own folder on this machine: journals, leases and the host lock live under it.</summary>
     string DataRoot { get; }
     /// <summary>Windows: <c>HKCU\Software\Valve\Steam</c> <c>SteamPath</c>, as Steam wrote it; null elsewhere or when unset.</summary>
     string? RegistrySteamPath();
@@ -30,10 +30,17 @@ internal interface ISteamLocator
     /// </summary>
     string OnDiskPath(string path);
     /// <summary>
+    /// The final path reached through a link or junction at <paramref name="path"/> or one of its parents. A path that has
+    /// no linked component is returned unchanged.
+    /// </summary>
+    string FinalPath(string path);
+    /// <summary>
     /// The folder a link at <paramref name="path"/> finally points to, or null when it is no link: Linux's <c>~/.steam/steam</c> links
     /// to the folder Steam's <c>libraryfolders.vdf</c> lists under its own name.
     /// </summary>
     string? LinkTarget(string path);
+    /// <summary>Windows: the actual volume and filesystem containing the path or its nearest existing parent.</summary>
+    WindowsStorageVolume StorageVolume(string path);
 }
 
 /// <summary>This machine, read through the file system and (on Windows) the current user's registry.</summary>
@@ -70,6 +77,37 @@ internal sealed class LocalSteamLocator : ISteamLocator
         try { return Directory.ResolveLinkTarget(path, returnFinalTarget: true)?.FullName; }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException) { return null; }
     }
+    public string FinalPath(string path)
+    {
+        string full = Path.GetFullPath(path);
+        var suffix = new Stack<string>();
+        string? current = full;
+        while (current != null)
+        {
+            string trimmed = Path.TrimEndingDirectorySeparator(current);
+            // A volume root is never a link, and Windows refuses to resolve one (C:\ throws "Could not find a part of the path").
+            if (Path.GetDirectoryName(trimmed) == null) break;
+            try
+            {
+                FileSystemInfo? target = Directory.Exists(trimmed)
+                    ? Directory.ResolveLinkTarget(trimmed, returnFinalTarget: true)
+                    : File.Exists(trimmed) ? File.ResolveLinkTarget(trimmed, returnFinalTarget: true) : null;
+                if (target != null)
+                {
+                    string resolved = target.FullName;
+                    foreach (string part in suffix) resolved = Path.Combine(resolved, part);
+                    return resolved;
+                }
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException) { throw new IOException($"Could not resolve links in {path}: {error.Message}", error); }
+            string? parent = Path.GetDirectoryName(trimmed);
+            if (parent == null || parent == current || parent == trimmed) break;
+            suffix.Push(Path.GetFileName(trimmed));
+            current = parent;
+        }
+        return full;
+    }
+    public WindowsStorageVolume StorageVolume(string path) => WindowsStorageProbe.Inspect(path);
     public string OnDiskPath(string path)
     {
         if (!Path.Exists(path)) return path;

@@ -13,7 +13,15 @@ public sealed class EnvironmentRecipe
     /// <summary><c>server</c> or <c>client</c>; a client recipe may list only client, a server recipe only server.</summary>
     public List<string> Roles { get; set; } = [];
     public string Install { get; set; } = "";
-    public string Runtime { get; set; } = "";
+    public string Runtime
+    {
+        get => _runtime;
+        set { _runtime = value; RuntimeExplicit = !string.IsNullOrEmpty(value); }
+    }
+    private string _runtime = "";
+    [JsonIgnore] internal bool RuntimeExplicit { get; set; }
+    [JsonIgnore] internal string RuntimeReason { get; set; } = "";
+    [JsonIgnore] internal ProfileStorageVerdict? ProfileStorage { get; set; }
     public int CliPort { get; set; }
     public int LocalCliPort { get; set; }
     public int GamePort { get; set; }
@@ -23,7 +31,7 @@ public sealed class EnvironmentRecipe
 
     internal GameRole Role() => new()
     {
-        Host = Host, Install = Install, Runtime = Runtime, CliPort = CliPort,
+        Host = Host, Install = Install, Runtime = Runtime, RuntimeReason = RuntimeReason, RuntimeExplicit = RuntimeExplicit, CliPort = CliPort,
         LocalCliPort = LocalCliPort, GamePort = GamePort, Architecture = Architecture,
     };
 }
@@ -124,8 +132,8 @@ public sealed class EnvironmentInventory
     /// <summary>
     /// This machine with one server environment, <c>local-server</c>, on <paramref name="install"/>: where a standalone run without
     /// an inventory file places its dedicated server. Its host, lock and runtime folder default as <see cref="Read(string?)"/>
-    /// detects them (the runtime folder in ValheimTesting's data folder, as every server host's runs keep their run directories
-    /// outside their output); its ValheimCLI port is <paramref name="cliPort"/> and its game port <paramref name="gamePort"/>.
+    /// detects them (on Windows the runtime follows the install's volume; journals and the host lock stay in ValheimTesting's
+    /// data folder); its ValheimCLI port is <paramref name="cliPort"/> and its game port <paramref name="gamePort"/>.
     /// </summary>
     internal static EnvironmentInventory ThisMachineServer(string install, int cliPort, int gamePort)
     {
@@ -207,6 +215,7 @@ public sealed class EnvironmentInventory
         foreach (var recipe in Environments.Where(recipe => recipe.Host == name))
         {
             bool serves = recipe.Roles.Contains("server");
+            bool explicitRuntime = !string.IsNullOrEmpty(recipe.Runtime);
             var assumed = new List<string>();
             if (string.IsNullOrEmpty(recipe.Architecture))
             {
@@ -223,7 +232,16 @@ public sealed class EnvironmentInventory
                     _missing.Add($"Environment {recipe.Name} has no install: {_noInstall[recipe.Name ?? ""]}");
                 }
             }
-            if (string.IsNullOrEmpty(recipe.Runtime)) assumed.Add("runtime " + (recipe.Runtime = HostPath.Join(machine.DataRoot, "runs", recipe.Name ?? "")));
+            if (string.IsNullOrEmpty(recipe.Runtime))
+            {
+                var runtime = ProfileRuntimeStorage.DefaultRoot(machine, recipe.Install);
+                recipe.Runtime = HostPath.Join(runtime.Path, recipe.Name ?? "");
+                recipe.RuntimeExplicit = false;
+                recipe.RuntimeReason = runtime.Reason;
+                assumed.Add($"runtime {recipe.Runtime} ({runtime.Reason})");
+            }
+            if (windows && recipe.Install.Length != 0)
+                recipe.ProfileStorage = ProfileRuntimeStorage.Inspect(machine, recipe.Install, recipe.Runtime, explicitRuntime);
             if (recipe.CliPort == 0)
             {
                 taken.Add(recipe.CliPort = Enumerable.Range(FirstCliPort, 1000).First(port => !taken.Contains(port)));
@@ -292,6 +310,7 @@ public sealed class EnvironmentInventory
             if (!host.IsAbsolutePath(recipe.Install) || !host.IsAbsolutePath(recipe.Runtime))
                 errors.Add($"Environment {recipe.Name} needs absolute install and runtime paths on {recipe.Host}." +
                     (_noInstall.TryGetValue(recipe.Name ?? "", out string? why) ? " " + why : ""));
+            if (recipe.RuntimeReason.Length == 0) recipe.RuntimeReason = "named by the inventory";
             if (recipe.CliPort is < 1024 or > 65535 || recipe.LocalCliPort is < 0 or > 65535)
                 errors.Add($"Environment {recipe.Name} needs valid ValheimCLI ports.");
             bool serves = recipe.Roles.Contains("server");

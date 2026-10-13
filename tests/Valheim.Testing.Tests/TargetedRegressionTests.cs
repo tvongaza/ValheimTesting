@@ -65,6 +65,21 @@ public sealed class TargetedRegressionTests : IDisposable
         Assert.Contains("client.architecture", Assert.Throws<ArgumentException>(client.Validate).Message);
     }
 
+    [Fact] public void WindowsRegressionUsesItsExplicitRuntimeWithoutOfferingInPlace()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var inventory = _rig.Inventory();
+        inventory.Environments[0].Runtime = @"D:\vt\regressions";
+        var machine = new FakeMachine("windows");
+        using var useMachine = EnvironmentInventory.UseMachine(machine);
+        var regression = new TargetedRegression(_rig.Manifest(), inventory: inventory);
+
+        var error = Assert.Throws<InvalidOperationException>(() => regression.Stage("parent"));
+
+        Assert.Contains("explicit inventory runtime folder", error.Message);
+        Assert.DoesNotContain("--in-place", error.Message);
+    }
+
     [Fact] public void RegressionInputsOverrideTheInventorySlice()
     {
         var inventory = _rig.Inventory();

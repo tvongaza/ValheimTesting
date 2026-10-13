@@ -27,7 +27,8 @@ try
     string beside = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(args[1]))!, "environments.json");
     var inventory = EnvironmentInventory.Read(machine.GetValueOrDefault("--inventory") ?? (File.Exists(beside) ? beside : null));
     var regression = new TargetedRegression(RegressionInputs.Read(args[1]), Scenario.Capabilities, inventory, machine.GetValueOrDefault("--client-env"));
-    Console.WriteLine($"client environment {regression.ClientEnvironment}: game {regression.Game}, disposable install {regression.Install}");
+    foreach (string line in regression.Detected) Console.WriteLine("detected: " + line);
+    Console.WriteLine($"client environment {regression.ClientEnvironment}: game {regression.Game}, disposable install {regression.Install} (under that environment's runtime folder)");
     switch (args[0])
     {
         case "preflight":

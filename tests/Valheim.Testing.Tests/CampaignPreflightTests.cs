@@ -124,7 +124,7 @@ public sealed class CampaignPreflightTests : IDisposable
         });
         using var listed = new StringWriter();
         Assert.Equal(0, await EnvCommand.RunAsync(["list", "--inventory", serverOnly], listed, new StringWriter()));
-        Assert.Contains(@"pc-server: server on pc; install C:\server; runtime C:\runs; ValheimCLI port 5577, game port 2456", listed.ToString());
+        Assert.Contains(@"pc-server: server on pc; install C:\server; runtime C:\runs (named by the inventory); ValheimCLI port 5577, game port 2456", listed.ToString());
         Assert.DoesNotContain("REFUSED", listed.ToString());
         Assert.DoesNotContain("ELIGIBLE", listed.ToString());
         using var json = new StringWriter();
@@ -177,6 +177,37 @@ public sealed class CampaignPreflightTests : IDisposable
         // An empty file is refused, not a crash.
         File.WriteAllText(local, "null");
         Assert.Equal(3, await EnvCommand.RunAsync(["preflight", "--inventory", local], new StringWriter(), new StringWriter()));
+    }
+
+    [Fact]
+    public async Task EnvPreflightPrintsWhyWindowsDefaultRuntimeFoldersFollowTheirInstalls()
+    {
+        string file = Write("windows-default-runtimes.json", new
+        {
+            environments = new object[]
+            {
+                new { name = "local-server", roles = new[] { "server" }, install = @"D:\Steam\Valheim server", cliPort = 5577, gamePort = 2456 },
+                new { name = "local-client", roles = new[] { "client" }, install = @"E:\Steam\Valheim", cliPort = 5578 },
+            },
+        });
+        using var machine = EnvironmentInventory.UseMachine(new FakeMachine("windows")
+            { DataRoot = @"C:\Users\tester\AppData\Local\ValheimTesting" });
+        using var journal = RunJournal.UseLocalDirectory(Path.Combine(_root, "windows-runtime-journal"));
+        using var probes = LocalHostPreflight.ReplaceDefaultProbesForTest(new(
+            Processes: (_, _, _, _) => Task.CompletedTask,
+            Port: (_, _, _, _) => Task.CompletedTask,
+            Lock: (_, _, _, _) => Task.FromResult(new HostLockResult(HostLockState.Free, null, "free")),
+            ProfileStorage: (_, _, _, _, _, _) => Task.FromResult<string?>("same NTFS volume"),
+            Desktop: _ => Task.CompletedTask, SteamRunning: () => true,
+            Journals: (_, _) => Task.FromResult<IReadOnlyList<CampaignPreflightProblem>>([]), Packaged: () => null));
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+
+        int result = await EnvCommand.RunAsync(["preflight", "--inventory", file], output, error);
+        Assert.True(result == (OperatingSystem.IsWindows() ? 0 : 3), output + Environment.NewLine + error);
+        Assert.Contains(@"runtime D:\ValheimTesting\runs\local-server", output.ToString());
+        Assert.Contains(@"runtime E:\ValheimTesting\runs\local-client", output.ToString());
+        Assert.Contains("profiles follow the install volume", output.ToString());
     }
 
     // #406: valheim-test inside a Windows package (a packaged desktop app that starts it) has its AppData writes redirected into
@@ -363,6 +394,28 @@ public sealed class CampaignPreflightTests : IDisposable
         Assert.Contains(host.Scripts, script => script == "list");
         Assert.DoesNotContain(host.Scripts, script => script is "copy" or "start" or "apply-stage");
         Assert.DoesNotContain(report.Problems, problem => problem.Input == "server task"); // an elevated host registers its S4U task
+    }
+
+    [Fact]
+    public async Task RemoteWindowsProfileStorageIsRefusedBeforeStaging()
+    {
+        string file = Write("campaign.json", new
+        {
+            inventory = Inventory(), server = new { dependencyLock = "missing-lock.json" }, clients = new Dictionary<string, object>(),
+        });
+        var host = new FakeServerHost("pc", Path.Combine(_root, "storage-mirror"), windows: true)
+        {
+            ProfileRuntimeVolume = new WindowsStorageVolume(@"D:\", "volume-d", "NTFS", false),
+        };
+
+        var report = await HostedCampaignPreparation.InspectAsync(file, TimeSpan.FromSeconds(2), _ => host, pinnedLoader: null);
+
+        var problem = Assert.Single(report.Problems, problem => problem.Actor == "server" && problem.Input == "profile storage");
+        Assert.Contains("explicit inventory runtime folder", problem.Message);
+        Assert.Contains("Put the inventory runtime on the install's NTFS volume", problem.Message);
+        Assert.DoesNotContain("--in-place", problem.Message);
+        Assert.Contains("profile-storage", host.Scripts);
+        Assert.DoesNotContain(host.Scripts, script => script is "profile-seed" or "apply-stage");
     }
 
     // Stage 2's journal item (#257): a run another process left on a campaign host refuses the preflight and names the command;

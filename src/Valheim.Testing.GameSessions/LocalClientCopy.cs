@@ -43,7 +43,8 @@ internal sealed class LocalClientCopy
     /// Makes <paramref name="plan"/>'s disposable profile and binds the plan to it. <paramref name="actor"/> names the client in the
     /// journal. The install is checked first as the profile's source (<see cref="ClientRunPlan.Preflight()"/>: its install pins, its
     /// plugin builds but ValheimCLI's, its standing pins). <paramref name="dataRoot"/> (default <see cref="CliBundle.DataRoot"/>)
-    /// holds the profiles (<c>runs/local-clients</c>); profiles on this machine are journalled as <see cref="WorldFixture"/>'s are, in
+    /// holds the profiles (<c>runs/local-clients</c>) on Unix and on a Windows install on the same volume; another-volume Windows
+    /// install uses that volume's <c>ValheimTesting/runs/local-clients</c>. Profiles on this machine are journalled as <see cref="WorldFixture"/>'s are, in
     /// process and without the host lock, which a run with its server here holds;
     /// <paramref name="host"/> is this machine (a test passes its own); <paramref name="cliBundle"/> the pinned set when the plan
     /// names none (default <see cref="PinnedCliBundle.Source"/>); <paramref name="loader"/> the pinned-loader rule (default
@@ -68,7 +69,11 @@ internal sealed class LocalClientCopy
         string data = dataRoot ?? CliBundle.DataRoot;
         host ??= new LocalGameHost("this machine", HostShell.ThisMachine);
         var journal = RunJournal.ThisProcess;
-        string root = Path.Combine(data, "runs", "local-clients");
+        var runtimeRoot = await HostedRuntimeStage.DefaultProfileRootAsync(host, source, data, StepTimeout, cancellation).ConfigureAwait(false);
+        string root = HostPath.Join(runtimeRoot.Path, "local-clients");
+        Console.WriteLine($"profile runtime root: {root} ({runtimeRoot.Reason}).");
+        await HostedRuntimeStage.RequireProfileStorageAsync(host, source, root, StepTimeout, cancellation,
+            explicitRuntime: false).ConfigureAwait(false);
         // One folder per profile: a run may prepare two plans for one client name (a client opened without its mod, then with it).
         string parent = Path.Combine(root, "vt-prep-" + journal.RunId + "-" + actor + "-" + Guid.NewGuid().ToString("N")[..8]);
         string runtime = Path.Combine(parent, "runtime"), stage = Path.Combine(parent, "staging");

@@ -137,9 +137,9 @@ internal static class ModInputStage
         }
         foreach (string line in inventory.Detected) Console.WriteLine("detected: " + line);
         if (server != null)
-            Console.WriteLine($"server: {server.Recipe.Name} on {server.Recipe.Host} ({server.Reason}): install {server.Recipe.Install}; ValheimCLI port {server.Recipe.CliPort}, game port {server.Recipe.GamePort}");
+            Console.WriteLine($"server: {server.Recipe.Name} on {server.Recipe.Host} ({server.Reason}): install {server.Recipe.Install}; runtime {server.Recipe.Runtime} ({server.Recipe.RuntimeReason}); ValheimCLI port {server.Recipe.CliPort}, game port {server.Recipe.GamePort}");
         if (client != null)
-            Console.WriteLine($"client: {client.Recipe.Name} on {client.Recipe.Host} ({client.Reason}): install {client.Recipe.Install}; ValheimCLI port {client.Recipe.CliPort}" +
+            Console.WriteLine($"client: {client.Recipe.Name} on {client.Recipe.Host} ({client.Reason}): install {client.Recipe.Install}; runtime {client.Recipe.Runtime} ({client.Recipe.RuntimeReason}); ValheimCLI port {client.Recipe.CliPort}" +
                 (choice.Join == null ? "" : "; joins " + choice.Join) + (architecture == null ? "" : "; architecture " + architecture));
         else if (request.Route == Route.Dedicated) Console.WriteLine("client: none (--server-only)");
 

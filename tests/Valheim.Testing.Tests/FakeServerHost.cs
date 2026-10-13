@@ -95,6 +95,9 @@ internal sealed class FakeServerHost : IGameHost
         "\"IOConsoleUsers\" = ({\"kCGSSessionOnConsoleKey\"=Yes,\"kCGSessionLoginDoneKey\"=Yes,\"kCGSSessionUserNameKey\"=\"tester\"})\nVT-MAC-REGISTRY-END\n";
     /// <summary>The slices the Mac game and its Doorstop library hold, as the host's lipo reports them.</summary>
     public string MacSlices { get; set; } = "x86_64 arm64";
+    /// <summary>The Windows profile-storage probe's source and runtime volumes.</summary>
+    public WindowsStorageVolume ProfileSourceVolume { get; set; } = new(@"C:\", "volume-c", "NTFS", false);
+    public WindowsStorageVolume ProfileRuntimeVolume { get; set; } = new(@"C:\", "volume-c", "NTFS", false);
     /// <summary>A process this host reports as running until it is stopped; for journal tests.</summary>
     public void Running(int pid, string start)
     {
@@ -126,6 +129,7 @@ internal sealed class FakeServerHost : IGameHost
         ("drop-kept", [HostedRunScripts.DropKept, HostedRunScripts.WindowsDropKept]),
         ("apply-stage", [HostedRuntimeStage.WindowsApply, HostedRuntimeStage.BashApply]),
         ("profile-seed", [HostedRuntimeStage.WindowsProfileSeed, HostedRuntimeStage.BashProfileSeed]),
+        ("profile-storage", [HostedRuntimeStage.WindowsProfileStorage]),
         ("keep-logs", [RunRecovery.BashKeepLogs, RunRecovery.WindowsKeepLogs]),
         ("cleanup-stage", [HostedRuntimeStage.WindowsCleanup, HostedRuntimeStage.BashCleanup]),
         ("character-install", [HostedCharacterStage.WindowsInstall, HostedCharacterStage.BashInstall]),
@@ -183,6 +187,19 @@ internal sealed class FakeServerHost : IGameHost
         if (Failures.TryGetValue(name, out var failure)) return failure;
         switch (name)
         {
+            case "profile-storage":
+            {
+                object Item(WindowsStorageVolume volume) => new
+                {
+                    Path = volume.Root,
+                    volume.Root,
+                    DriveType = volume.Network ? 4u : 3u,
+                    volume.Identity,
+                    volume.FileSystem,
+                };
+                string json = JsonSerializer.Serialize(new { Source = Item(ProfileSourceVolume), Runtime = Item(ProfileRuntimeVolume) });
+                return Ok("VT-PROFILE-STORAGE " + Convert.ToBase64String(Encoding.UTF8.GetBytes(json)) + "\n");
+            }
             case "machine-name": return Ok("VT-MACHINE " + MachineName + "\n");
             // As the scripts: the first path that overlaps the root once links are resolved (here in the mirror, by the local rule).
             case "apart":

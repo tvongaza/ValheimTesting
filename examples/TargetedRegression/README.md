@@ -97,6 +97,6 @@ From a checkout of this repository, make a public copy with the maintainer tool 
 ## Limits
 
 - One owned client hosting one world. A dedicated server and restarts of a server process are FullLifecycle's; a second client is the native acceptance suite's.
-- The default profile does not copy the game on macOS or Linux. On Windows it needs hard links on the same volume as the source install; if the filesystem refuses them, put the client environment's `runtime` folder on the game's NTFS volume.
+- The default profile does not copy the game on macOS or Linux. On Windows preflight checks hard-link support before staging: a default runtime follows the source install's volume, while an explicit client-environment `runtime` must be on that NTFS volume. A library on exFAT, FAT32 or a network share must move to NTFS.
 - The optional registered-character path stages and removes one owned test character. Without it, stage your disposable local character yourself. The tool does not reserve a machine or publish anything.
 - The metadata checks read what BepInEx reads; a dependency a mod finds by reflection at run time, or a config value it needs, is caught only by the live run.

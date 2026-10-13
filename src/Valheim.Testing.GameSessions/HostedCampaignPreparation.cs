@@ -457,7 +457,7 @@ public static class HostedCampaignPreparation
             .Select(item => new LocalHostPreflight.Actor(item.Name, new EnvironmentRecipe
             {
                 Name = item.Name, Host = item.Role.Host, Install = item.Role.Install, Runtime = item.Role.Runtime,
-                CliPort = item.Role.CliPort, Roles = [item.Name == "server" ? "server" : "client"],
+                RuntimeExplicit = item.Role.RuntimeExplicit, CliPort = item.Role.CliPort, Roles = [item.Name == "server" ? "server" : "client"],
             })).ToArray();
         if (localActors.Length != 0 && !skipLocalChecks)
         {
@@ -483,6 +483,15 @@ public static class HostedCampaignPreparation
                 return;
             }
             bool localHost = inputs.Profile.Hosts[group.Key].Kind == "local";
+            if (!localHost && inputs.Profile.Hosts[group.Key].Platform == "windows")
+                foreach (var item in group)
+                    try
+                    {
+                        await HostedRuntimeStage.RequireProfileStorageAsync(host, item.Role.Install, item.Role.Runtime,
+                            timeout, cancellation, explicitRuntime: item.Role.RuntimeExplicit).ConfigureAwait(false);
+                    }
+                    catch (Exception error) when (HostCheckRefusal(error))
+                    { failures.Add(new(item.Name, "profile storage", error.Message)); }
             if (!localHost)
                 try
                 {
@@ -880,7 +889,8 @@ public static class HostedCampaignPreparation
                 var assignment = resolved?.Assignments.FirstOrDefault(item => item.Actor == role.Name);
                 return new CampaignPreflightActor(role.Name, role.Name == "server" ? "dedicated-server" : "client",
                     selectedRole.Host, profile.Hosts.TryGetValue(selectedRole.Host, out var host) ? host.Platform : "unknown")
-                { Environment = assignment?.Environment, SelectionReason = assignment?.Reason };
+                { Environment = assignment?.Environment, SelectionReason = assignment?.Reason +
+                    $"; runtime {selectedRole.Runtime} ({selectedRole.RuntimeReason})" };
             }).ToArray();
         var report = new CampaignPreflightReport(problems) { Actors = actors, Detected = detected };
         if (profile == null || (manifest.Server != null) != (profile.Server != null) || !manifest.Clients.Keys.ToHashSet(StringComparer.Ordinal).SetEquals(profile.Clients.Keys))

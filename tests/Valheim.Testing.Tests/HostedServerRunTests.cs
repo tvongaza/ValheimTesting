@@ -18,6 +18,15 @@ public sealed partial class HostedServerRunTests : IDisposable
 
     private FakeServerHost NewHost(FakeOwnedServer? server = null) => new("linux-box", Mirror, server);
     private FakeOwnedServer NewServer() => new("test.mod", saveRoot: RunDirectory + "/world");
+    [Fact] public void RuntimeExplicitIsSerializedWithAResolvedRole()
+    {
+        var assumed = new GameRole { Runtime = "/runs", RuntimeExplicit = false };
+        var explicitRole = new GameRole { Runtime = "/runs", RuntimeExplicit = true };
+
+        Assert.False(JsonSerializer.Deserialize<GameRole>(JsonSerializer.Serialize(assumed))!.RuntimeExplicit);
+        Assert.True(JsonSerializer.Deserialize<GameRole>(JsonSerializer.Serialize(explicitRole))!.RuntimeExplicit);
+    }
+
     [Fact] public void AWindowsPwshDedicatedServerProfileIsAcceptedBeforeAnyHostOperation()
     {
         var host = NewHost();
@@ -933,6 +942,40 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.False(Directory.Exists(refused)); Assert.Equal(scripts, host.Runs.Count);
     }
 
+    [Fact]
+    public void PlacementSkipsAnExplicitWindowsRuntimeOnAnotherVolumeForTheNextEnvironment()
+    {
+        string inventoryPath = Path.Combine(_root, "windows-placement.json");
+        File.WriteAllText(inventoryPath, JsonSerializer.Serialize(new
+        {
+            hosts = new Dictionary<string, object>
+            {
+                ["windows-box"] = new { kind = "ssh", platform = "windows", shell = "pwsh",
+                    destination = "tester@windows-box.example", @lock = @"C:\vt\lock" },
+            },
+            environments = new object[]
+            {
+                new { name = "srv-a", host = "windows-box", roles = new[] { "server" }, install = @"C:\Steam\Valheim server",
+                    runtime = @"D:\vt\runs", cliPort = 5577, gamePort = 2456 },
+                new { name = "srv-b", host = "windows-box", roles = new[] { "server" }, install = @"C:\Steam\Valheim server",
+                    runtime = @"C:\vt\runs", cliPort = 5577, gamePort = 2456 },
+            },
+        }));
+        var inventory = EnvironmentInventory.Read(inventoryPath, new FakeMachine("windows"));
+        var plan = new ServerRunPlan
+        {
+            Executable = GameLaunch.ServerWindowsExecutable,
+            Port = 5577,
+            Arguments = ["-port", "2456"],
+        };
+
+        var (_, assignment, _) = inventory.PlaceServer(plan);
+
+        Assert.Equal("srv-b", assignment.Environment);
+        Assert.Contains(@"srv-a: the explicit inventory runtime folder D:\vt\runs is on D:\, not the source install's volume C:\",
+            assignment.Reason);
+    }
+
     // A Linux loader package (the pinned pack's shape) beside its manifest; returns the manifest's path.
     private string LinuxLoaderPackage(string name)
     {
@@ -1009,41 +1052,6 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.Equal("observed", Result().GetProperty("PinOrigins").GetProperty("runtimePins").GetString());
         Assert.Equal("pins observed, not reviewed", provenance.GetProperty("pins").GetString());
     }
-
-    // #730: a Windows server's profile hard-links its install's files, so the environment's runtime folder must be on the install's
-    // volume: another drive or share is refused before any host operation (the runtime copy that allowed it is gone), with the fix.
-    [Theory]
-    [InlineData(@"D:\vt\runs", false)]
-    [InlineData(@"\\nas\share\runs", false)]
-    [InlineData(@"c:\vt\runs", true)]
-    public void AWindowsServerRuntimeFolderMustBeOnTheInstallsVolume(string runtime, bool accepted)
-    {
-        var host = new FakeServerHost("windows-server", Mirror, windows: true);
-        var (planPath, profilePath) = Write(host, hostPlatform: "windows", hostShell: "pwsh");
-        var environment = TestEnvironment.Read(profilePath);
-        environment.Server!.Runtime = runtime;
-        var create = () => HostedServerRun.Create(environment, ServerRunPlan.Read<ServerRunPlan>(planPath), "test", new FakeRunHooks { Host = _ => host, RunId = RunId });
-        if (accepted) create();
-        else
-        {
-            var error = Assert.Throws<ArgumentException>(create);
-            Assert.Contains($"its runtime folder {runtime} is on another volume than its install C:\\valheim\\server", error.Message);
-            Assert.Contains("put the environment's runtime folder on the install's NTFS volume", error.Message);
-        }
-        Assert.Empty(host.Runs);
-    }
-
-    [Theory]
-    [InlineData(@"C:\a", @"c:/b", true)]
-    [InlineData(@"C:\a", @"D:\a", false)]
-    [InlineData(@"\\nas\share\a", @"\\NAS\Share\b", true)]
-    [InlineData(@"\\nas\share\a", @"\\nas\other\a", false)]
-    [InlineData(@"\\nas\share\a", @"C:\a", false)]
-    [InlineData(@"\\?\C:\a", @"C:\b", true)]
-    [InlineData(@"\\?\UNC\nas\share\a", @"\\nas\share\b", true)]
-    [InlineData(@"\\?\UNC\nas\share\a", @"\\?\UNC\other\share\a", false)]
-    public void WindowsVolumesCompareByDriveOrShare(string first, string second, bool same) =>
-        Assert.Equal(same, HostedServerRun.SameWindowsVolume(first, second));
 
     [Fact] public async Task AProfileClientStartsInItsHostsDesktopSessionAndStopsOnlyThatClient()
     {

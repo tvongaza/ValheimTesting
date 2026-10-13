@@ -18,6 +18,7 @@ internal static class LocalHostPreflight
         Func<IGameHost, bool, TimeSpan, CancellationToken, Task>? Processes = null,
         Func<IGameHost, int, TimeSpan, CancellationToken, Task>? Port = null,
         Func<IGameHost, string, TimeSpan, CancellationToken, Task<HostLockResult>>? Lock = null,
+        Func<IGameHost, string, string, bool, TimeSpan, CancellationToken, Task<string?>>? ProfileStorage = null,
         Func<CancellationToken, Task>? Desktop = null,
         Action? MacDesktop = null,
         Func<bool>? SteamRunning = null,
@@ -67,6 +68,26 @@ internal static class LocalHostPreflight
                 continue;
             }
             bool client = group.Any(actor => actor.Recipe.Roles.Contains("client"));
+            if (inventory.Hosts[group.Key].Platform == "windows")
+                foreach (var actor in group)
+                    try
+                    {
+                        bool explicitRuntime = actor.Recipe.RuntimeExplicit;
+                        string runtime = actor.Recipe.Runtime;
+                        if (actor.Recipe.Roles.Contains("client"))
+                        {
+                            var root = ProfileRuntimeStorage.DefaultRoot(EnvironmentInventory.ThisMachine,
+                                actor.Recipe.Install, CliBundle.DataRoot);
+                            runtime = HostPath.Join(root.Path, "local-clients");
+                            explicitRuntime = false;
+                        }
+                        if (probes.ProfileStorage is { } profileStorage)
+                            _ = await profileStorage(host, actor.Recipe.Install, runtime, explicitRuntime, timeout, cancellation).ConfigureAwait(false);
+                        else
+                            _ = await HostedRuntimeStage.RequireProfileStorageAsync(host, actor.Recipe.Install, runtime,
+                                timeout, cancellation, explicitRuntime: explicitRuntime).ConfigureAwait(false);
+                    }
+                    catch (Exception error) when (Refusal(error)) { problems.Add(new(actor.Name, "profile storage", error.Message)); }
             try
             {
                 var claim = probes.Lock is { } lockProbe
