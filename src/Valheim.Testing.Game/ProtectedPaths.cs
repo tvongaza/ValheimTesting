@@ -110,15 +110,16 @@ internal static class ProtectedPaths
 
     /// <summary>
     /// Removal under a root, for a bash host script that already holds <see cref="BashInside"/> (it uses <c>vt_physical</c>).
-    /// <c>vt_remove PATH ROOT</c> deletes PATH only when it lies strictly below ROOT once links are resolved, and returns 3 and
-    /// deletes nothing when it does not, when either cannot be resolved or when PATH is not absolute. A PATH that is itself a link
-    /// (to a directory or a file, dangling or not) is unlinked and its target is never entered or emptied; the link only has to
+    /// <c>vt_remove PATH ROOT [check]</c> deletes PATH only when it lies strictly below ROOT once links are resolved, and returns 3
+    /// and deletes nothing when it does not, when either cannot be resolved or when PATH is not absolute (or 4 when the delete itself
+    /// failed). With <c>check</c> it only decides, so a script can check every path before it deletes any. A PATH that is itself a
+    /// link (to a directory or a file, dangling or not) is unlinked and its target is never entered or emptied; the link only has to
     /// stand inside ROOT. A PATH that does not exist is already gone. A trailing slash on PATH is dropped first: BSD <c>rm</c> follows
-    /// <c>link/</c>. This is the one delete of a folder a host script was handed by name (a runtime copy, a staging folder, a journalled path).
+    /// <c>link/</c>. This is the one delete of a folder a host script was handed by name (a runtime copy, a staging folder).
     /// </summary>
     internal static readonly string BashRemove = """
         vt_remove() {
-            local path=$1 root=$2 base real
+            local path=$1 root=$2 mode=${3:-} base real
             case "$path" in /*) ;; *) return 3;; esac
             while [ "$path" != / ] && [ "${path%/}" != "$path" ]; do path=${path%/}; done
             base=$(vt_physical "$root") || return 3
@@ -126,13 +127,15 @@ internal static class ProtectedPaths
             if [ -L "$path" ]; then
                 real=$(vt_physical "$(dirname -- "$path")") || return 3
                 case "$real" in "$base"|"$base"/*) ;; *) return 3;; esac
-                rm -f -- "$path"
-                return
+                [ "$mode" = check ] && return 0
+                rm -f -- "$path" || return 4
+                return 0
             fi
             [ -e "$path" ] || return 0
             real=$(vt_physical "$path") || return 3
             case "$real" in "$base"/*) ;; *) return 3;; esac
-            rm -rf -- "$path"
+            [ "$mode" = check ] && return 0
+            rm -rf -- "$path" || return 4
         }
 
         """.ReplaceLineEndings("\n");
@@ -140,27 +143,37 @@ internal static class ProtectedPaths
     /// <summary>
     /// <see cref="BashRemove"/> for a Windows host's PowerShell 7, put after <see cref="PowerShellInside"/>. <c>Remove-VtTree $path $root</c>
     /// unlinks a symlink or junction without entering it, deletes a folder or file only when it lies strictly below the root once
-    /// links are resolved, and throws (deleting nothing) otherwise. A path that does not exist is already gone.
+    /// links are resolved, and throws (deleting nothing) otherwise; with <c>-Check</c> it only decides. A path that does not exist is
+    /// already gone. A reparse point that is not a symlink or junction (a cloud placeholder) is an ordinary folder, as <c>Get-VtPhysical</c> reads it.
     /// </summary>
     internal static readonly string PowerShellRemove = """
-        function Remove-VtTree([string]$path, [string]$root) {
+        function Remove-VtTree([string]$path, [string]$root, [switch]$check) {
             $sep = [IO.Path]::DirectorySeparatorChar
             $comparison = [StringComparison]::OrdinalIgnoreCase
             $path = $path.TrimEnd([char[]]@('\', '/'))
-            $base = (Get-VtPhysical $root).TrimEnd($sep)
-            if (-not $base) { throw ('Refusing to remove below the volume root: ' + $path) }
+            $rootPhysical = (Get-VtPhysical $root).TrimEnd($sep)
+            $base = $rootPhysical
+            # 'C:\' trimmed is 'C:': a volume root is the root's own path root.
+            if (-not $base -or [string]::Equals($base, [IO.Path]::GetPathRoot((Get-VtPhysical $root)).TrimEnd($sep), $comparison)) { throw ('Refusing to remove below a volume root: ' + $path) }
             $attributes = $null
             try { $attributes = [IO.File]::GetAttributes($path) } catch [IO.FileNotFoundException] { } catch [IO.DirectoryNotFoundException] { }
             if ($null -eq $attributes) { return }
             $isDirectory = [bool]($attributes -band [IO.FileAttributes]::Directory)
+            $isLink = $false
             if ($attributes -band [IO.FileAttributes]::ReparsePoint) {
+                $item = Get-Item -LiteralPath $path -Force -ErrorAction Stop
+                $isLink = $item.LinkType -eq 'SymbolicLink' -or $item.LinkType -eq 'Junction'
+            }
+            if ($isLink) {
                 $real = (Get-VtPhysical ([IO.Path]::GetDirectoryName($path))).TrimEnd($sep)
                 if (-not ([string]::Equals($real, $base, $comparison) -or $real.StartsWith($base + $sep, $comparison))) { throw ('Refusing to remove a link outside ' + $root + ': ' + $path) }
+                if ($check) { return }
                 if ($isDirectory) { [IO.Directory]::Delete($path) } else { [IO.File]::Delete($path) }
                 return
             }
             $real = (Get-VtPhysical $path).TrimEnd($sep)
             if (-not $real.StartsWith($base + $sep, $comparison)) { throw ('Refusing to remove outside ' + $root + ': ' + $path) }
+            if ($check) { return }
             if ($isDirectory) { [IO.Directory]::Delete($path, $true) } else { [IO.File]::Delete($path) }
         }
 

@@ -274,9 +274,10 @@ public sealed class LinkRuleTests : IDisposable
             ["runtime"] = Path.Combine(parent, "runtime"), ["stage"] = Path.Combine(door, "staging"), ["parent"] = parent,
         }, Generous);
 
-        Assert.NotEqual(0, result.ExitCode);
+        Assert.True(result.Failed, result.Describe() + result.Stderr);
         Assert.DoesNotContain("VT-STAGE-CLEANED", result.Stdout);
         Assert.Equal("not ours either", File.ReadAllText(Path.Combine(elsewhere, "staging", "precious.txt")));
+        Assert.True(File.Exists(Path.Combine(parent, "runtime", "game.txt"))); // every path is checked before any is deleted
         Assert.Equal("not ours", File.ReadAllText(Path.Combine(elsewhere, "precious.txt")));
     }
 
@@ -293,23 +294,42 @@ public sealed class LinkRuleTests : IDisposable
             {
                 ["runtime"] = "", ["stage"] = stage, ["parent"] = parent,
             }, Generous);
-            Assert.NotEqual(0, result.ExitCode);
+            Assert.True(result.Failed, result.Describe() + result.Stderr);
             Assert.Equal("not ours", File.ReadAllText(Path.Combine(elsewhere, "precious.txt")));
             Assert.True(File.Exists(Path.Combine(parent, "runtime", "game.txt")));
         }
     }
 
-    // A hosted run's runtime that is a link is unlinked, not left behind and not emptied (bash host; the Windows script refuses a reparse point).
+    // The remover itself: a trailing slash on a link (BSD rm follows "link/" and empties its target) names the link, not the target.
+    [Theory]
+    [MemberData(nameof(Shells))]
+    public async Task TheRemoverTakesALinkWithATrailingSlashAsTheLinkAndNeverEmptiesItsTarget(string shell)
+    {
+        string parent = Folder("parent"), elsewhere = Elsewhere("elsewhere");
+        string link = Path.Combine(parent, "stage");
+        DirectoryLinks.Create(link, elsewhere);
+        var host = Shell(shell);
+        string script = host.Shell.Kind == HostShellKind.Bash
+            ? "set -eu\n" + ProtectedPaths.BashInside + ProtectedPaths.BashRemove + "vt_remove \"$path/\" \"$parent\"\necho VT-DONE\n"
+            : ProtectedPaths.PowerShellInside + ProtectedPaths.PowerShellRemove + "Remove-VtTree ($path + [IO.Path]::DirectorySeparatorChar) $parent\n'VT-DONE'\n";
+
+        var result = (await host.RunAsync(script, new Dictionary<string, string> { ["path"] = link, ["parent"] = parent }, Generous)).EnsureSuccess("remove");
+
+        Assert.Contains("VT-DONE", result.Stdout);
+        Assert.False(Directory.Exists(link));
+        Assert.Equal("not ours", File.ReadAllText(Path.Combine(elsewhere, "precious.txt")));
+    }
+
+    // A hosted run's runtime that is a link is unlinked, not left behind and not emptied.
     [Fact]
     public async Task ARetiredRunUnlinksARuntimeThatIsALinkAndKeepsItsTarget()
     {
-        if (OperatingSystem.IsWindows()) return;
         string run = Path.Combine(_root, "runs", "run-link"), runtime = Path.Combine(run, "runtime"), keep = Path.Combine(run, "runtime-changes");
         Directory.CreateDirectory(run);
         string elsewhere = Elsewhere("elsewhere");
         DirectoryLinks.Create(runtime, elsewhere);
 
-        var result = (await _host.RunAsync(HostedRunScripts.Retire, new Dictionary<string, string>
+        var result = (await _host.RunAsync(OperatingSystem.IsWindows() ? HostedRunScripts.WindowsRetire : HostedRunScripts.Retire, new Dictionary<string, string>
         {
             ["runtime"] = runtime, ["keep"] = keep, ["run"] = "run-link", ["perfile"] = "1000", ["total"] = "5000", ["files"] = "",
         }, Generous)).EnsureSuccess("retire");

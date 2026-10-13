@@ -367,10 +367,12 @@ internal static class RunRecovery
                             await Note(group.Key, JournalEntry.Of(JournalEntry.CopyRetired, ("runtime", copy.What), ("handedOver", "true"), ("keptIn", keepIn))).ConfigureAwait(false);
                             continue;
                         }
+                        // The journalled stage is read from disk: it must be this copy's own before anything runs on the host, logs included.
+                        string copyParent = HostedRuntimeStage.RequirePrepared(host, copy.What, runId);
+                        if (stage.Length != 0) HostedRuntimeStage.RequireStaging(host, copyParent, stage);
                         // A hosted run's world copy (HostedServerRun journals what each of its copies holds) has no game logs.
                         if (copy.Fields.GetValueOrDefault("holds") == "world")
                         {
-                            HostedRuntimeStage.RequirePrepared(host, copy.What, runId);
                             if (copy.Fields.GetValueOrDefault("verified") == "true")
                             {
                                 // A hosted run's verified world copy is its save, evidence: handed over where it is, as a run that ends does.

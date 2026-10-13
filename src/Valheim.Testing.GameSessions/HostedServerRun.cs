@@ -776,7 +776,7 @@ internal static class HostedRunScripts
 {
     // Windows counterpart of Retire. Only this run's own runtime copy may be removed, and a retained file must be a regular
     // file that lies inside it once links are resolved (ProtectedPaths.PowerShellInside). Variables: runtime, keep, run, files, perfile, total.
-    public static readonly string WindowsRetire = ProtectedPaths.PowerShellInside + """
+    public static readonly string WindowsRetire = ProtectedPaths.PowerShellInside + ProtectedPaths.PowerShellRemove + """
         if (-not $run -or $run -match '[\\/]' -or $run -eq '.' -or $run -eq '..') { exit 3 }
         $parent = [IO.Path]::GetDirectoryName($runtime)
         if ([IO.Path]::GetFileName($runtime) -cne 'runtime' -or [IO.Path]::GetFileName($parent) -cne $run -or
@@ -784,7 +784,8 @@ internal static class HostedRunScripts
         if ([IO.Directory]::Exists($keep) -or [IO.File]::Exists($keep)) { exit 3 }
         [void][IO.Directory]::CreateDirectory($keep)
         if (-not [IO.Directory]::Exists($runtime)) { 'VT-RETIRED 0 0'; exit 0 }
-        if ([IO.File]::GetAttributes($runtime) -band [IO.FileAttributes]::ReparsePoint) { exit 3 }
+        # A runtime that is a link keeps nothing: it is unlinked, never entered, and its target stays.
+        if ([IO.File]::GetAttributes($runtime) -band [IO.FileAttributes]::ReparsePoint) { Remove-VtTree $runtime $parent; 'VT-RETIRED 0 0'; exit 0 }
         $real = Get-VtPhysical $runtime # the copy's physical path; each kept file must resolve below it
         $kept = [long]0
         foreach ($line in ($files -split "`n")) {
@@ -819,7 +820,7 @@ internal static class HostedRunScripts
             }
         }
         foreach ($link in $links) { if ($link[1]) { [IO.Directory]::Delete($link[0]) } else { [IO.File]::Delete($link[0]) } }
-        [IO.Directory]::Delete($runtime, $true)
+        Remove-VtTree $runtime $parent
         'VT-RETIRED ' + $bytes + ' ' + $kept
         """.ReplaceLineEndings("\n");
 
@@ -844,6 +845,7 @@ internal static class HostedRunScripts
         # A runtime that is a link (or not a folder) keeps nothing: a link is unlinked, never entered, and its target stays.
         if [ ! -d "$runtime" ] || [ -L "$runtime" ]; then
             mkdir -p -- "$keep" || exit 3
+            # The root is the run's own directory (checked above), so what vt_remove adds here is the link handling, not a wider guard.
             if [ -L "$runtime" ]; then vt_remove "$runtime" "$(dirname -- "$runtime")" || exit 3; fi
             echo "VT-RETIRED 0 0"; exit 0
         fi

@@ -197,11 +197,7 @@ internal static partial class HostedRuntimeStage
         if (host.Shell.Kind is not (HostShellKind.Bash or HostShellKind.PowerShell))
             throw new PlatformNotSupportedException("Runtime preparation needs a bash or PowerShell host.");
         if (files.Count == 0) throw new ArgumentException("Select at least one pinned plugin file.", nameof(files));
-        string stageSuffix = host.Shell.Kind == HostShellKind.PowerShell ? @"\staging" : "/staging";
-        if (!staging.EndsWith(stageSuffix, StringComparison.OrdinalIgnoreCase) ||
-            !string.Equals(staging[..^stageSuffix.Length], destination[..destination.LastIndexOfAny(['/', '\\'])],
-                StringComparison.OrdinalIgnoreCase))
-            throw new ArgumentException("The staging directory must be a new sibling named staging beside the disposable runtime.", nameof(staging));
+        RequireStaging(host, destination[..destination.LastIndexOfAny(['/', '\\'])], staging);
         // Whether the disposable runtime and its staging lie outside the install that runs never change is decided on the host,
         // with links resolved there: a runtime directory reached through a link into the install is inside it.
         await HostInstall.RequireApartAsync(host, source, [destination, staging], "the source install", timeout, cancellation).ConfigureAwait(false);
@@ -212,7 +208,7 @@ internal static partial class HostedRuntimeStage
     internal static async Task RetireAsync(IGameHost host, string destination, string staging, TimeSpan timeout, CancellationToken cancellation = default, string? runId = null)
     {
         string parent = RequirePrepared(host, destination, runId);
-        RequireStaging(host, parent, staging);
+        if (staging.Length != 0) RequireStaging(host, parent, staging);
         var result = await host.RunAsync(host.Shell.Kind == HostShellKind.PowerShell ? WindowsCleanup : BashCleanup,
             new Dictionary<string, string> { ["runtime"] = destination, ["stage"] = staging, ["parent"] = parent }, timeout, cancellation).ConfigureAwait(false);
         result.EnsureSuccess($"Retiring prepared runtime on {host.Name}");
@@ -221,16 +217,16 @@ internal static partial class HostedRuntimeStage
     }
 
     /// <summary>
-    /// Refuses a staging path that is not the copy's own: empty (a world copy has none) or <c>&lt;parent&gt;/staging</c>, the sibling
-    /// preparation names. It arrives from a journal on recovery, which a hand edit or corruption could aim anywhere.
+    /// The one rule for a copy's staging folder: <c>&lt;parent&gt;/staging</c> beside the runtime (ignoring case, as preparation always did),
+    /// Preparation applies it to what it is given and retirement to what
+    /// it is given (a world copy has none: retirement skips the check for an empty one), which on recovery comes from a journal that a hand edit or corruption could aim anywhere.
     /// </summary>
     internal static void RequireStaging(IGameHost host, string parent, string staging)
     {
-        if (staging.Length == 0) return;
         bool windows = host.Shell.Kind == HostShellKind.PowerShell;
         string Same(string path) => windows ? path.Replace('/', '\\') : path;
-        if (!string.Equals(Same(staging), Same(parent) + (windows ? @"\" : "/") + "staging", windows ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
-            throw new ArgumentException($"The staging directory must be {parent}/staging, beside the runtime; not removing {staging}.", nameof(staging));
+        if (!string.Equals(Same(staging), Same(parent) + (windows ? @"\" : "/") + "staging", StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("The staging directory must be a sibling named staging beside the disposable runtime.", nameof(staging));
     }
 
     /// <summary>
@@ -318,6 +314,9 @@ internal static partial class HostedRuntimeStage
     // unlinked, never emptied, and a path that resolves outside the parent is refused with nothing deleted. Variables: runtime, stage, parent.
     internal static readonly string WindowsCleanup = ProtectedPaths.PowerShellInside + ProtectedPaths.PowerShellRemove + """
         foreach ($path in @($runtime, $stage)) {
+            if ($path) { Remove-VtTree $path $parent -Check }
+        }
+        foreach ($path in @($runtime, $stage)) {
             if ($path) { Remove-VtTree $path $parent }
         }
         if ($parent -and [IO.Directory]::Exists($parent) -and [IO.Directory]::GetFileSystemEntries($parent).Length -eq 0) {
@@ -328,8 +327,13 @@ internal static partial class HostedRuntimeStage
 
     internal static readonly string BashCleanup = "set -eu\n" + ProtectedPaths.BashInside + ProtectedPaths.BashRemove + """
         if [ -z "$parent" ]; then echo 'vt: no parent folder to remove below' >&2; exit 3; fi
-        if [ -n "$runtime" ]; then vt_remove "$runtime" "$parent" || { echo "vt: refused to remove $runtime" >&2; exit 3; }; fi
-        if [ -n "$stage" ]; then vt_remove "$stage" "$parent" || { echo "vt: refused to remove $stage" >&2; exit 3; }; fi
+        # Every path is checked before any is deleted: a refusal leaves the whole copy for a later recovery.
+        for path in "$runtime" "$stage"; do
+          if [ -n "$path" ]; then vt_remove "$path" "$parent" check || { echo "vt: refused to remove $path" >&2; exit 3; }; fi
+        done
+        for path in "$runtime" "$stage"; do
+          if [ -n "$path" ]; then vt_remove "$path" "$parent" || { echo "vt: could not remove $path" >&2; exit 3; }; fi
+        done
         if [ -d "$parent" ]; then rmdir "$parent" 2>/dev/null || true; fi
         echo 'VT-STAGE-CLEANED'
         """.ReplaceLineEndings("\n");

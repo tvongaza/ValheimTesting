@@ -879,7 +879,7 @@ public sealed class RunRecoveryTests : IDisposable
 
         Assert.False(report.Recovered);
         Assert.Contains("not removed: The staging directory must be", Assert.Single(report.Steps, step => step.What == "copy " + Prep + "/runtime").Outcome);
-        Assert.DoesNotContain("cleanup-stage", _host.Scripts);
+        Assert.DoesNotContain(_host.Scripts, script => script is "keep-logs" or "cleanup-stage"); // nothing ran on the host
         Assert.True(Directory.Exists(_host.Local(Prep + "/runtime")));
         Assert.Equal("not ours", File.ReadAllText(_host.Local("/srv/runs/server/someone-else/precious.txt")));
     }
