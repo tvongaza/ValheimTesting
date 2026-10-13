@@ -115,9 +115,10 @@ public sealed class ValidationLimitsTests : IClassFixture<ValidationLimitsTests.
                 [Trait("Os", "macos")] public class SplitMacos { [Fact] public void Ran() { } }
                 public class SplitSensitive { [Fact] public void Ran() { } }
                 """);
-            // A copy of the script, so the validation that runs these tests keeps its own build of it; it finds the repository
-            // from the working directory.
-            _script = Path.Combine(Path.GetTempPath(), "vt-validate-limits-probe", "validate.cs");
+            // A copy of the script in this fixture's own folder, so the validation that runs these tests keeps its own build of it
+            // and two validations never share one copy. The probe receives the repository explicitly: a file-based app's working
+            // directory is the SDK's choice (#766).
+            _script = Path.Combine(_directory, "validate-probe", "validate.cs");
             Directory.CreateDirectory(Path.GetDirectoryName(_script)!);
             File.Copy(Path.Combine(FixtureProjects.RepositoryRoot(), "scripts", "validate.cs"), _script, overwrite: true);
             // Restore and compile now, so the scaled limits below measure the test run and not the first build. The project is
@@ -137,7 +138,7 @@ public sealed class ValidationLimitsTests : IClassFixture<ValidationLimitsTests.
         /// <summary>validate.cs's probe mode on one test of the project; null limits keep the script's own.</summary>
         public Task<BuildRun> Run(string test, double? soft, double? hard, bool githubActions, double? heartbeat = null, bool split = false) =>
             FixtureProjects.Dotnet(FixtureProjects.RepositoryRoot(),
-                ["run", _script, "--", "--limits-probe", _project, Results(test, split), "FullyQualifiedName~" + test, .. (split ? new[] { "--split" } : Array.Empty<string>())],
+                ["run", _script, "--", "--limits-probe", FixtureProjects.RepositoryRoot(), _project, Results(test, split), "FullyQualifiedName~" + test, .. (split ? new[] { "--split" } : Array.Empty<string>())],
                 new Dictionary<string, string?>
                 {
                     ["VT_VALIDATE_SOFT_LIMIT_SECONDS"] = soft?.ToString(System.Globalization.CultureInfo.InvariantCulture),

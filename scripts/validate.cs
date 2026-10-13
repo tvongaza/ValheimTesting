@@ -6,7 +6,7 @@
 //   dotnet run scripts/validate.cs -- --ci-main-tests  CI only (Windows, macOS): toolkit tests excluding this OS's measured slow methods
 //   dotnet run scripts/validate.cs -- --ci-timed 1|2|3 CI only (Windows, macOS): one balanced slow-method shard of this OS
 //   dotnet run scripts/validate.cs -- --ci-build-only  CI only (Windows, macOS): packaging and other test layers
-//   dotnet run scripts/validate.cs -- --limits-probe PROJECT RESULTS [FILTER]  tests of validate.cs's test commands only: one command
+//   dotnet run scripts/validate.cs -- --limits-probe ROOT PROJECT RESULTS [FILTER]  tests of validate.cs's test commands only: one command
 //   ... --split  with any mode above: CI pull requests: this OS's share of the toolkit tests (#735, below)
 //
 // Runs the library tests, compiles the adapter source package against reference stubs, builds every example, tool and script, runs
@@ -40,22 +40,25 @@ using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Xml.Linq;
 
-string root = FindRoot();
 bool split = args.Contains("--split");
 string[] mode = args.Where(argument => argument != "--split").ToArray();
 bool skipCiShell = mode.SequenceEqual(["--skip-ci-shell"]);
 bool onlyCiShell = mode.SequenceEqual(["--only-ci-shell"]);
 bool ciMainTests = mode.SequenceEqual(["--ci-main-tests"]);
 bool ciBuildOnly = mode.SequenceEqual(["--ci-build-only"]);
-bool limitsProbe = mode is ["--limits-probe", _, _] or ["--limits-probe", _, _, _];
+bool limitsProbe = mode is ["--limits-probe", _, _, _] or ["--limits-probe", _, _, _, _];
 const int TimedShardCount = 3; // the timed shards of --ci-timed; the workflow's toolkit matrix lists the same N
 int ciTimed = mode is ["--ci-timed", var shardNumber] && int.TryParse(shardNumber, out int shardIndex) && shardIndex >= 1 && shardIndex <= TimedShardCount ? shardIndex : 0;
 if ((mode.Length != 0 && !skipCiShell && !onlyCiShell && !ciMainTests && !ciBuildOnly && !limitsProbe && ciTimed == 0) ||
     args.Count(argument => argument == "--split") > 1)
-    throw new ArgumentException("usage: dotnet run scripts/validate.cs [--skip-ci-shell|--only-ci-shell|--ci-main-tests|--ci-timed 1|2|3|--ci-build-only|--limits-probe PROJECT RESULTS [FILTER]] [--split]");
+    throw new ArgumentException("usage: dotnet run scripts/validate.cs [--skip-ci-shell|--only-ci-shell|--ci-main-tests|--ci-timed 1|2|3|--ci-build-only|--limits-probe ROOT PROJECT RESULTS [FILTER]] [--split]");
+// A probe names its repository and paths absolutely: a file-based app's working directory is the SDK's choice (#766).
+if (limitsProbe && (mode.Skip(1).Take(3).Any(path => !Path.IsPathFullyQualified(path)) || !File.Exists(Path.Combine(mode[1], "cli-dependency.json"))))
+    throw new ArgumentException("usage: --limits-probe ROOT PROJECT RESULTS [FILTER]: three absolute paths, ROOT the repository (it holds cli-dependency.json)");
+string root = limitsProbe ? mode[1] : FindRoot();
 string? splitFilter = split ? SplitFilter() : null;
 // A probe writes beside its caller's choice, never over the results of the validation that runs the probing test.
-string results = limitsProbe ? Path.GetFullPath(mode[2]) : Path.Combine(root, "artifacts", "validate");
+string results = limitsProbe ? mode[3] : Path.Combine(root, "artifacts", "validate");
 Directory.CreateDirectory(results);
 string transcript = Path.Combine(results, "validate.log");
 File.WriteAllText(transcript, "");
@@ -81,7 +84,7 @@ if (splitFilter != null) Note($"OS-aware split (#735): the toolkit tests' comman
 
 if (limitsProbe)
 {
-    Test(mode[1], mode.Length == 4 ? ["--filter", mode[3]] : []);
+    Test(mode[2], mode.Length == 5 ? ["--filter", mode[4]] : []);
     return 0;
 }
 
@@ -202,8 +205,9 @@ return 0;
 
 static string ScriptPath([CallerFilePath] string path = "") => path;
 
-// The repository root holds cli-dependency.json. Search upward from the working directory first:
-// CI path mapping can rewrite the compile-time source path CallerFilePath reports.
+// The repository root holds cli-dependency.json. Search upward from the working directory first: CI path mapping can rewrite
+// the compile-time source path CallerFilePath reports. Newer SDKs start a file-based app in its own folder, which is inside the
+// repository for scripts/validate.cs; a copied limits probe lives outside it, so it receives its root explicitly above.
 static string FindRoot()
 {
     foreach (string start in new[] { Environment.CurrentDirectory, Path.GetDirectoryName(ScriptPath()) ?? "" })
