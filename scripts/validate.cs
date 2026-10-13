@@ -23,8 +23,9 @@
 // Every test command has two time limits (#719), enforced in Execute and nowhere else. Past the soft limit (5 minutes) it keeps
 // going and, when it ends, a warning names the command, its duration and its slowest tests (a ::warning:: annotation in CI): the
 // signal to split or speed it up. Past the hard limit (10 minutes) its test host is stopped, so the blame sequence names the tests in
-// flight, and the process tree is killed: validation fails. VT_VALIDATE_SOFT_LIMIT_SECONDS and VT_VALIDATE_HARD_LIMIT_SECONDS scale
-// both down, for the tests of this mechanism (ValidationLimitsTests) only.
+// flight. When a host was stopped, the test command then has 30 seconds to exit and write its completed results before its tree is
+// killed; with no stopped host, its tree is killed at once. Validation fails either way. VT_VALIDATE_SOFT_LIMIT_SECONDS and
+// VT_VALIDATE_HARD_LIMIT_SECONDS scale both limits down, for the tests of this mechanism (ValidationLimitsTests) only.
 // A RunTestsOnBothFrameworks hard limit during the net48 xunit console leg cannot name tests: xunit.console.exe is not a testhost
 // on Windows or under Mono, so there is no blame collector to flush.
 //
@@ -73,6 +74,7 @@ string dataRoot = DataRoot();
 var dataBefore = Snapshot(dataRoot);
 var softLimit = TimeSpan.FromSeconds(LimitSeconds("VT_VALIDATE_SOFT_LIMIT_SECONDS", 5 * 60));
 var hardLimit = TimeSpan.FromSeconds(LimitSeconds("VT_VALIDATE_HARD_LIMIT_SECONDS", 10 * 60));
+const int hardLimitGracePeriodSeconds = 30;
 if (hardLimit <= softLimit) throw new InvalidOperationException("The hard limit of a test command must be longer than its soft limit.");
 // #736 investigation, remove it when that issue closes: the macOS CI job runs with VT_VALIDATE_HEARTBEAT_SECONDS=60. One line each
 // period names the running command and the machine's state; it reaches GitHub in the job log while the job runs, so the last line
@@ -324,19 +326,36 @@ void Execute(string file, string[] arguments, string? testResults, string? noTes
         try { stopped = StopTestHosts(process.Id); }
         catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or AggregateException or IOException)
         {
-            Note($"could not stop the test host ({ex.Message}); killing the process tree without a blame sequence");
+            Note($"could not stop the test host ({ex.Message}); continuing without a blame sequence");
         }
         bool cannotNameTests = stopped == 0 && noTestNamesReason != null;
-        if (stopped != 0)
+        // No stopped host means MSBuild may still start another target-framework leg, so only a stopped host earns the grace.
+        bool waitForCommandExit = ValidationLimitHandling.ShouldWaitForCommandExit(stopped);
+        if (waitForCommandExit)
         {
             Note($"stopped {stopped} test host process(es); waiting up to 10 s for the blame sequence to flush");
             Note(WaitForReadableBlameSequence(testResults!, TimeSpan.FromSeconds(10))
-                ? "blame sequence flushed; killing the process tree"
-                : "no readable blame sequence after 10 s; killing the process tree");
+                ? $"blame sequence flushed; waiting up to {hardLimitGracePeriodSeconds} s for the test command to exit"
+                : $"no readable blame sequence after 10 s; waiting up to {hardLimitGracePeriodSeconds} s for the test command to exit");
         }
-        else Note("no test host was found; killing the process tree");
-        try { process.Kill(entireProcessTree: true); }
-        catch (InvalidOperationException) { /* It exited after its test host was stopped. */ }
+        else Note("no test host was stopped; killing the process tree without a grace period");
+        var exitClock = Stopwatch.StartNew();
+        if (waitForCommandExit && process.WaitForExit(TimeSpan.FromSeconds(hardLimitGracePeriodSeconds)))
+            Note($"test command exited on its own after {Math.Ceiling(exitClock.Elapsed.TotalSeconds):F0} s");
+        else
+        {
+            try
+            {
+                process.Kill(entireProcessTree: true);
+                Note(waitForCommandExit
+                    ? $"test command killed after the {hardLimitGracePeriodSeconds} s grace period"
+                    : "test command killed without a grace period");
+            }
+            catch (InvalidOperationException)
+            {
+                Note($"test command exited during the kill after {Math.Ceiling(exitClock.Elapsed.TotalSeconds):F0} s");
+            }
+        }
         process.WaitForExit();
         string? unavailable = cannotNameTests ? noTestNamesReason : null;
         Note(ValidationLimitReports.HardLimitFailure(command, clock.Elapsed, hardLimit, unavailable));
@@ -354,8 +373,8 @@ void Execute(string file, string[] arguments, string? testResults, string? noTes
     DataRootUnchanged(command);
 }
 
-// Stopping only the host gives vstest's blame collector a bounded chance to finish its sequence before the whole command
-// tree is killed. This polls only the read-only evidence; the stop and tree kill are each issued once.
+// Stopping only the host gives vstest's blame collector a bounded chance to finish its sequence and the command to write its TRX.
+// With no stopped host the tree is killed immediately. This polls only read-only evidence; the stop and tree kill are each issued once.
 static bool WaitForReadableBlameSequence(string testResults, TimeSpan timeout)
 {
     var clock = Stopwatch.StartNew();

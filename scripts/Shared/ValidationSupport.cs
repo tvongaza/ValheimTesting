@@ -138,3 +138,8 @@ internal static class ValidationLimitReports
 
     public static string Elapsed(TimeSpan elapsed) => $"{(int)elapsed.TotalMinutes}m{elapsed.Seconds:00}s";
 }
+
+internal static class ValidationLimitHandling
+{
+    public static bool ShouldWaitForCommandExit(int stoppedTestHosts) => stoppedTestHosts != 0;
+}
