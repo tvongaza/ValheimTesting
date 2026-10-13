@@ -3,7 +3,7 @@ using Valheim.Testing.Game;
 internal static class SmokeOutput
 {
     // Check the actual selected actors, not every inventory entry or a separately guessed default.
-    public static void RefuseResolved(string output, string cliFiles, EnvironmentInventory? inventory,
+    public static void RefuseResolved(string output, string? cliFiles, EnvironmentInventory? inventory,
         IEnumerable<EnvironmentRecipe?> actors, params string?[] otherProtected)
     {
         RefuseInside(output, actors.OfType<EnvironmentRecipe>().Select(actor => actor.Install)

@@ -57,90 +57,30 @@ bool journalClean = true;
 bool characterPending = false;
 bool ownershipStarted = false;
 string? output = null;
-bool outputChecked = false;
+var progress = new ModInputStage.Progress();
 try
 {
     output = SmokeCommandOptions.Output(options!);
-    // The client: the inventory's (this machine's Valheim with no --inventory); --game overrides the install and --client-loader-package the loader.
-    var (inventory, client, shippedLoader) = SmokeInputs.Client(options, output, ShippedLoader.Instead,
-        recordSelection: false);
-    string architecture = SmokeInputResolver.SelectClientArchitecture(options.GetValueOrDefault("--client-architecture"), client, inventory);
-    SmokeInputResolver.RequireClientArchitecture(inventory, client, architecture, client.LoaderPackage);
-    var localProblems = await LocalHostPreflight.InspectAsync(inventory,
-        [new LocalHostPreflight.Actor("client", client)], TimeSpan.FromSeconds(60), cancel.Token);
-    if (localProblems.Count != 0)
-        throw new InvalidOperationException(string.Join("; ", localProblems.Select(problem =>
-            $"{problem.Actor} {problem.Input}: {problem.Message}")));
-    foreach (string line in inventory.Detected) Console.WriteLine("detected: " + line);
-    Console.WriteLine($"client: {client.Name} on {client.Host}: install {client.Install}; ValheimCLI port {client.CliPort}; architecture {architecture}");
-    string game = client.Install;
-    // Resolve every selected source before a --project or --scenario-project build writes under --output.
-    var (cliManifest, cliFiles) = SmokeInputs.Cli(options);
-    string? loader = client.LoaderPackage;
-    if (loader != null && !File.Exists(loader)) throw new FileNotFoundException("--client-loader-package file does not exist: " + loader, loader);
-    var loaderPackage = loader == null ? null : BepInExLoaderPackage.Read(loader);
-    SmokeOutput.RefuseResolved(output, cliFiles, inventory, [client], loaderPackage?.Root);
-    outputChecked = true;
-    if (options.TryGetValue("--project", out string? project))
-    {
-        var given = ModBuild.ParseDependencies(buildDependencies!);
-        string? loaderRoot = client.LoaderPackage == null ? null : BepInExLoaderPackage.Read(client.LoaderPackage).Root;
-        var build = ModBuild.Plan(project, game, given, Path.Combine(output, "build"), loaderRoot);
-        var record = await ModBuild.BuildAsync(build, cancel.Token).ConfigureAwait(false);
-        mods!.Add(record.Mod);
-        options["--build-inputs"] = Path.Combine(build.Output, "build-inputs.json");
-        Console.WriteLine("built mod: " + record.Mod);
-        outputChecked = true;
-    }
-    var modSelection = SmokeModInput.Select(mods!, Environment.CurrentDirectory);
-    var selectedMods = modSelection.Mods.ToList();
-    string modSelectionReason = options.TryGetValue("--project", out string? builtProject)
-        ? "built from --project " + Path.GetFullPath(builtProject)
-        : modSelection.Reason;
-    Console.WriteLine("mod selection: " + modSelectionReason);
-    if (options.TryGetValue("--scenario-project", out string? scenarioProject))
-    {
-        options["--scenario"] = await OneShotScenario.BuildAsync(scenarioProject,
-            Path.Combine(output, "scenario-build"), cancel.Token).ConfigureAwait(false);
-        outputChecked = true;
-    }
-    ModBuild.BuildRecord? verifiedBuild = null;
-    if (options.TryGetValue("--build-inputs", out string? buildInputs))
-    {
-        if (selectedMods.Count != 1) throw new ArgumentException("--build-inputs requires exactly one --mod DLL.");
-        verifiedBuild = ModBuild.Verify(buildInputs, game, selectedMods[0]);
-        roots!.AddRange(ModBuild.ThirdPartyRoots(verifiedBuild));
-        Console.WriteLine("build inputs verified: " + buildInputs);
-    }
+    // The client (the inventory's; this machine's Valheim with no --inventory), its loader, the mod, its build inputs,
+    // the scenario and the dependency lock: one stage, shared with build and server-load.
+    var stage = await ModInputStage.RunAsync(new ModInputStage.Request(ModInputStage.Route.Hosted, output, options!,
+        new HashSet<string>(StringComparer.Ordinal), // start's one switch, --hold, is its run's own
+        mods!, roots!, optionalReferences!, buildDependencies!) { Shipped = ShippedLoader.Instead, Progress = progress }, cancel.Token).ConfigureAwait(false);
+    var selectedMods = stage.Mods;
+    string game = stage.Compile.Recipe.Install;
+    string architecture = stage.ClientArchitecture!;
     string mod = selectedMods[0];
-    foreach (var (name, path) in new[] { ("game", game), ("--cli-files", cliFiles) })
-        if (!Directory.Exists(path)) throw new DirectoryNotFoundException(name + " directory does not exist: " + path);
-    var custom = options.TryGetValue("--scenario", out string? scenarioFile)
-        ? OneShotScenario.LoadHosted(scenarioFile, output) : null;
-    object? validatedScenarioInputs = custom == null ? null
-        : OneShotScenario.ValidateInputs(custom.Runner, custom.Runner.Name);
-    SmokeInputs.RecordClient(inventory, client, output);
-    foreach (var (name, path) in selectedMods.Select(path => ("--mod", path)).Append(("--cli-manifest", cliManifest)))
-        if (!File.Exists(path)) throw new FileNotFoundException(name + " file does not exist: " + path, path);
-    string core = Path.Combine(loaderPackage?.Root ?? game, InstallPins.CoreDirectory);
-    if (verifiedBuild != null) ModBuild.RequireLoaderMatches(verifiedBuild, core);
-    var request = SmokeDependencyInputs.Request(selectedMods, game, core, cliManifest, cliFiles,
-        roots!, optionalReferences!, CliCapabilities.HostedRounds);
-    var dependencies = NativeDependencyResolver.Resolve(request);
-    Directory.CreateDirectory(output);
-    if (buildInputs != null) File.Copy(buildInputs, Path.Combine(output, "build-inputs.json"));
-    dependencies.Write(Path.Combine(output, "dependencies.lock.json"));
-    if (!dependencies.Ready)
-        throw new InvalidDataException("Dependency choices remain: " + SmokeDependencyInputs.Gaps(dependencies));
-    if (verifiedBuild != null) ModBuild.RequireResolvedDependencies(verifiedBuild, dependencies);
+    var custom = stage.Scenario;
+    var hostedScenario = (IOneShotHostedScenario?)custom?.Runner;
+    var dependencies = stage.Dependencies!;
     NativeDependencyLock? comparison = null;
     string? compareMod = null;
     if (options.TryGetValue("--compare-mod", out string? compareFile))
     {
         compareMod = Path.GetFullPath(compareFile);
         if (!File.Exists(compareMod)) throw new FileNotFoundException("--compare-mod file does not exist: " + compareMod, compareMod);
-        var compareRequest = SmokeDependencyInputs.Request([compareMod, .. selectedMods.Skip(1)], game, core,
-            cliManifest, cliFiles, request.SearchRoots, request.OptionalReferences, request.Capabilities);
+        var compareRequest = SmokeDependencyInputs.Request([compareMod, .. selectedMods.Skip(1)], game, stage.Core,
+            stage.CliManifest, stage.CliFiles, stage.SearchRoots, optionalReferences!, stage.Capabilities);
         comparison = NativeDependencyResolver.Resolve(compareRequest);
         comparison.Write(Path.Combine(output, "comparison-dependencies.lock.json"));
         if (!comparison.Ready)
@@ -183,10 +123,10 @@ try
     {
         string armOutput = Path.Combine(output, "evidence", arm);
         LocalClientJournal? processJournal = null;
-        var report = runner.Run(arm, armOutput, custom?.Runner.Name ?? "selected plugin loads in a hosted fixture",
+        var report = runner.Run(arm, armOutput, custom?.Name ?? "selected plugin loads in a hosted fixture",
             ["first"], round =>
             {
-                custom?.Runner.Run(round, validatedScenarioInputs);
+                hostedScenario?.Run(round, custom!.ValidatedInputs);
                 if (holdRequested && arm == inputs.Mod.Arms.Keys.Last())
                     round.Step("keep the owned client running until finish", () =>
                         ForegroundHold.HoldAsync(runId, armOutput, cancel.Token,
@@ -197,13 +137,7 @@ try
                 ready.Provenance["runId"] = runId;
                 ready.Provenance["firstModLoadedSecondsFromCommand"] =
                     elapsed.Elapsed.TotalSeconds.ToString("F3", System.Globalization.CultureInfo.InvariantCulture);
-                ready.Provenance["modSelection"] = modSelectionReason;
-                if (custom != null)
-                {
-                    ready.Provenance["oneShotScenario"] = custom.Runner.Name;
-                    ready.Provenance["oneShotScenarioSha256"] = custom.Sha256;
-                }
-                SmokeInputResolver.RecordLoader(ready.Provenance, "client", loader, shippedLoader);
+                stage.Record(ready.Provenance);
             }, openClient: (plan, directory, logs, token) =>
                 {
                     bool desktopTask = OperatingSystem.IsWindows() &&
@@ -239,7 +173,7 @@ try
 catch (Exception failure) when (failure is ArgumentException or IOException or InvalidDataException or InvalidOperationException or UnauthorizedAccessException or FormatException or OperationCanceledException or PlatformNotSupportedException)
 {
     Console.Error.WriteLine("REFUSED: " + failure.Message);
-    if (outputChecked) SmokeOutput.MarkRefused(output, "start", [failure.Message]);
+    if (progress.OutputChecked) SmokeOutput.MarkRefused(output, "start", [failure.Message]);
 }
 finally
 {
