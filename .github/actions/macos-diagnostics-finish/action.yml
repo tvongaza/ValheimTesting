@@ -1,0 +1,25 @@
+name: Keep the macOS diagnostics (#736)
+description: >-
+  Stops the sampler macos-diagnostics-start began and uploads its samples with validate.cs's transcript, whatever the outcome of the
+  job. A lost runner never reaches this step, so an absent artifact after a cancel says the machine, not a test, stopped; otherwise
+  the last sample and the transcript's last "start:" line show what was running and how the machine was. Use it with `if: always()`.
+inputs:
+  name:
+    description: The artifact's name, unique in the run (one per macOS job).
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Stop the sampler
+      shell: bash
+      run: |
+        kill "$(cat artifacts/ci-diagnostics/sampler.pid)" 2>/dev/null || true
+        sleep 1
+    - uses: actions/upload-artifact@v7
+      with:
+        name: ${{ inputs.name }}
+        path: |
+          artifacts/ci-diagnostics
+          artifacts/validate/validate.log
+        if-no-files-found: ignore
+        retention-days: 7

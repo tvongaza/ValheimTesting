@@ -1,0 +1,14 @@
+name: Start the macOS diagnostics (#736)
+description: >-
+  #736 investigation, macOS only; remove it, macos-diagnostics-finish, .github/scripts/macos-sampler.sh and validate.cs's heartbeat when
+  #736 closes. The macOS test jobs have lost their runner inside the validate step. A sample of the machine every minute, kept beside
+  validate.cs's transcript, shows what it was doing and which command ran. Used after the checkout, in a macOS job that runs validate.cs.
+runs:
+  using: composite
+  steps:
+    - name: Sample the machine every minute
+      shell: bash
+      run: |
+        mkdir -p artifacts/ci-diagnostics
+        nohup .github/scripts/macos-sampler.sh artifacts/ci-diagnostics/samples.txt artifacts/validate/validate.log > /dev/null 2>&1 &
+        echo $! > artifacts/ci-diagnostics/sampler.pid
