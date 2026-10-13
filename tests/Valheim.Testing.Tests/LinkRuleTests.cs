@@ -451,4 +451,113 @@ public sealed class LinkRuleTests : IDisposable
         Assert.False(Directory.Exists(keep));
         Assert.Equal("not ours", File.ReadAllText(Path.Combine(elsewhere, "precious.txt")));
     }
+
+    // ---- Read-only entries (#747): Remove-Item -Force used to delete them, and the one remover still must ----
+
+    private static void MakeReadOnly(string path)
+    {
+        if (OperatingSystem.IsWindows()) File.SetAttributes(path, File.GetAttributes(path) | FileAttributes.ReadOnly);
+        else File.SetUnixFileMode(path, Directory.Exists(path) ? UnixFileMode.UserRead | UnixFileMode.UserExecute : UnixFileMode.UserRead);
+    }
+
+    private static void MakeWritable(string path)
+    {
+        if (OperatingSystem.IsWindows()) File.SetAttributes(path, File.GetAttributes(path) & ~FileAttributes.ReadOnly);
+        else File.SetUnixFileMode(path, Directory.Exists(path) ? UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute : UnixFileMode.UserRead | UnixFileMode.UserWrite);
+    }
+
+    private static bool IsReadOnly(string path) => OperatingSystem.IsWindows()
+        ? File.GetAttributes(path).HasFlag(FileAttributes.ReadOnly)
+        : !File.GetUnixFileMode(path).HasFlag(UnixFileMode.UserWrite);
+
+    // A tree with a read-only file and a read-only folder (with a read-only file inside it) goes, and a link inside it is unlinked (read-only on Windows): the clearing
+    // of the read-only bit never enters the link, so the read-only file in its target stays read-only and in place.
+    [Theory]
+    [MemberData(nameof(Shells))]
+    public async Task TheRemoverDeletesReadOnlyFilesAndFoldersAndLeavesALinksTargetAlone(string shell)
+    {
+        if (!OperatingSystem.IsWindows() && Environment.IsPrivilegedProcess) return; // root deletes a read-only folder's contents anyway, so nothing would be proved
+        string parent = Folder("parent"), tree = Path.Combine(parent, "tree"), elsewhere = Elsewhere("elsewhere");
+        string guarded = Path.Combine(tree, "guarded"), precious = Path.Combine(elsewhere, "precious.txt"), fenced = Path.Combine(elsewhere, "fenced");
+        Directory.CreateDirectory(fenced); // a read-only folder beyond the link: the clearing must not reach it either
+        Directory.CreateDirectory(Path.Combine(guarded, "inner"));
+        File.WriteAllText(Path.Combine(tree, "locked.txt"), "read-only");
+        File.WriteAllText(Path.Combine(guarded, "inner", "deep.txt"), "read-only too");
+        File.WriteAllText(Path.Combine(guarded, "inner.txt"), "in a read-only folder");
+        DirectoryLinks.Create(Path.Combine(tree, "door"), elsewhere);
+        DirectoryLinks.Create(Path.Combine(guarded, "inner", "zdoor"), elsewhere); // after the read-only file, inside read-only folders
+        // The system's own recursive delete unlinks a link by itself, so only a read-only link (Windows) is left for the walk to meet.
+        if (OperatingSystem.IsWindows()) foreach (string door in new[] { Path.Combine(tree, "door"), Path.Combine(guarded, "inner", "zdoor") }) MakeReadOnly(door);
+        MakeReadOnly(precious);
+        MakeReadOnly(fenced);
+        MakeReadOnly(Path.Combine(tree, "locked.txt"));
+        MakeReadOnly(Path.Combine(guarded, "inner", "deep.txt"));
+        MakeReadOnly(Path.Combine(guarded, "inner"));
+        MakeReadOnly(guarded);
+        var host = Shell(shell);
+        try
+        {
+            var result = (await host.RunAsync(Run(host, TreeBash, TreePowerShell), new Dictionary<string, string> { ["path"] = tree, ["parent"] = parent }, Generous)).EnsureSuccess("remove");
+
+            Assert.Contains("VT-DONE", result.Stdout);
+            Assert.False(Directory.Exists(tree));
+            Assert.True(File.Exists(precious));
+            Assert.True(IsReadOnly(precious));
+            Assert.True(IsReadOnly(fenced));
+            Assert.Equal("not ours", File.ReadAllText(precious));
+        }
+        finally
+        {
+            if (Directory.Exists(fenced)) MakeWritable(fenced);
+            if (File.Exists(precious)) MakeWritable(precious);
+            foreach (string stuck in new[] { guarded, Path.Combine(guarded, "inner") }.Where(Directory.Exists)) MakeWritable(stuck);
+        }
+    }
+
+    // Hard links share their attributes on NTFS: a read-only file that is also linked elsewhere (a game file in the install, hard-linked into a
+    // runtime) is not made writable through the tree being removed. The delete fails and the other name is untouched.
+    [Fact]
+    public async Task TheRemoverDoesNotClearTheReadOnlyBitOfAFileThatHasAnotherHardLink()
+    {
+        if (!OperatingSystem.IsWindows()) return; // elsewhere rm -rf needs no attribute, and a hard link shares none
+        string parent = Folder("parent"), tree = Path.Combine(parent, "tree"), install = Folder("install");
+        string original = Path.Combine(install, "game.dll"), linked = Path.Combine(tree, "game.dll");
+        Directory.CreateDirectory(tree);
+        File.WriteAllText(original, "the install's file");
+        var link = await Shell("pwsh").RunAsync("New-Item -ItemType HardLink -Path $to -Target $from | Out-Null", new Dictionary<string, string> { ["to"] = linked, ["from"] = original }, Generous);
+        link.EnsureSuccess("hard link");
+        MakeReadOnly(original);
+        try
+        {
+            var result = await Shell("pwsh").RunAsync(TreePowerShell, new Dictionary<string, string> { ["path"] = tree, ["parent"] = parent }, Generous);
+
+            Assert.True(result.Failed, result.Describe() + result.Stderr);
+            Assert.Contains("another hard link", result.Stderr);
+            Assert.True(IsReadOnly(original));
+            Assert.Equal("the install's file", File.ReadAllText(original));
+        }
+        finally { MakeWritable(original); }
+    }
+
+    // The same remover still refuses a path outside its root before it clears anything.
+    [Theory]
+    [MemberData(nameof(Shells))]
+    public async Task TheRemoverLeavesAReadOnlyFileOutsideItsRootAsItIs(string shell)
+    {
+        string parent = Folder("parent"), elsewhere = Elsewhere("elsewhere"), precious = Path.Combine(elsewhere, "precious.txt");
+        MakeReadOnly(precious);
+        var host = Shell(shell);
+        try
+        {
+            var result = await host.RunAsync(Run(host, TreeBash, TreePowerShell), new Dictionary<string, string> { ["path"] = elsewhere, ["parent"] = parent }, Generous);
+
+            Assert.True(result.Failed, result.Describe() + result.Stderr);
+            Assert.True(IsReadOnly(precious));
+            Assert.Equal("not ours", File.ReadAllText(precious));
+        }
+        finally { MakeWritable(precious); }
+    }
+
+    private static readonly string TreeBash = "set -eu\n" + ProtectedPaths.BashInside + ProtectedPaths.BashRemove + "vt_remove \"$path\" \"$parent\"\necho VT-DONE\n";
+    private static readonly string TreePowerShell = ProtectedPaths.PowerShellInside + ProtectedPaths.PowerShellRemove + "Remove-VtTree $path $parent\n'VT-DONE'\n";
 }

@@ -115,7 +115,8 @@ internal static class ProtectedPaths
     /// failed). With <c>check</c> it only decides, so a script can check every path before it deletes any. A PATH that is itself a
     /// link (to a directory or a file, dangling or not) is unlinked and its target is never entered or emptied; the link only has to
     /// stand inside ROOT. A PATH that does not exist is already gone. A trailing slash on PATH is dropped first: BSD <c>rm</c> follows
-    /// <c>link/</c>. This is the delete of a runtime copy and its staging folder (cleanup and retire) that a host script was handed by name.
+    /// <c>link/</c>. A folder below PATH that the user cannot write or enter (a read-only extract, mode 555) is made writable first, because
+    /// <c>rm -rf</c> cannot empty it; <c>find</c> does not follow links and <c>-type d</c> never matches one. This is the delete of a runtime copy and its staging folder (cleanup and retire) that a host script was handed by name.
     /// </summary>
     internal static readonly string BashRemove = """
         vt_remove() {
@@ -135,6 +136,8 @@ internal static class ProtectedPaths
             real=$(vt_physical "$path") || return 3
             case "$real" in "$base"/*) ;; *) return 3;; esac
             [ "$mode" = check ] && return 0
+            # A read-only folder keeps rm from emptying it. find -P never follows a link, and -type d never matches one.
+            find -P "$path" -type d ! -perm -700 -exec chmod u+rwx {} \; 2> /dev/null || :
             rm -rf -- "$path" || return 4
         }
 
@@ -145,6 +148,10 @@ internal static class ProtectedPaths
     /// unlinks a symlink or junction without entering it, deletes a folder or file only when it lies strictly below the root once
     /// links are resolved, and throws (deleting nothing) otherwise; with <c>-Check</c> it only decides. A path that does not exist is
     /// already gone. A reparse point that is not a symlink or junction (a cloud placeholder) is an ordinary folder, as <c>Get-VtPhysical</c> reads it.
+    /// A delete that Windows refuses (a read-only file, folder or link, which <c>Remove-Item -Force</c> used to delete) is repeated entry by entry:
+    /// each read-only attribute is cleared just before its entry goes (except on a file with another hard link, which shares the attribute: that
+    /// delete fails as it did), and a link is unlinked without being entered, its target left as it is. The path is already strictly inside the
+    /// root, so the walk stays inside it.
     /// </summary>
     internal static readonly string PowerShellRemove = """
         function Test-VtLink([string]$path) {
@@ -153,6 +160,25 @@ internal static class ProtectedPaths
             if ($null -eq $attributes -or -not ($attributes -band [IO.FileAttributes]::ReparsePoint)) { return $false }
             $item = Get-Item -LiteralPath $path -Force -ErrorAction Stop
             return ($item.LinkType -eq 'SymbolicLink' -or $item.LinkType -eq 'Junction')
+        }
+        # Entry by entry, bottom up: a link is unlinked and never entered, a read-only file or folder is made writable just before it goes.
+        function Remove-VtWalk([string]$path) {
+            $attributes = [IO.File]::GetAttributes($path)
+            $isDirectory = [bool]($attributes -band [IO.FileAttributes]::Directory)
+            if ($isDirectory -and -not (Test-VtLink $path)) {
+                foreach ($entry in @([IO.Directory]::EnumerateFileSystemEntries($path))) { Remove-VtWalk $entry }
+            }
+            if ($attributes -band [IO.FileAttributes]::ReadOnly) {
+                # Hard links share their attributes: clearing the bit here would also change the other name (a game file in the install).
+                if (-not $isDirectory -and (Get-Item -LiteralPath $path -Force).LinkType -eq 'HardLink') { throw ('Refusing to clear the read-only attribute of a file with another hard link: ' + $path) }
+                [IO.File]::SetAttributes($path, [IO.FileAttributes]($attributes -bxor [IO.FileAttributes]::ReadOnly))
+            }
+            if ($isDirectory) { [IO.Directory]::Delete($path) } else { [IO.File]::Delete($path) }
+        }
+        function Remove-VtEntry([string]$path, [bool]$isDirectory, [bool]$tree) {
+            # The system's own delete first: the walk costs a call per entry, and most trees hold nothing it would refuse.
+            try { if ($isDirectory) { [IO.Directory]::Delete($path, $tree) } else { [IO.File]::Delete($path) } }
+            catch { Remove-VtWalk $path }
         }
         function Remove-VtTree([string]$path, [string]$root, [switch]$check) {
             $sep = [IO.Path]::DirectorySeparatorChar
@@ -172,13 +198,13 @@ internal static class ProtectedPaths
                 $real = (Get-VtPhysical ([IO.Path]::GetDirectoryName($path))).TrimEnd($sep)
                 if (-not ([string]::Equals($real, $base, $comparison) -or $real.StartsWith($base + $sep, $comparison))) { throw ('Refusing to remove a link outside ' + $root + ': ' + $path) }
                 if ($check) { return }
-                if ($isDirectory) { [IO.Directory]::Delete($path) } else { [IO.File]::Delete($path) }
+                Remove-VtEntry $path $isDirectory $false
                 return
             }
             $real = (Get-VtPhysical $path).TrimEnd($sep)
             if (-not $real.StartsWith($base + $sep, $comparison)) { throw ('Refusing to remove outside ' + $root + ': ' + $path) }
             if ($check) { return }
-            if ($isDirectory) { [IO.Directory]::Delete($path, $true) } else { [IO.File]::Delete($path) }
+            Remove-VtEntry $path $isDirectory $true
         }
 
         """.ReplaceLineEndings("\n");
