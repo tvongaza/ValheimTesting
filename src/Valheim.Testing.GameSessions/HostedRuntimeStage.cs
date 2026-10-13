@@ -197,26 +197,37 @@ internal static partial class HostedRuntimeStage
         if (host.Shell.Kind is not (HostShellKind.Bash or HostShellKind.PowerShell))
             throw new PlatformNotSupportedException("Runtime preparation needs a bash or PowerShell host.");
         if (files.Count == 0) throw new ArgumentException("Select at least one pinned plugin file.", nameof(files));
-        string stageSuffix = host.Shell.Kind == HostShellKind.PowerShell ? @"\staging" : "/staging";
-        if (!staging.EndsWith(stageSuffix, StringComparison.OrdinalIgnoreCase) ||
-            !string.Equals(staging[..^stageSuffix.Length], destination[..destination.LastIndexOfAny(['/', '\\'])],
-                StringComparison.OrdinalIgnoreCase))
-            throw new ArgumentException("The staging directory must be a new sibling named staging beside the disposable runtime.", nameof(staging));
+        RequireStaging(host, destination[..destination.LastIndexOfAny(['/', '\\'])], staging);
         // Whether the disposable runtime and its staging lie outside the install that runs never change is decided on the host,
         // with links resolved there: a runtime directory reached through a link into the install is inside it.
         await HostInstall.RequireApartAsync(host, source, [destination, staging], "the source install", timeout, cancellation).ConfigureAwait(false);
     }
 
-    // Only HostedCampaignPreparation calls this for a unique directory it created and retained in memory. Its caller
-    // must hold the host lock and must have stopped all game processes before retiring the prepared install.
+    // For a toolkit-created copy (RequirePrepared) and its own staging folder (RequireStaging), whether the caller still holds it in memory or
+    // a recovery read it from a journal. The caller must hold the host lock and must have stopped all game processes first.
     internal static async Task RetireAsync(IGameHost host, string destination, string staging, TimeSpan timeout, CancellationToken cancellation = default, string? runId = null)
     {
         string parent = RequirePrepared(host, destination, runId);
+        if (staging.Length != 0) RequireStaging(host, parent, staging);
         var result = await host.RunAsync(host.Shell.Kind == HostShellKind.PowerShell ? WindowsCleanup : BashCleanup,
             new Dictionary<string, string> { ["runtime"] = destination, ["stage"] = staging, ["parent"] = parent }, timeout, cancellation).ConfigureAwait(false);
         result.EnsureSuccess($"Retiring prepared runtime on {host.Name}");
         if (InteractiveClient.Line(result.Stdout, "VT-STAGE-CLEANED") == null)
             throw new HostOperationException($"Unexpected cleanup reply from {host.Name}", result);
+    }
+
+    /// <summary>
+    /// The one rule for a copy's staging folder: <c>&lt;parent&gt;/staging</c> beside the runtime (case-insensitive on a Windows host).
+    /// Preparation applies it to the folder it is given, and retirement to the one it is given, which on recovery comes from a journal
+    /// that a hand edit or corruption could aim anywhere. A world copy has no staging: retirement skips the check for an empty one.
+    /// </summary>
+    internal static void RequireStaging(IGameHost host, string parent, string staging)
+    {
+        bool windows = host.Shell.Kind == HostShellKind.PowerShell;
+        string Same(string path) => windows ? path.Replace('/', '\\') : path;
+        // Windows ignores case; a bash host's folders may differ by it (the host script resolves what is really there).
+        if (!string.Equals(Same(staging), Same(parent) + (windows ? @"\" : "/") + "staging", windows ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+            throw new ArgumentException("The staging directory must be a sibling named staging beside the disposable runtime.", nameof(staging));
     }
 
     /// <summary>
@@ -300,9 +311,14 @@ internal static partial class HostedRuntimeStage
         echo 'VT-STAGED selected files only'
         """.ReplaceLineEndings("\n");
 
-    internal static readonly string WindowsCleanup = """
+    // Only the runtime and its staging folder, each below the run's own parent, through the one remover (ProtectedPaths): a link is
+    // unlinked, never emptied, and a path that resolves outside the parent is refused with nothing deleted. Variables: runtime, stage, parent.
+    internal static readonly string WindowsCleanup = ProtectedPaths.PowerShellInside + ProtectedPaths.PowerShellRemove + """
         foreach ($path in @($runtime, $stage)) {
-            if ($path -and [IO.Directory]::Exists($path)) { [IO.Directory]::Delete($path, $true) }
+            if ($path) { Remove-VtTree $path $parent -Check }
+        }
+        foreach ($path in @($runtime, $stage)) {
+            if ($path) { Remove-VtTree $path $parent }
         }
         if ($parent -and [IO.Directory]::Exists($parent) -and [IO.Directory]::GetFileSystemEntries($parent).Length -eq 0) {
             [IO.Directory]::Delete($parent)
@@ -310,11 +326,16 @@ internal static partial class HostedRuntimeStage
         'VT-STAGE-CLEANED'
         """.ReplaceLineEndings("\n");
 
-    internal static readonly string BashCleanup = """
-        set -eu
-        if [ -n "$runtime" ]; then rm -rf -- "$runtime"; fi
-        if [ -n "$stage" ]; then rm -rf -- "$stage"; fi
-        if [ -n "$parent" ] && [ -d "$parent" ]; then rmdir "$parent" 2>/dev/null || true; fi
+    internal static readonly string BashCleanup = "set -eu\n" + ProtectedPaths.BashInside + ProtectedPaths.BashRemove + """
+        if [ -z "$parent" ]; then echo 'vt: no parent folder to remove below' >&2; exit 3; fi
+        # Every path is checked before any is deleted: a refusal leaves the whole copy for a later recovery.
+        for path in "$runtime" "$stage"; do
+          if [ -n "$path" ]; then vt_remove "$path" "$parent" check || { echo "vt: refused to remove $path" >&2; exit 3; }; fi
+        done
+        for path in "$runtime" "$stage"; do
+          if [ -n "$path" ]; then vt_remove "$path" "$parent" || { echo "vt: could not remove $path" >&2; exit 3; }; fi
+        done
+        if [ -d "$parent" ]; then rmdir "$parent" 2>/dev/null || true; fi
         echo 'VT-STAGE-CLEANED'
         """.ReplaceLineEndings("\n");
 }

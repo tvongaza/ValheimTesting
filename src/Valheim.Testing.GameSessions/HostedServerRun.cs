@@ -776,15 +776,16 @@ internal static class HostedRunScripts
 {
     // Windows counterpart of Retire. Only this run's own runtime copy may be removed, and a retained file must be a regular
     // file that lies inside it once links are resolved (ProtectedPaths.PowerShellInside). Variables: runtime, keep, run, files, perfile, total.
-    public static readonly string WindowsRetire = ProtectedPaths.PowerShellInside + """
+    public static readonly string WindowsRetire = ProtectedPaths.PowerShellInside + ProtectedPaths.PowerShellRemove + """
         if (-not $run -or $run -match '[\\/]' -or $run -eq '.' -or $run -eq '..') { exit 3 }
         $parent = [IO.Path]::GetDirectoryName($runtime)
         if ([IO.Path]::GetFileName($runtime) -cne 'runtime' -or [IO.Path]::GetFileName($parent) -cne $run -or
             [IO.Path]::GetFileName($keep) -cne 'runtime-changes' -or [IO.Path]::GetDirectoryName($keep) -cne $parent) { exit 3 }
         if ([IO.Directory]::Exists($keep) -or [IO.File]::Exists($keep)) { exit 3 }
         [void][IO.Directory]::CreateDirectory($keep)
+        # A runtime that is a link (dangling or to a file too) keeps nothing: it is unlinked, never entered, and its target stays.
+        if (Test-VtLink $runtime) { Remove-VtTree $runtime $parent; 'VT-RETIRED 0 0'; exit 0 }
         if (-not [IO.Directory]::Exists($runtime)) { 'VT-RETIRED 0 0'; exit 0 }
-        if ([IO.File]::GetAttributes($runtime) -band [IO.FileAttributes]::ReparsePoint) { exit 3 }
         $real = Get-VtPhysical $runtime # the copy's physical path; each kept file must resolve below it
         $kept = [long]0
         foreach ($line in ($files -split "`n")) {
@@ -819,7 +820,7 @@ internal static class HostedRunScripts
             }
         }
         foreach ($link in $links) { if ($link[1]) { [IO.Directory]::Delete($link[0]) } else { [IO.File]::Delete($link[0]) } }
-        [IO.Directory]::Delete($runtime, $true)
+        Remove-VtTree $runtime $parent
         'VT-RETIRED ' + $bytes + ' ' + $kept
         """.ReplaceLineEndings("\n");
 
@@ -833,7 +834,7 @@ internal static class HostedRunScripts
     // Keeps the listed files (base64 relative paths, one per line) from a run's runtime copy in $keep, within the size
     // limits, then removes the copy. Only a directory named runtime directly inside the run's own directory ($run) is
     // ever removed; a path that leaves the copy, a link or anything but a regular file is listed, never copied.
-    public static readonly string Retire = "set -u\n" + ProtectedPaths.BashInside + """
+    public static readonly string Retire = "set -u\n" + ProtectedPaths.BashInside + ProtectedPaths.BashRemove + """
         case "$run" in ''|*/*|.|..) exit 3;; esac
         [ "$(basename -- "$runtime")" = runtime ] || exit 3
         [ "$(basename -- "$(dirname -- "$runtime")")" = "$run" ] || exit 3
@@ -841,7 +842,13 @@ internal static class HostedRunScripts
         [ "$(dirname -- "$keep")" = "$(dirname -- "$runtime")" ] || exit 3
         # A reused or linked destination could overwrite evidence outside this run. Leave the runtime for review instead.
         [ ! -e "$keep" ] && [ ! -L "$keep" ] || exit 3
-        if [ ! -d "$runtime" ] || [ -L "$runtime" ]; then mkdir -p -- "$keep" || exit 3; echo "VT-RETIRED 0 0"; exit 0; fi
+        # A runtime that is a link (or not a folder) keeps nothing: a link is unlinked, never entered, and its target stays.
+        if [ ! -d "$runtime" ] || [ -L "$runtime" ]; then
+            mkdir -p -- "$keep" || exit 3
+            # The root is the run's own directory (checked above), so what vt_remove adds here is the link handling, not a wider guard.
+            if [ -L "$runtime" ]; then vt_remove "$runtime" "$(dirname -- "$runtime")" || exit 3; fi
+            echo "VT-RETIRED 0 0"; exit 0
+        fi
         mkdir -p -- "$keep" || exit 3
         real=$(vt_physical "$runtime") || exit 3 # the copy's physical path; each kept file must resolve below it
         kept=0
@@ -863,7 +870,7 @@ internal static class HostedRunScripts
         else bytes=$(du -sb -- "$runtime") || exit 3; fi
         bytes=${bytes%%$'\t'*}
         if [ "$vt_darwin" = 1 ]; then bytes=$((bytes * 1024)); fi
-        rm -rf -- "$runtime" || exit 3
+        vt_remove "$runtime" "$(dirname -- "$runtime")" || exit 3
         printf 'VT-RETIRED %s %s\n' "$bytes" "$kept"
         """.ReplaceLineEndings("\n");
 

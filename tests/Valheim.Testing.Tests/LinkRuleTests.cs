@@ -195,4 +195,148 @@ public sealed class LinkRuleTests : IDisposable
         Assert.False(File.Exists(Path.Combine(keep, "out-link", "secret.txt")));
         Assert.True(File.Exists(Path.Combine(outside, "secret.txt"))); // removing the copy removed its links only
     }
+
+    // ---- removing a copy and its staging folder (#738): through the one remover, a link is unlinked and a stray path is refused ----
+
+    private string Prepared(string name)
+    {
+        string parent = Folder("vt-prep-" + name);
+        Directory.CreateDirectory(Path.Combine(parent, "runtime", "BepInEx"));
+        File.WriteAllText(Path.Combine(parent, "runtime", "game.txt"), "the copy");
+        return parent;
+    }
+
+    private string Elsewhere(string name)
+    {
+        string folder = Folder(name);
+        File.WriteAllText(Path.Combine(folder, "precious.txt"), "not ours");
+        return folder;
+    }
+
+    // A staging folder that is a link goes as a link: its target's contents stay, with the shell's own rm (BSD on macOS).
+    [Theory]
+    [MemberData(nameof(Shells))]
+    public async Task RetiringACopyUnlinksALinkedStagingFolderAndLeavesItsTargetAlone(string shell)
+    {
+        string parent = Prepared("linked-stage"), elsewhere = Elsewhere("elsewhere");
+        string staging = Path.Combine(parent, "staging");
+        DirectoryLinks.Create(staging, elsewhere);
+
+        await HostedRuntimeStage.RetireAsync(Shell(shell), Path.Combine(parent, "runtime"), staging, Generous);
+
+        Assert.False(Directory.Exists(parent)); // the copy, the link, then the empty parent
+        Assert.Equal("not ours", File.ReadAllText(Path.Combine(elsewhere, "precious.txt")));
+    }
+
+    [Theory]
+    [MemberData(nameof(Shells))]
+    public async Task RetiringACopyUnlinksALinkedRuntimeAndLeavesItsTargetAlone(string shell)
+    {
+        string parent = Folder("vt-prep-linked-runtime"), elsewhere = Elsewhere("elsewhere");
+        string runtime = Path.Combine(parent, "runtime");
+        DirectoryLinks.Create(runtime, elsewhere);
+
+        await HostedRuntimeStage.RetireAsync(Shell(shell), runtime, Path.Combine(parent, "staging"), Generous);
+
+        Assert.False(Directory.Exists(runtime));
+        Assert.Equal("not ours", File.ReadAllText(Path.Combine(elsewhere, "precious.txt")));
+    }
+
+    // A journal's stage that is not <copy's parent>/staging is refused before the host is asked; nothing is deleted.
+    [Theory]
+    [MemberData(nameof(Shells))]
+    public async Task RetiringACopyRefusesAStagingPathThatIsNotItsOwn(string shell)
+    {
+        string parent = Prepared("stray-stage"), elsewhere = Elsewhere("elsewhere");
+        foreach (string stage in new[] { elsewhere, Path.Combine(parent, "..", "elsewhere", "staging"), Path.Combine(parent, "staging", "..", "runtime"), Path.Combine(elsewhere, "staging") })
+        {
+            await Assert.ThrowsAsync<ArgumentException>(() => HostedRuntimeStage.RetireAsync(Shell(shell), Path.Combine(parent, "runtime"), stage, Generous));
+            Assert.Equal("not ours", File.ReadAllText(Path.Combine(elsewhere, "precious.txt")));
+            Assert.True(File.Exists(Path.Combine(parent, "runtime", "game.txt")));
+        }
+    }
+
+    // The host's own script refuses what resolves outside the copy's parent, whatever the caller checked: a staging folder whose
+    // name is right but that sits beyond a link in the parent is not removed.
+    [Theory]
+    [MemberData(nameof(Shells))]
+    public async Task TheCleanupScriptRefusesAPathBeyondALinkOutOfTheParent(string shell)
+    {
+        string parent = Prepared("beyond-link"), elsewhere = Elsewhere("elsewhere");
+        Directory.CreateDirectory(Path.Combine(elsewhere, "staging"));
+        File.WriteAllText(Path.Combine(elsewhere, "staging", "precious.txt"), "not ours either");
+        string door = Path.Combine(parent, "door");
+        DirectoryLinks.Create(door, elsewhere);
+        var host = Shell(shell);
+
+        var result = await host.RunAsync(host.Shell.Kind == HostShellKind.Bash ? HostedRuntimeStage.BashCleanup : HostedRuntimeStage.WindowsCleanup, new Dictionary<string, string>
+        {
+            ["runtime"] = Path.Combine(parent, "runtime"), ["stage"] = Path.Combine(door, "staging"), ["parent"] = parent,
+        }, Generous);
+
+        Assert.True(result.Failed, result.Describe() + result.Stderr);
+        Assert.DoesNotContain("VT-STAGE-CLEANED", result.Stdout);
+        Assert.Equal("not ours either", File.ReadAllText(Path.Combine(elsewhere, "staging", "precious.txt")));
+        Assert.True(File.Exists(Path.Combine(parent, "runtime", "game.txt"))); // every path is checked before any is deleted
+        Assert.Equal("not ours", File.ReadAllText(Path.Combine(elsewhere, "precious.txt")));
+    }
+
+    // The same for a path with no link at all: outside the parent, or the parent itself.
+    [Theory]
+    [MemberData(nameof(Shells))]
+    public async Task TheCleanupScriptRefusesAPathOutsideTheParentOrTheParentItself(string shell)
+    {
+        string parent = Prepared("outside"), elsewhere = Elsewhere("elsewhere");
+        var host = Shell(shell);
+        foreach (string stage in new[] { elsewhere, parent })
+        {
+            var result = await host.RunAsync(host.Shell.Kind == HostShellKind.Bash ? HostedRuntimeStage.BashCleanup : HostedRuntimeStage.WindowsCleanup, new Dictionary<string, string>
+            {
+                ["runtime"] = "", ["stage"] = stage, ["parent"] = parent,
+            }, Generous);
+            Assert.True(result.Failed, result.Describe() + result.Stderr);
+            Assert.Equal("not ours", File.ReadAllText(Path.Combine(elsewhere, "precious.txt")));
+            Assert.True(File.Exists(Path.Combine(parent, "runtime", "game.txt")));
+        }
+    }
+
+    // The remover itself: a trailing slash on a link (BSD rm follows "link/" and empties its target) names the link, not the target.
+    [Theory]
+    [MemberData(nameof(Shells))]
+    public async Task TheRemoverTakesALinkWithATrailingSlashAsTheLinkAndNeverEmptiesItsTarget(string shell)
+    {
+        string parent = Folder("parent"), elsewhere = Elsewhere("elsewhere");
+        string link = Path.Combine(parent, "stage");
+        DirectoryLinks.Create(link, elsewhere);
+        var host = Shell(shell);
+        string script = host.Shell.Kind == HostShellKind.Bash
+            ? "set -eu\n" + ProtectedPaths.BashInside + ProtectedPaths.BashRemove + "vt_remove \"$path/\" \"$parent\"\necho VT-DONE\n"
+            : ProtectedPaths.PowerShellInside + ProtectedPaths.PowerShellRemove + "Remove-VtTree ($path + [IO.Path]::DirectorySeparatorChar) $parent\n'VT-DONE'\n";
+
+        var result = (await host.RunAsync(script, new Dictionary<string, string> { ["path"] = link, ["parent"] = parent }, Generous)).EnsureSuccess("remove");
+
+        Assert.Contains("VT-DONE", result.Stdout);
+        Assert.False(Directory.Exists(link));
+        Assert.Equal("not ours", File.ReadAllText(Path.Combine(elsewhere, "precious.txt")));
+    }
+
+    // A hosted run's runtime that is a link is unlinked, not left behind and not emptied.
+    [Fact]
+    public async Task ARetiredRunUnlinksARuntimeThatIsALinkAndKeepsItsTarget()
+    {
+        string run = Path.Combine(_root, "runs", "run-link"), runtime = Path.Combine(run, "runtime"), keep = Path.Combine(run, "runtime-changes");
+        Directory.CreateDirectory(run);
+        string elsewhere = Elsewhere("elsewhere");
+        DirectoryLinks.Create(runtime, elsewhere);
+
+        var result = (await _host.RunAsync(OperatingSystem.IsWindows() ? HostedRunScripts.WindowsRetire : HostedRunScripts.Retire, new Dictionary<string, string>
+        {
+            ["runtime"] = runtime, ["keep"] = keep, ["run"] = "run-link", ["perfile"] = "1000", ["total"] = "5000", ["files"] = "",
+        }, Generous)).EnsureSuccess("retire");
+
+        Assert.Contains("VT-RETIRED 0 0", result.Stdout);
+        Assert.False(Directory.Exists(runtime));
+        Assert.True(Directory.Exists(keep));
+        Assert.Equal("not ours", File.ReadAllText(Path.Combine(elsewhere, "precious.txt")));
+    }
 }
