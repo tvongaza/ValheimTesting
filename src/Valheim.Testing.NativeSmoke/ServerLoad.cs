@@ -46,7 +46,9 @@ internal static class ServerLoad
         Action<EnvironmentInventory, EnvironmentRecipe, string, string?>? ClientArchitecture = null,
         // An A/B run freezes its automatic server choice before either arm starts. Its command
         // still names the package, while this carries the reason into each arm's evidence.
-        ShippedLoader.Choice? FrozenServerLoader = null);
+        ShippedLoader.Choice? FrozenServerLoader = null,
+        string? SummaryLabel = null,
+        TextWriter? SummaryOutput = null);
 
     public static async Task<int> RunAsync(string[] args, Seams? seams = null)
     {
@@ -342,6 +344,7 @@ internal static class ServerLoad
         {
             if (clientPlan != null) Environment.SetEnvironmentVariable(SmokeSessionContract.PasswordVariable, previousPassword);
         }
+        NativeSmokeLogSummary.WriteReport(Path.Combine(output, "evidence"), seams.SummaryLabel, seams.SummaryOutput);
         if (result == 0 && bakeDestination != null)
         {
             try

@@ -1,7 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup><TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable><IsPackable>false</IsPackable>
-    <!-- dev-loop.cs is a file-based script; compiled here without its top-level entry point. -->
-    <DefineConstants>$(DefineConstants);DEV_LOOP_TESTS;VERSIONED_API_DOCS_TESTS</DefineConstants>
+    <DefineConstants>$(DefineConstants);VERSIONED_API_DOCS_TESTS</DefineConstants>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../../src/Valheim.Testing.Game/Valheim.Testing.Game.csproj" />
@@ -13,7 +12,6 @@
     <Compile Include="../../src/Valheim.Testing.Adapter/Adapter/Members.cs;../../src/Valheim.Testing.Adapter/Adapter/FixtureGate.cs" LinkBase="Adapter" />
     <!-- Compiled twice at test time against a working BepInEx stub, as a ScriptEngine reload loads it twice. -->
     <EmbeddedResource Include="../../src/Valheim.Testing.Adapter/Adapter/QuitLogFlush.cs" LogicalName="Adapter.QuitLogFlush.cs" />
-    <Compile Include="../../tools/dev-loop/dev-loop.cs" Link="DevLoop/dev-loop.cs" />
     <Compile Include="../../scripts/versioned-api-docs.cs" Link="Tools/versioned-api-docs.cs" />
     <Compile Include="../../scripts/Shared/RepositoryPaths.cs" Link="Tools/RepositoryPaths.cs" />
     <Compile Include="../../scripts/Shared/ValidationSupport.cs" Link="Tools/ValidationSupport.cs" />

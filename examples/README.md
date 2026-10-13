@@ -32,7 +32,6 @@ Native runs still need a disposable game install, world and character. See [runt
 | `valheim-test`, package `Valheim.Testing.NativeSmoke` ([package page](../docs/packages/Valheim.Testing.NativeSmoke.md)) | Disposable mod-load checks and A/B mod isolation |
 | [`docker/linux-server/smoke`](../docker/linux-server/smoke/README.md) | The Linux image's boot check |
 | [`tools/reload-check`](../tools/reload-check/README.md) | The ScriptEngine extension reload check |
-| [`tools/dev-loop`](../tools/dev-loop/README.md) | A mod's edit-build-test loop |
 
 ## Contribute
 

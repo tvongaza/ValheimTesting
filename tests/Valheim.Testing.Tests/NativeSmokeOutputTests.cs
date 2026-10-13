@@ -4,6 +4,42 @@ using Valheim.Testing.Game;
 public sealed class NativeSmokeOutputTests
 {
     [Fact]
+    public void StartLogSummaryNamesTotalsAndMostFrequentPatterns()
+    {
+        var logs = new[]
+        {
+            new LogFileScan("client BepInEx log", "bepinex.log", true, null,
+            [
+                new(LogScanner.UnknownWarning, LogSeverity.Warning, null, 5, 1, "warning", 2, "expected warning"),
+                new(LogScanner.UnknownError, LogSeverity.Failure, null, 1, 8, "error"),
+            ]),
+            new LogFileScan("client Player.log", "Player.log", true, null,
+            [
+                new("missing-script", LogSeverity.Warning, null, 3, 4, "missing script"),
+                new("shader-unsupported", LogSeverity.Warning, null, 1, 9, "shader"),
+            ]),
+            new LogFileScan("required server log", "server.log", false, "required log is missing", []),
+        };
+
+        Assert.Equal("log scan: 2/3 logs present; failure=1 warning=9 expected=2 required-missing=1; " +
+            "most frequent: client BepInEx log/unknown-warning x5, client Player.log/missing-script x3, " +
+            "client BepInEx log/unknown-error x1", NativeSmokeLogSummary.Format(logs));
+    }
+
+    [Fact]
+    public void LogSummarySaysWhenTheScanDidNotRunAndLabelsComparisonArms()
+    {
+        Assert.Equal("log scan: not run", NativeSmokeLogSummary.Format([]));
+        Assert.Equal("before: log scan: not run", NativeSmokeLogSummary.Format([], "before"));
+        Assert.StartsWith("after: log scan: 2/3 logs present", NativeSmokeLogSummary.Format(
+        [
+            new LogFileScan("client BepInEx log", "bepinex.log", true, null, []),
+            new LogFileScan("client Player.log", "Player.log", true, null, []),
+            new LogFileScan("required server log", "server.log", false, "required log is missing", []),
+        ], "after"));
+    }
+
+    [Fact]
     public void Arm64OneShotRefusesAStockMacLoaderBeforeAnyCopy()
     {
         using var stock = ClientLaunchTests.Install.Mac();

@@ -102,7 +102,7 @@ jobs:
           retention-days: 14
       # Runs the file-based scripts no other PR step runs, as a user runs them (#434: file-based apps default to PublishAot,
       # which turns off reflection-based System.Text.Json unless the script sets PublishAot=false). The two dependency scripts
-      # read and write their JSON; the other two only start. Judged by exit codes, on Linux only: an SDK
+      # read and write their JSON. Judged by exit codes, on Linux only: an SDK
       # default reaches every OS alike. api-docs, pins, bootstrap-cli and validate run in this workflow, consumer in release.yml;
       # tools/doubles-members needs the game's assemblies.
       - name: File-based scripts run
@@ -128,8 +128,6 @@ jobs:
           EOF
           dotnet run scripts/native-dependencies.cs -- resolve "$t/request.json" "$t/lock.json"
           dotnet run scripts/native-dependencies.cs -- check "$t/lock.json"
-          code=0; dotnet run --file tools/dev-loop/dev-loop.cs || code=$?
-          if [ "$code" != 4 ]; then echo "::error::dev-loop.cs with no arguments exited $code, not 4 (usage)"; exit 1; fi
       - name: Save the NuGet package cache
         if: steps.nuget-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6
@@ -425,12 +423,12 @@ jobs:
           git diff --exit-code HEAD
           # A valheimCLI fork link at another commit than the released Cli's fails; write puts it back. A fork page's
           # anchor must be one of its headings at that commit.
-          loop=tools/dev-loop/README.md
-          sed -i -E 's#(valheimCLI/blob/[0-9a-f]{40}/docs/expectations\.md\#)world-files-hash#\1no-such-heading#' "$loop"
-          refused check "FAIL $loop:$(grep -n 'no-such-heading' "$loop" | cut -d: -f1): https://github.com/tvongaza/valheimCLI/blob/*/docs/expectations.md#no-such-heading: the fork's docs/expectations.md at * has no heading with the anchor #no-such-heading"
-          fork() { sed -i -E 's#(valheimCLI/blob/)[0-9a-f]{40}/#\15c0aef02ddf15cdbf6faa152c6b75881fce7f134/#' tools/dev-loop/README.md; }
+          fork_page=docs/guides/choose-a-test-layer.md
+          sed -i -E 's#(valheimCLI/blob/[0-9a-f]{40}/docs/command-packs\.md)#\1\#no-such-heading#' "$fork_page"
+          refused check "FAIL $fork_page:$(grep -n 'no-such-heading' "$fork_page" | cut -d: -f1): https://github.com/tvongaza/valheimCLI/blob/*/docs/command-packs.md#no-such-heading: the fork's docs/command-packs.md at * has no heading with the anchor #no-such-heading"
+          fork() { sed -i -E 's#(valheimCLI/blob/)[0-9a-f]{40}/#\15c0aef02ddf15cdbf6faa152c6b75881fce7f134/#' "$fork_page"; }
           fork
-          refused check "FAIL $loop:$(grep -n 'valheimCLI/blob/5c0aef02' "$loop" | cut -d: -f1): releasedCliCommit 5c0aef02ddf15cdbf6faa152c6b75881fce7f134 differs from toolkit-versions.json"
+          refused check "FAIL $fork_page:$(grep -n 'valheimCLI/blob/5c0aef02' "$fork_page" | cut -d: -f1): releasedCliCommit 5c0aef02ddf15cdbf6faa152c6b75881fce7f134 differs from toolkit-versions.json"
           fork
           dotnet run scripts/pins.cs -- write
           git diff --exit-code
