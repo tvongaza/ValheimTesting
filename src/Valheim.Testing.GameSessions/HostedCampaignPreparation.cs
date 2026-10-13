@@ -992,10 +992,10 @@ public static class HostedCampaignPreparation
                 cancellation.ThrowIfCancellationRequested();
                 string hostName = group.Key;
                 IGameHost host = hostFactory?.Invoke(hostName) ?? profile.CreateHost(hostName);
-                await using var claim = await host.AcquireLockAsync(profile.Hosts[hostName].Lock,
-                    "campaign-prepare " + id + " " + hostName, timeout, cancellation).ConfigureAwait(false);
-                await HostedRuntimeStage.RequireStoppedAsync(host, timeout, cancellation, clientSession: group.Any(item => item.Name != "server")).ConfigureAwait(false);
                 string journalDirectory = RunJournal.DirectoryFor(profile.Hosts[hostName]);
+                await using var claim = await JournaledHostLock.AcquireAsync(host, profile.Hosts[hostName].Lock,
+                    "campaign-prepare " + id + " " + hostName, journal, journalDirectory, "run", timeout, cancellation).ConfigureAwait(false);
+                await HostedRuntimeStage.RequireStoppedAsync(host, timeout, cancellation, clientSession: group.Any(item => item.Name != "server")).ConfigureAwait(false);
                 await Task.WhenAll(group.Select(async item =>
                 {
                     var (name, role, _) = item;

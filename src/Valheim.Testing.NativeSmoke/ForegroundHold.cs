@@ -7,6 +7,8 @@ using Valheim.Testing.Game;
 internal sealed class ForegroundHold : IDisposable
 {
     internal const string FinishUsage = "valheim-test finish --run ID";
+    internal static string FinishUsageForRun(string run) =>
+        (DetachedSession.ConfiguredRun == run ? "valheim-test detach finish --run ID" : FinishUsage).Replace("ID", run, StringComparison.Ordinal);
     private sealed record Marker(string Run, string Evidence, int Pid, string Started);
 
     private readonly string _marker;
@@ -24,7 +26,7 @@ internal sealed class ForegroundHold : IDisposable
         if (!RunJournal.SafeName(run) || run == "-") throw new ArgumentException("Invalid run ID.", nameof(run));
         evidence = Path.GetFullPath(evidence);
         if (!Directory.Exists(evidence)) throw new DirectoryNotFoundException("Hold evidence does not exist: " + evidence);
-        directory ??= DirectoryForThisMachine;
+        directory ??= DetachedSession.ConfiguredControlDirectory ?? DirectoryForThisMachine;
         Directory.CreateDirectory(directory);
         using var process = Process.GetCurrentProcess();
         var identity = new Marker(run, evidence, process.Id, process.StartTime.ToFileTimeUtc().ToString(CultureInfo.InvariantCulture));
@@ -44,7 +46,7 @@ internal sealed class ForegroundHold : IDisposable
     {
         if (processes.Count == 0) throw new ArgumentException("A hold needs at least one owned process to watch.", nameof(processes));
         using var hold = Open(run, evidence);
-        Console.WriteLine("HELD run " + run + "; finish from another shell with: " + FinishUsage.Replace("ID", run, StringComparison.Ordinal));
+        Console.WriteLine("HELD run " + run + "; finish from another shell with: " + FinishUsageForRun(run));
         if (client) Console.WriteLine("Pinned client commands: valheim-test cli --evidence " + evidence + " --phase world --command cli_screenshot");
         Console.Out.Flush();
         try { await hold.WaitAsync(cancellation, processes).ConfigureAwait(false); }

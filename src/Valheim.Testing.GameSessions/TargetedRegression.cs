@@ -97,7 +97,7 @@ public sealed class TargetedRegression
     private readonly IGameHost _host = new LocalGameHost("this machine", HostShell.ThisMachine);
     private readonly RunJournal _journal = RunJournal.ThisProcess;
     private readonly string _lockPath;
-    private HostLock? _hostLock;
+    private JournaledHostLock? _hostLock;
     private readonly string _stage;
     private readonly bool _runtimeExplicit;
     private bool _prepared;
@@ -508,9 +508,7 @@ public sealed class TargetedRegression
         else RetirePrepared();
         if (_hostLock is { } held)
         {
-            var released = held.ReleaseAsync().GetAwaiter().GetResult();
-            if (released.State is not (HostLockState.Released or HostLockState.Free)) throw new HostLockException(released);
-            _journal.AppendLocal("run", JournalEntry.Of(JournalEntry.LockReleased, ("lock", held.Path), ("claimant", held.Owner)));
+            held.ReleaseAsync().GetAwaiter().GetResult();
             _hostLock = null;
         }
     }
@@ -540,16 +538,8 @@ public sealed class TargetedRegression
         // Keep the host exclusive from the first copy through the final arm's client and copy retirement.
         // The journal lets env recover release a lock left by an interrupted direct consumer.
         if (_hostLock == null && !SkipHostLockForTest)
-        {
-            var held = _host.AcquireLockAsync(_lockPath, "regression " + _journal.RunId, HostedTimeouts.Quick).GetAwaiter().GetResult();
-            try { _journal.AppendLocal("run", JournalEntry.Of(JournalEntry.LockHeld, ("lock", held.Path), ("claimant", held.Owner))); }
-            catch
-            {
-                held.DisposeAsync().AsTask().GetAwaiter().GetResult();
-                throw;
-            }
-            _hostLock = held;
-        }
+            _hostLock = JournaledHostLock.AcquireAsync(_host, _lockPath, "regression " + _journal.RunId, _journal,
+                RunJournal.LocalDirectory, "run", HostedTimeouts.Quick).GetAwaiter().GetResult();
         RequireStopped(null, clientSession: true);
         string parent = Path.GetDirectoryName(Install)!;
         Directory.CreateDirectory(Path.GetDirectoryName(parent)!);

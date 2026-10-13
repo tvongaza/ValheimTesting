@@ -10,110 +10,130 @@ using Valheim.Testing.GameSessions;
 internal static class DetachedSession
 {
     internal const string Usage = "valheim-test detach server-load --server DIR --mod DLL --server-only --output NEW_DIR [assertion and timing options] | " +
-        "valheim-test detach status | valheim-test detach finish --run ID | valheim-test detach recover --token TOKEN";
+        "valheim-test detach status | valheim-test detach finish --run ID";
     private const string ReadyVariable = "VALHEIM_TEST_DETACH_READY";
-    private const string WindowsTaskPrefix = "ValheimTesting-detached-";
-    private sealed record Ready(string Run, string Evidence, int Pid, string Started);
-    private sealed record StartedRun(string Run, int Pid, string Started);
-    internal sealed record Launch(string Token, string Label, string Output, string ReadyFile, string StandardOut,
-        string StandardError, string ToolDirectory, string InputDirectory, string LauncherPath, string? Run = null,
-        int StarterPid = 0, string StarterStarted = "");
-    private static string Root => Path.Combine(CliBundle.DataRoot, "runs", "detached");
+    private const string RunVariable = "VALHEIM_TEST_DETACH_RUN";
+    private const string ControlVariable = "VALHEIM_TEST_DETACH_CONTROL";
+    private const string TaskVariable = "VALHEIM_TEST_DETACH_TASK";
+    private const string TaskExecutableVariable = "VALHEIM_TEST_DETACH_TASK_EXECUTABLE";
+    private const string TaskUserVariable = "VALHEIM_TEST_DETACH_TASK_USER";
+    private const string ToolVariable = "VALHEIM_TEST_DETACH_TOOL";
+    private const string OutputVariable = "VALHEIM_TEST_DETACH_OUTPUT";
+    private const string Actor = "detached";
 
-    internal static async Task<int> RunAsync(string[] args, TextWriter? output = null, TextWriter? error = null)
+    internal sealed record Ready(string Run, string Evidence, int Pid, string Started);
+    internal sealed record Launch(string Run, string Label, string Output, string ReadyFile, string StandardOut,
+        string StandardError, string ControlDirectory, string ToolDirectory, string LauncherPath, string TaskExecutable, string TaskUser)
+    {
+        internal WindowsScheduledTask Task => new(Label, "ValheimTesting detached run " + Run, TaskExecutable, LauncherPath, ToolDirectory, TaskUser);
+    }
+    internal sealed record Seams(bool Windows = false, Func<Task>? RequireDesktop = null,
+        Func<WindowsScheduledTask, Task>? Register = null, Func<Launch, Task<Ready>>? WaitReady = null,
+        Func<int, string, bool>? ExactOwner = null, Func<string, string>? StageTool = null, string? TaskExecutable = null,
+        string? TaskUser = null);
+
+    private static string RunsRoot => Path.Combine(CliBundle.DataRoot, "runs");
+    private static string RecoveryLogs(string run) => Path.Combine(CliBundle.DataRoot, "recovered-detached", run);
+    internal static string? ConfiguredRun => Environment.GetEnvironmentVariable(RunVariable);
+    internal static string? ConfiguredControlDirectory => Environment.GetEnvironmentVariable(ControlVariable);
+
+    internal static async Task<int> RunAsync(string[] args, TextWriter? output = null, TextWriter? error = null, Seams? seams = null)
     {
         output ??= Console.Out; error ??= Console.Error;
-        if (!OperatingSystem.IsWindows())
+        if (!(seams?.Windows == true || OperatingSystem.IsWindows()))
         { error.WriteLine("REFUSED: detached sessions currently require a local Windows Task Scheduler owner; foreground --hold works on other hosts."); return 3; }
-        if (args is ["status"]) return Status(output, error);
-        if (args is ["finish", "--run", var run]) return await FinishAsync(run, output, error).ConfigureAwait(false);
-        if (args is ["recover", "--token", var recoveryToken]) return await RecoverAsync(recoveryToken, output, error).ConfigureAwait(false);
+        if (args is ["status"])
+            return await EnvironmentRuns.WriteRunStatusAsync(null, output).ConfigureAwait(false) ? 0 : 3;
+        if (args is ["finish", "--run", var finishRun]) return await FinishAsync(finishRun, output, error).ConfigureAwait(false);
         if (args is not ["server-load", .. var serverArgs])
         { error.WriteLine("Usage: " + Usage); return 2; }
         if (!TryServerArgs(serverArgs, out string selectedOutput, out string reason))
         { error.WriteLine("Usage: " + Usage + "\nREFUSED: " + reason); return 2; }
+
+        string run = RunJournal.NewRunId();
         try
         {
-            // The runner itself needs the desktop token on Windows. Otherwise its nested owned
-            // server task would be created from a non-elevated session-0 S4U token and refused.
-            await InteractiveClient.RequireWindowsDesktopSessionAsync(new LocalGameHost("this machine", HostShell.Pwsh))
-                .ConfigureAwait(false);
-            Directory.CreateDirectory(Root);
-            string token = Guid.NewGuid().ToString("N");
-            string label = WindowsTaskPrefix + token;
-            string prefix = Path.Combine(Root, token);
-            using var starter = Process.GetCurrentProcess();
-            var launch = new Launch(token, label, selectedOutput, prefix + ".ready.json", prefix + ".out.log", prefix + ".err.log",
-                prefix + ".tool", prefix + ".inputs", prefix + ".ps1",
-                StarterPid: starter.Id, StarterStarted: starter.StartTime.ToFileTimeUtc().ToString(CultureInfo.InvariantCulture));
-            string record = prefix + ".launch.json";
-            // This intent precedes even the tool snapshot: an interrupted copy is visible and
-            // recoverable by token, provided the exact starter and OS job are both gone.
-            string pending = record + ".new";
-            using (var stream = new FileStream(pending, FileMode.CreateNew, FileAccess.Write, FileShare.None))
-                JsonSerializer.Serialize(stream, launch);
-            File.Move(pending, record);
+            if (seams?.RequireDesktop != null) await seams.RequireDesktop().ConfigureAwait(false);
+            else await InteractiveClient.RequireWindowsDesktopSessionAsync(new LocalGameHost("this machine", HostShell.Pwsh)).ConfigureAwait(false);
+            LocalGameHost? taskHost = null;
+            string taskExecutable, taskUser;
+            if (seams?.TaskExecutable is { } executable && seams.TaskUser is { } user)
+            {
+                taskExecutable = executable;
+                taskUser = user;
+            }
+            else
+            {
+                taskHost = new LocalGameHost("this machine", HostShell.Pwsh);
+                var registration = await WindowsScheduledTask.FindRegistrationContextAsync(taskHost, TimeSpan.FromSeconds(60)).ConfigureAwait(false);
+                taskExecutable = registration.Executable;
+                taskUser = registration.PrincipalUserId;
+            }
+
+            Directory.CreateDirectory(RunsRoot);
+            using var runScope = RunJournal.UseRun(run);
+            string control = JournalOwnedDirectory.Create(RunsRoot, Actor, "detached control and startup logs", _ => { },
+                ("keepIn", RecoveryLogs(run)), ("keepFiles", "stdout.log\nstderr.log"));
+            string tool = seams?.StageTool?.Invoke(RunsRoot) ?? StageTool(RunsRoot);
+            string[] stagedArgs = StageModsOwned(serverArgs, RunsRoot);
+            string label = WindowsScheduledTask.Prefix + run;
+            var launch = new Launch(run, label, selectedOutput, Path.Combine(control, "ready.json"),
+                Path.Combine(control, "stdout.log"), Path.Combine(control, "stderr.log"), control, tool, Path.Combine(control, "launcher.ps1"), taskExecutable, taskUser);
+            var command = OwnCommand(tool);
+            var childEnvironment = new List<string>
+            {
+                ReadyVariable + "=" + launch.ReadyFile, RunVariable + "=" + run, ControlVariable + "=" + control,
+                TaskVariable + "=" + label, TaskExecutableVariable + "=" + taskExecutable,
+                TaskUserVariable + "=" + taskUser,
+                ToolVariable + "=" + tool, OutputVariable + "=" + selectedOutput,
+                "PATH=" + Environment.GetEnvironmentVariable("PATH"),
+            };
+            foreach (string key in new[] { "DOTNET_ROOT", "NUGET_PACKAGES", "NUGET_HTTP_CACHE_PATH" })
+                if (Environment.GetEnvironmentVariable(key) is { } value) childEnvironment.Add(key + "=" + value);
+            string[] program = [command.Program, .. command.Prefix, "server-load", .. stagedArgs, "--hold"];
+            File.WriteAllText(launch.LauncherPath, WindowsLauncher(launch, childEnvironment, program), new System.Text.UTF8Encoding(true));
+
+            var journal = new RunJournal(run);
+            journal.AppendLocal(Actor, launch.Task.Entry(JournalEntry.ScheduledTaskIntended,
+                ("control", control), ("output", selectedOutput)));
             try
             {
-                StageTool(launch.ToolDirectory);
-                string[] stagedArgs = StageMods(serverArgs, launch.InputDirectory);
-                var command = OwnCommand(launch.ToolDirectory);
-                // An OS service, rather than a child of this terminal or SSH session, owns the runner and its host lock.
-                var childEnvironment = new List<string> { ReadyVariable + "=" + launch.ReadyFile,
-                    "PATH=" + Environment.GetEnvironmentVariable("PATH") };
-                foreach (string key in new[] { "DOTNET_ROOT", "NUGET_PACKAGES", "NUGET_HTTP_CACHE_PATH" })
-                    if (Environment.GetEnvironmentVariable(key) is { } value) childEnvironment.Add(key + "=" + value);
-                string[] program = [command.Program, .. command.Prefix, "server-load", .. stagedArgs, "--hold"];
-                File.WriteAllText(launch.LauncherPath, WindowsLauncher(launch, childEnvironment, program), new System.Text.UTF8Encoding(true));
+                if (seams?.Register != null) await seams.Register(launch.Task).ConfigureAwait(false);
+                else await launch.Task.RegisterAsync(taskHost!, TimeSpan.FromSeconds(60)).ConfigureAwait(false);
             }
-            catch
+            catch (Exception failure) when (failure is IOException or InvalidOperationException or HostOperationException or TimeoutException or
+                                                     System.ComponentModel.Win32Exception)
             {
-                // Nothing was submitted to the OS yet; these are exclusively this token's files.
-                if (Directory.Exists(launch.ToolDirectory)) Directory.Delete(launch.ToolDirectory, recursive: true);
-                if (Directory.Exists(launch.InputDirectory)) Directory.Delete(launch.InputDirectory, recursive: true);
-                File.Delete(launch.LauncherPath); File.Delete(record);
-                throw;
-            }
-            int submitted;
-            try
-            {
-                submitted = await RegisterWindowsTaskAsync(launch).ConfigureAwait(false);
-            }
-            catch (Exception failure) when (failure is IOException or InvalidOperationException or System.ComponentModel.Win32Exception)
-            {
-                error.WriteLine("REFUSED: " + failure.Message + " Inspect env status, then use detach recover --token " + token + ".");
+                error.WriteLine("REFUSED: " + failure.Message + ". Inspect env status, then use valheim-test env recover --run " + run + ".");
                 return 3;
             }
-            if (submitted != 0)
-            {
-                error.WriteLine("REFUSED: the OS did not accept the detached server owner (exit " + submitted +
-                    "). The exact owner record remains at " + record + "; inspect it, then use detach recover --token " + token + ".");
-                return 3;
-            }
+
             Ready ready;
-            try { ready = await WaitReadyAsync(launch).ConfigureAwait(false); }
-            catch (Exception failure) when (failure is IOException or TimeoutException or InvalidDataException)
+            try { ready = seams?.WaitReady != null ? await seams.WaitReady(launch).ConfigureAwait(false) : await WaitReadyAsync(launch).ConfigureAwait(false); }
+            catch (Exception failure) when (failure is IOException or TimeoutException or InvalidDataException or HostOperationException)
             {
                 error.WriteLine("REFUSED: " + failure.Message + " Private startup logs: " + launch.StandardOut + " and " + launch.StandardError +
-                    ". Check valheim-test env status, then use detach recover --token " + token + ".");
-                return 3; // It may own a game. Never remove or kill it merely because the handshake timed out.
-            }
-            if (!ExactOwner(ready))
-            {
-                error.WriteLine("REFUSED: the held runner exited or changed identity before detach returned; inspect env status and " + record);
+                    ". Check valheim-test env status, then use valheim-test env recover --run " + run + ".");
                 return 3;
             }
-            File.WriteAllText(record + ".new", JsonSerializer.Serialize(launch with { Run = ready.Run }));
-            File.Move(record + ".new", record, overwrite: true);
-            output.WriteLine("DETACHED run " + ready.Run + "; evidence " + ready.Evidence);
-            output.WriteLine("Finish and verify cleanup: valheim-test detach finish --run " + ready.Run);
+            bool exact = seams?.ExactOwner?.Invoke(ready.Pid, ready.Started) ?? ExactOwner(ready.Pid, ready.Started);
+            if (ready.Run != run || !exact)
+            {
+                error.WriteLine("REFUSED: the held runner exited or changed identity before detach returned; inspect env status for " + run + ".");
+                return 3;
+            }
+            output.WriteLine("DETACHED run " + run + "; evidence " + ready.Evidence);
+            output.WriteLine("Finish and verify cleanup: valheim-test detach finish --run " + run);
             return 0;
         }
-        catch (Exception failure) when (failure is ArgumentException or IOException or InvalidOperationException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
-        { error.WriteLine("REFUSED: " + failure.Message); return 3; }
+        catch (Exception failure) when (failure is ArgumentException or IOException or InvalidDataException or InvalidOperationException or
+                                             UnauthorizedAccessException or HostOperationException or TimeoutException or System.ComponentModel.Win32Exception)
+        {
+            error.WriteLine("REFUSED run " + run + ": " + failure.Message + ". Inspect env status, then use valheim-test env recover --run " + run + ".");
+            return 3;
+        }
     }
 
-    // A scheduled task has no caller working directory. Refuse relative paths and implicit mod discovery before it starts.
     internal static bool TryServerArgs(string[] args, out string output, out string error)
     {
         output = ""; error = "";
@@ -137,107 +157,95 @@ internal static class DetachedSession
         return true;
     }
 
-    // The task can outlive a source checkout. Copy each selected mod directory so its adjacent
-    // managed dependencies resolve from the same snapshot.
-    internal static string[] StageMods(string[] args, string target)
+    private static string[] StageModsOwned(string[] args, string parent) => CopyMods(args, source =>
+    {
+        string payload = "";
+        JournalOwnedDirectory.Create(parent, Actor, "detached mod input", owned =>
+        {
+            payload = Path.Combine(owned, "payload"); Directory.CreateDirectory(payload);
+            CopyDirectory(source, payload, 10000, 512L << 20, "A detached mod directory is too large to stage");
+        });
+        return payload;
+    });
+
+    private static string[] CopyMods(string[] args, Func<string, string> stage)
     {
         var staged = (string[])args.Clone();
         var sources = new Dictionary<string, string>(StringComparer.Ordinal);
-        Directory.CreateDirectory(target);
-        try
+        for (int i = 0; i < args.Length - 1; i++)
         {
-            for (int i = 0; i < args.Length - 1; i++)
-            {
-                if (args[i] != "--mod") continue;
-                string file = args[++i], directory = Path.GetDirectoryName(file)!;
-                if (!File.Exists(file)) throw new FileNotFoundException("A detached mod does not exist: " + file, file);
-                if (!sources.TryGetValue(directory, out string? copy))
-                {
-                    copy = Path.Combine(target, sources.Count.ToString(CultureInfo.InvariantCulture));
-                    var manifest = WorldFixture.Manifest(directory);
-                    if (manifest.Count > 10000 || manifest.Keys.Sum(relative => new FileInfo(Path.Combine(directory, relative)).Length) > 512L << 20)
-                        throw new InvalidDataException("A detached mod directory is too large to stage (10,000 files or 512 MiB): " + directory);
-                    Directory.CreateDirectory(copy);
-                    foreach (var (relative, hash) in manifest)
-                    {
-                        string destination = Path.Combine(copy, relative);
-                        Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
-                        File.Copy(Path.Combine(directory, relative), destination);
-                        if (!FileHash.Sha256(destination).Equals(hash, StringComparison.OrdinalIgnoreCase))
-                            throw new IOException("The detached mod changed during staging: " + relative);
-                    }
-                    WorldFixture.Verify(directory, manifest);
-                    sources.Add(directory, copy);
-                }
-                staged[i] = Path.Combine(copy, Path.GetFileName(file));
-            }
-            return staged;
+            if (args[i] != "--mod") continue;
+            string file = args[++i], directory = Path.GetDirectoryName(file)!;
+            if (!File.Exists(file)) throw new FileNotFoundException("A detached mod does not exist: " + file, file);
+            if (!sources.TryGetValue(directory, out string? copy)) sources.Add(directory, copy = stage(directory));
+            staged[i] = Path.Combine(copy, Path.GetFileName(file));
         }
-        catch { if (Directory.Exists(target)) Directory.Delete(target, recursive: true); throw; }
+        return staged;
     }
 
-    // Called by ForegroundHold only after the exact run's marker has been created.
-    internal static void SignalHeld(string run, string evidence, int pid, string started,
-        string? readyOverride = null, string? rootOverride = null)
+    private static void CopyDirectory(string source, string target, int maxFiles, long maxBytes, string tooLarge)
+    {
+        var manifest = WorldFixture.Manifest(source);
+        if (manifest.Count > maxFiles || manifest.Keys.Sum(relative => new FileInfo(Path.Combine(source, relative)).Length) > maxBytes)
+            throw new InvalidDataException(tooLarge + ": " + source);
+        foreach (var (relative, hash) in manifest)
+        {
+            string destination = Path.Combine(target, relative);
+            Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+            File.Copy(Path.Combine(source, relative), destination);
+            if (!FileHash.Sha256(destination).Equals(hash, StringComparison.OrdinalIgnoreCase))
+                throw new IOException("The detached input changed during staging: " + relative);
+        }
+        WorldFixture.Verify(source, manifest);
+    }
+
+    // The supervisor's first journal line adopts the starter's run before the campaign creates any host state.
+    internal static void AdoptRun(string run)
+    {
+        string configured = ConfiguredRun ?? "";
+        string control = ConfiguredControlDirectory ?? "";
+        string label = Environment.GetEnvironmentVariable(TaskVariable) ?? "";
+        string executable = Environment.GetEnvironmentVariable(TaskExecutableVariable) ?? "";
+        string taskUser = Environment.GetEnvironmentVariable(TaskUserVariable) ?? "";
+        string tool = Environment.GetEnvironmentVariable(ToolVariable) ?? "";
+        string output = Environment.GetEnvironmentVariable(OutputVariable) ?? "";
+        if (run != configured || !RunJournal.SafeName(run) || label != WindowsScheduledTask.Prefix + run ||
+            executable.Length == 0 || taskUser.Length == 0 || !Path.IsPathFullyQualified(control) || !Path.IsPathFullyQualified(tool) || !Path.IsPathFullyQualified(output))
+            throw new InvalidOperationException("The detached run or scheduled owner environment is invalid.");
+        var task = new WindowsScheduledTask(label, "ValheimTesting detached run " + run, executable, Path.Combine(control, "launcher.ps1"), tool, taskUser);
+        new RunJournal(run).AppendLocal(Actor, task.Entry(JournalEntry.ScheduledTaskStarted, ("control", control), ("output", output)));
+    }
+
+    internal static void SignalHeld(string run, string evidence, int pid, string started, string? readyOverride = null, string? controlOverride = null)
     {
         string? path = readyOverride ?? Environment.GetEnvironmentVariable(ReadyVariable);
         if (path == null) return;
-        if (!Path.IsPathFullyQualified(path) || !Path.GetDirectoryName(path)!.Equals(rootOverride ?? Root, StringComparison.Ordinal))
-            throw new InvalidOperationException("The detached readiness path is outside this machine's run data.");
+        string control = controlOverride ?? ConfiguredControlDirectory ?? "";
+        if (!Path.IsPathFullyQualified(path) || !Path.IsPathFullyQualified(control) ||
+            !Path.GetDirectoryName(path)!.Equals(control, StringComparison.Ordinal))
+            throw new InvalidOperationException("The detached readiness path is outside this run's journalled control directory.");
         string temporary = path + ".new";
         using (var stream = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None))
             JsonSerializer.Serialize(stream, new Ready(run, evidence, pid, started));
         File.Move(temporary, path);
     }
 
-    // The journal adopts this run ID immediately afterwards. A runner that dies during setup has
-    // no held marker yet, but the next shell can recover this exact run without guessing from text.
-    internal static void SignalRun(string run)
+    private static string StageTool(string parent)
     {
-        string? ready = Environment.GetEnvironmentVariable(ReadyVariable);
-        if (ready == null) return;
-        SignalRunAt(run, ready, Root);
-    }
-
-    internal static void SignalRunAt(string run, string ready, string root)
-    {
-        if (!RunJournal.SafeName(run) || !Path.IsPathFullyQualified(ready) ||
-            !Path.GetDirectoryName(ready)!.Equals(root, StringComparison.Ordinal) ||
-            !ready.EndsWith(".ready.json", StringComparison.Ordinal))
-            throw new InvalidOperationException("The detached run ID or owner path is invalid.");
-        string path = ready[..^".ready.json".Length] + ".run.json";
-        using var process = Process.GetCurrentProcess();
-        var started = new StartedRun(run, process.Id, process.StartTime.ToFileTimeUtc().ToString(CultureInfo.InvariantCulture));
-        using (var stream = new FileStream(path + ".new", FileMode.CreateNew, FileAccess.Write, FileShare.None))
-            JsonSerializer.Serialize(stream, started);
-        File.Move(path + ".new", path);
-    }
-
-    private static void StageTool(string target)
-    {
-        string assembly = Assembly.GetEntryAssembly()?.Location ?? "";
-        if (!Path.IsPathFullyQualified(assembly) || !File.Exists(assembly))
-            throw new InvalidOperationException("The valheim-test DLL path is unavailable for staging.");
-        string source = Path.GetDirectoryName(assembly)!;
-        string temporary = target + ".new";
-        Directory.CreateDirectory(temporary);
-        try
+        string payload = "";
+        JournalOwnedDirectory.Create(parent, Actor, "detached tool snapshot", owned =>
         {
-            foreach (string file in Directory.EnumerateFiles(source, "*", SearchOption.TopDirectoryOnly))
-            {
-                if ((File.GetAttributes(file) & FileAttributes.ReparsePoint) != 0)
-                    throw new InvalidDataException("The runner build contains a link: " + file);
-                string hash = FileHash.Sha256(file), copy = Path.Combine(temporary, Path.GetFileName(file));
-                File.Copy(file, copy);
-                if (FileHash.Sha256(copy) != hash || FileHash.Sha256(file) != hash)
-                    throw new IOException("The runner changed while staging its detached copy: " + file);
-            }
-            if (!File.Exists(Path.Combine(temporary, Path.GetFileName(assembly))) ||
-                !File.Exists(Path.Combine(temporary, Path.GetFileNameWithoutExtension(assembly) + ".runtimeconfig.json")))
+            payload = Path.Combine(owned, "payload"); Directory.CreateDirectory(payload);
+            string assembly = Assembly.GetEntryAssembly()?.Location ?? "";
+            if (!Path.IsPathFullyQualified(assembly) || !File.Exists(assembly))
+                throw new InvalidOperationException("The valheim-test DLL path is unavailable for staging.");
+            string source = Path.GetDirectoryName(assembly)!;
+            CopyDirectory(source, payload, int.MaxValue, long.MaxValue, "The runner build is too large to stage");
+            if (!File.Exists(Path.Combine(payload, Path.GetFileName(assembly))) ||
+                !File.Exists(Path.Combine(payload, Path.GetFileNameWithoutExtension(assembly) + ".runtimeconfig.json")))
                 throw new InvalidDataException("The runner build has no complete .NET runtime configuration.");
-            Directory.Move(temporary, target);
-        }
-        catch { if (Directory.Exists(temporary)) Directory.Delete(temporary, recursive: true); throw; }
+        });
+        return payload;
     }
 
     private static (string Program, string[] Prefix) OwnCommand(string toolDirectory)
@@ -247,11 +255,8 @@ internal static class DetachedSession
         return OwnCommandForPaths(toolDirectory, process, assembly, RuntimeEnvironment.GetRuntimeDirectory());
     }
 
-    internal static (string Program, string[] Prefix) OwnCommandForPaths(string toolDirectory, string process, string assembly,
-        string runtimeDirectory)
+    internal static (string Program, string[] Prefix) OwnCommandForPaths(string toolDirectory, string process, string assembly, string runtimeDirectory)
     {
-        // A dotnet tool's apphost shim lives outside the package's DLL directory. The staged
-        // directory contains the framework-dependent entry DLL, not that shim.
         string host = Path.GetFileNameWithoutExtension(process).Equals("dotnet", StringComparison.OrdinalIgnoreCase)
             ? process : DotnetHost(runtimeDirectory);
         return (host, [Path.Combine(toolDirectory, Path.GetFileName(assembly))]);
@@ -259,24 +264,13 @@ internal static class DetachedSession
 
     internal static string DotnetHost(string runtimeDirectory)
     {
-        string host = Path.GetFullPath(Path.Combine(runtimeDirectory, "..", "..", "..",
-            OperatingSystem.IsWindows() ? "dotnet.exe" : "dotnet"));
-        if (!File.Exists(host))
-            throw new InvalidOperationException("The .NET host beside the active runtime was not found: " + host);
+        string host = Path.GetFullPath(Path.Combine(runtimeDirectory, "..", "..", "..", OperatingSystem.IsWindows() ? "dotnet.exe" : "dotnet"));
+        if (!File.Exists(host)) throw new InvalidOperationException("The .NET host beside the active runtime was not found: " + host);
         return host;
-    }
-
-    private static async Task<int> RunCommand(ProcessStartInfo start)
-    {
-        using var process = Process.Start(start) ?? throw new IOException("Could not start " + start.FileName);
-        await process.WaitForExitAsync().ConfigureAwait(false);
-        return process.ExitCode;
     }
 
     private static string Ps(string value) => "'" + value.Replace("'", "''", StringComparison.Ordinal) + "'";
 
-    // The scheduled task owns the PowerShell wrapper, which waits for the runner. It has no clock trigger:
-    // registration is followed by exactly one demand start, and finish removes it after journal recovery.
     internal static string WindowsLauncher(Launch launch, IReadOnlyList<string> environment, IReadOnlyList<string> program)
     {
         var script = new System.Text.StringBuilder("$ErrorActionPreference = 'Stop'\n");
@@ -294,93 +288,9 @@ internal static class DetachedSession
         return script.ToString();
     }
 
-    internal static string WindowsRegistration(Launch launch) => $$"""
-        $ErrorActionPreference = 'Stop'
-        $service = New-Object -ComObject Schedule.Service
-        $service.Connect()
-        $folder = $service.GetFolder('\')
-        $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
-        $logonType = 3 # the one preflighted desktop, including when this command came from SSH/session 0
-        $definition = $service.NewTask(0)
-        $definition.RegistrationInfo.Description = 'ValheimTesting: one owned detached server run; removed after finish.'
-        $definition.Principal.UserId = $identity.Name
-        $definition.Principal.LogonType = $logonType
-        $definition.Principal.RunLevel = 0
-        $definition.Settings.Hidden = $true
-        $definition.Settings.Enabled = $true
-        $definition.Settings.AllowDemandStart = $true
-        $definition.Settings.DisallowStartIfOnBatteries = $false
-        $definition.Settings.StopIfGoingOnBatteries = $false
-        $definition.Settings.ExecutionTimeLimit = 'PT0S'
-        $action = $definition.Actions.Create(0)
-        $action.Path = [Environment]::ProcessPath
-        $action.Arguments = '-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + {{Ps(launch.LauncherPath)}} + '"'
-        $action.WorkingDirectory = {{Ps(launch.ToolDirectory)}}
-        $task = $folder.RegisterTaskDefinition({{Ps(launch.Label)}}, $definition, 2, $identity.Name, $null, $logonType) # TASK_CREATE; 1 only validates
-        [void]$task.Run($null)
-        """;
-
-    private static async Task<int> RegisterWindowsTaskAsync(Launch launch)
-    {
-        var start = new ProcessStartInfo("pwsh") { UseShellExecute = false, RedirectStandardError = true };
-        start.ArgumentList.Add("-NoProfile"); start.ArgumentList.Add("-NonInteractive");
-        start.ArgumentList.Add("-ExecutionPolicy"); start.ArgumentList.Add("Bypass");
-        start.ArgumentList.Add("-EncodedCommand");
-        start.ArgumentList.Add(Convert.ToBase64String(System.Text.Encoding.Unicode.GetBytes(WindowsRegistration(launch))));
-        using var process = Process.Start(start) ?? throw new IOException("Could not start Windows Task Scheduler registration.");
-        string diagnostic = await process.StandardError.ReadToEndAsync().ConfigureAwait(false);
-        await process.WaitForExitAsync().ConfigureAwait(false);
-        if (process.ExitCode != 0 && !string.IsNullOrWhiteSpace(diagnostic))
-            throw new InvalidOperationException("Windows detached task registration failed: " + diagnostic.Trim());
-        return process.ExitCode;
-    }
-
-    private static async Task<string> WindowsTaskStateAsync(Launch launch)
-    {
-        string script = $$"""
-            $ErrorActionPreference = 'Stop'
-            $service = New-Object -ComObject Schedule.Service
-            $service.Connect()
-            try { $task = $service.GetFolder('\').GetTask({{Ps(launch.Label)}}) }
-            catch [System.Runtime.InteropServices.COMException] {
-                if ($_.Exception.HResult -eq -2147024894) { 'missing'; exit 0 }
-                throw
-            }
-            if ($task.State -in @(2, 4) -or [int64]$task.LastTaskResult -in @(0x41301, 0x41325)) {
-                'running'
-            } elseif ([int64]$task.LastTaskResult -eq 0x41303) { 'not-started' }
-            else { 'stopped ' + $task.LastTaskResult }
-            """;
-        var start = new ProcessStartInfo("pwsh") { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true };
-        start.ArgumentList.Add("-NoProfile"); start.ArgumentList.Add("-NonInteractive");
-        start.ArgumentList.Add("-EncodedCommand");
-        start.ArgumentList.Add(Convert.ToBase64String(System.Text.Encoding.Unicode.GetBytes(script)));
-        using var process = Process.Start(start) ?? throw new IOException("Could not inspect the Windows detached task.");
-        string stdout = await process.StandardOutput.ReadToEndAsync().ConfigureAwait(false);
-        string stderr = await process.StandardError.ReadToEndAsync().ConfigureAwait(false);
-        await process.WaitForExitAsync().ConfigureAwait(false);
-        if (process.ExitCode != 0) throw new IOException("The Windows detached task could not be inspected: " + stderr.Trim());
-        return stdout.Trim();
-    }
-
-    private static async Task<int> RemoveWindowsTaskAsync(Launch launch)
-    {
-        string script = $$"""
-            $ErrorActionPreference = 'Stop'
-            $service = New-Object -ComObject Schedule.Service
-            $service.Connect()
-            $service.GetFolder('\').DeleteTask({{Ps(launch.Label)}}, 0)
-            """;
-        var start = new ProcessStartInfo("pwsh") { UseShellExecute = false };
-        start.ArgumentList.Add("-NoProfile"); start.ArgumentList.Add("-NonInteractive");
-        start.ArgumentList.Add("-EncodedCommand");
-        start.ArgumentList.Add(Convert.ToBase64String(System.Text.Encoding.Unicode.GetBytes(script)));
-        return await RunCommand(start).ConfigureAwait(false);
-    }
-
     private static async Task<Ready> WaitReadyAsync(Launch launch)
     {
-        using var watcher = new FileSystemWatcher(Root, Path.GetFileName(launch.ReadyFile))
+        using var watcher = new FileSystemWatcher(launch.ControlDirectory, Path.GetFileName(launch.ReadyFile))
         { NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite, EnableRaisingEvents = true };
         TaskCompletionSource changed = new(TaskCreationOptions.RunContinuationsAsynchronously);
         FileSystemEventHandler onChange = (_, _) => changed.TrySetResult();
@@ -388,27 +298,23 @@ internal static class DetachedSession
         watcher.Created += onChange; watcher.Changed += onChange; watcher.Renamed += onRename;
         try
         {
-            DateTime started = DateTime.UtcNow;
-            DateTime deadline = started + TimeSpan.FromMinutes(10);
+            DateTime started = DateTime.UtcNow, deadline = started + TimeSpan.FromMinutes(10);
+            var host = new LocalGameHost("this machine", HostShell.Pwsh);
             while (DateTime.UtcNow < deadline)
             {
                 if (File.Exists(launch.ReadyFile))
                 {
                     var ready = JsonSerializer.Deserialize<Ready>(File.ReadAllText(launch.ReadyFile))
                         ?? throw new InvalidDataException("The detached readiness record is empty.");
-                    if (!RunJournal.SafeName(ready.Run) || ready.Pid <= 0 || !Path.IsPathFullyQualified(ready.Evidence))
+                    if (ready.Run != launch.Run || ready.Pid <= 0 || !Path.IsPathFullyQualified(ready.Evidence))
                         throw new InvalidDataException("The detached readiness record is invalid.");
-                    var startedRun = JsonSerializer.Deserialize<StartedRun>(File.ReadAllText(RunFile(launch)))
-                        ?? throw new InvalidDataException("The detached run-start record is empty.");
-                    if (startedRun.Run != ready.Run || startedRun.Pid != ready.Pid || startedRun.Started != ready.Started)
-                        throw new InvalidDataException("The detached held owner differs from the runner that started the run.");
                     return ready;
                 }
-                string state = await WindowsTaskStateAsync(launch).ConfigureAwait(false);
-                if (state == "not-started" && DateTime.UtcNow - started > TimeSpan.FromSeconds(30))
+                var state = await launch.Task.InspectAsync(host, TimeSpan.FromSeconds(60)).ConfigureAwait(false);
+                if (state == WindowsScheduledTask.State.NotStarted && DateTime.UtcNow - started > TimeSpan.FromSeconds(30))
                     throw new IOException("The Windows detached task did not start within thirty seconds.");
-                if (state.StartsWith("stopped", StringComparison.Ordinal))
-                    throw new IOException("The Windows detached task ended before the game entered its held state (" + state + ").");
+                if (state is WindowsScheduledTask.State.Missing or WindowsScheduledTask.State.Mismatch or WindowsScheduledTask.State.Stopped)
+                    throw new IOException("The Windows detached task ended or changed before the game entered its held state (" + state + ").");
                 await Task.WhenAny(changed.Task, Task.Delay(TimeSpan.FromSeconds(2))).ConfigureAwait(false);
                 if (changed.Task.IsCompleted) changed = new(TaskCreationOptions.RunContinuationsAsynchronously);
             }
@@ -416,9 +322,6 @@ internal static class DetachedSession
         }
         finally { watcher.Created -= onChange; watcher.Changed -= onChange; watcher.Renamed -= onRename; }
     }
-
-    private static bool ExactOwner(Ready ready)
-        => ExactOwner(ready.Pid, ready.Started);
 
     private static bool ExactOwner(int pid, string started)
     {
@@ -430,55 +333,24 @@ internal static class DetachedSession
         catch (Exception error) when (error is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception) { return false; }
     }
 
-    private static IEnumerable<(string File, Launch Record)> Records()
-    {
-        if (!Directory.Exists(Root)) yield break;
-        foreach (string file in Directory.EnumerateFiles(Root, "*.launch.json"))
-        {
-            Launch record = JsonSerializer.Deserialize<Launch>(File.ReadAllText(file))
-                ?? throw new InvalidDataException("The detached record is empty: " + file);
-            if (record.Token is not { Length: 32 } || !record.Token.All(Uri.IsHexDigit))
-                throw new InvalidDataException("The detached record has an invalid token: " + file);
-            string prefix = Path.Combine(Root, record.Token);
-            if (record.Label != WindowsTaskPrefix + record.Token ||
-                file != prefix + ".launch.json" || record.ReadyFile != prefix + ".ready.json" ||
-                record.StandardOut != prefix + ".out.log" || record.StandardError != prefix + ".err.log" ||
-                record.ToolDirectory != prefix + ".tool" || record.InputDirectory != prefix + ".inputs" ||
-                record.LauncherPath != prefix + ".ps1" ||
-                record.Output is null || !Path.IsPathFullyQualified(record.Output) ||
-                record.StarterPid <= 0 || record.StarterStarted.Length == 0)
-                throw new InvalidDataException("The detached record is not one this machine created: " + file);
-            yield return (file, record);
-        }
-    }
+    private sealed record Owner(WindowsScheduledTask Task, string Control, string Output, JournalRunner Runner);
 
-    private static string? RecordedRun(Launch record)
+    private static async Task<Owner> ReadOwnerAsync(string run)
     {
-        if (record.Run != null) return record.Run;
-        if (File.Exists(record.ReadyFile)) return JsonSerializer.Deserialize<Ready>(File.ReadAllText(record.ReadyFile))?.Run;
-        string path = Path.Combine(Root, record.Token + ".run.json");
-        return File.Exists(path) ? JsonSerializer.Deserialize<StartedRun>(File.ReadAllText(path))?.Run : null;
-    }
-
-    private static int Status(TextWriter output, TextWriter error)
-    {
-        try { foreach (var (_, record) in Records())
-        {
-            Ready? ready = null;
-            if (File.Exists(record.ReadyFile))
-                try { ready = JsonSerializer.Deserialize<Ready>(File.ReadAllText(record.ReadyFile)); }
-                catch (Exception failure) when (failure is IOException or JsonException) { }
-            StartedRun? started = File.Exists(RunFile(record))
-                ? JsonSerializer.Deserialize<StartedRun>(File.ReadAllText(RunFile(record))) : null;
-            string state = ready != null && ExactOwner(ready) ? "LIVE " :
-                started != null && ExactOwner(started.Pid, started.Started) ? "STARTING " : "CHECK ";
-            output.WriteLine(state +
-                (RecordedRun(record) ?? record.Token) + ": output " + record.Output + "; OS owner " + record.Label);
-        } }
-        catch (Exception failure) when (failure is IOException or InvalidDataException or JsonException)
-        { error.WriteLine("REFUSED: " + failure.Message); return 3; }
-        output.WriteLine("Use valheim-test env status for owned game and recovery state.");
-        return 0;
+        var host = new LocalGameHost("this machine", HostShell.ThisMachine);
+        // In time order, as RunJournalStatus reads them: per-actor files are not ordered among themselves.
+        var records = (await RunJournalOnHost.ReadAsync(host, RunJournal.LocalDirectory, run, TimeSpan.FromSeconds(60)).ConfigureAwait(false))
+            .OrderBy(record => record.Utc).ToList();
+        var open = records.Where(record => record.Entry.Kind is JournalEntry.ScheduledTaskIntended or JournalEntry.ScheduledTaskStarted)
+            .LastOrDefault(record => !records.Any(later => later.Utc >= record.Utc && later.Entry.Kind == JournalEntry.ScheduledTaskRetired &&
+                later.Entry.Fields.GetValueOrDefault("task") == record.Entry.Fields.GetValueOrDefault("task")));
+        if (open == null) throw new InvalidDataException("Run " + run + " has no journalled detached owner to finish.");
+        string control = open.Entry.Fields.GetValueOrDefault("control") ?? "";
+        string output = open.Entry.Fields.GetValueOrDefault("output") ?? "";
+        if (!Path.IsPathFullyQualified(control) || !Path.IsPathFullyQualified(output))
+            throw new InvalidDataException("Run " + run + " has an invalid detached owner journal entry.");
+        var runner = records.Last(record => record.Actor != RunRecovery.Actor).Runner;
+        return new(WindowsScheduledTask.FromJournal(open.Entry.Fields, run), control, output, runner);
     }
 
     private static async Task<int> FinishAsync(string run, TextWriter output, TextWriter error)
@@ -486,101 +358,46 @@ internal static class DetachedSession
         if (!RunJournal.SafeName(run)) { error.WriteLine("Usage: " + Usage); return 2; }
         try
         {
-            var matches = Records().Where(item => RecordedRun(item.Record) == run).ToArray();
-            if (matches.Length != 1) throw new InvalidDataException("Expected exactly one detached record for run " + run + ". Use detach status and env status.");
-            var (file, record) = matches[0];
-            Ready? ready = File.Exists(record.ReadyFile)
-                ? JsonSerializer.Deserialize<Ready>(File.ReadAllText(record.ReadyFile)) : null;
-            StartedRun? started = File.Exists(RunFile(record))
-                ? JsonSerializer.Deserialize<StartedRun>(File.ReadAllText(RunFile(record))) : null;
-            if (ready?.Run != run && started?.Run != run) throw new InvalidDataException("The detached run identity changed.");
-            bool live = ready != null ? ExactOwner(ready) : started != null && ExactOwner(started.Pid, started.Started);
-            // A dead runner may have left its exact journalled game alive. Recovery can stop
-            // that game, but it cannot turn an interrupted run into a successful finish.
+            var owner = await ReadOwnerAsync(run).ConfigureAwait(false);
+            bool live = owner.Runner.OnThisMachine && owner.Runner.StillRuns();
             int ownerExit = live ? 0 : 1;
             if (live)
             {
-                if (ready == null) throw new InvalidOperationException("The detached runner is still setting up; it has no held marker to finish yet.");
-                ForegroundHold.Request(run);
-                using var owner = Process.GetProcessById(ready.Pid);
+                ForegroundHold.Request(run, owner.Control);
+                using var process = Process.GetProcessById(owner.Runner.Pid);
                 using var wait = new CancellationTokenSource(TimeSpan.FromMinutes(10));
-                await owner.WaitForExitAsync(wait.Token).ConfigureAwait(false);
-                ownerExit = owner.ExitCode;
+                await process.WaitForExitAsync(wait.Token).ConfigureAwait(false);
+                ownerExit = process.ExitCode;
             }
-            // An owner that died unexpectedly still goes through the existing exact-process recovery.
-            // It stops only processes proved to belong to this run and retains its recovered game logs.
-            if (Directory.Exists(Path.Combine(RunJournal.LocalDirectory, run)))
+            if (Directory.Exists(owner.Output))
             {
-                int clean = await EnvCommand.RunAsync(["recover", "--run", run], output, error).ConfigureAwait(false);
-                if (clean != 0) throw new InvalidOperationException("The run still owns state; inspect env status before removing its OS owner.");
+                // Evidence only: a log the launcher still holds must not stop recovery of what the run owns.
+                foreach (string log in new[] { "stdout.log", "stderr.log" })
+                    try { CopyLog(Path.Combine(owner.Control, log), Path.Combine(owner.Output, "detached-" + log)); }
+                    catch (IOException copy) { error.WriteLine($"warning: could not keep detached {log}: {copy.Message}"); }
             }
-            bool copiedLogs = Directory.Exists(record.Output);
-            if (copiedLogs)
-            {
-                CopyLog(record.StandardOut, Path.Combine(record.Output, "detached-stdout.log"));
-                CopyLog(record.StandardError, Path.Combine(record.Output, "detached-stderr.log"));
-            }
-            bool ownerMissing = await WindowsTaskStateAsync(record).ConfigureAwait(false) == "missing";
-            if (!ownerMissing && await RemoveOwnerAsync(record).ConfigureAwait(false) != 0)
-                throw new IOException("Could not remove the completed detached owner " + record.Label);
-            if (Directory.Exists(record.ToolDirectory)) Directory.Delete(record.ToolDirectory, recursive: true);
-            if (Directory.Exists(record.InputDirectory)) Directory.Delete(record.InputDirectory, recursive: true);
-            File.Delete(record.ReadyFile);
-            if (copiedLogs) { File.Delete(record.StandardOut); File.Delete(record.StandardError); }
-            File.Delete(RunFile(record)); File.Delete(RunFile(record) + ".new"); File.Delete(record.LauncherPath); File.Delete(file);
-            if (!copiedLogs) output.WriteLine("Private startup logs kept at " + record.StandardOut + " and " + record.StandardError);
-            output.WriteLine((ownerExit == 0 ? "DETACHED FINISHED run " : "DETACHED RECOVERED FAILED run ") +
-                run + "; owned state verified clear.");
+            int clean = await EnvCommand.RunAsync(["recover", "--run", run], output, error).ConfigureAwait(false);
+            if (clean != 0) throw new InvalidOperationException("The run still owns state; inspect env status.");
+            output.WriteLine((ownerExit == 0 ? "DETACHED FINISHED run " : "DETACHED RECOVERED FAILED run ") + run + "; owned state verified clear.");
             return ownerExit == 0 ? 0 : 1;
         }
-        catch (Exception failure) when (failure is ArgumentException or IOException or InvalidDataException or InvalidOperationException or UnauthorizedAccessException or OperationCanceledException or JsonException or System.ComponentModel.Win32Exception)
-        { error.WriteLine("REFUSED: " + failure.Message); return 3; }
-    }
-
-    private static string RunFile(Launch record) => Path.Combine(Root, record.Token + ".run.json");
-
-    private static Task<int> RemoveOwnerAsync(Launch record) => RemoveWindowsTaskAsync(record);
-
-    private static async Task<int> RecoverAsync(string token, TextWriter output, TextWriter error)
-    {
-        if (token is not { Length: 32 } || !token.All(Uri.IsHexDigit))
-        { error.WriteLine("Usage: " + Usage); return 2; }
-        try
-        {
-            var matches = Records().Where(item => item.Record.Token == token).ToArray();
-            if (matches.Length != 1) throw new InvalidDataException("No exact detached owner record for token " + token + ".");
-            var (file, record) = matches[0];
-            string? run = RecordedRun(record);
-            if (run != null) return await FinishAsync(run, output, error).ConfigureAwait(false);
-            if (ExactOwner(record.StarterPid, record.StarterStarted))
-                throw new InvalidOperationException("The detached starter is still staging or registering this task; retry after it exits.");
-            // A run ID is recorded before its journal or game can start. A missing ID is safe to
-            // retire only after the OS task has stopped; never kill a task merely to clean files.
-            if (await WindowsTaskStateAsync(record).ConfigureAwait(false) == "running")
-                throw new InvalidOperationException("The Windows detached task is still running; inspect its private logs first.");
-            bool ownerMissing = await WindowsTaskStateAsync(record).ConfigureAwait(false) == "missing";
-            if (!ownerMissing && await RemoveOwnerAsync(record).ConfigureAwait(false) != 0)
-                throw new IOException("Could not remove the stopped detached owner " + record.Label);
-            if (Directory.Exists(record.ToolDirectory)) Directory.Delete(record.ToolDirectory, recursive: true);
-            if (Directory.Exists(record.InputDirectory)) Directory.Delete(record.InputDirectory, recursive: true);
-            File.Delete(RunFile(record) + ".new"); File.Delete(record.LauncherPath); File.Delete(file);
-            output.WriteLine("DETACHED RECOVERED token " + token + "; no run or game had been journalled. Private startup logs kept at " +
-                record.StandardOut + " and " + record.StandardError);
-            return 0;
-        }
-        catch (Exception failure) when (failure is ArgumentException or IOException or InvalidDataException or InvalidOperationException or UnauthorizedAccessException or JsonException or System.ComponentModel.Win32Exception)
+        catch (Exception failure) when (failure is ArgumentException or IOException or InvalidDataException or InvalidOperationException or
+                                             UnauthorizedAccessException or OperationCanceledException or JsonException or HostOperationException or
+                                             System.ComponentModel.Win32Exception or TimeoutException)
         { error.WriteLine("REFUSED: " + failure.Message); return 3; }
     }
 
     private static void CopyLog(string source, string target)
     {
-        if (!File.Exists(source)) return; // An owner refused before it opened either redirected stream.
+        if (!File.Exists(source)) return;
         if (File.Exists(target))
         {
-            if (FileHash.Sha256(source) != FileHash.Sha256(target))
-                throw new IOException("A different detached log already exists: " + target);
-            return; // finish can resume after a later cleanup error.
+            if (FileHash.Sha256(source) != FileHash.Sha256(target)) throw new IOException("A different detached log already exists: " + target);
+            return;
         }
-        File.Copy(source, target);
+        // The launcher may still have the log open for writing.
+        using var from = new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        using var to = new FileStream(target, FileMode.CreateNew, FileAccess.Write);
+        from.CopyTo(to);
     }
 }

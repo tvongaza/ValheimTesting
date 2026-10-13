@@ -159,10 +159,16 @@ internal static class RunJournalStatus
                         case JournalEntry.ProcessStopped: left.Remove($"process {Field("pid")} {Field("startIdentity")}"); break;
                         case JournalEntry.MacAgentIntended: Open("mac-agent " + Field("launchDirectory"), "mac-agent", Field("launchDirectory"), "GUI agent may still be loaded"); break;
                         case JournalEntry.MacAgentRetired: left.Remove("mac-agent " + Field("launchDirectory")); break;
+                        case JournalEntry.ScheduledTaskIntended:
+                            Open("scheduled-task " + Field("task"), "scheduled-task", Field("task"), "registration intended; task state not checked yet"); break;
+                        case JournalEntry.ScheduledTaskStarted:
+                            Open("scheduled-task " + Field("task"), "scheduled-task", Field("task"), "registered, not retired"); break;
+                        case JournalEntry.ScheduledTaskRetired: left.Remove("scheduled-task " + Field("task")); break;
                         case JournalEntry.LaunchSettled: left.Remove($"launch {Field("actor")} {Field("directory")}"); break;
                         case JournalEntry.LeaseHeld: Open($"lease {Field("account")} {Field("owner")}", "lease", $"Steam account {Field("account")} ({Field("pool")})", "held"); break;
                         case JournalEntry.LeaseKept: Open($"lease {Field("account")} {Field("owner")}", "lease", $"Steam account {Field("account")} ({Field("pool")})", "kept: its client may still run", kept: true); break;
                         case JournalEntry.LeaseReleased: left.Remove($"lease {Field("account")} {Field("owner")}"); break;
+                        case JournalEntry.LockIntended: Open($"lock {Field("lock")} {Field("claimant")}", "lock", Field("lock"), "claim intended; state not checked yet"); break;
                         case JournalEntry.LockHeld: Open($"lock {Field("lock")} {Field("claimant")}", "lock", Field("lock"), "held"); break;
                         case JournalEntry.LockReleased: left.Remove($"lock {Field("lock")} {Field("claimant")}"); break;
                         case JournalEntry.RunEnded: ended[run.Key] = (Field("state"), Field("cleanupVerified") == "true"); break;
@@ -346,6 +352,27 @@ internal static class RunJournalStatus
                     };
                 }
                 catch (Exception error) when (error is HostOperationException or TimeoutException or IOException or ArgumentException or InvalidOperationException)
+                {
+                    return judged with { Status = "cannot be checked: " + error.Message, Unrecoverable = true };
+                }
+            }
+            case "scheduled-task":
+            {
+                if (item.Connection.Shell.Kind != HostShellKind.PowerShell)
+                    return judged with { Status = "can be checked only on its Windows host", Unrecoverable = true };
+                try
+                {
+                    var task = WindowsScheduledTask.FromJournal(item.Fields, run);
+                    return await task.InspectAsync(item.Connection, timeout, cancellation).ConfigureAwait(false) switch
+                    {
+                        WindowsScheduledTask.State.Missing => null,
+                        WindowsScheduledTask.State.Mismatch => judged with { Status = "a task with its name has another definition", Unrecoverable = true },
+                        WindowsScheduledTask.State.Running => judged with { Status = "registered and running with this run's exact definition" },
+                        WindowsScheduledTask.State.NotStarted => judged with { Status = "registered but not started, with this run's exact definition" },
+                        _ => judged with { Status = "registered and stopped, with this run's exact definition" },
+                    };
+                }
+                catch (Exception error) when (error is HostOperationException or TimeoutException or IOException or InvalidDataException or InvalidOperationException)
                 {
                     return judged with { Status = "cannot be checked: " + error.Message, Unrecoverable = true };
                 }
@@ -607,6 +634,8 @@ internal static class RunJournalStatus
             output.WriteLine($"{run.State.ToString().ToUpperInvariant()} {run.Run} on {string.Join(", ", run.Hosts)}, {Time(run.FirstUtc)} to {Time(run.LastUtc)}: {run.Reason}");
             foreach (var item in run.Items)
                 output.WriteLine($"  {item.Kind} {item.What} on {item.Host} ({item.Actor}, since {Time(item.SinceUtc)}): {(item.Unrecoverable ? "UNRECOVERABLE " : "")}{item.Status}");
+            if (run.State == JournalRunState.Recoverable)
+                output.WriteLine($"  Recover it with: valheim-test env recover --run {run.Run}");
         }
         foreach (var copy in report.Unjournalled)
             output.WriteLine($"UNJOURNALLED copy {copy.Path} ({copy.Kind}, {DiskSpace.Format(copy.Bytes)}, made {Time(copy.CreatedUtc)}" +

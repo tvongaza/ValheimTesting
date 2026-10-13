@@ -82,6 +82,8 @@ internal sealed class FakeServerHost : IGameHost
     public Dictionary<string, (string Holder, string LeaseId)> Leases { get; } = [];
     /// <summary>What the process check reads as a running process's command-line hash, by process ID; by default <see cref="CommandLineSha256"/> of its ID.</summary>
     public Dictionary<int, string> CommandLines { get; } = [];
+    /// <summary>Exact detached tasks registered on this fake Windows host and their current state.</summary>
+    public Dictionary<string, (WindowsScheduledTask Task, WindowsScheduledTask.State State)> ScheduledTasks { get; } = [];
     /// <summary>Runs after each process check, for example to change a process between two checks.</summary>
     public Action? AfterProbe { get; set; }
     public static string CommandLineSha256(string pid) => Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes("fake game " + pid)));
@@ -162,6 +164,10 @@ internal sealed class FakeServerHost : IGameHost
         ("process-probe", [HostProcessProbe.Unix, HostProcessProbe.Windows]),
         ("mac-bundle", [MacAppBundle.Bash]),
         ("machine-name", [RunJournalStatus.WindowsMachineName]),
+        ("lock", [HostScripts.Lock(HostShellKind.Bash), HostScripts.Lock(HostShellKind.PowerShell)]),
+        ("scheduled-task-register", [WindowsScheduledTask.RegisterScript]),
+        ("scheduled-task-inspect", [WindowsScheduledTask.InspectScript]),
+        ("scheduled-task-retire", [WindowsScheduledTask.RetireScript]),
         ("lease", [LeaseScripts.Bash, LeaseScripts.PowerShell]),
         ("world-entries", [HostedWorldOnHost.WindowsEntries, HostedWorldOnHost.BashEntries]),
         ("world-move", [HostedWorldOnHost.WindowsMoveOut, HostedWorldOnHost.BashMoveOut]));
@@ -201,6 +207,48 @@ internal sealed class FakeServerHost : IGameHost
                 return Ok("VT-PROFILE-STORAGE " + Convert.ToBase64String(Encoding.UTF8.GetBytes(json)) + "\n");
             }
             case "machine-name": return Ok("VT-MACHINE " + MachineName + "\n");
+            case "lock":
+            {
+                string owner = v["owner"];
+                string? current;
+                lock (_sync) current = HeldBy ?? Claims.FirstOrDefault(claim => !Releases.Contains(claim));
+                if (v["action"] == "claim")
+                {
+                    if (current == null) { lock (_sync) Claims.Add(owner); return Ok("VT-LOCK claimed\n"); }
+                    return Ok(current == owner ? "VT-LOCK yours\n" : "VT-LOCK held\n" + current + "\n");
+                }
+                if (current == null) return Ok("VT-LOCK free\n");
+                if (current != owner) return Ok("VT-LOCK held\n" + current + "\n");
+                if (v["action"] == "check") return Ok("VT-LOCK yours\n");
+                lock (_sync) Releases.Add(owner);
+                AfterRelease?.Invoke(owner);
+                return Ok("VT-LOCK released\n");
+            }
+            case "scheduled-task-register":
+            {
+                if (ScheduledTasks.ContainsKey(v["task"])) return new HostResult(HostOutcome.Exited, 1, "", "task exists", TimeSpan.Zero, false);
+                ScheduledTasks.Add(v["task"], (new WindowsScheduledTask(v["task"], v["description"], v["executable"], v["launcher"], v["working"], v["principalUserId"]), WindowsScheduledTask.State.Running));
+                return Ok("VT-TASK registered\n");
+            }
+            case "scheduled-task-inspect":
+            {
+                if (!ScheduledTasks.TryGetValue(v["task"], out var scheduled)) return Ok("VT-TASK missing\n");
+                var expected = new WindowsScheduledTask(v["task"], v["description"], v["executable"], v["launcher"], v["working"], v["principalUserId"]);
+                if (scheduled.Task != expected) return Ok("VT-TASK mismatch\n");
+                string state = scheduled.State switch
+                {
+                    WindowsScheduledTask.State.Running => "running", WindowsScheduledTask.State.NotStarted => "not-started", _ => "stopped",
+                };
+                return Ok("VT-TASK owned " + state + "\n");
+            }
+            case "scheduled-task-retire":
+            {
+                if (!ScheduledTasks.TryGetValue(v["task"], out var scheduled)) return Ok("VT-TASK missing\n");
+                var expected = new WindowsScheduledTask(v["task"], v["description"], v["executable"], v["launcher"], v["working"], v["principalUserId"]);
+                if (scheduled.Task != expected) return Ok("VT-TASK mismatch\n");
+                ScheduledTasks.Remove(v["task"]);
+                return Ok("VT-TASK removed\n");
+            }
             // As the scripts: the first path that overlaps the root once links are resolved (here in the mirror, by the local rule).
             case "apart":
                 foreach (string path in v["paths"].Split('\n', StringSplitOptions.RemoveEmptyEntries))
