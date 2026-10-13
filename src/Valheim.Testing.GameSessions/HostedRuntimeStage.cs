@@ -203,8 +203,8 @@ internal static partial class HostedRuntimeStage
         await HostInstall.RequireApartAsync(host, source, [destination, staging], "the source install", timeout, cancellation).ConfigureAwait(false);
     }
 
-    // Only HostedCampaignPreparation calls this for a unique directory it created and retained in memory. Its caller
-    // must hold the host lock and must have stopped all game processes before retiring the prepared install.
+    // For a toolkit-created copy (RequirePrepared) and its own staging folder (RequireStaging), whether the caller still holds it in memory or
+    // a recovery read it from a journal. The caller must hold the host lock and must have stopped all game processes first.
     internal static async Task RetireAsync(IGameHost host, string destination, string staging, TimeSpan timeout, CancellationToken cancellation = default, string? runId = null)
     {
         string parent = RequirePrepared(host, destination, runId);
@@ -217,15 +217,16 @@ internal static partial class HostedRuntimeStage
     }
 
     /// <summary>
-    /// The one rule for a copy's staging folder: <c>&lt;parent&gt;/staging</c> beside the runtime (ignoring case, as preparation always did),
-    /// Preparation applies it to what it is given and retirement to what
-    /// it is given (a world copy has none: retirement skips the check for an empty one), which on recovery comes from a journal that a hand edit or corruption could aim anywhere.
+    /// The one rule for a copy's staging folder: <c>&lt;parent&gt;/staging</c> beside the runtime (case-insensitive on a Windows host).
+    /// Preparation applies it to the folder it is given, and retirement to the one it is given, which on recovery comes from a journal
+    /// that a hand edit or corruption could aim anywhere. A world copy has no staging: retirement skips the check for an empty one.
     /// </summary>
     internal static void RequireStaging(IGameHost host, string parent, string staging)
     {
         bool windows = host.Shell.Kind == HostShellKind.PowerShell;
         string Same(string path) => windows ? path.Replace('/', '\\') : path;
-        if (!string.Equals(Same(staging), Same(parent) + (windows ? @"\" : "/") + "staging", StringComparison.OrdinalIgnoreCase))
+        // Windows ignores case; a bash host's folders may differ by it (the host script resolves what is really there).
+        if (!string.Equals(Same(staging), Same(parent) + (windows ? @"\" : "/") + "staging", windows ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
             throw new ArgumentException("The staging directory must be a sibling named staging beside the disposable runtime.", nameof(staging));
     }
 

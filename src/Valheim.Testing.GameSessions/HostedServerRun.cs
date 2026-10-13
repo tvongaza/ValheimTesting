@@ -783,9 +783,9 @@ internal static class HostedRunScripts
             [IO.Path]::GetFileName($keep) -cne 'runtime-changes' -or [IO.Path]::GetDirectoryName($keep) -cne $parent) { exit 3 }
         if ([IO.Directory]::Exists($keep) -or [IO.File]::Exists($keep)) { exit 3 }
         [void][IO.Directory]::CreateDirectory($keep)
+        # A runtime that is a link (dangling or to a file too) keeps nothing: it is unlinked, never entered, and its target stays.
+        if (Test-VtLink $runtime) { Remove-VtTree $runtime $parent; 'VT-RETIRED 0 0'; exit 0 }
         if (-not [IO.Directory]::Exists($runtime)) { 'VT-RETIRED 0 0'; exit 0 }
-        # A runtime that is a link keeps nothing: it is unlinked, never entered, and its target stays.
-        if ([IO.File]::GetAttributes($runtime) -band [IO.FileAttributes]::ReparsePoint) { Remove-VtTree $runtime $parent; 'VT-RETIRED 0 0'; exit 0 }
         $real = Get-VtPhysical $runtime # the copy's physical path; each kept file must resolve below it
         $kept = [long]0
         foreach ($line in ($files -split "`n")) {

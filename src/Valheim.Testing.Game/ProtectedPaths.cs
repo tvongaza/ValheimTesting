@@ -115,7 +115,7 @@ internal static class ProtectedPaths
     /// failed). With <c>check</c> it only decides, so a script can check every path before it deletes any. A PATH that is itself a
     /// link (to a directory or a file, dangling or not) is unlinked and its target is never entered or emptied; the link only has to
     /// stand inside ROOT. A PATH that does not exist is already gone. A trailing slash on PATH is dropped first: BSD <c>rm</c> follows
-    /// <c>link/</c>. This is the one delete of a folder a host script was handed by name (a runtime copy, a staging folder).
+    /// <c>link/</c>. This is the delete of a runtime copy and its staging folder (cleanup and retire) that a host script was handed by name.
     /// </summary>
     internal static readonly string BashRemove = """
         vt_remove() {
@@ -147,24 +147,28 @@ internal static class ProtectedPaths
     /// already gone. A reparse point that is not a symlink or junction (a cloud placeholder) is an ordinary folder, as <c>Get-VtPhysical</c> reads it.
     /// </summary>
     internal static readonly string PowerShellRemove = """
+        function Test-VtLink([string]$path) {
+            $attributes = $null
+            try { $attributes = [IO.File]::GetAttributes($path) } catch [IO.FileNotFoundException] { } catch [IO.DirectoryNotFoundException] { }
+            if ($null -eq $attributes -or -not ($attributes -band [IO.FileAttributes]::ReparsePoint)) { return $false }
+            $item = Get-Item -LiteralPath $path -Force -ErrorAction Stop
+            return ($item.LinkType -eq 'SymbolicLink' -or $item.LinkType -eq 'Junction')
+        }
         function Remove-VtTree([string]$path, [string]$root, [switch]$check) {
             $sep = [IO.Path]::DirectorySeparatorChar
             $comparison = [StringComparison]::OrdinalIgnoreCase
             $path = $path.TrimEnd([char[]]@('\', '/'))
-            $rootPhysical = (Get-VtPhysical $root).TrimEnd($sep)
-            $base = $rootPhysical
-            # 'C:\' trimmed is 'C:': a volume root is the root's own path root.
-            if (-not $base -or [string]::Equals($base, [IO.Path]::GetPathRoot((Get-VtPhysical $root)).TrimEnd($sep), $comparison)) { throw ('Refusing to remove below a volume root: ' + $path) }
+            # 'C:' (a drive root trimmed) names the current directory on that drive, never a folder to remove.
+            if (-not $path -or $path.EndsWith(':')) { throw ('Refusing to remove a volume root: ' + $path) }
+            $physicalRoot = Get-VtPhysical $root
+            $base = $physicalRoot.TrimEnd($sep)
+            # A volume root trimmed ('C:') is the root's own path root.
+            if (-not $base -or [string]::Equals($base, [IO.Path]::GetPathRoot($physicalRoot).TrimEnd($sep), $comparison)) { throw ('Refusing to remove below a volume root: ' + $path) }
             $attributes = $null
             try { $attributes = [IO.File]::GetAttributes($path) } catch [IO.FileNotFoundException] { } catch [IO.DirectoryNotFoundException] { }
             if ($null -eq $attributes) { return }
             $isDirectory = [bool]($attributes -band [IO.FileAttributes]::Directory)
-            $isLink = $false
-            if ($attributes -band [IO.FileAttributes]::ReparsePoint) {
-                $item = Get-Item -LiteralPath $path -Force -ErrorAction Stop
-                $isLink = $item.LinkType -eq 'SymbolicLink' -or $item.LinkType -eq 'Junction'
-            }
-            if ($isLink) {
+            if (Test-VtLink $path) {
                 $real = (Get-VtPhysical ([IO.Path]::GetDirectoryName($path))).TrimEnd($sep)
                 if (-not ([string]::Equals($real, $base, $comparison) -or $real.StartsWith($base + $sep, $comparison))) { throw ('Refusing to remove a link outside ' + $root + ': ' + $path) }
                 if ($check) { return }
