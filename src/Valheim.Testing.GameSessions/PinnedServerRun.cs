@@ -644,6 +644,7 @@ public static class PinnedServerRun
                 if (inventoryPath != null) report.Provenance["inventorySha256"] = FileHash.Sha256(inventoryPath);
                 else report.Provenance["inventory"] = "this machine";
                 report.Provenance["serverEnvironment"] = assignment.Environment + ": " + assignment.Reason;
+                Console.WriteLine($"server runtime root: {environment.Server!.Runtime} ({environment.Server.RuntimeReason}).");
             }
             // The runtime is a profile of the server host's install (this machine's too), checked and staged there; nothing else
             // of the install is read here.
@@ -668,6 +669,12 @@ public static class PinnedServerRun
                 if (DiskSpace.Require(output, DiskSpace.DirectoryBytes(plan.World.Source), "this run's world copy") is { } free)
                     report.Provenance["freeBytesBeforeCopies"] = free.ToString(CultureInfo.InvariantCulture);
             });
+            if (prepared == null && hosted.HostProfile.Platform == "windows")
+                await report.StepAsync(StepPhase.Preflight, "check the Windows profile storage", async () =>
+                {
+                    string? storage = await hosted.PreflightProfileStorageAsync(cancellation.Token).ConfigureAwait(false);
+                    if (storage != null) Console.WriteLine("profile storage: " + storage);
+                }).ConfigureAwait(false);
             phase = StepPhase.Setup;
             // A supplied manifest remains an expected pin. A strict standalone run binds an omitted one from the copy as found.
             bool Verified(PinnedDirectory fixture) => fixture.Sha256.Count != 0;

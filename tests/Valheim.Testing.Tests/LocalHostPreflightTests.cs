@@ -78,6 +78,83 @@ public sealed class LocalHostPreflightTests : IDisposable
         Assert.Contains(problems, problem => problem.Actor == "client" && problem.Input == "ValheimCLI port" && problem.Message == "port busy");
     }
 
+    [Fact]
+    public async Task WindowsProfileStorageUsesTheVolumeProbeBeforeAnyStage()
+    {
+        var inventory = new EnvironmentInventory
+        {
+            Hosts = new() { ["pc"] = new HostProfile { Kind = "local", Platform = "windows", Shell = "pwsh", Lock = @"C:\vt\lock" } },
+            Environments = [new EnvironmentRecipe { Name = "server", Host = "pc", Roles = ["server"],
+                Install = @"C:\game", Runtime = @"C:\runs", CliPort = 5551 }],
+        };
+        var host = new FakeServerHost("pc", Path.Combine(_root, "storage-mirror"), windows: true, kind: GameHostKind.Local);
+        var source = new WindowsStorageVolume(@"C:\", "source", "NTFS", false);
+        WindowsStorageVolume runtime = source;
+        var probes = new LocalHostPreflight.Probes(
+            Processes: (_, _, _, _) => Task.CompletedTask,
+            Port: (_, _, _, _) => Task.CompletedTask,
+            Lock: (_, _, _, _) => Task.FromResult(new HostLockResult(HostLockState.Free, null, "free")),
+            ProfileStorage: (_, sourcePath, runtimePath, explicitRuntime, _, _) =>
+            {
+                if (ProfileRuntimeStorage.Refusal(sourcePath, source, runtimePath, runtime, explicitRuntime) is { } refusal)
+                    throw new InvalidOperationException(refusal);
+                return Task.FromResult<string?>("same NTFS volume");
+            },
+            Journals: (_, _) => Task.FromResult<IReadOnlyList<CampaignPreflightProblem>>([]), Packaged: () => null);
+
+        var selected = inventory.Environments.Select(recipe => new LocalHostPreflight.Actor(recipe.Name, recipe));
+        Assert.Empty(await LocalHostPreflight.InspectAsync(inventory, selected, TimeSpan.FromSeconds(1), hostFactory: _ => host, probes: probes));
+
+        runtime = new WindowsStorageVolume(@"D:\", "runtime", "NTFS", false);
+        var cross = Assert.Single(await LocalHostPreflight.InspectAsync(inventory, selected, TimeSpan.FromSeconds(1), hostFactory: _ => host, probes: probes),
+            problem => problem.Input == "profile storage");
+        Assert.Contains("explicit inventory runtime folder", cross.Message);
+
+        runtime = new WindowsStorageVolume(@"C:\", "source", "exFAT", false);
+        var unsupported = Assert.Single(await LocalHostPreflight.InspectAsync(inventory, selected, TimeSpan.FromSeconds(1), hostFactory: _ => host, probes: probes),
+            problem => problem.Input == "profile storage");
+        Assert.Contains("cannot hold the hard links", unsupported.Message);
+        Assert.DoesNotContain(host.Scripts, script => script is "profile-seed" or "apply-stage");
+    }
+
+    [Fact]
+    public async Task WindowsClientPreflightChecksTheDefaultRuntimeThatLocalClientCopyUses()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var machine = new FakeMachine("windows");
+        using var useMachine = EnvironmentInventory.UseMachine(machine);
+        var inventory = new EnvironmentInventory
+        {
+            Hosts = new() { ["pc"] = new HostProfile { Kind = "local", Platform = "windows", Shell = "pwsh", Lock = @"C:\vt\lock" } },
+            Environments = [new EnvironmentRecipe { Name = "client", Host = "pc", Roles = ["client"],
+                Install = @"C:\game", Runtime = @"D:\inventory-runs", CliPort = 5551 }],
+        };
+        var host = new FakeServerHost("pc", Path.Combine(_root, "client-storage-mirror"), windows: true, kind: GameHostKind.Local);
+        string? checkedRuntime = null;
+        bool? checkedExplicit = null;
+        var probes = new LocalHostPreflight.Probes(
+            Processes: (_, _, _, _) => Task.CompletedTask,
+            Port: (_, _, _, _) => Task.CompletedTask,
+            Lock: (_, _, _, _) => Task.FromResult(new HostLockResult(HostLockState.Free, null, "free")),
+            ProfileStorage: (_, _, runtime, explicitRuntime, _, _) =>
+            {
+                checkedRuntime = runtime;
+                checkedExplicit = explicitRuntime;
+                return Task.FromResult<string?>(null);
+            },
+            Desktop: _ => Task.CompletedTask, SteamRunning: () => true,
+            Journals: (_, _) => Task.FromResult<IReadOnlyList<CampaignPreflightProblem>>([]), Packaged: () => null);
+
+        var problems = await LocalHostPreflight.InspectAsync(inventory,
+            [new LocalHostPreflight.Actor("client", inventory.Environments[0])], TimeSpan.FromSeconds(1),
+            hostFactory: _ => host, probes: probes);
+
+        Assert.Empty(problems);
+        Assert.NotEqual(@"D:\inventory-runs", checkedRuntime);
+        Assert.EndsWith(@"runs\local-clients", checkedRuntime, StringComparison.OrdinalIgnoreCase);
+        Assert.False(checkedExplicit);
+    }
+
     // #703: a Windows host without PowerShell 7 is refused by preflight with the one fix: the winget command, run in a desktop
     // terminal on that machine. A local host cannot start pwsh; a host reached over ssh hears it from its login shell (cmd.exe).
     // Every check that reaches the host refuses the same way, so preflight never reports the host as merely busy or unknown.
@@ -86,6 +163,7 @@ public sealed class LocalHostPreflightTests : IDisposable
     [InlineData("ssh")]
     public async Task AWindowsHostWithoutPwshIsRefusedWithTheInstallCommand(string kind)
     {
+        using var useMachine = EnvironmentInventory.UseMachine(new FakeMachine(HostProfile.CurrentPlatform));
         var inventory = new EnvironmentInventory
         {
             Hosts = new() { ["pc"] = new HostProfile { Kind = "local", Platform = "windows", Shell = "pwsh", Lock = @"C:\vt\lock" } },

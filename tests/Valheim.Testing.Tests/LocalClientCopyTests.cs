@@ -274,6 +274,26 @@ public sealed class LocalClientCopyTests : IDisposable
         Assert.False(plan.Prepared);
     }
 
+    [Fact]
+    public async Task ACallerSuppliedHostDecidesStorageWithoutProbingTheRealMachine()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var plan = Plan(_rig.Game);
+        plan.CliManifest = CliSet();
+        string data = Path.Combine(_rig.Root, "isolated-data");
+        var host = new FakeServerHost("isolated-host", Path.Combine(_rig.Root, "isolated-mirror"),
+            kind: GameHostKind.Local, windows: true) { GameActive = true, GameProcessIds = "4242" };
+        using var machine = EnvironmentInventory.UseMachine(new FakeMachine("windows")
+            { StorageError = new InvalidOperationException("the real machine must not be probed") });
+        using var journalDirectory = RunJournal.UseLocalDirectory(Path.Combine(data, "journal"));
+
+        var busy = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            LocalClientCopy.PrepareAsync("client", plan, default, data, host, loader: (_, _) => null));
+
+        Assert.Contains("4242", busy.Message);
+        Assert.Equal(2, host.Scripts.Count(script => script == "profile-storage"));
+    }
+
     // A copy whose named set is not complete, or a build with no pinned bundle and no named set, is refused before anything is copied.
     [ClientHostFact] public async Task ACopyWithoutACompleteSetToStageIsRefusedBeforeAnythingIsCopied()
     {

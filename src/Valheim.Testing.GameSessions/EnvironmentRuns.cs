@@ -321,6 +321,12 @@ public static class EnvironmentRuns
         foreach (var recipe in inventory.Environments.Where(recipe => recipe.Roles.Contains("server")))
         {
             var role = recipe.Role();
+            if (inventory.Hosts[recipe.Host].Platform == "windows")
+            {
+                var storage = recipe.ProfileStorage ?? ProfileRuntimeStorage.PlacementVerdict(recipe.Install, recipe.Runtime,
+                    recipe.RuntimeExplicit);
+                if (storage.Refusal is { } storageRefusal) { skipped.Add(recipe.Name + ": " + storageRefusal); continue; }
+            }
             if (HostedServerRun.Refusal(inventory.Hosts[recipe.Host], role, plan) is { } refusal) { skipped.Add(recipe.Name + ": " + refusal); continue; }
             var environment = new ResolvedEnvironment { Hosts = inventory.Hosts, Server = role };
             environment.Validate();

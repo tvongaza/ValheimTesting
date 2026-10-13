@@ -165,6 +165,7 @@ internal static partial class HostedRuntimeStage
     {
         await RequireStagePathsAsync(host, kind, source, destination, staging, files, timeout, cancellation).ConfigureAwait(false);
         bool windows = host.Shell.Kind == HostShellKind.PowerShell;
+        if (windows) await RequireProfileStorageAsync(host, source, destination, timeout, cancellation).ConfigureAwait(false);
         var (selected, explicitlySelectedSettings) = SelectPayload(files, loaderPackage, host.Shell.Kind);
         if (steamRuntimePackage != null) loaderPackage?.RequireNativeMacServer();
         if (steamRuntimePackage != null)
@@ -353,7 +354,7 @@ internal static partial class HostedRuntimeStage
             $to = Join-Path $runtime $relative
             [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($to))
             try { New-Item -ItemType HardLink -Path $to -Target $from -ErrorAction Stop | Out-Null }
-            catch { throw "The source game and disposable launch folder must support hard links on one volume: move the folder that holds the profile ($runtime; a dedicated server's or campaign actor's is its environment's runtime folder) onto the NTFS volume of $source. A volume without hard links cannot hold a profile; an owned client can instead run its install as it is (inPlace, --in-place). $($_.Exception.Message)" }
+            catch { throw "Could not create a hard link in runtime folder $runtime from the install's volume containing $source`: $($_.Exception.Message)" }
         }
         foreach ($line in ($files -split "`n")) {
             if (-not $line) { continue }

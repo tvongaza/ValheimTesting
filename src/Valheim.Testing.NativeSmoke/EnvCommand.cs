@@ -92,7 +92,7 @@ internal static class EnvCommand
         foreach (string line in inventory.Detected) output.WriteLine("detected: " + line);
         foreach (string line in inventory.Missing) output.WriteLine("NOT FOUND: " + line);
         foreach (var recipe in inventory.Environments)
-            output.WriteLine($"{recipe.Name}: {string.Join(" and ", recipe.Roles)} on {recipe.Host}; install {recipe.Install}; runtime {recipe.Runtime}; " +
+            output.WriteLine($"{recipe.Name}: {string.Join(" and ", recipe.Roles)} on {recipe.Host}; install {recipe.Install}; runtime {recipe.Runtime} ({recipe.RuntimeReason}); " +
                 $"ValheimCLI port {recipe.CliPort}" + (recipe.Roles.Contains("server") ? $", game port {recipe.GamePort}" :
                     $"; selected architecture {recipe.Architecture}; available slices {string.Join(", ", AvailableSlices(inventory, recipe))}"));
         if (!preflight) return 0;

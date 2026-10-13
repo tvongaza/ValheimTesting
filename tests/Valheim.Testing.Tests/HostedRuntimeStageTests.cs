@@ -867,6 +867,36 @@ public sealed class HostedRuntimeStageTests : IDisposable
         Assert.True(File.Exists(Path.Combine(install, GameLaunch.ServerWindowsExecutable)));
     }
 
+    [Fact]
+    public async Task TheRealProfileSeedKeepsItsOwnFileErrorInsteadOfBecomingAHardLinkDiagnosis()
+    {
+        string source = Directory.CreateDirectory(Path.Combine(_root, "seed-source")).FullName;
+        string runtime = Path.Combine(_root, "seed-runtime");
+        const string missing = "missing-game-file.dll";
+        string encoded = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(missing));
+        var variables = new Dictionary<string, string>
+        {
+            ["source"] = source,
+            ["runtime"] = runtime,
+            ["gameFiles"] = encoded,
+            ["files"] = OperatingSystem.IsWindows() ? "" : encoded,
+        };
+        var host = new LocalGameHost("local-seed", HostShell.ThisMachine);
+        string script = OperatingSystem.IsWindows() ? HostedRuntimeStage.WindowsProfileSeed : HostedRuntimeStage.BashProfileSeed;
+
+        var result = await host.RunAsync(script, variables, TimeSpan.FromSeconds(30));
+
+        Assert.True(result.Failed, result.Describe());
+        Assert.Contains(missing, result.Stderr);
+        Assert.DoesNotContain("must support hard links", result.Describe(), StringComparison.OrdinalIgnoreCase);
+        if (OperatingSystem.IsWindows())
+        {
+            Assert.Contains(runtime, result.Stderr);
+            Assert.Contains(source, result.Stderr);
+            Assert.Contains("install's volume", result.Stderr);
+        }
+    }
+
     [Fact] public async Task FailedCleanupKeepsBothTheOriginalErrorAndTheUnprovenResidue()
     {
         var host = new FakeServerHost("windows-server", Mirror, windows: true);

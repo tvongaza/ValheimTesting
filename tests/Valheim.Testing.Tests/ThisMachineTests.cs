@@ -23,6 +23,38 @@ internal sealed class FakeMachine(string platform = "windows") : ISteamLocator
     /// <summary>Links: a link's path and the folder it finally points to.</summary>
     public Dictionary<string, string> Links { get; } = new(StringComparer.Ordinal);
     public string? LinkTarget(string path) => Links.GetValueOrDefault(path);
+    public Exception? StorageError { get; set; }
+    public string FinalPath(string path)
+    {
+        string current = path.Replace('/', Separator);
+        var suffix = new Stack<string>();
+        while (current.Length != 0)
+        {
+            if (Links.TryGetValue(current, out string? target))
+            {
+                string resolved = target;
+                foreach (string part in suffix) resolved = HostPath.Join(resolved, part);
+                return resolved;
+            }
+            string trimmed = current.TrimEnd(Separator);
+            int slash = trimmed.LastIndexOf(Separator);
+            if (slash < 0 || Platform == "windows" && slash == 2) break;
+            suffix.Push(trimmed[(slash + 1)..]);
+            current = trimmed[..slash];
+            if (Platform == "windows" && current.Length == 2 && current[1] == ':') current += Separator;
+        }
+        return path;
+    }
+    public Dictionary<string, WindowsStorageVolume> Storage { get; } = new(platform == "windows" ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
+    public WindowsStorageVolume StorageVolume(string path)
+    {
+        if (StorageError != null) throw StorageError;
+        var match = Storage.Where(item => path.StartsWith(item.Key, Platform == "windows" ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+            .OrderByDescending(item => item.Key.Length).Select(item => item.Value).FirstOrDefault();
+        if (match != null) return match;
+        string root = Platform == "windows" && path.Length >= 2 && path[1] == ':' ? char.ToUpperInvariant(path[0]) + @":\" : Path.GetPathRoot(path) ?? path;
+        return new WindowsStorageVolume(root, root, Platform == "windows" ? "NTFS" : "", path.StartsWith(@"\\", StringComparison.Ordinal));
+    }
 
     private char Separator => Platform == "windows" ? '\\' : '/';
     public void File(string path, string text = "")
@@ -72,6 +104,119 @@ public sealed class ThisMachineTests : IDisposable
         return pc;
     }
 
+    [Fact]
+    public void WindowsProfileDefaultsStayInDataOnTheInstallVolumeAndRelocateAcrossVolumes()
+    {
+        var same = new FakeMachine { DataRoot = @"C:\Users\tester\AppData\Local\ValheimTesting" };
+        var sameRoot = ProfileRuntimeStorage.DefaultRoot(same, @"C:\Steam\Valheim");
+        Assert.Equal(@"C:\Users\tester\AppData\Local\ValheimTesting\runs", sameRoot.Path);
+        Assert.Contains("data folder is on the install volume", sameRoot.Reason);
+
+        var other = new FakeMachine { DataRoot = @"C:\Users\tester\AppData\Local\ValheimTesting" };
+        var moved = ProfileRuntimeStorage.DefaultRoot(other, @"D:\SteamLibrary\Valheim");
+        Assert.Equal(@"D:\ValheimTesting\runs", moved.Path);
+        Assert.Contains("profiles follow the install volume", moved.Reason);
+
+        var mounted = new FakeMachine { DataRoot = @"C:\Users\tester\AppData\Local\ValheimTesting" };
+        mounted.Storage[@"C:\Users"] = new WindowsStorageVolume(@"C:\", "system", "NTFS", false);
+        mounted.Storage[@"C:\MountedGames"] = new WindowsStorageVolume(@"C:\MountedGames\", "games", "NTFS", false);
+        Assert.Equal(@"C:\MountedGames\ValheimTesting\runs",
+            ProfileRuntimeStorage.DefaultRoot(mounted, @"C:\MountedGames\Steam\Valheim").Path);
+
+        var junction = new FakeMachine { DataRoot = @"C:\Users\tester\AppData\Local\ValheimTesting" };
+        junction.Links[@"C:\Steam"] = @"D:\Games\Steam";
+        junction.Storage[@"D:\Games"] = new WindowsStorageVolume(@"D:\", "games", "NTFS", false);
+        Assert.Equal(@"D:\ValheimTesting\runs",
+            ProfileRuntimeStorage.DefaultRoot(junction, @"C:\Steam\steamapps\common\Valheim").Path);
+    }
+
+    [Fact]
+    public void AFailedWindowsVolumeProbeKeepsInventoryReadableAndUsesTheDataFolder()
+    {
+        string file = Path.Combine(_root, "subst-inventory.json");
+        File.WriteAllText(file, """
+            {
+              "environments": [
+                { "name": "server", "roles": ["server"], "install": "S:\\Valheim server", "cliPort": 5577, "gamePort": 2456 }
+              ]
+            }
+            """);
+        var machine = new FakeMachine { StorageError = new IOException("SUBST volume has no mount-point identity") };
+
+        var inventory = EnvironmentInventory.Read(file, machine);
+
+        var recipe = Assert.Single(inventory.Environments);
+        Assert.Equal(@"C:\Users\tester\AppData\Local\ValheimTesting\runs\server", recipe.Runtime);
+        Assert.Contains("using ValheimTesting's data folder", recipe.RuntimeReason);
+        Assert.False(recipe.RuntimeExplicit);
+        Assert.Null(recipe.ProfileStorage!.Refusal);
+        Assert.Contains(@"install S:\Valheim server", recipe.ProfileStorage.Warning);
+        Assert.Contains("SUBST volume has no mount-point identity", recipe.ProfileStorage.Warning);
+
+        if (OperatingSystem.IsWindows())
+        {
+            var plan = new ServerRunPlan { Executable = GameLaunch.ServerWindowsExecutable, Port = 5577, Arguments = ["-port", "2456"] };
+            Assert.Equal("server", inventory.PlaceServer(plan).Assignment.Environment);
+        }
+    }
+
+    [Fact]
+    public void WindowsProfileStorageRefusesAnExplicitOtherVolumeAndFilesystemsWithoutLinks()
+    {
+        var ntfsC = new WindowsStorageVolume(@"C:\", "c", "NTFS", false);
+        var ntfsD = new WindowsStorageVolume(@"D:\", "d", "NTFS", false);
+        string cross = Assert.IsType<string>(ProfileRuntimeStorage.Refusal(@"C:\game", ntfsC, @"D:\runs", ntfsD));
+        Assert.Contains("explicit inventory runtime folder", cross);
+        Assert.Contains("Put the inventory runtime on the install's NTFS volume", cross);
+
+        foreach (var unsupported in new[]
+        {
+            new WindowsStorageVolume(@"E:\", "e", "exFAT", false),
+            new WindowsStorageVolume(@"F:\", "f", "FAT32", false),
+            new WindowsStorageVolume(@"\\nas\games\", "share", "NTFS", true),
+        })
+        {
+            string refusal = Assert.IsType<string>(ProfileRuntimeStorage.Refusal(@"E:\game", unsupported, @"E:\runs", unsupported));
+            Assert.Contains("cannot hold the hard links", refusal);
+            Assert.Contains("Move the Steam library to NTFS", refusal);
+            Assert.DoesNotContain("--in-place", refusal);
+            Assert.Contains("--in-place", ProfileRuntimeStorage.Refusal(@"E:\game", unsupported, @"E:\runs", unsupported,
+                explicitRuntime: false, inPlaceAvailable: true));
+        }
+    }
+
+    [Theory]
+    [InlineData(@"\\?\D:\Steam\Valheim", @"\\?\D:\", 3, false)]
+    [InlineData(@"\\?\Volume{01234567-89ab-cdef-0123-456789abcdef}\Steam\Valheim", @"\\?\Volume{01234567-89ab-cdef-0123-456789abcdef}\", 3, false)]
+    [InlineData(@"\\.\X:\Steam\Valheim", @"\\.\X:\", 3, false)]
+    [InlineData(@"\\server\share\Steam\Valheim", @"\\server\share\", 4, true)]
+    [InlineData(@"\\?\UNC\server\share\Steam\Valheim", @"\\?\UNC\server\share\", 4, true)]
+    public void WindowsStorageClassifierDistinguishesLocalDevicePathsFromNetworkShares(string path, string root,
+        uint driveType, bool network)
+    {
+        var volume = WindowsStorageClassifier.Classify(new(path, root, driveType, "volume", "NTFS"));
+        Assert.Equal(network, volume.Network);
+        Assert.Equal(network ? @"\\server\share\" : root, volume.Root);
+    }
+
+    [Fact]
+    public void WindowsStorageProbeClassifiesAMappedDriveBeforeRequestingItsVolumeGuid()
+    {
+        int volumeNameCalls = 0, fileSystemCalls = 0;
+        var probes = new WindowsStorageProbe.Probes(path => path, _ => true, _ => null, _ => @"Z:\", _ => 4,
+            _ => { volumeNameCalls++; throw new InvalidOperationException("SMB has no volume GUID"); },
+            _ => { fileSystemCalls++; throw new InvalidOperationException("SMB has no local filesystem query"); });
+
+        var volume = WindowsStorageProbe.Inspect(@"Z:\Steam\Valheim", probes);
+
+        Assert.True(volume.Network);
+        Assert.Equal(@"Z:\", volume.Root);
+        Assert.Equal(0, volumeNameCalls);
+        Assert.Equal(0, fileSystemCalls);
+        string refusal = Assert.IsType<string>(ProfileRuntimeStorage.Refusal(@"Z:\Steam\Valheim", volume, @"Z:\runs", volume));
+        Assert.Contains("Move the Steam library to NTFS", refusal);
+    }
+
     [Fact] public void WithNoFileAWindowsPcIsAServerAndAClientOnThisMachine()
     {
         var pc = WindowsPc(out string game, out string server);
@@ -80,14 +225,18 @@ public sealed class ThisMachineTests : IDisposable
         Assert.Equal(("local", "windows", "pwsh", @"C:\Users\tester\AppData\Local\ValheimTesting\lock"), (local.Kind, local.Platform, local.Shell, local.Lock));
         var serverRecipe = Assert.Single(inventory.Environments, recipe => recipe.Name == "local-server");
         var clientRecipe = Assert.Single(inventory.Environments, recipe => recipe.Name == "local-client");
-        Assert.Equal((server, 5688, 2486, @"C:\Users\tester\AppData\Local\ValheimTesting\runs\local-server"),
+        Assert.False(serverRecipe.RuntimeExplicit);
+        Assert.False(clientRecipe.RuntimeExplicit);
+        Assert.Equal((server, 5688, 2486, @"D:\ValheimTesting\runs\local-server"),
             (serverRecipe.Install, serverRecipe.CliPort, serverRecipe.GamePort, serverRecipe.Runtime));
-        Assert.Equal((game, 5689, 0), (clientRecipe.Install, clientRecipe.CliPort, clientRecipe.GamePort));
+        Assert.Equal((game, 5689, 0, @"E:\ValheimTesting\runs\local-client"),
+            (clientRecipe.Install, clientRecipe.CliPort, clientRecipe.GamePort, clientRecipe.Runtime));
         Assert.Equal(("local", @"C:\Users\tester\AppData\Local\ValheimTesting\leases"), (inventory.LeaseHost, inventory.LeaseDirectory));
         Assert.Empty(inventory.Missing);
         Assert.Contains(inventory.Detected, line => line.Contains(@"from registry HKCU\Software\Valve\Steam SteamPath") && line.Contains(@"E:\SteamLibrary"));
         Assert.Contains(inventory.Detected, line => line == $"Valheim (Steam app 892970): {game}");
         Assert.Contains(inventory.Detected, line => line.StartsWith("local-server (server) on local: install " + server) && line.Contains("assumed") && line.Contains("game port 2486"));
+        Assert.Contains(inventory.Detected, line => line.Contains(@"runtime D:\ValheimTesting\runs\local-server") && line.Contains("profiles follow the install volume"));
         // It resolves a one-server, one-client campaign with no file at all.
         var resolved = inventory.Resolve(new HostedCampaignManifest { Server = new(), Clients = new() { ["client"] = new() } });
         Assert.Equal(["local-server", "local-client"], resolved.Assignments.Select(assignment => assignment.Environment));

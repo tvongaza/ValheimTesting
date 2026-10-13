@@ -99,6 +99,7 @@ public sealed class TargetedRegression
     private readonly string _lockPath;
     private HostLock? _hostLock;
     private readonly string _stage;
+    private readonly bool _runtimeExplicit;
     private bool _prepared;
     private double _lastStageSeconds;
     private string? _activeGameRoot;
@@ -182,6 +183,7 @@ public sealed class TargetedRegression
         ClientEnvironment = recipe.Name;
         _lockPath = host.Lock;
         Game = recipe.Install; Port = recipe.CliPort; _environmentLoader = recipe.LoaderPackage;
+        _runtimeExplicit = recipe.RuntimeExplicit;
         Architecture = ClientArchitectureChoice.Select(inputs.Client.Architecture, recipe.Architecture,
             host.Platform, EnvironmentInventory.ThisMachine.OsArchitecture);
         string parent = Path.Combine(recipe.Runtime, "vt-prep-regression-" + inputs.Name + "-" + _journal.RunId);
@@ -226,6 +228,8 @@ public sealed class TargetedRegression
         var env = Inputs;
         if (!env.Mod.Arms.TryGetValue(arm, out var chosen))
             throw new ArgumentException($"There is no arm \"{arm}\"; the manifest names {string.Join(", ", env.Mod.Arms.Keys)}.");
+        _ = HostedRuntimeStage.RequireProfileStorageAsync(_host, Game, Install, LocalClientCopy.StepTimeout,
+            explicitRuntime: _runtimeExplicit, inPlaceAvailable: false).GetAwaiter().GetResult();
         var identity = FixtureLayout.Discover(env.Fixture.Root, env.Fixture.WorldUid);
         var fixture = WorldFixture.Manifest(env.Fixture.Root);
 

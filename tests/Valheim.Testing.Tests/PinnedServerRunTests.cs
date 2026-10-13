@@ -109,8 +109,9 @@ public sealed class PinnedServerRunTests : IDisposable
         var result = Result();
         Assert.True(result.GetProperty("Passed").GetBoolean());
         // A Windows host first shows it can start a server task.
+        string[] storage = LocalServerMachine.Windows ? ["check the Windows profile storage"] : [];
         string[] task = LocalServerMachine.Windows ? ["the server host can start a server task"] : [];
-        Assert.Equal([ "enough free disk space for the copies", .. task, "take the server host's lock",
+        Assert.Equal([ "enough free disk space for the copies", .. storage, .. task, "take the server host's lock",
                 "check the server host's install against the pinned runtime and stage its profile", "copy and verify pinned world",
                 "ship and verify the world copy on the server host", "server runtime has the plan's server executable",
                 "server runtime is the pinned game build, loader and patchers", "prepared only; no game launched",
@@ -119,7 +120,7 @@ public sealed class PinnedServerRunTests : IDisposable
         // Validate prepares and cleans up; it runs no scenario, so the scenario state is not reported as passed.
         Assert.Equal((true, true, false, true), (result.GetProperty("PreflightPassed").GetBoolean(), result.GetProperty("RuntimeReady").GetBoolean(),
             result.GetProperty("ScenarioPassed").GetBoolean(), result.GetProperty("CleanupVerified").GetBoolean()));
-        Assert.Equal([ "Preflight", .. task.Select(_ => "Setup"), "Setup", "Setup", "Setup", "Setup", "Setup", "Setup", "Setup", "Cleanup", "Cleanup" ],
+        Assert.Equal([ "Preflight", .. storage.Select(_ => "Preflight"), .. task.Select(_ => "Setup"), "Setup", "Setup", "Setup", "Setup", "Setup", "Setup", "Setup", "Cleanup", "Cleanup" ],
             result.GetProperty("Steps").EnumerateArray().Select(s => s.GetProperty("Phase").GetString()));
         var provenance = result.GetProperty("Provenance");
         Assert.Equal(("this machine", EnvironmentInventory.LocalHost, EnvironmentInventory.LocalHost + ":" + LocalServerMachine.Install),
