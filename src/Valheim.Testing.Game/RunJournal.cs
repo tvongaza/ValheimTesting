@@ -120,21 +120,60 @@ internal sealed class RunJournal
     private sealed class LocalReset(string? previous) : IDisposable { public void Dispose() => s_localFlow.Value = previous; }
 
     private static readonly Lazy<RunJournal> s_process = new(() => new RunJournal(NewRunId()));
-    private static readonly AsyncLocal<RunJournal?> s_run = new();
+    private static readonly AsyncLocal<RunScope?> s_run = new();
     /// <summary>
     /// The run this process's local copies are journalled under: the run going in this flow (<see cref="UseRun"/>), so a run's
     /// copies join its own journal run, else one run for the whole process.
     /// </summary>
-    internal static RunJournal ThisProcess => s_run.Value ?? s_process.Value;
+    internal static RunJournal ThisProcess => s_run.Value?.Journal ?? s_process.Value;
 
-    /// <summary>Journals this flow's local copies under <paramref name="runId"/> (a run's own id) until disposed.</summary>
-    internal static IDisposable UseRun(string runId)
+    /// <summary>
+    /// Journals this flow's local copies under <paramref name="runId"/> (a run's own id) until disposed. The scope records every
+    /// journal this flow writes for that run, here or on a host, so the run's end goes to each of them and nowhere else
+    /// (<c>RunFinish</c>, #667). A scope opened inside another keeps the outer one: an entry joins the nearest scope of its run.
+    /// </summary>
+    internal static RunScope UseRun(string runId)
     {
-        var previous = s_run.Value;
-        s_run.Value = new RunJournal(runId);
-        return new RunReset(previous);
+        var scope = new RunScope(new RunJournal(runId), s_run.Value);
+        s_run.Value = scope;
+        return scope;
     }
-    private sealed class RunReset(RunJournal? previous) : IDisposable { public void Dispose() => s_run.Value = previous; }
+
+    /// <summary>
+    /// Notes, before an entry is written, that this flow journals run <paramref name="runId"/> at <paramref name="place"/>
+    /// (one key per journal file set: a host and its journal directory). <paramref name="write"/> writes another entry there.
+    /// Outside a scope of that run nothing is noted: only the run's own flow ends it.
+    /// </summary>
+    internal static void Journalled(string runId, string place, Func<string, JournalEntry, TimeSpan, Task> write, TimeSpan timeout)
+    {
+        for (var scope = s_run.Value; scope != null; scope = scope.Parent)
+            if (scope.Journal.RunId == runId) { scope.Note(place, write, timeout); return; }
+    }
+
+    /// <summary>
+    /// One run in one flow (<see cref="UseRun"/>): where the flow journalled it, and whether its end was written. The journal's
+    /// record of "did this process journal anything for the run", so no caller keeps a flag of its own.
+    /// </summary>
+    internal sealed class RunScope : IDisposable
+    {
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<string, Place> _places = new(StringComparer.Ordinal);
+        private int _ended;
+        internal RunScope(RunJournal journal, RunScope? parent) { Journal = journal; Parent = parent; }
+        public RunJournal Journal { get; }
+        public string RunId => Journal.RunId;
+        internal RunScope? Parent { get; }
+        /// <summary>Where this flow journalled the run, in the order first written.</summary>
+        internal IReadOnlyList<Place> Places => _places.Values.OrderBy(place => place.Order).ToList();
+        private int _order;
+        internal void Note(string key, Func<string, JournalEntry, TimeSpan, Task> write, TimeSpan timeout) =>
+            _places.TryAdd(key, new Place(key, write, timeout, Interlocked.Increment(ref _order)));
+        /// <summary>True once: the caller that gets it writes the run's end.</summary>
+        internal bool TryEnd() => Interlocked.Exchange(ref _ended, 1) == 0;
+        public void Dispose() => s_run.Value = Parent;
+    }
+
+    /// <summary>A journal a flow wrote a run to: its key, how to write one more entry there and the timeout its entries used.</summary>
+    internal sealed record Place(string Key, Func<string, JournalEntry, TimeSpan, Task> Write, TimeSpan Timeout, int Order);
 
     /// <summary>
     /// Copies this machine's journal says a still-running process holds: made (or being made) by a runner on this machine that
@@ -180,7 +219,9 @@ internal sealed class RunJournal
     /// </summary>
     internal void AppendLocal(string actor, JournalEntry entry, string? journal = null)
     {
-        string directory = Path.Combine(journal ?? LocalDirectory, RunId);
+        string root = Path.GetFullPath(journal ?? LocalDirectory);
+        Journalled(RunId, LocalPlace(root), (again, last, _) => { AppendLocal(again, last, root); return Task.CompletedTask; }, TimeSpan.Zero);
+        string directory = Path.Combine(root, RunId);
         string line = Line(actor, entry) + "\n";
         lock (s_localWrite)
         {
@@ -197,6 +238,9 @@ internal sealed class RunJournal
                 catch (IOException) when (attempt < 20) { Thread.Sleep(50); }
         }
     }
+
+    /// <summary>The place key of a journal on this machine, however it is written (in process or through the local shell).</summary>
+    internal static string LocalPlace(string journal) => "this machine|" + Path.TrimEndingDirectorySeparator(Path.GetFullPath(journal));
 
     // One journal line: when, which run and actor, what, and the runner that wrote it.
     internal string Line(string actor, JournalEntry entry)

@@ -55,7 +55,6 @@ int exitCode = 3;
 string? outcome = null;
 bool journalClean = true;
 bool characterPending = false;
-bool ownershipStarted = false;
 string? output = null;
 var progress = new ModInputStage.Progress();
 try
@@ -149,7 +148,7 @@ try
                 }, afterStaged: null, characterJournal: (point, characters, userData, name, expectedSha256) =>
                 {
                     RunJournal.ThisProcess.AppendLocal("client", TargetedRegression.CharacterEntry(point, characters, userData, name, expectedSha256));
-                    if (point == CharacterStageEvent.Intended) { characterPending = true; ownershipStarted = true; }
+                    if (point == CharacterStageEvent.Intended) characterPending = true;
                     if (point == CharacterStageEvent.Retired) characterPending = false;
                 }, deferReportWrite: true);
         if (processJournal != null)
@@ -202,17 +201,12 @@ finally
             Console.Error.WriteLine("CLEANUP REFUSED: " + cleanup.Message + "; inspect the disposable install at " + runner.Install);
             if (exitCode == 0) exitCode = 1;
         }
-    if (journalClean && ownershipStarted)
-        try
-        {
-            RunJournal.ThisProcess.AppendLocal("run", JournalEntry.Of(JournalEntry.RunEnded,
-                ("state", exitCode == 0 ? "passed" : "failed"), ("cleanupVerified", "true")));
-        }
-        catch (Exception journalError) when (journalError is IOException or UnauthorizedAccessException)
-        {
-            Console.Error.WriteLine("CLEANUP UNVERIFIED: the run ended but its journal could not record that: " + journalError.Message);
-            exitCode = 1;
-        }
+    // The run's end, in every journal this run wrote (none for a refusal before anything was journalled), whatever failed (#667).
+    if (!await RunFinish.EndAsync(runJournal, new RunEnd(exitCode == 0 ? RunOutcome.Passed : RunOutcome.Failed, journalClean)))
+    {
+        Console.Error.WriteLine("CLEANUP UNVERIFIED: the run ended but its journal could not record that.");
+        exitCode = 1;
+    }
 }
 if (outcome != null)
 {

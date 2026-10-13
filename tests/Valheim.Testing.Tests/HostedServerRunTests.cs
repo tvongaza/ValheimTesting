@@ -709,7 +709,9 @@ public sealed partial class HostedServerRunTests : IDisposable
             clientJournal.Where(record => record.Actor == "player").Select(record => record.Entry.Kind));
         Assert.Equal("77", clientJournal.Single(record => record.Entry.Kind == JournalEntry.ProcessStarted).Entry.Fields["pid"]);
         Assert.Equal(FakeServerHost.CommandLineSha256("77"), clientJournal.Single(record => record.Entry.Kind == JournalEntry.ProcessStarted).Entry.Fields["commandLineSha256"]);
-        Assert.Equal([JournalEntry.LockHeld, JournalEntry.LockReleased], clientJournal.Where(record => record.Actor == "run").Select(record => record.Entry.Kind));
+        // The run ends in every journal it wrote (#667): the client host's too, not only the server's.
+        Assert.Equal([JournalEntry.LockHeld, JournalEntry.LockReleased, JournalEntry.RunEnded], clientJournal.Where(record => record.Actor == "run").Select(record => record.Entry.Kind));
+        Assert.Equal("passed", clientJournal.Single(record => record.Entry.Kind == JournalEntry.RunEnded).Entry.Fields["state"]);
         Assert.True(JournalIndex(clientHost, JournalEntry.ProcessIntended) < clientHost.Runs.ToList().FindIndex(run => run.Script == "client-start"));
         // The earlier log moved aside first, the new one was awaited from its start; only that client was stopped.
         Assert.Equal("/Users/tester/runs/" + RunId + "/client-1.previous-LogOutput.log", Assert.Single(clientHost.Runs, run => run.Script == "move-aside").Variables["to"]);

@@ -100,9 +100,8 @@ internal static class RunRecovery
             string name = run.Hosts[0];
             try
             {
-                await journal.AppendAsync(hostFactory(name), RunJournal.DirectoryFor(hosts[name]), Actor,
-                    JournalEntry.Of(JournalEntry.RunEnded, ("state", "recovered: runner gone"), ("cleanupVerified", "true")),
-                    timeout, cancellation).ConfigureAwait(false);
+                await RunFinish.RecordForGoneRunnerAsync(journal, hostFactory(name), RunJournal.DirectoryFor(hosts[name]),
+                    new RunEnd(RunOutcome.Recovered, CleanupProven: true), timeout, cancellation).ConfigureAwait(false);
                 return new(runId, JournalRunState.Ended, null, [new(name, "run end", "recorded after proving its runner gone and no owned state remains", false)])
                 { After = JournalRunState.Ended };
             }

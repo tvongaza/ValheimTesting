@@ -51,12 +51,8 @@ internal sealed class HostedServerRun : IServerPlacement
 
     // The run's journal on each host it touches (RunJournal): a process is journalled before it starts, a lock once held.
     private readonly RunJournal _journal;
-    private async Task JournalAsync(IGameHost host, string hostName, string actor, JournalEntry entry, CancellationToken cancellation)
-    {
-        await _journal.AppendAsync(host, RunJournal.DirectoryFor(Profile.Hosts[hostName]), actor, entry, HostedTimeouts.Quick, cancellation).ConfigureAwait(false);
-        if (hostName == Role.Host) _serverJournalled = true;
-    }
-    private bool _serverJournalled;
+    private Task JournalAsync(IGameHost host, string hostName, string actor, JournalEntry entry, CancellationToken cancellation) =>
+        _journal.AppendAsync(host, RunJournal.DirectoryFor(Profile.Hosts[hostName]), actor, entry, HostedTimeouts.Quick, cancellation);
     // After its effect a lost line is a warning: the effect happened, and the entry before it already names where to look.
     private async Task NoteAsync(IGameHost host, string hostName, string actor, JournalEntry entry)
     {
@@ -65,15 +61,6 @@ internal sealed class HostedServerRun : IServerPlacement
     }
     private Task NoteLockAsync(IGameHost host, string hostName, HostLock held, string kind) =>
         NoteAsync(host, hostName, "run", JournalEntry.Of(kind, ("lock", held.Path), ("claimant", held.Owner)));
-
-    /// <summary>
-    /// The run's end in its server host's journal, when the run wrote there at all (a standalone run; a campaign's preparation
-    /// journals its own hosts). A run refused before it touched the host leaves it untouched.
-    /// </summary>
-    public Task JournalEndAsync(string state, bool cleanupVerified) =>
-        JournalEndAsync(JournalEntry.Of(JournalEntry.RunEnded, ("state", state), ("cleanupVerified", cleanupVerified ? "true" : "false")));
-    /// <summary>The run's last journal entry on its server host: its end, or that its cleanup was abandoned.</summary>
-    internal Task JournalEndAsync(JournalEntry last) => !_serverJournalled ? Task.CompletedTask : NoteAsync(Host, Role.Host, "run", last);
 
     /// <summary>Whether the runtime is a campaign's prepared install (verified in place) rather than a copy this run makes.</summary>
     public bool Prepared { get; }

@@ -14,6 +14,8 @@ internal static class RunJournalOnHost
     /// <summary>Appends <paramref name="entry"/> for <paramref name="actor"/> on <paramref name="host"/>; throws unless the host confirms the write.</summary>
     public static async Task AppendAsync(this RunJournal run, IGameHost host, string journal, string actor, JournalEntry entry, TimeSpan timeout, CancellationToken cancellation = default)
     {
+        // Noted before the write: a journal whose entry may have landed is one the run's end goes to (RunFinish).
+        RunJournal.Journalled(run.RunId, Place(host, journal), (again, last, time) => run.AppendAsync(host, journal, again, last, time), timeout);
         // Base64 keeps the line one shell word whatever the paths hold; the host decodes it before appending.
         string encoded = Convert.ToBase64String(Encoding.UTF8.GetBytes(run.Line(actor, entry)));
         var result = (await host.RunAsync(host.Shell.Kind == HostShellKind.PowerShell ? WindowsAppend : BashAppend, new Dictionary<string, string>
@@ -23,6 +25,10 @@ internal static class RunJournalOnHost
         if (InteractiveClient.Line(result.Stdout, "VT-JOURNALED") == null)
             throw new HostOperationException($"The run journal on {host.Name} did not confirm {entry.Kind} for {actor}", result);
     }
+
+    // This machine's journal is one place whether written in process or through its own shell; another host's is its name and directory.
+    private static string Place(IGameHost host, string journal) =>
+        host is LocalGameHost ? RunJournal.LocalPlace(journal) : host.Name + "|" + journal;
 
     /// <summary>Every entry of run <paramref name="runId"/> on <paramref name="host"/>, in the order written per actor.</summary>
     public static async Task<IReadOnlyList<JournalRecord>> ReadAsync(IGameHost host, string journal, string runId, TimeSpan timeout, CancellationToken cancellation = default)
