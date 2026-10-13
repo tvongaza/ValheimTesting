@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Valheim.Testing.Game;
+using Valheim.Testing.GameSessions;
 using Xunit;
 
 public sealed class ServerLoadPhasesTests : IDisposable

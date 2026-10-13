@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Valheim.Testing.Game;
+using Valheim.Testing.GameSessions;
 
 /// <summary>Runs ordered server-only fixture bakes through the existing owned server-load lifecycle.</summary>
 internal static class ServerLoadPhases
