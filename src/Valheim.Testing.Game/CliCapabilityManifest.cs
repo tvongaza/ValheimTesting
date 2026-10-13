@@ -12,8 +12,7 @@ namespace Valheim.Testing.Game;
 /// build (missing, another build of it, a second copy, a renamed file declaring its GUID) or lacks a capability the run uses,
 /// naming the capability. A file name, plugin GUID or version never stands for a capability: only a DLL with the manifest's hash
 /// does. ValheimCLI ships this file with its build; <see cref="Generate"/> writes one from a known build by reading the DLL's
-/// metadata and IL, never loading it. <see cref="Read"/> is the one place that refuses anything but a one-plugin build (an
-/// old split core-and-pack manifest among them), so every command that reads a manifest refuses it with the same error.
+/// metadata and IL, never loading it. <see cref="Read"/> is the one place that refuses anything but a one-plugin build, so every command that reads a manifest refuses it with the same error.
 /// <see cref="CliCapabilities.Require(GameActor, string[])"/> after launch stays the authoritative check: this one only fails earlier.
 /// </summary>
 public sealed class CliCapabilityManifest
@@ -97,14 +96,14 @@ public sealed class CliCapabilityManifest
     }
 
     // The one place that decides "a one-plugin ValheimCLI build" (#670): files lists exactly one valheimCLI.dll declaring exactly
-    // valheimCLI.valheimCLI. An old split core-and-pack manifest, or any other shape, is refused here and nowhere else.
+    // valheimCLI.valheimCLI. Any other shape is refused here and nowhere else.
     private void RequireOnePlugin()
     {
         if (Files is [{ File: PluginFile, Plugins: [PluginGuid] }]) return;
         string listed = Files == null || Files.Count == 0 ? "no DLL" : string.Join(", ", Files.Select(file =>
             file == null ? "null" : $"{file.File} ({(file.Plugins == null || file.Plugins.Count == 0 ? "no plugin" : string.Join(", ", file.Plugins))})"));
         throw new ArgumentException($"files lists {listed}: not a one-plugin build. This toolkit reads one {PluginFile} declaring {PluginGuid}; " +
-            $"replace the old core and first-party pack DLLs together with one pinned {PluginFile} and its matching capability manifest.");
+            $"use one pinned {PluginFile} and its matching capability manifest.");
     }
 
     private static bool ValidName(string name) => name.Length != 0 && !name.Contains('/') && !name.Any(c => char.IsWhiteSpace(c) || char.IsControl(c));
@@ -253,7 +252,7 @@ public sealed class CliCapabilityManifest
         foreach (var dll in candidates.Where(dll => othersLoad && !exact.Contains(dll)))
         {
             var plugins = CliBuildManifest.Plugins(dll.Path) ?? [];
-            // ValheimCLI is one plugin: any other DLL declaring a ValheimCLI plugin GUID (an old first-party pack) would load beside it.
+            // ValheimCLI is one plugin: any other DLL declaring a ValheimCLI plugin GUID would load beside it.
             var others = plugins.Where(guid => CliBuildManifest.IsCliPlugin(guid) && !file.Plugins.Contains(guid, StringComparer.Ordinal)).ToList();
             if (!SameFile(dll.Shown, file) && others.Count != 0 && !file.Plugins.Intersect(plugins, StringComparer.Ordinal).Any())
             {

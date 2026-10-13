@@ -119,26 +119,6 @@ public sealed class ClientRunPlan
     /// by default every joined player is protected with ghost mode, which holds on every peer that runs ValheimCLI.
     /// </summary>
     public bool Targetable { get; set; }
-    // Removed (#298): direct start and prepared-character start saved 0.07 s over the menu start. A plan that still names
-    // one is refused with what to do instead of the generic unknown-field error.
-    [JsonInclude, JsonPropertyName("directStart"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    private JsonElement? RemovedDirectStart { get => null; set => throw Removed("directStart", 298, StartInstead); }
-    [JsonInclude, JsonPropertyName("directStartWorldUid"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    private JsonElement? RemovedDirectStartWorldUid { get => null; set => throw Removed("directStartWorldUid", 298, StartInstead); }
-    [JsonInclude, JsonPropertyName("startAtCharacterSave"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    private JsonElement? RemovedStartAtCharacterSave { get => null; set => throw Removed("startAtCharacterSave", 298, StartInstead); }
-    [JsonInclude, JsonPropertyName("characterStart"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    private JsonElement? RemovedCharacterStart { get => null; set => throw Removed("characterStart", 298, StartInstead); }
-    private const string StartInstead = "an owned client launches to its menu and joins (or hosts), and the first arrival teleports";
-    internal static ArgumentException Removed(string field, int issue, string instead) =>
-        new($"The client plan's {field} was removed (ValheimTesting #{issue}): {instead}. Delete {field} from the plan.");
-    // Removed (#299): arrival has one procedure, the game-side signal waits that were opt-in here (PlayerPlacement.Arrive).
-    [JsonInclude, JsonPropertyName("eventDrivenArrival"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    private JsonElement? RemovedEventDrivenArrival { get => null; set => throw Removed("eventDrivenArrival", 299, "every arrival now uses the game-side signal waits it switched on (PlayerPlacement.Arrive), which were faster than the polling arrival at the game's ordinary timing"); }
-    // Removed (#299): no library runner could reach fastTestTeleports after #239 (it required hostWorld.local, which
-    // a joining client's ClientRounds refuses, and the hosted rounds never used signal arrival).
-    [JsonInclude, JsonPropertyName("fastTestTeleports"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    private JsonElement? RemovedFastTestTeleports { get => null; set => throw Removed("fastTestTeleports", 299, "no runner could use it; arrival uses the game's ordinary teleport timing"); }
     /// <summary>The environment variable, in the client's process, that holds the join password.</summary>
     public string? PasswordVariable { get; set; }
 
@@ -170,9 +150,6 @@ public sealed class ClientRunPlan
     public int BepInExSeconds { get; set; } = 60;
     public int JoinSeconds { get; set; } = ClientTimeouts.DefaultJoinSeconds;
     public int ArrivalSeconds { get; set; } = 120;
-    // Removed (#295): patcher names beside the installPins patchers hash described one folder twice.
-    [JsonInclude, JsonPropertyName("patchers"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    private JsonElement? RemovedPatchers { get => null; set => throw Removed("patchers", 295, ServerRunPlan.PatchersInstead); }
     /// <summary>
     /// Owned only: the install's game build, loader and patchers by SHA256 (<see cref="Valheim.Testing.Game.InstallPins.Of"/>),
     /// checked before launch. Required for an owned client unless <see cref="Pinning"/> is <c>none</c>. An attached
@@ -374,10 +351,8 @@ public sealed class ClientRunPlan
         }
         if (InPlace) OwnedClientPreflight.RequireInPlace(Install);
         var start = ClientSession.StartInfo(this, GameLaunch.CurrentClientHost); // The install's loader and slices.
-        var located = OwnedClientPreflight.Check(LoaderRoot, Pins, Pinned, HostWorld, hostWorldName);
-        var manifestCheck = CheckCliManifest(capabilities);
-        if (manifestCheck != null)
-            OwnedClientPreflight.RequireManifestScriptsLoad(LoaderRoot, Pins, located, manifestCheck.Files);
+        OwnedClientPreflight.Check(LoaderRoot, Pins, Pinned, HostWorld, hostWorldName);
+        CheckCliManifest(capabilities);
         return start;
     }
 

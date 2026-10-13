@@ -62,10 +62,6 @@ public sealed class HostedCampaignManifest
     {
         string directory = Path.GetDirectoryName(Path.GetFullPath(path))!;
         string json = File.ReadAllText(path);
-        using (var document = JsonDocument.Parse(json))
-            if (document.RootElement.ValueKind == JsonValueKind.Object && document.RootElement.TryGetProperty("profile", out _))
-                throw new InvalidDataException("A campaign no longer takes a fixed environment profile: replace profile with inventory, " +
-                    "a private environment inventory listing the hosts and environments its actors are assigned from.");
         var manifest = JsonSerializer.Deserialize<HostedCampaignManifest>(json, Json)
             ?? throw new InvalidDataException("Empty hosted campaign manifest.");
         if (manifest.Inventory == null) throw new InvalidDataException("A campaign's inventory is a path, not null; leave it out for this machine.");

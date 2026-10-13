@@ -64,11 +64,6 @@ public partial class ServerRunPlan
     /// once, without the game's shutdown. Default 120, at most 1800.
     /// </summary>
     public int QuitSeconds { get; set; } = 120;
-    // Removed (#295): patcher names beside the patchers hash described one folder twice. A plan that still names them is
-    // refused with what to do instead of the generic unknown-field error.
-    [JsonInclude, JsonPropertyName("patchers"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    private JsonElement? RemovedPatchers { get => null; set => throw new ArgumentException($"The plan's patchers was removed (ValheimTesting #295): {PatchersInstead}. Delete patchers from the plan."); }
-    internal const string PatchersInstead = "the patchers pin in runtimePins and installPins hashes everything BepInEx/patchers holds, so a patcher a removed mod left behind is refused by the pin, which names what the folder holds; an explicitly unpinned run checks no patchers, like the rest of its install";
     /// <summary>
     /// This run's severities for the teardown log scan's patterns (<see cref="LogScanner.Names"/>), each with a written
     /// reason, for example <c>"rpc-method-missing": { "severity": "Failure", "reason": "..." }</c>; under a new name, a pattern

@@ -193,8 +193,6 @@ public sealed class CampaignPlanTests : IDisposable
                 var capabilities = plan["secondClient"]!["capabilities"]!.AsArray();
                 capabilities.Remove(capabilities.Single(c => c!.GetValue<string>() == capability));
             }, capability));
-        foreach (string removed in new[] { "eventDrivenArrival", "fastTestTeleports" })
-            rows.Add("handoff: removed client field " + removed, (Valid(AcceptancePlan.OwnershipHandoffScenario), (plan, _) => plan["client"]![removed] = true, removed + " was removed (ValheimTesting #299)"));
         return rows;
     }
 

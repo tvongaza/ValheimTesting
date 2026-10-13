@@ -1,5 +1,3 @@
-using System.Text.Json;
-using System.Text.Json.Serialization;
 
 namespace Valheim.Testing.Game;
 
@@ -78,17 +76,6 @@ public sealed class InstallPins
     public string Game { get; set; } = "";
     public string Loader { get; set; } = "";
     public string Patchers { get; set; } = "";
-
-    // Removed (#295): the core-only hash missed the Doorstop proxy and its configuration, whose mismatch started games without
-    // BepInEx; loader covers them with the core. A plan that still names it is refused with what to do.
-    [JsonInclude, JsonPropertyName("bepinexCore"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    private JsonElement? RemovedBepInExCore
-    {
-        get => null;
-        set => throw new ArgumentException("The pins' bepinexCore was removed (ValheimTesting #295): loader pins BepInEx/core together with the Doorstop " +
-            "proxy, its configuration and libraries as one hash. Replace bepinexCore with loader, computed by InstallPins.Of(<install>) " +
-            "(or BepInExLoaderPackage.Loader for a reviewed loader package).");
-    }
 
     /// <summary>Every value is a full SHA256. <paramref name="what"/> names the install in the message ("runtime", "client install").</summary>
     public void Validate(string what)

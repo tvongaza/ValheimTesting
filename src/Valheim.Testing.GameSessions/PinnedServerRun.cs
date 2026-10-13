@@ -204,12 +204,6 @@ public static class PinnedServerRun
     public static async Task<int> MainAsync<TPlan>(string[] args, PinnedServerRunOptions<TPlan> options) where TPlan : ServerRunPlan
     {
         string[] modes = ["validate", "run"];
-        if (args.Length >= 1 && args[0] == "--profile")
-        {
-            Console.Error.WriteLine($"{options.Name}: --profile was removed. Place the dedicated server with {InventoryOption} <environments.json> " +
-                "(a private environment inventory), or run remote clients and several actors as a campaign (PinnedServerRun.RunCampaignAsync).");
-            return 2;
-        }
         (bool inPlace, string? inventoryPath, args) = LeadingOptions(args, inventory: true);
         if (args.Length != 3 || !modes.Contains(args[0]))
         {

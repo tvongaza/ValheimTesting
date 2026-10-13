@@ -627,7 +627,7 @@ public sealed partial class HostedServerRunTests : IDisposable
     }
 
     // --inventory: a standalone run places its one actor, the dedicated server, on the first server environment in inventory
-    // order that can run the plan, records why, and refuses before anything is written when none can. --profile is gone.
+    // order that can run the plan, records why, and refuses before anything is written when none can.
     [Fact] public async Task AnInventoryPlacesTheServerOnTheFirstEnvironmentThatFitsThePlan()
     {
         var server = NewServer(); var host = NewHost(server);
@@ -674,9 +674,6 @@ public sealed partial class HostedServerRunTests : IDisposable
         int scripts = host.Runs.Count;
         Assert.Equal(1, await PinnedServerRun.MainAsync(["--inventory", inventory, "run", plan, refused], Options(host, server)));
         Assert.False(Directory.Exists(refused)); Assert.Equal(scripts, host.Runs.Count);
-        // The removed option is refused as bad usage, never read as a file.
-        Assert.Equal(2, await PinnedServerRun.MainAsync(["--profile", inventory, "run", plan, refused], Options(host, server)));
-        Assert.False(Directory.Exists(refused));
     }
 
     [Fact] public async Task AProfileClientStartsInItsHostsDesktopSessionAndStopsOnlyThatClient()

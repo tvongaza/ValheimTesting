@@ -57,7 +57,7 @@ public static class CliCapabilities
         if (missing.Count == 0) return;
         throw new InvalidOperationException($"The {actor.Name}'s ValheimCLI lacks {string.Join(", ", missing.Select(path => live.ContainsKey(path) ? path + " (another result schema)" : path))}. " +
             string.Join(" ", missing.Select(path => path.Split('/')[0]).Distinct(StringComparer.Ordinal).Select(Provider)) +
-            " Install one current valheimCLI.dll in BepInEx/plugins and remove old first-party pack DLLs.");
+            " Install one current valheimCLI.dll in BepInEx/plugins.");
     }
 
     /// <summary>The live commands (<c>owner/command</c>) and their result schema versions, from one <c>cli_extensions</c> call.</summary>
