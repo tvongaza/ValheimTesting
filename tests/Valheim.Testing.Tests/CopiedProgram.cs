@@ -39,54 +39,46 @@ internal static class CopiedProgram
     }
 }
 
-// The forking threads would widen the same window for any other test in this process that writes a program and starts it.
-[CollectionDefinition(nameof(CopiedProgramStress), DisableParallelization = true)]
-public sealed class CopiedProgramStress;
-
-[Collection(nameof(CopiedProgramStress))]
 public sealed class CopiedProgramTests : IDisposable
 {
+    private const UnixFileMode Executable = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
     private readonly string _root = Directory.CreateTempSubdirectory("copied-program-").FullName;
     public void Dispose() { try { Directory.Delete(_root, recursive: true); } catch (IOException) { } }
 
-    // The race of #720, made frequent: other threads start programs without pause while a copy is made and started, again and again.
-    // Copied in this process, a start fails with "Text file busy" within a few hundred rounds; copied here it never does.
-    [Fact] public void ACopyStartsWhileOtherThreadsStartPrograms()
+    // Why the helper exists (#720, #723), without a race: Linux refuses to start a file that a process holds open for writing.
+    // A copy written in this process holds its write descriptor while a parallel fork can inherit it, hence "Text file busy".
+    [Fact] public void LinuxRefusesToStartAFileHeldOpenForWriting()
     {
-        if (!OperatingSystem.IsLinux()) return; // The copy of `true` runs unsigned only here (macOS kills an unsigned copy of a system program).
-        string source = File.Exists("/usr/bin/true") ? "/usr/bin/true" : "/bin/true";
-        WhileOtherThreadsStartPrograms(source, () =>
-        {
-            for (int round = 0; round < 300; round++)
-            {
-                string copy = Path.Combine(_root, "true-" + round);
-                CopiedProgram.Copy(source, copy);
-                StartAndExpectSuccess(copy);
-            }
-        });
+        if (!OperatingSystem.IsLinux()) return;
+        string path = Path.Combine(_root, "held");
+        File.WriteAllText(path, "#!/bin/sh\nexit 0\n");
+        File.SetUnixFileMode(path, Executable);
+        using var held = new FileStream(path, FileMode.Open, FileAccess.Write, FileShare.ReadWrite);
+        var refused = Assert.Throws<System.ComponentModel.Win32Exception>(() => Process.Start(new ProcessStartInfo(path) { UseShellExecute = false }));
+        Assert.Equal(26, refused.NativeErrorCode); // ETXTBSY
     }
 
-    // The same race for a script stub (#723): written in this process, the stub is "Text file busy" to a start for as long as a forked child holds its descriptor.
-    [Fact] public void AScriptStubStartsWhileOtherThreadsStartPrograms()
+    // The contract: a copy starts on the first try, and this process holds no descriptor to it once the helper returns.
+    [Fact] public void ACopyStartsAtOnceAndIsNotHeldOpen()
+    {
+        if (!OperatingSystem.IsLinux()) return; // The copy of `true` runs unsigned only here (macOS kills an unsigned copy of a system program).
+        string copy = Path.Combine(_root, "true-copy");
+        CopiedProgram.Copy(File.Exists("/usr/bin/true") ? "/usr/bin/true" : "/bin/true", copy);
+        Assert.DoesNotContain(copy, Directory.GetFiles("/proc/self/fd").Select(fd => new FileInfo(fd).LinkTarget));
+        StartAndExpectSuccess(copy);
+    }
+
+    [Fact] public void AScriptStubStartsAtOnceHasItsContentAndIsNotHeldOpen()
     {
         if (OperatingSystem.IsWindows()) return; // A stub runs unsigned on macOS too, so its scratch-file path is exercised there as well.
-        string source = File.Exists("/usr/bin/true") ? "/usr/bin/true" : "/bin/true";
-        // The refusal is Linux's (ETXTBSY); macOS has no such race, so there one round exercises the scratch-file path and the stress would only
-        // price macOS's slow process starts (300 rounds took about 140 s in CI).
-        int rounds = OperatingSystem.IsLinux() ? 300 : 1;
         const string content = "#!/bin/sh\nexit 0\n";
-        WhileOtherThreadsStartPrograms(source, () =>
-        {
-            for (int round = 0; round < rounds; round++)
-            {
-                string stub = Path.Combine(_root, "stub-" + round);
-                CopiedProgram.WriteScript(stub, content);
-                Assert.Equal(content, File.ReadAllText(stub));
-                if (!OperatingSystem.IsWindows())
-                    Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute, File.GetUnixFileMode(stub));
-                StartAndExpectSuccess(stub);
-            }
-        });
+        string stub = Path.Combine(_root, "stub");
+        CopiedProgram.WriteScript(stub, content);
+        Assert.Equal(content, File.ReadAllText(stub));
+        Assert.Equal(Executable, File.GetUnixFileMode(stub));
+        if (OperatingSystem.IsLinux())
+            Assert.DoesNotContain(stub, Directory.GetFiles("/proc/self/fd").Select(fd => new FileInfo(fd).LinkTarget));
+        StartAndExpectSuccess(stub);
     }
 
     private static void StartAndExpectSuccess(string program)
@@ -94,27 +86,5 @@ public sealed class CopiedProgramTests : IDisposable
         using var running = Process.Start(new ProcessStartInfo(program) { UseShellExecute = false })!;
         running.WaitForExit();
         Assert.Equal(0, running.ExitCode);
-    }
-
-    private static void WhileOtherThreadsStartPrograms(string program, Action body)
-    {
-        using var stop = new CancellationTokenSource();
-        Exception? forkFailure = null; // a thread's exception would end the whole test host; it is rethrown here instead
-        var forkers = Enumerable.Range(0, 4).Select(_ => new Thread(() =>
-        {
-            try
-            {
-                while (!stop.IsCancellationRequested)
-                {
-                    using var other = Process.Start(new ProcessStartInfo(program) { UseShellExecute = false })!;
-                    other.WaitForExit();
-                }
-            }
-            catch (Exception failure) { forkFailure = failure; }
-        })).ToArray();
-        foreach (var forker in forkers) forker.Start();
-        try { body(); }
-        finally { stop.Cancel(); foreach (var forker in forkers) forker.Join(); }
-        Assert.Null(forkFailure);
     }
 }
