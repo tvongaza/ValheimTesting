@@ -48,7 +48,7 @@ Unit, integration, bounded game checks and human judgement: [Choose a test layer
 
 ## Contribute
 
-Mod developers and coding agents are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) has repository ownership, a worked fixture example, local checks (`sh scripts/validate.sh` on macOS/Linux; the bootstrap entrypoint then `dotnet run scripts/validate.cs` on Windows; no game) and PR expectations. Agents start with [AGENTS.md](AGENTS.md) and the [agent workflow](docs/agent-guide.md). Before a native run, read the [runtime hygiene checklist](docs/runtime-hygiene.md).
+Mod developers and coding agents are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) has repository ownership, a worked fixture example, local checks (`dotnet run scripts/bootstrap-cli.cs`, then `dotnet run scripts/validate.cs`, on every OS; no game) and PR expectations. Agents start with [AGENTS.md](AGENTS.md) and the [agent workflow](docs/agent-guide.md). Before a native run, read the [runtime hygiene checklist](docs/runtime-hygiene.md).
 
 ## License
 

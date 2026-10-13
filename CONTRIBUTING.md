@@ -32,14 +32,13 @@ Fork the repository, clone your fork, and make a focused branch from current `ma
 ```sh
 dotnet run scripts/bootstrap-cli.cs  # every OS: build the pinned ValheimCLI into the local package feed
 dotnet run scripts/validate.cs       # every OS: full no-game validation
-# macOS/Linux alternative: sh scripts/validate.sh (host-access preflight, writable NuGet caches, then both of the above)
 
 # For a public API or documentation change, build the documentation site too (open docs/reference/_site/index.html through a local web server):
 dotnet tool restore
 dotnet run scripts/api-docs.cs
 ```
 
-On macOS/Linux, `sh scripts/validate.sh --preflight-only` checks the SDK file-app cache, NuGet caches and (on macOS) process and TCP-listener access without starting tests or the CLI bootstrap. The normal command refuses before the long suite if those host observations are unavailable; it chooses writable NuGet caches and converts file-based scripts to temporary projects when the SDK runfile cache is unavailable. `sh scripts/validate.sh --restricted-sandbox` runs only selected no-host tests and exits **4** after an `INCOMPLETE` result. It cannot replace a full CI or authorized-host validation. `dotnet run scripts/bootstrap-cli.cs` needs no PowerShell or execution policy, so the two commands above are the same on Windows, macOS and Linux. On Windows the tests run host scripts in PowerShell 7 (`pwsh`), as every Windows host does ([host shells](docs/platforms.md#host-shells)). This is the one place the bootstrap command is written out; other pages link here.
+Inside an agent sandbox, set it up once first: [Running in an agent sandbox](AGENTS.md#running-in-an-agent-sandbox) names the folders to allow and the symptoms of a missing setup. `dotnet run scripts/bootstrap-cli.cs` needs no PowerShell or execution policy, so the two commands above are the same on Windows, macOS and Linux. On Windows the tests run host scripts in PowerShell 7 (`pwsh`), as every Windows host does ([host shells](docs/platforms.md#host-shells)). This section is the one home of the setup; other pages may quote the one-line commands but link here for the rest.
 
 `validate.cs` packs every package as `<Version>-candidate.<id>`, where `dotnet run scripts/pins.cs -- candidate` prints the id, a hash of the package inputs: different sources never share a version in `.packages`, other packs of these packages are removed from it, and a complete set already packed under the id is kept, so one id has one set of bytes. Its consumer check restores the candidates and the bootstrapped Cli from `.packages` (byte for byte) and everything else from NuGet.org, with a package cache under `artifacts/consumer-cache/` that keeps NuGet.org's packages between runs and drops this checkout's before each. A candidate is never released (`pins.cs versions` refuses it).
 
@@ -164,7 +163,8 @@ Never include game/Unity assemblies, decompiled game source, private saves, cred
 
    ```sh
    dotnet run scripts/pins.cs -- bump        # new versions, coherent pins
-   sh scripts/validate.sh                    # Windows: the two commands under "Set up and validate locally" above
+   dotnet run scripts/bootstrap-cli.cs       # bootstrap and validate: the two commands under "Set up and validate locally" above
+   dotnet run scripts/validate.cs
    dotnet run scripts/api-docs.cs -- surface # the public-api lists from that build
    ```
 

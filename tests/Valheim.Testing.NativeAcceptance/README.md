@@ -218,7 +218,7 @@ dotnet run --project tests/Valheim.Testing.NativeAcceptance -c Release -- campai
 ```
 
 The first line is `valheim-test session check SESSION --hosts`, run from the NativeSmoke project or the
-installed `valheim-test` tool; the same lines work in any shell (a sandbox with a blocked NuGet cache: see the recipe in [AGENTS.md](../../AGENTS.md)). Use `--json` for a machine-readable report. It
+installed `valheim-test` tool; the same lines work in any shell (in an agent sandbox, set it up once: [AGENTS.md](../../AGENTS.md#running-in-an-agent-sandbox)). Use `--json` for a machine-readable report. It
 reports all independent local lock, loader, character, fixture and inventory problems it can find in one pass, plus the
 selected actors and hosts. `--hosts` reads the selected source installs and Steam sessions on their hosts,
 and checks the combined copy size of actors sharing a target volume against its free space;

@@ -21,11 +21,11 @@ The image and every layer, export or saved tarball of it contain Valheim's game 
 From the repository root. The build takes the BepInExPack from the repository's pin, so fetch it first (it is also what the checks and the tests use; BuildKit, Docker 23 or later, is needed):
 
 ```sh
-sh scripts/bootstrap-cli.sh
+dotnet run scripts/bootstrap-cli.cs
 bash docker/linux-server/build.sh -t valheimtesting-linux-server:local
 ```
 
-`build.sh` passes `.packages/bepinexpack-valheim.zip` to `docker build` as the context `pinned` and the SHA-256 from [`loader-dependency.json`](../../loader-dependency.json) as `BEPINEX_PACK_SHA256`; every other argument goes to `docker build`. On Windows, fetch the pack with the command in [CONTRIBUTING.md](../../CONTRIBUTING.md) and run `build.sh` in Git Bash or WSL.
+`build.sh` passes `.packages/bepinexpack-valheim.zip` to `docker build` as the context `pinned` and the SHA-256 from [`loader-dependency.json`](../../loader-dependency.json) as `BEPINEX_PACK_SHA256`; every other argument goes to `docker build`. On Windows, run the same `dotnet run` line and then `build.sh` in Git Bash or WSL.
 
 The image is x86-64 only: the Dockerfile pins `FROM --platform=linux/amd64`, because the server, SteamCMD and Doorstop have no arm64 builds.
 

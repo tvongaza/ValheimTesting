@@ -17,7 +17,7 @@ public sealed class OsSplitTests
         // The guard saw the classes it should judge, by name (not merely some number of them).
         Assert.Equal("neutral", result.Classes["TerrainRendererTests"]);
         Assert.Equal("neutral", result.Classes["WalkingReviewTests"]);
-        Assert.Equal("unix", result.Classes["ValidationEntryTests"]);
+        Assert.Equal("unix", result.Classes["HostedRetireScriptTests"]);
         Assert.Equal("macos", result.Classes["RemoteMacServerPreflightTests"]);
         Assert.False(result.Classes.ContainsKey(nameof(OsSplitTests)));
         // validate.cs --split filters the toolkit tests only (the xunit adapter matches nothing in a project whose tests carry no

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Builds the private image from the repository's pinned BepInExPack (loader-dependency.json), not from a download of its own.
 #
-#   sh scripts/bootstrap-cli.sh                  (fetches and checks .packages/bepinexpack-valheim.zip; Windows: see CONTRIBUTING.md)
+#   dotnet run scripts/bootstrap-cli.cs          (fetches and checks .packages/bepinexpack-valheim.zip)
 #   bash docker/linux-server/build.sh -t valheimtesting-linux-server:local [more docker build arguments]
 #
 # The zip enters the build as the named context "pinned" (needs BuildKit, Docker 23 or later; a plain `docker build` of the

@@ -76,6 +76,5 @@
   {"Name": "TargetedRegressionTests.EachArmGetsAFreshProfile", "Seconds": {"macOS": 3.77, "Windows": 30.78}},
   {"Name": "TargetedRegressionTests.IncompatibleServerOnlyAndDuplicatePluginsAreRefused", "Seconds": {"Windows": 5.62}},
   {"Name": "TargetedRegressionTests.RemovingTheInstallIsTheLastArmsCleanupStep", "Seconds": {"Windows": 7.36}},
-  {"Name": "TestRunnersTargetsTests.BothFrameworksPass", "Seconds": {"Windows": 13.94}},
-  {"Name": "ValidationEntryTests.UnwritableFileAppCacheStillBuildsAndRunsAScript", "Seconds": {"macOS": 13.69}}
+  {"Name": "TestRunnersTargetsTests.BothFrameworksPass", "Seconds": {"Windows": 13.94}}
 ]
