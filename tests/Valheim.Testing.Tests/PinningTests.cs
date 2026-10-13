@@ -284,14 +284,15 @@ public sealed class PinningTests : IDisposable
         plan.RuntimePins = new() { Game = new string('c', 64), Loader = new string('d', 64), Patchers = new string('e', 64) };
     }
 
-    [Fact] public void AStrictPlanNeedsRuntimePins()
+    [Fact] public void AStrictPlanAcceptsOnlyThePinsItIsGiven()
     {
         var plan = Plan(); Pin(plan);
         plan.ValidateServerPlan(["my.mod"], "TOKEN");
         Assert.StartsWith("cli_expect", plan.ExpectCommand);
         plan.RuntimePins = null;
-        Assert.Contains("runtimePins", Assert.Throws<ArgumentException>(() => plan.ValidateServerPlan(["my.mod"], "TOKEN")).Message);
-        Assert.Throws<ArgumentException>(() => plan.CheckRuntimePins(_root));
+        plan.Pins.Clear(); plan.Runtime.Sha256.Clear(); plan.World.Sha256.Clear();
+        plan.ValidateServerPlan(["my.mod"], "TOKEN");
+        Assert.True(plan.Pinned);
     }
 
     [Fact] public void ASlowNetworkGenerationHasOneBoundedServerStartupBudget()
@@ -337,7 +338,7 @@ public sealed class PinningTests : IDisposable
         }));
         var plan = ServerRunPlan.Read<ServerRunPlan>(path);
         Assert.Equal(EnvironmentPinning.Strict, plan.Pinning); Assert.True(plan.Pinned);
-        Assert.Throws<ArgumentException>(() => plan.ValidateServerPlan([], "TOKEN")); // Missing manifests and pins.
+        plan.ValidateServerPlan([], "TOKEN"); // Missing pins are observed by a standalone runner, not an opt-out.
         File.WriteAllText(path, """{"pinning": null}""");
         Assert.Throws<ArgumentException>(() => ServerRunPlan.Read<ServerRunPlan>(path).Pinned);
     }

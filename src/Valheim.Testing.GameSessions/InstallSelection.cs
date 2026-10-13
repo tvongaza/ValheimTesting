@@ -22,15 +22,17 @@ internal sealed class InstallSelection : IDisposable
     private static readonly string[] Folders = ["plugins", "scripts", "config", "patchers"];
     private readonly string _work;
 
-    private InstallSelection(string work, HostListing source, IReadOnlyList<HostedRuntimeFile> files, IReadOnlyList<string> replaced)
-    { _work = work; Source = source; Files = files; Replaced = replaced; }
+    private InstallSelection(string work, HostListing source, IReadOnlyList<HostedRuntimeFile> files, IReadOnlyList<HostedRuntimeFile> replaced)
+    { _work = work; Source = source; Files = files; ReplacedFiles = replaced; }
 
     /// <summary>The install as <see cref="HostedRuntimeStage.InspectSourceAsync"/> listed it: pass it on as the profile's inspected source.</summary>
     internal HostListing Source { get; }
     /// <summary>The selected files, each a local file: the install's own in place, or fetched with the listing's hash.</summary>
     internal IReadOnlyList<HostedRuntimeFile> Files { get; }
-    /// <summary>The install's own ValheimCLI builds (relative paths) that the staged set replaces.</summary>
-    internal IReadOnlyList<string> Replaced { get; }
+    /// <summary>The install's own ValheimCLI builds that the staged set replaces, kept locally so supplied source pins can be checked.</summary>
+    internal IReadOnlyList<HostedRuntimeFile> ReplacedFiles { get; }
+    /// <summary>The relative paths of <see cref="ReplacedFiles"/>.</summary>
+    internal IReadOnlyList<string> Replaced => ReplacedFiles.Select(file => file.RelativePath).ToArray();
 
     /// <summary>Removes the local folder holding fetched files and the generated config. The install is never touched.</summary>
     public void Dispose()
@@ -102,7 +104,7 @@ internal sealed class InstallSelection : IDisposable
         return bound;
     }
 
-    private static async Task<(List<HostedRuntimeFile> Files, List<string> Replaced)> SelectAsync(IGameHost host, HostedRuntimeKind role,
+    private static async Task<(List<HostedRuntimeFile> Files, List<HostedRuntimeFile> Replaced)> SelectAsync(IGameHost host, HostedRuntimeKind role,
         string install, HostListing source, CliCapabilityManifest cli, CliSetLocation cliFiles, BepInExLoaderPackage? loader, string work,
         TimeSpan timeout, CancellationToken cancellation)
     {
@@ -110,7 +112,7 @@ internal sealed class InstallSelection : IDisposable
         var names = source.Names;
         bool inPlace = host.Kind == GameHostKind.Local;
         var selection = new List<HostedRuntimeFile>();
-        var replaced = new List<string>();
+        var replaced = new List<HostedRuntimeFile>();
         foreach (string folder in Folders)
         {
             string prefix = "BepInEx/" + folder + "/";
@@ -148,7 +150,7 @@ internal sealed class InstallSelection : IDisposable
                 if (folder is "plugins" or "scripts" && relative.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)
                     && (Path.GetFileName(relative).Equals(cli.Plugin.File, StringComparison.OrdinalIgnoreCase) || CliBuildManifest.Plugins(local)?.Any(CliBuildManifest.IsCliPlugin) == true))
                 {
-                    replaced.Add(relative);
+                    replaced.Add(new HostedRuntimeFile(local, relative));
                     continue;
                 }
                 if (!HostedRuntimeStage.IsStageable(relative))

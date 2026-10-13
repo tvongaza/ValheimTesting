@@ -77,6 +77,27 @@ public sealed class NativeDependencyResolverTests : IDisposable
         Assert.Throws<InvalidDataException>(() => HostedRuntimeStage.FromDependencies(path));
     }
 
+    [Fact] public void CampaignPluginPinsLeaveNonLoadingScriptsOutUnlessThePlanPinsOne()
+    {
+        string script = _rig.Write("script-pins/ScriptMod.dll", RegressionRig.Assembly("ScriptMod", new("example.script")));
+        string engine = _rig.Write("script-pins/ScriptEngine.dll", RegressionRig.Assembly("ScriptEngine", new(OwnedClientPreflight.ScriptEngine)));
+        string config = _rig.Write("script-pins/scriptengine.cfg", System.Text.Encoding.UTF8.GetBytes("[General]\nLoadOnStart = true\n"));
+        var files = new List<HostedRuntimeFile> { new(script, "BepInEx/scripts/ScriptMod.dll") };
+
+        Assert.Empty(HostedCampaignPreparation.PluginPins("server", files));
+        Assert.Contains("does not pin ScriptEngine", Assert.Throws<InvalidOperationException>(() =>
+            HostedCampaignPreparation.PluginPins("server", files, new Dictionary<string, string> { ["example.script"] = FileHash.Md5(script) })).Message);
+        files.Add(new(engine, "BepInEx/plugins/ScriptEngine.dll"));
+        Assert.DoesNotContain("example.script", HostedCampaignPreparation.PluginPins("server", files));
+        Assert.Contains("LoadOnStart defaults to false", Assert.Throws<InvalidOperationException>(() =>
+            HostedCampaignPreparation.PluginPins("server", files, new Dictionary<string, string> { ["example.script"] = FileHash.Md5(script) })).Message);
+        files.Add(new(config, "BepInEx/config/" + OwnedClientPreflight.ScriptEngineConfig));
+
+        var pins = HostedCampaignPreparation.PluginPins("server", files);
+        Assert.Equal(FileHash.Md5(script), pins["example.script"]);
+        Assert.Equal(FileHash.Md5(engine), pins[OwnedClientPreflight.ScriptEngine]);
+    }
+
     [Fact] public async Task HostedCampaignPreparesServerAndAnyNumberOfNamedClientsAndRetiresTheirCopies()
     {
         string parent = _rig.Write("campaign/Server.dll", RegressionRig.Assembly("Server", new("example.server")));
@@ -691,6 +712,9 @@ public sealed class NativeDependencyResolverTests : IDisposable
         Assert.True(scenarioRan);
         var result = JsonDocument.Parse(File.ReadAllText(Path.Combine(output, "result.json"))).RootElement;
         Assert.True(result.GetProperty("CleanupVerified").GetBoolean());
+        Assert.Empty(result.GetProperty("PinOrigins").EnumerateObject());
+        var inputHashes = JsonDocument.Parse(File.ReadAllText(Path.Combine(output, "input-hashes.json"))).RootElement;
+        Assert.Empty(inputHashes.GetProperty("pinOrigins").EnumerateObject());
         var steps = result.GetProperty("Steps").EnumerateArray().ToDictionary(step => step.GetProperty("Name").GetString()!, step => step.GetProperty("Phase").GetString());
         Assert.Equal("Setup", steps["check the hosts and prepare every actor's disposable install"]);
         // One retire owner (#257): each owned path is its own Cleanup step, retired under the lock the run already holds.

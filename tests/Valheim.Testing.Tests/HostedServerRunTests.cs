@@ -144,6 +144,9 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.Contains("fetch", host.Scripts);
         Assert.False(Directory.Exists(host.Local(windowsRuns + @"\run-test\runtime")));
         Assert.Contains("fake boot", File.ReadAllText(Path.Combine(Output, "boot-1", "game-0.log")));
+        var prebootProfile = Assert.Single(host.Runs, run => run.Script == "list" &&
+            run.Variables["root"] == windowsRuns + @"\run-test\runtime" && run.Variables["dirs"].Length != 0);
+        Assert.Equal(string.Join('\n', HostInstall.ListingPatterns(HostInstall.ProfilePinPaths)), prebootProfile.Variables["dirs"]);
     }
 
     // #295: a standalone Windows server whose install's proxy (Doorstop 4) and doorstop_config.ini (Doorstop 3) are from different
@@ -223,12 +226,229 @@ public sealed partial class HostedServerRunTests : IDisposable
         return (planPath, profilePath);
     }
 
+    // A standalone source with one real mod assembly and a readable world identity. The three shapes exercise the
+    // pin-as-found contract without a game: no expected pins, every expected pin, and a mixed input.
+    private (string Plan, string Profile, string Mod) PinPlan(FakeServerHost host, string shape, bool scriptPlugin = false)
+    {
+        var (planPath, profilePath) = Write(host);
+        string mod = Path.Combine(host.Local(Install), "BepInEx", scriptPlugin ? "scripts" : "plugins", "TestMod.dll");
+        Directory.CreateDirectory(Path.GetDirectoryName(mod)!);
+        File.WriteAllBytes(mod, RegressionRig.Assembly("TestMod", new("test.mod")));
+        string? scriptEngine = null;
+        if (scriptPlugin)
+        {
+            scriptEngine = Path.Combine(host.Local(Install), "BepInEx", "plugins", "ScriptEngine.dll");
+            Directory.CreateDirectory(Path.GetDirectoryName(scriptEngine)!);
+            File.WriteAllBytes(scriptEngine, RegressionRig.Assembly("ScriptEngine", new(OwnedClientPreflight.ScriptEngine)));
+            string config = Path.Combine(host.Local(Install), "BepInEx", "config", OwnedClientPreflight.ScriptEngineConfig);
+            Directory.CreateDirectory(Path.GetDirectoryName(config)!);
+            File.WriteAllText(config, "[General]\nLoadOnStart = true\n");
+        }
+        string world = Path.Combine(_root, "world");
+        Directory.Delete(world, recursive: true);
+        DefaultSmokeWorld.PrepareServerSaveRoot(world);
+        var plan = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(planPath))!;
+        var runtime = plan["runtime"]!;
+        var fixture = plan["world"]!;
+        var pins = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (shape == "full")
+        {
+            runtime["sha256"] = JsonSerializer.SerializeToNode(WorldFixture.Manifest(host.Local(Install)));
+            fixture["sha256"] = JsonSerializer.SerializeToNode(WorldFixture.Manifest(world));
+            pins["worlduid"] = DefaultSmokeWorld.Uid;
+            pins["test.mod"] = FileHash.Md5(mod);
+            if (scriptEngine != null) pins[OwnedClientPreflight.ScriptEngine] = FileHash.Md5(scriptEngine);
+            pins["valheimCLI.valheimCLI"] = TestCliSet.CorePin;
+            plan["runtimePins"] = JsonSerializer.SerializeToNode(InstallPins.Of(host.Local(Install)));
+        }
+        else
+        {
+            runtime["sha256"] = JsonSerializer.SerializeToNode(new Dictionary<string, string>());
+            fixture["sha256"] = JsonSerializer.SerializeToNode(new Dictionary<string, string>());
+            plan.AsObject().Remove("runtimePins");
+            if (shape == "mixed")
+            {
+                pins["worlduid"] = DefaultSmokeWorld.Uid;
+                plan["runtimePins"] = JsonSerializer.SerializeToNode(InstallPins.Of(host.Local(Install)));
+            }
+        }
+        plan["pins"] = JsonSerializer.SerializeToNode(pins);
+        File.WriteAllText(planPath, plan.ToJsonString());
+        return (planPath, profilePath, mod);
+    }
+
+    [Fact] public async Task AStandalonePlanWithNoPinsBindsAndRecordsEverythingItStages()
+    {
+        var server = NewServer(); var host = NewHost(server);
+        var (plan, profile, mod) = PinPlan(host, "observed");
+        int code = await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["run", plan, Output], Options(host, server));
+        Assert.True(code == 0, File.ReadAllText(Path.Combine(Output, "result.json")));
+
+        var result = Result();
+        Assert.Equal("strict", result.GetProperty("Pinning").GetString());
+        Assert.Equal("pins observed, not reviewed", result.GetProperty("Provenance").GetProperty("pins").GetString());
+        var origins = result.GetProperty("PinOrigins");
+        Assert.All(origins.EnumerateObject(), origin => Assert.Equal("observed", origin.Value.GetString()));
+        Assert.Equal("observed", origins.GetProperty("plugins.test.mod").GetString());
+        Assert.Equal("observed", origins.GetProperty("worldUid").GetString());
+        Assert.Contains(server.Events, item => item.StartsWith("pins", StringComparison.Ordinal));
+        Assert.Equal(FileHash.Md5(mod), result.GetProperty("Plugins").GetProperty("server").GetProperty("test.mod").GetString());
+        Assert.False(result.GetProperty("Provenance").TryGetProperty("environment", out _));
+
+        var inputs = JsonDocument.Parse(File.ReadAllText(Path.Combine(Output, "input-hashes.json"))).RootElement;
+        Assert.Equal("strict", inputs.GetProperty("pinning").GetString());
+        Assert.Equal(DefaultSmokeWorld.Uid, inputs.GetProperty("worldUid").GetString());
+        Assert.Equal(FileHash.Md5(mod), inputs.GetProperty("plugins").GetProperty("test.mod").GetString());
+        Assert.Equal("observed", inputs.GetProperty("pinOrigins").GetProperty("runtimePins").GetString());
+        Assert.DoesNotContain(EnvironmentPinning.NotPinned, File.ReadAllText(Path.Combine(Output, "input-hashes.json")));
+    }
+
+    [Fact] public async Task AStandalonePlanWithEveryPinKeepsPlanOriginsWhenTheEnforcedValuesMatch()
+    {
+        var host = NewHost();
+        var (plan, profile, _) = PinPlan(host, "full");
+        Assert.Equal(0, await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["validate", plan, Output], Options(host, null)));
+        var origins = Result().GetProperty("PinOrigins");
+        Assert.NotEmpty(origins.EnumerateObject());
+        Assert.All(origins.EnumerateObject(), origin => Assert.Equal("plan", origin.Value.GetString()));
+        Assert.False(Result().GetProperty("Provenance").TryGetProperty("pins", out _));
+    }
+
+    [Fact] public async Task AStandaloneMixedPlanChecksWhatItGivesAndObservesTheRest()
+    {
+        var host = NewHost();
+        var (plan, profile, _) = PinPlan(host, "mixed");
+        Assert.Equal(0, await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["validate", plan, Output], Options(host, null)));
+        var origins = Result().GetProperty("PinOrigins");
+        Assert.Equal("plan", origins.GetProperty("runtimePins").GetString());
+        Assert.Equal("plan", origins.GetProperty("worldUid").GetString());
+        Assert.Equal("observed", origins.GetProperty("runtimeManifest").GetString());
+        Assert.Equal("observed", origins.GetProperty("worldManifest").GetString());
+        Assert.Equal("observed", origins.GetProperty("plugins.test.mod").GetString());
+    }
+
+    [Fact] public async Task AStandaloneObservedScriptPluginIsPinnedFromTheStagedProfile()
+    {
+        var host = NewHost();
+        var (plan, profile, mod) = PinPlan(host, "observed", scriptPlugin: true);
+        Assert.Equal(0, await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["validate", plan, Output], Options(host, null)));
+        var inputs = JsonDocument.Parse(File.ReadAllText(Path.Combine(Output, "input-hashes.json"))).RootElement;
+        Assert.Equal(FileHash.Md5(mod), inputs.GetProperty("plugins").GetProperty("test.mod").GetString());
+        Assert.Equal("observed", Result().GetProperty("PinOrigins").GetProperty("plugins.test.mod").GetString());
+        Assert.Equal("observed", Result().GetProperty("PinOrigins").GetProperty("plugins." + OwnedClientPreflight.ScriptEngine).GetString());
+    }
+
+    [Fact] public async Task AStandaloneSuppliedScriptPluginPinIsCheckedAndKeptAsAPlanOrigin()
+    {
+        var host = NewHost();
+        var (plan, profile, mod) = PinPlan(host, "full", scriptPlugin: true);
+        Assert.Equal(0, await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["validate", plan, Output], Options(host, null)));
+        var inputs = JsonDocument.Parse(File.ReadAllText(Path.Combine(Output, "input-hashes.json"))).RootElement;
+        Assert.Equal(FileHash.Md5(mod), inputs.GetProperty("plugins").GetProperty("test.mod").GetString());
+        Assert.Equal("plan", Result().GetProperty("PinOrigins").GetProperty("plugins.test.mod").GetString());
+        Assert.Equal("plan", Result().GetProperty("PinOrigins").GetProperty("plugins." + OwnedClientPreflight.ScriptEngine).GetString());
+    }
+
+    [Fact] public async Task AStandaloneSuppliedInstallCliPinIsCheckedBeforeTheToolkitReplacesIt()
+    {
+        var host = NewHost();
+        var (planPath, profilePath, _) = PinPlan(host, "full");
+        string installCli = Path.Combine(host.Local(Install), "BepInEx", "plugins", "valheimCLI.dll");
+        File.WriteAllBytes(installCli, RegressionRig.Assembly("valheimCLI-source", new("valheimCLI.valheimCLI")));
+        var plan = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(planPath))!;
+        plan["runtime"]!["sha256"] = JsonSerializer.SerializeToNode(WorldFixture.Manifest(host.Local(Install)));
+        plan["pins"]!["valheimCLI.valheimCLI"] = FileHash.Md5(installCli);
+        File.WriteAllText(planPath, plan.ToJsonString());
+
+        Assert.Equal(0, await PinnedServerRun.MainAsync(TestEnvironment.Read(profilePath), ["validate", planPath, Output], Options(host, null)));
+        var inputs = JsonDocument.Parse(File.ReadAllText(Path.Combine(Output, "input-hashes.json"))).RootElement;
+        Assert.Equal(TestCliSet.CorePin, inputs.GetProperty("plugins").GetProperty("valheimCLI.valheimCLI").GetString());
+        Assert.Equal(FileHash.Md5(installCli), inputs.GetProperty("sourceValheimCliPins").GetProperty("valheimCLI.valheimCLI").GetString());
+        Assert.Equal("BepInEx/plugins/valheimCLI.dll", Assert.Single(inputs.GetProperty("replacedValheimCliPaths").EnumerateArray()).GetString());
+        Assert.Equal("observed", Result().GetProperty("PinOrigins").GetProperty("plugins.valheimCLI.valheimCLI").GetString());
+        var provenance = Result().GetProperty("Provenance");
+        Assert.Equal("valheimCLI.valheimCLI=" + FileHash.Md5(installCli), provenance.GetProperty("sourceValheimCliPins").GetString());
+        Assert.Equal("BepInEx/plugins/valheimCLI.dll", provenance.GetProperty("replacedValheimCliPaths").GetString());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task UnpinnedSourceCliCopiesDoNotInspectNonLoadingOrDuplicateReplacements(bool alsoInPlugins)
+    {
+        var host = NewHost();
+        var (plan, profile, _) = PinPlan(host, "observed");
+        string scripts = Path.Combine(host.Local(Install), "BepInEx", "scripts", "old-valheimCLI.dll");
+        Directory.CreateDirectory(Path.GetDirectoryName(scripts)!);
+        File.WriteAllBytes(scripts, RegressionRig.Assembly("old-cli-script", new("valheimCLI.valheimCLI")));
+        if (alsoInPlugins)
+        {
+            string plugins = Path.Combine(host.Local(Install), "BepInEx", "plugins", "old-valheimCLI.dll");
+            File.WriteAllBytes(plugins, RegressionRig.Assembly("old-cli-plugin", new("valheimCLI.valheimCLI")));
+        }
+
+        Assert.Equal(0, await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["validate", plan, Output], Options(host, null)));
+        Assert.Equal(TestCliSet.CorePin, JsonDocument.Parse(File.ReadAllText(Path.Combine(Output, "input-hashes.json"))).RootElement
+            .GetProperty("plugins").GetProperty("valheimCLI.valheimCLI").GetString());
+    }
+
+    [Fact] public async Task ARequiredPluginMissingFromTheStagedPinsIsRefused()
+    {
+        var host = NewHost();
+        var (plan, profile) = Write(host);
+        Assert.Equal(1, await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["validate", plan, Output],
+            Options(host, null, requiredPlugins: ["test.mod"])));
+        var stage = Step(StageStep);
+        Assert.False(stage.GetProperty("Passed").GetBoolean());
+        Assert.Contains("missing required plugin test.mod", stage.GetProperty("Error").GetString());
+    }
+
+    [Fact] public async Task AnEmptyNewWorldFixtureWithWorldAnyStagesAndRuns()
+    {
+        var server = NewServer(); var host = NewHost(server);
+        var (planPath, profilePath, _) = PinPlan(host, "observed");
+        string fixture = Path.Combine(_root, "new-world");
+        Directory.CreateDirectory(fixture);
+        File.WriteAllText(Path.Combine(fixture, "NEW-WORLD.txt"), "The game creates this world on first boot.\n");
+        var plan = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(planPath))!;
+        plan["world"]!["source"] = fixture;
+        plan["world"]!["sha256"] = JsonSerializer.SerializeToNode(WorldFixture.Manifest(fixture));
+        plan["pins"] = JsonSerializer.SerializeToNode(new Dictionary<string, string> { ["world"] = "any" });
+        File.WriteAllText(planPath, plan.ToJsonString());
+
+        Assert.Equal(0, await PinnedServerRun.MainAsync(TestEnvironment.Read(profilePath), ["run", planPath, Output], Options(host, server)));
+        Assert.Equal("plan", Result().GetProperty("PinOrigins").GetProperty("worldUid").GetString());
+        Assert.Equal(JsonValueKind.Null, JsonDocument.Parse(File.ReadAllText(Path.Combine(Output, "input-hashes.json"))).RootElement
+            .GetProperty("worldUid").ValueKind);
+        Assert.True(File.Exists(Path.Combine(Output, "host-world", "NEW-WORLD.txt")));
+    }
+
+    [Fact] public async Task AnObservedPluginChangedAfterStagingIsRefusedBeforeBoot()
+    {
+        var server = NewServer(); var host = NewHost(server);
+        var (plan, profile, _) = PinPlan(host, "observed");
+        bool changed = false;
+        host.BeforeScript = script =>
+        {
+            if (script != "port" || changed) return;
+            changed = true;
+            File.WriteAllText(Path.Combine(host.Local(RunDirectory + "/runtime"), "BepInEx", "plugins", "TestMod.dll"), "swapped after staging");
+        };
+        Assert.Equal(1, await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["run", plan, Output], Options(host, server)));
+        Assert.True(changed);
+        Assert.DoesNotContain("start", host.Scripts);
+        var start = Step("start and verify owned dedicated fixture");
+        Assert.False(start.GetProperty("Passed").GetBoolean());
+        Assert.Contains("prepared server profile before launch plugins", start.GetProperty("Error").GetString());
+        Assert.Contains("different hash: BepInEx/plugins/TestMod.dll", start.GetProperty("Error").GetString());
+    }
+
     private static PinnedServerRunOptions<ServerRunPlan> Options(FakeServerHost host, FakeOwnedServer? server, Func<TestRun<ServerRunPlan>, Task>? scenario = null,
         FakeServerHost? clientHost = null, IGameTransport? clientTransport = null, IGameHost? leaseHost = null, string name = "toolkit-smoke",
-        RunCancellation? cancellation = null) => new()
+        RunCancellation? cancellation = null, IReadOnlyList<string>? requiredPlugins = null) => new()
     {
         Name = name,
-        ReadPlan = path => { var plan = ServerRunPlan.Read<ServerRunPlan>(path); plan.ValidateServerPlan([], "TEST_SESSION_TOKEN"); return plan; },
+        ReadPlan = path => { var plan = ServerRunPlan.Read<ServerRunPlan>(path); plan.ValidateServerPlan(requiredPlugins ?? [], "TEST_SESSION_TOKEN"); return plan; },
         Mod = new("test.mod/session", "TEST_SESSION_TOKEN"),
         Scenario = TestRun.Scenario(scenario ?? (_ => Task.CompletedTask)),
         Hooks = new FakeRunHooks
@@ -728,7 +948,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         return manifest;
     }
 
-    // #730: a standalone server's plan is checked against its install (the install's own loader and ValheimCLI build), then bound to
+    // #730: a standalone server's plan is checked against its install and staged plugins, then bound to
     // the profile staged from it: the runtime manifest to the profile's game listing, runtimePins to the profile's (on the pinned
     // loader), the ValheimCLI pin to the staged set's. The install is never changed; its own ValheimCLI build is left out.
     [Fact] public async Task AStandalonePlanIsCheckedAgainstItsInstallThenBoundToItsProfile()
@@ -737,12 +957,13 @@ public sealed partial class HostedServerRunTests : IDisposable
         var (planPath, profilePath) = Write(host);
         Directory.CreateDirectory(Path.Combine(host.Local(Install), "BepInEx", "plugins"));
         File.WriteAllText(Path.Combine(host.Local(Install), "BepInEx", "plugins", "valheimCLI.dll"), "the install's own ValheimCLI");
-        File.WriteAllText(Path.Combine(host.Local(Install), "BepInEx", "plugins", "Mod.dll"), "the install's mod");
+        string mod = Path.Combine(host.Local(Install), "BepInEx", "plugins", "Mod.dll");
+        File.WriteAllBytes(mod, RegressionRig.Assembly("ExampleMod", new("example.mod")));
         var plan = ServerRunPlan.Read<ServerRunPlan>(planPath);
         plan.Runtime.Sha256 = new(WorldFixture.Manifest(host.Local(Install)));
         var installPins = plan.RuntimePins = InstallPins.Of(host.Local(Install));
-        plan.Pins["valheimCLI.valheimCLI"] = FileHash.Md5(Path.Combine(host.Local(Install), "BepInEx", "plugins", "valheimCLI.dll"));
-        plan.Pins["example.mod"] = "0123456789abcdef0123456789abcdef";
+        plan.Pins["valheimCLI.valheimCLI"] = TestCliSet.CorePin;
+        plan.Pins["example.mod"] = FileHash.Md5(mod);
         var before = WorldFixture.Manifest(host.Local(Install));
         string package = LinuxLoaderPackage("pinned-pack");
         var hosted = HostedServerRun.Create(TestEnvironment.Read(profilePath), plan, "test",
@@ -757,9 +978,9 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.Equal(installPins.Game, plan.RuntimePins.Game);
         Assert.Equal((Install, before.Count), (plan.Runtime.Source, plan.Runtime.Sha256.Count)); // the profile's game is the install, on Linux
         Assert.Equal(TestCliSet.CorePin, plan.Pins["valheimCLI.valheimCLI"]);
-        Assert.Equal("0123456789abcdef0123456789abcdef", plan.Pins["example.mod"]);
+        Assert.Equal(FileHash.Md5(mod), plan.Pins["example.mod"]);
         Assert.Equal(File.ReadAllBytes(Path.Combine(TestCliSet.Source.Files, "valheimCLI.dll")), File.ReadAllBytes(Path.Combine(profile, "BepInEx", "plugins", "valheimCLI.dll")));
-        Assert.Equal("the install's mod", File.ReadAllText(Path.Combine(profile, "BepInEx", "plugins", "Mod.dll")));
+        Assert.Equal(File.ReadAllBytes(mod), File.ReadAllBytes(Path.Combine(profile, "BepInEx", "plugins", "Mod.dll")));
         Assert.Equal("pinned-pack doorstop_libs/libdoorstop_x64.so", File.ReadAllText(Path.Combine(profile, "doorstop_libs", "libdoorstop_x64.so")));
         Assert.Equal("the pinned test pack", report.Provenance["serverLoaderShipped"]);
         Assert.Equal(before, WorldFixture.Manifest(host.Local(Install)));
@@ -785,6 +1006,8 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.StartsWith("packaged: first server recipe", provenance.GetProperty("serverEnvironment").GetString());
         Assert.Equal(BepInExLoaderPackage.Read(package).Identity, provenance.GetProperty("serverLoaderPackage").GetString());
         Assert.Equal(BepInExLoaderPackage.Read(package).Loader, provenance.GetProperty("runtimeLoaderSha256").GetString());
+        Assert.Equal("observed", Result().GetProperty("PinOrigins").GetProperty("runtimePins").GetString());
+        Assert.Equal("pins observed, not reviewed", provenance.GetProperty("pins").GetString());
     }
 
     // #730: a Windows server's profile hard-links its install's files, so the environment's runtime folder must be on the install's

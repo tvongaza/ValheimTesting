@@ -61,11 +61,11 @@ After: "Unit tests need the .NET 10 SDK and nothing else. They run on any OS. Na
 
 **2. From `docs/packages/Valheim.Testing.Game.md`, "Pins and the opt-out".**
 Before: "**Computing the pins.** Every strict plan needs `runtimePins`, and an owned client section needs `installPins`; `ValidateServerPlan` and `ClientRunPlan.Validate` refuse a plan without them. Compute the values once with `InstallPins.Of(<runtime>)` and `InstallPins.Of(<client install>)` (or the shell listing above), review them, and add them to the plan: … `bepinexCore`, which pinned `BepInEx/core` alone, was replaced by `loader` (#295); a plan that still names it is refused with that instruction."
-After: "Compute the pins once with `InstallPins.Of(<runtime>)`, review them, and add them to the plan:
+After: "A standalone runner pins omitted values from what it stages and records them as observed. To require reviewed values, compute the pins with `InstallPins.Of(<runtime>)` and add them to the plan:
 ```json
 "runtimePins": { "game": "...", "loader": "...", "patchers": "..." }
 ```
-An owned client section needs the same object as `"installPins"`. `ValidateServerPlan` and `ClientRunPlan.Validate` refuse a plan without them."
+An owned client section still needs the same object as `"installPins"`; `ClientRunPlan.Validate` refuses an owned client without it."
 
 **3. From `CONTRIBUTING.md`, "Set up and validate locally".**
 Before: "A pull request carries code, tests and docs only. It changes no package `<Version>`, no Cli `packageVersion`, no dependency pin between the packages, no `toolkit-versions.json` entry or copyable pin, and no list in `docs/reference/public-api/`: cutting a release does all of that in one step (see "Release packages"). The one exception is a pull request that moves the ValheimCLI fork pin: it marks the transport a candidate …"

@@ -11,7 +11,7 @@ public sealed class PinnedDirectory
     public string Source { get; set; } = "";
     public Dictionary<string, string> Sha256 { get; set; } = [];
     public void Validate() => Validate(requireHashes: true);
-    /// <summary>Without <paramref name="requireHashes"/> (an explicitly unpinned plan) the hashes may be left out; listed ones are still full SHA256.</summary>
+    /// <summary>Without <paramref name="requireHashes"/> the hashes may be left out for a runner that pins the copy as found; listed ones are still full SHA256.</summary>
     public void Validate(bool requireHashes)
     {
         // A run on another host may be assembled on macOS for a Windows host. The source then names an absolute path on the
@@ -39,11 +39,15 @@ public partial class ServerRunPlan
     public string Executable { get; set; } = "";
     public string[] Arguments { get; set; } = [];
     public Dictionary<string, string> Environment { get; set; } = [];
-    /// <summary>Strict ValheimCLI expectations: <c>worlduid</c> and an exact MD5 for every listed plugin.</summary>
+    /// <summary>
+    /// Strict ValheimCLI expectations: <c>worlduid</c> and an exact MD5 for every listed plugin. A standalone runner
+    /// observes any omitted pins from the fixture and staged profile before launch.
+    /// </summary>
     public Dictionary<string, string> Pins { get; set; } = [];
     /// <summary>
     /// The runtime's game build, loader and patchers by SHA256 (<see cref="InstallPins.Of"/> computes them), checked
-    /// on the copy before launch: what ValheimCLI cannot report in game. Required unless <see cref="Pinning"/> is <c>none</c>.
+    /// on the copy before launch: what ValheimCLI cannot report in game. A standalone runner observes them from the staged
+    /// profile when omitted; supplied values remain expected pins and are checked against the source install before staging.
     /// </summary>
     public InstallPins? RuntimePins { get; set; }
     /// <summary>
@@ -78,18 +82,25 @@ public partial class ServerRunPlan
         ?? throw new ArgumentException("Empty plan.");
 
     /// <summary>
-    /// The rules every pinned dedicated-server plan follows: pinned sources, port and time bounds, a known executable,
+    /// The rules every dedicated-server plan follows: fully qualified sources, port and time bounds, a known executable,
     /// no runner-owned session token or Doorstop variable in the environment, <c>-batchmode -nographics</c> and exactly
-    /// one <c>-savedir {world}</c>, and strict pins with <c>worlduid</c>, an exact MD5 for each of
-    /// <paramref name="requiredPlugins"/> and for every other listed plugin, no <c>worldfiles</c>, and
-    /// <see cref="RuntimePins"/>. Each log scan classification names a known pattern
+    /// one <c>-savedir {world}</c>, and exact values for every pin the plan supplies: plugin MD5s, no <c>worldfiles</c>,
+    /// full fixture hashes and <see cref="RuntimePins"/>. A standalone runner observes omitted pins from what it stages;
+    /// after that binding, every <paramref name="requiredPlugins"/> entry must be in the staged plugin set.
+    /// Each log scan classification names a known pattern
     /// with a reason. <c>-crossplay</c> comes only from <see cref="Crossplay"/> (<see cref="CheckCrossplay"/>). An explicitly unpinned plan (<see cref="Pinning"/> <c>none</c>) follows the same rules without the
     /// pins, which it must leave out, and may leave out the fixture hashes.
     /// </summary>
     public void ValidateServerPlan(IEnumerable<string> requiredPlugins, string sessionTokenVariable)
     {
+        ArgumentNullException.ThrowIfNull(requiredPlugins);
+        _requiredPlugins = requiredPlugins.Select(plugin =>
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(plugin);
+            return plugin;
+        }).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
         bool pinned = Pinned;
-        Runtime.Validate(pinned); World.Validate(pinned);
+        Runtime.Validate(requireHashes: false); World.Validate(requireHashes: false);
         CheckLogScan();
         if (Port < 1024 || Port > 65535 || StartupSeconds < 1 || StartupSeconds > MaximumStartupSeconds || CommandSeconds < 1 || CommandSeconds > 120 || QuitSeconds < 0 || QuitSeconds > MaximumQuitSeconds)
             throw new ArgumentException("Invalid port or time budget.");
@@ -113,16 +124,23 @@ public partial class ServerRunPlan
         var errors = new List<string>();
         var parsed = Expectations.ParseLines(Pins.Select(x => x.Key + "=" + x.Value), errors);
         if (errors.Count != 0) throw new ArgumentException("Invalid environment pins: " + string.Join("; ", errors));
-        if (!Pins.ContainsKey("worlduid")) throw new ArgumentException("Pin worlduid.");
-        foreach (string plugin in requiredPlugins)
-            if (!Pins.TryGetValue(plugin, out var value) || value.Length != 32 || !value.All(Uri.IsHexDigit))
-                throw new ArgumentException("Pin a full MD5 for " + plugin + ".");
-        if (parsed.Any(x => !Expectations.IsWorldKey(x.Key) && (x.Value == "any" || x.Value == "absent")))
+        if (parsed.Any(x => !Expectations.IsWorldKey(x.Key) &&
+            (x.Value.Length != 32 || !x.Value.All(Uri.IsHexDigit))))
             throw new ArgumentException("All listed plugins require exact MD5 pins.");
         if (Pins.ContainsKey("worldfiles")) throw new ArgumentException("World bytes change after save; pin input SHA256 and persistent worlduid instead.");
-        if (RuntimePins == null)
-            throw new ArgumentException("Pin the runtime's game build, loader and patchers in runtimePins (InstallPins.Of computes them), or opt out explicitly with \"pinning\": \"none\".");
-        RuntimePins.Validate("runtime");
+        RuntimePins?.Validate("runtime");
+    }
+    private IReadOnlyList<string> _requiredPlugins = [];
+    /// <summary>
+    /// After a strict runner binds its staged pins, refuses a required plugin that is missing or pinned absent. Validation
+    /// retains this list because omitted plugin pins cannot be decided until the standalone profile exists.
+    /// </summary>
+    internal void RequireStagedPlugins()
+    {
+        if (!Pinned) return;
+        var missing = _requiredPlugins.Where(plugin => !Pins.TryGetValue(plugin, out string? value) || value == "absent").ToArray();
+        if (missing.Length != 0)
+            throw new InvalidOperationException($"The staged server profile is missing required plugin{(missing.Length == 1 ? "" : "s")} {string.Join(", ", missing)}. Install the mod and its test adapter in the source install, or select them in the campaign dependency lock.");
     }
     public static string ExecutableFor(ServerPlatform platform) => platform switch
     {
@@ -152,12 +170,11 @@ public partial class ServerRunPlan
     /// <summary>The plan's log scan classifications are well formed (the runner checks them for every plan).</summary>
     public void CheckLogScan() => LogScanner.CheckClassifications(LogScan);
     /// <summary>
-    /// Pinned: refuses a runtime whose game build, loader or patchers are not <see cref="RuntimePins"/>. Unpinned:
-    /// checks nothing. Either way returns what the runtime holds, for the report.
+    /// With expected <see cref="RuntimePins"/>, refuses a runtime whose game build, loader or patchers differ. Otherwise
+    /// returns the runtime's pins as observed. An explicitly unpinned plan also only observes them for the report.
     /// </summary>
-    public InstallPins CheckRuntimePins(string runtime) => !Pinned ? InstallPins.Of(runtime) :
-        (RuntimePins ?? throw new ArgumentException("Pin the runtime's game build, loader and patchers in runtimePins, or opt out explicitly with \"pinning\": \"none\"."))
-            .Check(runtime, "runtime");
+    public InstallPins CheckRuntimePins(string runtime) => Pinned && RuntimePins != null
+        ? RuntimePins.Check(runtime, "runtime") : InstallPins.Of(runtime);
     public void CheckOutput(string output)
     {
         foreach (string source in new[] { Runtime.Source, World.Source })

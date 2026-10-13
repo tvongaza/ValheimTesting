@@ -21,6 +21,14 @@ internal static partial class HostedRuntimeStage
 {
     private static readonly StringComparer HostNames = StringComparer.OrdinalIgnoreCase;
     private static readonly Regex SafePath = new(@"^[A-Za-z0-9_. -]+(?:/[A-Za-z0-9_. -]+)*$", RegexOptions.CultureInvariant);
+    private static readonly string[] PayloadFolders = ["plugins", "scripts", "config", "patchers"];
+
+    private static bool InPayloadFolder(string relativePath, params string[] folders) => folders.Any(folder =>
+        relativePath.StartsWith("BepInEx/" + folder + "/", StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>Whether a selected DLL is in a BepInEx startup-plugin location. Scripts still need ScriptEngine with <c>LoadOnStart = true</c>.</summary>
+    internal static bool IsStartupPlugin(string relativePath) =>
+        relativePath.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) && InPayloadFolder(relativePath, "plugins", "scripts");
 
     internal enum PayloadTargetKind { BepInEx, Loader, SteamRuntime }
     private sealed record SelectedPayloadFile(string Source, string Sha, PayloadTargetKind Kind);
@@ -53,10 +61,7 @@ internal static partial class HostedRuntimeStage
         {
             if (string.IsNullOrWhiteSpace(file.RelativePath) || !SafePath.IsMatch(file.RelativePath) ||
                 file.RelativePath.Split('/').Any(part => part is "." or "..") || file.RelativePath.StartsWith(' ') ||
-                !(file.RelativePath.StartsWith("BepInEx/plugins/", StringComparison.OrdinalIgnoreCase) ||
-                  file.RelativePath.StartsWith("BepInEx/scripts/", StringComparison.OrdinalIgnoreCase) ||
-                  file.RelativePath.StartsWith("BepInEx/config/", StringComparison.OrdinalIgnoreCase) ||
-                  file.RelativePath.StartsWith("BepInEx/patchers/", StringComparison.OrdinalIgnoreCase)))
+                !InPayloadFolder(file.RelativePath, PayloadFolders))
                 throw new ArgumentException("Staged paths must be regular files under BepInEx/plugins, scripts, config or patchers. Use loaderPackage to replace the copied loader; never pass loader files as plugins.", nameof(files));
             string local = Path.GetFullPath(file.Source);
             if (!File.Exists(local) || (File.GetAttributes(local) & FileAttributes.ReparsePoint) != 0)

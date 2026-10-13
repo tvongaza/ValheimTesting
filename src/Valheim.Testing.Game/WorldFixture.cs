@@ -45,9 +45,11 @@ public sealed class WorldFixture : IDisposable
         return CopyFixture(source, outputParent, expectedHashes);
     }
     /// <summary>
-    /// Copies a fixture that has no manifest, for an explicitly unpinned run only: every file's SHA256 is recorded in
+    /// Copies a fixture that has no expected manifest: every file's SHA256 is recorded in
     /// <see cref="SourceHashes"/> and <c>fixture-provenance.json</c> and the copy is verified against it, but nothing says
-    /// the source is the one intended. Prefer <see cref="Copy"/>.
+    /// the source was reviewed in advance. A strict standalone runner may bind these observed hashes as the run's pins;
+    /// an explicitly unpinned run records them without enforcing them after the copy. Prefer <see cref="Copy"/> when the
+    /// expected manifest is known.
     /// </summary>
     public static WorldFixture CopyAsFound(string source, string outputParent) => CopyFixture(source, outputParent, null);
     private static WorldFixture CopyFixture(string source, string outputParent, IReadOnlyDictionary<string, string>? expectedHashes)
