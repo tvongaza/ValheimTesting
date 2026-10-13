@@ -55,7 +55,7 @@ public sealed class PatchReloadSettings
 /// After each change, every other owner's patches on those methods are exactly as before (<see cref="HarmonyCensus.OthersChanged"/>)
 /// and AcceptanceMod's declared patch is applied. In a control run (<see cref="PatchReloadSettings.ExpectOthersRemoved"/>) A's unload also
 /// removes AcceptanceMod's patches, and the check after the reload must fail naming them; the run ends there.
-/// Each census is written to <c>patch-reload-{stage}.txt</c>. A run on this machine only: the scenario writes into the runtime copy.
+/// Each census is written to <c>patch-reload-{stage}.txt</c>. A run on this machine only: the scenario writes into the server's disposable profile.
 /// </summary>
 public static class PatchReloadScenario
 {

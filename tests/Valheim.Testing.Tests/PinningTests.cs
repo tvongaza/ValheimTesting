@@ -344,19 +344,23 @@ public sealed class PinningTests : IDisposable
 
     // ---- the runner ----
 
-    private string Runtime => Path.Combine(_root, "runtime");
+    // The server install a standalone run on this machine stages its profile from (#730): on a fake Linux local host, any OS.
+    private LocalServerMachine? _machine;
+    private LocalServerMachine Machine => _machine ??= new LocalServerMachine(Path.Combine(_root, "local-host"));
+    private string Runtime => Machine.InstallDirectory;
     private string World => Path.Combine(_root, "world");
+    private static async Task<int> RunHere(string[] args, PinnedServerRunOptions<ServerRunPlan> options)
+    {
+        using var machine = LocalServerMachine.Use();
+        return await PinnedServerRun.MainAsync(args, options);
+    }
     private string WritePlan(object? pinning = null, InstallPins? runtimePins = null, bool manifests = true)
     {
-        Directory.CreateDirectory(Runtime); Directory.CreateDirectory(Path.Combine(World, "worlds_local"));
-        string server = Path.Combine(Runtime, OperatingSystem.IsWindows() ? GameLaunch.ServerWindowsExecutable : GameLaunch.ServerLinuxExecutable);
-        File.WriteAllText(server, "server");
-        if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(server, File.GetUnixFileMode(server) | UnixFileMode.UserExecute);
-        FakeInstalls.Server(Runtime);
+        Directory.CreateDirectory(Path.Combine(World, "worlds_local"));
         File.WriteAllText(Path.Combine(World, "worlds_local", "Test.db"), "world");
         var plan = new Dictionary<string, object>
         {
-            ["runtime"] = new { source = Runtime, sha256 = manifests ? WorldFixture.Manifest(Runtime) : new Dictionary<string, string>() },
+            ["runtime"] = new { source = LocalServerMachine.Install, sha256 = manifests ? WorldFixture.Manifest(Runtime) : new Dictionary<string, string>() },
             ["world"] = new { source = World, sha256 = manifests ? WorldFixture.Manifest(World) : new Dictionary<string, string>() },
             ["arguments"] = new[] { "-batchmode", "-nographics", "-savedir", "{world}" },
             ["port"] = FreePort(),
@@ -372,9 +376,9 @@ public sealed class PinningTests : IDisposable
         var listener = new TcpListener(IPAddress.Loopback, 0); listener.Start(); int port = ((IPEndPoint)listener.LocalEndpoint).Port; listener.Stop();
         return port < 1024 ? 5577 : port;
     }
-    private static PinnedServerRunOptions<ServerRunPlan> Options(FakeOwnedServer? server = null) => new()
+    private PinnedServerRunOptions<ServerRunPlan> Options(FakeOwnedServer? server = null) => new()
     {
-        Name = "pinning-smoke",
+        Name = "pinning-smoke", Hooks = Machine.Hooks(),
         ReadPlan = path => { var plan = ServerRunPlan.Read<ServerRunPlan>(path); plan.ValidateServerPlan([], "TEST_SESSION_TOKEN"); return plan; },
         Mod = new("test.mod/session", "TEST_SESSION_TOKEN"),
         Scenario = (session, _) => { session.Server!.Game.Execute("cli_extension test.mod/session"); return Task.CompletedTask; },
@@ -401,22 +405,22 @@ public sealed class PinningTests : IDisposable
         }
         string plan = WritePlan(runtimePins: pinned);
         string output = Path.Combine(_root, "out");
-        Assert.Equal(1, await PinnedServerRun.MainAsync(["validate", plan, output], Options()));
-        var step = Step(Result(output), "copied runtime is the pinned game build, loader and patchers");
+        Assert.Equal(1, await RunHere(["validate", plan, output], Options()));
+        // Checked on the install the plan names, before its profile is staged.
+        var step = Step(Result(output), "check the server host's install against the pinned runtime and stage its profile");
         Assert.False(step.GetProperty("Passed").GetBoolean()); Assert.Contains(message, step.GetProperty("Error").GetString());
         // The control: the same runtime pinned as it now is passes.
-        Assert.Equal(0, await PinnedServerRun.MainAsync(["validate", WritePlan(), output + "-repinned"], Options()));
+        Assert.Equal(0, await RunHere(["validate", WritePlan(), output + "-repinned"], Options()));
     }
 
     [Fact] public async Task AnUnpinnedRunRunsWarnsAndMarksEveryReportAndEvidenceFile()
     {
         string plan = WritePlan(pinning: "none", manifests: false);
         string output = Path.Combine(_root, "out");
-        // This fake Windows or Linux runtime cannot run on macOS; validate still reads, copies and reports the unpinned plan there.
-        string mode = OperatingSystem.IsMacOS() ? "validate" : "run";
+        const string mode = "run";
         var server = new FakeOwnedServer("test.mod");
         int code = 0;
-        string stderr = Stderr(() => code = PinnedServerRun.MainAsync([mode, plan, output], Options(server)).GetAwaiter().GetResult());
+        string stderr = Stderr(() => code = RunHere([mode, plan, output], Options(server)).GetAwaiter().GetResult());
         Assert.Equal(0, code);
         Assert.Contains("WARNING: environment not pinned: pinning-smoke", stderr);
         var result = Result(output);
@@ -425,8 +429,8 @@ public sealed class PinningTests : IDisposable
         Assert.StartsWith("environment not pinned", result.GetProperty("Provenance").GetProperty("environment").GetString());
         Assert.Equal(InstallPins.Of(Runtime).Loader, result.GetProperty("Provenance").GetProperty("runtimeLoaderSha256").GetString());
         var names = result.GetProperty("Steps").EnumerateArray().Select(s => s.GetProperty("Name").GetString()).ToList();
-        Assert.Contains("copy unpinned runtime as found", names); Assert.Contains("copy unpinned world as found", names);
-        Assert.Contains("record the unpinned runtime's game build, loader and patchers", names);
+        Assert.Contains("stage the server's profile from its install as found", names); Assert.Contains("copy unpinned world as found", names);
+        Assert.Contains("record the unpinned server runtime's game build, loader and patchers", names);
         if (mode == "run") Assert.DoesNotContain(server.Events, e => e.StartsWith("pins", StringComparison.Ordinal)); // No cli_expect was sent.
         // The marker sits in the Preflight suite: the pinning decision is made before anything is copied.
         var junit = XDocument.Load(Path.Combine(output, "junit.xml")).Root!.Elements("testsuite").Single(s => s.Attribute("name")!.Value.EndsWith(" / preflight", StringComparison.Ordinal));
@@ -443,7 +447,7 @@ public sealed class PinningTests : IDisposable
     {
         string output = Path.Combine(_root, "out"), plan = WritePlan();
         int code = 0;
-        string stderr = Stderr(() => code = PinnedServerRun.MainAsync(["validate", plan, output], Options()).GetAwaiter().GetResult());
+        string stderr = Stderr(() => code = RunHere(["validate", plan, output], Options()).GetAwaiter().GetResult());
         Assert.Equal(0, code);
         Assert.DoesNotContain("not pinned", stderr);
         Assert.Equal("strict", Result(output).GetProperty("Pinning").GetString());

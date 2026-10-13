@@ -90,7 +90,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         var plan = ServerRunPlan.Read<ServerRunPlan>(planPath);
         var environment = TestEnvironment.Read(profilePath);
         const string owned = Runs + "/vt-prep-profile/runtime";
-        await HostInstall.CopyAsync(host, Install, owned, TimeSpan.FromSeconds(30));
+        FakeServerHost.CopyDirectory(host.Local(Install), host.Local(owned)); // a stand-in for the campaign's staged profile
         environment.Server!.Install = owned; // the campaign retires only this owned profile
         environment.Server.PreparedGameRoot = Install;
         environment.Server.PreparedLoaderRoot = owned;
@@ -114,7 +114,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         var plan = ServerRunPlan.Read<ServerRunPlan>(planPath);
         var environment = TestEnvironment.Read(profilePath);
         const string source = @"C:\valheim\server", owned = @"C:\vt\runs\vt-prep-profile\runtime";
-        await HostInstall.CopyAsync(host, source, owned, TimeSpan.FromSeconds(30));
+        FakeServerHost.CopyDirectory(host.Local(source), host.Local(owned)); // a stand-in for the campaign's staged launch folder
         environment.Server!.Install = owned;
         environment.Server.PreparedGameRoot = owned;
         environment.Server.PreparedLoaderRoot = owned;

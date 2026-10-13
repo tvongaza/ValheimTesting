@@ -14,19 +14,21 @@ namespace Valheim.Testing.NativeAcceptance;
 /// Prepares a <c>dry-site-server</c> plan on a world the game creates now, so the server scenario can run where nobody
 /// prepared a fixture by hand, such as a scheduled CI job: <c>prepare-server &lt;server-runtime&gt; &lt;new-output-directory&gt;</c>.
 /// <list type="number">
-/// <item>Pins the runtime by the SHA256 of every file, and each required plugin in its <c>BepInEx/plugins</c> by the MD5 of
-/// their files: the default ValheimCLI plugin, the mod and its adapter.</item>
-/// <item>Starts one owned server on a copy of the runtime (the source is never launched), and the game creates a new world
-/// in <c>world/</c>. Its uid is not known yet, so this one boot pins the plugins strictly and accepts any world.</item>
+/// <item>Pins the runtime by the SHA256 of every file, its game build, loader and patchers (<c>InstallPins</c>), and each required
+/// plugin in its <c>BepInEx/plugins</c> by the MD5 of their files: the default ValheimCLI plugin, the mod and its adapter.</item>
+/// <item>Runs one owned server through the toolkit's pinned runner (<see cref="PinnedServerRun"/>, as a standalone run on this
+/// machine: a disposable profile of the runtime, which is never changed), and the game creates a new world. Its uid is not
+/// known yet, so this one boot pins the plugins strictly and accepts any world. The runner's evidence is <c>run/</c>.</item>
 /// <item>Reads the world's uid (<c>cli_world</c>) and picks the sites from the world generator's heights, read through
 /// ValheimCLI (<c>valheim.world/terrain-grid</c>) and never from the mod: the dry site at least <see cref="Margin"/> above
 /// the rule's 31.5 m threshold, the wet one at least as far below it, each the closest such sample to the world's centre.</item>
-/// <item>Confirms a save, stops only that server and writes <c>plan.json</c>: the runtime and the new world pinned by hash,
-/// the world uid, the plugins and the sites. <c>run plan.json &lt;new-output-directory&gt;</c> then checks it like any plan.</item>
+/// <item>Confirms a save; the runner stops only that server and fetches the world (<c>run/host-world</c>), copied to <c>world/</c>. Writes <c>plan.json</c>:
+/// the runtime and the new world pinned by hash, the world uid, the plugins and the sites. <c>run plan.json
+/// &lt;new-output-directory&gt;</c> then checks it like any plan.</item>
 /// </list>
 /// The runtime's ValheimCLI must listen on <see cref="CliPort"/> (<c>[Server] Port</c> in its configuration). The output
-/// holds <c>result.json</c>, <c>junit.xml</c>, the boot's logs and recorded commands, the world and the plan. The plan holds
-/// the server's generated throwaway password: publish the reports and logs, not the plan or the world.
+/// holds <c>result.json</c>, <c>junit.xml</c>, the runner's evidence (<c>run/</c>: the boot's logs and recorded commands), the
+/// world and the plan. The plan holds the server's generated throwaway password: publish the reports and logs, not the plan or the world.
 /// </summary>
 public static class ServerFixture
 {
@@ -48,79 +50,100 @@ public static class ServerFixture
         [.. new (float X, float Z, float Spacing)[] { (0, 0, 32), (0, 0, 96), (0, 0, 256), (2048, 2048, 256), (-2048, 2048, 256), (-2048, -2048, 256), (2048, -2048, 256) }
             .Select(grid => SiteSearch.Around(grid.X, grid.Z, grid.Spacing, 16))];
 
-    public static int Run(string[] args)
+    public static async Task<int> RunAsync(string[] args)
     {
         if (args.Length != 3 || args[0] != Mode)
         {
             Console.Error.WriteLine($"Usage: Valheim.Testing.NativeAcceptance {Mode} <server-runtime> <new-output-directory>");
             return 2;
         }
-        using var cancellation = new CancellationTokenSource();
-        ConsoleCancelEventHandler onCancel = (_, e) => { e.Cancel = true; cancellation.Cancel(); };
-        Console.CancelKeyPress += onCancel;
-        using var sigterm = OperatingSystem.IsWindows() ? null : PosixSignalRegistration.Create(PosixSignal.SIGTERM, context => { context.Cancel = true; cancellation.Cancel(); });
         var report = new ScenarioReport("acceptancemod-server-fixture");
         report.Provenance["mode"] = Mode;
         string runtime = Path.GetFullPath(args[1]), output = Path.GetFullPath(args[2]);
         bool ownOutput = false;
-        ServerActor? session = null;
-        WorldFixture? copy = null;
-        // Stops only the process this preparation started. A copy whose server may still run is kept, never deleted.
-        void StopOwned()
-        {
-            if (session == null) return;
-            var owned = session; session = null;
-            report.Provenance["ownedPids"] = string.Join(",", owned.StartedProcesses);
-            try { report.Step(StepPhase.Cleanup, "stop only the owned server", owned.Dispose); }
-            catch { if (copy != null) copy.Preserve = true; throw; }
-        }
         try
         {
             if (Path.Exists(output)) throw new IOException("Use a new output directory; existing evidence is never overwritten.");
             if (IsInside(output, runtime)) throw new ArgumentException("The output must be outside the runtime.");
             var platform = GameLaunch.DetectServer(runtime);
             ServerRunPlan.CheckLaunchHost(platform, GameLaunch.LocalServerPlatform);
+            // A macOS server's run places a world fixture in its default worlds (the server ignores -savedir for its lists), so
+            // it cannot start on a world the game is still to create.
+            if (platform == ServerPlatform.MacOS)
+                throw new ArgumentException("prepare-server creates a new world on a Windows or Linux dedicated server; a macOS server runs only an existing world fixture.");
             report.Provenance["serverPlatform"] = platform.ToString();
             report.Provenance["steamBuildId"] = SteamBuildId(runtime);
             Directory.CreateDirectory(output); ownOutput = true;
-            string world = Path.Combine(output, "world");
-            Directory.CreateDirectory(world);
 
             IReadOnlyDictionary<string, string> runtimeHashes = null!;
             Dictionary<string, string> pins = [];
             report.Step(StepPhase.Preflight, $"pin the runtime and its {Plugins.Count} plugins", () => { runtimeHashes = WorldFixture.Manifest(runtime); pins = PluginPins(runtime); });
             report.Provenance["pins"] = string.Join(" ", pins.Select(pin => pin.Key + "=" + pin.Value));
-            report.Step(StepPhase.Setup, "copy the runtime; the source is never launched", () =>
-            {
-                copy = WorldFixture.Copy(runtime, output, runtimeHashes);
-                GameLaunch.RequireServerExecutable(copy.DirectoryPath);
-            });
 
             // A throwaway password for a server that is never listed (-public 0) and whose port nothing publishes.
             string password = Convert.ToHexString(RandomNumberGenerator.GetBytes(8)).ToLowerInvariant();
             string[] arguments = ["-batchmode", "-nographics", "-name", WorldName, "-port", "2456", "-world", WorldName, "-password", password,
                 "-public", "0", "-savedir", "{world}", "-logFile", "{runtime}/toolkit-unity.log"];
+            // The world folder the game creates its world in: empty but for a note, as a strictly pinned world fixture is never empty.
+            string newWorld = Path.Combine(output, "new-world");
+            Directory.CreateDirectory(newWorld);
+            File.WriteAllText(Path.Combine(newWorld, "NEW-WORLD.txt"), $"The game creates {WorldName} here.\n");
+            string preparation = Path.Combine(output, "preparation-plan.json");
             // Strict: every loaded plugin must be one of the pinned builds. The world is the one the game is creating now.
-            var plan = new LifecyclePlan
+            File.WriteAllText(preparation, JsonSerializer.Serialize(new
             {
-                Scenario = LifecyclePlan.ServerScenario, Arguments = arguments, Port = CliPort, StartupSeconds = StartupSeconds, CommandSeconds = CommandSeconds,
-                Pins = new Dictionary<string, string>(pins) { ["world"] = "any" },
-            };
-            // The actor establishes test access on this boot (and would on any restart).
-            var started = session = ServerActor.OnThisMachine(plan, copy!.DirectoryPath, world, output, "acceptancemod.testing/session", LifecyclePlan.SessionTokenVariable, cancellation.Token);
-            GameActor server = null!;
-            report.Step(StepPhase.Setup, "start the owned server on a new world, plugins pinned, with test access", () => server = started.Start());
+                scenario = Mode,
+                runtime = new { source = runtime, sha256 = runtimeHashes },
+                runtimePins = InstallPins.Of(runtime),
+                world = new { source = newWorld, sha256 = WorldFixture.Manifest(newWorld) },
+                executable = ServerRunPlan.ExecutableFor(platform),
+                arguments,
+                environment = new Dictionary<string, string>(),
+                pins = new Dictionary<string, string>(pins) { ["world"] = "any" },
+                port = CliPort,
+                startupSeconds = StartupSeconds,
+                commandSeconds = CommandSeconds,
+            }, new JsonSerializerOptions { WriteIndented = true }));
+
             WorldFacts facts = new();
-            report.Step("read the new world's uid", () => facts = ReadWorld(server));
-            report.Provenance["worldUid"] = facts.Uid; report.Provenance["worldSeed"] = facts.Seed;
             (Site Dry, Site Wet) sites = (new(), new());
-            report.Step("choose the sites from the world generator's heights", () => sites = ChooseSites(server, facts.Uid));
+            // The actor establishes test access on this boot (and would on any restart).
+            var options = new PinnedServerRunOptions<ServerRunPlan>
+            {
+                Name = "acceptancemod-server-preparation",
+                ReadPlan = ServerRunPlan.Read<ServerRunPlan>,
+                Mod = new("acceptancemod.testing/session", LifecyclePlan.SessionTokenVariable),
+                Scenario = (session, _) =>
+                {
+                    var server = session.Server!.Game;
+                    session.Report.Step("read the new world's uid", () => facts = ReadWorld(server));
+                    session.Report.Step("choose the sites from the world generator's heights", () => sites = ChooseSites(server, facts.Uid));
+                    session.Report.Step("confirmed world save", () => server.SaveConfirmed());
+                    return Task.CompletedTask;
+                },
+            };
+            string run = Path.Combine(output, "run");
+            int code = await PinnedServerRun.MainAsync(["run", preparation, run], options).ConfigureAwait(false);
+            report.Step(StepPhase.Setup, "start the owned server on a new world, plugins pinned, with test access (run/)", () =>
+            {
+                if (code != 0) throw new InvalidOperationException($"The preparation run did not pass (exit {code}); see {Path.Combine(run, "result.json")}.");
+            });
+            report.Provenance["worldUid"] = facts.Uid; report.Provenance["worldSeed"] = facts.Seed;
             report.Provenance["drySite"] = Describe(sites.Dry); report.Provenance["wetSite"] = Describe(sites.Wet);
-            report.Step("confirmed world save", () => server.SaveConfirmed());
-            StopOwned();
+            // The world the game created and saved, fetched from the server's run directory once it stopped: the plan's fixture is
+            // a copy of it without the shipment's own SOURCE.txt (a later run's ship writes it again) or this preparation's note.
+            string fetched = Path.Combine(run, "host-world"), world = Path.Combine(output, "world");
             string planPath = Path.Combine(output, "plan.json");
             report.Step("write and validate the plan", () =>
             {
+                if (!Directory.Exists(Path.Combine(fetched, "worlds_local"))) throw new DirectoryNotFoundException($"The preparation run fetched no saved world into {fetched}.");
+                foreach (string file in Directory.EnumerateFiles(fetched, "*", SearchOption.AllDirectories))
+                {
+                    string relative = Path.GetRelativePath(fetched, file);
+                    if (relative is "SOURCE.txt" or "NEW-WORLD.txt") continue;
+                    Directory.CreateDirectory(Path.GetDirectoryName(Path.Combine(world, relative))!);
+                    File.Copy(file, Path.Combine(world, relative));
+                }
                 WritePlan(planPath, runtime, runtimeHashes, world, platform, arguments, pins, facts.Uid, sites.Dry, sites.Wet);
                 LifecyclePlan.ReadValidated(planPath);
             });
@@ -133,12 +156,6 @@ public static class ServerFixture
         }
         finally
         {
-            Console.CancelKeyPress -= onCancel;
-            try { StopOwned(); } catch (Exception error) { Console.Error.WriteLine("Teardown: " + error.Message); }
-            // The copy only served this boot; its logs were copied into the output when the server stopped.
-            if (copy != null)
-                try { report.Step(StepPhase.Cleanup, "remove the runtime copy", copy.Dispose); }
-                catch (Exception error) when (error is IOException or UnauthorizedAccessException) { Console.Error.WriteLine("Could not remove the runtime copy: " + error.Message); }
             if (ownOutput) report.Write(output);
         }
         Console.WriteLine(report.Passed ? "PREPARED (a new world and its dry-site-server plan; not an acceptance test)" : "FAIL");

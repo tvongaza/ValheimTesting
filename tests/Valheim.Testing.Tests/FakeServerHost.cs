@@ -65,8 +65,6 @@ internal sealed class FakeServerHost : IGameHost
     public string? SteamLog { get; set; }
     private string? _runtime; // The host runtime of the last server start, whose log a clean stop appends to.
     public List<FakeForward> Tunnels { get; } = [];
-    /// <summary>What the copy does to the runtime after copying, for example editing a file.</summary>
-    public Action<string>? AfterCopy { get; set; }
     /// <summary>What the staging apply leaves in the runtime after applying, for example a loader file it failed to remove.</summary>
     public Action<string>? AfterApply { get; set; }
     /// <summary>What happens to a fetched directory after it arrived here, for example a file changed on the way.</summary>
@@ -119,7 +117,6 @@ internal sealed class FakeServerHost : IGameHost
     // Each embedded script by identity (the very constant the production code passes; ReferenceEqualityComparer, never its
     // text) → the name Runs records and RunAsync answers by. A script missing here is refused, naming its first line.
     private static readonly Dictionary<string, string> s_scriptNames = Names(
-        ("copy", [HostInstallScripts.Copy, HostInstallScripts.PowerShellCopy]),
         ("list", [HostInstallScripts.BashList, HostInstallScripts.PowerShellList]),
         ("port", [HostInstallScripts.BashPort, HostInstallScripts.PowerShellPort]),
         ("apart", [HostInstallScripts.BashApart, HostInstallScripts.PowerShellApart]),
@@ -210,13 +207,6 @@ internal sealed class FakeServerHost : IGameHost
                 var bytes = File.ReadAllBytes(file);
                 return Ok(bytes.Length > 4194304 ? "VT-PREFLIGHT too-large\n" : "VT-PREFLIGHT " + Convert.ToBase64String(bytes) + "\n");
             }
-            case "copy":
-                CopyDirectory(Local(v["source"]), Local(v["dest"]));
-                // As the scripts: a skipped top-level directory of the source is not copied.
-                foreach (string skipped in v.GetValueOrDefault("skip", "").Split('\n', StringSplitOptions.RemoveEmptyEntries))
-                    if (Directory.Exists(Path.Combine(Local(v["dest"]), skipped))) Directory.Delete(Path.Combine(Local(v["dest"]), skipped), recursive: true);
-                AfterCopy?.Invoke(Local(v["dest"]));
-                return Ok("VT-COPY copied\n");
             case "profile-seed":
             {
                 string destination = Local(v["runtime"]);
@@ -673,7 +663,8 @@ internal sealed class FakeServerHost : IGameHost
         return FileSystemName.MatchesSimpleExpression(pattern.Replace('\\', '/'), prefix, ignoreCase: windows);
     }
 
-    private static void CopyDirectory(string source, string target)
+    /// <summary>Copies a folder of the mirror, as a test sets up a host directory (a stand-in profile).</summary>
+    internal static void CopyDirectory(string source, string target)
     {
         Directory.CreateDirectory(target);
         foreach (string file in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories))

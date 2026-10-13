@@ -9,7 +9,7 @@ using Valheim.Testing.GameSessions;
 // session's host is a client that hosts the fixture world (HostedScenario). prepare-server creates a fresh world and writes a
 // dry-site-server plan for it (ServerFixture); it runs before any plan exists, so it is outside the pinned runner.
 // --in-place (before the mode) runs each owned client from its install as it is instead of a disposable copy.
-if (args.Length > 0 && args[0] == ServerFixture.Mode) return ServerFixture.Run(args);
+if (args.Length > 0 && args[0] == ServerFixture.Mode) return await ServerFixture.RunAsync(args);
 string? mode = args.SkipWhile(arg => arg == PinnedServerRun.InPlaceOption).FirstOrDefault();
 if (mode is PinnedServerRun.HostMode or PinnedServerRun.ValidateHostMode) return await PinnedServerRun.MainAsync(args, HostedScenario.RunnerOptions());
 // The runner's options: the suite's plan rules, AcceptanceMod's declaration, and every scenario by name (ScenarioTable).

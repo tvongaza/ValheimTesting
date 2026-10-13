@@ -99,8 +99,8 @@ public static class ScenarioTable
         var owned = session.Server!;
         var server = DrySiteServerScenario.Run(plan, owned.Game, owned.Restart, session.Report);
         if (plan.PatchReload == null) return;
-        // It writes into the runtime copy's scripts folder, which must be on this machine.
-        if (owned.Host != null) throw new ArgumentException("patchReload runs only with the server on this machine (no --inventory).");
+        // It writes into the server profile's scripts folder, which must be on this machine.
+        if (owned.Host is { Kind: not GameHostKind.Local }) throw new ArgumentException("patchReload runs only with the server on this machine (no --inventory).");
         PatchReloadScenario.Run(plan, server, owned.RuntimeDirectory, session.Output, session.Report, session.Cancellation);
     }
 

@@ -31,7 +31,7 @@ public sealed class HostListing
 }
 
 /// <summary>
-/// Reads and copies game installs and runtimes on a host, so a run on another machine keeps the same pins as one here: the
+/// Reads game installs and their profiles on a host (never copying an install), so a run on another machine keeps the same pins as one here: the
 /// runtime manifest, the game build, loader and patchers (<see cref="InstallPins"/>) and the server's
 /// execute bit are all checked against what the host holds, not against a local copy.
 /// </summary>
@@ -140,45 +140,15 @@ public static class HostInstall
         return new HostListing(hostName, shell, root, files, executables);
     }
 
-    /// <summary>
-    /// Copies <paramref name="source"/> into <paramref name="destination"/> on the host,
-    /// which must not exist yet; a directory this call created is removed again if the copy fails. Verify the copy with
-    /// <see cref="ListAsync"/> before using it.
-    /// </summary>
-    public static Task CopyAsync(IGameHost host, string source, string destination, TimeSpan timeout, CancellationToken cancellation = default) =>
-        CopyAsync(host, source, destination, timeout, [], cancellation);
-
     /// <summary><paramref name="files"/> (a manifest or listing) without what lies under a skipped top-level directory.</summary>
     internal static Dictionary<string, string> WithoutSkipped(IReadOnlyDictionary<string, string> files, IReadOnlyCollection<string> skip, StringComparer names) =>
         files.Where(file => !Skipped(file.Key, skip, names)).ToDictionary(file => file.Key, file => file.Value, names);
 
-    // Whatever the top-level entry is (a folder, a file or a link), as the copy scripts skip it by name.
+    // Whatever the top-level entry is (a folder, a file or a link), by its name.
     internal static bool Skipped(string relative, IReadOnlyCollection<string> skip, StringComparer names)
     {
         int slash = relative.IndexOfAny(['/', '\\']);
         return skip.Contains(slash < 0 ? relative : relative[..slash], names);
-    }
-
-    // skip: names of the source's top-level entries not copied (the install keeps them).
-    internal static async Task CopyAsync(IGameHost host, string source, string destination, TimeSpan timeout, IReadOnlyCollection<string> skip,
-        CancellationToken cancellation)
-    {
-        ArgumentNullException.ThrowIfNull(host);
-        RequireHostPath(host, source, nameof(source));
-        RequireHostPath(host, destination, nameof(destination));
-        foreach (string name in skip)
-            if (name.Length == 0 || name is "." or ".." || name.IndexOfAny(['/', '\\', '\n', '\r']) >= 0) throw new ArgumentException($"'{name}' is not a directory name.", nameof(skip));
-        var copy = host.Kind == GameHostKind.Local && OperatingSystem.IsMacOS() ? HostInstallScripts.MacCopy : HostInstallScripts.CopyFor(host.Shell.Kind);
-        var result = (await host.RunAsync(copy, new Dictionary<string, string>
-            { ["source"] = source, ["dest"] = destination, ["skip"] = string.Join('\n', skip) }, timeout, cancellation).ConfigureAwait(false))
-            .EnsureSuccess($"Copying {source} to {destination} on {host.Name}");
-        switch (InteractiveClient.Line(result.Stdout, "VT-COPY "))
-        {
-            case "copied": return;
-            case "missing": throw new DirectoryNotFoundException($"{source} does not exist on {host.Name}.");
-            case "exists": throw new InvalidOperationException($"{destination} already exists on {host.Name}; each run copies into a new directory.");
-            default: throw new HostOperationException($"Unexpected reply while copying {source} on {host.Name}", result);
-        }
     }
 
     /// <summary>
@@ -374,7 +344,6 @@ public static class HostInstall
 // The fixed scripts of HostInstall. Values arrive as variables (ScriptedGameHost.Compose); each script ends with its verdict.
 internal static class HostInstallScripts
 {
-    public static string CopyFor(HostShellKind kind) => kind == HostShellKind.Bash ? Copy : PowerShellCopy;
     public static string List(HostShellKind kind) => kind == HostShellKind.Bash ? BashList : PowerShellList;
     public static string Port(HostShellKind kind) => kind == HostShellKind.Bash ? BashPort : PowerShellPort;
     public static string Apart(HostShellKind kind) => kind == HostShellKind.Bash ? BashApart : PowerShellApart;
@@ -538,65 +507,6 @@ internal static class HostInstallScripts
             }
         } finally { $sha.Dispose() }
         'VT-LIST done'
-        """.ReplaceLineEndings("\n");
-
-    // Variables: source, dest, skip (names of top-level entries left out, one per line; none copies everything).
-    public static readonly string Copy = "set -u\n" + ProtectedPaths.BashInside + ProtectedPaths.BashRemove + """
-        if [ ! -d "$source" ]; then echo "VT-COPY missing"; exit 0; fi
-        if [ -e "$dest" ]; then echo "VT-COPY exists"; exit 0; fi
-        mkdir -p -- "$(dirname -- "$dest")" && mkdir -- "$dest" || exit 3
-        if [ -z "${skip:-}" ]; then
-            if ! cp -a -- "$source/." "$dest/"; then vt_remove "$dest" "$(dirname -- "$dest")"; exit 3; fi
-        else
-            shopt -s nullglob dotglob
-            for entry in "$source"/*; do
-                if printf '%s\n' "$skip" | grep -Fqx -- "${entry##*/}"; then continue; fi
-                if ! cp -a -- "$entry" "$dest/"; then vt_remove "$dest" "$(dirname -- "$dest")"; exit 3; fi
-            done
-        fi
-        echo "VT-COPY copied"
-        """.ReplaceLineEndings("\n");
-
-    // macOS cp -a can fail while copying protected extended attributes from a Steam install. The runtime
-    // contract pins file bytes and execute modes, not quarantine metadata; ditto copies those without xattrs.
-    public static readonly string MacCopy = "set -u\n" + ProtectedPaths.BashInside + ProtectedPaths.BashRemove + """
-        if [ ! -d "$source" ]; then echo 'VT-COPY missing'; exit 0; fi
-        if [ -e "$dest" ]; then echo 'VT-COPY exists'; exit 0; fi
-        mkdir -p -- "$(dirname -- "$dest")" && mkdir -- "$dest" || exit 3
-        shopt -s nullglob dotglob
-        for entry in "$source"/*; do
-            if printf '%s\n' "$skip" | grep -Fqx -- "${entry##*/}"; then continue; fi
-            if ! ditto --noextattr --noqtn "$entry" "$dest/${entry##*/}"; then vt_remove "$dest" "$(dirname -- "$dest")"; exit 3; fi
-        done
-        echo 'VT-COPY copied'
-        """.ReplaceLineEndings("\n");
-
-    // Variables: source, dest, skip (as the bash copy's; names compare ignoring case). The source may be a game install; only a
-    // new destination can be written.
-    public static readonly string PowerShellCopy = ProtectedPaths.PowerShellInside + ProtectedPaths.PowerShellRemove + """
-        if (-not [IO.Directory]::Exists($source)) { 'VT-COPY missing'; exit 0 }
-        if ([IO.Directory]::Exists($dest) -or [IO.File]::Exists($dest)) { 'VT-COPY exists'; exit 0 }
-        $skipped = @($skip -split "`n" | Where-Object { $_ })
-        [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($dest))
-        [void][IO.Directory]::CreateDirectory($dest)
-        try {
-            $pending = New-Object 'Collections.Generic.Stack[string]'
-            $pending.Push($source)
-            while ($pending.Count -gt 0) {
-                $from = $pending.Pop()
-                $relative = $from.Substring($source.TrimEnd('\', '/').Length).TrimStart('\', '/')
-                $to = if ($relative) { Join-Path $dest $relative } else { $dest }
-                [void][IO.Directory]::CreateDirectory($to)
-                foreach ($entry in [IO.Directory]::GetFileSystemEntries($from)) {
-                    if (-not $relative -and $skipped -contains [IO.Path]::GetFileName($entry)) { continue }
-                    $attributes = [IO.File]::GetAttributes($entry)
-                    if ($attributes -band [IO.FileAttributes]::ReparsePoint) { throw ('Refusing link in runtime: ' + $entry) }
-                    if ($attributes -band [IO.FileAttributes]::Directory) { $pending.Push($entry) }
-                    else { [IO.File]::Copy($entry, (Join-Path $to ([IO.Path]::GetFileName($entry)))) }
-                }
-            }
-        } catch { Remove-VtTree $dest ([IO.Path]::GetDirectoryName($dest)); throw }
-        'VT-COPY copied'
         """.ReplaceLineEndings("\n");
 
     // Variables: port. Linux: a listening socket is state 0A; the local address's port is the hex after its last colon. macOS

@@ -1,6 +1,4 @@
 using System.Globalization;
-using System.Net;
-using System.Net.Sockets;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Valheim.Testing.Game;
@@ -48,7 +46,7 @@ public sealed class PinnedServerRunOptions<TPlan> where TPlan : ServerRunPlan
             _cleanupBudget = value;
         }
     }
-    /// <summary>Test seam: the owned server's session (scripted) instead of launching the copied runtime.</summary>
+    /// <summary>Test seam: the owned server's session (scripted) instead of launching the server from its profile.</summary>
     internal Func<TPlan, OwnedServerSession>? SessionOverride { get; init; }
     /// <summary>What a run on other hosts reaches outside this process (<see cref="IHostedRunHooks"/>); tests pass fakes.</summary>
     internal IHostedRunHooks Hooks { get; init; } = HostedRunHooks.Production;
@@ -97,13 +95,15 @@ public sealed class HostedRunOptions<TPlan> where TPlan : class
 /// scenarios. Usage: <c>&lt;runner&gt; [--inventory &lt;environments.json&gt;] validate|run &lt;plan.json&gt; &lt;new-output-directory&gt;</c>.
 /// <list type="number">
 /// <item>Refuses an existing output directory (evidence is never overwritten) and one inside a pinned source.</item>
-/// <item>Reads the plan, detects the runtime's platform and checks the host before copying anything.</item>
-/// <item>Records provenance: plan, runner and toolkit hashes, mode, platform, <c>crossplay</c>, the copies and their input hashes.</item>
-/// <item>Copies and verifies the pinned runtime and world (kept for inspection), checks the copy's executable and its
-/// game build, loader and patchers against <see cref="ServerRunPlan.RuntimePins"/> (recorded
-/// as provenance).</item>
+/// <item>Reads the plan and places its server: on this machine, from the install the plan's runtime names, or with
+/// <c>--inventory</c> on a host (below); checks the host before writing anything there.</item>
+/// <item>Records provenance: plan, runner and toolkit hashes, mode, platform, <c>crossplay</c>, the profile, the world copy and their input hashes.</item>
+/// <item>Takes the host's lock, checks the install against the pinned runtime and <see cref="ServerRunPlan.RuntimePins"/>,
+/// stages the server's disposable loader profile from it (the install is never changed) and binds the plan to it, copies and
+/// verifies the pinned world (kept for inspection) and places it beside the profile, and checks the profile's executable and
+/// its game build, loader and patchers (recorded as provenance).</item>
 /// <item><c>validate</c> stops there. Otherwise: checks the CLI port is free, starts the <see cref="GameSession"/>'s owned
-/// server (<see cref="ServerActor"/>) on the copies with per-boot logs (<c>boot-N.*</c>) and recorded commands
+/// server (<see cref="ServerActor"/>) from the profile with per-boot logs (<c>boot-N.*</c>) and recorded commands
 /// (<c>connection-N.jsonl</c>), waits on the dedicated startup events, establishes test access and runs the scenario with the
 /// session and the plan.</item>
 /// <item>Always disposes the session (clients the scenario left open, then only the owned server), records the server's PIDs,
@@ -116,17 +116,18 @@ public sealed class HostedRunOptions<TPlan> where TPlan : class
 /// runtime's hashes without checking them, and marks <c>result.json</c>, <c>junit.xml</c>, <c>input-hashes.json</c>,
 /// <c>boot-N.process.json</c>, <c>connection-N.jsonl</c> and the result banner "environment not pinned".
 /// <para>
-/// With <c>--inventory &lt;environments.json&gt;</c> the dedicated server runs on a host of the private environment inventory instead:
+/// Without <c>--inventory</c> the server's host is this machine (a <c>local</c> host whose one environment is the plan's install);
+/// with <c>--inventory &lt;environments.json&gt;</c> it is a host of the private environment inventory instead:
 /// the first server environment in inventory order whose host (Linux with bash over SSH, in a container or this machine, or
-/// Windows with PowerShell) and ports fit the plan, its choice and reason recorded as <c>serverEnvironment</c>. The runner takes that host's lock for the run, checks
+/// Windows with PowerShell) and ports fit the plan. Either way its choice and reason are recorded as <c>serverEnvironment</c>. The runner takes that host's lock for the run, checks
 /// the host's install against the plan's runtime manifest and <see cref="ServerRunPlan.RuntimePins"/>, stages a disposable loader
 /// profile of it in a new run directory there (the install's own mods on the pinned loader and ValheimCLI set, the install never
 /// changed) and binds the plan to that profile, ships the verified world copy and verifies it there, makes the executable and pin
 /// checks on the profile,
 /// checks the CLI port on the host, reaches ValheimCLI only through a loopback tunnel (<see cref="IGameHost.OpenCliTunnelAsync"/>),
 /// starts each boot with <see cref="HostServer"/> and waits for its listening line in the host's log, and at teardown stops only
-/// the process it started, fetches each boot's logs (<c>boot-N/</c>) and the world copy (<c>host-world/</c>), closes the tunnel
-/// and releases the lock. Clients open on this machine; remote clients and several actors are a campaign's
+/// the process it started, fetches each boot's logs (<c>boot-N/</c>) and the world copy (<c>host-world/</c>), removes the profile,
+/// closes the tunnel and releases the lock. Clients open on this machine; remote clients and several actors are a campaign's
 /// (<see cref="RunCampaignAsync{TPlan}"/>), where <see cref="GameSession.OpenClient"/> starts each in its host's
 /// desktop session on its leased, observed Steam identity.
 /// A host operation whose outcome is unknown (a lost reply, a transport failure, an unproven lock or lease release), when nothing else
@@ -190,14 +191,14 @@ public static class PinnedServerRun
     }
 
     /// <summary>
-    /// Set to <c>1</c> to keep every actor's whole runtime copy after the run, for hands-on debugging in it, with any runner.
-    /// By default a run that stopped its server keeps only what the run added or changed in the copy (<c>runtime-changes/</c>,
-    /// see <see cref="WorldFixture.Retire"/>) and removes the rest, which is the pinned runtime's own files.
+    /// Set to <c>1</c> to keep every actor's whole profile after the run, for hands-on debugging in it, with any runner.
+    /// By default a run that stopped its server keeps only what the run added or changed in the profile (<c>runtime-changes/</c>)
+    /// and removes the rest, which is the install's loader and mods.
     /// </summary>
     public const string KeepRuntimeVariable = "VALHEIM_TESTING_KEEP_RUNTIME";
 
     /// <summary>
-    /// How much of what a run wrote in its runtime copy is kept (per file, in all): 64 MB and 256 MB after a pass, and 1 GB
+    /// How much of what a run wrote in its profile (or an older run's runtime copy) is kept (per file, in all): 64 MB and 256 MB after a pass, and 1 GB
     /// and 2 GB after a failure, where a large file the run wrote (a mod's cache, a dump) may be the evidence.
     /// </summary>
     internal static (long PerFile, long Total) RetainLimits(bool passed) => passed ? (64L << 20, 256L << 20) : (1L << 30, 2L << 30);
@@ -562,7 +563,7 @@ public static class PinnedServerRun
         var report = new ScenarioReport(options.Name);
         GameSession? game = null;
         TPlan? launchedPlan = null;
-        WorldFixture? runtime = null, world = null;
+        WorldFixture? world = null;
         HostedServerRun? hosted = null;
         PreparedHostedCampaign? prepared = null;
         string output = Path.GetFullPath(outputArgument);
@@ -626,36 +627,27 @@ public static class PinnedServerRun
                 });
                 environment = prepared!.Environment;
             }
-            ServerPlatform platform;
-            if (inventoryPath != null)
+            if (environment == null)
             {
-                // A standalone run has one actor to place: its dedicated server. Clients are a campaign's.
-                var inventory = EnvironmentInventory.Read(inventoryPath);
+                // A standalone run has one actor to place: its dedicated server, on the inventory's first environment that fits,
+                // else on this machine from the install the plan's runtime names (#730). Clients are a campaign's.
+                var inventory = inventoryPath != null ? EnvironmentInventory.Read(inventoryPath) : EnvironmentInventory.ThisMachineServer(
+                    plan.Runtime.Source, plan.Port, HostedServerRun.GamePort(plan) ?? 2456); // the game's own port when the plan names none
                 var (placed, assignment, loaderPackage) = inventory.PlaceServer(plan);
                 serverLoaderPackage = loaderPackage;
                 if (inventory.Detected.Count != 0) report.Provenance["inventoryDetected"] = string.Join("; ", inventory.Detected);
                 environment = placed;
-                report.Provenance["inventorySha256"] = FileHash.Sha256(inventoryPath);
+                if (inventoryPath != null) report.Provenance["inventorySha256"] = FileHash.Sha256(inventoryPath);
+                else report.Provenance["inventory"] = "this machine";
                 report.Provenance["serverEnvironment"] = assignment.Environment + ": " + assignment.Reason;
             }
-            if (environment != null)
-            {
-                // The runtime is a profile of the server host's install, checked and staged there; nothing local is read for it.
-                hosted = HostedServerRun.Create(environment, plan, options.Name, options.Hooks, prepared: prepared != null, prepared?.Journal.RunId, serverLoaderPackage);
-                if (RunJournal.ThisProcess.RunId != hosted.RunId) hostedRun = RunJournal.UseRun(hosted.RunId);
-                report.Provenance.TryAdd("runId", hosted.RunId); // a standalone hosted run's; a campaign's is already there
-                hosted.Record(report.Provenance);
-                platform = hosted.HostProfile.Platform switch { "windows" => ServerPlatform.Windows, "macos" => ServerPlatform.MacOS, _ => ServerPlatform.Linux };
-            }
-            else
-            {
-                // A local run's copies are journalled under its own id, so its end goes where they went.
-                journalRun = RunJournal.UseRun(RunJournal.NewRunId());
-                report.Provenance["runId"] = journalRun.RunId;
-                // The runtime's contents decide its platform; checked on the pinned source so a wrong host fails before copying.
-                platform = GameLaunch.DetectServer(plan.Runtime.Source); plan.CheckExecutable(platform);
-                if (mode != "validate") ServerRunPlan.CheckLaunchHost(platform, GameLaunch.LocalServerPlatform);
-            }
+            // The runtime is a profile of the server host's install (this machine's too), checked and staged there; nothing else
+            // of the install is read here.
+            hosted = HostedServerRun.Create(environment, plan, options.Name, options.Hooks, prepared: prepared != null, prepared?.Journal.RunId, serverLoaderPackage);
+            if (RunJournal.ThisProcess.RunId != hosted.RunId) hostedRun = RunJournal.UseRun(hosted.RunId);
+            report.Provenance.TryAdd("runId", hosted.RunId); // a standalone run's; a campaign's is already there
+            hosted.Record(report.Provenance);
+            var platform = hosted.HostProfile.Platform switch { "windows" => ServerPlatform.Windows, "macos" => ServerPlatform.MacOS, _ => ServerPlatform.Linux };
             options.CheckPlan?.Invoke(plan);
             report.Provenance["planSha256"] = planHash();
             report.Provenance["scenario"] = plan.Scenario;
@@ -663,14 +655,13 @@ public static class PinnedServerRun
             report.Provenance["mode"] = mode;
             report.Provenance["serverPlatform"] = platform.ToString();
             report.Provenance["crossplay"] = plan.Crossplay ? "true" : "false";
-            // Never deleted automatically: a failed stop or partial save must stay inspectable. Only the runtime copy goes at
+            // Never deleted automatically: a failed stop or partial save must stay inspectable. Only the server's profile goes at
             // the end, after a clean stop, keeping what the run changed in it.
             if (!ownOutput) { Directory.CreateDirectory(output); ownOutput = true; }
-            // Before copying: a drive that fills part-way through a copy leaves a broken runtime behind.
+            // Before copying: a drive that fills part-way through a copy leaves a broken world behind.
             report.Step(StepPhase.Preflight, "enough free disk space for the copies", () =>
             {
-                long bytes = DiskSpace.DirectoryBytes(plan.World.Source) + (hosted == null ? DiskSpace.DirectoryBytes(plan.Runtime.Source) : 0);
-                if (DiskSpace.Require(output, bytes, hosted == null ? "this run's runtime and world copies" : "this run's world copy") is { } free)
+                if (DiskSpace.Require(output, DiskSpace.DirectoryBytes(plan.World.Source), "this run's world copy") is { } free)
                     report.Provenance["freeBytesBeforeCopies"] = free.ToString(CultureInfo.InvariantCulture);
             });
             phase = StepPhase.Setup;
@@ -678,39 +669,18 @@ public static class PinnedServerRun
             bool Verified(PinnedDirectory fixture) => pinned || fixture.Sha256.Count != 0;
             WorldFixture CopyOf(PinnedDirectory fixture) =>
                 Verified(fixture) ? WorldFixture.Copy(fixture.Source, output, fixture.Sha256) : WorldFixture.CopyAsFound(fixture.Source, output);
-            if (hosted != null) await hosted.LockAndPrepareRuntimeAsync(report, plan, pinned, cancellation.Token).ConfigureAwait(false);
-            else report.Step(StepPhase.Setup, Verified(plan.Runtime) ? "copy and verify pinned runtime" : "copy unpinned runtime as found", () => { runtime = CopyOf(plan.Runtime); runtime.Preserve = true; });
+            await hosted.LockAndPrepareRuntimeAsync(report, plan, pinned, cancellation.Token).ConfigureAwait(false);
             report.Step(StepPhase.Setup, Verified(plan.World) ? "copy and verify pinned world" : "copy unpinned world as found", () => { world = CopyOf(plan.World); world.Preserve = true; });
-            if (hosted != null) await hosted.ShipWorldAsync(report, world!.DirectoryPath, output, cancellation.Token).ConfigureAwait(false);
-            string runtimeDirectory = hosted?.RuntimeDirectory ?? runtime!.DirectoryPath, worldDirectory = hosted?.WorldDirectory ?? world!.DirectoryPath;
+            await hosted.ShipWorldAsync(report, world!.DirectoryPath, output, cancellation.Token).ConfigureAwait(false);
+            string runtimeDirectory = hosted.RuntimeDirectory, worldDirectory = hosted.WorldDirectory;
             report.Provenance["runtime"] = runtimeDirectory; report.Provenance["world"] = world!.DirectoryPath;
-            if (hosted != null) report.Provenance["hostWorld"] = worldDirectory;
+            report.Provenance["hostWorld"] = worldDirectory;
             File.WriteAllText(Path.Combine(output, "input-hashes.json"), JsonSerializer.Serialize(
-                EnvironmentPinning.Stamp(new() { ["runtime"] = hosted?.RuntimeHashes ?? runtime!.SourceHashes, ["world"] = world.SourceHashes }, pinned), new JsonSerializerOptions { WriteIndented = true }));
-            if (hosted != null)
-            {
-                hosted.CheckRuntime(report, plan, pinned);
-                await hosted.CheckCrossplayAsync(report, plan, cancellation.Token).ConfigureAwait(false);
-            }
-            else
-            {
-                // Hashes do not cover file modes: a launch also requires the copy's Linux or macOS execute bit.
-                report.Step(StepPhase.Setup, "copied runtime has the plan's server executable", () =>
-                {
-                    plan.CheckExecutable(GameLaunch.DetectServer(runtime!.DirectoryPath));
-                    if (mode != "validate") GameLaunch.RequireServerExecutable(runtime.DirectoryPath);
-                });
-                // What the game cannot report in game: its build and the loader, pinned on disk before anything launches.
-                report.Step(StepPhase.Setup, pinned ? "copied runtime is the pinned game build, loader and patchers" : "record the unpinned runtime's game build, loader and patchers",
-                    () => plan.CheckRuntimePins(runtime!.DirectoryPath).Record(report.Provenance, "runtime"));
-                // Only this machine's own loader can say whether a Linux runtime's libparty.so loads here.
-                if (plan.Crossplay && platform == ServerPlatform.Linux && OperatingSystem.IsLinux())
-                    await report.StepAsync(StepPhase.Setup, "this machine can load crossplay's libraries", async () =>
-                        report.Provenance["crossplayLibraries"] = await CrossplayLibraries.RequireAsync(new LocalGameHost("this machine", HostShell.Bash), runtime!.DirectoryPath,
-                            TimeSpan.FromMinutes(1), cancellation.Token).ConfigureAwait(false) + " loads on this machine").ConfigureAwait(false);
-            }
+                EnvironmentPinning.Stamp(new() { ["runtime"] = hosted.RuntimeHashes, ["world"] = world.SourceHashes }, pinned), new JsonSerializerOptions { WriteIndented = true }));
+            hosted.CheckRuntime(report, plan, pinned);
+            await hosted.CheckCrossplayAsync(report, plan, cancellation.Token).ConfigureAwait(false);
             if (mode == "validate") report.Step(StepPhase.Setup, "prepared only; no game launched", () => { });
-            else await Launch(plan, runtimeDirectory, worldDirectory).ConfigureAwait(false);
+            else await Launch(plan, hosted, runtimeDirectory, worldDirectory).ConfigureAwait(false);
         }
         catch (Exception error)
         {
@@ -753,7 +723,7 @@ public static class PinnedServerRun
                     }
                     catch (Exception error) { Console.Error.WriteLine("Teardown: " + error.Message); definite = true; } // Recorded as its failed step.
             }
-            // One owner retires what the run leaves (#257): a hosted run's teardown retires its profile and the campaign's characters
+            // One owner retires what the run leaves (#257): the server run's teardown retires its profile and the campaign's characters
             // and installs under the locks it holds; a campaign whose server run was never created is retired here.
             var retirement = new RunRetirement(report, output);
             if (hosted != null)
@@ -768,15 +738,11 @@ public static class PinnedServerRun
                 var logs = game.Logs;
                 if (logs.Count != 0 && !report.ScanLogs(logs, launchedPlan.LogScan) && unknown == null) definite = true;
             }
-            // A copy that could not be removed is a definite (local) failure, so it comes before the outcome is decided.
-            if (runtime != null)
-                try { retirement.Local(runtime, stopped, launchedNothing: game == null); }
-                catch (Exception error) { Console.Error.WriteLine("Warning: runtime copy cleanup failed: " + error.Message); definite = true; } // Recorded as its failed step.
             unknownOutcome = !report.Passed && unknown != null && !definite;
             if (unknownOutcome) report.Provenance["outcome"] = "unknown: " + unknown;
             // The run lets go of this machine's copies before its end is journalled, so the end stays the run's last line: the
             // copies it keeps (their owner records go; see OwnedCopies) are journalled as kept or handed over first.
-            runtime?.Dispose(); world?.Dispose();
+            world?.Dispose();
             // The run's last word in every journal it wrote, on its hosts and this machine (RunFinish): how it ended and whether its
             // cleanup was proven, or that its cleanup was abandoned, which leaves the run for env recover.
             abandoned = cancellation.Abandoned;
@@ -805,36 +771,25 @@ public static class PinnedServerRun
             + (pinned ? "" : $" [{EnvironmentPinning.NotPinned}]"));
         return report.Passed ? 0 : unknownOutcome ? 3 : 1;
 
-        async Task Launch(TPlan plan, string runtimeDirectory, string worldDirectory)
+        async Task Launch(TPlan plan, HostedServerRun hostedRun, string runtimeDirectory, string worldDirectory)
         {
-            if (hosted != null) await hosted.OpenAsync(report, cancellation.Token).ConfigureAwait(false);
-            else
-            {
-                // Catch an occupied port without issuing even a read to an unrelated server.
-                report.Step(StepPhase.Setup, "CLI port is free", () =>
-                {
-                    var reservation = new TcpListener(IPAddress.Loopback, plan.Port);
-                    try { reservation.Start(); } finally { reservation.Stop(); }
-                });
-            }
+            await hostedRun.OpenAsync(report, cancellation.Token).ConfigureAwait(false);
             launchedPlan = plan;
             // The actor owns test access on every boot it starts, so a scenario's restart comes back with it too.
-            var hostedRun = hosted;
-            IReadOnlyList<string> campaignClients = hostedRun?.Profile.Clients.Keys.Order(StringComparer.Ordinal).ToList() ?? [];
+            IReadOnlyList<string> campaignClients = hostedRun.Profile.Clients.Keys.Order(StringComparer.Ordinal).ToList();
             game = new GameSession(report, output, plan.Pins.GetValueOrDefault("worlduid"),
-                token => options.SessionOverride is { } scripted ? new ServerActor(scripted(plan), runtimeDirectory, worldDirectory, hostedRun?.Host, plan, token)
-                    : new ServerActor(hostedRun ?? (IServerPlacement)new LocalServerPlacement(runtimeDirectory, worldDirectory, plan.Port),
-                        plan, output, options.Mod.SessionCapability, options.Mod.SessionTokenVariable, token),
+                token => options.SessionOverride is { } scripted ? new ServerActor(scripted(plan), runtimeDirectory, worldDirectory, hostedRun.Host, plan, token)
+                    : new ServerActor(hostedRun, plan, output, options.Mod.SessionCapability, options.Mod.SessionTokenVariable, token),
                 [], cancellation.Token)
             {
                 CampaignClients = campaignClients,
                 // A campaign's client starts on its assigned host; an attached one without leases, and any other, on this machine.
-                ResolveClient = (client, name) => hostedRun != null && campaignClients.Count != 0 && (client.Owned || hostedRun.Profile.SteamAccounts != null)
+                ResolveClient = (client, name) => campaignClients.Count != 0 && (client.Owned || hostedRun.Profile.SteamAccounts != null)
                     ? (name ?? (campaignClients.Count == 1 ? campaignClients[0]
                         : throw new ArgumentException($"The campaign declares clients {string.Join(", ", campaignClients)}; say which one opens.", nameof(name))),
                         hostedRun.ClientPlacement(report))
                     : game!.ThisMachine(client, name), // assigned before any client opens
-                FindClientHost = hostedRun == null ? null : hostedRun.ClientHost,
+                FindClientHost = hostedRun.ClientHost,
                 Mod = options.Mod, ServerPinsMod = !plan.Pinned || options.Mod.PinnedIn(plan.Pins),
                 DisposeOnFailedStart = false, // The finally disposes it, on the cleanup's own bounded token.
             };

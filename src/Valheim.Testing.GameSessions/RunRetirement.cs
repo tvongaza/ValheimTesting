@@ -7,7 +7,7 @@ namespace Valheim.Testing.GameSessions;
 
 /// <summary>
 /// The one owner of what a run leaves on disk once its processes have stopped (#257): the clients' disposable characters,
-/// then each actor's runtime copy, keeping what the run changed in it, on this machine or on a host. Each owned path is one
+/// then each actor's profile, keeping what the run changed in it, on this machine's host or another. Each owned path is one
 /// <see cref="StepPhase.Cleanup"/> step in the report; a failure fails that step and is returned or rethrown to the
 /// caller's own step, so the scenario's result stands. A copy whose server may still run stays, and so does every copy when
 /// <see cref="PinnedServerRun.KeepRuntimeVariable"/> is <c>1</c>; the report says where. A path already retired is not
@@ -45,51 +45,6 @@ internal sealed class RunRetirement(ScenarioReport? report, string output)
         report != null ? report.StepAsync(StepPhase.Cleanup, name, action) : action();
 
     private void Provenance(string value) { if (report != null) report.Provenance["runtimeCopy"] = value; }
-
-    /// <summary>
-    /// This machine's runtime copy. After a clean stop, keeps what the run wrote (<see cref="WorldFixture.Retire"/>) and removes
-    /// the rest, the pinned runtime's own files; with nothing launched (validate), removes it without a comparison. Throws
-    /// the step's failure.
-    /// </summary>
-    public void Local(WorldFixture runtime, bool stopped, bool launchedNothing)
-    {
-        if (!First(Key(null, runtime.DirectoryPath))) return;
-        Step("remove the runtime copy, keeping what the run changed", () =>
-        {
-            string Keep(string why)
-            {
-                _kept.Add(Key(null, runtime.DirectoryPath));
-                runtime.KeepReason = why; // journalled as kept when the run lets go of it, so env status lists it
-                string line = $"kept {runtime.DirectoryPath} ({DiskSpace.Format(DiskSpace.DirectoryBytes(runtime.DirectoryPath))}): {why}";
-                Provenance(line);
-                return line;
-            }
-            if (KeepRequested) { Console.Error.WriteLine(Keep(KeptOnRequest)); return; }
-            if (!stopped)
-            {
-                Console.Error.WriteLine("Warning: " + Keep("the owned server did not stop cleanly and may still use it; once no process does, remove it with " +
-                    $"valheim-test env teardown --run {RunJournal.ThisProcess.RunId}"));
-                return;
-            }
-            try
-            {
-                if (launchedNothing)
-                {
-                    long bytes = DiskSpace.DirectoryBytes(runtime.DirectoryPath);
-                    runtime.Preserve = false; runtime.Dispose();
-                    Provenance($"removed {runtime.DirectoryPath} ({DiskSpace.Format(bytes)}): nothing was launched");
-                    return;
-                }
-                var (perFile, total) = PinnedServerRun.RetainLimits(report?.Passed ?? false);
-                Provenance(runtime.Retire(Path.Combine(output, "runtime-changes"), perFile, total).ToString());
-            }
-            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
-            {
-                Provenance("cleanup failed: " + error.Message);
-                throw;
-            }
-        });
-    }
 
     /// <summary>
     /// A host's runtime copy (<paramref name="runtime"/>, listed as <paramref name="before"/> once it was ready). After a clean

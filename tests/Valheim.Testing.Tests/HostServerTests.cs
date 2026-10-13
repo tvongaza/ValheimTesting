@@ -252,7 +252,7 @@ public sealed class HostServerTests : IDisposable
         finally { Assert.Equal(HostServerStop.Stopped, await interactive.StopAsync(TimeSpan.FromSeconds(15))); }
     }
 
-    [Fact] public async Task WindowsHostCopiesAndRetiresOnlyThisRunsRuntime()
+    [Fact] public async Task WindowsHostRetiresOnlyThisRunsRuntime()
     {
         if (!OperatingSystem.IsWindows()) return;
         var host = new LocalGameHost("windows-copy", HostShell.Pwsh);
@@ -260,8 +260,8 @@ public sealed class HostServerTests : IDisposable
         string runtime = Path.Combine(run, "runtime"), keep = Path.Combine(run, "runtime-changes");
         Directory.CreateDirectory(install);
         File.WriteAllText(Path.Combine(install, "base.txt"), "source");
-        await HostInstall.CopyAsync(host, install, runtime, TimeSpan.FromSeconds(30));
-        Assert.Equal("source", File.ReadAllText(Path.Combine(runtime, "base.txt")));
+        Directory.CreateDirectory(runtime);
+        File.Copy(Path.Combine(install, "base.txt"), Path.Combine(runtime, "base.txt")); // the run's own runtime, beside the install
         File.WriteAllText(Path.Combine(runtime, "new.txt"), "evidence");
         var result = await host.RunAsync(HostedRunScripts.WindowsRetire, new Dictionary<string, string>
         {
@@ -596,26 +596,25 @@ public sealed class HostServerTests : IDisposable
         Assert.Contains("missing: BepInEx/core/BepInEx.dll", Assert.Throws<InvalidOperationException>(() => HostInstall.RequireSame(manifest, ListingOf(runtime), "runtime copy")).Message);
     }
 
-    [Fact] public async Task CopyAndPortRepliesAreRead()
+    // #730: the toolkit never copies a game install: every dedicated server and client runs from a profile of it. No copy helper
+    // or copy script is left for a run to reach (the one host write of an install's files is the profile stage's).
+    [Fact] public void NoInstallCopyHelperIsLeft()
+    {
+        var flags = System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Instance;
+        Assert.DoesNotContain(typeof(HostInstall).GetMethods(flags), method => method.Name.Contains("Copy", StringComparison.Ordinal));
+        Assert.DoesNotContain(typeof(HostInstallScripts).GetMembers(flags), member => member.Name.Contains("Copy", StringComparison.Ordinal));
+        Assert.DoesNotContain(typeof(ServerActor).GetMethods(flags), method => method.Name == "OnThisMachine");
+        Assert.Null(typeof(ServerActor).Assembly.GetType("Valheim.Testing.GameSessions.LocalServerPlacement"));
+    }
+
+    [Fact] public async Task PortRepliesAreRead()
     {
         var host = new QueueHost();
-        host.Replies.Enqueue(Reply("VT-COPY copied\n"));
-        await HostInstall.CopyAsync(host, "/opt/server", "/srv/runs/r/runtime", TimeSpan.FromSeconds(30));
-        Assert.Equal("/opt/server", host.Runs[0].Variables["source"]); Assert.Equal("/srv/runs/r/runtime", host.Runs[0].Variables["dest"]);
-        host.Replies.Enqueue(Reply("VT-COPY exists\n"));
-        await Assert.ThrowsAsync<InvalidOperationException>(() => HostInstall.CopyAsync(host, "/opt/server", "/srv/runs/r/runtime", TimeSpan.FromSeconds(30)));
-        host.Replies.Enqueue(Reply("VT-COPY missing\n"));
-        await Assert.ThrowsAsync<DirectoryNotFoundException>(() => HostInstall.CopyAsync(host, "/opt/none", "/srv/runs/r2/runtime", TimeSpan.FromSeconds(30)));
-        await Assert.ThrowsAsync<ArgumentException>(() => HostInstall.CopyAsync(host, "opt/server", "/srv/x", TimeSpan.FromSeconds(30)));
         host.Replies.Enqueue(Reply("VT-PORT free\n"));
         await HostInstall.RequirePortFreeAsync(host, 5577, TimeSpan.FromSeconds(30));
         Assert.Equal("5577", host.Runs[^1].Variables["port"]);
         host.Replies.Enqueue(Reply("VT-PORT busy\n"));
         await Assert.ThrowsAsync<InvalidOperationException>(() => HostInstall.RequirePortFreeAsync(host, 5577, TimeSpan.FromSeconds(30)));
-        var windows = new QueueHost(HostShell.Pwsh);
-        windows.Replies.Enqueue(Reply("VT-COPY copied\n"));
-        await HostInstall.CopyAsync(windows, @"C:\server", @"C:\runs\r\runtime", TimeSpan.FromSeconds(30));
-        Assert.Same(HostInstallScripts.PowerShellCopy, windows.Runs[0].Script);
     }
 
     [Fact] public void HostPathsJoinInTheHostsOwnStyle()
