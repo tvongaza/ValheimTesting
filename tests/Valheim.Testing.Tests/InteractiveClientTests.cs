@@ -607,7 +607,9 @@ public class InteractiveClientShellTests
             }
             var launch = GameLaunch.ForClientWithLoader(install, install, [], null, ClientPlatform.MacOS,
                 ClientArchitecture.Arm64, macDoorstop: "libdoorstop.dylib");
-            client = await InteractiveClient.StartAsync(host, launch, launchDirectory, Generous);
+            await using var standIn = await StandInClient.StartAsync(host, launch, launchDirectory, Generous,
+                nameof(CheckMacGuiAgentStartAndStop));
+            client = standIn.Process;
             Assert.True(client.Id > 0);
             Assert.True(File.Exists(Path.Combine(launchDirectory, "pid")));
             Assert.NotNull(await HostProcessProbe.CommandLineAsync(host, client.Id, client.StartIdentity, TimeSpan.FromSeconds(10)));
@@ -649,7 +651,9 @@ public class InteractiveClientShellTests
         var started = new List<Process>();
         try
         {
-            var refused = await Assert.ThrowsAsync<InteractiveSessionException>(() => InteractiveClient.StartAsync(host, launch, Path.Combine(root.Path, "launch-1"), Generous));
+            var refused = await Assert.ThrowsAsync<InteractiveSessionException>(() => StandInClient.StartAsync(host, launch,
+                Path.Combine(root.Path, "launch-1"), Generous,
+                nameof(AWindowsClientStartsThroughATaskInTheRunnersDesktopSession)));
             // Without Steam anywhere, a desktop session shows as the missing Steam client, and no session as itself.
             bool desktop = refused.Reason == InteractiveRefusal.NoSteam;
             int session = Process.GetCurrentProcess().SessionId;
@@ -665,7 +669,9 @@ public class InteractiveClientShellTests
             var secretsBefore = Directory.GetFiles(Path.GetTempPath(), "vt-secrets-*").ToHashSet();
 
             string launchDirectory = Path.Combine(root.Path, "launch-2");
-            var client = await InteractiveClient.StartAsync(host, launch, launchDirectory, Generous);
+            await using var standIn = await StandInClient.StartAsync(host, launch, launchDirectory, Generous,
+                nameof(AWindowsClientStartsThroughATaskInTheRunnersDesktopSession));
+            var client = standIn.Process;
             using (var process = Process.GetProcessById(client.Id))
             {
                 Assert.Equal("valheim", process.ProcessName, ignoreCase: true);

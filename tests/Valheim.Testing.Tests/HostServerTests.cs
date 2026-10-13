@@ -206,7 +206,9 @@ public sealed class HostServerTests : IDisposable
 
         // 1. This process's own logon (S4U when elevated, else interactive), through StartAsync.
         string boot = Path.Combine(root, "boot 1");
-        var process = await HostServer.StartAsync(host, launch, boot, TimeSpan.FromSeconds(75));
+        await using var server = await StandInServer.StartAsync(host, launch, boot, TimeSpan.FromSeconds(75),
+            nameof(WindowsServerTaskStartsTheLauncherFromAPathWithSpacesAndStopsByIdentity));
+        var process = server.Process;
         try
         {
             Assert.Matches("^(s4u|interactive)$", process.TaskLogon);
@@ -240,8 +242,10 @@ public sealed class HostServerTests : IDisposable
             Assert.True(session != 0, $"This runner was expected to run in a desktop session (it runs in session {session}).");
         if (session == 0) return;
         string interactiveBoot = Path.Combine(root, "boot 2");
-        var interactive = await HostServer.StartAsync(host, launch, interactiveBoot, TimeSpan.FromSeconds(75), logs: null, evidence: null,
-            new Dictionary<string, string> { ["elevated"] = "false", ["session"] = session.ToString(CultureInfo.InvariantCulture), ["desktops"] = "1" }, default);
+        await using var interactiveServer = await StandInServer.StartAsync(host, launch, interactiveBoot, TimeSpan.FromSeconds(75),
+            nameof(WindowsServerTaskStartsTheLauncherFromAPathWithSpacesAndStopsByIdentity), logs: null, evidence: null,
+            logonSeams: new Dictionary<string, string> { ["elevated"] = "false", ["session"] = session.ToString(CultureInfo.InvariantCulture), ["desktops"] = "1" });
+        var interactive = interactiveServer.Process;
         try
         {
             Assert.Equal("interactive", interactive.TaskLogon);
