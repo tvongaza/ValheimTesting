@@ -631,8 +631,9 @@ public static class PinnedServerRun
             {
                 // A standalone run has one actor to place: its dedicated server, on the inventory's first environment that fits,
                 // else on this machine from the install the plan's runtime names (#730). Clients are a campaign's.
+                // This machine's run keeps all it writes (the profile until teardown, the world, the boot logs) in its output.
                 var inventory = inventoryPath != null ? EnvironmentInventory.Read(inventoryPath) : EnvironmentInventory.ThisMachineServer(
-                    Path.IsPathRooted(plan.Runtime.Source) ? plan.Runtime.Source : Path.GetFullPath(plan.Runtime.Source), plan.Port, HostedServerRun.GamePort(plan) ?? 0);
+                    plan.Runtime.Source, output, plan.Port, HostedServerRun.GamePort(plan) ?? 2456); // the game's own port when the plan names none
                 var (placed, assignment, loaderPackage) = inventory.PlaceServer(plan);
                 serverLoaderPackage = loaderPackage;
                 if (inventory.Detected.Count != 0) report.Provenance["inventoryDetected"] = string.Join("; ", inventory.Detected);

@@ -108,16 +108,18 @@ public sealed class PinnedServerRunTests : IDisposable
         Assert.Equal(0, await RunHere(["validate", plan, Output], Options()));
         var result = Result();
         Assert.True(result.GetProperty("Passed").GetBoolean());
-        Assert.Equal(new[] { "enough free disk space for the copies", "take the server host's lock",
+        // A Windows host first shows it can start a server task.
+        string[] task = LocalServerMachine.Windows ? ["the server host can start a server task"] : [];
+        Assert.Equal([ "enough free disk space for the copies", .. task, "take the server host's lock",
                 "check the server host's install against the pinned runtime and stage its profile", "copy and verify pinned world",
                 "ship and verify the world copy on the server host", "server runtime has the plan's server executable",
                 "server runtime is the pinned game build, loader and patchers", "prepared only; no game launched",
-                "remove the server host's runtime copy, keeping what the run changed", "release the server host's lock" },
+                "remove the server host's runtime copy, keeping what the run changed", "release the server host's lock" ],
             result.GetProperty("Steps").EnumerateArray().Select(s => s.GetProperty("Name").GetString()));
         // Validate prepares and cleans up; it runs no scenario, so the scenario state is not reported as passed.
         Assert.Equal((true, true, false, true), (result.GetProperty("PreflightPassed").GetBoolean(), result.GetProperty("RuntimeReady").GetBoolean(),
             result.GetProperty("ScenarioPassed").GetBoolean(), result.GetProperty("CleanupVerified").GetBoolean()));
-        Assert.Equal(new[] { "Preflight", "Setup", "Setup", "Setup", "Setup", "Setup", "Setup", "Setup", "Cleanup", "Cleanup" },
+        Assert.Equal([ "Preflight", .. task.Select(_ => "Setup"), "Setup", "Setup", "Setup", "Setup", "Setup", "Setup", "Setup", "Cleanup", "Cleanup" ],
             result.GetProperty("Steps").EnumerateArray().Select(s => s.GetProperty("Phase").GetString()));
         var provenance = result.GetProperty("Provenance");
         Assert.Equal(("this machine", EnvironmentInventory.LocalHost, EnvironmentInventory.LocalHost + ":" + LocalServerMachine.Install),

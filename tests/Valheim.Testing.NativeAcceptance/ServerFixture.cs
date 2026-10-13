@@ -22,13 +22,13 @@ namespace Valheim.Testing.NativeAcceptance;
 /// <item>Reads the world's uid (<c>cli_world</c>) and picks the sites from the world generator's heights, read through
 /// ValheimCLI (<c>valheim.world/terrain-grid</c>) and never from the mod: the dry site at least <see cref="Margin"/> above
 /// the rule's 31.5 m threshold, the wet one at least as far below it, each the closest such sample to the world's centre.</item>
-/// <item>Confirms a save; the runner stops only that server and fetches the world (<c>run/host-world</c>). Writes <c>plan.json</c>:
+/// <item>Confirms a save; the runner stops only that server and fetches the world (<c>run/host-world</c>), copied to <c>world/</c>. Writes <c>plan.json</c>:
 /// the runtime and the new world pinned by hash, the world uid, the plugins and the sites. <c>run plan.json
 /// &lt;new-output-directory&gt;</c> then checks it like any plan.</item>
 /// </list>
 /// The runtime's ValheimCLI must listen on <see cref="CliPort"/> (<c>[Server] Port</c> in its configuration). The output
-/// holds <c>result.json</c>, <c>junit.xml</c>, the runner's evidence (<c>run/</c>: the boot's logs and recorded commands, the
-/// world) and the plan. The plan holds the server's generated throwaway password: publish the reports and logs, not the plan or the world.
+/// holds <c>result.json</c>, <c>junit.xml</c>, the runner's evidence (<c>run/</c>: the boot's logs and recorded commands), the
+/// world and the plan. The plan holds the server's generated throwaway password: publish the reports and logs, not the plan or the world.
 /// </summary>
 public static class ServerFixture
 {
@@ -67,6 +67,10 @@ public static class ServerFixture
             if (IsInside(output, runtime)) throw new ArgumentException("The output must be outside the runtime.");
             var platform = GameLaunch.DetectServer(runtime);
             ServerRunPlan.CheckLaunchHost(platform, GameLaunch.LocalServerPlatform);
+            // A macOS server's run places a world fixture in its default worlds (the server ignores -savedir for its lists), so
+            // it cannot start on a world the game is still to create.
+            if (platform == ServerPlatform.MacOS)
+                throw new ArgumentException("prepare-server creates a new world on a Windows or Linux dedicated server; a macOS server runs only an existing world fixture.");
             report.Provenance["serverPlatform"] = platform.ToString();
             report.Provenance["steamBuildId"] = SteamBuildId(runtime);
             Directory.CreateDirectory(output); ownOutput = true;
@@ -126,12 +130,20 @@ public static class ServerFixture
             });
             report.Provenance["worldUid"] = facts.Uid; report.Provenance["worldSeed"] = facts.Seed;
             report.Provenance["drySite"] = Describe(sites.Dry); report.Provenance["wetSite"] = Describe(sites.Wet);
-            // The world the game created and saved, fetched from the server's run directory once it stopped.
-            string world = Path.Combine(run, "host-world");
+            // The world the game created and saved, fetched from the server's run directory once it stopped: the plan's fixture is
+            // a copy of it without the shipment's own SOURCE.txt, which a later run's ship writes again.
+            string fetched = Path.Combine(run, "host-world"), world = Path.Combine(output, "world");
             string planPath = Path.Combine(output, "plan.json");
             report.Step("write and validate the plan", () =>
             {
-                if (!Directory.Exists(Path.Combine(world, "worlds_local"))) throw new DirectoryNotFoundException($"The preparation run fetched no saved world into {world}.");
+                if (!Directory.Exists(Path.Combine(fetched, "worlds_local"))) throw new DirectoryNotFoundException($"The preparation run fetched no saved world into {fetched}.");
+                foreach (string file in Directory.EnumerateFiles(fetched, "*", SearchOption.AllDirectories))
+                {
+                    string relative = Path.GetRelativePath(fetched, file);
+                    if (relative == "SOURCE.txt") continue;
+                    Directory.CreateDirectory(Path.GetDirectoryName(Path.Combine(world, relative))!);
+                    File.Copy(file, Path.Combine(world, relative));
+                }
                 WritePlan(planPath, runtime, runtimeHashes, world, platform, arguments, pins, facts.Uid, sites.Dry, sites.Wet);
                 LifecyclePlan.ReadValidated(planPath);
             });

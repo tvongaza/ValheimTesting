@@ -67,7 +67,10 @@ public sealed class CrossplayPlanTests : IDisposable
             string runtime = machine.InstallDirectory, world = Path.Combine(root, "world");
             Directory.CreateDirectory(world);
             File.WriteAllText(Path.Combine(world, "Test.db"), "world");
-            string party = Path.Combine(runtime, "valheim_server_Data", "Plugins", "libparty.so");
+            // The game's PlayFab library: Party.dll on Windows, libparty.so on Linux, which the host's ldd checks.
+            string party = LocalServerMachine.Windows ? Path.Combine(runtime, "valheim_server_Data", "Plugins", "x86_64", "Party.dll")
+                : Path.Combine(runtime, "valheim_server_Data", "Plugins", "libparty.so");
+            string partyStep = LocalServerMachine.Windows ? "the Windows runtime has crossplay's native library" : "the server host can load crossplay's libraries";
             Directory.CreateDirectory(Path.GetDirectoryName(party)!);
             File.WriteAllText(party, "the game's PlayFab library");
             string Plan(string name, bool crossplay, params string[] extra)
@@ -97,15 +100,16 @@ public sealed class CrossplayPlanTests : IDisposable
                 Assert.Equal(0, await PinnedServerRun.MainAsync(["validate", Plan(crossplay + ".json", crossplay, "-port", "2466"), output], options));
                 var result = JsonDocument.Parse(File.ReadAllText(Path.Combine(output, "result.json"))).RootElement;
                 Assert.Equal(crossplay ? "true" : "false", result.GetProperty("Provenance").GetProperty("crossplay").GetString());
-                Assert.Equal(crossplay, result.GetProperty("Steps").EnumerateArray().Any(step => step.GetProperty("Name").GetString() == "the server host can load crossplay's libraries"));
+                Assert.Equal(crossplay, result.GetProperty("Steps").EnumerateArray().Any(step => step.GetProperty("Name").GetString() == partyStep));
             }
-            // A library libparty.so needs is missing on the host: a crossplay runtime is refused before anything launches.
+            // A library libparty.so needs is missing on the host, or Windows' Party.dll is: a crossplay runtime is refused before anything launches.
             machine.Host.PartyReply = "VT-LDD \tlibpulse.so.0 => not found\nVT-PARTY checked valheim_server_Data/Plugins/libparty.so 1\n";
+            if (LocalServerMachine.Windows) File.Delete(party);
             string missing = Path.Combine(root, "out-missing");
             Assert.Equal(1, await PinnedServerRun.MainAsync(["validate", Plan("missing.json", true, "-port", "2466"), missing], options));
             var step = JsonDocument.Parse(File.ReadAllText(Path.Combine(missing, "result.json"))).RootElement.GetProperty("Steps").EnumerateArray()
-                .Single(step => step.GetProperty("Name").GetString() == "the server host can load crossplay's libraries");
-            Assert.Contains("libpulse.so.0 (package libpulse0) is missing", step.GetProperty("Error").GetString());
+                .Single(step => step.GetProperty("Name").GetString() == partyStep);
+            Assert.Contains(LocalServerMachine.Windows ? "has no valheim_server_Data/Plugins/x86_64/Party.dll" : "libpulse.so.0 (package libpulse0) is missing", step.GetProperty("Error").GetString());
         }
         finally { Directory.Delete(root, true); }
     }

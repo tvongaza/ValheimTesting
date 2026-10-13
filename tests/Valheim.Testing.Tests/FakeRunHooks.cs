@@ -75,29 +75,40 @@ internal static class TestCliSet
 }
 
 /// <summary>
-/// This machine as a standalone run without <c>--inventory</c> places its server on it (#730), for no-game tests on any OS: a
-/// Linux machine (<see cref="FakeMachine"/>) whose <c>local</c> host is a <see cref="FakeServerHost"/> over a mirror, holding a
-/// modded Linux dedicated-server install at <see cref="Install"/>. A plan names <see cref="Install"/> as its runtime source; the run
-/// stages its server's profile on that host. Run the runner inside <see cref="Use"/>.
+/// This machine as a standalone run without <c>--inventory</c> places its server on it (#730), for no-game tests: a machine of the
+/// runner's own kind (<see cref="FakeMachine"/>: Windows on a Windows runner, else Linux, so a plan's paths are full paths here)
+/// whose <c>local</c> host is a <see cref="FakeServerHost"/> over a mirror, holding a modded dedicated-server install of that
+/// platform at <see cref="Install"/>. A plan names <see cref="Install"/> as its runtime source; the run stages its server's
+/// profile on that host. Run the runner inside <see cref="Use"/>.
 /// </summary>
 internal sealed class LocalServerMachine
 {
-    public const string Install = "/opt/valheim/server";
+    public static readonly bool Windows = OperatingSystem.IsWindows();
+    public static readonly string Install = Windows ? @"C:\valheim\server" : "/opt/valheim/server";
     public FakeServerHost Host { get; }
     /// <summary>The install's folder in the mirror, where a test writes and hashes its files.</summary>
     public string InstallDirectory => Host.Local(Install);
 
     public LocalServerMachine(string mirror, FakeOwnedServer? server = null)
     {
-        Host = new FakeServerHost(EnvironmentInventory.LocalHost, mirror, server);
+        Host = new FakeServerHost(EnvironmentInventory.LocalHost, mirror, server, windows: Windows);
         Directory.CreateDirectory(InstallDirectory);
         FakeInstalls.Server(InstallDirectory);
-        FakeInstalls.LinuxLoader(InstallDirectory);
-        File.WriteAllText(Path.Combine(InstallDirectory, GameLaunch.ServerLinuxExecutable), "server");
+        if (Windows)
+        {
+            File.WriteAllText(Path.Combine(InstallDirectory, GameLaunch.ServerWindowsExecutable), "server");
+            File.WriteAllText(Path.Combine(InstallDirectory, "winhttp.dll"), "MZ target_assembly");
+            File.WriteAllText(Path.Combine(InstallDirectory, "doorstop_config.ini"), DoorstopMixPathsTests.Doorstop4Config);
+        }
+        else
+        {
+            File.WriteAllText(Path.Combine(InstallDirectory, GameLaunch.ServerLinuxExecutable), "server");
+            FakeInstalls.LinuxLoader(InstallDirectory);
+        }
     }
 
-    /// <summary>This machine, for the runner's flow: a Linux machine, so the install's Linux server fits its local host.</summary>
-    public static IDisposable Use() => EnvironmentInventory.UseMachine(new FakeMachine("linux"));
+    /// <summary>This machine, for the runner's flow: of the install's platform, so its server fits the local host.</summary>
+    public static IDisposable Use() => EnvironmentInventory.UseMachine(new FakeMachine(Windows ? "windows" : "linux"));
 
     /// <summary>The hooks that make <see cref="Host"/> this machine's host.</summary>
     public FakeRunHooks Hooks(RunCancellation? cancellation = null) => new() { Host = _ => Host, StateWaits = false, Cancellation = cancellation };

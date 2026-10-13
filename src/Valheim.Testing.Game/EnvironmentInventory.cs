@@ -123,14 +123,15 @@ public sealed class EnvironmentInventory
 
     /// <summary>
     /// This machine with one server environment, <c>local-server</c>, on <paramref name="install"/>: where a standalone run without
-    /// an inventory file places its dedicated server. Its host, lock and runtime folder default as <see cref="Read(string?)"/>
-    /// detects them; its ValheimCLI port is <paramref name="cliPort"/>, and its game port <paramref name="gamePort"/> (0: the default).
+    /// an inventory file places its dedicated server. Its host and lock default as <see cref="Read(string?)"/> detects them; its
+    /// runtime folder is <paramref name="runtime"/> (the run's output, so nothing of the run stays outside it), its ValheimCLI port
+    /// <paramref name="cliPort"/> and its game port <paramref name="gamePort"/>.
     /// </summary>
-    internal static EnvironmentInventory ThisMachineServer(string install, int cliPort, int gamePort)
+    internal static EnvironmentInventory ThisMachineServer(string install, string runtime, int cliPort, int gamePort)
     {
         var inventory = new EnvironmentInventory
         {
-            Environments = [new EnvironmentRecipe { Name = LocalServer, Roles = ["server"], Install = install, CliPort = cliPort, GamePort = gamePort }],
+            Environments = [new EnvironmentRecipe { Name = LocalServer, Roles = ["server"], Install = install, Runtime = runtime, CliPort = cliPort, GamePort = gamePort }],
         };
         inventory.AddThisMachine(ThisMachine, fromFile: true); // only the one environment listed, on this machine's host
         inventory.Validate(Environment.CurrentDirectory);
