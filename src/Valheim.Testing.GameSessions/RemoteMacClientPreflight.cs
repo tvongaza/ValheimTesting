@@ -1,4 +1,3 @@
-using System.Reflection;
 using Valheim.Testing.Game;
 
 namespace Valheim.Testing.GameSessions;
@@ -19,22 +18,22 @@ internal static class RemoteMacClientPreflight
         MacGuiSession.RequireRemoteEvidence(user, console, gui == "ready", result.Stdout);
     }
 
-    // A read-only check on the source game before any profile is staged. A Mac client always needs an
-    // explicit slice; even a universal binary must not silently fall back to Rosetta.
+    // A read-only check on the source game before any profile is staged: the host reads the slices (lipo), the one Mac
+    // game-slice decision (GameLaunch.RequireMacGameSlice) decides. Even a universal binary never falls back to Rosetta.
     internal static async Task RequireGameAsync(IGameHost host, string gameRoot, ClientArchitecture architecture,
         TimeSpan timeout, CancellationToken cancellation)
     {
-        var result = (await host.RunAsync(GameSlice, new Dictionary<string, string>
-        {
-            ["game"] = HostPath.Join(gameRoot, "Valheim.app/Contents/MacOS/Valheim"),
-        }, timeout, cancellation).ConfigureAwait(false)).EnsureSuccess($"Checking the Mac client slice on {host.Name}");
+        string game = HostPath.Join(gameRoot, "Valheim.app/Contents/MacOS/Valheim");
+        var result = (await host.RunAsync(GameSlice, new Dictionary<string, string> { ["game"] = game },
+            timeout, cancellation).ConfigureAwait(false)).EnsureSuccess($"Checking the Mac client slice on {host.Name}");
         string? slices = InteractiveClient.Line(result.Stdout, "VT-MAC-GAME ");
         if (slices == null) throw new HostOperationException($"The Mac client slice check on {host.Name} gave no verdict", result);
-        string wanted = architecture == ClientArchitecture.Arm64 ? "arm64" : "x86_64";
-        if (!(" " + slices + " ").Contains(" " + wanted + " ", StringComparison.Ordinal))
-            throw new InvalidDataException($"The Mac client on {host.Name} has no {wanted} slice (found: {slices}).");
+        if (slices == "missing") throw new FileNotFoundException($"The Mac client on {host.Name} has no executable: {game}");
+        GameLaunch.RequireMacGameSlice(GameLaunch.MacSlices(slices), architecture, $"{game} on {host.Name}");
     }
 
+    // The host lists its Doorstop libraries' slices (lipo); the one Doorstop selector (GameLaunch.SelectMacDoorstop) chooses,
+    // and an arm64 launch's core is read from the host for the one native-core rule. Returns the library, relative to the loader.
     internal static async Task<string> SelectLoaderAsync(IGameHost host, string loaderRoot, ClientArchitecture architecture,
         TimeSpan timeout, CancellationToken cancellation)
     {
@@ -42,51 +41,37 @@ internal static class RemoteMacClientPreflight
             timeout, cancellation).ConfigureAwait(false)).EnsureSuccess($"Checking the Mac client loader on {host.Name}");
         string? available = InteractiveClient.Line(result.Stdout, "VT-MAC-DOORSTOPS ");
         if (available == null) throw new HostOperationException($"The Mac loader check on {host.Name} gave no verdict", result);
-        string? choice = Select(available.Split(';', StringSplitOptions.RemoveEmptyEntries).Select(entry => entry.Split('|', 2)), architecture);
-        if (choice == null) throw new InvalidDataException($"The Mac client loader on {host.Name} has no {architecture} Doorstop library ({available}).");
+        var present = available.Split(';', StringSplitOptions.RemoveEmptyEntries).Select(entry => entry.Split('|', 2))
+            .Where(entry => entry.Length == 2).Select(entry => (entry[0], GameLaunch.MacSlices(entry[1]))).ToList();
+        string choice = GameLaunch.SelectMacDoorstop(present, architecture, $"Mac client loader on {host.Name}");
         if (architecture == ClientArchitecture.Arm64)
         {
-            byte[]? core = await HostClientPreflight.Read(host, HostPath.Join(loaderRoot, "BepInEx/core/MonoMod.RuntimeDetour.dll"),
+            byte[]? core = await HostClientPreflight.Read(host, HostPath.Join(loaderRoot, GameLaunch.MacNativeDetour),
                 timeout, cancellation).ConfigureAwait(false);
-            RequireNativeCore(core);
+            if (GameLaunch.MacNativeCoreProblem(core != null, core == null ? null : Version(core)) is { } problem)
+                throw new InvalidOperationException(problem);
         }
         return choice;
     }
 
+    // A reviewed loader package on this machine, before it is staged to the host: the same selector and core rule, over the
+    // package's own Doorstop files.
     internal static string SelectPackage(BepInExLoaderPackage package, ClientArchitecture architecture)
     {
         package.RequireFor(ClientPlatform.MacOS, "remote Mac client loader package");
-        string? choice = GameLaunch.MacDoorstopFiles.FirstOrDefault(relative =>
-            package.Files.ContainsKey(relative) && GameLaunch.MachOArchitectures(Path.Combine(package.Root,
-                relative.Replace('/', Path.DirectorySeparatorChar))).Contains(architecture));
-        if (choice == null) throw new InvalidDataException($"The remote Mac client loader package has no {architecture} Doorstop library.");
+        var present = GameLaunch.MacDoorstopFiles.Where(package.Files.ContainsKey).Select(relative =>
+            (relative, GameLaunch.MachOArchitectures(Path.Combine(package.Root, relative.Replace('/', Path.DirectorySeparatorChar))))).ToList();
+        string choice = GameLaunch.SelectMacDoorstop(present, architecture, "remote Mac client loader package");
         if (architecture == ClientArchitecture.Arm64 && GameLaunch.MacNativeCoreProblem(package.Root) is { } problem)
-            throw new InvalidDataException(problem);
+            throw new InvalidOperationException(problem);
         return choice;
     }
 
-    private static string? Select(IEnumerable<string[]> entries, ClientArchitecture architecture)
+    // The assembly version of a core fetched from a host, read from a temporary copy without loading it.
+    private static Version? Version(byte[] core)
     {
-        string wanted = architecture == ClientArchitecture.Arm64 ? "arm64" : "x86_64";
-        foreach (string relative in GameLaunch.MacDoorstopFiles)
-            if (entries.Any(entry => entry.Length == 2 && entry[0] == relative &&
-                (" " + entry[1] + " ").Contains(" " + wanted + " ", StringComparison.Ordinal))) return relative;
-        return null;
-    }
-
-    private static void RequireNativeCore(byte[]? core)
-    {
-        if (core == null) throw new InvalidDataException("A native arm64 Mac client needs BepInEx's MonoMod.RuntimeDetour.dll (version 25 or newer).");
         string temporary = Path.Combine(Path.GetTempPath(), "vt-mac-core-" + Guid.NewGuid().ToString("N") + ".dll");
-        try
-        {
-            File.WriteAllBytes(temporary, core);
-            Version? version;
-            try { version = AssemblyName.GetAssemblyName(temporary).Version; }
-            catch (Exception error) when (error is BadImageFormatException or FileLoadException) { version = null; }
-            if (version is { Major: >= 25 }) return;
-            throw new InvalidDataException($"A native arm64 Mac client needs MonoMod.RuntimeDetour.dll version 25 or newer (found {version?.ToString() ?? "unreadable"}).");
-        }
+        try { File.WriteAllBytes(temporary, core); return GameLaunch.AssemblyVersion(temporary); }
         finally { File.Delete(temporary); }
     }
 

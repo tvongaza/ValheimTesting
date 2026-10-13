@@ -323,7 +323,7 @@ public class ClientLaunchTests
     {
         using var install = Install.Mac(universalDoorstop: true);
         var missing = Assert.Throws<InvalidOperationException>(() => GameLaunch.LocalClient(install.Root, [], null, ClientArchitecture.Arm64, true, ClientPlatform.MacOS).ToStartInfo());
-        Assert.Contains("has no " + Path.Combine("BepInEx", "core", "MonoMod.RuntimeDetour.dll"), missing.Message);
+        Assert.Contains("has no BepInEx/core/MonoMod.RuntimeDetour.dll", missing.Message); // Named with /, as a Mac names it, on every OS.
         install.Add("BepInEx/core/MonoMod.RuntimeDetour.dll", "fake");
         var unreadable = Assert.Throws<InvalidOperationException>(() => GameLaunch.LocalClient(install.Root, [], null, ClientArchitecture.Arm64, true, ClientPlatform.MacOS).ToStartInfo());
         Assert.Contains("MonoMod.RuntimeDetour.dll is not a .NET assembly", unreadable.Message);
