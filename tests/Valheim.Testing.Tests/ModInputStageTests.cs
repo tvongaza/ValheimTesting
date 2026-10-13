@@ -126,27 +126,39 @@ public sealed class ModInputStageTests : IDisposable
         {
             var options = new Dictionary<string, string>
             {
-                ["--server"] = _rig.Game, ["--project"] = project, ["--output"] = output,
+                ["--server"] = _rig.Game, ["--output"] = output,
                 ["--cli-manifest"] = _rig.CliManifest(save: true, full: true), ["--cli-files"] = Path.Combine(_rig.Root, "cli"),
             };
             foreach (var (key, value) in more) options[key] = value;
-            return new(ModInputStage.Route.Dedicated, output, options, new HashSet<string> { "--server-only" }, [], [], [], []);
+            // With no --project the mod is a given DLL: the rig's, for build inputs to check, else one that does not exist.
+            var mods = options.ContainsKey("--project") ? [] : new List<string>
+                { options.ContainsKey("--build-inputs") ? _rig.Parent : Path.Combine(_rig.Root, "missing", "Mod.dll") };
+            return new(ModInputStage.Route.Dedicated, output, options, new HashSet<string> { "--server-only" }, mods, [], [], []);
         }
 
         string refused = Path.Combine(_rig.Root, "host-refused");
-        var failure = await Assert.ThrowsAsync<InvalidOperationException>(() => ModInputStage.RunAsync(Request(refused), CancellationToken.None));
+        var failure = await Assert.ThrowsAsync<InvalidOperationException>(() => ModInputStage.RunAsync(Request(refused, ("--project", project)), CancellationToken.None));
         Assert.Contains("another run holds it", failure.Message);
         Assert.Equal(1, probes);
         Assert.False(Path.Exists(refused)); // no build, lock or record was written
 
+        // Each input error is refused without a host probe: not a Mac server (or, on a Mac, no such package), a bake
+        // target inside the server install, a missing mod, and build inputs that do not exist.
         string steam = Path.Combine(_rig.Root, "steam-runtime");
-        // Not a Mac server, or (on a Mac) no such package: refused either way.
-        await Assert.ThrowsAnyAsync<IOException>(() => ModInputStage.RunAsync(
-            Request(Path.Combine(_rig.Root, "steam-refused"), ("--steam-runtime-package", steam)), CancellationToken.None));
-        string bake = Path.Combine(_rig.Game, "baked");
-        await Assert.ThrowsAsync<IOException>(() => ModInputStage.RunAsync(
-            Request(Path.Combine(_rig.Root, "bake-refused"), ("--bake-fixture", bake)), CancellationToken.None));
-        Assert.Equal(1, probes); // neither input error waited for a host probe
+        foreach (var (name, extra) in new (string, (string, string)[])[]
+        {
+            ("steam-refused", [("--project", project), ("--steam-runtime-package", steam)]),
+            ("bake-refused", [("--project", project), ("--bake-fixture", Path.Combine(_rig.Game, "baked"))]),
+            ("mod-refused", []),
+            ("build-inputs-refused", [("--build-inputs", Path.Combine(_rig.Root, "missing", "build-inputs.json"))]),
+        })
+        {
+            string output = Path.Combine(_rig.Root, name);
+            var error = await Assert.ThrowsAnyAsync<Exception>(() => ModInputStage.RunAsync(Request(output, extra), CancellationToken.None));
+            Assert.IsNotType<InvalidOperationException>(error); // not the host refusal
+            Assert.False(Path.Exists(output), name);
+        }
+        Assert.Equal(1, probes); // no input error waited for a host probe
     }
 
     // Build takes a role's install, environment and loader with the same options as the command that runs that role.
