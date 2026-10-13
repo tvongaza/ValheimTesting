@@ -58,7 +58,7 @@ internal static class HostServerChecks
             await host.ShipFilesAsync(source.Path, profile, Generous);
             var before = await HostInstall.ListAsync(host, install, Generous);
             var launch = GameLaunch.ForServerWithLoader(install, profile, ["-nographics"], null, ServerPlatform.MacOS);
-            var process = await HostServer.StartAsync(host, launch, boot, Generous, logs: [], logRoot: profile,
+            var process = await HostServer.StartAsync(host, launch, boot, Generous, logs: [],
                 evidence: null, logonSeams: null, cancellation: CancellationToken.None);
             try
             {
@@ -74,7 +74,7 @@ internal static class HostServerChecks
                     new Dictionary<string, string> { ["boot"] = boot }, Generous)).Stdout);
             }
             finally { if (!process.HasExited) await process.StopAsync(TimeSpan.FromSeconds(5)); }
-            var killed = await HostServer.StartAsync(host, launch, root + "/killed", Generous, logs: [], logRoot: profile,
+            var killed = await HostServer.StartAsync(host, launch, root + "/killed", Generous, logs: [],
                 evidence: null, logonSeams: null, cancellation: CancellationToken.None);
             try
             {
@@ -124,16 +124,18 @@ internal static class HostServerChecks
             var before = await HostInstall.ListAsync(host, install, Generous);
             var launch = GameLaunch.ForServerWithLoader(install, profile, ["-batchmode"], null, ServerPlatform.Linux);
             using var evidence = new TempDirectory();
-            var process = await HostServer.StartAsync(host, launch, boot, Generous, logs: [], evidence: Path.Combine(evidence.Path, "boot"),
-                logonSeams: null, cancellation: CancellationToken.None, logRoot: profile);
+            var process = await HostServer.StartAsync(host, launch, boot, Generous,
+                logs: [HostedServerRun.BepInExLog, HostedServerRun.UnityLog], evidence: Path.Combine(evidence.Path, "boot"),
+                logonSeams: null, cancellation: CancellationToken.None);
             try
             {
-                (await host.WaitForLogAsync(boot + "/logs/stats_log.txt", 0,
+                (await host.WaitForLogAsync(profile + "/logs/stats_log.txt", 0,
                     new System.Text.RegularExpressions.Regex("owned runtime output"), null, Generous)).EnsureMatched();
             }
             finally { await process.StopAsync(TimeSpan.FromSeconds(15)); }
             HostInstall.RequireSame(before.Files, await HostInstall.ListAsync(host, install, Generous), "source install after profile boot");
-            Assert.Contains("owned runtime output", File.ReadAllText(Path.Combine(evidence.Path, "boot", "logs", "stats_log.txt")));
+            (await host.WaitForLogAsync(profile + "/logs/stats_log.txt", 0,
+                new System.Text.RegularExpressions.Regex("owned runtime output"), null, Generous)).EnsureMatched();
         });
 
     public static Task AServerRunsFromAVerifiedCopyAndStopsByIdentity(IGameHost host, string parent) => GameHostChecks.WithRootAsync(host, parent, async root =>

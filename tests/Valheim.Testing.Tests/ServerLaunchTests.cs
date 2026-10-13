@@ -44,6 +44,8 @@ public class ServerLaunchTests
         var launch = GameLaunch.LocalServer(game.Root, [], null, LinuxLaunchHost, ClientArchitecture.X64, profile.Root);
         var start = launch.ToStartInfo();
         Assert.Equal(Path.Combine(game.Root, "valheim_server.x86_64"), start.FileName);
+        Assert.Equal(profile.Root, start.WorkingDirectory);
+        Assert.NotEqual(game.Root, start.WorkingDirectory);
         Assert.Equal(Path.Combine(profile.Root, "BepInEx", "core", "BepInEx.Preloader.dll"), start.Environment["DOORSTOP_TARGET_ASSEMBLY"]);
         Assert.StartsWith(Path.Combine(game.Root, "linux64") + ":" + Path.Combine(profile.Root, "doorstop_libs"), start.Environment["LD_LIBRARY_PATH"]);
         Assert.Contains(Path.Combine(profile.Root, "doorstop_libs", "libdoorstop_x64.so"), launch.RequiredFiles);
@@ -53,6 +55,7 @@ public class ServerLaunchTests
     {
         var launch = GameLaunch.ForServerWithLoader("/game/valheim", "/owned/profile", ["-batchmode"], null, ServerPlatform.Linux);
         Assert.Equal("/game/valheim/valheim_server.x86_64", launch.Executable);
+        Assert.Equal("/owned/profile", launch.WorkingDirectory);
         Assert.Equal("/owned/profile/BepInEx/core/BepInEx.Preloader.dll", launch.Environment["DOORSTOP_TARGET_ASSEMBLY"]);
         Assert.Equal("/game/valheim/linux64:/owned/profile/doorstop_libs", launch.Prepended["LD_LIBRARY_PATH"]);
         Assert.Contains("/owned/profile/doorstop_libs/libdoorstop_x64.so", launch.RequiredFiles);
@@ -66,13 +69,14 @@ public class ServerLaunchTests
         Assert.Contains("beside the server executable", error.Message);
     }
 
-    [Fact] public void MacServerProfileInsertsItsDoorstopWithoutChangingTheGameRoot()
+    [Fact] public void MacServerProfileStartsInItsOwnedDirectoryWithoutChangingTheGameRoot()
     {
         using var game = Runtime.Mac("game");
         using var profile = Runtime.Mac("profile");
         var launch = GameLaunch.LocalServer(game.Root, [], null, ServerHost.MacOS, GameLaunch.MacServerArchitecture, profile.Root);
         var start = launch.ToStartInfo();
-        Assert.Equal(game.Root, start.WorkingDirectory);
+        Assert.Equal(profile.Root, start.WorkingDirectory);
+        Assert.NotEqual(game.Root, start.WorkingDirectory);
         Assert.Contains(Path.Combine(game.Root, "valheim_server", "Valheim"), start.ArgumentList);
         Assert.Equal(Path.Combine(profile.Root, "BepInEx", "core", "BepInEx.Preloader.dll"), start.Environment["DOORSTOP_TARGET_ASSEMBLY"]);
         Assert.Contains(start.ArgumentList, argument => argument == "DYLD_INSERT_LIBRARIES=" + Path.Combine(profile.Root, "libdoorstop.dylib"));

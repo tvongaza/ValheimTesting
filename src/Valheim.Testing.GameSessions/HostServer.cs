@@ -43,8 +43,7 @@ public static class HostServer
 
     // logonSeams: the test seams of Get-VtServerLogon (elevated, session, desktops), so a test forces the interactive-token task.
     internal static async Task<HostServerProcess> StartAsync(IGameHost host, GameLaunch launch, string bootDirectory, TimeSpan timeout,
-        IReadOnlyList<string>? logs, string? evidence, IReadOnlyDictionary<string, string>? logonSeams, CancellationToken cancellation,
-        string? logRoot = null)
+        IReadOnlyList<string>? logs, string? evidence, IReadOnlyDictionary<string, string>? logonSeams, CancellationToken cancellation)
     {
         ArgumentNullException.ThrowIfNull(host);
         ArgumentNullException.ThrowIfNull(launch);
@@ -65,10 +64,8 @@ public static class HostServer
 
         var variables = new Dictionary<string, string>
         {
-            ["runtime"] = launch.WorkingDirectory, ["logroot"] = logRoot ?? launch.WorkingDirectory,
-            // Steam writes logs relative to the process cwd. A profile must not write them into the installed game.
-            ["workdir"] = !windows && logRoot != null && !logRoot.Equals(launch.WorkingDirectory, StringComparison.Ordinal)
-                ? directory : launch.WorkingDirectory,
+            ["runtime"] = launch.GameDirectory, ["logroot"] = launch.WorkingDirectory,
+            ["workdir"] = launch.WorkingDirectory,
             ["exe"] = launch.Platform switch { ClientPlatform.Windows => GameLaunch.ServerWindowsExecutable,
                 ClientPlatform.MacOS => GameLaunch.ServerMacExecutable, _ => GameLaunch.ServerLinuxExecutable },
             ["files"] = string.Join('\n', launch.RequiredFiles), ["dir"] = directory,
@@ -93,8 +90,8 @@ public static class HostServer
             var parts = detail.Split(' ');
             if (parts.Length != 2 || !int.TryParse(parts[0], NumberStyles.None, CultureInfo.InvariantCulture, out int id) || parts[1].Length == 0 || !parts[1].All(char.IsAsciiDigit))
                 throw new HostOperationException($"Unexpected process identity from {host.Name}; see {directory}/pid", result);
-            return new HostServerProcess(host, id, parts[1], directory, launch.WorkingDirectory, kept, evidence,
-                logRoot ?? launch.WorkingDirectory, launch.Platform)
+            return new HostServerProcess(host, id, parts[1], directory, launch.GameDirectory, kept, evidence,
+                launch.WorkingDirectory, launch.Platform)
                 { TaskLogon = InteractiveClient.Line(result.Stdout, "VT-LOGON ") };
         }
         throw word switch
