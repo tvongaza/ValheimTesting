@@ -94,8 +94,6 @@ internal sealed class GameRole
     // The original install for every profile, including a Windows hard-linked launch folder.
     // Never use this as a retirement target.
     internal string? PreparedSourceRoot { get; set; }
-    // Remote profiles recheck the complete source install immediately before launch, not only its game/loader pins.
-    internal IReadOnlyDictionary<string, string>? PreparedSourceFiles { get; set; }
     /// <summary>The directory on the host under which each run makes its own disposable runtime copy, logs and evidence.</summary>
     public string Runtime { get; set; } = "";
     internal string RuntimeReason { get; set; } = "";

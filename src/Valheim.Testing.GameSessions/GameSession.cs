@@ -489,8 +489,15 @@ public sealed class GameSession : IAsyncDisposable
         if (Host is { } host) CloseHost(host);
         // This machine's disposable client copies, once their clients are closed (a client that could not be stopped keeps its copy).
         if (_local.HasCopies)
-            try { Report.Step(StepPhase.Cleanup, "remove the disposable client copy", () => _local.RetireAsync().GetAwaiter().GetResult()); }
+        {
+            await _local.VerifySourcesAsync(async (name, verify) =>
+            {
+                try { await Report.StepAsync(StepPhase.Cleanup, name, verify).ConfigureAwait(false); }
+                catch (Exception error) { TeardownFailures.Add(error); Console.Error.WriteLine("Teardown: " + error.Message); }
+            }).ConfigureAwait(false);
+            try { Report.Step(StepPhase.Cleanup, "remove the disposable client copy", () => _local.RetireAsync(verifySource: false).GetAwaiter().GetResult()); }
             catch (Exception error) { TeardownFailures.Add(error); Console.Error.WriteLine("Teardown: " + error.Message); }
+        }
         if (Server is { } server)
             try { Report.Step(StepPhase.Cleanup, "stop only owned server", server.Dispose); }
             catch (Exception error) { ServerStopped = false; TeardownFailures.Add(error); Console.Error.WriteLine("Teardown: " + error.Message); }

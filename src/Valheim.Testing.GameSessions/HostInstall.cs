@@ -14,10 +14,9 @@ namespace Valheim.Testing.GameSessions;
 [ResultShape]
 public sealed class HostListing
 {
-    internal HostListing(string hostName, HostShellKind shell, string root, IReadOnlyDictionary<string, string> files, IReadOnlyList<string> executables)
-    {
-        HostName = hostName; Shell = shell; Root = root; Files = files; Executables = executables;
-    }
+    internal HostListing(string hostName, HostShellKind shell, string root, IReadOnlyDictionary<string, string> files,
+        IReadOnlyList<string> executables, IReadOnlyDictionary<string, HostFileState>? states = null)
+    { HostName = hostName; Shell = shell; Root = root; Files = files; Executables = executables; States = states ?? new Dictionary<string, HostFileState>(); }
     public string HostName { get; }
     public HostShellKind Shell { get; }
     /// <summary>The listed directory on the host.</summary>
@@ -26,9 +25,14 @@ public sealed class HostListing
     public IReadOnlyDictionary<string, string> Files { get; }
     /// <summary>Bash hosts: which dedicated-server or client executables the user may execute, including <c>valheim_server/Valheim</c> on macOS.</summary>
     public IReadOnlyList<string> Executables { get; }
+    /// <summary>The size and host-native modified-time token captured beside each hash, for the profile source integrity check.</summary>
+    internal IReadOnlyDictionary<string, HostFileState> States { get; }
     /// <summary>Paths compare ignoring case on a Windows (PowerShell) host.</summary>
     internal StringComparer Names => Shell == HostShellKind.PowerShell ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
 }
+
+/// <summary>A file's cheap identity on one host. Modified is compared only with a later listing from that same host.</summary>
+internal sealed record HostFileState(long Size, string Modified);
 
 /// <summary>
 /// Reads game installs and their profiles on a host (never copying an install), so a run on another machine keeps the same pins as one here: the
@@ -39,6 +43,7 @@ public static class HostInstall
 {
     private static readonly Regex Sha256Line = new(@"^(\\?)([0-9a-f]{64}) [ *]\./(.+)$", RegexOptions.CultureInvariant);
     private static readonly Regex FileLine = new(@"^VT-FILE ([0-9a-f]{64}) ([A-Za-z0-9+/=]+)$", RegexOptions.CultureInvariant);
+    private static readonly Regex StateLine = new(@"^VT-STATE ([0-9]+) ([^ ]+) ([A-Za-z0-9+/=]+)$", RegexOptions.CultureInvariant);
     private static readonly Regex GameAssembly = new(@"^(?<managed>[^/]+_Data/Managed|[^/]+\.app/Contents/Resources/Data/Managed|valheim_server/Data/Managed)/assembly_valheim\.dll$", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
     internal static readonly string[] ProfilePinPaths = [.. InstallPins.PinPaths, "BepInEx/plugins", "BepInEx/scripts"];
 
@@ -53,7 +58,18 @@ public static class HostInstall
     /// Null lists everything. The patcher entries and executables are always read.
     /// </summary>
     public static Task<HostListing> ListAsync(IGameHost host, string root, TimeSpan timeout, IReadOnlyList<string>? paths = null,
-        CancellationToken cancellation = default) => ListCoreAsync(host, root, timeout, paths, cancellation, ignoreCase: false);
+        CancellationToken cancellation = default) => ListCoreAsync(host, root, timeout, paths, cancellation,
+            ignoreCase: false, content: true, metadata: false);
+
+    /// <summary>The preparation row's one full content listing, with metadata retained for the post-run comparison.</summary>
+    internal static Task<HostListing> ListProfileSourceAsync(IGameHost host, string root, TimeSpan timeout,
+        CancellationToken cancellation = default) => ListCoreAsync(host, root, timeout, null, cancellation,
+            ignoreCase: false, content: true, metadata: true);
+
+    /// <summary>Lists names, sizes and modified times without reading file contents.</summary>
+    internal static Task<HostListing> ListMetadataAsync(IGameHost host, string root, TimeSpan timeout,
+        CancellationToken cancellation = default) => ListCoreAsync(host, root, timeout, null, cancellation,
+            ignoreCase: false, content: false, metadata: true);
 
     /// <summary>
     /// <see cref="ListAsync"/> with every segment of every pattern compared ignoring case (on a bash host as its locale folds
@@ -64,10 +80,10 @@ public static class HostInstall
     /// </summary>
     internal static Task<HostListing> ListCaseInsensitiveAsync(IGameHost host, string root, TimeSpan timeout,
         IReadOnlyList<string> paths, CancellationToken cancellation = default) =>
-        ListCoreAsync(host, root, timeout, paths, cancellation, ignoreCase: true);
+        ListCoreAsync(host, root, timeout, paths, cancellation, ignoreCase: true, content: true, metadata: false);
 
     private static async Task<HostListing> ListCoreAsync(IGameHost host, string root, TimeSpan timeout, IReadOnlyList<string>? paths,
-        CancellationToken cancellation, bool ignoreCase)
+        CancellationToken cancellation, bool ignoreCase, bool content, bool metadata)
     {
         ArgumentNullException.ThrowIfNull(host);
         RequireHostPath(host, root, nameof(root));
@@ -75,6 +91,7 @@ public static class HostInstall
         var result = (await host.RunAsync(HostInstallScripts.List(host.Shell.Kind), new Dictionary<string, string>
         {
             ["root"] = root, ["dirs"] = string.Join('\n', patterns), ["nocase"] = ignoreCase ? "1" : "0",
+            ["content"] = content ? "1" : "0", ["metadata"] = metadata ? "1" : "0",
         }, timeout, cancellation).ConfigureAwait(false)).EnsureSuccess($"Listing {root} on {host.Name}");
         return ReadListing(host.Name, host.Shell.Kind, root, result);
     }
@@ -110,6 +127,28 @@ public static class HostInstall
         return string.Concat(name.Select(c => c is '*' or '?' or '[' or '\\' ? '?' : c));
     }
 
+    /// <summary>A relative path as a pattern that names it literally on either host listing script.</summary>
+    internal static string LiteralPathPattern(string path) => string.Join('/', path.Replace('\\', '/').Split('/').Select(LiteralPattern));
+
+    /// <summary>Whether a listed relative path is selected by one of this type's segment-glob patterns.</summary>
+    internal static bool MatchesAny(string relative, IEnumerable<string> patterns, bool ignoreCase)
+    {
+        string text = relative.Replace('\\', '/');
+        var options = RegexOptions.CultureInvariant | (ignoreCase ? RegexOptions.IgnoreCase : RegexOptions.None);
+        return patterns.Any(pattern =>
+        {
+            string expression = "^" + Regex.Escape(pattern.Replace('\\', '/'))
+                .Replace("\\*", "[^/]*", StringComparison.Ordinal).Replace("\\?", "[^/]", StringComparison.Ordinal) + "$";
+            for (string candidate = text; ;)
+            {
+                if (Regex.IsMatch(candidate, expression, options)) return true;
+                int slash = candidate.LastIndexOf('/');
+                if (slash < 0) return false;
+                candidate = candidate[..slash];
+            }
+        });
+    }
+
     internal static HostListing ReadListing(string hostName, HostShellKind shell, string root, HostResult result)
     {
         var lines = result.Stdout.Split('\n');
@@ -119,6 +158,7 @@ public static class HostInstall
         if (!lines.Contains("VT-LIST done")) throw new HostOperationException($"Unexpected reply while listing {root} on {hostName}", result);
         var names = shell == HostShellKind.PowerShell ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
         var files = new Dictionary<string, string>(names);
+        var states = new Dictionary<string, HostFileState>(names);
         var executables = new List<string>();
         foreach (string line in lines)
         {
@@ -131,6 +171,31 @@ public static class HostInstall
                 // sha256sum escapes a name holding a backslash or a line break, and marks the line with a leading backslash.
                 if (sum.Groups[1].Value.Length != 0) relative = Unescape(relative);
             }
+            else if (StateLine.Match(line) is { Success: true } state)
+            {
+                relative = Decode(state.Groups[3].Value).Replace('\\', '/');
+                var found = new HostFileState(long.Parse(state.Groups[1].Value, CultureInfo.InvariantCulture), state.Groups[2].Value);
+                if (states.TryGetValue(relative, out var seenState) && seenState != found)
+                    throw new IOException($"{relative} changed while {root} on {hostName} was listed.");
+                states[relative] = found;
+                continue;
+            }
+            else if (line.StartsWith("VT-STATES ", StringComparison.Ordinal))
+            {
+                string packed = Encoding.UTF8.GetString(Convert.FromBase64String(line["VT-STATES ".Length..]));
+                foreach (string record in packed.Split('\0', StringSplitOptions.RemoveEmptyEntries))
+                {
+                    int first = record.IndexOf(' '), second = first < 0 ? -1 : record.IndexOf(' ', first + 1);
+                    if (first < 1 || second < first + 2)
+                        throw new HostOperationException($"Unexpected packed metadata while listing {root} on {hostName}", result);
+                    relative = record[(second + 1)..].Replace('\\', '/');
+                    var found = new HostFileState(long.Parse(record[..first], CultureInfo.InvariantCulture), record[(first + 1)..second]);
+                    if (states.TryGetValue(relative, out var seenState) && seenState != found)
+                        throw new IOException($"{relative} changed while {root} on {hostName} was listed.");
+                    states[relative] = found;
+                }
+                continue;
+            }
             else if (line.StartsWith("VT-EXEC ", StringComparison.Ordinal)) { executables.Add(line["VT-EXEC ".Length..]); continue; }
             else throw new HostOperationException($"Unexpected line while listing {root} on {hostName}: {line}", result);
             relative = relative.Replace('\\', '/');
@@ -138,7 +203,9 @@ public static class HostInstall
             if (files.TryGetValue(relative, out string? seen) && seen != sha256) throw new IOException($"{relative} changed while {root} on {hostName} was listed.");
             files[relative] = sha256;
         }
-        return new HostListing(hostName, shell, root, files, executables);
+        if (files.Count != 0 && states.Count != 0 && !files.Keys.ToHashSet(names).SetEquals(states.Keys))
+            throw new HostOperationException($"The content and metadata listings of {root} on {hostName} named different files", result);
+        return new HostListing(hostName, shell, root, files, executables, states);
     }
 
     /// <summary><paramref name="files"/> (a manifest or listing) without what lies under a skipped top-level directory.</summary>
@@ -232,20 +299,29 @@ public static class HostInstall
     internal static InstallPins CheckPins(InstallPins pinned, HostListing game, HostListing profile, string kind) =>
         CheckPins(pinned, Combined(game, profile), kind);
 
-    // Hard links can retain old bytes after Steam atomically replaces a source file. Re-read
-    // both the launch folder and original game immediately before a profile process starts.
+    // Hard links can retain old bytes after Steam atomically replaces a source file. The one source-check owner decides the
+    // narrow paths re-read in both the launch folder and original game immediately before a profile process starts.
     internal static async Task CheckProfilePinsAsync(IGameHost host, InstallPins pinned, string gameRoot,
-        string loaderRoot, string sourceRoot, string kind, TimeSpan timeout, CancellationToken cancellation,
-        IReadOnlyDictionary<string, string>? sourceFiles = null,
+        string loaderRoot, ProfileSourceCheck sourceCheck, string kind, TimeSpan timeout, CancellationToken cancellation,
         IReadOnlyDictionary<string, string>? pluginFiles = null)
     {
         bool oneProfileRoot = loaderRoot == gameRoot;
-        var game = await ListAsync(host, gameRoot, timeout, pluginFiles != null && oneProfileRoot ? ProfilePinPaths : InstallPins.PinPaths, cancellation).ConfigureAwait(false);
+        bool gameIsSource = sourceCheck.Source.Root == gameRoot;
+        var game = await ListAsync(host, gameRoot, timeout,
+            gameIsSource ? sourceCheck.SourceBeforeBootPaths() :
+                sourceCheck.ProfileBeforeBootPaths(pluginFiles != null && oneProfileRoot), cancellation).ConfigureAwait(false);
         var loader = loaderRoot == gameRoot ? game :
-            await ListAsync(host, loaderRoot, timeout, pluginFiles == null ? InstallPins.PinPaths : null, cancellation).ConfigureAwait(false);
-        var source = sourceFiles == null && sourceRoot == gameRoot ? game :
-            await ListAsync(host, sourceRoot, timeout, sourceFiles == null ? InstallPins.PinPaths : null, cancellation).ConfigureAwait(false);
-        if (sourceFiles != null) RequireSame(sourceFiles, source, "source game before profile launch");
+            await ListAsync(host, loaderRoot, timeout, pluginFiles == null ? InstallPins.PinPaths : ProfilePinPaths, cancellation).ConfigureAwait(false);
+        var source = gameIsSource ? game :
+            await ListAsync(host, sourceCheck.Source.Root, timeout, sourceCheck.SourceBeforeBootPaths(), cancellation).ConfigureAwait(false);
+        RequireSame(sourceCheck.BeforeBoot, source, "source game before profile launch");
+        if (sourceCheck.LinkedRootFiles.Count != 0)
+        {
+            var native = game.Files.Where(file => sourceCheck.LinkedRootFiles.ContainsKey(file.Key))
+                .ToDictionary(file => file.Key, file => file.Value, game.Names);
+            RequireSame(sourceCheck.LinkedRootFiles, new HostListing(game.HostName, game.Shell, game.Root, native, []),
+                kind + " linked root files");
+        }
         if (!Pins(source, loader).Game.Equals(pinned.Game, StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException($"The source game changed after its loader profile was staged for {kind}; refuse this launch and prepare a new profile.");
         CheckPins(pinned, game, loader, kind);
@@ -385,13 +461,16 @@ internal static class HostInstallScripts
         """.ReplaceLineEndings("\n");
 
     // Variables: root, dirs (relative directory patterns and file names with "/" separators, one per line, as
-    // HostInstall.ListingPatterns checked them; none lists everything), nocase (1: compare every segment ignoring case).
+    // HostInstall.ListingPatterns checked them; none lists everything), nocase (1: compare every segment ignoring case),
+    // content (1 hashes contents) and metadata (1 records size and modified time for the profile source check).
     // sha256sum prints each file as "<hash>  ./<path>", escaping a name with a backslash or line break. Links are refused before
     // anything is hashed, whether a link is listed itself or lies on the way to a named path.
     public static readonly string BashList = """
         set -u
+        set -o pipefail
         if [ ! -d "$root" ]; then echo "VT-LIST missing"; exit 0; fi
         cd -- "$root" || exit 3
+        host_os=$(uname -s) || exit 3
         shopt -s nullglob dotglob
         if [ "${nocase:-0}" = 1 ]; then shopt -s nocasematch; fi
         if command -v sha256sum > /dev/null 2>&1; then hasher=(sha256sum); else hasher=(shasum -a 256); fi
@@ -437,14 +516,43 @@ internal static class HostInstallScripts
         links=$({ for linked in ${way[@]+"${way[@]}"}; do printf '%s\n' "$linked"; done
                   if [ "${#roots[@]}" -gt 0 ]; then find "${roots[@]}" -type l -print; fi; } | awk '!seen[$0]++' | head -n 5) || exit 3
         if [ -n "$links" ]; then echo "VT-LIST links"; printf '%s\n' "$links"; exit 0; fi
-        if [ "${#roots[@]}" -gt 0 ]; then
+        if [ "${content:-1}" = 1 ] && [ "${#roots[@]}" -gt 0 ]; then
             find "${roots[@]}" -type f -exec "${hasher[@]}" {} + || exit 3
+        fi
+        if [ "${metadata:-0}" = 1 ] && [ "${#roots[@]}" -gt 0 ]; then
+            # Metadata callers list the whole source (roots=(.)); keep find and stat batched. GNU find supplies size,
+            # fractional epoch mtime and root-relative name in one process. BSD stat receives up to 200 files per call,
+            # and its floating-point %Fm retains the host's sub-second precision.
+            if [ "$host_os" != Darwin ]; then
+                packed=$(find . -type f -printf '%s %T@ %P\0' | base64 -w 0) || exit 3
+            else
+                vt_bsd_states() {
+                    [ "$#" -ne 0 ] || return 0
+                    local states=() state file i=0
+                    while IFS= read -r state; do states+=("$state"); done < <(/usr/bin/stat -f '%z %Fm' "$@")
+                    [ "${#states[@]}" -eq "$#" ] || return 3
+                    for file in "$@"; do
+                        printf '%s %s\0' "${states[$i]}" "${file#./}"
+                        i=$((i + 1))
+                    done
+                }
+                vt_all_bsd_states() {
+                    local files=() file
+                    while IFS= read -r -d '' file; do
+                        files+=("$file")
+                        if [ "${#files[@]}" -eq 200 ]; then vt_bsd_states "${files[@]}" || return 3; files=(); fi
+                    done < <(find . -type f -print0)
+                    vt_bsd_states "${files[@]}" || return 3
+                }
+                packed=$(vt_all_bsd_states | /usr/bin/base64 -b 0) || exit 3
+            fi
+            printf 'VT-STATES %s\n' "$packed"
         fi
         for e in valheim_server.x86_64 valheim.x86_64 valheim_server/Valheim; do if [ -f "$e" ] && [ -x "$e" ]; then echo "VT-EXEC $e"; fi; done
         echo "VT-LIST done"
         """.ReplaceLineEndings("\n");
 
-    // Variables: root, dirs (as the bash listing's; names compare ignoring case, so nocase changes nothing). Hashes with .NET
+    // Variables: root, dirs, content and metadata (as the bash listing's; names compare ignoring case, so nocase changes nothing). Hashes with .NET
     // (see HostScripts' note on Get-FileHash); names travel as base64.
     public static readonly string PowerShellList = """
         $utf8 = New-Object Text.UTF8Encoding $false
@@ -511,10 +619,17 @@ internal static class HostInstallScripts
         $sha = [Security.Cryptography.SHA256]::Create()
         try {
             foreach ($file in $files) {
-                $stream = [IO.File]::OpenRead($file)
-                try { $hash = ([BitConverter]::ToString($sha.ComputeHash($stream))).Replace('-', '').ToLowerInvariant() } finally { $stream.Dispose() }
                 $relative = $file.Substring($full.Length + 1).Replace('\', '/')
-                'VT-FILE ' + $hash + ' ' + [Convert]::ToBase64String($utf8.GetBytes($relative))
+                $named = [Convert]::ToBase64String($utf8.GetBytes($relative))
+                if ($content -ne '0') {
+                    $stream = [IO.File]::OpenRead($file)
+                    try { $hash = ([BitConverter]::ToString($sha.ComputeHash($stream))).Replace('-', '').ToLowerInvariant() } finally { $stream.Dispose() }
+                    'VT-FILE ' + $hash + ' ' + $named
+                }
+                if ($metadata -eq '1') {
+                    $info = New-Object IO.FileInfo $file
+                    'VT-STATE ' + $info.Length + ' ' + $info.LastWriteTimeUtc.Ticks + ' ' + $named
+                }
             }
         } finally { $sha.Dispose() }
         'VT-LIST done'

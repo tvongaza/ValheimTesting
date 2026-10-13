@@ -17,6 +17,7 @@ internal sealed class RunRetirement(ScenarioReport? report, string output)
 {
     private readonly HashSet<string> _done = new(StringComparer.Ordinal);
     private readonly HashSet<string> _kept = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _unstopped = new(StringComparer.Ordinal);
 
     /// <summary>Whether a person asked to keep every runtime copy (<see cref="PinnedServerRun.KeepRuntimeVariable"/>=1).</summary>
     public static bool KeepRequested => KeepOverride.Value ?? Environment.GetEnvironmentVariable(PinnedServerRun.KeepRuntimeVariable) == "1";
@@ -70,6 +71,7 @@ internal sealed class RunRetirement(ScenarioReport? report, string output)
         if (!serverStopped)
         {
             _kept.Add(Key(hostName, runtime));
+            _unstopped.Add(Key(hostName, runtime));
             Provenance($"kept {where}: the owned server there may still run; remove the directory once it has stopped");
             Console.Error.WriteLine($"Warning: kept {where}: the owned server there may still run; remove the directory once it has stopped");
             return;
@@ -154,6 +156,10 @@ internal sealed class RunRetirement(ScenarioReport? report, string output)
             var hostCopies = copies.Where(copy => copy.Host.Equals(name, StringComparison.OrdinalIgnoreCase)).ToList();
             var retired = hostCopies.Where(copy => !Kept(copy.Host, copy.Runtime)).ToList();
             var keptByRun = hostCopies.Where(copy => Kept(copy.Host, copy.Runtime)).ToList();
+            // Verification and retention are independent. A requested keep still gets a source verdict once its actor is stopped.
+            var sourceCopies = hostCopies.Where(copy => prepared.SourceChecks.ContainsKey(copy.Actor)).ToList();
+            var unstoppedSourceCopies = sourceCopies.Where(copy => _unstopped.Contains(Key(copy.Host, copy.Runtime))).ToList();
+            var verifiableSourceCopies = sourceCopies.Except(unstoppedSourceCopies).ToList();
             if (KeepRequested && retired.Count != 0)
             {
                 foreach (var copy in retired)
@@ -173,7 +179,7 @@ internal sealed class RunRetirement(ScenarioReport? report, string output)
                 try { await prepared.Journal.AppendAsync(on, journal, actor, entry, prepared.Timeout).ConfigureAwait(false); }
                 catch (Exception error) { Console.Error.WriteLine($"Warning: could not journal {entry.Kind} for {actor} on {name}: {error.Message}"); }
             }
-            // A kept copy needs neither the lock nor a process check to be recorded as kept.
+            // A kept copy still needs the lock and stop proof for its source verdict.
             if (keptByRun.Count != 0)
             {
                 var keptOn = prepared.HostFor(name);
@@ -181,7 +187,10 @@ internal sealed class RunRetirement(ScenarioReport? report, string output)
                     await Journal(keptOn, copy.Actor, JournalEntry.Of(JournalEntry.CopyKept, ("runtime", copy.Runtime),
                         ("why", KeepRequested ? KeptOnRequest : "its server may still run, or its retire failed"))).ConfigureAwait(false);
             }
-            if (hostCharacters.Count == 0 && retired.Count == 0) continue;
+            foreach (var copy in unstoppedSourceCopies)
+                Incomplete(prepared.SourceChecks[copy.Actor].VerdictName(copy.Actor), copy.Actor,
+                    "the owned server may still run from its kept copy");
+            if (hostCharacters.Count == 0 && retired.Count == 0 && sourceCopies.Count == 0) continue;
             IGameHost host;
             HostLock? claim = null;
             try
@@ -192,7 +201,8 @@ internal sealed class RunRetirement(ScenarioReport? report, string output)
                 if (!lockedHosts.Contains(name, StringComparer.OrdinalIgnoreCase))
                     claim = await host.AcquireLockAsync(prepared.LockOf(name), "campaign-retire " + Guid.NewGuid().ToString("N"), prepared.Timeout, cancellation).ConfigureAwait(false);
                 // Any client on a host with characters is a conflict; on a copies-only host only a process running from one of them is.
-                await HostedRuntimeStage.RequireStoppedAsync(host, prepared.Timeout, cancellation, runtimes: retired.Select(copy => copy.Runtime).ToList(),
+                await HostedRuntimeStage.RequireStoppedAsync(host, prepared.Timeout, cancellation,
+                    runtimes: retired.Concat(verifiableSourceCopies).Select(copy => copy.Runtime).Distinct(StringComparer.Ordinal).ToList(),
                     clientSession: hostCharacters.Count != 0).ConfigureAwait(false);
             }
             catch (Exception error)
@@ -206,6 +216,11 @@ internal sealed class RunRetirement(ScenarioReport? report, string output)
                     Fail($"retire the disposable character {character.Character.FileName} on {name}", error);
                     _done.Remove("character " + Key(character.Host, character.Character.FileName)); // not attempted: a later retire tries again
                 }
+                foreach (var copy in verifiableSourceCopies)
+                {
+                    if (prepared.SourceChecks.TryGetValue(copy.Actor, out var sourceCheck))
+                        Incomplete(sourceCheck.VerdictName(copy.Actor), copy.Actor, error);
+                }
                 foreach (var copy in retired)
                 {
                     Fail($"remove the prepared install {name}:{copy.Runtime}", error);
@@ -215,6 +230,12 @@ internal sealed class RunRetirement(ScenarioReport? report, string output)
             }
             try
             {
+                foreach (var copy in verifiableSourceCopies)
+                {
+                    var sourceCheck = prepared.SourceChecks[copy.Actor];
+                    await Try(sourceCheck.VerdictName(copy.Actor),
+                        () => sourceCheck.VerifyAfterRunAsync(host, prepared.Timeout, cancellation), failures).ConfigureAwait(false);
+                }
                 foreach (var character in hostCharacters)
                     if (await Try($"retire the disposable character {character.Character.FileName} on {name}",
                         () => HostedCharacterStage.RetireAsync(host, character.Character, prepared.Timeout, cancellation), failures).ConfigureAwait(false))
@@ -245,5 +266,15 @@ internal sealed class RunRetirement(ScenarioReport? report, string output)
     {
         try { Step(name, () => throw new IOException("Not attempted: " + error.Message, error)); }
         catch (IOException) { } // Recorded as the failed step; the failure itself is returned once per host.
+    }
+
+    private void Incomplete(string name, string actor, Exception error) => Incomplete(name, actor, error.Message);
+
+    private void Incomplete(string name, string actor, string reason)
+    {
+        string incomplete = "incomplete: actor stop not proven: " + reason;
+        if (report != null) report.Provenance["sourceIntegrity." + actor] = incomplete;
+        try { Step(name + " (incomplete: actor stop not proven)", () => throw new IOException(incomplete)); }
+        catch (IOException) { }
     }
 }

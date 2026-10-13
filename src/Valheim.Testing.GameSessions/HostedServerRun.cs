@@ -30,6 +30,7 @@ internal sealed class HostedServerRun : IServerPlacement
     private HostListing? _loader;
     private InstallPins? _preparedPins;
     private IReadOnlyDictionary<string, string>? _preparedPluginFiles;
+    private ProfileSourceCheck? _sourceCheck;
     private readonly SortedDictionary<string, string> _pinOrigins = new(StringComparer.Ordinal);
     private readonly SortedDictionary<string, string> _sourceCliPins = new(StringComparer.Ordinal);
     private IReadOnlyList<string> _replacedCliPaths = [];
@@ -45,7 +46,7 @@ internal sealed class HostedServerRun : IServerPlacement
     private enum WorldCopy { None, Intended, Shipped, Verified }
 
     private HostedServerRun(ResolvedEnvironment profile, GameRole role, HostProfile hostProfile, IGameHost host, string runId, string runner, IHostedRunHooks hooks,
-        string? preparedRuntime, string? loaderPackage)
+        string? preparedRuntime, string? loaderPackage, IReadOnlyDictionary<string, ProfileSourceCheck>? sourceChecks)
     {
         Profile = profile; Role = role; HostProfile = hostProfile; Host = host; RunId = runId; _hooks = hooks; _owner = runner + " " + runId;
         _loaderPackage = loaderPackage;
@@ -57,7 +58,8 @@ internal sealed class HostedServerRun : IServerPlacement
         RuntimeDirectory = preparedRuntime ?? HostPath.Join(RunDirectory, "runtime");
         StagingDirectory = HostPath.Join(RunDirectory, "staging");
         WorldDirectory = LocalMac ? HostedWorld.DefaultSaveDirectory(ClientPlatform.MacOS) : HostPath.Join(RunDirectory, "world");
-        _clientActors = new CampaignClients(profile, runId, _owner, hooks, (role.Host, host), JournalAsync);
+        _clientActors = new CampaignClients(profile, runId, _owner, hooks, (role.Host, host), JournalAsync, sourceChecks);
+        if (sourceChecks?.TryGetValue("server", out var check) == true) _sourceCheck = check;
     }
 
     // The run's journal on each host it touches (RunJournal): a process and an exact lock claimant are journalled before their effects.
@@ -116,7 +118,8 @@ internal sealed class HostedServerRun : IServerPlacement
     /// (the inventory recipe's reviewed loader package) when given, else on the pinned one (<see cref="ShippedLoader"/>).
     /// </summary>
     internal static HostedServerRun Create(ResolvedEnvironment profile, ServerRunPlan plan, string runner, IHostedRunHooks? hooks, bool prepared,
-        string? campaignRunId = null, string? loaderPackage = null)
+        string? campaignRunId = null, string? loaderPackage = null,
+        IReadOnlyDictionary<string, ProfileSourceCheck>? sourceChecks = null)
     {
         var role = profile.Server ?? throw new ArgumentException("The environment places no dedicated server.");
         var hostProfile = profile.Hosts[role.Host];
@@ -126,7 +129,8 @@ internal sealed class HostedServerRun : IServerPlacement
         if (prepared && loaderPackage != null) throw new ArgumentException("A campaign's prepared server profile already has its loader.", nameof(loaderPackage));
         hooks ??= HostedRunHooks.Production;
         var host = hooks.CreateHost(profile, role.Host);
-        return new HostedServerRun(profile, role, hostProfile, host, hooks.RunId(campaignRunId), runner, hooks, prepared ? role.Install : null, loaderPackage);
+        return new HostedServerRun(profile, role, hostProfile, host, hooks.RunId(campaignRunId), runner, hooks,
+            prepared ? role.Install : null, loaderPackage, sourceChecks);
     }
 
     /// <summary>Why a server environment cannot run <paramref name="plan"/>, or null: its host's platform and shell, and the plan's ports.</summary>
@@ -206,14 +210,16 @@ internal sealed class HostedServerRun : IServerPlacement
         bool verified = plan.Runtime.Sha256.Count != 0;
         if (Prepared)
         {
-            // The campaign's preparation made the one profile; it must still be exactly what the preparation listed and bound.
-            await report.StepAsync(StepPhase.Setup, verified ? "verify the prepared runtime on the server host" : "list the prepared runtime on the server host as found", async () =>
+            // Reuse the preparation owner's listings. The before-boot pin row below is the only fresh, narrow check; listing the
+            // source-backed game root here would recreate a broad rule and reject unrelated source output.
+            await report.StepAsync(StepPhase.Setup, verified ? "reuse the verified prepared runtime listing" : "reuse the prepared runtime listing as found", () =>
             {
-                _runtime = await HostInstall.ListAsync(Host, GameDirectory, HostedTimeouts.Long, null, cancellation).ConfigureAwait(false);
+                var owner = _sourceCheck ?? throw new InvalidOperationException("The prepared server profile has no source-check owner.");
+                _runtime = owner.PreparedGame;
                 if (verified) HostInstall.RequireSame(plan.Runtime.Sha256, _runtime, "prepared runtime");
-                _loader = GameDirectory == RuntimeDirectory ? _runtime :
-                    await HostInstall.ListAsync(Host, RuntimeDirectory, HostedTimeouts.Long, null, cancellation).ConfigureAwait(false);
+                _loader = owner.PreparedLoader;
                 plan.RequireStagedPlugins();
+                return Task.CompletedTask;
             }).ConfigureAwait(false);
             return;
         }
@@ -290,9 +296,8 @@ internal sealed class HostedServerRun : IServerPlacement
         }
         _runtime = profile.Game;
         _loader = profile.Loader;
+        _sourceCheck = profile.SourceCheck;
         Role.PreparedSourceRoot = profile.Source.Root;
-        // A remote install is compared whole with its listing before each boot; this machine's by its pins.
-        if (Host.Kind != GameHostKind.Local) Role.PreparedSourceFiles = profile.Source.Files;
         if (profile.GameRoot != profile.LoaderRoot)
         {
             Role.PreparedGameRoot = profile.GameRoot;
@@ -437,11 +442,11 @@ internal sealed class HostedServerRun : IServerPlacement
                     throw new IOException("The pinned Mac Steam runtime changed before server launch: " + relative);
             }
         }
-        if (Role.PreparedSourceRoot is { } source && _preparedPins != null)
+        if (_sourceCheck != null && _preparedPins != null)
         {
-            HostInstall.CheckProfilePinsAsync(Host, _preparedPins, GameDirectory, LoaderDirectory, source,
+            HostInstall.CheckProfilePinsAsync(Host, _preparedPins, GameDirectory, LoaderDirectory, _sourceCheck,
                 "prepared server profile before launch", HostedTimeouts.Long, cancellation,
-                Role.PreparedSourceFiles, _preparedPluginFiles).GetAwaiter().GetResult();
+                _preparedPluginFiles).GetAwaiter().GetResult();
         }
         string local = Path.Combine(output, "boot-" + n), bootDirectory = HostPath.Join(RunDirectory, "boot-" + n);
         // The stop's quit budget, journalled so env recover gives the server the same time to save (#665).
@@ -606,6 +611,20 @@ internal sealed class HostedServerRun : IServerPlacement
             worldFetched = failures.Count == before;
         }
         if (_runtime != null)
+        {
+            if (!Prepared && _sourceCheck != null)
+            {
+                if (serverStopped)
+                    await Try(_sourceCheck.VerdictName("server"),
+                        () => _sourceCheck.VerifyAfterRunAsync(Host, HostedTimeouts.Long, cleanup)).ConfigureAwait(false);
+                else
+                {
+                    const string reason = "Source integrity is unknown because the owned server was not proven stopped.";
+                    report.Provenance["sourceIntegrity.server"] = "unknown: the owned server was not proven stopped";
+                    report.RecordFailure(StepPhase.Cleanup,
+                        _sourceCheck.VerdictName("server") + " (unknown: server not proven stopped)", new IOException(reason));
+                }
+            }
             try
             {
                 await retirement.HostAsync(Role.Host, Host, _loader ?? _runtime, RuntimeDirectory, launched, serverStopped, cleanup).ConfigureAwait(false);
@@ -617,6 +636,7 @@ internal sealed class HostedServerRun : IServerPlacement
                         : JournalEntry.Of(JournalEntry.CopyRetired, ("runtime", RuntimeDirectory))).ConfigureAwait(false);
             }
             catch (Exception error) { failures.Add(error); Console.Error.WriteLine("Teardown: " + error.Message); }
+        }
         else if (_runtimeIntended)
             // A profile whose staging failed and whose own cleanup was not proven (a lost reply): nothing ran from it, so all of it
             // goes, its staging folder too. A failed retire leaves it open in the journal, for env recover.
@@ -646,6 +666,7 @@ internal sealed class HostedServerRun : IServerPlacement
         }
         if (_tunnel != null) await Try("close the CLI tunnel", () => { _tunnel.Dispose(); return Task.CompletedTask; }).ConfigureAwait(false);
         await _clientActors.ReleaseAccountsAsync(Try).ConfigureAwait(false);
+        await _clientActors.RecordInPlaceSourceVerdictsAsync(report, Try).ConfigureAwait(false);
         // Every process is stopped (or named as possibly running), so the campaign's characters and prepared installs go, under the
         // locks held here; a host whose lock this run never took (a client that never opened) is locked for its retire.
         if (prepared != null)

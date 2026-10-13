@@ -249,6 +249,32 @@ public sealed class ServerLoadPhasesTests : IDisposable
         Assert.Contains("failed", File.ReadAllText(Path.Combine(output, "phase-state.json")));
     }
 
+    // #653: each server-load owns its profile source verdict. The wrapper no longer re-hashes the full server directory
+    // before every phase, so Steam output there is not misreported as a phased build-input change.
+    [Fact]
+    public async Task SteamWritingServerLogsBetweenPhasesDoesNotFailTheNextPhase()
+    {
+        string output = Path.Combine(_root, "steam-log-run");
+        int calls = 0;
+        int result = await ServerLoadPhases.RunAsync(["--plan", Plan(), "--output", output], args =>
+        {
+            calls++;
+            string checkpoint = args[Array.IndexOf(args, "--bake-fixture") + 1];
+            Directory.CreateDirectory(checkpoint);
+            File.WriteAllText(Path.Combine(checkpoint, "world.fwl"), "saved " + calls);
+            if (calls == 1)
+            {
+                string log = Path.Combine(_root, "server", "logs", "connection_log.txt");
+                Directory.CreateDirectory(Path.GetDirectoryName(log)!);
+                File.WriteAllText(log, "Steam runtime output");
+            }
+            return Task.FromResult(0);
+        });
+
+        Assert.Equal(0, result);
+        Assert.Equal(2, calls);
+    }
+
     [Fact]
     public async Task ARefusedPinStopsBeforeTheNextPhaseAndPublishesNoCheckpoint()
     {

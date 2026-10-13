@@ -99,7 +99,10 @@ public sealed class LocalClientCopyTests : IDisposable
         Assert.Contains("\"copy-intended\"", journal);
         Assert.Contains("\"copy-done\"", journal);
 
-        await copy.RetireAsync();
+        var report = new ScenarioReport("local client evidence");
+        await report.StepAsync(StepPhase.Cleanup, copy.SourceVerdictName, copy.VerifySourceAsync);
+        Assert.Contains(report.Steps, step => step.Name == "verify client's source install after the run (size and modified time)" && step.Passed);
+        await copy.RetireAsync(verifySource: false);
         Assert.False(Directory.Exists(copy.Runtime));
         // The plan is as it was: a run that reuses it makes a new profile.
         Assert.True(plan.CopySource);

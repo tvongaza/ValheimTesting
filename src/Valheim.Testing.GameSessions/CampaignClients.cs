@@ -25,16 +25,21 @@ internal sealed class CampaignClients
     private readonly List<ClientAccount> _accounts = [];
     private readonly (string Name, IGameHost Host)? _serverHost;
     private readonly Func<IGameHost, string, string, JournalEntry, CancellationToken, Task> _journal;
+    private readonly Dictionary<string, ProfileSourceCheck> _sourceChecks;
+    private readonly HashSet<string> _inPlaceSourceActors = new(StringComparer.Ordinal);
     private IGameHost? _leaseHost;
     private int _clients;
 
     /// <param name="serverHost">The dedicated server's host, whose lock its run holds and whose connection is reused; null without one.</param>
     /// <param name="journal">Appends an entry to a host's journal for an actor (the owner's run journal); throws when it cannot.</param>
     internal CampaignClients(ResolvedEnvironment profile, string runId, string owner, IHostedRunHooks hooks, (string Name, IGameHost Host)? serverHost,
-        Func<IGameHost, string, string, JournalEntry, CancellationToken, Task> journal)
+        Func<IGameHost, string, string, JournalEntry, CancellationToken, Task> journal,
+        IReadOnlyDictionary<string, ProfileSourceCheck>? sourceChecks = null)
     {
         Profile = profile; RunId = runId; _owner = owner; _hooks = hooks; _serverHost = serverHost; _journal = journal;
         _runJournal = new RunJournal(runId);
+        _sourceChecks = sourceChecks?.ToDictionary(item => item.Key, item => item.Value, StringComparer.Ordinal)
+            ?? new Dictionary<string, ProfileSourceCheck>(StringComparer.Ordinal);
     }
 
     public ResolvedEnvironment Profile { get; }
@@ -140,12 +145,16 @@ internal sealed class CampaignClients
             return await OpenLocalMacClientAsync(report, output, plan, name, role, hostProfile, cancellation).ConfigureAwait(false);
         if (platform != ClientPlatform.MacOS && plan.LaunchArchitecture != ClientArchitecture.X64)
             throw new ArgumentException($"Profile client '{name}' on {platform} needs x64; architecture arm64 is for a macOS client.");
+        var host = ClientHost(role);
         string gameRoot = role.PreparedGameRoot ?? role.Install;
         string loaderRoot = role.PreparedLoaderRoot ?? role.Install;
-        var host = ClientHost(role);
+        ProfileSourceCheck? ownedSource = null;
+        if (role.PreparedSourceRoot != null && !_sourceChecks.TryGetValue(name, out ownedSource))
+            throw new InvalidOperationException($"Prepared owned remote client {name} has no source-check owner.");
         string? macDoorstop = null;
         if (platform == ClientPlatform.MacOS)
         {
+            // These read-only refusals stay before the account lease and host lock, so an unavailable GUI host is untouched.
             await RemoteMacClientPreflight.RequireDesktopAsync(host, HostedTimeouts.Quick, cancellation).ConfigureAwait(false);
             await RemoteMacClientPreflight.RequireGameAsync(host, gameRoot, plan.LaunchArchitecture, HostedTimeouts.Quick, cancellation).ConfigureAwait(false);
             macDoorstop = await RemoteMacClientPreflight.SelectLoaderAsync(host, loaderRoot, plan.LaunchArchitecture,
@@ -192,12 +201,12 @@ internal sealed class CampaignClients
                 {
                     if (platform == ClientPlatform.MacOS)
                         RemoteMacClientPreflight.RequireDesktopAsync(host, HostedTimeouts.Quick, cancellation).GetAwaiter().GetResult();
-                    if (role.PreparedSourceRoot is { } source && plan.InstallPins is { } pinned)
-                    {
-                        HostInstall.CheckProfilePinsAsync(host, pinned, gameRoot, loaderRoot, source,
-                            "prepared client profile before launch", HostedTimeouts.Long, cancellation,
-                            role.PreparedSourceFiles).GetAwaiter().GetResult();
-                    }
+                    if (ownedSource != null)
+                        HostInstall.CheckProfilePinsAsync(host,
+                            plan.InstallPins ?? throw new ArgumentException("The prepared client profile has no install pins."),
+                            gameRoot, loaderRoot, ownedSource, "prepared client profile before launch",
+                            HostedTimeouts.Long, cancellation).GetAwaiter().GetResult();
+                    else lock (_clientState) _inPlaceSourceActors.Add(name);
                     string expected = launch.CommandLineSha256();
                     JournalAsync(host, role.Host, name, JournalEntry.Of(JournalEntry.ProcessIntended, ("launchDirectory", launchDirectory),
                         ("expectedCommandLineSha256", expected)), cancellation).GetAwaiter().GetResult();
@@ -376,6 +385,19 @@ internal sealed class CampaignClients
                 await account.Hold.ReleaseAsync().ConfigureAwait(false);
                 await NoteAsync(account.LeaseHost, account.LeaseHostName, account.Client, LeaseEntry(JournalEntry.LeaseReleased, account.Hold)).ConfigureAwait(false);
             }).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>Records why standalone inventory clients have no post-run source-integrity check: they run in place.</summary>
+    public async Task RecordInPlaceSourceVerdictsAsync(ScenarioReport report, Func<string, Func<Task>, Task> step)
+    {
+        string[] actors;
+        lock (_clientState) actors = _inPlaceSourceActors.Order(StringComparer.Ordinal).ToArray();
+        foreach (string actor in actors)
+        {
+            const string verdict = "not applicable: runs in place";
+            report.Provenance["sourceIntegrity." + actor] = verdict;
+            await step($"verify {actor}'s source install after the run ({verdict})", () => Task.CompletedTask).ConfigureAwait(false);
         }
     }
 

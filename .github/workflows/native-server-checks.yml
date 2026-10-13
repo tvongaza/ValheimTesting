@@ -116,14 +116,14 @@ jobs:
         id: smoke
         continue-on-error: true
         timeout-minutes: 20
-        run: docker run --init --name smoke -v "$GITHUB_WORKSPACE:/src:ro" "$IMAGE" bash /src/.github/scripts/native-server-checks.sh smoke
+        run: docker run --init --name smoke -e VALHEIM_TESTING_SOURCE_HASH_AFTER_RUN=1 -v "$GITHUB_WORKSPACE:/src:ro" "$IMAGE" bash /src/.github/scripts/native-server-checks.sh smoke
       - name: AcceptanceMod, server half (dry-site-server)
         id: acceptance
         continue-on-error: true
         timeout-minutes: 40
         env:
           CONTROL: ${{ (inputs.negative_control == 'plugin-pin') && 'plugin-pin' || 'none' }}
-        run: docker run --init --name acceptance -v "$GITHUB_WORKSPACE:/src:ro" "$IMAGE" bash /src/.github/scripts/native-server-checks.sh acceptance "$CONTROL"
+        run: docker run --init --name acceptance -e VALHEIM_TESTING_SOURCE_HASH_AFTER_RUN=1 -v "$GITHUB_WORKSPACE:/src:ro" "$IMAGE" bash /src/.github/scripts/native-server-checks.sh acceptance "$CONTROL"
       - name: Collect logs and reports only
         id: collect
         if: always()

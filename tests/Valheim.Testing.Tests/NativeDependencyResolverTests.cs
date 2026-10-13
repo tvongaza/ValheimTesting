@@ -200,8 +200,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         await using (var campaign = await HostedCampaignPreparation.PrepareAsync(manifestFile, output, TimeSpan.FromSeconds(30), name => hosts[name], pinnedLoader: null))
         {
             var profile = campaign.Environment;
-            Assert.NotNull(profile.Server!.PreparedSourceFiles);
-            Assert.All(profile.Clients.Values, role => Assert.NotNull(role.PreparedSourceFiles));
+            Assert.Equal(4, campaign.SourceChecks.Count);
             Assert.Equal(4, hosts.Values.Sum(host => host.Scripts.Count(script => script == "profile-seed")));
             Assert.DoesNotContain(hosts.Values, host => host.Scripts.Contains("copy"));
             prepared = [profile.Server!.Install, profile.Clients["client-a"].Install,
@@ -290,16 +289,48 @@ public sealed class NativeDependencyResolverTests : IDisposable
         Assert.Equal(claimsBefore + 2, sharedHost.Claims.Count);
         Assert.Equal(checksBefore + 1, sharedHost.Scripts.Count(script => script == "game-process"));
 
+        // A server copy kept because its process may still run is not one of the runtimes the shared-host retirement asks
+        // to be stopped. Its source verdict is incomplete, while the character and client copy on that host are still retired.
+        var runningCampaign = await HostedCampaignPreparation.PrepareAsync(sameHostManifestFile,
+            Path.Combine(_rig.Root, "running-server-prepared"), TimeSpan.FromSeconds(30), name => hosts[name], pinnedLoader: null);
+        var serverCopy = runningCampaign.Copies.Single(copy => copy.Actor == "server");
+        var sharedClientCopy = runningCampaign.Copies.Single(copy => copy.Actor == "client-a");
+        var runningReport = new ScenarioReport("server may still run");
+        var runningRetirement = new RunRetirement(runningReport, "");
+        await runningRetirement.HostAsync(serverCopy.Host, sharedHost, runningCampaign.LoaderListings["server"],
+            serverCopy.Runtime, launched: true, serverStopped: false);
+        int runsBeforeRetirement = sharedHost.Runs.Count;
+        Assert.Empty(await runningRetirement.CampaignAsync(runningCampaign, ["server"]));
+        var processCheck = Assert.Single(sharedHost.Runs.Skip(runsBeforeRetirement).Where(run => run.Script == "game-process"));
+        Assert.DoesNotContain(serverCopy.Runtime, processCheck.Variables["runtime"], StringComparison.Ordinal);
+        Assert.Contains(sharedClientCopy.Runtime, processCheck.Variables["runtime"], StringComparison.Ordinal);
+        Assert.True(Directory.Exists(sharedHost.Local(serverCopy.Runtime)));
+        Assert.False(Directory.Exists(sharedHost.Local(sharedClientCopy.Runtime)));
+        Assert.False(File.Exists(sharedHost.Local(@"C:\save\characters_local\vt-one.fch")));
+        var unknownServerSource = Assert.Single(runningReport.Steps, step =>
+            step.Name.Contains("server's source install after the run", StringComparison.Ordinal));
+        Assert.False(unknownServerSource.Passed);
+        Assert.Contains("may still run", unknownServerSource.Error, StringComparison.OrdinalIgnoreCase);
+        await HostedRuntimeStage.RetireAsync(sharedHost, serverCopy.Runtime, serverCopy.Stage, TimeSpan.FromSeconds(30));
+        runningCampaign.Retired = true;
+        await runningCampaign.DisposeAsync();
+
         // A game can exit while its Mac GUI agent stays loaded. That host's character and profile
         // must remain journalled until recovery proves the agent was removed.
         var blockedCampaign = await HostedCampaignPreparation.PrepareAsync(sameHostManifestFile,
             Path.Combine(_rig.Root, "blocked-agent-prepared"), TimeSpan.FromSeconds(30), name => hosts[name], pinnedLoader: null);
         string blockedRuntime = blockedCampaign.Copies.Single(copy => copy.Actor == "client-a").Runtime;
-        var blocked = await new RunRetirement(null, "").CampaignAsync(blockedCampaign, ["server"], blockedHosts: ["server"]);
+        var blockedReport = new ScenarioReport("blocked source verdict");
+        var blocked = await new RunRetirement(blockedReport, "").CampaignAsync(blockedCampaign, ["server"], blockedHosts: ["server"]);
         Assert.Single(blocked);
         Assert.Contains("Mac GUI agent", blocked[0].Message + blocked[0].InnerException?.Message);
         Assert.True(File.Exists(sharedHost.Local(@"C:\save\characters_local\vt-one.fch")));
         Assert.True(Directory.Exists(sharedHost.Local(blockedRuntime)));
+        var incomplete = Assert.Single(blockedReport.Steps, step => step.Name.Contains("client-a's source install after the run", StringComparison.Ordinal) &&
+            step.Name.Contains("incomplete: actor stop not proven", StringComparison.Ordinal));
+        Assert.False(incomplete.Passed);
+        Assert.Contains("incomplete", incomplete.Error, StringComparison.OrdinalIgnoreCase);
+        Assert.StartsWith("incomplete: actor stop not proven", blockedReport.Provenance["sourceIntegrity.client-a"]);
         await blockedCampaign.DisposeAsync();
         Assert.False(File.Exists(sharedHost.Local(@"C:\save\characters_local\vt-one.fch")));
         Assert.False(Directory.Exists(sharedHost.Local(blockedRuntime)));
@@ -309,6 +340,8 @@ public sealed class NativeDependencyResolverTests : IDisposable
         var keptCampaign = await HostedCampaignPreparation.PrepareAsync(sameHostManifestFile, Path.Combine(_rig.Root, "kept-prepared"),
             TimeSpan.FromSeconds(30), name => hosts[name], pinnedLoader: null);
         var retirement = new RunRetirement(null, "");
+        int metadataBefore = hosts.Values.SelectMany(host => host.Runs)
+            .Count(run => run.Script == "list" && run.Variables["metadata"] == "1");
         RunRetirement.KeepOverride.Value = true;
         try { Assert.Empty(await retirement.CampaignAsync(keptCampaign, [])); }
         finally { RunRetirement.KeepOverride.Value = null; }
@@ -316,6 +349,8 @@ public sealed class NativeDependencyResolverTests : IDisposable
         Assert.All(keptCampaign.Copies, copy => Assert.True(Directory.Exists(hosts[copy.Host].Local(copy.Runtime)), copy.Runtime));
         Assert.All(keptCampaign.Copies, copy => Assert.True(retirement.Kept(copy.Host.ToLowerInvariant(), copy.Runtime)));
         Assert.False(File.Exists(sharedHost.Local(@"C:\save\characters_local\vt-one.fch")));
+        Assert.Equal(metadataBefore + keptCampaign.SourceChecks.Count, hosts.Values.SelectMany(host => host.Runs)
+            .Count(run => run.Script == "list" && run.Variables["metadata"] == "1"));
         int scripts = hosts.Values.Sum(host => host.Scripts.Count);
         Assert.Empty(await retirement.CampaignAsync(keptCampaign, []));
         Assert.Equal(scripts, hosts.Values.Sum(host => host.Scripts.Count));
@@ -733,7 +768,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         // One owned profile for the server (#257): the campaign's prepared install is the runtime, verified in place, never copied.
         Assert.Single(host.Scripts, script => script == "profile-seed");
         Assert.DoesNotContain("copy", host.Scripts);
-        Assert.Equal("Setup", steps["verify the prepared runtime on the server host"]);
+        Assert.Equal("Setup", steps["reuse the verified prepared runtime listing"]);
         Assert.DoesNotContain("copy and verify pinned runtime on the server host", steps.Keys);
         Assert.Contains("vt-prep-", result.GetProperty("Provenance").GetProperty("runtimeCopy").GetString());
         // The run journal (#257): one run id for the campaign; on the host, beside its lock, each copy was journalled before it

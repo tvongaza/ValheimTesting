@@ -194,4 +194,18 @@ public sealed class HostInstallListingTests : IDisposable
         }
         finally { Directory.Delete(outside, recursive: true); }
     }
+
+    [Fact]
+    public async Task MetadataRetainsSubSecondModifiedTime()
+    {
+        string path = Path.Combine(_root, "save", "Name.fch");
+        var firstTime = new DateTime(2026, 1, 2, 3, 4, 5, 100, DateTimeKind.Utc);
+        File.SetLastWriteTimeUtc(path, firstTime);
+        var first = await HostInstall.ListProfileSourceAsync(_host, _root, TimeSpan.FromSeconds(20));
+        File.SetLastWriteTimeUtc(path, firstTime.AddMilliseconds(200));
+        var second = await HostInstall.ListMetadataAsync(_host, _root, TimeSpan.FromSeconds(20));
+
+        Assert.Equal(first.States["save/Name.fch"].Size, second.States["save/Name.fch"].Size);
+        Assert.NotEqual(first.States["save/Name.fch"].Modified, second.States["save/Name.fch"].Modified);
+    }
 }

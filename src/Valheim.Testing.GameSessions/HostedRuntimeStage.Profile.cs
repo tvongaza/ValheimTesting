@@ -10,7 +10,7 @@ internal static partial class HostedRuntimeStage
     /// take from the game's root that a reader of the run should know about (<see cref="ProfileLeftOut"/>).
     /// </summary>
     internal sealed record PreparedProfile(HostListing Source, HostListing Game, HostListing Loader, InstallPins Pins,
-        IReadOnlyList<ProfileLeftOut> LeftOut)
+        IReadOnlyList<ProfileLeftOut> LeftOut, ProfileSourceCheck SourceCheck)
     {
         internal string GameRoot => Game.Root;
         internal string LoaderRoot => Loader.Root;
@@ -205,6 +205,9 @@ internal static partial class HostedRuntimeStage
         // Keep only the game's known root dependencies; every other source file stays untouched and out of the run.
         var plan = windows ? PlanWindowsProfile(game.Files.Keys) : new WindowsProfileFiles([], []);
         string[] gameLinks = [.. plan.Links];
+        string[] checkedRootFiles = windows ? gameLinks : kind == HostedRuntimeKind.Server &&
+            game.Files.ContainsKey(GameLaunch.ServerLinuxExecutable) ? [GameLaunch.ServerLinuxExecutable] : [];
+        var sourceCheck = ProfileSourceCheck.Prepare(game, checkedRootFiles);
         if (plan.LeftOut.Count != 0)
             Console.WriteLine($"The profile {destination} on {host.Name} leaves out {ProfileLeftOut.Describe(plan.LeftOut)}.");
         string payload = Path.Combine(Path.GetTempPath(), "valheim-profile-stage-" + Guid.NewGuid().ToString("N"));
@@ -232,7 +235,8 @@ internal static partial class HostedRuntimeStage
             }
             shipped = true;
             await host.ShipFilesAsync(payload, staging, timeout, cancellation).ConfigureAwait(false);
-            var shipment = await HostInstall.ListAsync(host, staging, timeout, cancellation: cancellation).ConfigureAwait(false);
+            var shipment = await ProfileSourceCheck.ListSelectedAsync(host, staging, selected.Keys, timeout, cancellation).ConfigureAwait(false)
+                ?? throw new InvalidOperationException("A profile payload unexpectedly selected no files.");
             foreach (var (relative, value) in selected)
                 if (!shipment.Files.TryGetValue(relative, out string? hash) || !hash.Equals(value.Sha, StringComparison.OrdinalIgnoreCase))
                     throw new IOException($"The staged profile file {relative} on {host.Name} differs from its selected source.");
@@ -255,11 +259,12 @@ internal static partial class HostedRuntimeStage
             seed.EnsureSuccess($"Seeding the profile loader on {host.Name}");
             if (InteractiveClient.Line(seed.Stdout, "VT-PROFILE-SEEDED") == null)
                 throw new HostOperationException($"No profile-seed verdict from {host.Name}", seed);
-            var seeded = await HostInstall.ListAsync(host, destination, timeout, cancellation: cancellation).ConfigureAwait(false);
-            foreach (string relative in sourceLoader)
-                if (!seeded.Files.TryGetValue(relative, out string? hash) ||
-                    !hash.Equals(game.Files[relative], StringComparison.OrdinalIgnoreCase))
-                    throw new IOException($"The profile's source loader file {relative} on {host.Name} changed while it was copied.");
+            var seeded = await ProfileSourceCheck.ListSelectedAsync(host, destination, sourceLoader, timeout, cancellation).ConfigureAwait(false);
+            if (seeded != null)
+                foreach (string relative in sourceLoader)
+                    if (!seeded.Files.TryGetValue(relative, out string? hash) ||
+                        !hash.Equals(game.Files[relative], StringComparison.OrdinalIgnoreCase))
+                        throw new IOException($"The profile's source loader file {relative} on {host.Name} changed while it was copied.");
 
             string names = string.Join('\n', selected.Select(file => Encode(file.Key) + " " + file.Value.Kind));
             var applied = await host.RunAsync(windows ? WindowsApply : BashApply,
@@ -281,7 +286,8 @@ internal static partial class HostedRuntimeStage
                         throw new InvalidDataException("Steam runtime target collides with another staged file: " + relative);
                 }
             }
-            var profile = await HostInstall.ListAsync(host, destination, timeout, cancellation: cancellation).ConfigureAwait(false);
+            var profile = await HostInstall.ListAsync(host, destination, timeout,
+                ProfileSourceCheck.StagingVerificationPaths(selected.Keys.Concat(sourceLoader)), cancellation).ConfigureAwait(false);
             foreach (var (relative, value) in selected)
                 if (!profile.Files.TryGetValue(relative, out string? hash) || !hash.Equals(value.Sha, StringComparison.OrdinalIgnoreCase))
                     throw new IOException($"The prepared profile file {relative} on {host.Name} differs from its pin.");
@@ -299,9 +305,10 @@ internal static partial class HostedRuntimeStage
             var pins = windows ? HostInstall.Pins(profile) : HostInstall.Pins(game, profile);
             if (loaderPackage != null && !pins.Loader.Equals(loaderPackage.Loader, StringComparison.OrdinalIgnoreCase))
                 throw new IOException($"The profile loader on {host.Name} is not the reviewed package's loader.");
-            var freshSource = await HostInstall.ListAsync(host, source, timeout, cancellation: cancellation).ConfigureAwait(false);
-            HostInstall.RequireSame(game.Files, freshSource, "source game after profile preparation");
-            return new PreparedProfile(game, windows ? profile : game, profile, pins, plan.LeftOut);
+            var preparedGame = windows ? WindowsProfileListing(game, profile, plan.Links) : game;
+            var loader = windows ? preparedGame : profile;
+            sourceCheck.RecordPreparedProfile(preparedGame, loader);
+            return new PreparedProfile(game, preparedGame, loader, pins, plan.LeftOut, sourceCheck);
         }
         catch (Exception original)
         {
@@ -326,6 +333,23 @@ internal static partial class HostedRuntimeStage
             throw;
         }
         finally { Directory.Delete(payload, recursive: true); }
+    }
+
+    // A Windows profile's full game listing without re-hashing its hard links: their bytes are the preparation listing's
+    // bytes, while every copied loader/BepInEx path comes from the narrow verified profile listing above.
+    private static HostListing WindowsProfileListing(HostListing source, HostListing profile, IEnumerable<string> links)
+    {
+        var files = new Dictionary<string, string>(profile.Names);
+        var states = new Dictionary<string, HostFileState>(profile.Names);
+        foreach (string path in links)
+        {
+            files[path] = source.Files[path];
+            states[path] = source.States[path];
+        }
+        foreach (var (path, hash) in profile.Files) files[path] = hash;
+        foreach (var (path, state) in profile.States) states[path] = state;
+        return new HostListing(profile.HostName, profile.Shell, profile.Root, files,
+            source.Executables.Where(path => files.ContainsKey(path)).ToArray(), states);
     }
 
     private static string Encode(string name) => Convert.ToBase64String(Encoding.UTF8.GetBytes(name));
