@@ -36,7 +36,6 @@ jobs:
       # GitHub's Windows runners run the job in the signed-in console session, so the interactive client's scheduled-task
       # start is required to run there (with stand-ins for Steam and the game) rather than only its refusal.
       VALHEIM_TESTING_WINDOWS_DESKTOP: ${{ matrix.os == 'windows-latest' && '1' || '' }}
-      VT_CI_PROFILE: ${{ github.event_name == 'workflow_dispatch' && '1' || '' }}
       # The NuGet package cache's paths (see "Restore the NuGet package cache"), shared by its restore and save.
       VT_NUGET_CACHE_PATHS: |
         ~/.nuget/packages
@@ -81,22 +80,13 @@ jobs:
       # slowest measured rest of the step (about 4 minutes on macOS) and a margin: a hang ends in minutes, not at the old 30.
       # The transcript and test results are kept when the step fails or is cancelled (#171), and a test run with no progress
       # for five minutes names its unfinished tests.
-      # A manual dispatch keeps the full toolkit suite on every OS and its TRX timings to refresh ci-test-timings.json.
       # Windows and macOS run package and consume beside their toolkit jobs (the shards of scripts/ci-test-timings.json); Linux
       # retains its full non-shell validation. A pull request runs this OS's share of the toolkit tests (VT_SPLIT_ARGUMENT).
-      - run: dotnet run scripts/validate.cs -- ${{ matrix.os != 'ubuntu-latest' && github.event_name != 'workflow_dispatch' && '--ci-build-only' || '--skip-ci-shell' }} ${{ env.VT_SPLIT_ARGUMENT }}
+      - run: dotnet run scripts/validate.cs -- ${{ matrix.os != 'ubuntu-latest' && '--ci-build-only' || '--skip-ci-shell' }} ${{ env.VT_SPLIT_ARGUMENT }}
         timeout-minutes: 15
         env:
           # #736: macOS only; one line a minute in the job log, which reaches GitHub while the job runs.
           VT_VALIDATE_HEARTBEAT_SECONDS: ${{ runner.os == 'macOS' && '60' || '' }}
-      - name: Keep test timings for CI profiling
-        if: github.event_name == 'workflow_dispatch' && always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: test-timings-${{ matrix.os }}
-          path: artifacts/validate/Valheim.Testing.Tests/timings.trx
-          if-no-files-found: ignore
-          retention-days: 2
       # #736: always on macOS (see the action).
       - uses: ./.github/actions/macos-diagnostics-finish
         if: always() && runner.os == 'macOS'
@@ -192,8 +182,18 @@ jobs:
         timeout-minutes: 12
         run: dotnet run scripts/validate.cs -- ${{ matrix.args }} ${{ env.VT_SPLIT_ARGUMENT }}
         env:
+          # A manual dispatch keeps each shard's TRX timings, to refresh ci-test-timings.json (the union is the whole suite).
+          VT_CI_PROFILE: ${{ github.event_name == 'workflow_dispatch' && '1' || '' }}
           # #736: macOS only; one line a minute in the job log, which reaches GitHub while the job runs.
           VT_VALIDATE_HEARTBEAT_SECONDS: ${{ runner.os == 'macOS' && '60' || '' }}
+      - name: Keep the shard's test timings for CI profiling
+        if: github.event_name == 'workflow_dispatch' && always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-timings-${{ matrix.os }}-${{ matrix.shard }}
+          path: artifacts/validate/Valheim.Testing.Tests/timings.trx
+          if-no-files-found: ignore
+          retention-days: 2
       - uses: ./.github/actions/macos-diagnostics-finish
         if: always() && runner.os == 'macOS'
         with:
