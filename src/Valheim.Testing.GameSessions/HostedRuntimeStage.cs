@@ -22,11 +22,33 @@ internal static partial class HostedRuntimeStage
     private static readonly StringComparer HostNames = StringComparer.OrdinalIgnoreCase;
     private static readonly Regex SafePath = new(@"^[A-Za-z0-9_. -]+(?:/[A-Za-z0-9_. -]+)*$", RegexOptions.CultureInvariant);
 
+    internal enum PayloadTargetKind { BepInEx, Loader, SteamRuntime }
+    private sealed record SelectedPayloadFile(string Source, string Sha, PayloadTargetKind Kind);
+
+    // The C# selector and fake host use the same path families the two host scripts enforce. Keep this in step with the
+    // script switches below: the scripts receive InstallPins.LoaderEntries as their Loader table.
+    internal static bool PayloadTargetAllowed(string relative, PayloadTargetKind kind) => kind switch
+    {
+        PayloadTargetKind.BepInEx => relative.StartsWith("BepInEx/", StringComparison.OrdinalIgnoreCase),
+        PayloadTargetKind.Loader => InstallPins.IsLoaderFile(relative, StringComparison.OrdinalIgnoreCase),
+        PayloadTargetKind.SteamRuntime => relative.StartsWith("steam-runtime/", StringComparison.OrdinalIgnoreCase),
+        _ => false,
+    };
+
+    private static PayloadTargetKind PayloadKind(string relative) =>
+        PayloadTargetAllowed(relative, PayloadTargetKind.Loader) ? PayloadTargetKind.Loader :
+        PayloadTargetAllowed(relative, PayloadTargetKind.SteamRuntime) ? PayloadTargetKind.SteamRuntime :
+        PayloadTargetAllowed(relative, PayloadTargetKind.BepInEx) ? PayloadTargetKind.BepInEx :
+        throw new InvalidDataException("No selected payload kind owns target path: " + relative);
+
+    private static SelectedPayloadFile Select(string source, string sha, string relative) =>
+        new(source, sha, PayloadKind(relative));
+
     // The profile's selection and loader-package policy.
-    private static (Dictionary<string, (string Source, string Sha)> Files, bool ExplicitSettings) SelectPayload(
+    private static (Dictionary<string, SelectedPayloadFile> Files, bool ExplicitSettings) SelectPayload(
         IReadOnlyList<HostedRuntimeFile> files, BepInExLoaderPackage? loaderPackage, HostShellKind shell)
     {
-        var selected = new Dictionary<string, (string Source, string Sha)>(HostNames);
+        var selected = new Dictionary<string, SelectedPayloadFile>(HostNames);
         foreach (var file in files)
         {
             if (string.IsNullOrWhiteSpace(file.RelativePath) || !SafePath.IsMatch(file.RelativePath) ||
@@ -39,7 +61,7 @@ internal static partial class HostedRuntimeStage
             string local = Path.GetFullPath(file.Source);
             if (!File.Exists(local) || (File.GetAttributes(local) & FileAttributes.ReparsePoint) != 0)
                 throw new FileNotFoundException("A selected runtime file is missing or linked: " + local, local);
-            if (!selected.TryAdd(file.RelativePath, (local, FileHash.Sha256(local))))
+            if (!selected.TryAdd(file.RelativePath, Select(local, FileHash.Sha256(local), file.RelativePath)))
                 throw new ArgumentException("Two selected runtime files have the same target path: " + file.RelativePath, nameof(files));
         }
         bool explicitlySelectedSettings = selected.ContainsKey(BepInExSettings.RelativePath);
@@ -51,7 +73,8 @@ internal static partial class HostedRuntimeStage
                 throw new InvalidDataException("The reviewed loader package does not match the host platform.");
             // A BepInEx.cfg the plan selects replaces the package's default (#711); any other overlap is refused.
             foreach (var (relative, sha) in loaderPackage.Files.Where(file => !(explicitlySelectedSettings && selected.Comparer.Equals(file.Key, BepInExSettings.RelativePath))))
-                if (!selected.TryAdd(relative, (Path.Combine(loaderPackage.Root, relative.Replace('/', Path.DirectorySeparatorChar)), sha)))
+                if (!selected.TryAdd(relative, Select(Path.Combine(loaderPackage.Root, relative.Replace('/', Path.DirectorySeparatorChar)),
+                    sha, relative)))
                     throw new InvalidDataException("A selected runtime file overrides a reviewed loader file: " + relative);
         }
         return (selected, explicitlySelectedSettings);
@@ -269,10 +292,38 @@ internal static partial class HostedRuntimeStage
     internal static bool IsStageable(string relativePath) =>
         SafePath.IsMatch(relativePath) && !relativePath.Split('/').Any(part => part is "." or "..") && !relativePath.StartsWith(' ');
 
-    // Variables: runtime, stage, parent (the folder holding both), files, loader, preserveConfig. Every delete is below its root: the
-    // runtime's own BepInEx folders and loader entries below the runtime, the staging folder below the parent.
+    // Variables: runtime, stage, parent (the folder holding both), files (base64 path and its kind), loader, preserveConfig. Every delete is below its
+    // root: the runtime's own BepInEx folders and loader entries below the runtime, the staging folder below the parent.
     internal static readonly string WindowsApply = ProtectedPaths.PowerShellInside + ProtectedPaths.PowerShellRemove + """
         $utf8 = New-Object Text.UTF8Encoding $false
+        $loaderEntries = @($loader -split "`n" | Where-Object { $_ })
+        # Decide every selected target before changing the runtime. Each kind belongs to that one selected file; this host-side
+        # check also refuses a malformed/replayed request before it can overwrite a hard-linked game file.
+        $selected = @()
+        foreach ($line in ($files -split "`n")) {
+            if (-not $line) { continue }
+            $parts = @($line -split ' ', 2)
+            if ($parts.Length -ne 2) { throw ('Malformed selected payload entry: ' + $line) }
+            $relative = $utf8.GetString([Convert]::FromBase64String($parts[0]))
+            $kind = $parts[1]
+            if ([IO.Path]::IsPathRooted($relative) -or @($relative -split '[\\/]').Contains('..')) {
+                throw ('Refusing an absolute or traversing selected payload target: ' + $relative)
+            }
+            $allowed = $false
+            switch ($kind) {
+                'BepInEx' { $allowed = $relative.StartsWith('BepInEx/', [StringComparison]::OrdinalIgnoreCase) }
+                'SteamRuntime' { $allowed = $relative.StartsWith('steam-runtime/', [StringComparison]::OrdinalIgnoreCase) }
+                'Loader' {
+                    foreach ($entry in $loaderEntries) {
+                        if ([string]::Equals($relative, $entry, [StringComparison]::OrdinalIgnoreCase) -or
+                            $relative.StartsWith($entry.TrimEnd('/', '\') + '/', [StringComparison]::OrdinalIgnoreCase)) { $allowed = $true }
+                    }
+                }
+                default { throw ('Unknown selected payload kind: ' + $kind) }
+            }
+            if (-not $allowed) { throw ('Refusing a target outside the selected payload kinds: ' + $relative) }
+            $selected += [pscustomobject]@{ Relative = $relative; Kind = $kind }
+        }
         if ($preserveConfig -eq 'true') {
             [IO.File]::Copy((Join-Path $runtime 'BepInEx\config\BepInEx.cfg'), (Join-Path $stage 'source-BepInEx.cfg'))
         }
@@ -282,27 +333,54 @@ internal static partial class HostedRuntimeStage
             [void][IO.Directory]::CreateDirectory($dir)
         }
         # loader: the loader's files and folders (InstallPins), one per line, when a reviewed package replaces them; else empty.
-        foreach ($entry in ($loader -split "`n")) {
-            if (-not $entry) { continue }
+        foreach ($entry in $loaderEntries) {
             $path = Join-Path $runtime $entry
             Remove-VtTree $path $runtime
         }
-        foreach ($line in ($files -split "`n")) {
-            if (-not $line) { continue }
-            $relative = $utf8.GetString([Convert]::FromBase64String($line))
+        foreach ($file in $selected) {
+            $relative = $file.Relative
             $from = Join-Path $stage $relative
             $to = Join-Path $runtime $relative
             [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($to))
-            [IO.File]::Copy($from, $to, $true)
+            # Delete the name first: File.Copy(..., overwrite: true) would write through a hard link into the source install.
+            [IO.File]::Delete($to)
+            [IO.File]::Copy($from, $to)
         }
         if ($preserveConfig -eq 'true') {
-            [IO.File]::Copy((Join-Path $stage 'source-BepInEx.cfg'), (Join-Path $runtime 'BepInEx\config\BepInEx.cfg'))
+            $config = Join-Path $runtime 'BepInEx\config\BepInEx.cfg'
+            [IO.File]::Copy((Join-Path $stage 'source-BepInEx.cfg'), $config)
         }
         Remove-VtTree $stage $parent
         'VT-STAGED selected files only'
         """.ReplaceLineEndings("\n");
 
     internal static readonly string BashApply = "set -eu\n" + ProtectedPaths.BashInside + ProtectedPaths.BashRemove + """
+        loader_lower=$(printf '%s\n' "$loader" | LC_ALL=C tr '[:upper:]' '[:lower:]')
+        # Decide every selected target before changing the runtime. Each kind belongs to that one selected file; a
+        # malformed/replayed request must not reach one of the launch folder's hard-linked game files.
+        while IFS= read -r line; do
+          [ -n "$line" ] || continue
+          case "$line" in *' '*) ;; *) echo "vt: malformed selected payload entry: $line" >&2; exit 3;; esac
+          encoded=${line%% *}
+          kind=${line#* }
+          relative=$(printf '%s' "$encoded" | base64 -D 2>/dev/null || printf '%s' "$encoded" | base64 -d)
+          separators=$(printf '%s' "$relative" | tr '\\' '/')
+          case "$separators" in /*|[A-Za-z]:/*) echo "vt: refusing an absolute selected payload target: $relative" >&2; exit 3;; esac
+          case "/$separators/" in */../*) echo "vt: refusing a traversing selected payload target: $relative" >&2; exit 3;; esac
+          relative_lower=$(printf '%s' "$relative" | LC_ALL=C tr '[:upper:]' '[:lower:]')
+          allowed=
+          case "$kind" in
+            BepInEx) case "$relative_lower" in bepinex/*) allowed=1;; esac;;
+            SteamRuntime) case "$relative_lower" in steam-runtime/*) allowed=1;; esac;;
+            Loader)
+              while IFS= read -r entry; do
+                [ -n "$entry" ] || continue
+                case "$relative_lower" in "$entry"|"$entry"/*) allowed=1;; esac
+              done <<< "$loader_lower";;
+            *) echo "vt: unknown selected payload kind: $kind" >&2; exit 3;;
+          esac
+          if [ -z "$allowed" ]; then echo "vt: refusing a target outside the selected payload kinds: $relative" >&2; exit 3; fi
+        done <<< "$files"
         if [ "$preserveConfig" = true ]; then
           cp "$runtime/BepInEx/config/BepInEx.cfg" "$stage/source-BepInEx.cfg"
         fi
@@ -317,8 +395,11 @@ internal static partial class HostedRuntimeStage
         done <<< "$loader"
         while IFS= read -r line; do
           [ -n "$line" ] || continue
-          relative=$(printf '%s' "$line" | base64 -D 2>/dev/null || printf '%s' "$line" | base64 -d)
+          encoded=${line%% *}
+          relative=$(printf '%s' "$encoded" | base64 -D 2>/dev/null || printf '%s' "$encoded" | base64 -d)
           mkdir -p "$(dirname "$runtime/$relative")"
+          # Unlink first: cp to an existing hard link would rewrite the source install's shared file record.
+          rm -f -- "$runtime/$relative"
           cp "$stage/$relative" "$runtime/$relative"
         done <<< "$files"
         if [ "$preserveConfig" = true ]; then

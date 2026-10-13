@@ -344,6 +344,18 @@ public sealed class LinkRuleTests : IDisposable
 
     private static string Run(LocalGameHost host, string bash, string powershell) => host.Shell.Kind == HostShellKind.Bash ? bash : powershell;
 
+    private static string Selected(params (string Path, string Kind)[] files) => string.Join('\n', files.Select(file =>
+        Convert.ToBase64String(Encoding.UTF8.GetBytes(file.Path)) + " " + file.Kind));
+
+    private static async Task HardLink(LocalGameHost host, string source, string target)
+    {
+        string script = host.Shell.Kind == HostShellKind.Bash
+            ? "ln \"$source\" \"$target\""
+            : "New-Item -ItemType HardLink -Path $target -Target $source -ErrorAction Stop | Out-Null";
+        (await host.RunAsync(script, new Dictionary<string, string> { ["source"] = source, ["target"] = target }, Generous))
+            .EnsureSuccess("create hard link");
+    }
+
     // The character staging folder goes, and a stage beyond a link out of its root is refused with nothing deleted.
     [Theory]
     [MemberData(nameof(Shells))]
@@ -380,10 +392,11 @@ public sealed class LinkRuleTests : IDisposable
         File.WriteAllText(Path.Combine(stage, "BepInEx", "plugins", "mod.dll"), "the mod");
         var host = Shell(shell);
         string script = Run(host, HostedRuntimeStage.BashApply, HostedRuntimeStage.WindowsApply);
-        string names = Convert.ToBase64String(Encoding.UTF8.GetBytes("BepInEx/plugins/mod.dll"));
+        string names = Selected(("BepInEx/plugins/mod.dll", "BepInEx"));
         Dictionary<string, string> Variables(string loader) => new()
         {
-            ["runtime"] = runtime, ["stage"] = stage, ["parent"] = parent, ["files"] = names, ["loader"] = loader, ["preserveConfig"] = "false",
+            ["runtime"] = runtime, ["stage"] = stage, ["parent"] = parent, ["files"] = names,
+            ["loader"] = loader, ["preserveConfig"] = "false",
         };
 
         // BepInEx is a link out of the runtime: nothing below it is deleted, and the staging stays for recovery.
@@ -407,6 +420,178 @@ public sealed class LinkRuleTests : IDisposable
         Assert.False(Directory.Exists(stage));
     }
 
+    // BepInEx/core is not touched by the preliminary plugins/scripts/config/patchers cleanup, and the loader list is empty.
+    // The apply step itself must unlink this selected target before copying, or cp/File.Copy rewrites the source hard link (#656).
+    [Theory]
+    [MemberData(nameof(Shells))]
+    public async Task ApplyingAProfileUnlinksAHardLinkedSelectedTargetBeforeCopying(string shell)
+    {
+        string parent = Folder("vt-prep-hard-linked-selected"), runtime = Path.Combine(parent, "runtime"), stage = Path.Combine(parent, "staging");
+        const string relative = "BepInEx/core/sentinel.dll";
+        Directory.CreateDirectory(Path.Combine(runtime, "BepInEx", "core"));
+        Directory.CreateDirectory(Path.Combine(stage, "BepInEx", "core"));
+        string source = Path.Combine(Folder("source-selected"), "sentinel.dll");
+        File.WriteAllText(source, "source bytes");
+        string target = Path.Combine(runtime, "BepInEx", "core", "sentinel.dll");
+        var host = Shell(shell);
+        await HardLink(host, source, target);
+        File.WriteAllText(Path.Combine(stage, "BepInEx", "core", "sentinel.dll"), "staged bytes");
+
+        var result = (await host.RunAsync(Run(host, HostedRuntimeStage.BashApply, HostedRuntimeStage.WindowsApply), new Dictionary<string, string>
+        {
+            ["runtime"] = runtime, ["stage"] = stage, ["parent"] = parent,
+            ["files"] = Selected((relative, "BepInEx")),
+            ["loader"] = "", ["preserveConfig"] = "false",
+        }, Generous)).EnsureSuccess("apply hard-linked selected target");
+
+        Assert.Contains("VT-STAGED", result.Stdout);
+        Assert.Equal("source bytes", File.ReadAllText(source));
+        Assert.Equal("staged bytes", File.ReadAllText(target));
+        Assert.False(Directory.Exists(stage));
+    }
+
+    // A local Mac server's reviewed SteamCMD closure is part of the selected payload. Its kind admits that exact payload
+    // family without broadening the apply script to unrelated game-root targets.
+    [Theory]
+    [MemberData(nameof(Shells))]
+    public async Task ApplyingAProfileAcceptsASelectedMacSteamRuntimePayload(string shell)
+    {
+        string parent = Folder("vt-prep-steam-runtime"), runtime = Path.Combine(parent, "runtime"), stage = Path.Combine(parent, "staging");
+        const string relative = "steam-runtime/steamclient.dylib";
+        Directory.CreateDirectory(runtime);
+        Directory.CreateDirectory(Path.Combine(stage, "steam-runtime"));
+        File.WriteAllText(Path.Combine(stage, "steam-runtime", "steamclient.dylib"), "reviewed Steam runtime");
+        var host = Shell(shell);
+
+        var result = (await host.RunAsync(Run(host, HostedRuntimeStage.BashApply, HostedRuntimeStage.WindowsApply), new Dictionary<string, string>
+        {
+            ["runtime"] = runtime, ["stage"] = stage, ["parent"] = parent,
+            ["files"] = Selected((relative, "SteamRuntime")),
+            ["loader"] = "", ["preserveConfig"] = "false",
+        }, Generous)).EnsureSuccess("apply selected Steam runtime");
+
+        Assert.Contains("VT-STAGED", result.Stdout);
+        Assert.Equal("reviewed Steam runtime", File.ReadAllText(Path.Combine(runtime, "steam-runtime", "steamclient.dylib")));
+        Assert.False(Directory.Exists(stage));
+    }
+
+    // The API never selects game paths, and the host enforces that boundary before deleting BepInEx or writing a file. A
+    // malformed/replayed apply request therefore cannot write through one of the launch folder's hard links to the source.
+    [Theory]
+    [MemberData(nameof(Shells))]
+    public async Task ApplyingAProfileRefusesAHardLinkedGameTargetBeforeWriting(string shell)
+    {
+        string parent = Folder("vt-prep-hard-linked-game"), runtime = Path.Combine(parent, "runtime"), stage = Path.Combine(parent, "staging");
+        string plugins = Path.Combine(runtime, "BepInEx", "plugins");
+        Directory.CreateDirectory(plugins);
+        string marker = Path.Combine(plugins, "keep.dll");
+        File.WriteAllText(marker, "untouched");
+        Directory.CreateDirectory(stage);
+        string source = Path.Combine(Folder("source-game"), "valheim_server.exe");
+        File.WriteAllText(source, "source bytes");
+        string target = Path.Combine(runtime, "valheim_server.exe");
+        var host = Shell(shell);
+        await HardLink(host, source, target);
+        File.WriteAllText(Path.Combine(stage, "valheim_server.exe"), "staged bytes");
+
+        var refused = await host.RunAsync(Run(host, HostedRuntimeStage.BashApply, HostedRuntimeStage.WindowsApply), new Dictionary<string, string>
+        {
+            ["runtime"] = runtime, ["stage"] = stage, ["parent"] = parent,
+            ["files"] = Selected(("valheim_server.exe", "BepInEx")),
+            ["loader"] = "", ["preserveConfig"] = "false",
+        }, Generous);
+
+        Assert.True(refused.Failed, refused.Describe() + refused.Stderr);
+        Assert.Contains("valheim_server.exe", refused.Describe() + refused.Stderr);
+        Assert.Equal("source bytes", File.ReadAllText(source));
+        Assert.Equal("source bytes", File.ReadAllText(target));
+        Assert.Equal("untouched", File.ReadAllText(marker));
+        Assert.True(Directory.Exists(stage));
+    }
+
+    // Selection and PowerShell compare these path families without case. Bash must enforce the same contract even on a
+    // case-sensitive host, for both BepInEx and the reviewed loader entries.
+    [Theory]
+    [MemberData(nameof(Shells))]
+    public async Task ApplyingAProfileMatchesSelectedPrefixesWithoutCase(string shell)
+    {
+        string parent = Folder("vt-prep-case"), runtime = Path.Combine(parent, "runtime"), stage = Path.Combine(parent, "staging");
+        string bepinex = "bePiNeX/core/mixed.dll", loader = "DOORSTOP_LIBS/libdoorstop_x64.so";
+        Directory.CreateDirectory(Path.Combine(stage, "bePiNeX", "core"));
+        Directory.CreateDirectory(Path.Combine(stage, "DOORSTOP_LIBS"));
+        File.WriteAllText(Path.Combine(stage, "bePiNeX", "core", "mixed.dll"), "plugin");
+        File.WriteAllText(Path.Combine(stage, "DOORSTOP_LIBS", "libdoorstop_x64.so"), "loader");
+        Directory.CreateDirectory(runtime);
+        var host = Shell(shell);
+
+        var result = (await host.RunAsync(Run(host, HostedRuntimeStage.BashApply, HostedRuntimeStage.WindowsApply), new Dictionary<string, string>
+        {
+            ["runtime"] = runtime, ["stage"] = stage, ["parent"] = parent,
+            ["files"] = Selected((bepinex, "BepInEx"), (loader, "Loader")),
+            ["loader"] = "doorstop_libs", ["preserveConfig"] = "false",
+        }, Generous)).EnsureSuccess("apply case-insensitive selected prefixes");
+
+        Assert.Contains("VT-STAGED", result.Stdout);
+        Assert.Equal("plugin", File.ReadAllText(Path.Combine(runtime, "bePiNeX", "core", "mixed.dll")));
+        Assert.Equal("loader", File.ReadAllText(Path.Combine(runtime, "DOORSTOP_LIBS", "libdoorstop_x64.so")));
+    }
+
+    // A replay cannot borrow permission from another file's kind. The old union check accepted both swapped entries.
+    [Theory]
+    [MemberData(nameof(Shells))]
+    public async Task ApplyingAProfileChecksEachSelectedFileAgainstItsOwnKind(string shell)
+    {
+        string parent = Folder("vt-prep-own-kind"), runtime = Path.Combine(parent, "runtime"), stage = Path.Combine(parent, "staging");
+        string marker = Path.Combine(runtime, "BepInEx", "plugins", "keep.dll");
+        Directory.CreateDirectory(Path.GetDirectoryName(marker)!);
+        Directory.CreateDirectory(stage);
+        File.WriteAllText(marker, "untouched");
+        var host = Shell(shell);
+
+        var refused = await host.RunAsync(Run(host, HostedRuntimeStage.BashApply, HostedRuntimeStage.WindowsApply), new Dictionary<string, string>
+        {
+            ["runtime"] = runtime, ["stage"] = stage, ["parent"] = parent,
+            ["files"] = Selected(("BepInEx/core/wrong.dll", "SteamRuntime"), ("steam-runtime/wrong.dylib", "BepInEx")),
+            ["loader"] = "", ["preserveConfig"] = "false",
+        }, Generous);
+
+        Assert.True(refused.Failed, refused.Describe() + refused.Stderr);
+        Assert.Contains("outside the selected payload kinds", refused.Describe() + refused.Stderr);
+        Assert.Equal("untouched", File.ReadAllText(marker));
+        Assert.True(Directory.Exists(stage));
+    }
+
+    // Prefix checks are not containment checks: reject absolute names and every .. segment before cleanup or copying.
+    [Theory]
+    [MemberData(nameof(Shells))]
+    public async Task ApplyingAProfileRefusesAbsoluteAndTraversingSelectedTargets(string shell)
+    {
+        string parent = Folder("vt-prep-target-path"), runtime = Path.Combine(parent, "runtime"), stage = Path.Combine(parent, "staging");
+        string marker = Path.Combine(runtime, "BepInEx", "plugins", "keep.dll");
+        Directory.CreateDirectory(Path.GetDirectoryName(marker)!);
+        Directory.CreateDirectory(stage);
+        File.WriteAllText(marker, "untouched");
+        var host = Shell(shell);
+
+        foreach (string relative in new[]
+        {
+            "/absolute.dll", @"C:\x.dll", @"\\server\share\x.dll", @"\\?\C:\x.dll",
+            "BepInEx/../../outside.dll", @"BepInEx\..\..\x.dll",
+        })
+        {
+            var refused = await host.RunAsync(Run(host, HostedRuntimeStage.BashApply, HostedRuntimeStage.WindowsApply), new Dictionary<string, string>
+            {
+                ["runtime"] = runtime, ["stage"] = stage, ["parent"] = parent,
+                ["files"] = Selected((relative, "BepInEx")), ["loader"] = "", ["preserveConfig"] = "false",
+            }, Generous);
+            Assert.True(refused.Failed, refused.Describe() + refused.Stderr);
+            bool traversing = relative.Replace('\\', '/').Split('/').Contains("..");
+            Assert.Contains(traversing ? "travers" : "absolute", refused.Describe() + refused.Stderr, StringComparison.OrdinalIgnoreCase);
+            Assert.Equal("untouched", File.ReadAllText(marker));
+            Assert.True(Directory.Exists(stage));
+        }
+    }
+
     // A loader entry beyond a link out of the runtime is refused as well (the entries come from the pins, but the host decides).
     [Theory]
     [MemberData(nameof(Shells))]
@@ -423,7 +608,8 @@ public sealed class LinkRuleTests : IDisposable
 
         var refused = await host.RunAsync(Run(host, HostedRuntimeStage.BashApply, HostedRuntimeStage.WindowsApply), new Dictionary<string, string>
         {
-            ["runtime"] = runtime, ["stage"] = stage, ["parent"] = parent, ["files"] = "", ["loader"] = "door/core", ["preserveConfig"] = "false",
+            ["runtime"] = runtime, ["stage"] = stage, ["parent"] = parent, ["files"] = "",
+            ["loader"] = "door/core", ["preserveConfig"] = "false",
         }, Generous);
 
         Assert.True(refused.Failed, refused.Describe() + refused.Stderr);

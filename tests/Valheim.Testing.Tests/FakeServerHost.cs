@@ -242,7 +242,12 @@ internal sealed class FakeServerHost : IGameHost
                 }
                 foreach (string line in v["files"].Split('\n', StringSplitOptions.RemoveEmptyEntries))
                 {
-                    string relative = Encoding.UTF8.GetString(Convert.FromBase64String(line));
+                    string[] selected = line.Split(' ', 2);
+                    if (selected.Length != 2 || !Enum.TryParse(selected[1], out HostedRuntimeStage.PayloadTargetKind kind) || !Enum.IsDefined(kind))
+                        throw new InvalidDataException("Malformed selected payload entry: " + line);
+                    string relative = Encoding.UTF8.GetString(Convert.FromBase64String(selected[0]));
+                    if (!HostedRuntimeStage.PayloadTargetAllowed(relative, kind))
+                        throw new InvalidDataException("Refusing a target outside the selected payload kinds: " + relative);
                     string target = Path.Combine(runtime, relative);
                     Directory.CreateDirectory(Path.GetDirectoryName(target)!);
                     File.Copy(Path.Combine(stage, relative), target, overwrite: true);
