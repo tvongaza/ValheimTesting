@@ -1117,8 +1117,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
     [Fact] public void AnEditedLockWithoutTheCliCoreIsNotReady()
     {
         var plan = NativeDependencyResolver.Resolve(Request(_rig.Parent));
-        var core = Assert.Single(plan.CliManifest.Files.Where(file => file.Plugins.Contains("valheimCLI.valheimCLI")));
-        core.Plugins = ["a.different.plugin"];
+        plan.CliManifest.Plugin.Plugins = ["a.different.plugin"];
         string path = Path.Combine(_rig.Root, "no-core-lock.json");
         plan.Write(path);
         Assert.Contains("not a one-plugin build", Assert.Throws<InvalidDataException>(() => NativeDependencyLock.ReadReady(path)).Message);

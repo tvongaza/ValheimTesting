@@ -194,7 +194,7 @@ public sealed class ClientRunPlan
     /// </summary>
     public string[] Capabilities { get; set; } = [];
     /// <summary>
-    /// Owned only: the full path of the <see cref="CliCapabilityManifest"/> of a ValheimCLI core-and-pack set. For a disposable
+    /// Owned only: the full path of the <see cref="CliCapabilityManifest"/> of a ValheimCLI build (one plugin). For a disposable
     /// copy (the default) it names the set the copy stages, its DLLs beside the manifest; left out, the copy stages the toolkit's
     /// pinned bundle and checks against that bundle's manifest. With <see cref="InPlace"/> it names the set the install already
     /// holds; left out there, no static check runs and the report says so. Before launch the install (the copy, or the install in
@@ -297,7 +297,7 @@ public sealed class ClientRunPlan
         }
         if (Pins.ContainsKey("worlduid") || Pins.ContainsKey("world")) throw new ArgumentException("Leave the world out of the client pins; the runner pins the server's world.");
         // A disposable copy's ValheimCLI pins are its staged set's (bound when the copy is made); any other client pins its own.
-        if (!CopySource && (!Pins.TryGetValue("valheimCLI.valheimCLI", out var cli) || cli.Length != 32 || !cli.All(Uri.IsHexDigit)))
+        if (!CopySource && (!Pins.TryGetValue(CliCapabilityManifest.PluginGuid, out var cli) || cli.Length != 32 || !cli.All(Uri.IsHexDigit)))
             throw new ArgumentException("Pin the client's exact ValheimCLI MD5.");
         foreach (string plugin in absentPlugins)
             if (!Pins.TryGetValue(plugin, out var value) || value != "absent") throw new ArgumentException($"The client must pin {plugin}=absent: the check is what a client without it sees.");
@@ -398,12 +398,7 @@ public sealed class ClientRunPlan
         if (CopySource)
         {
             StaticCapabilities.UnionWith(wanted);
-            if (CliManifest != null)
-            {
-                var manifest = CliCapabilityManifest.Read(CliManifest);
-                manifest.RequireDefaultPlugin(); // Refuse an old split set before preparing a disposable client.
-                manifest.RequireCapabilities(wanted);
-            }
+            if (CliManifest != null) CliCapabilityManifest.Read(CliManifest).RequireCapabilities(wanted);
             return null;
         }
         if (CliManifest == null)

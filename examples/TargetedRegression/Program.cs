@@ -46,7 +46,7 @@ try
             return report.Passed ? 0 : 1;
     }
 }
-catch (Exception error) when (error is ArgumentException or InvalidOperationException or IOException or System.Text.Json.JsonException)
+catch (Exception error) when (error is ArgumentException or InvalidOperationException or IOException or InvalidDataException or System.Text.Json.JsonException)
 {
     // Refused before anything launched: the message names what to change.
     Console.Error.WriteLine("REFUSED: " + error.Message);

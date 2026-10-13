@@ -8,10 +8,7 @@ internal static class SmokeAdapter
         CancellationToken cancellation, string? bepInExCore = null)
     {
         GameLaunch.DetectServer(server);
-        var cliCore = dependencies.CliFiles.Where(file => dependencies.CliManifest.Files.Any(entry =>
-            entry.Sha256.Equals(file.Sha256, StringComparison.OrdinalIgnoreCase) &&
-            entry.Plugins.Contains("valheimCLI.valheimCLI", StringComparer.Ordinal))).ToArray();
-        if (cliCore.Length != 1) throw new InvalidDataException("Build the session adapter against exactly one pinned ValheimCLI core.");
+        string cliCore = dependencies.CliPlugin.File;
         bepInExCore ??= Path.Combine(server, InstallPins.CoreDirectory);
         string stage = Path.Combine(Path.GetTempPath(), "valheimtesting-smoke-adapter-" + Guid.NewGuid().ToString("N"));
         try
@@ -20,7 +17,7 @@ internal static class SmokeAdapter
             WriteSource(stage);
             // A staged cache pair proves the adapter restores from NuGet.org alone; no shared cache can stand in.
             var build = new ProjectBuild(Path.Combine(stage, "NativeSmoke.SessionAdapter.csproj"),
-                ["-p:ValheimPath=" + server, "-p:BepInExCore=" + bepInExCore, "-p:CliDll=" + cliCore[0].File], NuGetCaches.Staged(stage));
+                ["-p:ValheimPath=" + server, "-p:BepInExCore=" + bepInExCore, "-p:CliDll=" + cliCore], NuGetCaches.Staged(stage));
             var restore = await build.RestoreAsync(cancellation, ["--configfile", "NuGet.Config"]);
             if (restore.ExitCode != 0)
                 throw new InvalidOperationException("The test-only session adapter could not restore its reference assemblies from NuGet.org (exit " +

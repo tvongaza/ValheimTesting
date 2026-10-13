@@ -136,8 +136,7 @@ internal static class ServerLoad
         var fixture = FixtureBake.Prepare(fixtureSource, output);
         if (parsed.Options.TryGetValue("--adapter-project", out string? adapterProject))
         {
-            string cliCore = dependencies.CliFiles.Single(file => PluginMetadata.Read(file.File).Plugins
-                .Any(plugin => plugin.Guid == "valheimCLI.valheimCLI")).File;
+            string cliCore = dependencies.CliPlugin.File;
             var properties = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             {
                 ["CliDll"] = cliCore,
@@ -189,7 +188,7 @@ internal static class ServerLoad
         var files = new List<HostedRuntimeFile> { new(adapter, "BepInEx/plugins/" + Path.GetFileName(adapter)) };
         foreach (string config in parsed.Configs.Select(Path.GetFullPath))
         {
-            if (Path.GetFileName(config).Equals("valheimCLI.valheimCLI.cfg", StringComparison.OrdinalIgnoreCase))
+            if (Path.GetFileName(config).Equals(OwnedClientPreflight.CliConfig, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidDataException("ValheimCLI's config is the run's own; do not supply it as a mod config.");
             files.Add(new HostedRuntimeFile(config, "BepInEx/config/" + Path.GetFileName(config)));
         }

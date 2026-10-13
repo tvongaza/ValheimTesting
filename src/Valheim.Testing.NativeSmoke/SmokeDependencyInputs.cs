@@ -14,8 +14,8 @@ internal static class SmokeDependencyInputs
         CliFiles = cliFiles,
         SearchRoots = searchRoots.Select(Path.GetFullPath).ToList(),
         OptionalReferences = optionalReferences.ToList(),
-        Capabilities = capabilities.ToList(),
-        RequireToolkitCommands = true,
+        // A one-shot run's plugin must provide every toolkit command, as well as the scenario's.
+        Capabilities = capabilities.Concat(CliCapabilities.Toolkit).Distinct(StringComparer.Ordinal).ToList(),
     };
 
     internal static string Gaps(NativeDependencyLock value) =>

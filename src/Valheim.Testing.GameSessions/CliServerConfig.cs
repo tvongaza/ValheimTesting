@@ -7,7 +7,7 @@ namespace Valheim.Testing.GameSessions;
 // config is never rewritten: refusing it before a copy is safer than silently granting client mutation access.
 internal static class CliServerConfig
 {
-    internal const string RelativePath = "BepInEx/config/valheimCLI.valheimCLI.cfg";
+    internal const string RelativePath = "BepInEx/config/" + OwnedClientPreflight.CliConfig;
 
     // Whether a client needs ValheimCLI's mutation access is decided here, once, from its role. AllowOnServerClients governs
     // a client joined to someone else's server (a dedicated server's, or a hosting client's as that host's peer), where

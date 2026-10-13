@@ -799,8 +799,8 @@ internal sealed class RegressionRig : IDisposable
         var manifest = new CliCapabilityManifest
         {
             Build = "valheimCLI test build",
-            Files = [new() { File = "valheimCLI.dll", Sha256 = FileHash.Sha256(_core), Plugins = ["valheimCLI.valheimCLI"],
-                Extensions = new(StringComparer.Ordinal) { ["valheim.session"] = session } }],
+            Plugin = new() { File = "valheimCLI.dll", Sha256 = FileHash.Sha256(_core), Plugins = ["valheimCLI.valheimCLI"],
+                Extensions = new(StringComparer.Ordinal) { ["valheim.session"] = session } },
         };
         if (full)
         {
@@ -809,7 +809,7 @@ internal sealed class RegressionRig : IDisposable
                 .GroupBy(parts => parts[0], StringComparer.Ordinal);
             foreach (var group in commands)
             {
-                manifest.Files[0].Extensions[group.Key] = new SortedDictionary<string, int>(
+                manifest.Plugin.Extensions[group.Key] = new SortedDictionary<string, int>(
                     group.ToDictionary(parts => parts[1], _ => 1, StringComparer.Ordinal), StringComparer.Ordinal);
             }
         }

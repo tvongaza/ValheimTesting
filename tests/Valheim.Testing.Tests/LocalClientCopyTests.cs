@@ -40,15 +40,10 @@ public sealed class LocalClientCopyTests : IDisposable
     [Fact] public void AnOldSplitCliSetIsRefusedBeforeACopyIsPrepared()
     {
         string manifestPath = CliSet();
-        var manifest = CliCapabilityManifest.Read(manifestPath);
-        manifest.Files.Add(new CliManifestFile
-        {
-            File = "Valheim.Cli.Standard.dll", Sha256 = new string('a', 64), Plugins = ["valheimCLI.standard"]
-        });
-        manifest.Write(manifestPath);
+        OneManifestRefusalTests.MakeSplit(manifestPath);
         var plan = Plan(_rig.Game);
         plan.CliManifest = manifestPath;
-        var error = Assert.Throws<InvalidOperationException>(plan.Preflight);
+        var error = Assert.Throws<InvalidDataException>(plan.Preflight);
         Assert.Contains("not a one-plugin build", error.Message);
         Assert.False(plan.Prepared);
     }

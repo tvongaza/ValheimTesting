@@ -12,7 +12,7 @@ internal static class OwnedClientPreflight
     internal static readonly string Plugins = Path.Combine("BepInEx", "plugins"), Scripts = Path.Combine("BepInEx", "scripts"), Config = Path.Combine("BepInEx", "config");
     internal const string ScriptEngine = "com.bepis.bepinex.scriptengine";
     internal const string ScriptEngineConfig = ScriptEngine + ".cfg";
-    internal const string CliConfig = "valheimCLI.valheimCLI.cfg";
+    internal const string CliConfig = CliCapabilityManifest.PluginGuid + ".cfg";
 
     internal static Dictionary<string, List<string>> Check(string install, IReadOnlyDictionary<string, string> pins, bool pinned, HostWorldPlan? hostWorld, string? hostWorldName)
     {
@@ -38,9 +38,9 @@ internal static class OwnedClientPreflight
         string preloader = Path.Combine(InstallPins.CoreDirectory, "BepInEx.Preloader.dll");
         if (!File.Exists(Path.Combine(install, preloader)))
             missing.Add($"BepInEx ({Slash(preloader)} is not there)");
-        if (!Directory.Exists(install) || !InstalledDlls(install).Any(dll => Path.GetFileName(dll).Equals("valheimCLI.dll", StringComparison.OrdinalIgnoreCase)
-                || CliBuildManifest.Plugins(dll)?.Contains("valheimCLI.valheimCLI", StringComparer.Ordinal) == true))
-            missing.Add($"ValheimCLI (no valheimCLI.dll, nor a plugin declaring valheimCLI.valheimCLI, in {Slash(Plugins)} or {Slash(Scripts)})");
+        if (!Directory.Exists(install) || !InstalledDlls(install).Any(dll => Path.GetFileName(dll).Equals(CliCapabilityManifest.PluginFile, StringComparison.OrdinalIgnoreCase)
+                || CliBuildManifest.Plugins(dll)?.Contains(CliCapabilityManifest.PluginGuid, StringComparer.Ordinal) == true))
+            missing.Add($"ValheimCLI (no {CliCapabilityManifest.PluginFile}, nor a plugin declaring {CliCapabilityManifest.PluginGuid}, in {Slash(Plugins)} or {Slash(Scripts)})");
         if (missing.Count != 0)
             throw new InvalidOperationException($"The client runs in place, so nothing is staged into {install}, and it lacks {string.Join(" and ", missing)}. " +
                 "Install them there, or leave out inPlace (--in-place) so the run uses a disposable copy that stages ValheimCLI.");

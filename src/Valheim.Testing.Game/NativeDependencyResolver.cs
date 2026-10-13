@@ -13,10 +13,8 @@ public sealed class NativeDependencyRequest
     public string BepInExCore { get; set; } = "";
     public string CliManifest { get; set; } = "";
     public string CliFiles { get; set; } = "";
+    /// <summary>The ValheimCLI commands (<c>owner/command</c>) the pinned plugin must provide with result version 1.</summary>
     public List<string> Capabilities { get; set; } = [];
-    /// <summary>Require every <see cref="CliCapabilities.Toolkit"/> command from the pinned default ValheimCLI plugin.
-    /// One-shot runners set this; general requests may select by capability.</summary>
-    public bool RequireToolkitCommands { get; set; }
     /// <summary>Assembly names the developer explicitly confirms are only used behind an absent soft integration.</summary>
     public List<string> OptionalReferences { get; set; } = [];
 
@@ -62,6 +60,9 @@ public sealed class NativeDependencyLock
     public List<NativeDependencyFile> Plugins { get; set; } = [];
     public List<NativeDependencyFile> CliFiles { get; set; } = [];
     public CliCapabilityManifest CliManifest { get; set; } = new();
+    /// <summary>The lock's one ValheimCLI file: the manifest's plugin (<see cref="RequireExactCliSet"/> checks its bytes).</summary>
+    internal NativeDependencyFile CliPlugin => CliFiles is [var one] ? one
+        : throw new InvalidDataException($"The dependency lock must contain exactly one pinned {CliCapabilityManifest.PluginFile} matching its capability manifest; it lists {CliFiles.Count}.");
     public List<string> OptionalReferences { get; set; } = [];
     public List<string> OptionalCandidates { get; set; } = [];
     public List<NativeDependencyGap> Gaps { get; set; } = [];
@@ -130,14 +131,11 @@ public sealed class NativeDependencyLock
         ArgumentNullException.ThrowIfNull(inputs);
         if (!Ready) throw new InvalidOperationException($"Resolve the {Gaps.Count} dependency choice(s) before applying this lock.");
         RequireExactCliSet();
-        CliManifest.RequireDefaultPlugin();
-        var core = CliFiles.Where(file => CliManifest.Files.Any(entry => entry.Sha256.Equals(file.Sha256, StringComparison.OrdinalIgnoreCase)
-            && entry.Plugins.Contains("valheimCLI.valheimCLI", StringComparer.Ordinal))).ToList();
-        if (core.Count != 1) throw new InvalidDataException("The dependency lock needs exactly one default ValheimCLI plugin.");
+        var core = CliPlugin;
         CliManifest.Write(cliManifestPath);
         inputs.Cli = new RegressionCli
         {
-            Core = new RegressionFile { File = core[0].File, Sha256 = core[0].Sha256 },
+            Core = new RegressionFile { File = core.File, Sha256 = core.Sha256 },
             Manifest = Path.GetFullPath(cliManifestPath),
         };
         inputs.Plugins = Plugins.Select(file => new RegressionFile { File = file.File, Sha256 = file.Sha256 }).ToList();
@@ -152,7 +150,7 @@ public sealed class NativeDependencyLock
         var plan = JsonSerializer.Deserialize<NativeDependencyLock>(File.ReadAllText(path), Json)
             ?? throw new InvalidDataException($"The native dependency lock {path} is empty.");
         if (!plan.Ready) throw new InvalidDataException($"The native dependency lock {path} still has {plan.Gaps.Count} unresolved choice(s): {string.Join("; ", plan.Gaps.Select(gap => gap.Name))}.");
-        plan.CliManifest.Validate();
+        plan.CliManifest.RequireValid($"in the dependency lock {path}");
         foreach (var file in plan.Mods.Concat(plan.Plugins).Concat(plan.CliFiles))
             if (!File.Exists(file.File) || !FileHash.Sha256(file.File).Equals(file.Sha256, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidDataException($"The pinned file {file.File} ({file.Reason}) is missing or changed; resolve from explicit roots again.");
@@ -163,17 +161,11 @@ public sealed class NativeDependencyLock
     /// <summary>The lock contains exactly the pinned default ValheimCLI plugin described by its manifest.</summary>
     internal void RequireExactCliSet()
     {
-        CliManifest.Validate();
-        try { CliManifest.RequireDefaultPlugin(); }
-        catch (InvalidOperationException error) { throw new InvalidDataException(error.Message, error); }
-        if (CliFiles.Count == 0 || CliFiles.Count != CliManifest.Files.Count)
-            throw new InvalidDataException("The dependency lock must contain exactly one pinned valheimCLI.dll matching its capability manifest.");
-        if (CliManifest.Files.Count(file => file.Plugins.Contains("valheimCLI.valheimCLI", StringComparer.Ordinal)) != 1)
-            throw new InvalidDataException("The dependency lock needs exactly one default ValheimCLI plugin.");
-        foreach (var file in CliFiles)
-            if (!File.Exists(file.File) || !FileHash.Sha256(file.File).Equals(file.Sha256, StringComparison.OrdinalIgnoreCase))
-                throw new InvalidDataException($"The pinned ValheimCLI file {file.File} is missing or changed; resolve from explicit roots again.");
-        var location = CliManifest.Locate(CliFiles.Select(file => file.File), "in the dependency lock");
+        CliManifest.RequireValid("in the dependency lock");
+        var file = CliPlugin;
+        if (!File.Exists(file.File) || !FileHash.Sha256(file.File).Equals(file.Sha256, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException($"The pinned ValheimCLI file {file.File} is missing or changed; resolve from explicit roots again.");
+        var location = CliManifest.Locate([file.File], "in the dependency lock");
         if (location.Problems.Count != 0)
             throw new InvalidDataException($"The dependency lock's ValheimCLI files are not the build {CliManifest.Build} its manifest describes: {string.Join("; ", location.Problems.Select(problem => problem.Message))}.");
     }
@@ -206,15 +198,8 @@ public static class NativeDependencyResolver
             if (!Path.IsPathFullyQualified(file) || !File.Exists(file)) throw new FileNotFoundException($"Dependency input {file} does not exist; supply an absolute local file.", file);
 
         var result = new NativeDependencyLock { OptionalReferences = request.OptionalReferences.Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase).ToList() };
-        var bundle = CliCapabilityManifest.Read(request.CliManifest);
-        bundle.RequireDefaultPlugin();
-        // The one-shot contract needs every toolkit command in the pinned plugin.
-        // General resolver callers can still request a smaller set explicitly.
-        var requiredCli = request.RequireToolkitCommands
-            ? request.Capabilities.Concat(CliCapabilities.Toolkit)
-            : request.Capabilities;
-        var needed = bundle.ForCapabilities(requiredCli);
-        var cli = request.RequireToolkitCommands ? bundle : needed;
+        var cli = CliCapabilityManifest.Read(request.CliManifest);
+        cli.RequireCapabilities(request.Capabilities);
         result.CliManifest = cli;
         var exactSources = request.SearchRoots.Where(File.Exists).ToHashSet(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
         var inventory = request.SearchRoots.Concat(request.Mods.Select(path => Path.GetDirectoryName(path)!)).Distinct(StringComparer.Ordinal)
@@ -273,18 +258,16 @@ public static class NativeDependencyResolver
             result.Mods.Add(Pinned(path, "selected mod"));
             Add(path, "selected mod");
         }
-        // The ValheimCLI set: the one static check (CliCapabilityManifest.Locate) over the folder's DLLs of the manifest's file
-        // names. Only the located files are copied, so another build left in the folder is not judged.
-        var names = cli.Files.Select(file => file.File).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var location = cli.Locate(Directory.EnumerateFiles(request.CliFiles, "*.dll", SearchOption.AllDirectories).Where(path => names.Contains(Path.GetFileName(path))),
-            "in " + request.CliFiles, othersLoad: false);
+        // The ValheimCLI plugin: the one static check (CliCapabilityManifest.Locate) over the folder's DLLs of the manifest's file
+        // name. Only the located file is copied, so another build left in the folder is not judged.
+        var location = cli.Locate(Directory.EnumerateFiles(request.CliFiles, "*.dll", SearchOption.AllDirectories)
+            .Where(path => Path.GetFileName(path).Equals(cli.Plugin.File, StringComparison.OrdinalIgnoreCase)), "in " + request.CliFiles, othersLoad: false);
         foreach (var problem in location.Problems)
             result.Gaps.Add(new("cli", problem.File.File, $"The pinned ValheimCLI build {cli.Build}: {problem.Message}.", problem.Candidates.Order(StringComparer.Ordinal).ToList()));
-        foreach (var (file, path) in location.Located)
+        foreach (var (_, path) in location.Located)
         {
             var actual = PluginMetadata.Read(path);
-            result.CliFiles.Add(Pinned(path, file.Plugins.Contains("valheimCLI.valheimCLI", StringComparer.Ordinal) ? "pinned default ValheimCLI plugin" :
-                "provides " + string.Join(", ", request.Capabilities.Where(capability => file.Commands().Any(command => command.Path == capability)))));
+            result.CliFiles.Add(Pinned(path, "pinned default ValheimCLI plugin"));
             known[path] = actual;
             Add(path, "ValheimCLI selected build");
         }
