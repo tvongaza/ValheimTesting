@@ -5,5 +5,5 @@
   "sha256": "bce631497976a93977ceb08e166712e6c31d15244956f89f17df092a9b62e29f",
   "root": "BepInExPack_Valheim",
   "source": "https://github.com/AzumattDev/BepInEx",
-  "status": "the BepInEx loader valheim-test applies to a disposable copy whose own Doorstop proxy and configuration do not match (#256); bootstrap-cli.cs fetches it into .packages"
+  "status": "the BepInEx loader every Windows and Linux profile runs on unless a loader package names another (#711); bootstrap-cli.cs fetches it into .packages"
 }

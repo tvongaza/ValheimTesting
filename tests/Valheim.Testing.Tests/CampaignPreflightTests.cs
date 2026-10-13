@@ -325,7 +325,7 @@ public sealed class CampaignPreflightTests : IDisposable
         Assert.Equal(3, await EnvCommand.RunAsync(["preflight", "--inventory", inventory], env, envError));
         Assert.True(env.ToString().Contains("REFUSED here Steam session: No Steam client is running on this machine", StringComparison.Ordinal),
             "output: " + env + "; error: " + envError);
-        var report = await HostedCampaignPreparation.InspectAsync(file, TimeSpan.FromSeconds(2), _ => host);
+        var report = await HostedCampaignPreparation.InspectAsync(file, TimeSpan.FromSeconds(2), _ => host, pinnedLoader: null);
         Assert.Contains(report.Problems, problem => problem.Input == "Steam session" &&
             problem.Message.Contains("No Steam client is running on this machine", StringComparison.Ordinal));
     }
@@ -354,7 +354,7 @@ public sealed class CampaignPreflightTests : IDisposable
             inventory, server = new { dependencyLock = "missing-lock.json" }, clients = new Dictionary<string, object>(),
         });
         var host = new FakeServerHost("pc", Path.Combine(_root, "mirror"), windows: true) { GameActive = true, PortBusy = true };
-        var report = await HostedCampaignPreparation.InspectAsync(file, TimeSpan.FromSeconds(2), _ => host);
+        var report = await HostedCampaignPreparation.InspectAsync(file, TimeSpan.FromSeconds(2), _ => host, pinnedLoader: null);
         Assert.Contains(report.Problems, problem => problem.Actor == "server" && problem.Input == "dependencies and ValheimCLI");
         Assert.Contains(report.Problems, problem => problem.Actor == "pc" && problem.Input == "session");
         Assert.Contains(report.Problems, problem => problem.Actor == "server" && problem.Input == "game and loader");
@@ -388,7 +388,7 @@ public sealed class CampaignPreflightTests : IDisposable
         }
         Line("run-left", RunJournalStatusTests.Gone, JournalEntry.CopyIntended, ("runtime", @"C:\runs\vt-prep-left-server\runtime"), ("stage", @"C:\runs\vt-prep-left-server\staging"));
 
-        var report = await HostedCampaignPreparation.InspectAsync(file, TimeSpan.FromSeconds(2), _ => host);
+        var report = await HostedCampaignPreparation.InspectAsync(file, TimeSpan.FromSeconds(2), _ => host, pinnedLoader: null);
         var left = Assert.Single(report.Problems, problem => problem.Input == "run journal");
         Assert.Equal("pc", left.Actor);
         Assert.Contains("valheim-test env recover --run run-left", left.Message);
@@ -397,7 +397,7 @@ public sealed class CampaignPreflightTests : IDisposable
         // Recovered, it no longer refuses.
         Assert.True((await RunRecovery.RecoverAsync(new Dictionary<string, HostProfile> { ["pc"] = new() { Kind = "ssh", Lock = @"C:\locks\test.lock" } },
             _ => host, "run-left", false, TimeSpan.FromSeconds(2))).Recovered);
-        report = await HostedCampaignPreparation.InspectAsync(file, TimeSpan.FromSeconds(2), _ => host);
+        report = await HostedCampaignPreparation.InspectAsync(file, TimeSpan.FromSeconds(2), _ => host, pinnedLoader: null);
         Assert.DoesNotContain(report.Problems, problem => problem.Input == "run journal");
 
         // Another run going on this host, whose runner is a live process on this machine: the preflight refuses it, and the
@@ -411,7 +411,7 @@ public sealed class CampaignPreflightTests : IDisposable
         host.GameActive = true; host.GameProcessIds = "77,78";
         try
         {
-            report = await HostedCampaignPreparation.InspectAsync(file, TimeSpan.FromSeconds(2), _ => host);
+            report = await HostedCampaignPreparation.InspectAsync(file, TimeSpan.FromSeconds(2), _ => host, pinnedLoader: null);
             Assert.Contains(report.Problems, problem => problem.Input == "run journal" && problem.Message.StartsWith("run run-going is still going on pc"));
             string message = Assert.Single(report.Problems, problem => problem.Input == "session").Message;
             Assert.Contains("process 77 of run run-going (LIVE)", message);
@@ -431,7 +431,7 @@ public sealed class CampaignPreflightTests : IDisposable
         });
         var host = new FakeServerHost("pc", Path.Combine(_root, "mirror"), windows: true)
         { ServerTaskLogon = "unsupported pc\\tester is not elevated, which a session-0 server task needs, and has no desktop session for one in its own session; run from your own desktop session, or over SSH as an administrator" };
-        var report = await HostedCampaignPreparation.InspectAsync(file, TimeSpan.FromSeconds(2), _ => host);
+        var report = await HostedCampaignPreparation.InspectAsync(file, TimeSpan.FromSeconds(2), _ => host, pinnedLoader: null);
         var problem = Assert.Single(report.Problems, problem => problem.Input == "server task");
         Assert.Equal("server", problem.Actor);
         Assert.Contains("is not elevated", problem.Message);
@@ -439,7 +439,7 @@ public sealed class CampaignPreflightTests : IDisposable
         Assert.DoesNotContain(host.Scripts, script => script is "copy" or "start");
         // A desktop session's interactive task is as good as an elevated one's S4U task.
         host.ServerTaskLogon = "interactive";
-        report = await HostedCampaignPreparation.InspectAsync(file, TimeSpan.FromSeconds(2), _ => host);
+        report = await HostedCampaignPreparation.InspectAsync(file, TimeSpan.FromSeconds(2), _ => host, pinnedLoader: null);
         Assert.DoesNotContain(report.Problems, problem => problem.Input == "server task");
     }
 
@@ -462,7 +462,7 @@ public sealed class CampaignPreflightTests : IDisposable
             inventory, server = new { dependencyLock = "missing-lock.json" }, clients = new Dictionary<string, object>(),
         });
         var host = new FakeServerHost("mac", Path.Combine(_root, "mirror"));
-        var report = await HostedCampaignPreparation.InspectAsync(file, TimeSpan.FromSeconds(2), _ => host);
+        var report = await HostedCampaignPreparation.InspectAsync(file, TimeSpan.FromSeconds(2), _ => host, pinnedLoader: null);
         Assert.False(report.Ready);
         Assert.DoesNotContain(report.Problems, problem => problem.Input == "inventory");
         Assert.Contains(report.Problems, problem => problem.Input == "loader" || problem.Input == "game and loader");
@@ -490,7 +490,7 @@ public sealed class CampaignPreflightTests : IDisposable
             inventory, server = new { dependencyLock = "missing-lock.json" }, clients = new Dictionary<string, object>(),
         });
         var host = new FakeServerHost("box", Path.Combine(_root, "mirror")) { PortReply = "VT-PORT unknown\n", GameActive = true };
-        var report = await HostedCampaignPreparation.InspectAsync(file, TimeSpan.FromSeconds(2), _ => host);
+        var report = await HostedCampaignPreparation.InspectAsync(file, TimeSpan.FromSeconds(2), _ => host, pinnedLoader: null);
         Assert.False(report.Ready);
         Assert.Contains(report.Problems, problem => problem.Actor == "server" && problem.Input == "ValheimCLI port" && problem.Message.Contains("cannot tell which ports are in use"));
         Assert.Contains(report.Problems, problem => problem.Actor == "box" && problem.Input == "session");
@@ -508,7 +508,7 @@ public sealed class CampaignPreflightTests : IDisposable
             clients = new Dictionary<string, object> { ["client-a"] = new { dependencyLock = "missing-client-lock.json" } },
         });
         var host = new FakeServerHost("pc", Path.Combine(_root, "mirror"), windows: true) { SteamUserReply = "VT-STEAMUSER unreadable\n" };
-        var report = await HostedCampaignPreparation.InspectAsync(file, TimeSpan.FromSeconds(2), _ => host);
+        var report = await HostedCampaignPreparation.InspectAsync(file, TimeSpan.FromSeconds(2), _ => host, pinnedLoader: null);
         Assert.Contains(report.Problems, problem => problem.Actor == "client-a" && problem.Input == "Steam identity");
         Assert.Contains(report.Problems, problem => problem.Actor == "server" && problem.Input == "game and loader");
         Assert.Contains(report.Problems, problem => problem.Actor == "client-a" && problem.Input == "game and loader");

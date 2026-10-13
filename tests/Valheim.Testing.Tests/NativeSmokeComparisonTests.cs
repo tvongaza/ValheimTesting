@@ -259,7 +259,7 @@ public sealed class NativeSmokeComparisonTests : IDisposable
         int shippedCalls = 0;
 
         int result = await ServerLoadComparison.RunAsync([.. arguments],
-        shippedLoader: (_, _) => { shippedCalls++; return new ShippedLoader.Choice(shipped.Manifest, "selected pinned pack"); },
+        shippedLoader: (_, _, _) => { shippedCalls++; return new ShippedLoader.Choice(shipped.Manifest, "selected pinned pack"); },
         resolve: request => { resolvedCores.Add(request.BepInExCore); return NativeDependencyResolver.Resolve(request); },
         buildAdapter: (_, _, _, _, core) => { builtCores.Add(core); return Task.FromResult(adapter); },
         runArmWithSeams: (args, seams) =>

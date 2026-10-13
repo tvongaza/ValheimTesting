@@ -27,8 +27,8 @@ internal interface IHostedRunHooks
     ClientSession LaunchLocalMac(ClientRunPlan plan, string output, SteamAccountHold? account, CancellationToken cancellation, Action<IOwnedProcess>? processStarted);
     /// <summary>The run's Ctrl+C owner, and whether the run owns (and disposes) it.</summary>
     RunCancellation Cancellation(out bool owned);
-    /// <summary>The shipped loader for an actor's install that names none (<see cref="ShippedLoader.OnHostAsync(string, IGameHost, HostProfile, string, TimeSpan, CancellationToken)"/>), or null.</summary>
-    Task<ShippedLoader.Choice?> ShippedLoaderAsync(string actor, IGameHost host, HostProfile profile, string install, TimeSpan timeout, CancellationToken cancellation);
+    /// <summary>The pinned loader for an actor that names none, on a host of that platform (<see cref="ShippedLoader.Choose"/>), or null (macOS).</summary>
+    ShippedLoader.Choice? PinnedLoader(string actor, string install, string platform);
 }
 
 /// <summary>The real hosted-run hooks: ssh and local hosts, CLI sockets, the pool's leases, this machine's session.</summary>
@@ -48,6 +48,5 @@ internal sealed class HostedRunHooks : IHostedRunHooks
     public ClientSession LaunchLocalMac(ClientRunPlan plan, string output, SteamAccountHold? account, CancellationToken cancellation, Action<IOwnedProcess>? processStarted) =>
         ClientSession.Launch(plan, output, account, cancellation, processStarted);
     public RunCancellation Cancellation(out bool owned) { owned = true; return new RunCancellation(); }
-    public Task<ShippedLoader.Choice?> ShippedLoaderAsync(string actor, IGameHost host, HostProfile profile, string install, TimeSpan timeout, CancellationToken cancellation) =>
-        ShippedLoader.OnHostAsync(actor, host, profile, install, timeout, cancellation);
+    public ShippedLoader.Choice? PinnedLoader(string actor, string install, string platform) => ShippedLoader.Choose(actor, install, platform);
 }

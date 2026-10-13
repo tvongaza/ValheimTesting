@@ -199,38 +199,38 @@ public sealed class SteamAccountInUseTests : IDisposable
     public async Task PreflightRefusesAClientAccountPlayingOnAnotherInventoryHost()
     {
         var (campaign, hosts) = Campaign("client-pc"); // client-a on pc, signed in to account 1; mac is too
-        var report = await HostedCampaignPreparation.InspectAsync(campaign, TimeSpan.FromSeconds(3), name => hosts[name]);
+        var report = await HostedCampaignPreparation.InspectAsync(campaign, TimeSpan.FromSeconds(3), name => hosts[name], pinnedLoader: null);
         Assert.Empty(InUse(report)); // nothing plays anywhere
         // The campaign's own client host refuses a running Valheim by itself; this check asks only the other client hosts.
         Assert.DoesNotContain("steam-playing", hosts["pc"].Scripts);
         Assert.Contains("steam-playing", hosts["mac"].Scripts); Assert.Contains("steam-playing", hosts["vm"].Scripts);
 
         hosts["mac"].PlayingReply = "VT-PLAYING process 4242\n";
-        var refused = Assert.Single(InUse(await HostedCampaignPreparation.InspectAsync(campaign, TimeSpan.FromSeconds(3), name => hosts[name])));
+        var refused = Assert.Single(InUse(await HostedCampaignPreparation.InspectAsync(campaign, TimeSpan.FromSeconds(3), name => hosts[name], pinnedLoader: null)));
         Assert.Equal("client-a", refused.Actor);
         Assert.Contains("Valheim (process 4242) is running on mac, signed in to the Steam account client client-a would use", refused.Message);
         Assert.DoesNotContain("12345678", refused.Message);
 
         // Valheim on a host signed in to another account is no conflict.
         hosts["mac"].SteamUserReply = "VT-STEAMUSER account 2\n";
-        Assert.Empty(InUse(await HostedCampaignPreparation.InspectAsync(campaign, TimeSpan.FromSeconds(3), name => hosts[name])));
+        Assert.Empty(InUse(await HostedCampaignPreparation.InspectAsync(campaign, TimeSpan.FromSeconds(3), name => hosts[name], pinnedLoader: null)));
         // Valheim running where the account cannot be read, or none is signed in, or run by a user this cannot identify: unknown is never a pass.
         hosts["mac"].SteamUserReply = "VT-STEAMUSER unreadable ActiveUser is not a number\n";
-        refused = Assert.Single(InUse(await HostedCampaignPreparation.InspectAsync(campaign, TimeSpan.FromSeconds(3), name => hosts[name])));
+        refused = Assert.Single(InUse(await HostedCampaignPreparation.InspectAsync(campaign, TimeSpan.FromSeconds(3), name => hosts[name], pinnedLoader: null)));
         Assert.Equal("mac", refused.Actor);
         Assert.Contains("which Steam account it uses cannot be read (ActiveUser is not a number)", refused.Message);
         hosts["mac"].SteamUserReply = "VT-STEAMUSER none\n";
-        refused = Assert.Single(InUse(await HostedCampaignPreparation.InspectAsync(campaign, TimeSpan.FromSeconds(3), name => hosts[name])));
+        refused = Assert.Single(InUse(await HostedCampaignPreparation.InspectAsync(campaign, TimeSpan.FromSeconds(3), name => hosts[name], pinnedLoader: null)));
         Assert.Contains("which Steam account it uses cannot be read (no account is signed in there)", refused.Message);
         hosts["mac"].SteamUserReply = "VT-STEAMUSER account 2\n";
         hosts["mac"].PlayingReply = "VT-PLAYING unowned 4242\n";
-        refused = Assert.Single(InUse(await HostedCampaignPreparation.InspectAsync(campaign, TimeSpan.FromSeconds(3), name => hosts[name])));
+        refused = Assert.Single(InUse(await HostedCampaignPreparation.InspectAsync(campaign, TimeSpan.FromSeconds(3), name => hosts[name], pinnedLoader: null)));
         Assert.Equal("mac", refused.Actor);
         Assert.Contains("Valheim (process 4242) is running on mac as a user this check cannot identify", refused.Message);
         // A host that cannot be asked is refused, naming it.
         hosts["mac"].PlayingReply = "VT-PLAYING no\n";
         hosts["vm"].Failures["steam-playing"] = FakeServerHost.TransportFailure;
-        refused = Assert.Single(InUse(await HostedCampaignPreparation.InspectAsync(campaign, TimeSpan.FromSeconds(3), name => hosts[name])));
+        refused = Assert.Single(InUse(await HostedCampaignPreparation.InspectAsync(campaign, TimeSpan.FromSeconds(3), name => hosts[name], pinnedLoader: null)));
         Assert.Equal("vm", refused.Actor);
         Assert.Contains("Could not ask vm, a client host in the inventory", refused.Message);
         Assert.All(hosts.Values, host => Assert.DoesNotContain(host.Scripts, script => script is "copy" or "start" or "client-start"));
@@ -241,7 +241,7 @@ public sealed class SteamAccountInUseTests : IDisposable
     {
         var (campaign, hosts) = Campaign("client-mac"); // client-a on mac (account 1); pc only runs the server here
         hosts["pc"].PlayingReply = "VT-PLAYING process 77\n";
-        var refused = Assert.Single(InUse(await HostedCampaignPreparation.InspectAsync(campaign, TimeSpan.FromSeconds(3), name => hosts[name])));
+        var refused = Assert.Single(InUse(await HostedCampaignPreparation.InspectAsync(campaign, TimeSpan.FromSeconds(3), name => hosts[name], pinnedLoader: null)));
         Assert.Equal("client-a", refused.Actor);
         Assert.Contains("Valheim (process 77) is running on pc, signed in to the Steam account client client-a would use", refused.Message);
         Assert.DoesNotContain("steam-playing", hosts["mac"].Scripts);

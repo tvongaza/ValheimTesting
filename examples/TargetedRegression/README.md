@@ -23,7 +23,7 @@ For a mod with several dependencies, use the [native dependency resolver](../../
 | Source | Files | In `regression.json` |
 |---|---|---|
 | Valheim | The game install, run by Steam in your desktop session | Not in the file: the client environment's install (only read) |
-| BepInEx (BepInExPack_Valheim) | `BepInEx/core`, the Doorstop loader (`winhttp.dll` and `doorstop_config.ini` on Windows), `BepInEx/config/BepInEx.cfg` | A reviewed package or the source install's loader, staged into the owned profile |
+| BepInEx (BepInExPack_Valheim) | `BepInEx/core`, the Doorstop loader (`winhttp.dll` and `doorstop_config.ini` on Windows), `BepInEx/config/BepInEx.cfg` | A reviewed package, else on Windows the toolkit's pinned BepInExPack_Valheim (macOS: the source install's loader), staged into the owned profile |
 | ValheimCLI | One `valheimCLI.dll` with all built-in commands, and its [capability manifest](../../docs/packages/Valheim.Testing.Game.md#valheimcli-capability-manifest) | `cli.core`, `cli.manifest` |
 | The mod under test | Its parent and candidate builds, each with its source commit | `mod.arms` |
 | The mod's dependencies | Every DLL the mod needs to load: the plugin each hard `[BepInDependency]` names, and libraries it references (for example JsonDotNET's detector plugin and `Newtonsoft.Json.dll`) | `plugins` |

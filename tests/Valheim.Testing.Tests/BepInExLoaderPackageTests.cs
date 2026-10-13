@@ -57,16 +57,20 @@ public sealed class BepInExLoaderPackageTests : IDisposable
         Assert.Equal(package.Files["BepInEx/core/BepInEx.dll"], FileHash.Sha256(Path.Combine(_rig.Install, "BepInEx", "core", "BepInEx.dll")));
     }
 
-    [Fact] public void AManifestCannotOverrideThePinnedLoaderConfiguration()
+    // #711: a regression's explicit BepInEx.cfg replaces the loader package's default in the disposable profile.
+    [ClientHostFact] public void AManifestsBepInExCfgReplacesTheLoaderPackagesDefault()
     {
         var package = Package();
         string manifest = Path.Combine(_rig.Root, "loader.json");
         package.Write(manifest);
         var environment = _rig.Manifest();
         _rig.LoaderPackage = manifest;
-        environment.Configs["BepInEx.cfg"] = Path.Combine(package.Root, "BepInEx", "config", "BepInEx.cfg");
-        Assert.Contains("edit and recapture", Assert.Throws<ArgumentException>(() => _rig.Regression(environment)).Message);
-        Assert.False(Directory.Exists(_rig.Install));
+        string explicitConfig = Path.Combine(_rig.Root, "explicit-BepInEx.cfg");
+        File.WriteAllText(explicitConfig, "[Logging.Console]\nEnabled = true\n");
+        environment.Configs["BepInEx.cfg"] = explicitConfig;
+        _rig.Regression(environment).Stage("parent").Verify();
+        Assert.Equal("[Logging.Console]\nEnabled = true\n", File.ReadAllText(Path.Combine(_rig.Install, "BepInEx", "config", "BepInEx.cfg")));
+        Assert.NotEqual(File.ReadAllText(Path.Combine(package.Root, "BepInEx", "config", "BepInEx.cfg")), File.ReadAllText(explicitConfig));
     }
 
     [Fact] public void TheLiveGameCannotBeThePinnedPackage()

@@ -233,8 +233,8 @@ public sealed class LocalClientCopyTests : IDisposable
         await copy.RetireAsync();
     }
 
-    // An install whose Doorstop pair does not match takes the shipped BepInExPack in its profile: the pack's own files (its
-    // BepInEx.cfg among them) replace the install's, which an install that ran once always has. Windows: the pack is Windows'.
+    // A Windows profile runs on the pinned BepInExPack (#711): the pack's own files (its BepInEx.cfg among them) replace the
+    // install's, which an install that ran once always has. Windows: the pack is Windows'.
     [Fact] public async Task AShippedLoaderReplacesTheInstallsLoaderFilesInTheProfile()
     {
         if (!OperatingSystem.IsWindows()) return;

@@ -177,6 +177,7 @@ public sealed class TargetedRegressionTests : IDisposable
             SaveDirectory = _rig.Save,
             BundleInspection = (_, _) => new(MacBundleInspection.State.Accepted, 0, "synthetic test install"),
             ProcessCheck = (_, _) => Task.CompletedTask,
+            PinnedLoader = (_, _) => null,
         };
         string lockPath = inventory.Hosts["local"].Lock;
         try
@@ -766,6 +767,8 @@ internal sealed class RegressionRig : IDisposable
             BundleInspection = (_, _) => new(MacBundleInspection.State.Accepted, 0, "synthetic test install"),
             ProcessCheck = (_, _) => Task.CompletedTask,
             SkipHostLockForTest = true,
+            // The rig's fake installs keep their fake loader; the pinned pack's rule has its own tests (ShippedLoaderTests).
+            PinnedLoader = (_, _) => null,
         };
 
     public RegressionInputs Manifest(string? fixture = null, string? worldUid = null) => new()

@@ -6,128 +6,71 @@ using Valheim.Testing.Game;
 namespace Valheim.Testing.GameSessions;
 
 /// <summary>
-/// The pinned BepInExPack the toolkit ships (loader-dependency.json and its zip, both embedded in Valheim.Testing.GameSessions): a disposable
-/// copy takes it when its install's own Doorstop proxy and configuration do not match (a mod manager that swaps the proxy leaves them so), or when
-/// its BepInEx is older than <see cref="MinimumBepInEx"/>, and for no other loader fault. The install is never changed; the
-/// run prints one line and records which package it used.
+/// The pinned BepInExPack every Windows and Linux profile runs on (#711): loader-dependency.json and its zip, both embedded in
+/// Valheim.Testing.GameSessions. A profile never inspects or inherits its install's loader. A macOS profile keeps its explicit
+/// arm64 package, or its install's native loader. The install is never changed; the run prints one line and records which
+/// pin it used.
 /// </summary>
 internal static class ShippedLoader
 {
-    /// <summary>Why the loader was chosen for an actor, and the captured package manifest it uses.</summary>
+    /// <summary>The captured package manifest an actor's profile uses, and the line that says which pin it came from.</summary>
     internal sealed record Choice(string Manifest, string Reason);
 
-    /// <summary>The choice for an actor's install on its host (<see cref="OnHostAsync(string, IGameHost, HostProfile, string, TimeSpan, CancellationToken)"/> in a real run).</summary>
-    internal delegate Task<Choice?> Rule(string actor, IGameHost host, HostProfile profile, string install, TimeSpan timeout, CancellationToken cancellation);
+    /// <summary>The choice for an actor's install on a host of <paramref name="platform"/> (<c>windows</c>, <c>linux</c> or <c>macos</c>).</summary>
+    internal delegate Choice? Rule(string actor, string install, string platform);
+
+    /// <summary>A pin, where it came from (for evidence), and its zip (null when this build carries none).</summary>
+    internal sealed record Pinned(LoaderPin Pin, string Source, Func<Stream?> Zip);
+
+    /// <summary>The pinned choice for an actor that names no loader package (the <see cref="Rule"/> every caller passes).</summary>
+    internal static Choice? Choose(string actor, string install, string platform) => For(actor, install, platform, BuiltIn());
+
+    /// <summary>The pinned choice for an install on this machine.</summary>
+    internal static Choice? Local(string actor, string install) => Choose(actor, install, HostProfile.CurrentPlatform);
 
     /// <summary>
-    /// The shipped package for <paramref name="actor"/>'s <paramref name="install"/> when its Doorstop pair does not match,
-    /// printed; null when the pair matches, the install is not a Windows Doorstop install, or this build carries no package
-    /// (then the preflight's own refusal stands).
+    /// The pinned package for <paramref name="actor"/>'s profile on a <paramref name="platform"/> host; null on macOS. A run prints
+    /// its reason (<see cref="Print"/>); a read-only check stays quiet. Refuses when the pin has no zip: a profile never falls
+    /// back to its install's loader.
     /// </summary>
-    internal static Choice? Instead(string actor, string install) => Instead(actor, install, Shipped, CliBundle.DataRoot);
-
-    /// <summary>
-    /// The oldest BepInEx a disposable copy keeps. Every v5 build before it finds none of Unity's log-writer methods on Unity
-    /// 2023.2 and later (Valheim's Unity 6), so its plugins' lines never reach Unity's log and it logs "Unable to start Unity log
-    /// writer" at startup (BepInEx/BepInEx#755); BepInEx/BepInEx#1264 fixed that in 5.4.23.5, which the shipped pack carries.
-    /// </summary>
-    internal static readonly Version MinimumBepInEx = new(5, 4, 23, 5);
-
-    /// <summary>
-    /// Why the install's BepInEx core is too old to keep (<see cref="MinimumBepInEx"/>), or null: new enough, not v5, unreadable,
-    /// or a macOS install, whose native arm64 loader the pack's x64 Doorstop library cannot replace.
-    /// </summary>
-    internal static string? OutdatedCore(string install)
+    internal static Choice? For(string actor, string install, string platform, Pinned pinned, string? dataRoot = null)
     {
-        if (Directory.Exists(Path.Combine(install, GameLaunch.ClientMacBundle)) || File.Exists(Path.Combine(install, GameLaunch.ServerMacExecutable))) return null;
-        return OutdatedLibrary(Path.Combine(install, InstallPins.CoreDirectory, "BepInEx.dll"));
-    }
-
-    // Why the BepInEx core library at this path is too old to keep, or null (new enough, not v5, missing or unreadable).
-    private static string? OutdatedLibrary(string library)
-    {
-        if (!File.Exists(library)) return null;
-        Version? version;
-        try { version = System.Reflection.AssemblyName.GetAssemblyName(library).Version; }
-        catch (Exception error) when (error is BadImageFormatException or FileLoadException or IOException) { return null; }
-        if (version is not { Major: 5 } || version >= MinimumBepInEx) return null;
-        return $"BepInEx {version} is older than {MinimumBepInEx}, which on Unity 6 cannot reach Unity's log writer " +
-            "(BepInEx/BepInEx#755, fixed by #1264 in 5.4.23.5)";
-    }
-
-    internal static Choice? Instead(string actor, string install, Func<(Stream Zip, LoaderPin Pin)?> shipped, string dataRoot) =>
-        Decide(actor, install, BepInExLoaderPackage.DoorstopMismatch(install), OutdatedCore(install), shipped, dataRoot);
-
-    /// <summary>
-    /// The same choice for an actor's <paramref name="install"/> on <paramref name="host"/> (#438): an install on this machine is read
-    /// in place, one on another host through that host's shell (its BepInEx core library, and on Windows its Doorstop proxy and
-    /// configuration, each a bounded read; nothing is written there). A macOS host keeps its own loader. A campaign's host
-    /// checks call it for every actor that names no loader package, so a session's server and clients get what server-load gets.
-    /// </summary>
-    internal static Task<Choice?> OnHostAsync(string actor, IGameHost host, HostProfile profile, string install, TimeSpan timeout, CancellationToken cancellation) =>
-        OnHostAsync(actor, host, profile, install, timeout, cancellation, Shipped, CliBundle.DataRoot);
-
-    internal static async Task<Choice?> OnHostAsync(string actor, IGameHost host, HostProfile profile, string install, TimeSpan timeout, CancellationToken cancellation,
-        Func<(Stream Zip, LoaderPin Pin)?> shipped, string dataRoot)
-    {
-        if (profile.Kind == "local") return Instead(actor, install, shipped, dataRoot);
-        if (profile.Platform == "macos") return null;
-        string? outdated = null, mismatch = null;
-        byte[]? core = await HostClientPreflight.Read(host, HostPath.Join(install, "BepInEx/core/BepInEx.dll"), timeout, cancellation).ConfigureAwait(false);
-        if (core != null)
+        if (platform == "macos") return null;
+        if (platform is not ("windows" or "linux")) throw new ArgumentException($"No pinned loader for platform {platform}.", nameof(platform));
+        using var zip = pinned.Zip() ?? throw new InvalidDataException(
+            $"This build of Valheim.Testing.GameSessions carries no pinned {pinned.Pin.Name} ({pinned.Source}): run dotnet run scripts/bootstrap-cli.cs before building, " +
+            "or name a reviewed loader package. A Windows or Linux profile never runs on its install's own loader.");
+        string manifest = Extract(zip, pinned.Pin, dataRoot ?? CliBundle.DataRoot);
+        if (platform == "linux")
         {
-            // An assembly's version is read from a file: the copy goes to a temporary one, removed at once.
-            string copy = Path.Combine(Path.GetTempPath(), "vt-bepinex-" + Guid.NewGuid().ToString("N") + ".dll");
-            try { File.WriteAllBytes(copy, core); outdated = OutdatedLibrary(copy); }
-            finally { try { File.Delete(copy); } catch (IOException) { } catch (UnauthorizedAccessException) { } } // a temp file left behind decides nothing
+            manifest = Path.Combine(Path.GetDirectoryName(manifest)!, LinuxManifest);
+            if (!File.Exists(manifest)) throw new InvalidDataException($"The pinned {pinned.Pin.Name} {pinned.Pin.Version} ({pinned.Source}) has no Linux loader ({BepInExLoader.LinuxDoorstop}).");
         }
-        if (profile.Platform == "windows")
-        {
-            byte[]? proxy = await HostClientPreflight.Read(host, HostPath.Join(install, BepInExLoader.WindowsProxy), timeout, cancellation).ConfigureAwait(false);
-            byte[]? config = proxy == null ? null : await HostClientPreflight.Read(host, HostPath.Join(install, BepInExLoader.WindowsConfig), timeout, cancellation).ConfigureAwait(false);
-            // As DoorstopMismatch on this machine: only a pair from different Doorstop versions is a mismatch; any other loader
-            // fault is the host checks' own refusal.
-            if (proxy != null && config != null)
-                try { BepInExLoader.RequireWindowsLoader(proxy, System.Text.Encoding.UTF8.GetString(config), install, "install"); }
-                catch (DoorstopPairingException pairing) { mismatch = pairing.Message; }
-                catch (Exception error) when (error is InvalidOperationException or IOException) { }
-        }
-        return Decide(actor, $"{host.Name}:{install}", mismatch, outdated, shipped, dataRoot);
+        string identity = BepInExLoaderPackage.Read(manifest).Identity;
+        string reason = $"{install}'s disposable profile runs on the pinned {identity}, sha256 {pinned.Pin.Sha256.ToLowerInvariant()}, from {pinned.Source}; " +
+            "the install's own loader is not used and the install is not changed";
+        return new Choice(manifest, reason);
     }
 
-    // The choice from what the install showed: its Doorstop pair's mismatch and its core's age (null when fine), printed.
-    private static Choice? Decide(string actor, string install, string? mismatch, string? outdated, Func<(Stream Zip, LoaderPin Pin)?> shipped, string dataRoot)
-    {
-        if (mismatch == null && outdated == null) return null;
-        var found = shipped();
-        if (found is not { } pack) return null;
-        using (pack.Zip)
-        {
-            string manifest = Extract(pack.Zip, pack.Pin, dataRoot);
-            string identity = BepInExLoaderPackage.Read(manifest).Identity;
-            string why = string.Join("; and ", new[] { mismatch == null ? null : $"Doorstop proxy and configuration do not match ({mismatch})", outdated }.OfType<string>());
-            string reason = $"{install}'s {why}; its disposable copy takes the toolkit's pinned {identity}, and the install is not changed";
-            Console.WriteLine($"{actor} loader: {reason}");
-            return new Choice(manifest, reason);
-        }
-    }
+    /// <summary>The one line a run prints for an actor's pinned loader.</summary>
+    internal static void Print(string actor, Choice choice) => Console.WriteLine($"{actor} loader: {choice.Reason}");
 
-    internal sealed record LoaderPin(string Name, string Version, string Sha256, string Root);
-
-    private static (Stream Zip, LoaderPin Pin)? Shipped()
+    /// <summary>The toolkit's pin, loader-dependency.json, embedded with its zip when the build fetched it.</summary>
+    internal static Pinned BuiltIn()
     {
         var assembly = typeof(ShippedLoader).Assembly; // Valheim.Testing.GameSessions embeds the pack and its pin.
-        LoaderPin found;
-        using (var pinStream = assembly.GetManifestResourceStream("loader-dependency.json"))
-        {
-            if (pinStream == null) return null;
-            using var pin = JsonDocument.Parse(pinStream);
-            string Text(string name) => pin.RootElement.GetProperty(name).GetString() ?? throw new InvalidDataException("loader-dependency.json has no " + name + ".");
-            found = new LoaderPin(Text("name"), Text("version"), Text("sha256"), Text("root"));
-        }
-        // The pin is read first, so a malformed one leaves no open stream behind.
-        return assembly.GetManifestResourceStream("bepinexpack-valheim.zip") is { } zip ? (zip, found) : null;
+        using var pinStream = assembly.GetManifestResourceStream("loader-dependency.json")
+            ?? throw new InvalidDataException("This build of Valheim.Testing.GameSessions carries no loader-dependency.json.");
+        using var pin = JsonDocument.Parse(pinStream);
+        string Text(string name) => pin.RootElement.GetProperty(name).GetString() ?? throw new InvalidDataException("loader-dependency.json has no " + name + ".");
+        return new Pinned(new LoaderPin(Text("name"), Text("version"), Text("sha256"), Text("root")), "loader-dependency.json",
+            () => assembly.GetManifestResourceStream("bepinexpack-valheim.zip"));
     }
+
+    /// <summary>The manifest beside <c>loader.json</c> for a Linux profile: the same pack without the Windows proxy and its configuration.</summary>
+    internal const string LinuxManifest = "loader-linux.json";
+
+    internal sealed record LoaderPin(string Name, string Version, string Sha256, string Root);
 
     /// <summary>
     /// The pack under <paramref name="dataRoot"/>/loader/&lt;name&gt;-&lt;version&gt;-&lt;sha256 prefix&gt;, captured as a loader package
@@ -168,6 +111,13 @@ internal static class ShippedLoader
             var json = JsonNode.Parse(File.ReadAllText(staged))!.AsObject();
             json["root"] = ".";
             File.WriteAllText(staged, json.ToJsonString(new JsonSerializerOptions { WriteIndented = true }) + "\n");
+            // A Linux profile takes the same pack without the Windows proxy and its configuration, which a bash host refuses.
+            var files = json["files"]!.AsObject();
+            if (files.ContainsKey(BepInExLoader.LinuxDoorstop))
+            {
+                foreach (string windowsOnly in new[] { BepInExLoader.WindowsProxy, BepInExLoader.WindowsConfig }) files.Remove(windowsOnly);
+                File.WriteAllText(Path.Combine(staging, LinuxManifest), json.ToJsonString(new JsonSerializerOptions { WriteIndented = true }) + "\n");
+            }
             if (!Current(staged)) throw new InvalidDataException($"The shipped {pin.Name} {pin.Version} is not a usable loader package.");
         }, $"shipped {pin.Name} {pin.Version}");
         return manifest;
@@ -178,7 +128,13 @@ internal static class ShippedLoader
     private static bool Current(string manifest)
     {
         if (!File.Exists(manifest)) return false;
-        try { _ = BepInExLoaderPackage.Read(manifest); return true; }
+        try
+        {
+            var package = BepInExLoaderPackage.Read(manifest);
+            string linux = Path.Combine(Path.GetDirectoryName(manifest)!, LinuxManifest);
+            if (package.Files.ContainsKey(BepInExLoader.LinuxDoorstop)) _ = BepInExLoaderPackage.Read(linux);
+            return true;
+        }
         catch (Exception error) when (error is InvalidDataException or FileNotFoundException or DirectoryNotFoundException or ArgumentException or InvalidOperationException or JsonException) { return false; }
     }
 }

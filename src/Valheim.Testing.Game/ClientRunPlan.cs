@@ -363,7 +363,7 @@ public sealed class ClientRunPlan
         CheckInstallPins();
         if (CopySource)
         {
-            // The copy's loader may be the shipped one (a mismatched Doorstop pair) and its ValheimCLI is the staged set: both are
+            // The copy's loader is the pinned pack on Windows (#711) and its ValheimCLI is the staged set: both are
             // checked on the copy before its launch.
             var kept = Pins.Where(pin => !CliBuildManifest.IsCliPlugin(pin.Key)).ToDictionary(pin => pin.Key, pin => pin.Value, StringComparer.Ordinal);
             OwnedClientPreflight.Check(Install, kept, Pinned, HostWorld, hostWorldName);

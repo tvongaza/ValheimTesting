@@ -297,11 +297,17 @@ public static class HostedCampaignPreparation
     public static async Task<CampaignPreflightReport> InspectAsync(string manifestFile, TimeSpan timeout,
         Func<string, IGameHost>? hostFactory = null, CancellationToken cancellation = default)
     {
-        var inspection = InspectInputs(manifestFile);
-        // Real hosts get the real shipped-loader rule; a caller's own hosts (tests) are read as they are.
-        return (await InspectHostsAsync(inspection, timeout, hostFactory, cancellation,
-            hostFactory == null ? ShippedLoader.OnHostAsync : null).ConfigureAwait(false)).Report;
+        // Every actor that names no loader package takes the pinned one on Windows and Linux (#711), whoever made the hosts.
+        return await InspectAsync(manifestFile, timeout, hostFactory, ShippedLoader.Choose, cancellation).ConfigureAwait(false);
     }
+
+    /// <summary>
+    /// The public InspectAsync with its pinned-loader rule given:
+    /// a test whose fake hosts hold fake installs passes its own (or none, to check each install's own loader).
+    /// </summary>
+    internal static async Task<CampaignPreflightReport> InspectAsync(string manifestFile, TimeSpan timeout,
+        Func<string, IGameHost>? hostFactory, ShippedLoader.Rule? pinnedLoader, CancellationToken cancellation = default) =>
+        (await InspectHostsAsync(InspectInputs(manifestFile), timeout, hostFactory, cancellation, pinnedLoader).ConfigureAwait(false)).Report;
 
     // The one-shot checked its local host before writing an adapter or fixture. Inspect remote actors here; preparation
     // rechecks local conditions immediately before staging. This avoids a third local process/port/desktop probe.
@@ -309,7 +315,7 @@ public static class HostedCampaignPreparation
         CancellationToken cancellation = default)
     {
         var inspection = InspectInputs(manifestFile);
-        return (await InspectHostsAsync(inspection, timeout, null, cancellation, ShippedLoader.OnHostAsync,
+        return (await InspectHostsAsync(inspection, timeout, null, cancellation, ShippedLoader.Choose,
             skipLocalChecks: true).ConfigureAwait(false)).Report;
     }
 
@@ -317,7 +323,7 @@ public static class HostedCampaignPreparation
         IReadOnlyDictionary<string, string> ObservedSteamIds, IReadOnlyDictionary<string, HostListing> SourceListings,
         IReadOnlyDictionary<string, CharacterDirectories> CharacterDirectories)
     {
-        /// <summary>The shipped loader each actor that named none takes (#438), with why; its role's input already names it.</summary>
+        /// <summary>The pinned loader each actor that named none takes (#711), with its pin; its role's input already names it.</summary>
         public IReadOnlyDictionary<string, ShippedLoader.Choice> Loaders { get; init; } = new Dictionary<string, ShippedLoader.Choice>();
     }
 
@@ -526,10 +532,11 @@ public static class HostedCampaignPreparation
                 {
                     try
                     {
-                        // An actor that names no loader package takes the shipped one where its install needs it, as server-load's do (#438).
+                        // An actor that names no loader package runs on the pinned one on Windows and Linux, as server-load's do (#711);
+                        // its install's own loader is never read.
                         string? loaderPackage = item.Input.LoaderPackage;
                         if (loaderPackage == null && shippedLoader != null &&
-                            await shippedLoader(item.Name, host, inputs.Profile.Hosts[group.Key], item.Role.Install, timeout, cancellation).ConfigureAwait(false) is { } choice)
+                            shippedLoader(item.Name, $"{group.Key}:{item.Role.Install}", inputs.Profile.Hosts[group.Key].Platform) is { } choice)
                         {
                             loaders[item.Name] = choice;
                             loaderPackage = choice.Manifest;
@@ -867,10 +874,18 @@ public static class HostedCampaignPreparation
         profile.Validate();
     }
 
-    /// <summary>Prepare a hosted campaign: every actor gets an owned loader profile on its host.</summary>
+    /// <summary>
+    /// Prepare a hosted campaign: every actor gets an owned loader profile on its host; one that names no loader package runs on
+    /// the pinned BepInExPack on Windows and Linux (#711), as the public InspectAsync checked.
+    /// </summary>
     public static Task<PreparedHostedCampaign> PrepareAsync(string manifestFile, string outputDirectory, TimeSpan timeout,
         Func<string, IGameHost>? hostFactory = null, CancellationToken cancellation = default) =>
-        PrepareAsync(InspectInputs(manifestFile), outputDirectory, timeout, hostFactory, cancellation, plans: null);
+        PrepareAsync(manifestFile, outputDirectory, timeout, hostFactory, ShippedLoader.Choose, cancellation);
+
+    /// <summary>The public PrepareAsync with its pinned-loader rule given: a test whose fake hosts hold fake installs passes its own, or none.</summary>
+    internal static Task<PreparedHostedCampaign> PrepareAsync(string manifestFile, string outputDirectory, TimeSpan timeout,
+        Func<string, IGameHost>? hostFactory, ShippedLoader.Rule? pinnedLoader, CancellationToken cancellation = default) =>
+        PrepareAsync(InspectInputs(manifestFile), outputDirectory, timeout, hostFactory, cancellation, plans: null, shippedLoader: pinnedLoader);
 
     // A preparation that failed ends its run in the journal of every host it was to touch, best effort: the entry is a record,
     // and the preparation's own failure is the one to report.

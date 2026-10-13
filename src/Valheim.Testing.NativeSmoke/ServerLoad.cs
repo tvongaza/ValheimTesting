@@ -40,9 +40,9 @@ internal static class ServerLoad
     internal sealed record Seams(
         Func<string, Task<CampaignPreflightReport>>? Inspect = null,
         Func<string, ServerRunPlan, Func<ServerRunPlan, IReadOnlyDictionary<string, ClientRunPlan>>, string, PinnedServerRunOptions<ServerRunPlan>, Task<int>>? Campaign = null,
-        // The shipped-loader decision reads the real install on this machine, so it is on only for a real run (no seams)
-        // and for a test that passes one.
-        Func<string, string, ShippedLoader.Choice?>? Loader = null,
+        // The pinned-loader rule extracts the real pack into this machine's data root, so it is on only for a real run (no
+        // seams) and for a test that passes one.
+        ShippedLoader.Rule? Loader = null,
         Action<EnvironmentInventory, EnvironmentRecipe, string, string?>? ClientArchitecture = null,
         // An A/B run freezes its automatic server choice before either arm starts. Its command
         // still names the package, while this carries the reason into each arm's evidence.
@@ -50,7 +50,7 @@ internal static class ServerLoad
 
     public static async Task<int> RunAsync(string[] args, Seams? seams = null)
     {
-        seams ??= new Seams(Loader: ShippedLoader.Instead);
+        seams ??= new Seams(Loader: ShippedLoader.Choose);
         if (!TryRead(args, out var parsed, out string error, allowImplicitMod: true))
         {
             Console.Error.WriteLine(error);
@@ -99,7 +99,7 @@ internal static class ServerLoad
         public bool Started { get; set; }
     }
 
-    // A source loader refusal (a mismatched Doorstop pair, an incomplete BepInEx) names the reviewed-package fix for that actor.
+    // A source loader refusal (a macOS install with an incomplete BepInEx) names the reviewed-package fix for that actor.
     // Not when the actor already runs with a package: then the refusal is the package's own (another platform's loader), and
     // the hint would name the very option that caused it.
     private static string LoaderHint(CampaignPreflightProblem problem, string? serverLoader, string? clientLoader) =>

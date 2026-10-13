@@ -445,7 +445,7 @@ public static class PinnedServerRun
             phase = StepPhase.Setup; // From here the hosts are written to.
             await report.StepAsync(StepPhase.Setup, "check the hosts and prepare every actor's disposable install", async () =>
                 prepared = await HostedCampaignPreparation.PrepareAsync(inspection, preparedDirectory, CampaignTimeout,
-                    name => options.Hooks.CreateHost(inspection.Inputs!.Profile, name), cancellation.Token, named, runId, PreparationCleanup(report), options.Hooks.ShippedLoaderAsync, ShippedLoaderChosen(report)).ConfigureAwait(false)).ConfigureAwait(false);
+                    name => options.Hooks.CreateHost(inspection.Inputs!.Profile, name), cancellation.Token, named, runId, PreparationCleanup(report), options.Hooks.PinnedLoader, ShippedLoaderChosen(report)).ConfigureAwait(false)).ConfigureAwait(false);
             prepared!.RecordProfileLeftOut(report.Provenance);
             string hostName = null!;
             report.Step(StepPhase.Setup, "bind the prepared actors to the plan", () =>
@@ -567,9 +567,9 @@ public static class PinnedServerRun
     private static Func<string, Func<Task>, Task> PreparationCleanup(ScenarioReport report) =>
         (step, action) => report.StepAsync(StepPhase.Cleanup, step, action);
 
-    // An actor's shipped loader (#438), recorded as server-load records its own: <actor>LoaderShipped says why.
+    // An actor's pinned loader (#711), recorded as server-load records its own: <actor>LoaderShipped names the pin and its SHA-256.
     private static Action<string, string> ShippedLoaderChosen(ScenarioReport report) =>
-        (actor, reason) => report.Provenance[actor + "LoaderShipped"] = reason;
+        (actor, reason) => { Console.WriteLine($"{actor} loader: {reason}"); report.Provenance[actor + "LoaderShipped"] = reason; };
 
     private static async Task<int> RunAsync<TPlan>(string mode, Func<TPlan> readPlan, Func<string> planHash, string planName, string outputArgument,
         PinnedServerRunOptions<TPlan> options, RunCancellation cancellation, string? inventoryPath,
@@ -621,7 +621,7 @@ public static class PinnedServerRun
                 phase = StepPhase.Setup; // From here the hosts are written to.
                 await report.StepAsync(StepPhase.Setup, "check the hosts and prepare every actor's disposable install", async () =>
                     prepared = await HostedCampaignPreparation.PrepareAsync(inspection, Path.Combine(output, "prepared"), CampaignTimeout,
-                        name => options.Hooks.CreateHost(inspection.Inputs!.Profile, name), cancellation.Token, campaignPlans, campaignRunId, PreparationCleanup(report), options.Hooks.ShippedLoaderAsync, ShippedLoaderChosen(report)).ConfigureAwait(false)).ConfigureAwait(false);
+                        name => options.Hooks.CreateHost(inspection.Inputs!.Profile, name), cancellation.Token, campaignPlans, campaignRunId, PreparationCleanup(report), options.Hooks.PinnedLoader, ShippedLoaderChosen(report)).ConfigureAwait(false)).ConfigureAwait(false);
                 prepared!.RecordProfileLeftOut(report.Provenance);
                 if (prepared.Manifest.Server?.SteamRuntimePackage is { } steamPackagePath)
                 {

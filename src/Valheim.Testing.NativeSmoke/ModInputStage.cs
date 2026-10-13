@@ -33,8 +33,8 @@ internal static class ModInputStage
     internal sealed record Request(Route Route, string Output, IReadOnlyDictionary<string, string> Options, IReadOnlySet<string> Switches,
         IReadOnlyList<string> Mods, IReadOnlyList<string> SearchRoots, IReadOnlyList<string> OptionalReferences, IReadOnlyList<string> Dependencies)
     {
-        /// <summary>The shipped-loader decision for a local actor (<see cref="ShippedLoader.Instead(string, string)"/> in a real run).</summary>
-        public Func<string, string, ShippedLoader.Choice?>? Shipped { get; init; }
+        /// <summary>The pinned-loader rule for an actor that names no package (<see cref="ShippedLoader.Choose"/> in a real run).</summary>
+        public ShippedLoader.Rule? Shipped { get; init; }
         /// <summary>An A/B arm's server loader, chosen once before either arm.</summary>
         public ShippedLoader.Choice? FrozenServerLoader { get; init; }
         public Action<EnvironmentInventory, EnvironmentRecipe, string, string?>? ClientArchitecture { get; init; }
@@ -45,7 +45,7 @@ internal static class ModInputStage
     internal sealed record Choice(EnvironmentInventory Inventory, string? InventoryFile, EnvironmentRecipe? Server, string? ServerReason,
         EnvironmentRecipe? Client, string? ClientReason, string? Join);
 
-    /// <summary>One chosen actor and its loader: a package (given, the environment's, or the shipped one), else its install's own.</summary>
+    /// <summary>One chosen actor and its loader: a package (given, the environment's, or the pinned one), else (macOS) its install's own.</summary>
     internal sealed record Actor(string Role, EnvironmentRecipe Recipe, string Reason, string? Loader, ShippedLoader.Choice? Shipped, string? LoaderRoot);
 
     internal sealed record Scenario(object Runner, string Name, string File, string Sha256, object? ValidatedInputs);
@@ -264,14 +264,14 @@ internal static class ModInputStage
 
     private static string LoaderOption(string role) => role == "server" ? "--loader-package" : "--client-loader-package";
 
-    // A role's loader: its loader option, else the environment's package, else (on this machine) the shipped decision.
+    // A role's loader: its loader option, else the environment's package, else the pinned pack on a Windows or Linux host (#711).
     private static Actor Select(Request request, EnvironmentInventory inventory, string role, EnvironmentRecipe recipe, string reason)
     {
-        bool local = inventory.Hosts[recipe.Host].Kind == "local";
-        var (manifest, shipped) = SmokeInputResolver.Loader(role, recipe, request.Options.GetValueOrDefault(LoaderOption(role)),
-            local ? request.Shipped : null);
+        var (manifest, shipped) = SmokeInputResolver.Loader(role, recipe, inventory.Hosts[recipe.Host].Platform,
+            request.Options.GetValueOrDefault(LoaderOption(role)), request.Shipped);
         if (manifest != null && !File.Exists(manifest))
             throw new FileNotFoundException($"The {role} loader package does not exist: {manifest}", manifest);
+        if (shipped != null) ShippedLoader.Print(role, shipped);
         return new Actor(role, recipe, reason, manifest, shipped, manifest == null ? null : BepInExLoaderPackage.Read(manifest).Root);
     }
 

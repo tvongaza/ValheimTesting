@@ -547,10 +547,14 @@ public sealed class HostedRuntimeStageTests : IDisposable
         Assert.False(Directory.Exists(host.Local(runtime)));
     }
 
+    // #711: the profile's BepInEx.cfg is the plan's explicit one, else the package's default, else none (BepInEx writes its
+    // defaults); the install's own is never carried over onto a package.
     [Theory]
-    [InlineData(true)]
-    [InlineData(false)]
-    public async Task ReviewedLoaderReplacesAnIncoherentSourceOnlyInTheDisposableRuntime(bool packageHasSettings)
+    [InlineData(true, false)]
+    [InlineData(false, false)]
+    [InlineData(true, true)]
+    [InlineData(false, true)]
+    public async Task ReviewedLoaderReplacesAnIncoherentSourceOnlyInTheDisposableRuntime(bool packageHasSettings, bool explicitSettings)
     {
         var host = new FakeServerHost("windows-client", Mirror, windows: true);
         const string source = @"C:\game\client", runtime = @"C:\runs\loader\runtime", staging = @"C:\runs\loader\staging";
@@ -583,12 +587,18 @@ public sealed class HostedRuntimeStageTests : IDisposable
         await Assert.ThrowsAsync<InvalidOperationException>(() => HostedRuntimeStage.PrepareProfileAsync(host,
             HostedRuntimeKind.Client, source, runtime, staging, files, TimeSpan.FromSeconds(30)));
         Assert.DoesNotContain("profile-seed", host.Scripts);
+        string explicitConfig = Path.Combine(_root, "explicit-BepInEx.cfg");
+        File.WriteAllText(explicitConfig, "explicit settings");
+        if (explicitSettings) files = [.. files, new HostedRuntimeFile(explicitConfig, BepInExSettings.RelativePath)];
         var prepared = await HostedRuntimeStage.PrepareProfileAsync(host, HostedRuntimeKind.Client, source, runtime, staging,
             files, TimeSpan.FromSeconds(30), loaderPackage: package);
         var listing = prepared.Loader;
-        foreach (var file in package.Files) Assert.Equal(file.Value, listing.Files[file.Key]);
-        Assert.Equal(File.ReadAllBytes(packageHasSettings ? packageConfig : sourceConfig),
-            File.ReadAllBytes(Path.Combine(host.Local(runtime), "BepInEx", "config", "BepInEx.cfg")));
+        foreach (var file in package.Files.Where(file => !(explicitSettings && file.Key == BepInExSettings.RelativePath)))
+            Assert.Equal(file.Value, listing.Files[file.Key]);
+        string profileConfig = Path.Combine(host.Local(runtime), "BepInEx", "config", "BepInEx.cfg");
+        if (explicitSettings || packageHasSettings)
+            Assert.Equal(File.ReadAllBytes(explicitSettings ? explicitConfig : packageConfig), File.ReadAllBytes(profileConfig));
+        else Assert.False(File.Exists(profileConfig));
         Assert.False(listing.Files.ContainsKey("BepInEx/core/stale.dll"));
         Assert.Equal(package.Loader, prepared.Pins.Loader);
         WorldFixture.Verify(install, before);

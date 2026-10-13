@@ -42,7 +42,7 @@ internal static partial class ModBuild
         {
             string output = SmokeCommandOptions.Output(parsed!.Options);
             var built = await ModInputStage.RunAsync(new ModInputStage.Request(ModInputStage.Route.Build, output, parsed.Options, parsed.Switches,
-                [], parsed.List("--search-root"), [], parsed.List("--dependency")) { Shipped = ShippedLoader.Instead }, cancellation).ConfigureAwait(false);
+                [], parsed.List("--search-root"), [], parsed.List("--dependency")) { Shipped = ShippedLoader.Choose }, cancellation).ConfigureAwait(false);
             Console.WriteLine("Built mod: " + built.Mods[0]);
             Console.WriteLine("Build inputs: " + built.BuildInputs);
             Console.WriteLine("Use --mod " + built.Mods[0] + " --build-inputs " + built.BuildInputs + " for the native run.");

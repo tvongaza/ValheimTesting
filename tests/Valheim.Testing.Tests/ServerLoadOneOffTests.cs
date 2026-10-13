@@ -553,9 +553,9 @@ public sealed class ServerLoadOneOffTests : IDisposable
         Assert.Single(EnvironmentInventory.Read(Path.Combine(output, "environments.json"), new FakeMachine(HostProfile.CurrentPlatform)).Environments);
     }
 
-    // An install whose own Doorstop pair does not match takes the shipped BepInExPack (ShippedLoader): the campaign's role
-    // names that package, and an install that needs none is left to its own loader.
-    [Fact] public async Task AShippedLoaderChosenForAnInstallBecomesItsRolesLoaderPackage()
+    // #711: an actor that names no loader package takes the pinned BepInExPack (the mod-input stage's one rule, with its host's
+    // platform): the campaign's role names that package.
+    [Fact] public async Task APinnedLoaderChosenForAnActorBecomesItsRolesLoaderPackage()
     {
         string package = Path.Combine(_rig.Root, "shipped-loader.json");
         BepInExLoaderPackage.Capture(_rig.Game, "BepInExPack_Valheim", "5.4.2351").Write(package);
@@ -563,9 +563,9 @@ public sealed class ServerLoadOneOffTests : IDisposable
         string output = Path.Combine(_rig.Root, "shipped-server");
         int result = await ServerLoad.RunAsync(Arguments(output, "--server-only", "--preflight-only"), new ServerLoad.Seams(
             Inspect: _ => Task.FromResult(Ready), Campaign: (_, _, _, _, _) => Task.FromResult(0),
-            Loader: (actor, install) => { asked.Add(actor); return new ShippedLoader.Choice(package, install + " mismatched"); }));
+            Loader: (actor, install, platform) => { asked.Add(actor + " " + platform); return new ShippedLoader.Choice(package, install + " pinned"); }));
         Assert.Equal(0, result);
-        Assert.Equal(new[] { "server" }, asked); // --server-only: no client to ask about
+        Assert.Equal(new[] { "server " + HostProfile.CurrentPlatform }, asked); // --server-only: no client to ask about
         var campaign = JsonDocument.Parse(File.ReadAllText(Path.Combine(output, "campaign.json"))).RootElement;
         Assert.Equal(package, campaign.GetProperty("server").GetProperty("loaderPackage").GetString());
 
@@ -573,7 +573,7 @@ public sealed class ServerLoadOneOffTests : IDisposable
         asked.Clear();
         result = await ServerLoad.RunAsync(Arguments(Path.Combine(_rig.Root, "explicit"), "--server-only", "--preflight-only", "--loader-package", package),
             new ServerLoad.Seams(Inspect: _ => Task.FromResult(Ready), Campaign: (_, _, _, _, _) => Task.FromResult(0),
-                Loader: (actor, _) => { asked.Add(actor); return null; }));
+                Loader: (actor, _, _) => { asked.Add(actor); return null; }));
         Assert.Equal(0, result);
         Assert.Empty(asked);
     }
@@ -582,7 +582,7 @@ public sealed class ServerLoadOneOffTests : IDisposable
     {
         string package = Path.Combine(_rig.Root, "frozen-loader.json");
         BepInExLoaderPackage.Capture(_rig.Game, "BepInExPack_Valheim", "5.4.2351").Write(package);
-        const string reason = "the source Doorstop pair was incoherent";
+        const string reason = "the server's profile runs on the pinned pack";
         var recorded = new Dictionary<string, string>();
         int result = await ServerLoad.RunAsync(Arguments(Path.Combine(_rig.Root, "frozen-server"),
             "--server-only", "--loader-package", package), new ServerLoad.Seams(
@@ -592,7 +592,7 @@ public sealed class ServerLoadOneOffTests : IDisposable
                 options.Provenance!(plan, recorded);
                 return Task.FromResult(0);
             },
-            Loader: (_, _) => throw new InvalidOperationException("An explicit arm package must not choose another loader."),
+            Loader: (_, _, _) => throw new InvalidOperationException("An explicit arm package must not choose another loader."),
             FrozenServerLoader: new ShippedLoader.Choice(package, reason)));
 
         Assert.Equal(0, result);
