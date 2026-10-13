@@ -38,6 +38,16 @@ public sealed class ValidationLimitsTests : IClassFixture<ValidationLimitsTests.
     }
 
     [Fact]
+    public async Task AOneProjectRunKeepsItsTrx()
+    {
+        var run = await _probe.Run("PassesQuickly", soft: 0.01, hard: 300, githubActions: false);
+        run.AssertSucceeded();
+        Has(run, "SOFT LIMIT: dotnet test");
+        Has(run, "slowest tests: LimitsProbe.ProbeTests.PassesQuickly");
+        Assert.Single(Directory.GetFiles(_probe.Results("PassesQuickly"), "*.trx", SearchOption.AllDirectories));
+    }
+
+    [Fact]
     public async Task ARunPastTheHardLimitIsStoppedAndFailsNamingTheTestInFlight()
     {
         var run = await _probe.Run("NeverFinishes", soft: 2, hard: 75, githubActions: false);
@@ -62,10 +72,49 @@ public sealed class ValidationLimitsTests : IClassFixture<ValidationLimitsTests.
         var split = await _probe.Run("LimitsProbe.Split", soft: null, hard: null, githubActions: false, split: true);
         split.AssertSucceeded();
         Has(split, "OS-aware split (#735)");
+        Has(split, "RunConfiguration.TreatNoTestsAsError=true");
         string[] expected = OperatingSystem.IsWindows() ? ["LimitsProbe.SplitSensitive.Ran", "LimitsProbe.SplitWindows.Ran"]
             : OperatingSystem.IsMacOS() ? ["LimitsProbe.SplitMacos.Ran", "LimitsProbe.SplitSensitive.Ran", "LimitsProbe.SplitUnix.Ran"]
             : ["LimitsProbe.SplitNeutral.Ran", "LimitsProbe.SplitSensitive.Ran", "LimitsProbe.SplitUnix.Ran"];
         Assert.Equal(expected, _probe.Passed("LimitsProbe.Split", split: true));
+    }
+
+    [Fact]
+    public async Task TheTargetFormRunsTheNamedBuildTargetThroughExecute()
+    {
+        BuildRun run = await _probe.RunTarget(soft: 0.01);
+
+        run.AssertSucceeded();
+        Assert.Equal("ran", File.ReadAllText(_probe.TargetMarker).Trim());
+        string command = $"dotnet build {_probe.Project} -m:1 -t:WriteMarker";
+        Has(run, "start: " + command);
+        Has(run, "SOFT LIMIT: " + command);
+        string transcript = File.ReadAllText(Path.Combine(_probe.TargetResults, "validate.log"));
+        Assert.Contains("start: " + command, transcript, StringComparison.Ordinal);
+        Assert.Contains("SOFT LIMIT: " + command, transcript, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task TheOneProjectModeRejectsEveryOtherShapeWithUsage()
+    {
+        string root = FixtureProjects.RepositoryRoot();
+        string results = _probe.Results("invalid");
+        string[][] invalid =
+        [
+            ["--unknown", root, _probe.Project, results, "FullyQualifiedName~PassesQuickly"],
+            ["--test-project", "relative-root", _probe.Project, results],
+            ["--test-project", root, "relative-project", results],
+            ["--test-project", root, _probe.Project, "relative-results"],
+            ["--test-project", _probe.FixtureDirectory, _probe.Project, results],
+            ["--test-project", root, _probe.Project, results, "--target"],
+            ["--test-project", root, _probe.Project, results, "--target", ""],
+            ["--test-project", root, _probe.Project, results, "FullyQualifiedName~PassesQuickly", "extra"],
+            ["--test-project", root, _probe.Project, results, "--target", "WriteMarker", "--split"],
+            ["--split", "--ci-build-only"],
+        ];
+
+        foreach (string[] arguments in invalid)
+            (await _probe.RunArguments(arguments)).AssertFailedWith("usage: dotnet run scripts/validate.cs");
     }
 
     private static void Has(BuildRun run, string text) =>
@@ -81,6 +130,11 @@ public sealed class ValidationLimitsTests : IClassFixture<ValidationLimitsTests.
         private string _project = "";
         private string _script = "";
 
+        public string FixtureDirectory => _directory;
+        public string Project => _project;
+        public string TargetMarker => Path.Combine(Path.GetDirectoryName(_project)!, "target.marker");
+        public string TargetResults => Path.Combine(_directory, "target-results");
+
         public async Task InitializeAsync()
         {
             string project = Path.Combine(_directory, "probe");
@@ -92,6 +146,7 @@ public sealed class ValidationLimitsTests : IClassFixture<ValidationLimitsTests.
                   <ItemGroup>
                     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.10.0" /><PackageReference Include="xunit" Version="2.8.1" /><PackageReference Include="xunit.runner.visualstudio" Version="2.8.1" />
                   </ItemGroup>
+                  <Target Name="WriteMarker"><WriteLinesToFile File="$(MSBuildProjectDirectory)/target.marker" Lines="ran" Overwrite="true" /></Target>
                 </Project>
                 """);
             File.WriteAllText(Path.Combine(project, "ProbeTests.cs"), """
@@ -135,10 +190,10 @@ public sealed class ValidationLimitsTests : IClassFixture<ValidationLimitsTests.
             return Task.CompletedTask;
         }
 
-        /// <summary>validate.cs's probe mode on one test of the project; null limits keep the script's own.</summary>
+        /// <summary>validate.cs's one-project mode on one test; null limits keep the script's own.</summary>
         public Task<BuildRun> Run(string test, double? soft, double? hard, bool githubActions, double? heartbeat = null, bool split = false) =>
             FixtureProjects.Dotnet(FixtureProjects.RepositoryRoot(),
-                ["run", _script, "--", "--limits-probe", FixtureProjects.RepositoryRoot(), _project, Results(test, split), "FullyQualifiedName~" + test, .. (split ? new[] { "--split" } : Array.Empty<string>())],
+                ["run", _script, "--", "--test-project", FixtureProjects.RepositoryRoot(), _project, Results(test, split), "FullyQualifiedName~" + test, .. (split ? new[] { "--split" } : Array.Empty<string>())],
                 new Dictionary<string, string?>
                 {
                     ["VT_VALIDATE_SOFT_LIMIT_SECONDS"] = soft?.ToString(System.Globalization.CultureInfo.InvariantCulture),
@@ -148,6 +203,21 @@ public sealed class ValidationLimitsTests : IClassFixture<ValidationLimitsTests.
                     ["VT_VALIDATE_HEARTBEAT_SECONDS"] = heartbeat?.ToString(System.Globalization.CultureInfo.InvariantCulture),
                 }, timeoutMinutes: 5);
 
+        public Task<BuildRun> RunTarget(double soft)
+        {
+            File.Delete(TargetMarker);
+            return FixtureProjects.Dotnet(FixtureProjects.RepositoryRoot(),
+                ["run", _script, "--", "--test-project", FixtureProjects.RepositoryRoot(), _project, TargetResults, "--target", "WriteMarker"],
+                new Dictionary<string, string?>(CleanEnvironment())
+                {
+                    ["VT_VALIDATE_SOFT_LIMIT_SECONDS"] = soft.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                }, timeoutMinutes: 5);
+        }
+
+        public Task<BuildRun> RunArguments(params string[] arguments) =>
+            FixtureProjects.Dotnet(FixtureProjects.RepositoryRoot(),
+                ["run", _script, "--", .. arguments], CleanEnvironment(), timeoutMinutes: 5);
+
         /// <summary>The tests a run passed, by name, from the TRX validate.cs keeps for it.</summary>
         public string[] Passed(string test, bool split)
         {
@@ -156,6 +226,15 @@ public sealed class ValidationLimitsTests : IClassFixture<ValidationLimitsTests.
                 .Select(e => (string?)e.Attribute("testName") ?? "").Order(StringComparer.Ordinal).ToArray();
         }
 
-        private string Results(string test, bool split) => Path.Combine(_directory, "results-" + test + (split ? "-split" : ""));
+        public string Results(string test, bool split = false) => Path.Combine(_directory, "results-" + test + (split ? "-split" : ""));
+
+        private static Dictionary<string, string?> CleanEnvironment() => new()
+        {
+            ["VT_VALIDATE_SOFT_LIMIT_SECONDS"] = null,
+            ["VT_VALIDATE_HARD_LIMIT_SECONDS"] = null,
+            ["GITHUB_ACTIONS"] = null,
+            ["VT_CI_PROFILE"] = null,
+            ["VT_VALIDATE_HEARTBEAT_SECONDS"] = null,
+        };
     }
 }
