@@ -394,9 +394,9 @@ public sealed class RunJournalStatusTests : IDisposable
         Assert.Empty(_host.Stops);
     }
 
-    // The pid-file read and the server copy's top-level skip through this machine's own shell (bash, or pwsh on Windows);
+    // The pid-file read through this machine's own shell (bash, or pwsh on Windows);
     // on Linux, also the command line a game started the Linux launchers' way (env executing it) has, as the probe hashes it.
-    [Fact] public async Task ThePidFileReadAndTheServerCopysSkipRunThroughThisMachinesShell()
+    [Fact] public async Task ThePidFileReadRunsThroughThisMachinesShell()
     {
         var local = new LocalGameHost("local", HostShell.ThisMachine);
         string Dir(string name) { string path = Path.Combine(_root, "launches", name); Directory.CreateDirectory(path); return path; }
@@ -408,23 +408,6 @@ public sealed class RunJournalStatusTests : IDisposable
         Assert.Equal([(RunJournalStatus.PidFileState.Found, 91152, "134357104986630869"), (RunJournalStatus.PidFileState.Found, 4242, null),
             (RunJournalStatus.PidFileState.Malformed, 0, null), (RunJournalStatus.PidFileState.Missing, 0, null)],
             files.Select(file => (file.State, file.Pid, file.StartIdentity)));
-
-        // The install's top-level logs/ stays behind; a nested one, the rest and the install itself are untouched.
-        string install = Path.Combine(_root, "server install"), runtime = Path.Combine(_root, "runs", "run 1", "runtime");
-        foreach (var (relative, text) in new[] { ("valheim_server.x86_64", "game"), ("logs/connection_log_2456.txt", "steam"), ("logs/stats_log.txt", "steam"),
-                     ("BepInEx/logs/kept.txt", "own"), (".hidden", "dot") })
-        {
-            string file = Path.Combine(install, relative.Replace('/', Path.DirectorySeparatorChar));
-            Directory.CreateDirectory(Path.GetDirectoryName(file)!);
-            File.WriteAllText(file, text);
-        }
-        await HostInstall.CopyAsync(local, install, runtime, TimeSpan.FromSeconds(60), HostedRuntimeStage.RuntimeSkips, default);
-        Assert.Equal(new[] { "valheim_server.x86_64", ".hidden", "BepInEx/logs/kept.txt" }.Order(StringComparer.Ordinal),
-            WorldFixture.Manifest(runtime).Keys.Select(key => key.Replace('\\', '/')).Order(StringComparer.Ordinal));
-        Assert.Equal(5, WorldFixture.Manifest(install).Count);
-        string whole = Path.Combine(_root, "runs", "run 2", "runtime");
-        await HostInstall.CopyAsync(local, install, whole, TimeSpan.FromSeconds(60));
-        Assert.Equal(WorldFixture.Manifest(install), WorldFixture.Manifest(whole));
 
         if (!OperatingSystem.IsLinux()) return;
         string sleep = File.Exists("/usr/bin/sleep") ? "/usr/bin/sleep" : "/bin/sleep";

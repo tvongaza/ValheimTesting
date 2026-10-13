@@ -6,31 +6,38 @@ using Valheim.Testing.Game.Fakes;
 using Xunit;
 using Valheim.Testing.GameSessions;
 
-// The whole runner lifecycle on temporary fixtures: validate for real, launching modes through the internal session
-// seam with the fake owned server (no game).
+// The whole runner lifecycle on temporary fixtures, a standalone run without --inventory: its server's profile is staged on
+// this machine's host (LocalServerMachine: a fake Linux host over a mirror, on any OS), and launching modes start the fake owned
+// server through the internal session seam (no game).
 public sealed class PinnedServerRunTests : IDisposable
 {
     private readonly string _root = Path.Combine(Path.GetTempPath(), "pinned-run-" + Guid.NewGuid().ToString("N"));
-    private string Runtime => Path.Combine(_root, "runtime");
+    private readonly LocalServerMachine _machine;
+    public PinnedServerRunTests() => _machine = new LocalServerMachine(Path.Combine(_root, "local-host"));
+    // The install the plan's runtime names, in the local host's mirror.
+    private string Runtime => _machine.InstallDirectory;
     private string World => Path.Combine(_root, "world");
     private string Output => Path.Combine(_root, "out");
     public void Dispose() { if (Directory.Exists(_root)) Directory.Delete(_root, true); }
+    private static async Task<int> RunHere<TPlan>(string[] args, PinnedServerRunOptions<TPlan> options) where TPlan : ServerRunPlan
+    {
+        using var machine = LocalServerMachine.Use();
+        return await PinnedServerRun.MainAsync(args, options);
+    }
+    // A path the run reports on this machine's host, in the mirror.
+    private string OnHost(string path) => _machine.Host.Local(path);
 
     // runtimePins: the pins to write (default: the runtime's own). Unpinned: pinning "none", no pins and no fixture manifests.
-    private string WritePlan(bool linux, Dictionary<string, object>? logScan = null, InstallPins? runtimePins = null, bool unpinned = false,
+    private string WritePlan(Dictionary<string, object>? logScan = null, InstallPins? runtimePins = null, bool unpinned = false,
         object? client = null)
     {
-        Directory.CreateDirectory(Runtime); Directory.CreateDirectory(Path.Combine(World, "worlds_local"));
-        string server = Path.Combine(Runtime, linux ? GameLaunch.ServerLinuxExecutable : GameLaunch.ServerWindowsExecutable);
-        File.WriteAllText(server, "server");
-        if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(server, File.GetUnixFileMode(server) | UnixFileMode.UserExecute);
-        FakeInstalls.Server(Runtime);
+        Directory.CreateDirectory(Path.Combine(World, "worlds_local"));
         File.WriteAllText(Path.Combine(World, "worlds_local", "Test.db"), "world");
         var listener = new TcpListener(IPAddress.Loopback, 0); listener.Start(); int port = ((IPEndPoint)listener.LocalEndpoint).Port; listener.Stop();
         var plan = new Dictionary<string, object>
         {
             ["scenario"] = "smoke",
-            ["runtime"] = new { source = Runtime, sha256 = unpinned ? new Dictionary<string, string>() : WorldFixture.Manifest(Runtime) },
+            ["runtime"] = new { source = LocalServerMachine.Install, sha256 = unpinned ? new Dictionary<string, string>() : WorldFixture.Manifest(Runtime) },
             ["world"] = new { source = World, sha256 = unpinned ? new Dictionary<string, string>() : WorldFixture.Manifest(World) },
             ["arguments"] = new[] { "-batchmode", "-nographics", "-savedir", "{world}" },
             ["pins"] = unpinned ? new Dictionary<string, string>() : new Dictionary<string, string> { ["worlduid"] = "1" },
@@ -44,9 +51,10 @@ public sealed class PinnedServerRunTests : IDisposable
         File.WriteAllText(path, JsonSerializer.Serialize(plan));
         return path;
     }
-    private static PinnedServerRunOptions<ServerRunPlan> Options(Func<TestRun<ServerRunPlan>, Task>? scenario = null,
+    private PinnedServerRunOptions<ServerRunPlan> Options(Func<TestRun<ServerRunPlan>, Task>? scenario = null,
         FakeOwnedServer? server = null, Action<ServerRunPlan>? checkPlan = null) => new()
     {
+        Hooks = _machine.Hooks(),
         Name = "toolkit-smoke",
         ReadPlan = path => { var plan = ServerRunPlan.Read<ServerRunPlan>(path); plan.ValidateServerPlan([], "TEST_SESSION_TOKEN"); return plan; },
         Mod = new("test.mod/session", "TEST_SESSION_TOKEN"),
@@ -56,8 +64,9 @@ public sealed class PinnedServerRunTests : IDisposable
     };
     private JsonElement Result() => JsonDocument.Parse(File.ReadAllText(Path.Combine(Output, "result.json"))).RootElement;
     // A mod plan with a client section, read and validated the way a mod runner's ReadPlan does.
-    private static PinnedServerRunOptions<CrossplayPlanTests.ClientPlan> ClientOptions(FakeOwnedServer? server = null) => new()
+    private PinnedServerRunOptions<CrossplayPlanTests.ClientPlan> ClientOptions(FakeOwnedServer? server = null) => new()
     {
+        Hooks = _machine.Hooks(),
         Name = "toolkit-smoke",
         ReadPlan = path =>
         {
@@ -74,7 +83,6 @@ public sealed class PinnedServerRunTests : IDisposable
     {
         mode = "owned", install, architecture, inPlace = true, port = 5556, join = "127.0.0.1:2456", character = "Tester", pinning = "none",
     };
-    private static bool HostRunsLinux => !OperatingSystem.IsWindows();
 
     [Theory]
     [InlineData(0)]
@@ -91,21 +99,33 @@ public sealed class PinnedServerRunTests : IDisposable
         Assert.Equal("CleanupBudget", error.ParamName);
     }
 
-    [Fact] public async Task ValidateCopiesAndVerifiesTheFixturesWithoutLaunching()
+    // #730: without --inventory the server runs on this machine, from a profile of the install the plan names: the same profile
+    // staging, checks and retirement as on any host, never a copy of the install.
+    [Fact] public async Task ValidateStagesTheServersProfileOnThisMachineWithoutLaunching()
     {
-        string plan = WritePlan(linux: HostRunsLinux);
-        Assert.Equal(0, await PinnedServerRun.MainAsync(["validate", plan, Output], Options()));
+        string plan = WritePlan();
+        var before = WorldFixture.Manifest(Runtime);
+        Assert.Equal(0, await RunHere(["validate", plan, Output], Options()));
         var result = Result();
         Assert.True(result.GetProperty("Passed").GetBoolean());
-        Assert.Equal(new[] { "enough free disk space for the copies", "copy and verify pinned runtime", "copy and verify pinned world", "copied runtime has the plan's server executable",
-                "copied runtime is the pinned game build, loader and patchers", "prepared only; no game launched",
-                "remove the runtime copy, keeping what the run changed" },
+        Assert.Equal(new[] { "enough free disk space for the copies", "take the server host's lock",
+                "check the server host's install against the pinned runtime and stage its profile", "copy and verify pinned world",
+                "ship and verify the world copy on the server host", "server runtime has the plan's server executable",
+                "server runtime is the pinned game build, loader and patchers", "prepared only; no game launched",
+                "remove the server host's runtime copy, keeping what the run changed", "release the server host's lock" },
             result.GetProperty("Steps").EnumerateArray().Select(s => s.GetProperty("Name").GetString()));
         // Validate prepares and cleans up; it runs no scenario, so the scenario state is not reported as passed.
         Assert.Equal((true, true, false, true), (result.GetProperty("PreflightPassed").GetBoolean(), result.GetProperty("RuntimeReady").GetBoolean(),
             result.GetProperty("ScenarioPassed").GetBoolean(), result.GetProperty("CleanupVerified").GetBoolean()));
-        Assert.Equal(new[] { "Preflight", "Setup", "Setup", "Setup", "Setup", "Setup", "Cleanup" },
+        Assert.Equal(new[] { "Preflight", "Setup", "Setup", "Setup", "Setup", "Setup", "Setup", "Setup", "Cleanup", "Cleanup" },
             result.GetProperty("Steps").EnumerateArray().Select(s => s.GetProperty("Phase").GetString()));
+        var provenance = result.GetProperty("Provenance");
+        Assert.Equal(("this machine", EnvironmentInventory.LocalHost, EnvironmentInventory.LocalHost + ":" + LocalServerMachine.Install),
+            (provenance.GetProperty("inventory").GetString(), provenance.GetProperty("serverHost").GetString(), provenance.GetProperty("runtimeSource").GetString()));
+        Assert.StartsWith(EnvironmentInventory.LocalServer + ": ", provenance.GetProperty("serverEnvironment").GetString());
+        Assert.DoesNotContain("copy", _machine.Host.Scripts);
+        Assert.Contains("profile-seed", _machine.Host.Scripts);
+        Assert.Equal(before, WorldFixture.Manifest(Runtime)); // the install itself never changes
         Assert.Equal("validate", result.GetProperty("Provenance").GetProperty("mode").GetString());
         Assert.Equal(InstallPins.Of(Runtime).Game, result.GetProperty("Provenance").GetProperty("runtimeGameSha256").GetString());
         Assert.Equal("strict", result.GetProperty("Pinning").GetString());
@@ -115,17 +135,17 @@ public sealed class PinnedServerRunTests : IDisposable
     [Fact] public async Task AnArm64ClientWithoutTheNativeCoreIsRefusedAtValidateAndBeforeTheServerStarts()
     {
         using var legacy = ClientLaunchTests.Install.Mac(universalDoorstop: true, core: ClientLaunchTests.LegacyDetour);
-        string plan = WritePlan(linux: HostRunsLinux, client: MacClient(legacy.Root, "arm64"));
+        string plan = WritePlan(client: MacClient(legacy.Root, "arm64"));
         Assert.Contains("MonoMod before 25", Assert.Throws<ArgumentException>(() => ClientOptions().ReadPlan(plan)).Message);
-        Assert.Equal(1, await PinnedServerRun.MainAsync(["validate", plan, Output], ClientOptions()));
+        Assert.Equal(1, await RunHere(["validate", plan, Output], ClientOptions()));
         Assert.False(Directory.Exists(Output)); // Refused before anything was copied or written.
         var server = new FakeOwnedServer("test.mod");
-        Assert.Equal(1, await PinnedServerRun.MainAsync(["run", plan, Output], ClientOptions(server)));
+        Assert.Equal(1, await RunHere(["run", plan, Output], ClientOptions(server)));
         Assert.Empty(server.Events); Assert.False(Directory.Exists(Output));
         using var native = ClientLaunchTests.Install.Mac(universalDoorstop: true, core: ClientLaunchTests.NativeDetour);
-        string nativePlan = WritePlan(linux: HostRunsLinux, client: MacClient(native.Root, "arm64"));
+        string nativePlan = WritePlan(client: MacClient(native.Root, "arm64"));
         Assert.Equal(ClientArchitecture.Arm64, ClientOptions().ReadPlan(nativePlan).Client!.LaunchArchitecture);
-        Assert.Equal(0, await PinnedServerRun.MainAsync(["validate", nativePlan, Output], ClientOptions()));
+        Assert.Equal(0, await RunHere(["validate", nativePlan, Output], ClientOptions()));
     }
 
     [Fact] public async Task AMissingClientJoinPasswordIsRefusedBeforeTheServerOrAnyCopyStarts()
@@ -136,13 +156,13 @@ public sealed class PinnedServerRunTests : IDisposable
         Environment.SetEnvironmentVariable(variable, null);
         try
         {
-            string plan = WritePlan(linux: HostRunsLinux, client: new
+            string plan = WritePlan(client: new
             {
                 mode = "owned", install = install.Root, architecture = "x64", port = 5556,
                 join = "127.0.0.1:2456", character = "Tester", pinning = "none", passwordVariable = variable,
             });
             var server = new FakeOwnedServer("test.mod");
-            Assert.Equal(1, await PinnedServerRun.MainAsync(["run", plan, Output], ClientOptions(server)));
+            Assert.Equal(1, await RunHere(["run", plan, Output], ClientOptions(server)));
             Assert.Empty(server.Events);
             Assert.False(Directory.Exists(Output));
         }
@@ -152,11 +172,10 @@ public sealed class PinnedServerRunTests : IDisposable
     // boot it starts, the scenario's restarts included; a server that never acknowledges fails its start, asked once.
     [Fact] public async Task TheDefaultRunEstablishesTestAccessOnEveryBootAndAServerThatNeverAcknowledgesFails()
     {
-        if (OperatingSystem.IsMacOS()) return; // This fake runtime is Windows or Linux, which a Mac cannot run.
-        string plan = WritePlan(linux: HostRunsLinux);
+        string plan = WritePlan();
         var server = new FakeOwnedServer("test.mod");
         TestAccessState? afterRestart = null;
-        Assert.Equal(0, await PinnedServerRun.MainAsync(["run", plan, Output], Options(server: server, scenario: run =>
+        Assert.Equal(0, await RunHere(["run", plan, Output], Options(server: server, scenario: run =>
         {
             afterRestart = TestAccess.Read(run.Session.Restart());
             return Task.CompletedTask;
@@ -166,7 +185,7 @@ public sealed class PinnedServerRunTests : IDisposable
         Assert.True(afterRestart is { Devcommands: true, CheatsAcknowledged: true });
         Directory.Delete(Output, true);
         var stubborn = new FakeOwnedServer("test.mod") { IgnoreConfirmCheats = true };
-        Assert.Equal(1, await PinnedServerRun.MainAsync(["run", plan, Output], Options(server: stubborn)));
+        Assert.Equal(1, await RunHere(["run", plan, Output], Options(server: stubborn)));
         var start = Result().GetProperty("Steps").EnumerateArray().Single(step => step.GetProperty("Name").GetString() == "start and verify owned dedicated fixture");
         Assert.False(start.GetProperty("Passed").GetBoolean());
         Assert.Contains("The owned server started, but its test access was not established", start.GetProperty("Error").GetString());
@@ -174,26 +193,25 @@ public sealed class PinnedServerRunTests : IDisposable
     }
     [Fact] public async Task ExistingEvidenceIsNeverOverwrittenAndBadUsageIsRefused()
     {
-        string plan = WritePlan(linux: HostRunsLinux);
+        string plan = WritePlan();
         Directory.CreateDirectory(Output); File.WriteAllText(Path.Combine(Output, "keep.txt"), "evidence");
-        Assert.Equal(1, await PinnedServerRun.MainAsync(["validate", plan, Output], Options()));
+        Assert.Equal(1, await RunHere(["validate", plan, Output], Options()));
         Assert.Equal(new[] { "keep.txt" }, Directory.GetFiles(Output).Select(Path.GetFileName));
-        Assert.Equal(2, await PinnedServerRun.MainAsync(["launch", plan, Output + "2"], Options()));
-        Assert.Equal(2, await PinnedServerRun.MainAsync(["validate", plan], Options()));
+        Assert.Equal(2, await RunHere(["launch", plan, Output + "2"], Options()));
+        Assert.Equal(2, await RunHere(["validate", plan], Options()));
     }
     [Fact] public async Task AChangedFixtureFailsBeforeAnythingLaunches()
     {
-        string plan = WritePlan(linux: HostRunsLinux);
+        string plan = WritePlan();
         File.WriteAllText(Path.Combine(World, "worlds_local", "Test.db"), "edited after pinning");
-        Assert.Equal(1, await PinnedServerRun.MainAsync(["validate", plan, Output], Options()));
+        Assert.Equal(1, await RunHere(["validate", plan, Output], Options()));
         Assert.False(Result().GetProperty("Passed").GetBoolean());
     }
     [Fact] public async Task RunStartsTheOwnedServerRunsTheScenarioAndStopsOnlyThatServer()
     {
-        if (OperatingSystem.IsMacOS()) return; // This fake runtime is Windows or Linux, which a Mac cannot run; validate is covered above.
-        string plan = WritePlan(linux: HostRunsLinux);
+        string plan = WritePlan();
         var server = new FakeOwnedServer("test.mod"); string? seen = null;
-        int code = await PinnedServerRun.MainAsync(["run", plan, Output], Options(run => { seen = run.Server.GetType().Name; return Task.CompletedTask; }, server));
+        int code = await RunHere(["run", plan, Output], Options(run => { seen = run.Server.GetType().Name; return Task.CompletedTask; }, server));
         Assert.Equal(0, code); Assert.Equal("GameActor", seen);
         Assert.Contains("stop1", server.Events);
         var result = Result();
@@ -202,26 +220,26 @@ public sealed class PinnedServerRunTests : IDisposable
     }
     [Fact] public async Task AFailingScenarioFailsTheRunButStillStopsTheServer()
     {
-        if (OperatingSystem.IsMacOS()) return;
-        string plan = WritePlan(linux: HostRunsLinux);
+        string plan = WritePlan();
         var server = new FakeOwnedServer("test.mod");
-        int code = await PinnedServerRun.MainAsync(["run", plan, Output], Options(_ => throw new InvalidOperationException("fixture refused"), server));
+        int code = await RunHere(["run", plan, Output], Options(_ => throw new InvalidOperationException("fixture refused"), server));
         Assert.Equal(1, code); Assert.Contains("stop1", server.Events);
         Assert.Contains(Result().GetProperty("Steps").EnumerateArray(), s => s.GetProperty("Name").GetString() == "runner failed" && s.GetProperty("Error").GetString() == "fixture refused");
     }
     [Fact] public async Task AFailedTeardownFailsAPassingRunAndKeepsItsEvidence()
     {
-        if (OperatingSystem.IsMacOS()) return;
-        string plan = WritePlan(linux: HostRunsLinux);
+        string plan = WritePlan();
         var server = new FakeOwnedServer("test.mod") { RefuseStop = true };
-        int code = await PinnedServerRun.MainAsync(["run", plan, Output], Options(server: server));
+        int code = await RunHere(["run", plan, Output], Options(server: server));
         Assert.Equal(1, code); Assert.Contains("stop1", server.Events);
         var result = Result();
         Assert.False(result.GetProperty("Passed").GetBoolean());
         var stop = Assert.Single(result.GetProperty("Steps").EnumerateArray(), s => s.GetProperty("Name").GetString() == "stop only owned server");
         Assert.False(stop.GetProperty("Passed").GetBoolean()); Assert.Equal("Fake server refused to stop.", stop.GetProperty("Error").GetString());
         var junit = System.Xml.Linq.XDocument.Load(Path.Combine(Output, "junit.xml")).Root!;
-        Assert.Equal("1", junit.Attribute("failures")!.Value);
+        // The stop and the host's lock, which a server that may still run keeps (env recover releases it once it has stopped).
+        Assert.Equal("2", junit.Attribute("failures")!.Value);
+        Assert.Contains("may still run", Assert.Single(result.GetProperty("Steps").EnumerateArray(), s => s.GetProperty("Name").GetString() == "release the server host's lock").GetProperty("Error").GetString());
         // The failed stop is in the Cleanup suite; the runtime was ready, and cleanup is not verified.
         var cleanup = junit.Elements("testsuite").Single(s => s.Attribute("name")!.Value.EndsWith(" / cleanup", StringComparison.Ordinal));
         Assert.Contains(cleanup.Elements("testcase"), c => c.Attribute("name")!.Value == "stop only owned server" && c.Element("failure") != null);
@@ -229,78 +247,75 @@ public sealed class PinnedServerRunTests : IDisposable
         Assert.True(File.Exists(Path.Combine(Output, "input-hashes.json")));
         server.RefuseStop = false;
     }
-    // #194: after a clean stop the runtime copy goes, keeping what the run wrote in it; the world copy and the evidence stay.
+    // #194: after a clean stop the server's profile goes, keeping what the run wrote in it; the world copy and the evidence stay.
     private string Copy(JsonElement result, string name) => result.GetProperty("Provenance").GetProperty(name).GetString()!;
-    [Fact] public async Task ACleanRunKeepsWhatItWroteInTheRuntimeAndRemovesTheCopy()
+    [Fact] public async Task ACleanRunKeepsWhatItWroteInTheProfileAndRemovesIt()
     {
-        if (OperatingSystem.IsMacOS()) return;
-        string plan = WritePlan(linux: HostRunsLinux);
+        string plan = WritePlan();
         var server = new FakeOwnedServer("test.mod");
-        int code = await PinnedServerRun.MainAsync(["run", plan, Output], Options(run =>
+        int code = await RunHere(["run", plan, Output], Options(run =>
         {
-            Directory.CreateDirectory(Path.Combine(run.RuntimeDirectory, "BepInEx", "cache"));
-            File.WriteAllText(Path.Combine(run.RuntimeDirectory, "BepInEx", "cache", "audit.txt"), "written during the run");
+            Directory.CreateDirectory(Path.Combine(OnHost(run.RuntimeDirectory), "BepInEx", "cache"));
+            File.WriteAllText(Path.Combine(OnHost(run.RuntimeDirectory), "BepInEx", "cache", "audit.txt"), "written during the run");
             return Task.CompletedTask;
         }, server));
         Assert.Equal(0, code);
         var result = Result();
-        Assert.False(Directory.Exists(Copy(result, "runtime")));
+        Assert.False(Directory.Exists(OnHost(Copy(result, "runtime"))));
         Assert.True(Directory.Exists(Copy(result, "world")));
         Assert.Equal("written during the run", File.ReadAllText(Path.Combine(Output, "runtime-changes", "BepInEx", "cache", "audit.txt")));
         Assert.True(File.Exists(Path.Combine(Output, "runtime-changes", "changes.json")));
-        Assert.StartsWith("removed " + Copy(result, "runtime"), Copy(result, "runtimeCopy"));
+        Assert.StartsWith("removed " + EnvironmentInventory.LocalHost + ":" + Copy(result, "runtime"), Copy(result, "runtimeCopy"));
         Assert.True(long.Parse(Copy(result, "outputBytes")) > 0);
         Assert.True(long.Parse(Copy(result, "freeBytesBeforeCopies")) > 0);
     }
-    [Fact] public async Task ValidateAndAFailedScenarioRemoveTheRuntimeCopyToo()
+    [Fact] public async Task ValidateAndAFailedScenarioRemoveTheProfileToo()
     {
-        string plan = WritePlan(linux: HostRunsLinux);
-        Assert.Equal(0, await PinnedServerRun.MainAsync(["validate", plan, Output], Options()));
-        Assert.False(Directory.Exists(Copy(Result(), "runtime")));
+        string plan = WritePlan();
+        Assert.Equal(0, await RunHere(["validate", plan, Output], Options()));
+        Assert.False(Directory.Exists(OnHost(Copy(Result(), "runtime"))));
         Assert.EndsWith("nothing was launched", Copy(Result(), "runtimeCopy"));
         Assert.False(Directory.Exists(Path.Combine(Output, "runtime-changes")));
-        if (OperatingSystem.IsMacOS()) return;
         Directory.Delete(Output, true);
         var server = new FakeOwnedServer("test.mod");
-        Assert.Equal(1, await PinnedServerRun.MainAsync(["run", plan, Output], Options(_ => throw new InvalidOperationException("fixture refused"), server)));
+        Assert.Equal(1, await RunHere(["run", plan, Output], Options(_ => throw new InvalidOperationException("fixture refused"), server)));
         var result = Result();
-        Assert.False(Directory.Exists(Copy(result, "runtime"))); Assert.True(Directory.Exists(Copy(result, "world")));
+        Assert.False(Directory.Exists(OnHost(Copy(result, "runtime")))); Assert.True(Directory.Exists(Copy(result, "world")));
     }
     [Fact] public async Task ARuntimeIsKeptWhenAskedOrWhenItsServerMayStillRun()
     {
-        if (OperatingSystem.IsMacOS()) return;
-        string plan = WritePlan(linux: HostRunsLinux);
+        string plan = WritePlan();
         RunRetirement.KeepOverride.Value = true; // VALHEIM_TESTING_KEEP_RUNTIME=1, in this test's flow only
-        try { Assert.Equal(0, await PinnedServerRun.MainAsync(["run", plan, Output], Options(server: new FakeOwnedServer("test.mod")))); }
+        try { Assert.Equal(0, await RunHere(["run", plan, Output], Options(server: new FakeOwnedServer("test.mod")))); }
         finally { RunRetirement.KeepOverride.Value = null; }
         var kept = Result();
-        Assert.True(Directory.Exists(Copy(kept, "runtime"))); Assert.Contains("kept on request", Copy(kept, "runtimeCopy"));
+        Assert.True(Directory.Exists(OnHost(Copy(kept, "runtime")))); Assert.Contains("kept on request", Copy(kept, "runtimeCopy"));
         Assert.False(Directory.Exists(Path.Combine(Output, "runtime-changes")));
 
         string refused = Output + "-refused";
         var stubborn = new FakeOwnedServer("test.mod") { RefuseStop = true };
-        Assert.Equal(1, await PinnedServerRun.MainAsync(["run", plan, refused], Options(server: stubborn)));
+        Assert.Equal(1, await RunHere(["run", plan, refused], Options(server: stubborn)));
         var result = JsonDocument.Parse(File.ReadAllText(Path.Combine(refused, "result.json"))).RootElement;
-        Assert.True(Directory.Exists(Copy(result, "runtime")));
-        Assert.Contains("did not stop cleanly", Copy(result, "runtimeCopy"));
+        Assert.True(Directory.Exists(OnHost(Copy(result, "runtime"))));
+        Assert.Contains("may still run", Copy(result, "runtimeCopy"));
         stubborn.RefuseStop = false;
     }
     [Fact] public async Task AFullDriveIsRefusedBeforeAnythingIsCopied()
     {
-        string plan = WritePlan(linux: HostRunsLinux);
+        string plan = WritePlan();
         DiskSpace.AvailableOverride = _ => 1024;
-        try { Assert.Equal(1, await PinnedServerRun.MainAsync(["validate", plan, Output], Options())); }
+        try { Assert.Equal(1, await RunHere(["validate", plan, Output], Options())); }
         finally { DiskSpace.AvailableOverride = null; }
         var step = Result().GetProperty("Steps").EnumerateArray().First();
         Assert.Equal("enough free disk space for the copies", step.GetProperty("Name").GetString());
         Assert.False(step.GetProperty("Passed").GetBoolean());
-        Assert.Contains("Not enough free disk space for this run's runtime and world copies", step.GetProperty("Error").GetString());
+        Assert.Contains("Not enough free disk space for this run's world copy", step.GetProperty("Error").GetString());
         Assert.Empty(Directory.GetDirectories(Output, "valheim-test-*"));
     }
     [Fact] public async Task APlanTheModRefusesIsRefusedBeforeCopying()
     {
-        string plan = WritePlan(linux: HostRunsLinux);
-        int code = await PinnedServerRun.MainAsync(["validate", plan, Output], Options(checkPlan: _ => throw new ArgumentException("smoke plans run only")));
+        string plan = WritePlan();
+        int code = await RunHere(["validate", plan, Output], Options(checkPlan: _ => throw new ArgumentException("smoke plans run only")));
         Assert.Equal(1, code); Assert.False(Directory.Exists(Output));
     }
     [Fact] public void ADedicatedServerWaitsOnThisBootsLogAndTheLoadedWorldPush()
@@ -315,12 +330,14 @@ public sealed class PinnedServerRunTests : IDisposable
     }
     [Fact] public async Task ALeftoverPatcherFailsValidationByThePatchersPin()
     {
-        WritePlan(linux: HostRunsLinux); var pinned = InstallPins.Of(Runtime); // The runtime pinned clean, with no patchers.
+        WritePlan(); var pinned = InstallPins.Of(Runtime); // The runtime pinned clean, with no patchers.
         Directory.CreateDirectory(Path.Combine(Runtime, "BepInEx", "patchers"));
         File.WriteAllText(Path.Combine(Runtime, "BepInEx", "patchers", "RemovedMod.Preloader.dll"), "patcher");
         // Its manifest is regenerated with the leftover in it, so only the pin can tell.
-        Assert.Equal(1, await PinnedServerRun.MainAsync(["validate", WritePlan(linux: HostRunsLinux, runtimePins: pinned), Output], Options()));
-        var step = Assert.Single(Result().GetProperty("Steps").EnumerateArray(), s => s.GetProperty("Name").GetString() == "copied runtime is the pinned game build, loader and patchers");
+        Assert.Equal(1, await RunHere(["validate", WritePlan(runtimePins: pinned), Output], Options()));
+        // The install is checked against the plan before its profile is staged.
+        var step = Assert.Single(Result().GetProperty("Steps").EnumerateArray(), s => s.GetProperty("Name").GetString() == "check the server host's install against the pinned runtime and stage its profile");
+        Assert.DoesNotContain("profile-seed", _machine.Host.Scripts);
         Assert.False(step.GetProperty("Passed").GetBoolean()); Assert.Contains("holding RemovedMod.Preloader.dll", step.GetProperty("Error").GetString());
     }
     // A scenario-registered log (an owned client's) is scanned with the run's at teardown: a patch on a method that does
@@ -335,10 +352,9 @@ public sealed class PinnedServerRunTests : IDisposable
     };
     [Fact] public async Task TheTeardownScanFailsAPassingScenarioOnABrokenPatch()
     {
-        if (OperatingSystem.IsMacOS()) return;
-        string plan = WritePlan(linux: HostRunsLinux);
+        string plan = WritePlan();
         var server = new FakeOwnedServer("test.mod");
-        Assert.Equal(1, await PinnedServerRun.MainAsync(["run", plan, Output], Options(RegistersClientLog(BrokenPatchLog), server)));
+        Assert.Equal(1, await RunHere(["run", plan, Output], Options(RegistersClientLog(BrokenPatchLog), server)));
         Assert.Contains("stop1", server.Events);
         var result = Result();
         var scan = Assert.Single(result.GetProperty("Steps").EnumerateArray(), s => s.GetProperty("Name").GetString() == "scan run logs");
@@ -348,13 +364,12 @@ public sealed class PinnedServerRunTests : IDisposable
     }
     [Fact] public async Task ACleanLogOrAReclassifiedPatternPassesTheScan()
     {
-        if (OperatingSystem.IsMacOS()) return;
-        string plan = WritePlan(linux: HostRunsLinux);
-        Assert.Equal(0, await PinnedServerRun.MainAsync(["run", plan, Output], Options(RegistersClientLog("[Message:   BepInEx] BepInEx 5.4.23.2\n"), new FakeOwnedServer("test.mod"))));
+        string plan = WritePlan();
+        Assert.Equal(0, await RunHere(["run", plan, Output], Options(RegistersClientLog("[Message:   BepInEx] BepInEx 5.4.23.2\n"), new FakeOwnedServer("test.mod"))));
         Assert.Contains(Result().GetProperty("Steps").EnumerateArray(), s => s.GetProperty("Name").GetString() == "scan run logs" && s.GetProperty("Passed").GetBoolean());
-        plan = WritePlan(linux: HostRunsLinux, logScan: new() { ["harmony-undefined-target"] = new { severity = "Warning", reason = "The broken patch is the mod's known, reported issue." } });
+        plan = WritePlan(logScan: new() { ["harmony-undefined-target"] = new { severity = "Warning", reason = "The broken patch is the mod's known, reported issue." } });
         string output = Output + "-reclassified";
-        Assert.Equal(0, await PinnedServerRun.MainAsync(["run", plan, output], Options(RegistersClientLog(BrokenPatchLog), new FakeOwnedServer("test.mod"))));
+        Assert.Equal(0, await RunHere(["run", plan, output], Options(RegistersClientLog(BrokenPatchLog), new FakeOwnedServer("test.mod"))));
         using var result = JsonDocument.Parse(File.ReadAllText(Path.Combine(output, "result.json")));
         var count = result.RootElement.GetProperty("Logs")[0].GetProperty("Counts").EnumerateArray().Single(c => c.GetProperty("Pattern").GetString() == "harmony-undefined-target");
         Assert.Equal(1, count.GetProperty("Count").GetInt32()); Assert.Equal("Warning", count.GetProperty("Severity").GetString());
@@ -362,8 +377,8 @@ public sealed class PinnedServerRunTests : IDisposable
     }
     [Fact] public async Task AnUnknownLogScanNameIsRefusedBeforeCopying()
     {
-        string plan = WritePlan(linux: HostRunsLinux, logScan: new() { ["no-such-pattern"] = new { severity = "Warning", reason = "x" } });
-        Assert.Equal(1, await PinnedServerRun.MainAsync(["validate", plan, Output], Options()));
+        string plan = WritePlan(logScan: new() { ["no-such-pattern"] = new { severity = "Warning", reason = "x" } });
+        Assert.Equal(1, await RunHere(["validate", plan, Output], Options()));
         Assert.False(Directory.Exists(Output));
     }
     [Fact] public void TheGenericPlanRulesHold()
@@ -399,18 +414,14 @@ public sealed class KeepRuntimeVariableTests : IDisposable
 
     [Fact] public async Task TheVariableKeepsTheRuntimeForAnyRunner()
     {
-        string runtime = Path.Combine(_root, "runtime"), world = Path.Combine(_root, "world"), output = Path.Combine(_root, "out");
-        Directory.CreateDirectory(runtime); Directory.CreateDirectory(Path.Combine(world, "worlds_local"));
-        bool linux = !OperatingSystem.IsWindows();
-        string server = Path.Combine(runtime, linux ? GameLaunch.ServerLinuxExecutable : GameLaunch.ServerWindowsExecutable);
-        File.WriteAllText(server, "server");
-        if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(server, File.GetUnixFileMode(server) | UnixFileMode.UserExecute);
-        FakeInstalls.Server(runtime);
+        var machine = new LocalServerMachine(Path.Combine(_root, "local-host"));
+        string runtime = machine.InstallDirectory, world = Path.Combine(_root, "world"), output = Path.Combine(_root, "out");
+        Directory.CreateDirectory(Path.Combine(world, "worlds_local"));
         File.WriteAllText(Path.Combine(world, "worlds_local", "Test.db"), "world");
         string plan = Path.Combine(_root, "plan.json");
         File.WriteAllText(plan, JsonSerializer.Serialize(new Dictionary<string, object>
         {
-            ["scenario"] = "smoke", ["runtime"] = new { source = runtime, sha256 = WorldFixture.Manifest(runtime) },
+            ["scenario"] = "smoke", ["runtime"] = new { source = LocalServerMachine.Install, sha256 = WorldFixture.Manifest(runtime) },
             ["world"] = new { source = world, sha256 = WorldFixture.Manifest(world) },
             ["arguments"] = new[] { "-batchmode", "-nographics", "-savedir", "{world}" },
             ["pins"] = new Dictionary<string, string> { ["worlduid"] = "1" }, ["port"] = 5577, ["runtimePins"] = InstallPins.Of(runtime),
@@ -419,14 +430,14 @@ public sealed class KeepRuntimeVariableTests : IDisposable
         {
             Name = "toolkit-smoke", Mod = new("test.mod/session", "TEST_SESSION_TOKEN"),
             ReadPlan = path => { var read = ServerRunPlan.Read<ServerRunPlan>(path); read.ValidateServerPlan([], "TEST_SESSION_TOKEN"); return read; },
-            Scenario = (_, _) => Task.CompletedTask,
+            Scenario = (_, _) => Task.CompletedTask, Hooks = machine.Hooks(),
         };
         string? previous = Environment.GetEnvironmentVariable(PinnedServerRun.KeepRuntimeVariable);
         Environment.SetEnvironmentVariable(PinnedServerRun.KeepRuntimeVariable, "1");
-        try { Assert.Equal(0, await PinnedServerRun.MainAsync(["validate", plan, output], options)); }
+        try { using (LocalServerMachine.Use()) Assert.Equal(0, await PinnedServerRun.MainAsync(["validate", plan, output], options)); }
         finally { Environment.SetEnvironmentVariable(PinnedServerRun.KeepRuntimeVariable, previous); }
         var provenance = JsonDocument.Parse(File.ReadAllText(Path.Combine(output, "result.json"))).RootElement.GetProperty("Provenance");
-        Assert.True(Directory.Exists(provenance.GetProperty("runtime").GetString()));
+        Assert.True(Directory.Exists(machine.Host.Local(provenance.GetProperty("runtime").GetString()!)));
         Assert.Contains("kept on request", provenance.GetProperty("runtimeCopy").GetString());
     }
 }

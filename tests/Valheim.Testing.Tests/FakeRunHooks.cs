@@ -1,4 +1,5 @@
 using Valheim.Testing.Game;
+using Valheim.Testing.Game.Fakes;
 using Valheim.Testing.GameSessions;
 
 /// <summary>
@@ -71,4 +72,33 @@ internal static class TestCliSet
     public static CliBundleSource Source => Made.Value;
     /// <summary>The MD5 a plan's ValheimCLI pin takes once bound to a profile that staged this set.</summary>
     public static string CorePin => FileHash.Md5(Path.Combine(Source.Files, "valheimCLI.dll"));
+}
+
+/// <summary>
+/// This machine as a standalone run without <c>--inventory</c> places its server on it (#730), for no-game tests on any OS: a
+/// Linux machine (<see cref="FakeMachine"/>) whose <c>local</c> host is a <see cref="FakeServerHost"/> over a mirror, holding a
+/// modded Linux dedicated-server install at <see cref="Install"/>. A plan names <see cref="Install"/> as its runtime source; the run
+/// stages its server's profile on that host. Run the runner inside <see cref="Use"/>.
+/// </summary>
+internal sealed class LocalServerMachine
+{
+    public const string Install = "/opt/valheim/server";
+    public FakeServerHost Host { get; }
+    /// <summary>The install's folder in the mirror, where a test writes and hashes its files.</summary>
+    public string InstallDirectory => Host.Local(Install);
+
+    public LocalServerMachine(string mirror, FakeOwnedServer? server = null)
+    {
+        Host = new FakeServerHost(EnvironmentInventory.LocalHost, mirror, server);
+        Directory.CreateDirectory(InstallDirectory);
+        FakeInstalls.Server(InstallDirectory);
+        FakeInstalls.LinuxLoader(InstallDirectory);
+        File.WriteAllText(Path.Combine(InstallDirectory, GameLaunch.ServerLinuxExecutable), "server");
+    }
+
+    /// <summary>This machine, for the runner's flow: a Linux machine, so the install's Linux server fits its local host.</summary>
+    public static IDisposable Use() => EnvironmentInventory.UseMachine(new FakeMachine("linux"));
+
+    /// <summary>The hooks that make <see cref="Host"/> this machine's host.</summary>
+    public FakeRunHooks Hooks(RunCancellation? cancellation = null) => new() { Host = _ => Host, StateWaits = false, Cancellation = cancellation };
 }

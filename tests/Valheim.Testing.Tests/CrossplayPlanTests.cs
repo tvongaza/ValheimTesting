@@ -55,25 +55,27 @@ public sealed class CrossplayPlanTests : IDisposable
         Assert.Equal(expanded.Append("-crossplay").ToArray(), plan.LaunchArguments("/r", "/w"));
     }
 
+    // A standalone run on this machine (#730: its server's profile staged on this machine's host, here a fake Linux one on any OS)
+    // refuses -crossplay passed around the option, records the option, and for a crossplay plan asks the host whether the
+    // game's libparty.so loads, before anything launches.
     [Fact] public async Task TheRunnerRefusesCrossplayInTheArgumentsOfEveryPlanAndRecordsTheOption()
     {
         string root = Directory.CreateTempSubdirectory("crossplay-plan-").FullName;
         try
         {
-            string runtime = Path.Combine(root, "runtime"), world = Path.Combine(root, "world");
-            Directory.CreateDirectory(runtime); Directory.CreateDirectory(world);
-            File.WriteAllText(Path.Combine(runtime, GameLaunch.ServerLinuxExecutable), "server"); File.WriteAllText(Path.Combine(world, "Test.db"), "world");
-            FakeInstalls.Server(runtime);
-            // On Linux a crossplay validate asks this machine's ldd whether libparty.so loads: a copy of `true` does.
+            var machine = new LocalServerMachine(Path.Combine(root, "local-host"));
+            string runtime = machine.InstallDirectory, world = Path.Combine(root, "world");
+            Directory.CreateDirectory(world);
+            File.WriteAllText(Path.Combine(world, "Test.db"), "world");
             string party = Path.Combine(runtime, "valheim_server_Data", "Plugins", "libparty.so");
             Directory.CreateDirectory(Path.GetDirectoryName(party)!);
-            if (OperatingSystem.IsLinux()) File.Copy(File.Exists("/usr/bin/true") ? "/usr/bin/true" : "/bin/true", party); else File.WriteAllText(party, "not checked here");
+            File.WriteAllText(party, "the game's PlayFab library");
             string Plan(string name, bool crossplay, params string[] extra)
             {
                 string path = Path.Combine(root, name);
                 File.WriteAllText(path, JsonSerializer.Serialize(new
                 {
-                    scenario = "smoke", runtime = new { source = runtime, sha256 = WorldFixture.Manifest(runtime) }, world = new { source = world, sha256 = WorldFixture.Manifest(world) },
+                    scenario = "smoke", runtime = new { source = LocalServerMachine.Install, sha256 = WorldFixture.Manifest(runtime) }, world = new { source = world, sha256 = WorldFixture.Manifest(world) },
                     arguments = new[] { "-batchmode", "-nographics", "-savedir", "{world}" }.Concat(extra).ToArray(), pins = new Dictionary<string, string> { ["worlduid"] = "1" },
                     runtimePins = InstallPins.Of(runtime), crossplay,
                 }));
@@ -83,8 +85,9 @@ public sealed class CrossplayPlanTests : IDisposable
             var options = new PinnedServerRunOptions<ServerRunPlan>
             {
                 Name = "crossplay", Mod = new("test.mod/session", Token),
-                ReadPlan = ServerRunPlan.Read<ServerRunPlan>, Scenario = (_, _) => Task.CompletedTask,
+                ReadPlan = ServerRunPlan.Read<ServerRunPlan>, Scenario = (_, _) => Task.CompletedTask, Hooks = machine.Hooks(),
             };
+            using var thisMachine = LocalServerMachine.Use();
             string refused = Path.Combine(root, "out-refused");
             Assert.Equal(1, await PinnedServerRun.MainAsync(["validate", Plan("raw.json", false, "-crossplay"), refused], options));
             Assert.False(Directory.Exists(refused)); // Refused before anything was copied.
@@ -94,19 +97,15 @@ public sealed class CrossplayPlanTests : IDisposable
                 Assert.Equal(0, await PinnedServerRun.MainAsync(["validate", Plan(crossplay + ".json", crossplay, "-port", "2466"), output], options));
                 var result = JsonDocument.Parse(File.ReadAllText(Path.Combine(output, "result.json"))).RootElement;
                 Assert.Equal(crossplay ? "true" : "false", result.GetProperty("Provenance").GetProperty("crossplay").GetString());
-                bool checkedHere = crossplay && OperatingSystem.IsLinux();
-                Assert.Equal(checkedHere, result.GetProperty("Steps").EnumerateArray().Any(step => step.GetProperty("Name").GetString() == "this machine can load crossplay's libraries"));
+                Assert.Equal(crossplay, result.GetProperty("Steps").EnumerateArray().Any(step => step.GetProperty("Name").GetString() == "the server host can load crossplay's libraries"));
             }
-            if (OperatingSystem.IsLinux())
-            {
-                // Without libparty.so, a local Linux crossplay runtime is refused before anything launches.
-                File.Delete(party);
-                string missing = Path.Combine(root, "out-missing");
-                Assert.Equal(1, await PinnedServerRun.MainAsync(["validate", Plan("missing.json", true, "-port", "2466"), missing], options));
-                var step = JsonDocument.Parse(File.ReadAllText(Path.Combine(missing, "result.json"))).RootElement.GetProperty("Steps").EnumerateArray()
-                    .Single(step => step.GetProperty("Name").GetString() == "this machine can load crossplay's libraries");
-                Assert.Contains("has no valheim_server_Data/Plugins/libparty.so", step.GetProperty("Error").GetString());
-            }
+            // A library libparty.so needs is missing on the host: a crossplay runtime is refused before anything launches.
+            machine.Host.PartyReply = "VT-LDD \tlibpulse.so.0 => not found\nVT-PARTY checked valheim_server_Data/Plugins/libparty.so 1\n";
+            string missing = Path.Combine(root, "out-missing");
+            Assert.Equal(1, await PinnedServerRun.MainAsync(["validate", Plan("missing.json", true, "-port", "2466"), missing], options));
+            var step = JsonDocument.Parse(File.ReadAllText(Path.Combine(missing, "result.json"))).RootElement.GetProperty("Steps").EnumerateArray()
+                .Single(step => step.GetProperty("Name").GetString() == "the server host can load crossplay's libraries");
+            Assert.Contains("libpulse.so.0 (package libpulse0) is missing", step.GetProperty("Error").GetString());
         }
         finally { Directory.Delete(root, true); }
     }

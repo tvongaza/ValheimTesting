@@ -10,9 +10,9 @@ namespace Valheim.Testing.GameSessions;
 /// in the output, waits on the plan's startup events, is strictly pinned (<see cref="ServerRunPlan.ExpectCommand"/>),
 /// and has test access established before it is handed over (<see cref="OwnedServerSession.EnsureTestAccess"/>), the
 /// first boot and each <see cref="Restart"/> alike. A stop asks the server to quit and kills it only after the plan's
-/// <see cref="ServerRunPlan.QuitSeconds"/>. Where the boots run is its placement: this machine (<see cref="OnThisMachine"/>),
-/// or a host of the environment, which <see cref="PinnedServerRun"/> places. <see cref="Game"/> is the current boot's
-/// in-game handle. Disposing it stops only the server it started.
+/// <see cref="ServerRunPlan.QuitSeconds"/>. Where the boots run is its placement: this machine or a host of the environment,
+/// from the disposable profile <see cref="PinnedServerRun"/> stages there. <see cref="Game"/> is the current boot's in-game
+/// handle. Disposing it stops only the server it started.
 /// </summary>
 public sealed class ServerActor : IOwnedServer, IDisposable
 {
@@ -90,22 +90,11 @@ public sealed class ServerActor : IOwnedServer, IDisposable
         RuntimeDirectory = ""; WorldDirectory = "";
     }
 
-    /// <summary>
-    /// An owned server on this machine, run from <paramref name="runtimeDirectory"/> and saving to <paramref name="worldDirectory"/>
-    /// (both disposable copies the caller made), with its evidence written to <paramref name="output"/>. ValheimCLI is reached on
-    /// loopback at the plan's port. <paramref name="sessionCapability"/> is the mod's read-only session capability (for example
-    /// <c>my.mod.testing/session</c>) and <paramref name="sessionTokenVariable"/> the environment variable that passes the owned
-    /// session token to the in-game adapter.
-    /// </summary>
-    public static ServerActor OnThisMachine(ServerRunPlan plan, string runtimeDirectory, string worldDirectory, string output,
-        string sessionCapability, string sessionTokenVariable, CancellationToken cancellation = default) =>
-        new(new LocalServerPlacement(runtimeDirectory, worldDirectory, plan.Port), plan, output, sessionCapability, sessionTokenVariable, cancellation);
-
-    /// <summary>The runtime copy the server runs from: a path on <see cref="Host"/> when it has one.</summary>
+    /// <summary>The server's profile, where BepInEx writes: a path on <see cref="Host"/> when it has one.</summary>
     public string RuntimeDirectory { get; }
     /// <summary>The world copy the server saves to: a path on <see cref="Host"/> when it has one.</summary>
     public string WorldDirectory { get; }
-    /// <summary>The host the server runs on (<c>--inventory</c> or a campaign), or null when it runs on this machine.</summary>
+    /// <summary>The host the server runs on: this machine's own (a local host) or another (<c>--inventory</c> or a campaign); null only for a scripted server.</summary>
     public IGameHost? Host { get; }
     /// <summary>The current boot's in-game handle; the server must have started.</summary>
     public GameActor Game => _game ?? throw new InvalidOperationException("The owned server has not started.");
@@ -118,10 +107,10 @@ public sealed class ServerActor : IOwnedServer, IDisposable
     internal IOwnedProcess? CurrentProcess => _session?.CurrentProcess;
     /// <summary>
     /// The current boot's live BepInEx log, for a scenario's in-run log reads: on this machine only (null when the server runs
-    /// on a host, where <see cref="Lobby"/> reads its log there).
+    /// on another host, where <see cref="Lobby"/> reads its log there).
     /// </summary>
     public string? LiveLog => _scripted is { } scripted ? scripted.LiveLog
-        : Host == null && RuntimeDirectory.Length != 0 ? Path.Combine(RuntimeDirectory, "BepInEx", "LogOutput.log") : null;
+        : (Host == null || Host.Kind == GameHostKind.Local) && RuntimeDirectory.Length != 0 ? Path.Combine(RuntimeDirectory, "BepInEx", "LogOutput.log") : null;
 
     /// <summary>
     /// The crossplay server's lobby for its current boot <paramref name="server"/>, read from the log the game writes to (the plan's
@@ -202,26 +191,3 @@ internal interface IServerPlacement
 
 /// <summary>A started boot: its process, the logs its stop keeps, its <c>boot-N.process.json</c> facts, and what the placement records once that file is written.</summary>
 internal sealed record ServerBoot(IOwnedProcess Process, IReadOnlyList<RunLog> Logs, Dictionary<string, object?> Facts, Action? Started = null);
-
-/// <summary>Boots on this machine: a direct child process, ValheimCLI on loopback, startup read from the runtime's own log.</summary>
-internal sealed class LocalServerPlacement(string runtimeDirectory, string worldDirectory, int port) : IServerPlacement
-{
-    public string RuntimeDirectory { get; } = runtimeDirectory;
-    public string WorldDirectory { get; } = worldDirectory;
-    public ServerPlatform? Platform => null;
-    public IGameHost? Host => null;
-
-    public ServerBoot Start(int boot, GameLaunch launch, string output, TimeSpan quit, CancellationToken cancellation)
-    {
-        string prefix = Path.Combine(output, "boot-" + boot);
-        var process = new DirectServerProcess(launch.ToStartInfo(), prefix,
-            Path.Combine(RuntimeDirectory, "BepInEx", "LogOutput.log"), Path.Combine(RuntimeDirectory, "toolkit-unity.log"));
-        return new ServerBoot(process,
-            [new RunLog($"boot-{boot} BepInEx log", prefix + ".game-0.log", Required: true), new RunLog($"boot-{boot} Unity log", prefix + ".game-1.log"),
-             new RunLog($"boot-{boot} stdout", prefix + ".stdout.log")],
-            new() { ["pid"] = process.Id, ["startedUtc"] = DateTime.UtcNow, ["world"] = WorldDirectory });
-    }
-
-    public IGameTransport Connect() => new CliTransport("127.0.0.1", port);
-    public StartupEvents? Events(ServerRunPlan plan) => plan.DedicatedStartupEvents(RuntimeDirectory);
-}

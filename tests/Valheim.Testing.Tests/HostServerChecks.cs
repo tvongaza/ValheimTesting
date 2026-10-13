@@ -120,7 +120,7 @@ internal static class HostServerChecks
             if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(server, File.GetUnixFileMode(server) | UnixFileMode.UserExecute);
             string install = root + "/install", profile = root + "/profile", boot = root + "/boot-1";
             await host.ShipFilesAsync(source.Path, install, Generous);
-            await HostInstall.CopyAsync(host, install, profile, Generous);
+            await host.ShipFilesAsync(source.Path, profile, Generous); // a stand-in profile holding the loader
             var before = await HostInstall.ListAsync(host, install, Generous);
             var launch = GameLaunch.ForServerWithLoader(install, profile, ["-batchmode"], null, ServerPlatform.Linux);
             using var evidence = new TempDirectory();
@@ -142,10 +142,9 @@ internal static class HostServerChecks
         WriteInstall(source.Path);
         await host.ShipFilesAsync(source.Path, root + "/install", Generous);
         string runtime = root + "/run/runtime";
-        await HostInstall.CopyAsync(host, root + "/install", runtime, Generous);
-        await Assert.ThrowsAsync<InvalidOperationException>(() => HostInstall.CopyAsync(host, root + "/install", runtime, Generous));
+        await host.ShipFilesAsync(source.Path, runtime, Generous);
 
-        // The copy on the host is every file of the source, and its pins are the source's.
+        // The runtime on the host is every file of the source, and its pins are the source's.
         var listing = await HostInstall.ListAsync(host, runtime, Generous);
         HostInstall.RequireSame(WorldFixture.Manifest(source.Path), listing, "runtime copy", ["SOURCE.txt"]);
         Assert.Contains(GameLaunch.ServerLinuxExecutable, listing.Executables);
@@ -388,10 +387,11 @@ public class WindowsSshServerIntegrationTests
             .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         var host = new SshGameHost("windows-server", destination, HostShell.Pwsh, sshOptions: options);
         string root = HostPath.Join(parent, "windows-host-check-" + Guid.NewGuid().ToString("N"));
-        string install = HostPath.Join(root, "install"), runtime = HostPath.Join(root, "run", "runtime");
+        string runtime = HostPath.Join(root, "run", "runtime");
         bool stopped = false;
         try
         {
+            // The stand-in runtime is made where it runs: nothing of a game install is involved.
             var setup = await host.RunAsync("""
                 [void][IO.Directory]::CreateDirectory($install)
                 [IO.File]::Copy((Join-Path ([Environment]::SystemDirectory) 'PING.EXE'), (Join-Path $install 'valheim_server.exe'))
@@ -401,9 +401,8 @@ public class WindowsSshServerIntegrationTests
                     [IO.File]::WriteAllText($path, 'test-only placeholder')
                 }
                 'VT-TEST prepared'
-                """, new Dictionary<string, string> { ["install"] = install }, TimeSpan.FromSeconds(30));
+                """, new Dictionary<string, string> { ["install"] = runtime }, TimeSpan.FromSeconds(30));
             Assert.True(setup.Succeeded, setup.Describe() + " " + setup.Stderr);
-            await HostInstall.CopyAsync(host, install, runtime, TimeSpan.FromSeconds(45));
             var listing = await HostInstall.ListAsync(host, runtime, TimeSpan.FromSeconds(45));
             Assert.Equal(ServerPlatform.Windows, HostInstall.DetectServer(listing));
             var launch = GameLaunch.ForServer(runtime, ["-n", "60", "127.0.0.1"], hostPlatform: ServerPlatform.Windows);
@@ -449,8 +448,24 @@ public class WindowsSshServerIntegrationTests
         bool stopped = false;
         try
         {
-            await HostInstall.CopyAsync(host, install, runtime, TimeSpan.FromMinutes(8));
+            // A disposable copy of the install, made by this test (the toolkit itself never copies an install; runs use a profile).
             // This smoke checks the host launch, not other mods' world-generation behavior. Prune only the disposable copy.
+            var copied = await host.RunAsync("""
+                if (-not [IO.Directory]::Exists($install) -or [IO.Directory]::Exists($runtime)) { exit 3 }
+                $pending = New-Object 'Collections.Generic.Stack[string]'
+                $pending.Push($install)
+                while ($pending.Count -gt 0) {
+                    $from = $pending.Pop()
+                    $relative = $from.Substring($install.TrimEnd('\', '/').Length).TrimStart('\', '/')
+                    $to = if ($relative) { Join-Path $runtime $relative } else { $runtime }
+                    [void][IO.Directory]::CreateDirectory($to)
+                    foreach ($entry in [IO.Directory]::GetFileSystemEntries($from)) {
+                        if ([IO.Directory]::Exists($entry)) { $pending.Push($entry) } else { [IO.File]::Copy($entry, (Join-Path $to ([IO.Path]::GetFileName($entry)))) }
+                    }
+                }
+                'VT-TEST copied'
+                """, new Dictionary<string, string> { ["install"] = install, ["runtime"] = runtime }, TimeSpan.FromMinutes(8));
+            Assert.True(copied.Succeeded, copied.Describe() + " " + copied.Stderr);
             var prune = await host.RunAsync("""
                 $plugins = Join-Path $runtime 'BepInEx\plugins'
                 foreach ($entry in [IO.Directory]::GetFileSystemEntries($plugins)) {

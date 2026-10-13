@@ -126,8 +126,8 @@ internal sealed class HostedServerRun : IServerPlacement
         if (hostProfile.Platform is not ("linux" or "macos" or "windows") || hostProfile.Shell != HostProfile.ShellFor(hostProfile.Platform) ||
             (hostProfile.Platform == "macos" && hostProfile.Kind is not ("local" or "ssh")))
             return $"it is {hostProfile.Platform} with {hostProfile.Shell}; a hosted dedicated server needs Linux/bash, macOS/bash on a local or SSH host, or Windows/pwsh.";
-        if (hostProfile.Kind == "local" && hostProfile.Platform != HostProfile.CurrentPlatform)
-            return $"it is a local {hostProfile.Platform} host, but this machine is {HostProfile.CurrentPlatform}.";
+        if (hostProfile.Kind == "local" && hostProfile.Platform != EnvironmentInventory.ThisMachine.Platform)
+            return $"it is a local {hostProfile.Platform} host, but this machine is {EnvironmentInventory.ThisMachine.Platform}.";
         // The plan's runtime names its platform by its server executable; a pinned manifest lists it.
         string? planned = plan.Executable == GameLaunch.ServerWindowsExecutable || plan.Runtime.Sha256.ContainsKey(GameLaunch.ServerWindowsExecutable) ? "windows"
             : plan.Executable == GameLaunch.ServerLinuxExecutable || plan.Runtime.Sha256.ContainsKey(GameLaunch.ServerLinuxExecutable) ? "linux"
@@ -142,11 +142,17 @@ internal sealed class HostedServerRun : IServerPlacement
         if (hostProfile.Platform == "windows" && !SameWindowsVolume(role.Install, role.Runtime))
             return $"its runtime folder {role.Runtime} is on another volume than its install {role.Install}: a Windows dedicated server runs from a profile " +
                 "that hard-links the install's files, so put the environment's runtime folder on the install's NTFS volume.";
-        // The game reads its arguments lowercased, so -Port names the game port too.
-        int at = Array.FindIndex(plan.Arguments, argument => argument.Equals("-port", StringComparison.OrdinalIgnoreCase));
-        if (at >= 0 && at + 1 < plan.Arguments.Length && int.TryParse(plan.Expand(plan.Arguments[at + 1], "", ""), NumberStyles.None, CultureInfo.InvariantCulture, out int gamePort) && gamePort != role.GamePort)
+        if (GamePort(plan) is int gamePort && gamePort != role.GamePort)
             return $"the plan's -port {gamePort} is not its gamePort {role.GamePort}.";
         return null;
+    }
+
+    /// <summary>The game port the plan's arguments name with <c>-port</c> (in any case: the game reads its arguments lowercased), or null.</summary>
+    internal static int? GamePort(ServerRunPlan plan)
+    {
+        int at = Array.FindIndex(plan.Arguments, argument => argument.Equals("-port", StringComparison.OrdinalIgnoreCase));
+        return at >= 0 && at + 1 < plan.Arguments.Length && int.TryParse(plan.Expand(plan.Arguments[at + 1], "", ""), NumberStyles.None,
+            CultureInfo.InvariantCulture, out int port) ? port : null;
     }
 
     // The volume a Windows path is on, as written: its drive (C:) or its UNC share (\\server\share). Equal volumes ignore case. A
