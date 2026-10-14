@@ -2,7 +2,7 @@
 
 Build a private Ubuntu 24.04 image that runs the Linux Valheim dedicated server with BepInEx, and run your checks inside it.
 
-Linux hosts run the dedicated server only. There is no Linux game client. For platform support, see [Platforms](../../docs/reference/platforms.md#linux-and-containers). For game hosts and environment inventories, see [Valheim.Testing.GameSessions](../../docs/packages/Valheim.Testing.GameSessions.md).
+Linux hosts run the dedicated server only. There is no Linux game client. For platform support, see [Platforms](../../docs/reference/platforms.md#linux-and-containers). For game hosts and inventory files, see [game hosts](../../docs/reference/sessions-hosts.md) and [run on another machine](../../docs/guides/run-on-another-machine.md).
 
 | In the image | Where |
 |---|---|

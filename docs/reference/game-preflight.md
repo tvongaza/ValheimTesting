@@ -78,7 +78,7 @@ The report's provenance records which checks ran as `cliPreflight`:
 | Attached | `live only: an attached client's files are its operator's` |
 | Owned, in place, no `cliManifest` | `live only: static check not run: your install, run in place` |
 
-A [targeted regression](game-run-inputs.md#targeted-native-regressions)'s `regression.json` must name its `cli.manifest` (`valheim-test start` writes it), so its staged set is always checked.
+A [targeted regression](sessions-targeted-regression.md)'s `regression.json` must name its `cli.manifest` (`valheim-test start` writes it), so its staged set is always checked.
 
 ## Generate a manifest
 

@@ -56,7 +56,7 @@ example.mymod=absent
 
 ## A first native check
 
-Copy the [FullLifecycle example](../../examples/FullLifecycle/README.md)'s native session. Put its private `session.json` and plan beside the test project ([prepare the native session](../../examples/FullLifecycle/README.md#prepare-the-native-session)), then run from a ValheimTesting checkout:
+Copy the [FullLifecycle example](../../examples/FullLifecycle/README.md)'s native session. Put its private `session.json` and plan beside the test project ([prepare the native session](../guides/test-save-restart-rejoin.md)), then run from a ValheimTesting checkout:
 
 ```sh
 valheim-test session check examples/FullLifecycle/ExampleMod.Tests/session.json --hosts
@@ -82,7 +82,7 @@ Without those files the native test is skipped with that reason. When it runs, i
 | `TerrainProbe`, `GlobalKeyFixture`, `SyncedConfig`, `DungeonRooms` | [World observations](../reference/game-observations.md) |
 | `ContentCensus`, `HarmonyCensus` | [Content and Harmony census](../reference/game-content-census.md) |
 | `LogScanner` | [Log scan at teardown](../reference/game-log-scan.md) |
-| `RegressionInputs`, `BepInExLoaderPackage`, `NativeDependencyResolver` | [Targeted regressions, loader packages and dependencies](../reference/game-run-inputs.md) |
+| `RegressionInputs`, `BepInExLoaderPackage`, `NativeDependencyResolver` | [Loader packages and dependencies](../reference/game-run-inputs.md) |
 | `result.json`, snapshots, review stills | [Evidence](../reference/evidence.md) |
 
 ## Test fakes

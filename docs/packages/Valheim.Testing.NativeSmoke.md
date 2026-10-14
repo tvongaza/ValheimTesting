@@ -264,7 +264,7 @@ The last line is `N runs ended and left nothing. Nothing was changed.` `env stat
 valheim-test session check SESSION [--hosts] [--json]
 ```
 
-`session check` reports every problem with a `session.json`'s inputs and actor assignment without contacting a host, then `ELIGIBLE` or `REFUSED` lines. `--hosts` adds the read-only host checks (installs, loaders, ports, free space, conflicting games, journals, signed-in Steam accounts) and prints `READY` when they pass. Sessions: [GameSessions](Valheim.Testing.GameSessions.md#several-machines).
+`session check` reports every problem with a `session.json`'s inputs and actor assignment without contacting a host, then `ELIGIBLE` or `REFUSED` lines. `--hosts` adds the read-only host checks (installs, loaders, ports, free space, conflicting games, journals, signed-in Steam accounts) and prints `READY` when they pass. Sessions: [GameSessions](../reference/sessions-inventory.md).
 
 ## detach
 
@@ -288,7 +288,7 @@ macOS only. It writes a reviewed manifest of SteamCMD's native server libraries.
 
 | Behaviour | Rule |
 |---|---|
-| Profiles | Each actor runs from a disposable loader profile; the install is only read ([profiles](Valheim.Testing.GameSessions.md#an-owned-client-on-this-machine-runs-with-a-disposable-loader-profile)) |
+| Profiles | Each actor runs from a disposable loader profile; the install is only read ([profiles](../reference/sessions-profiles.md)) |
 | Loader | Windows and Linux: the pinned BepInExPack_Valheim from [loader-dependency.json](../../loader-dependency.json), or a named loader package; never the install's. macOS: its loader package, or the install's native loader |
 | ValheimCLI | `--cli-manifest` and `--cli-files`, else `VALHEIMCLI_BUNDLE`, else the bundle pinned in the tool. The run prints which |
 | Output | Must be new and outside every install and the mod project; a refusal writes `REFUSED.txt` with the reason |
@@ -316,6 +316,6 @@ macOS only. It writes a reviewed manifest of SteamCMD's native server libraries.
 ## Limits
 
 - A pass proves the plugins loaded and the game entered a world, not the mod's gameplay.
-- `server-load` keeps its server on this machine. A server on another machine runs as a [session](Valheim.Testing.GameSessions.md#several-machines).
+- `server-load` keeps its server on this machine. A server on another machine runs through an [inventory file](../reference/sessions-inventory.md) ([run on another machine](../guides/run-on-another-machine.md)).
 - `cli` reaches only games a run on this machine owns.
 - The packaged world and character come from one game version; recheck them after a game update. Run one client with the packaged character at a time.

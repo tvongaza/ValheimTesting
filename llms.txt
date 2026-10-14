@@ -20,6 +20,11 @@ ValheimTesting serves mod authors and the coding agents that work in their mod r
 - [Check that a mod loads](https://github.com/tvongaza/ValheimTesting/blob/main/docs/guides/check-a-mod-loads.md): `valheim-test server-load`, `start` and `server-load-ab`
 - [Before a native run](https://github.com/tvongaza/ValheimTesting/blob/main/docs/guides/before-a-native-run.md): check the machine, the mod and the evidence rules before starting the game
 - [Debug a native run](https://github.com/tvongaza/ValheimTesting/blob/main/docs/guides/debug-a-native-run.md): read a refused or failed run, inspect a held run, clean up with `env status` and `env recover`
+- [Test save, restart and rejoin](https://github.com/tvongaza/ValheimTesting/blob/main/docs/guides/test-save-restart-rejoin.md): a dedicated server and a client through a save, a restart and a rejoin
+- [Run an A/B regression](https://github.com/tvongaza/ValheimTesting/blob/main/docs/guides/run-an-ab-regression.md): one mod before and after a change
+- [Run on another machine](https://github.com/tvongaza/ValheimTesting/blob/main/docs/guides/run-on-another-machine.md): servers and clients on SSH or container hosts
+- [Run a session with several clients](https://github.com/tvongaza/ValheimTesting/blob/main/docs/guides/run-a-session-with-several-clients.md): campaigns with named clients on several machines
+- [Profiles and hosts](https://github.com/tvongaza/ValheimTesting/blob/main/docs/concepts/profiles-and-hosts.md): how a run stages a disposable profile over the install, on this machine or a host
 
 ## Reference
 

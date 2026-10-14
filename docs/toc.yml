@@ -16,12 +16,24 @@
     href: guides/run-tests-in-ci.md
   - name: Check that a mod loads
     href: guides/check-a-mod-loads.md
+  - name: Test a save, restart and rejoin
+    href: guides/test-save-restart-rejoin.md
+  - name: Run an A/B regression
+    href: guides/run-an-ab-regression.md
+  - name: Run the server on another machine
+    href: guides/run-on-another-machine.md
+  - name: Run a session with several clients
+    href: guides/run-a-session-with-several-clients.md
   - name: Before a native run
     href: guides/before-a-native-run.md
   - name: Debug a native run
     href: guides/debug-a-native-run.md
   - name: Give your coding agent the workflow
     href: guides/give-your-agent-the-workflow.md
+- name: Concepts
+  items:
+  - name: Profiles and hosts
+    href: concepts/profiles-and-hosts.md
 - name: Packages
   items:
   - name: Package versions
@@ -82,8 +94,24 @@
     href: reference/game-content-census.md
   - name: Game - log scan at teardown
     href: reference/game-log-scan.md
-  - name: Game - regressions, loaders, dependencies
+  - name: Game - loader packages and dependencies
     href: reference/game-run-inputs.md
+  - name: Sessions - game sessions
+    href: reference/sessions-game-session.md
+  - name: Sessions - pinned server runner
+    href: reference/sessions-pinned-server-run.md
+  - name: Sessions - game hosts
+    href: reference/sessions-hosts.md
+  - name: Sessions - inventory file
+    href: reference/sessions-inventory.md
+  - name: Sessions - disposable profiles
+    href: reference/sessions-profiles.md
+  - name: Sessions - locks, leases and recovery
+    href: reference/sessions-leases-and-recovery.md
+  - name: Sessions - campaigns
+    href: reference/sessions-campaigns.md
+  - name: Sessions - targeted regression
+    href: reference/sessions-targeted-regression.md
   - name: Evidence
     href: reference/evidence.md
   - name: Platforms

@@ -1,51 +1,6 @@
-# Targeted regressions, loader packages and dependencies
+# Loader packages and dependencies
 
-The library contract behind a targeted A/B regression, a pinned BepInEx loader package and the resolver that finds a mod's pinned dependency set. The copyable template and its steps are in [TargetedRegression](../../examples/TargetedRegression/README.md).
-
-## Targeted native regressions
-
-`TargetedRegression` lives in [`Valheim.Testing.GameSessions`](../packages/Valheim.Testing.GameSessions.md); add that package to a runner that uses it ([versions](../package-versions.md)). It serves one shape: one owned client hosting one disposable fixture world, one mod under test in a parent and a candidate build, its dependencies and perhaps a probe. The run itself is the hosted [`ClientRounds`](game-client-rounds.md#client-rounds).
-
-| Type or member | Does | Fails or refuses when |
-|---|---|---|
-| `RegressionInputs` | Holds what the run loads: the disposable character, the fixture root and UID, the default ValheimCLI plugin, other plugins, an optional probe and the mod's arms, each with its file, SHA256 and source commit | |
-| `RegressionInputs.Read` | Reads the file and resolves relative paths against it | An unknown field |
-| `new TargetedRegression(inputs, capabilities, inventory, clientEnvironment)` | Takes the machine from the inventory's client environment (its first, or the one named; this machine with no inventory) | The environment is not on this machine |
-| `TargetedRegression.Read(regression.json)` | Uses the `environments.json` beside the file when there is one, as `valheim-test start` writes it for `--game`; otherwise this machine | |
-
-From the client environment the regression takes: the game install, only read; the disposable loader profile `<runtime>/vt-prep-regression-<name>-<run-id>/runtime`; the port from `cliPort`; the loader from `loaderPackage`; the default slice from its resolved `architecture` (arm64 on a local Apple Silicon Mac, x64 elsewhere, unless the inventory specifies a slice). `client.architecture` in the regression JSON overrides the slice for this run. Each arm gets a fresh profile, staged with the same hosted-runtime path as other owned clients but holding only this regression's pinned allowlist; `result.json` records `disposableStageSeconds` for the arm.
-
-`client.environment` sets non-secret process variables on the disposable game process, such as a mod's documented defer-generation switch. The same `environment` field exists on an owned `ClientRunPlan`; an attached plan refuses it. Validation rejects invalid names, multiline values and loader overrides before anything is copied or launched. It is not a credential channel: scenario evidence may include the plan.
-
-## Stage checks
-
-`TargetedRegression.Stage(arm)` works without the game and refuses at the first problem, naming the field and the fix.
-
-| Check | Refuses |
-|---|---|
-| Fixture layout (`FixtureLayout.Discover`) | A root that is the world folder itself, a `worlds_local` wrapper, several worlds or none; a world whose metadata holds another UID (`HostWorldPlan.Preflight`) |
-| Hashes | A file missing or not its pinned SHA256 (an empty `sha256` prints the hash to review); an arm whose file is another build than its commit's; two arms with one SHA256 unless `mod.repeatability` |
-| Clean install | An existing profile not prepared by this run. The stage prepares a fresh loader profile (the game is never copied) and rebuilds `BepInEx/plugins`, `patchers`, `config` and `scripts` from the allowlist; only the selected arm is installed |
-| Declared metadata (`PluginMetadata.Read`, no assembly loaded) | A hard `[BepInDependency]` no staged `[BepInPlugin]` declares, or one older than its minimum version; a staged `[BepInIncompatibility]`; a `[BepInProcess]` that excludes the client; a GUID declared twice; an assembly reference nothing provides, unless listed in `optionalReferences` |
-| Plan | The disposable character missing from `characters_local`; then the strict plan's `Validate` and `Preflight` on the staged install, which with `cli.manifest` includes the [static ValheimCLI capability check](game-preflight.md#valheimcli-capability-manifest) |
-
-File names never count in the metadata check. A probe's or the mod's own commands are checked live only, before the first round.
-
-`Stage` returns a `StagedArm`:
-
-| Member | Does |
-|---|---|
-| `Plan` | The strict `ClientRunPlan`: every staged plugin's declared GUID pinned by its MD5, no `absent` pins for anything else |
-| `Manifest` | The `RunManifest`: the arms, the allowlist with SHA256 and MD5, the install pins, the world and capabilities, install-relative paths only |
-| `Verify()` | Refuses any file added, changed or removed in the staged folders since staging |
-
-| Member | Does |
-|---|---|
-| `Preflight()` | Stages every arm in turn |
-| `Run(arm, output, scenario, rounds, measure)` | Stages the arm, writes `run-manifest.json`, calls `Verify()` right before the launch, runs the hosted `ClientRounds` with the scenario's capabilities required live before its first round, scans the client's logs and writes the report in every outcome |
-| `Remove()` | Call it in `finally`: retires only the shared-stage copy this runner prepared and releases the host lock |
-
-An interrupted run leaves its journal for `valheim-test env recover`.
+How to pin a BepInEx loader package, and how the resolver finds a mod's pinned dependency set. A [targeted regression](sessions-targeted-regression.md) uses both.
 
 ## Pin a BepInEx loader
 
@@ -125,8 +80,5 @@ An assembly a soft integration references is a candidate, not automatically opti
 
 ## Limits
 
-- One owned client hosting one world.
-- The checks read what BepInEx reads before loading; a dependency found by reflection at run time is caught only live.
 - The static loader check is not a claim that Doorstop ran; the owned client's fresh BepInEx log is.
-- The regression holds the inventory host lock until its copy is retired.
 - Loader manifests, inventories, regression inputs and dependency locks are private: they contain machine paths. A public copy of a regression for review is made with [regression-bundle](../../tools/regression-bundle/README.md).

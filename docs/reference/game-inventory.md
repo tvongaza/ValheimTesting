@@ -2,7 +2,7 @@
 
 What the toolkit finds on this machine when you give it no inventory file, what `valheim-test env list` and `env preflight` print, and how a file adds to it.
 
-`EnvironmentInventory` is in [`Valheim.Testing.Game`](../packages/Valheim.Testing.Game.md). A file with environments on other machines is on [GameSessions](../packages/Valheim.Testing.GameSessions.md#game-hosts-and-the-environment-inventory).
+`EnvironmentInventory` is in [`Valheim.Testing.Game`](../packages/Valheim.Testing.Game.md). A file with environments on other machines is an [inventory file](sessions-inventory.md).
 
 ## This machine, with no file
 
@@ -21,7 +21,7 @@ Steam's root is only ever the native default:
 | macOS | `~/Library/Application Support/Steam` |
 | Linux | `~/.steam/steam` |
 
-The toolkit then reads every library in `steamapps/libraryfolders.vdf` and each app's `appmanifest_<id>.acf` `installdir`. An install counts only if its executable is there. If Steam is anywhere else, such as a Flatpak, list the environment with its `install` in an [inventory file](../packages/Valheim.Testing.GameSessions.md#game-hosts-and-the-environment-inventory).
+The toolkit then reads every library in `steamapps/libraryfolders.vdf` and each app's `appmanifest_<id>.acf` `installdir`. An install counts only if its executable is there. If Steam is anywhere else, such as a Flatpak, list the environment with its `install` in an [inventory file](sessions-inventory.md).
 
 ValheimTesting keeps its own state in a data folder: `%LOCALAPPDATA%\ValheimTesting` on Windows, `~/Library/Application Support/ValheimTesting` on macOS, `$XDG_DATA_HOME/ValheimTesting` (or `~/.local/share/ValheimTesting`) on Linux.
 

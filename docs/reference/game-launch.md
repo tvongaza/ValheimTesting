@@ -14,7 +14,7 @@ How `GameLaunch` builds the launch of a BepInEx dedicated server or game client 
 | Linux | `valheim_server.x86_64` | the executable, with `start_server_bepinex.sh`'s environment |
 | macOS | `valheim_server/Valheim` and `valheim_server/Data` | through `/usr/bin/arch` ([below](#macos-dedicated-server)) |
 
-The Windows server's own console lets a clean stop signal the server, not the runner. Your arguments stay as you pass them; a pinned plan's rules are on [GameSessions](../packages/Valheim.Testing.GameSessions.md#pinned-server-runner).
+The Windows server's own console lets a clean stop signal the server, not the runner. Your arguments stay as you pass them; a pinned plan's rules are on [pinned server runner](sessions-pinned-server-run.md#the-plan).
 
 `ForServer` refuses, before anything starts:
 
@@ -80,7 +80,7 @@ The MonoMod version is read, never loaded; an older core is refused with the ver
 
 ## Limits
 
-- `GameLaunch` only builds launches. A game client needs an interactive desktop session with a display, a GPU and a running, signed-in Steam client. A service, an SSH session or a scheduled task without a logged-in user has no display. Starting a client in a user's session on another machine is [`InteractiveClient`'s job](../packages/Valheim.Testing.GameSessions.md#clients-in-a-hosts-desktop-session).
+- `GameLaunch` only builds launches. A game client needs an interactive desktop session with a display, a GPU and a running, signed-in Steam client. A service, an SSH session or a scheduled task without a logged-in user has no display. Starting a client in a user's session on another machine is [`InteractiveClient`'s job](sessions-hosts.md#clients-on-a-host).
 - There is no Wine or Proton support. Linux hosts run the dedicated server only.
 - No file says whether each plugin's own hooks and native libraries work on arm64.
 - Server container images contain game files. Never push or publish them.

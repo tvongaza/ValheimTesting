@@ -1,6 +1,6 @@
 # Plan rules and client rounds
 
-The glue a mod runner reuses from `Valheim.Testing.Game`: rules that refuse a bad plan before anything is copied, `ClientRounds` for a persistence scenario, and the two lifecycle cycles a round can run. The [FullLifecycle example](../../examples/FullLifecycle/README.md#the-rounds) uses all of them.
+The glue a mod runner reuses from `Valheim.Testing.Game`: rules that refuse a bad plan before anything is copied, `ClientRounds` for a persistence scenario, and the two lifecycle cycles a round can run. The [FullLifecycle example](../../examples/FullLifecycle/README.md) uses all of them ([its rounds](../guides/test-save-restart-rejoin.md#3-write-the-rounds)).
 
 ## Plan rules
 

@@ -166,5 +166,5 @@ A phase's `args` can use `--mod`, `--config`, `--plugin-file`, `--plugin-dir`, `
 
 - A native macOS dedicated server places the world briefly in the signed-in user's default `worlds_local`. If a world with the same name exists there, preflight refuses. Use another host or a separately named fixture.
 - Keep plans and evidence private. Paths, logs and game data can identify your machine or world.
-- One assertion runs per bake. For a longer event wait, use a `PinnedServerRun` scenario: see [Valheim.Testing.GameSessions](../packages/Valheim.Testing.GameSessions.md).
+- One assertion runs per bake. For a longer event wait, use a `PinnedServerRun` scenario: see [pinned server runner](sessions-pinned-server-run.md).
 - This page does not cover authoring terrain or biomes with Expand World.

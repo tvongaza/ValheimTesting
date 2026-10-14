@@ -17,8 +17,8 @@ CI runs bootstrap and validation on all three. [Launching servers and clients](g
 Other hosts:
 
 - **Server in a container.** You can run the server in a Linux x86-64 image ([docker/linux-server](../../docker/linux-server/README.md)). On Apple Silicon the image runs only under emulation and is experimental.
-- **Remote hosts.** A remote host is an SSH game host in an environment inventory ([Valheim.Testing.GameSessions](../packages/Valheim.Testing.GameSessions.md)). A headless dedicated server starts there from a disposable loader profile of the host's install, without Steam or a desktop session.
-- **Remote clients.** A client needs an interactive desktop session with a display and a running Steam client. `InteractiveClient` starts one inside a Windows or SSH Mac host's existing desktop session. A remote Mac client needs the SSH user at the unlocked console, with Steam signed in. <!-- TODO(docs): #808 -->
+- **Remote hosts.** A remote host is an SSH game host in an [inventory file](sessions-inventory.md). A headless dedicated server starts there from a disposable loader profile of the host's install, without Steam or a desktop session ([game hosts](sessions-hosts.md)).
+- **Remote clients.** A client needs an interactive desktop session with a display and a running Steam client. `InteractiveClient` starts one inside a Windows or SSH Mac host's existing desktop session ([clients on a host](sessions-hosts.md#clients-on-a-host)). A remote Mac client needs the SSH user at the unlocked console, with Steam signed in.
 
 ## Host shells
 
@@ -52,7 +52,7 @@ If you reach the host over SSH, restart its OpenSSH server (`Restart-Service ssh
 
 Both run from Steam installs.
 
-Another Windows machine can host the server over SSH. A headless server starts there from a disposable loader profile of its install, without Steam or a desktop session.
+Another Windows machine can host the server over SSH. A headless server starts there from a scheduled task, without Steam ([servers on a host](sessions-hosts.md#servers-on-a-host)).
 
 Run `valheim-test` and the runners from an ordinary terminal: Windows Terminal, PowerShell or cmd. Never run them from inside an MSIX-packaged app, such as a desktop app that starts commands for you. Windows redirects that app's AppData writes into its package, where the server's scheduled task and the game cannot see them. For that reason, `env preflight` and a run's host checks refuse a packaged process.
 
@@ -66,10 +66,10 @@ Linux hosts run the dedicated server only; start the client on Windows or macOS.
 
 [docker/linux-server](../../docker/linux-server/README.md) builds a local x86-64 image with the server, BepInEx and .NET 10. [LinuxServerSmoke](../../docker/linux-server/smoke/README.md) boots the server in that image twice, on a new world and on its save. The [scheduled server checks](../../docker/linux-server/README.md#scheduled-checks-in-ci) run every night and after each new public server build. They run that smoke and the server half of the [native acceptance suite](../../tests/Valheim.Testing.NativeAcceptance/README.md).
 
-You can place a server on another host from any OS. Both options are described in [Valheim.Testing.GameSessions](../packages/Valheim.Testing.GameSessions.md):
+You can place a server on another host from any OS:
 
-- `PinnedServerRun --inventory` runs a plan's dedicated server on an inventory host. That host can be Linux over SSH, Linux in a container, or Windows.
-- A campaign (`PinnedServerRun.RunCampaignAsync`) also places remote clients. Each client starts in its host's desktop session, on the Steam identity signed in there. The identity is leased, so no two runs use it at once.
+- `PinnedServerRun --inventory` runs a plan's dedicated server on an inventory host: Linux over SSH, Linux in a container, or Windows ([run on another machine](../guides/run-on-another-machine.md)).
+- A [campaign](sessions-campaigns.md) also places remote clients. Each client starts in its host's desktop session, on the Steam account signed in there, which the run leases.
 
 You provision the host and sign in its Steam client yourself.
 
@@ -144,7 +144,7 @@ A refused package names the file that changed. The refusal carries the verificat
 
 If you update SteamCMD, re-capture the manifest.
 
-For an SSH Mac server campaign, keep the signed SteamCMD files on the Mac and make the manifest available to the runner. The manifest's `root` still names the Mac path. The campaign checks that remote source and stages the same disposable profile.
+For an SSH Mac server campaign, keep the signed SteamCMD files on the Mac and make the manifest available to the runner. The manifest's `root` still names the Mac path. The campaign checks that remote source and stages the same disposable profile ([a Mac dedicated server](sessions-campaigns.md#a-mac-dedicated-server)).
 
 ## Native Apple Silicon client
 
