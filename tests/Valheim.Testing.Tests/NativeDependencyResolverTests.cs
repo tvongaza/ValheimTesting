@@ -599,6 +599,21 @@ public sealed class NativeDependencyResolverTests : IDisposable
             new Dictionary<string, ClientRunPlan> { ["client-a"] = HostSection(), ["client-b"] = new() { Mode = "owned", Port = 5579 } })).Message);
         Assert.Contains("declares a dedicated server", Assert.Throws<ArgumentException>(() => HostedCampaignPreparation.CheckHostedPlan(clean,
             new Dictionary<string, ClientRunPlan> { ["client-a"] = HostSection(), ["client-b"] = PeerSection() })).Message);
+        // #812: any client's -savedir (either spelling, any case, bare or =value) is refused in the plan check, before any host is
+        // contacted, on a hosted campaign and on one with a dedicated server; a plain argument is not.
+        foreach (string argument in new[] { "-savedir", "--SAVEDIR", "-SaveDir=D:\\elsewhere", "--savedir=/elsewhere" })
+        {
+            var peer = PeerSection(); peer.LaunchArguments = ["-console", argument, "D:\\elsewhere"];
+            var hostedError = Assert.Throws<ArgumentException>(() => HostedCampaignPreparation.CheckHostedPlan(serverless,
+                new Dictionary<string, ClientRunPlan> { ["client-a"] = HostSection(), ["client-b"] = peer })).Message;
+            Assert.Contains($"Remove the client-b's launch argument {argument}", hostedError);
+            var host = HostSection(); host.LaunchArguments = [argument];
+            Assert.Contains($"Remove the client-a's launch argument {argument}", Assert.Throws<ArgumentException>(() => HostedCampaignPreparation.CheckPlan(clean,
+                new ServerRunPlan { Arguments = ["-batchmode", "-nographics", "-savedir", "{world}"] },
+                new Dictionary<string, ClientRunPlan> { ["client-a"] = host, ["client-b"] = PeerSection() })).Message);
+        }
+        var notSavedir = PeerSection(); notSavedir.LaunchArguments = ["-console", "-savedirectory", "-name", "-savedir-not"];
+        HostedCampaignPreparation.CheckHostedPlan(serverless, new Dictionary<string, ClientRunPlan> { ["client-a"] = HostSection(), ["client-b"] = notSavedir });
     }
 
     // RunCampaignAsync: one report from the campaign's preflight through the run to retiring the prepared install, with the

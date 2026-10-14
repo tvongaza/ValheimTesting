@@ -764,6 +764,19 @@ public sealed class ClientRoundsTests : IDisposable
         HostedWorld.RequireNativeSaveDirectory(ClientPlatform.Windows, customPath, ["-savedir", customPath], defaultPath);
     }
 
+    // #812: the one test of what is a -savedir argument, shared by the macOS hosted-client refusal and every campaign client's.
+    [Theory]
+    [InlineData("-savedir", true)] [InlineData("--savedir", true)] [InlineData("-SAVEDIR", true)] [InlineData("--SaveDir=/x", true)]
+    [InlineData("-savedir=C:\\x", true)] [InlineData("-savedirectory", false)] [InlineData("-console", false)] [InlineData("x-savedir", false)]
+    public void SaveDirectoryArgumentIsTheOneTestForSavedir(string argument, bool refused)
+    {
+        Assert.Equal(refused ? argument : null, HostedWorld.SaveDirectoryArgument(["-console", argument]));
+        if (refused)
+            Assert.Throws<InvalidOperationException>(() => HostedWorld.RequireNativeSaveDirectory(ClientPlatform.MacOS, null, [argument], "/d"));
+        else
+            HostedWorld.RequireNativeSaveDirectory(ClientPlatform.MacOS, null, [argument], "/d");
+    }
+
     [ClientHostFact] public void AnInstallThatFailsThePreflightStopsBeforeTheFixtureIsCopied()
     {
         _install.Standing("expect.txt", $"valheimCLI.valheimCLI={_install.CliMd5} my.mod=absent\n"); // Two pins on one line.
