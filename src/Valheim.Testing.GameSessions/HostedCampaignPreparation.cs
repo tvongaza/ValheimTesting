@@ -707,7 +707,8 @@ public static class HostedCampaignPreparation
     /// direct-join address binding needs; the plan binds exactly the campaign's clients; every plugin the plan (or a client
     /// section) pins by hash is one its role's dependency lock selects, since binding replaces those pins with the selected
     /// files' own hashes and would otherwise drop one, and none it pins <c>absent</c> is selected; and no launch argument still
-    /// holds an angle-bracket placeholder such as <c>&lt;fixture password&gt;</c>. Every problem is reported at once, after the
+    /// holds an angle-bracket placeholder such as <c>&lt;fixture password&gt;</c>, and no client's launch arguments set the game's
+    /// save directory (<c>-savedir</c>), since its character and hosted world are staged in the default one. Every problem is reported at once, after the
     /// campaign's own preflight (<see cref="Check"/>) passed.
     /// </summary>
     public static void CheckPlan(string manifestFile, ServerRunPlan plan, IReadOnlyDictionary<string, ClientRunPlan> clients) =>
@@ -730,7 +731,7 @@ public static class HostedCampaignPreparation
         foreach (var (name, client) in clients.Where(client => inputs.Manifest.Clients.ContainsKey(client.Key)))
         {
             AgreeingPins(inputs, name, client.Pins, problems);
-            Placeholders(name, client.LaunchArguments, problems);
+            ClientLaunchArguments(name, client.LaunchArguments, problems);
         }
         if (problems.Count != 0) throw new ArgumentException("The plan does not agree with the campaign: " + string.Join(" ", problems));
     }
@@ -760,7 +761,7 @@ public static class HostedCampaignPreparation
         foreach (var (name, client) in clients.Where(client => inputs.Manifest.Clients.ContainsKey(client.Key)))
         {
             AgreeingPins(inputs, name, client.Pins, problems);
-            Placeholders(name, client.LaunchArguments, problems);
+            ClientLaunchArguments(name, client.LaunchArguments, problems);
         }
         if (problems.Count != 0) throw new ArgumentException("The plan does not agree with the campaign: " + string.Join(" ", problems));
     }
@@ -786,6 +787,16 @@ public static class HostedCampaignPreparation
                 problems.Add($"The plan pins plugin {guid} absent for {role}, but its dependency lock selects it.");
             else if (value != "absent" && !selected.ContainsKey(guid))
                 problems.Add($"The plan pins plugin {guid} for {role}, which its dependency lock does not select.");
+    }
+
+    // A campaign stages every client's character, and the hosting client's world, in the game's default save folder on its host;
+    // -savedir (honoured on Windows, ignored on macOS) would point the game at a folder the toolkit never staged.
+    private static void ClientLaunchArguments(string role, IEnumerable<string> arguments, List<string> problems)
+    {
+        var launch = arguments.ToList();
+        Placeholders(role, launch, problems);
+        if (HostedWorld.SaveDirectoryArgument(launch) is { } savedir)
+            problems.Add($"Remove the {role}'s launch argument {savedir}: a campaign client's character and hosted world are staged in the game's default save folder, which -savedir would move the game away from.");
     }
 
     private static void Placeholders(string role, IEnumerable<string> arguments, List<string> problems)

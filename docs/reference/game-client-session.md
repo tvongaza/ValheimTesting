@@ -11,7 +11,7 @@ JSON names are the camelCase of `ClientRunPlan`'s properties.
 | `mode` | `owned`: the run launches and stops the client. `attach`: you launch it; the run only connects | Required |
 | `install` | Owned only: the client install. The run launches a disposable copy of it, never the install itself | Full path on the client's machine |
 | `inPlace` | Owned only: run `install` as it is; nothing is staged into it | `false`; `--in-place` sets it for every owned client of a run |
-| `launchArguments` | Owned only: extra game arguments | `[]`; `-console` is added by the launch |
+| `launchArguments` | Owned only: extra game arguments | `[]`; `-console` is added by the launch; a campaign's plan refuses `-savedir` for every client, before any host is contacted (the campaign stages characters and worlds in the game's default save folder) |
 | `environment` | Owned only: non-secret process variables for the client, such as a mod's documented switch | `{}`; loader overrides, invalid names and multiline values refused; attached plans refuse it |
 | `architecture` | Owned only: the slice a `Valheim.app` client runs as, `x64` or `arm64` | Host default: `arm64` on Apple Silicon, `x64` elsewhere ([native client](platforms.md#native-apple-silicon-client)) |
 | `host` | The client's ValheimCLI host | `127.0.0.1`; an owned or hosting client must be on this machine |

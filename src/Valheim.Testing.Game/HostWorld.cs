@@ -184,16 +184,24 @@ public sealed class HostedWorld : IDisposable
     /// <summary>This machine's platform, for an attached client (whose install the runner does not read).</summary>
     public static ClientPlatform CurrentPlatform => GameLaunch.CurrentClientHost;
 
+    /// <summary>
+    /// The first <c>-savedir</c> launch argument in <paramref name="launchArguments"/> (<c>-savedir</c> or <c>--savedir</c>, bare or
+    /// <c>=value</c>, any case), or null. The one test of what counts as one: a standalone macOS hosted client and every campaign
+    /// client refuse it by this.
+    /// </summary>
+    internal static string? SaveDirectoryArgument(IEnumerable<string> launchArguments) =>
+        launchArguments.FirstOrDefault(argument => argument.Equals("-savedir", StringComparison.OrdinalIgnoreCase) ||
+            argument.Equals("--savedir", StringComparison.OrdinalIgnoreCase) ||
+            argument.StartsWith("-savedir=", StringComparison.OrdinalIgnoreCase) ||
+            argument.StartsWith("--savedir=", StringComparison.OrdinalIgnoreCase));
+
     // Valheim 1.0.16 on macOS ignored -savedir for a hosted client and read worlds_local from the signed-in user's
     // default data directory. Check before Place creates or copies anything; a world with the same name can have another UID.
     internal static void RequireNativeSaveDirectory(ClientPlatform platform, string? requested, IEnumerable<string> launchArguments,
         string defaultDirectory)
     {
         if (platform != ClientPlatform.MacOS) return;
-        if (launchArguments.Any(argument => argument.Equals("-savedir", StringComparison.OrdinalIgnoreCase) ||
-            argument.Equals("--savedir", StringComparison.OrdinalIgnoreCase) ||
-            argument.StartsWith("-savedir=", StringComparison.OrdinalIgnoreCase) ||
-            argument.StartsWith("--savedir=", StringComparison.OrdinalIgnoreCase)))
+        if (SaveDirectoryArgument(launchArguments) != null)
             throw new InvalidOperationException("A native macOS hosted client cannot use -savedir: Valheim 1.0.16 ignored it and read the signed-in user's default worlds_local. Remove that launch argument before staging the fixture.");
         if (requested != null && !Path.GetFullPath(requested).TrimEnd(Path.DirectorySeparatorChar)
                 .Equals(Path.GetFullPath(defaultDirectory).TrimEnd(Path.DirectorySeparatorChar), StringComparison.Ordinal))
