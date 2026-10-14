@@ -96,13 +96,15 @@ internal static class OwnedCliCommand
     }
 
     // Without --role: the one role whose lease this evidence holds; a server-only hold needs no --role. Evidence holding
-    // both is ambiguous and refused; evidence holding neither reads the client lease, whose absence is the refusal.
+    // both is ambiguous and refused; evidence holding neither has no run to reach (it ended, or was never held) and says so.
     internal static string DefaultRole(string evidence)
     {
         bool client = File.Exists(Path.Combine(evidence, OwnedClientCommandLease.FileName));
         bool server = File.Exists(Path.Combine(evidence, OwnedClientCommandLease.ServerFileName));
         if (client && server)
             throw new InvalidOperationException("This evidence holds both an owned client and server; choose --role client or --role server.");
+        if (!client && !server)
+            throw new InvalidOperationException("This evidence holds no owned client or server lease: the run has ended (finish retires its holds) or was never held.");
         return server ? OwnedClientCommandLease.ServerRole : OwnedClientCommandLease.ClientRole;
     }
 

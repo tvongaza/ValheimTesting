@@ -94,6 +94,31 @@ public sealed class MacSteamRuntimePackageContractTests : IDisposable
         Assert.Equal("999", Assert.Single(host.Runs).Variables["expectedVersion"]);
     }
 
+    // #810: the refusal itself names the reason and the file; "exited with code 4" alone left the user guessing what to restore.
+    [Fact]
+    public async Task ARefusedPackageNamesTheChangedFileInItsMessage()
+    {
+        var (host, package, _, _) = Fixture("changed-library");
+        File.AppendAllText(host.Local(package.Root + "/crashhandler.dylib"), "one changed byte");
+
+        var error = await Assert.ThrowsAsync<HostOperationException>(() =>
+            MacSteamRuntimeOnHost.VerifyAsync(host, package, TimeSpan.FromSeconds(30), default));
+
+        Assert.Equal(4, error.Result.ExitCode);
+        Assert.Contains("VT-STEAM-RUNTIME changed crashhandler.dylib", error.Message);
+        Assert.Contains("on ssh-mac", error.Message);
+    }
+
+    [Fact]
+    public async Task ARefusedPackageNamesAMissingFileInItsMessage()
+    {
+        var (host, package, _, _) = Fixture("missing-library");
+        File.Delete(host.Local(package.Root + "/steamclient.dylib"));
+        var missing = await Assert.ThrowsAsync<HostOperationException>(() =>
+            MacSteamRuntimeOnHost.VerifyAsync(host, package, TimeSpan.FromSeconds(30), default));
+        Assert.Contains("VT-STEAM-RUNTIME missing steamclient.dylib", missing.Message);
+    }
+
     private (FakeServerHost Host, MacSteamRuntimePackage Package, string Source, string Selected) Fixture(string name)
     {
         var host = new FakeServerHost("ssh-mac", Path.Combine(_root, name));
