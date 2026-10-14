@@ -318,7 +318,7 @@ public sealed class SteamAccountHoldTests : IDisposable
         await using var held = await SteamAccountHold.AcquireAsync(Profile("gaming-pc", "player"), "player", "run-4", LeaseBox.Host());
         var fake = new FakeLauncher();
         var elsewhere = new SshGameHost("mac-gpu", "tester@mac-gpu.example", HostShell.Bash, 0, null, null, "ssh", fake);
-        var launch = GameLaunch.ForClientWithLoader("/Users/tester/valheim", "/Users/tester/profile", [], null, ClientPlatform.MacOS, ClientArchitecture.Arm64, macDoorstop: "libdoorstop.dylib");
+        var launch = GameLaunch.ForOwnedClientOnHost(ClientPlatform.MacOS, "/Users/tester/valheim", "/Users/tester/profile", [], null, ClientArchitecture.Arm64, "/Users/tester/runs/client-1", macDoorstop: "libdoorstop.dylib");
         var error = await Assert.ThrowsAsync<ArgumentException>(() => InteractiveClient.StartAsync(held, elsewhere, launch, "/Users/tester/runs/run-4/client-1", LeaseBox.Timeout));
         Assert.Contains("leased for the client player on host 'gaming-pc'", error.Message);
         Assert.Empty(fake.Calls);

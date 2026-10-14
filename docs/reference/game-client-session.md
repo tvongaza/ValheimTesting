@@ -85,7 +85,7 @@ Startup then waits on events, never on polling, each raced against the process e
 2. ValheimCLI's listening line in this launch's BepInEx log; any of `StartupEvents.StartupFailures` ends it;
 3. the `MainMenu` state push.
 
-An exit ends startup at once with the exit code and, when BepInEx wrote nothing, the path of `Player.log`. Once the client answers at its menu, `capabilities` are required live (`CliCapabilities.Require`), for an attached client too. A failed startup stops the process it started.
+An exit ends startup at once with the exit code and, when BepInEx wrote nothing, the path of its Unity log (`toolkit-unity.log` in the run's launch folder, which the launch's `-logFile` names; never the user's `Player.log`). Once the client answers at its menu, `capabilities` are required live (`CliCapabilities.Require`), for an attached client too. A failed startup stops the process it started.
 
 `PinnedFile` pins a plan's input file by `Source` and `Sha256`; `Verified()` rechecks the hash before use and refuses with `<Source> changed after it was pinned.`
 
@@ -97,7 +97,7 @@ An exit ends startup at once with the exit code and, when BepInEx wrote nothing,
 | `client-process.json` | An owned client's launch, including the `architecture` it launched |
 | `Architecture` | The launched slice; null for an attached client |
 | `clientArchitecture` | The same in `ClientRounds`' provenance; `attached` for an attached client ([client rounds](game-client-rounds.md#client-rounds)) |
-| `Logs` | The kept BepInEx log and `Player.log` of an owned client, for the [log scan](game-log-scan.md) |
+| `Logs` | The kept BepInEx log and Unity log (its launch's `-logFile`) of an owned client, for the [log scan](game-log-scan.md) |
 | `ProcessId`, `Stopped`, `Closed` | The owned process, how it stopped, and whether the session is closed |
 
 ## Limits

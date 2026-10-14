@@ -18,7 +18,7 @@ namespace Valheim.Testing.GameSessions;
 /// </summary>
 internal sealed class HostedServerRun : IServerPlacement
 {
-    internal const string BepInExLog = "BepInEx/LogOutput.log", UnityLog = "toolkit-unity.log";
+    internal const string BepInExLog = "BepInEx/LogOutput.log";
     private readonly IHostedRunHooks _hooks;
     private readonly string _owner;
     private readonly ServerRunPlan _plan;
@@ -451,7 +451,7 @@ internal sealed class HostedServerRun : IServerPlacement
         JournalAsync(Host, Role.Host, "server", JournalEntry.Of(JournalEntry.ProcessIntended, ("bootDirectory", bootDirectory),
             ("expectedCommandLineSha256", expected), ("quitSeconds", quitSeconds),
             ("launcherOwnershipFile", ownership.FileName), ("launcherTask", ownership.TaskName)), cancellation).GetAwaiter().GetResult();
-        try { process = HostServer.StartAsync(Host, launch, bootDirectory, HostedTimeouts.Quick, [BepInExLog, UnityLog], local,
+        try { process = HostServer.StartAsync(Host, launch, bootDirectory, HostedTimeouts.Quick, [BepInExLog, GameLaunch.UnityLogName], local,
             logonSeams: null, cancellation: cancellation, ownership: ownership).GetAwaiter().GetResult(); }
         catch (Exception error) when (UnknownOutcome(error) != null)
         {
@@ -490,7 +490,7 @@ internal sealed class HostedServerRun : IServerPlacement
             ("expectedCommandLineSha256", expected), ("quitSeconds", quitSeconds)), cancellation).GetAwaiter().GetResult();
         Directory.CreateDirectory(local);
         Directory.CreateDirectory(bootDirectory);
-        foreach (var (relative, index) in new[] { (BepInExLog, 0), (UnityLog, 1) })
+        foreach (var (relative, index) in new[] { (BepInExLog, 0), (GameLaunch.UnityLogName, 1) })
         {
             string previous = Path.Combine(RuntimeDirectory, relative);
             if (File.Exists(previous)) File.Move(previous, Path.Combine(bootDirectory, $"previous-{index}.log"));
@@ -500,7 +500,7 @@ internal sealed class HostedServerRun : IServerPlacement
         try
         {
             process = new DirectServerProcess(launch.ToStartInfo(), prefix,
-                Path.Combine(RuntimeDirectory, BepInExLog), Path.Combine(RuntimeDirectory, UnityLog));
+                Path.Combine(RuntimeDirectory, BepInExLog), Path.Combine(RuntimeDirectory, GameLaunch.UnityLogName));
             var found = HostProcessProbe.ProbeAsync(Host, [(process.Id, "")], HostedTimeouts.Quick, cancellation, settle: true).GetAwaiter().GetResult()[(process.Id, "")];
             if (found.State != ProbedState.Same || found.StartIdentity == null || found.CommandLineSha256 == null)
                 throw new IOException($"The Mac server process {process.Id} could not be identified for recovery ({found.State}).");
@@ -796,9 +796,10 @@ internal sealed class ClientAccount(string client, SteamAccountHold hold, IGameH
 /// <summary>
 /// A client <see cref="InteractiveClient"/> started for a <see cref="PinnedServerRun"/>: stopping it stops only that process (a
 /// clean stop asks it to quit first),
-/// keeps its BepInEx log and Player.log in its launch directory, fetches that directory here and closes its CLI tunnel.
+/// keeps its BepInEx log and Unity's log (the launch's <see cref="GameLaunch.UnityLog"/>) in its launch directory, fetches that
+/// directory here and closes its CLI tunnel.
 /// </summary>
-internal class HostedClientProcess(InteractiveClientProcess process, IGameHost host, string install, CliTunnel tunnel, string evidence,
+internal class HostedClientProcess(InteractiveClientProcess process, IGameHost host, string install, string unityLog, CliTunnel tunnel, string evidence,
     Action? afterStopped = null) : IOwnedProcess, IClientProcessIdentity
 {
     /// <summary>
@@ -807,11 +808,11 @@ internal class HostedClientProcess(InteractiveClientProcess process, IGameHost h
     /// command lease once the menu pins verify; otherwise, or when that identity cannot be read, one that publishes none. A launch
     /// that exits before its menu fails startup, so a lease never names a PID reused in between.
     /// </summary>
-    internal static HostedClientProcess Of(InteractiveClientProcess process, IGameHost host, string install, CliTunnel tunnel, string evidence,
+    internal static HostedClientProcess Of(InteractiveClientProcess process, IGameHost host, string install, string unityLog, CliTunnel tunnel, string evidence,
         IHostedRunHooks? local, Action? afterStopped = null) =>
         local != null && LocalLeaseIdentity.TryRead(local, "client", process.Id, process.StartIdentity) is { } identity
-            ? new LocalHostedClientProcess(process, host, install, tunnel, evidence, identity, afterStopped)
-            : new HostedClientProcess(process, host, install, tunnel, evidence, afterStopped);
+            ? new LocalHostedClientProcess(process, host, install, unityLog, tunnel, evidence, identity, afterStopped)
+            : new HostedClientProcess(process, host, install, unityLog, tunnel, evidence, afterStopped);
 
     private bool _kept;
     public int Id => process.Id;
@@ -837,7 +838,7 @@ internal class HostedClientProcess(InteractiveClientProcess process, IGameHost h
             afterStopped?.Invoke();
             if (_kept) return;
             var kept = host.RunAsync(HostedClientScripts.Keep(host.Shell.Kind), new Dictionary<string, string>
-                { ["install"] = install, ["dir"] = process.LaunchDirectory, ["playerlog"] = HostedClientScripts.MacPlayerLogRelative },
+                { ["install"] = install, ["dir"] = process.LaunchDirectory, ["unitylog"] = unityLog },
                 TimeSpan.FromSeconds(60)).GetAwaiter().GetResult().EnsureSuccess($"Keeping the logs of client process {Id} on {host.Name}");
             if (InteractiveClient.Line(kept.Stdout, "VT-KEPT") == null) throw new HostOperationException($"Unexpected reply while keeping the client's logs on {host.Name}", kept);
             host.FetchDirectoryAsync(process.LaunchDirectory, evidence, TimeSpan.FromMinutes(5)).GetAwaiter().GetResult();
@@ -856,8 +857,8 @@ internal class HostedClientProcess(InteractiveClientProcess process, IGameHost h
 // A client hosted through the same scripts as a remote client (a desktop task, or a campaign client on a `local` host) whose
 // process is on this machine (HostedClientProcess.Of). The distinct identity type is the one rule ClientSession uses when
 // deciding whether it may publish a local lease; its identity is the lease's local rule (LocalLeaseIdentity).
-internal sealed class LocalHostedClientProcess(InteractiveClientProcess process, IGameHost host, string install, CliTunnel tunnel, string evidence,
-    string localStartFileTimeUtc, Action? afterStopped = null) : HostedClientProcess(process, host, install, tunnel, evidence, afterStopped), ILocalClientProcessIdentity
+internal sealed class LocalHostedClientProcess(InteractiveClientProcess process, IGameHost host, string install, string unityLog, CliTunnel tunnel, string evidence,
+    string localStartFileTimeUtc, Action? afterStopped = null) : HostedClientProcess(process, host, install, unityLog, tunnel, evidence, afterStopped), ILocalClientProcessIdentity
 {
     string IClientProcessIdentity.StartFileTimeUtc => localStartFileTimeUtc;
 }
@@ -865,9 +866,6 @@ internal sealed class LocalHostedClientProcess(InteractiveClientProcess process,
 // Scripts for a hosted client's logs. Values arrive as variables; each ends with its verdict.
 internal static class HostedClientScripts
 {
-    // Relative to a Mac client's home directory; Unity writes a Windows client's Player.log where the PowerShell script looks.
-    internal const string MacPlayerLogRelative = "Library/Logs/IronGate/Valheim/Player.log";
-
     public static string MoveAside(HostShellKind kind) => kind == HostShellKind.Bash ? BashMoveAside : PowerShellMoveAside;
     public static string Keep(HostShellKind kind) => kind == HostShellKind.Bash ? BashKeep : PowerShellKeep;
     public static string Preloader(HostShellKind kind) => kind == HostShellKind.Bash ? BashPreloader : PowerShellPreloader;
@@ -943,16 +941,14 @@ internal static class HostedClientScripts
         'VT-MOVED'
         """.ReplaceLineEndings("\n");
 
-    // Variables: install, dir, playerlog (relative to the host user's home). The game's BepInEx log and Unity's Player.log are copied into the
-    // launch directory as game-0.log and game-1.log, or an .absent note says the game never wrote one.
+    // Variables: install (the loader root), dir, unitylog (the launch's -logFile, GameLaunch.UnityLog). The game's BepInEx log and
+    // Unity's log are copied into the launch directory as game-0.log and game-1.log, or an .absent note says the game never wrote one.
     public static readonly string BashKeep = """
         set -u
         [ -d "$dir" ] || exit 3
         keep() { if [ -f "$1" ]; then cp -- "$1" "$dir/$2" || exit 3; else printf 'The game did not write %s\n' "$1" > "$dir/$2.absent" || exit 3; fi; }
         keep "$install/BepInEx/LogOutput.log" game-0.log
-        playerlog="${playerlog:-Library/Logs/IronGate/Valheim/Player.log}"
-        case "$playerlog" in /*) ;; *) playerlog="${HOME:-/nonexistent}/$playerlog" ;; esac
-        keep "$playerlog" game-1.log
+        keep "$unitylog" game-1.log
         # BepInEx's preloader crash logs beside the game (#254): this launch's (not older than its pid file) are kept; older
         # ones, left by an earlier start, are only named.
         ref="$dir/pid"; [ -e "$ref" ] || ref="$dir"
@@ -973,7 +969,7 @@ internal static class HostedClientScripts
             if ([IO.File]::Exists($from)) { [IO.File]::Copy($from, $to, $true) } else { [IO.File]::WriteAllText($to + '.absent', 'The game did not write ' + $from) }
         }
         Save-VtLog (Join-Path $install 'BepInEx\LogOutput.log') 'game-0.log'
-        Save-VtLog (Join-Path ([Environment]::GetFolderPath('UserProfile')) 'AppData\LocalLow\IronGate\Valheim\Player.log') 'game-1.log'
+        Save-VtLog $unitylog 'game-1.log'
         # BepInEx's preloader crash logs beside the game (#254): this launch's (not older than its pid file) are kept; older ones are only named.
         $ref = Join-Path $dir 'pid'; if (-not [IO.File]::Exists($ref)) { $ref = $dir }
         $since = [IO.File]::GetLastWriteTimeUtc($ref); if ($ref -eq $dir) { $since = [IO.Directory]::GetLastWriteTimeUtc($dir) }

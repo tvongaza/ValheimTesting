@@ -2,7 +2,7 @@
 
 After a run's processes stop, `ScenarioReport.ScanLogs(logs, classifications)` reads each `RunLog` (a role, the kept copy's path and whether it is required) with `LogScanner`. It records the `scan run logs` step and one `Logs` entry per file in `result.json`: every pattern's severity, count, first line number and first line. The step fails when a failure pattern matched or a required log is missing; warnings are only counted.
 
-`PinnedServerRun` scans, per boot, the BepInEx log (required), the Unity log (the copy of `{runtime}/toolkit-unity.log`, so pass `-logFile {runtime}/toolkit-unity.log` in the plan's arguments) and the process output (Unity's log on Linux without `-logFile`). A client opened with `session.OpenClient` adds its BepInEx log and `Player.log` itself. A scenario adds any other log with `session.AddLog`.
+`PinnedServerRun` scans, per boot, the BepInEx log (required), the Unity log (the copy of `{runtime}/toolkit-unity.log`, so pass `-logFile {runtime}/toolkit-unity.log` in the plan's arguments) and the process output (Unity's log on Linux without `-logFile`). A client opened with `session.OpenClient` adds its BepInEx log and its Unity log (the `toolkit-unity.log` its launch's `-logFile` writes in the run's launch folder) itself. A scenario adds any other log with `session.AddLog`.
 
 ## Patterns
 

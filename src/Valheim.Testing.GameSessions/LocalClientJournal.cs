@@ -22,11 +22,9 @@ internal sealed class LocalClientJournal(ClientRunPlan plan, string evidence, bo
         // BepInEx and Doorstop live in the owned profile. Windows desktop tasks carry a secret
         // variable into their own session, so keep that host launch path there.
         string expected = expectedCommandLineForTest ?? (desktopTask
-            ? GameLaunch.ForClient(plan.Install, plan.LaunchArguments, plan.Environment,
-                hostPlatform: ClientPlatform.Windows, architecture: plan.LaunchArchitecture,
-                secretVariables: plan.PasswordVariable is { } password ? [password] : null)
-            : GameLaunch.LocalClient(plan.Install, plan.LaunchArguments, plan.Environment, plan.LaunchArchitecture,
-                console: true, builtOn: hostPlatformForTest ?? GameLaunch.CurrentClientHost, loaderDirectory: plan.LoaderRoot)).CommandLineSha256();
+            ? GameLaunch.ForOwnedClientOnHost(ClientPlatform.Windows, plan.Install, null, plan.LaunchArguments, plan.Environment,
+                plan.LaunchArchitecture, _launchDirectory, plan.PasswordVariable is { } password ? [password] : null)
+            : ClientSession.LocalLaunch(plan, hostPlatformForTest ?? GameLaunch.CurrentClientHost, _launchDirectory)).CommandLineSha256();
         _journal.AppendLocal("client", JournalEntry.Of(JournalEntry.ProcessIntended,
             ("launchDirectory", _launchDirectory), ("expectedCommandLineSha256", expected)));
         _intended = true;

@@ -49,7 +49,7 @@ An interrupted run leaves its journal for `valheim-test env recover`.
 
 ## Pin a BepInEx loader
 
-A Doorstop proxy and its configuration can pass a static shape check and still not start BepInEx in Valheim. The real check is an owned client reaching its menu with a fresh BepInEx log and the expected plugin identities; `ClientSession` makes it within `bepInExSeconds` and, on failure, keeps `Player.log`, the BepInEx log if written, and the boot output.
+A Doorstop proxy and its configuration can pass a static shape check and still not start BepInEx in Valheim. The real check is an owned client reaching its menu with a fresh BepInEx log and the expected plugin identities; `ClientSession` makes it within `bepInExSeconds` and, on failure, keeps its Unity log (its launch's `-logFile`), the BepInEx log if written, and the boot output.
 
 `BepInExLoaderPackage` lets a targeted regression or native mod-load smoke select one reviewed, extracted BepInEx/UnityDoorstop package instead of inheriting the loader files in the prepared game. It pins the package's core, proxy or library, and configuration by SHA256. The disposable install receives those files after the game is copied; the source game is never changed.
 

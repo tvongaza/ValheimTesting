@@ -123,8 +123,8 @@ public class InteractiveClientTests
 
     [Fact] public async Task ARemoteMacClientUsesTheChosenSliceAndRunOwnedGuiAgent()
     {
-        var launch = GameLaunch.ForClientWithLoader(MacInstall, MacProfile, ["+connect", "server.example:2456"],
-            null, ClientPlatform.MacOS, ClientArchitecture.Arm64, macDoorstop: "libdoorstop.dylib");
+        var launch = GameLaunch.ForOwnedClientOnHost(ClientPlatform.MacOS, MacInstall, MacProfile, ["+connect", "server.example:2456"],
+            null, ClientArchitecture.Arm64, MacLaunch, macDoorstop: "libdoorstop.dylib");
         Assert.Equal(MacInstall + "/Valheim.app/Contents/MacOS/Valheim", launch.Executable);
         Assert.Equal(MacProfile, launch.WorkingDirectory);
         Assert.Equal(MacProfile + "/libdoorstop.dylib", launch.Prepended["DYLD_INSERT_LIBRARIES"]);
@@ -154,8 +154,8 @@ public class InteractiveClientTests
         var fake = new FakeLauncher()
             .Exits(0, Reply("VT-INTERACTIVE started 5412 391851"), FakeLauncher.Report(0))
             .Exits(0, Reply("VT-STOP quit", "VT-AGENT kept"), FakeLauncher.Report(0));
-        var launch = GameLaunch.ForClientWithLoader(MacInstall, MacProfile, [], null, ClientPlatform.MacOS,
-            ClientArchitecture.Arm64, macDoorstop: "libdoorstop.dylib");
+        var launch = GameLaunch.ForOwnedClientOnHost(ClientPlatform.MacOS, MacInstall, MacProfile, [], null,
+            ClientArchitecture.Arm64, MacLaunch, macDoorstop: "libdoorstop.dylib");
         var process = await InteractiveClient.StartAsync(MacHost(fake), launch, MacLaunch, Timeout);
         await Assert.ThrowsAsync<HostOperationException>(() => process.StopAsync(TimeSpan.FromSeconds(10)));
         Assert.False(process.HasExited);
@@ -171,8 +171,8 @@ public class InteractiveClientTests
         var fake = new FakeLauncher()
             .Exits(0, Reply("VT-INTERACTIVE started 5412 391851"), FakeLauncher.Report(0))
             .Exits(0, Reply(reply), FakeLauncher.Report(0));
-        var launch = GameLaunch.ForClientWithLoader(MacInstall, MacProfile, [], null, ClientPlatform.MacOS,
-            ClientArchitecture.Arm64, macDoorstop: "libdoorstop.dylib");
+        var launch = GameLaunch.ForOwnedClientOnHost(ClientPlatform.MacOS, MacInstall, MacProfile, [], null,
+            ClientArchitecture.Arm64, MacLaunch, macDoorstop: "libdoorstop.dylib");
         var process = await InteractiveClient.StartAsync(MacHost(fake), launch, MacLaunch, Timeout);
         var thrown = await Assert.ThrowsAnyAsync<Exception>(() => process.StopAsync(TimeSpan.FromSeconds(10)));
         Assert.IsType(error, thrown);
@@ -188,8 +188,8 @@ public class InteractiveClientTests
             .Exits(0, Reply("VT-INTERACTIVE started 5412 391851"), FakeLauncher.Report(0))
             .Exits(0, Reply("VT-WAIT unproven"), FakeLauncher.Report(0))
             .Exits(0, Reply("VT-WAIT exited 7"), FakeLauncher.Report(0));
-        var launch = GameLaunch.ForClientWithLoader(MacInstall, MacProfile, [], null, ClientPlatform.MacOS,
-            ClientArchitecture.Arm64, macDoorstop: "libdoorstop.dylib");
+        var launch = GameLaunch.ForOwnedClientOnHost(ClientPlatform.MacOS, MacInstall, MacProfile, [], null,
+            ClientArchitecture.Arm64, MacLaunch, macDoorstop: "libdoorstop.dylib");
         var process = await InteractiveClient.StartAsync(MacHost(fake), launch, MacLaunch, Timeout);
         Assert.Equal(7, await process.WaitForExitAsync(CancellationToken.None));
         Assert.Equal(3, fake.Calls.Count);
@@ -386,8 +386,8 @@ public class InteractiveClientTests
 
     [Fact] public async Task ARemoteMacBootstrapRefusalCanBeSettledOnlyWhenItsAgentNeverRan()
     {
-        var launch = GameLaunch.ForClientWithLoader(MacInstall, MacProfile, [], null, ClientPlatform.MacOS,
-            ClientArchitecture.Arm64, macDoorstop: "libdoorstop.dylib");
+        var launch = GameLaunch.ForOwnedClientOnHost(ClientPlatform.MacOS, MacInstall, MacProfile, [], null,
+            ClientArchitecture.Arm64, MacLaunch, macDoorstop: "libdoorstop.dylib");
         var neverStarted = new FakeLauncher().Exits(0,
             Reply("VT-INTERACTIVE not-started launchctl could not start the GUI agent"), FakeLauncher.Report(0));
         var refused = await Record.ExceptionAsync(() => InteractiveClient.StartAsync(MacHost(neverStarted), launch, MacLaunch, Timeout));
@@ -428,7 +428,7 @@ public class InteractiveClientTests
     {
         var fake = new FakeLauncher();
         var windows = GameLaunch.ForClient(WindowsInstall, [], hostPlatform: ClientPlatform.Windows);
-        var mac = GameLaunch.ForClientWithLoader(MacInstall, MacProfile, [], null, ClientPlatform.MacOS, ClientArchitecture.Arm64, macDoorstop: "libdoorstop.dylib");
+        var mac = GameLaunch.ForOwnedClientOnHost(ClientPlatform.MacOS, MacInstall, MacProfile, [], null, ClientArchitecture.Arm64, MacLaunch, macDoorstop: "libdoorstop.dylib");
         await Assert.ThrowsAsync<ArgumentException>(() => InteractiveClient.StartAsync(MacHost(fake), windows, "/srv/launch", Timeout));
         await Assert.ThrowsAsync<ArgumentException>(() => InteractiveClient.StartAsync(WindowsHost(fake), mac, WindowsLaunch, Timeout));
         await Assert.ThrowsAsync<ArgumentException>(() => InteractiveClient.StartAsync(MacHost(fake), mac, "runs/client", Timeout));
@@ -436,8 +436,8 @@ public class InteractiveClientTests
         await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => InteractiveClient.StartAsync(MacHost(fake), mac, MacLaunch, TimeSpan.FromSeconds(5)));
         string missing = "VT_TEST_UNSET_" + Guid.NewGuid().ToString("N");
         var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            InteractiveClient.StartAsync(MacHost(fake), GameLaunch.ForClientWithLoader(MacInstall, MacProfile, [], null, ClientPlatform.MacOS,
-                ClientArchitecture.Arm64, [missing], "libdoorstop.dylib"), MacLaunch, Timeout));
+            InteractiveClient.StartAsync(MacHost(fake), GameLaunch.ForOwnedClientOnHost(ClientPlatform.MacOS, MacInstall, MacProfile, [], null,
+                ClientArchitecture.Arm64, MacLaunch, [missing], "libdoorstop.dylib"), MacLaunch, Timeout));
         Assert.Contains(missing, error.Message);
         Assert.Empty(fake.Calls);
     }
@@ -466,7 +466,7 @@ public class InteractiveClientTests
             var fake = new FakeLauncher().Exits(1, "partial " + canary + "\n", "boom: " + canary + " " + line + "\n" + FakeLauncher.Report(1));
             var host = windows ? WindowsHost(fake) : MacHost(fake);
             var launch = windows ? GameLaunch.ForClient(WindowsInstall, [], hostPlatform: ClientPlatform.Windows, secretVariables: [variable])
-                : GameLaunch.ForClientWithLoader(MacInstall, MacProfile, [], null, ClientPlatform.MacOS, ClientArchitecture.Arm64, [variable], "libdoorstop.dylib");
+                : GameLaunch.ForOwnedClientOnHost(ClientPlatform.MacOS, MacInstall, MacProfile, [], null, ClientArchitecture.Arm64, MacLaunch, [variable], "libdoorstop.dylib");
             var error = await Assert.ThrowsAsync<HostOperationException>(() => InteractiveClient.StartAsync(host, launch, windows ? WindowsLaunch : MacLaunch, Timeout));
             Assert.Contains("[redacted]", error.Message);
             // The composed script counts as visible: the host's wrapper writes it to a temporary file.
@@ -478,7 +478,7 @@ public class InteractiveClientTests
 
             // Negative control: the same value as a plain environment value is evidence, and the same scan finds it.
             var leaky = windows ? GameLaunch.ForClient(WindowsInstall, [], new Dictionary<string, string> { ["LEAKY"] = canary }, hostPlatform: ClientPlatform.Windows)
-                : GameLaunch.ForClientWithLoader(MacInstall, MacProfile, [], new Dictionary<string, string> { ["LEAKY"] = canary }, ClientPlatform.MacOS, ClientArchitecture.Arm64, macDoorstop: "libdoorstop.dylib");
+                : GameLaunch.ForOwnedClientOnHost(ClientPlatform.MacOS, MacInstall, MacProfile, [], new Dictionary<string, string> { ["LEAKY"] = canary }, ClientArchitecture.Arm64, MacLaunch, macDoorstop: "libdoorstop.dylib");
             Assert.Contains(Decode(leaky.Spec()), item => item.Value.Contains(canary));
         }
         finally { Environment.SetEnvironmentVariable(variable, null); }
@@ -605,8 +605,8 @@ public class InteractiveClientShellTests
                 Assert.True(compile.WaitForExit(30000));
                 Assert.True(compile.ExitCode == 0, compile.StandardError.ReadToEnd());
             }
-            var launch = GameLaunch.ForClientWithLoader(install, install, [], null, ClientPlatform.MacOS,
-                ClientArchitecture.Arm64, macDoorstop: "libdoorstop.dylib");
+            var launch = GameLaunch.ForOwnedClientOnHost(ClientPlatform.MacOS, install, install, [], null,
+                ClientArchitecture.Arm64, launchDirectory, macDoorstop: "libdoorstop.dylib");
             await StandInClient.RunAsync(host, launch, launchDirectory, Generous, nameof(CheckMacGuiAgentStartAndStop), async started =>
             {
                 client = started;

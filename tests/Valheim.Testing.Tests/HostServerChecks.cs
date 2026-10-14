@@ -99,7 +99,7 @@ internal static partial class HostServerChecks
                         new System.Text.RegularExpressions.Regex("owned runtime output"), null, Generous)).EnsureMatched();
                 }
                 finally { await process.StopAsync(TimeSpan.FromSeconds(15)); }
-            }, logs: [HostedServerRun.BepInExLog, HostedServerRun.UnityLog], evidence: Path.Combine(evidence.Path, "boot"));
+            }, logs: [HostedServerRun.BepInExLog, GameLaunch.UnityLogName], evidence: Path.Combine(evidence.Path, "boot"));
             HostInstall.RequireSame(before.Files, await HostInstall.ListAsync(host, install, Generous), "source install after profile boot");
             (await host.WaitForLogAsync(profile + "/logs/stats_log.txt", 0,
                 new System.Text.RegularExpressions.Regex("owned runtime output"), null, Generous)).EnsureMatched();

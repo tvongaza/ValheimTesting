@@ -942,13 +942,13 @@ internal static class RunRecovery
     /// <summary>
     /// Keeps the game's own logs from a host copy of <paramref name="actor"/> in the run's evidence folder on that host,
     /// <c>&lt;runs&gt;/&lt;run&gt;/recovered-&lt;actor&gt;</c> beside its <c>boot-N</c> and client launch folders: BepInEx's
-    /// <c>BepInEx/LogOutput.log</c>, Unity's <c>toolkit-unity.log</c> (a server's <c>-logFile</c>) and BepInEx's
-    /// <c>preloader_*.log</c> beside the game, and for a client the host user's <c>Player.log</c>. Only a log written since the
+    /// <c>BepInEx/LogOutput.log</c>, Unity's <see cref="GameLaunch.UnityLogName"/> (a server's <c>-logFile</c>; a client's is in its
+    /// launch folder, already the run's) and BepInEx's <c>preloader_*.log</c> beside the game. Only a log written since the
     /// copy was made (<paramref name="copiedUtc"/>, its journalled start) is the run's: an older one came with the install and is
     /// only named. Throws when a log could not be kept.
     /// </summary>
     internal static async Task<RecoveredLogs> KeepLogsAsync(IGameHost host, string runtime, string runId, string actor, DateTime copiedUtc,
-        TimeSpan timeout, CancellationToken cancellation = default, string playerLog = "")
+        TimeSpan timeout, CancellationToken cancellation = default)
     {
         string parent = HostedRuntimeStage.RequirePrepared(host, runtime, runId);
         int at = parent.LastIndexOfAny(['/', '\\']);
@@ -957,8 +957,7 @@ internal static class RunRecovery
         string folder = HostPath.Join(parent[..at], runId, "recovered-" + actor);
         var result = (await host.RunAsync(host.Shell.Kind == HostShellKind.PowerShell ? WindowsKeepLogs : BashKeepLogs, new Dictionary<string, string>
         {
-            ["runtime"] = runtime, ["keep"] = folder, ["client"] = actor == "server" ? "false" : "true",
-            ["playerlog"] = PlayerLogArgument(host.Shell.Kind, playerLog),
+            ["runtime"] = runtime, ["keep"] = folder, ["unitylog"] = GameLaunch.UnityLogName,
             ["since"] = new DateTimeOffset(copiedUtc.ToUniversalTime()).ToUnixTimeSeconds().ToString(CultureInfo.InvariantCulture),
         }, timeout, cancellation).ConfigureAwait(false)).EnsureSuccess($"Keeping the game logs of {runtime} on {host.Name}");
         if (InteractiveClient.Line(result.Stdout, "VT-LOGS-DONE") == null) throw new HostOperationException($"Unexpected reply while keeping the game logs of {runtime} on {host.Name}", result);
@@ -967,13 +966,7 @@ internal static class RunRecovery
         return new(folder, Named("VT-LOG-KEPT"), Named("VT-LOG-OLDER"));
     }
 
-    // PowerShell's empty argument selects the Windows LocalLow path in its script. A bash host is a Mac (the only Unix client),
-    // whose path is relative to the remote account's home directory.
-    internal static string PlayerLogArgument(HostShellKind shell, string supplied) =>
-        supplied.Length != 0 || shell == HostShellKind.PowerShell ? supplied : HostedClientScripts.MacPlayerLogRelative;
-
-    // Variables: runtime, keep, since (Unix seconds: when the copy was made), client (true: the host user's Player.log too),
-    // playerlog (absolute or relative to that user's home). Each log written since the copy was made is copied into keep with its time, and named;
+    // Variables: runtime, keep, unitylog (GameLaunch.UnityLogName), since (Unix seconds: when the copy was made). Each log written since the copy was made is copied into keep with its time, and named;
     // an older one is only named; links are never followed, and the folder is made only for a log. Then the verdict.
     internal static readonly string BashKeepLogs = """
         set -u
@@ -987,13 +980,8 @@ internal static class RunRecovery
         }
         if [ -d "$runtime" ]; then
           save "$runtime/BepInEx/LogOutput.log" "BepInEx/LogOutput.log"
-          save "$runtime/toolkit-unity.log" "toolkit-unity.log"
+          save "$runtime/$unitylog" "$unitylog"
           for f in "$runtime"/preloader_*.log; do save "$f" "$(basename -- "$f")"; done
-        fi
-        if [ "$client" = "true" ]; then
-          playerlog="${playerlog:-Library/Logs/IronGate/Valheim/Player.log}"
-          case "$playerlog" in /*) ;; *) playerlog="${HOME:-/nonexistent}/$playerlog" ;; esac
-          save "$playerlog" "Player.log"
         fi
         echo "VT-LOGS-DONE"
         """.ReplaceLineEndings("\n");
@@ -1011,12 +999,8 @@ internal static class RunRecovery
         }
         if ([IO.Directory]::Exists($runtime)) {
             Save-VtRecovered (Join-Path $runtime 'BepInEx\LogOutput.log') 'BepInEx/LogOutput.log'
-            Save-VtRecovered (Join-Path $runtime 'toolkit-unity.log') 'toolkit-unity.log'
+            Save-VtRecovered (Join-Path $runtime $unitylog) $unitylog
             foreach ($f in @([IO.Directory]::GetFiles($runtime, 'preloader_*.log'))) { Save-VtRecovered $f ([IO.Path]::GetFileName($f)) }
-        }
-        if ($client -eq 'true') {
-            $log = if ($playerlog) { $playerlog } else { Join-Path ([Environment]::GetFolderPath('UserProfile')) 'AppData\LocalLow\IronGate\Valheim\Player.log' }
-            Save-VtRecovered $log 'Player.log'
         }
         'VT-LOGS-DONE'
         """.ReplaceLineEndings("\n");

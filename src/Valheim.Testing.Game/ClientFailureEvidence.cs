@@ -6,7 +6,7 @@ namespace Valheim.Testing.Game;
 // Private failure evidence. It never probes a PID until the launch's exact start identity still matches.
 internal static class ClientFailureEvidence
 {
-    internal static void CaptureLocal(IOwnedProcess owned, GameActor? actor, ClientRunPlan plan, string output)
+    internal static void CaptureLocal(IOwnedProcess owned, GameActor? actor, ClientRunPlan plan, string unityLog, string output)
     {
         Directory.CreateDirectory(output);
         var facts = new Dictionary<string, object?>
@@ -49,7 +49,7 @@ internal static class ClientFailureEvidence
             catch (System.ComponentModel.Win32Exception) { facts["process"] = "process facts unavailable to this runner"; }
 
         Tail(Path.Combine(plan.LoaderRoot, "BepInEx", "LogOutput.log"), Path.Combine(output, "client-failure-bepinex-tail.log"), facts, "bepInExTail");
-        Tail(ClientSession.PlayerLog(GameLaunch.CurrentClientHost), Path.Combine(output, "client-failure-player-tail.log"), facts, "playerTail");
+        Tail(unityLog, Path.Combine(output, "client-failure-player-tail.log"), facts, "playerTail");
         File.WriteAllText(Path.Combine(output, "client-failure-diagnostic.json"), JsonSerializer.Serialize(facts, new JsonSerializerOptions { WriteIndented = true }));
         string place = facts.TryGetValue("sessionId", out object? session) ? $"session {session}" : facts["process"]?.ToString() ?? "unknown process";
         string window = facts.TryGetValue("windowHandle", out object? handle) && Convert.ToInt64(handle) != 0 ? "window present" : "no window";

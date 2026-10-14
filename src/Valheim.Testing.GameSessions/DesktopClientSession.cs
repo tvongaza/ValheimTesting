@@ -75,8 +75,9 @@ internal static class DesktopClientSession
         if (InteractiveClient.Line(moved.Stdout, "VT-MOVED") == null && InteractiveClient.Line(moved.Stdout, "VT-NONE") == null)
             throw new HostOperationException("Unexpected reply while moving the client's previous BepInEx log", moved);
 
-        var launch = GameLaunch.ForClient(plan.Install, plan.LaunchArguments, plan.Environment, hostPlatform: ClientPlatform.Windows,
-            secretVariables: plan.PasswordVariable is { } password ? [password] : null);
+        // Unity's log goes to the launch folder the desktop task makes (#822), fetched with it into desktop-client/.
+        var launch = GameLaunch.ForOwnedClientOnHost(ClientPlatform.Windows, plan.Install, null, plan.LaunchArguments, plan.Environment,
+            plan.LaunchArchitecture, launchDirectory, plan.PasswordVariable is { } password ? [password] : null);
         var tunnel = host.OpenCliTunnelAsync(plan.Port, quick, cancellation: cancellation).GetAwaiter().GetResult();
         var keptLogs = new[]
         {
@@ -100,7 +101,7 @@ internal static class DesktopClientSession
                         try { process.Stop(TimeSpan.FromSeconds(15)); } finally { process.Dispose(); }
                         throw;
                     }
-                    return HostedClientProcess.Of(process, host, plan.Install, tunnel, keptDirectory, HostedRunHooks.Production);
+                    return HostedClientProcess.Of(process, host, plan.Install, launch.UnityLog!, tunnel, keptDirectory, HostedRunHooks.Production);
                 },
                 () => new CliTransport(tunnel.Address, tunnel.LocalPort),
                 async (left, token) =>
@@ -119,7 +120,7 @@ internal static class DesktopClientSession
                             StartupEvents.ClientStartupFailures, menuTime, next).ConfigureAwait(false)).EnsureMatched(),
                         token).ConfigureAwait(false);
                 }, cancellation, null, keptLogs, failureEvidence: (process, actor, directory) =>
-                    ClientFailureEvidence.CaptureLocal(process, actor, plan, directory));
+                    ClientFailureEvidence.CaptureLocal(process, actor, plan, launch.UnityLog!, directory));
             foreach (var kept in session.Logs) logs.Add(kept);
             return session;
         }

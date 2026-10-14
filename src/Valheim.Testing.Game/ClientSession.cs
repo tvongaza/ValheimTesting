@@ -178,7 +178,7 @@ public sealed class ClientSession : IDisposable, IWorldPins
     /// ScriptEngine will not load at start, a standing expectations file that would refuse the run). Once started, BepInEx must
     /// write this launch's first log line within <see cref="ClientRunPlan.BepInExSeconds"/>, or startup fails then, naming the
     /// loader, instead of at the start deadline. A failed startup stops the process it started. The process's output goes to
-    /// <c>client-boot.stdout.log</c>/<c>.stderr.log</c>, and its BepInEx log and Unity's Player.log are copied beside them
+    /// <c>client-boot.stdout.log</c>/<c>.stderr.log</c>, and its BepInEx log and Unity's log (the launch's <c>-logFile</c>, <c>toolkit-unity.log</c> in <paramref name="output"/>) are copied beside them
     /// (<c>client-boot.game-0.log</c>, <c>client-boot.game-1.log</c>) when it stops; <see cref="Logs"/> lists them. When BepInEx never
     /// logged, a BepInEx preloader crash log this launch wrote beside the game is kept as <c>client-boot.game-2.preloader-N.log</c>
     /// and its first error quoted in the failure; an older one is only named.
@@ -204,7 +204,10 @@ public sealed class ClientSession : IDisposable, IWorldPins
             throw new InvalidOperationException($"An owned client runs from a disposable loader profile of {plan.Install}, so nothing in it changes; this plan was not bound to one. " +
                 "Open it through a GameSession or ClientActor, which make the profile, or set inPlace (--in-place) to run your install as it is.");
         account?.RequireReady(null);
-        var start = plan.CheckOwnedInstall()!; // Install pins (patchers included), loader, plugin builds, ScriptEngine and standing pins, before any port or Steam check.
+        // Install pins (patchers included), loader, plugin builds, ScriptEngine and standing pins, before any port or Steam check.
+        // The run's output is this launch's folder: Unity's log goes there (#822), never into the install or the user's Player.log.
+        var launch = plan.CheckOwnedInstall(launchDirectory: output)!;
+        var start = launch.ToStartInfo();
         DirectClientDesktop.RequireCurrent(); // Direct launch has no desktop task; refuse session 0 before probing or starting.
         var reservation = new TcpListener(IPAddress.Loopback, plan.Port);
         try { reservation.Start(); }
@@ -212,8 +215,7 @@ public sealed class ClientSession : IDisposable, IWorldPins
         finally { reservation.Stop(); }
         RequireSteamRunning();
         string log = Path.Combine(plan.LoaderRoot, "BepInEx", "LogOutput.log");
-        var platform = GameLaunch.DetectClient(plan.Install);
-        string playerLog = PlayerLog(platform);
+        string unityLog = launch.UnityLog!;
         string prefix = Path.Combine(output, "client-boot");
         // #257: this machine's Steam connection_log from the launch on. "Logged In Elsewhere" in it means the account plays on another computer.
         string? steamLogPath = SteamSessionLog.LocalPath();
@@ -245,7 +247,7 @@ public sealed class ClientSession : IDisposable, IWorldPins
                     }
                     launched = DateTime.UtcNow;
                     processIntended?.Invoke();
-                    var process = new DirectServerProcess(start, prefix, log, playerLog) { Quit = QuitRequest.CloseWindow };
+                    var process = new DirectServerProcess(start, prefix, log, unityLog) { Quit = QuitRequest.CloseWindow };
                     try { processStarted?.Invoke(process); }
                     catch
                     {
@@ -259,7 +261,7 @@ public sealed class ClientSession : IDisposable, IWorldPins
                 {
                     var clock = Stopwatch.StartNew();
                     var bepInEx = TimeSpan.FromSeconds(plan.BepInExSeconds);
-                    await StartupEvents.WaitForBepInExLog(cliLog!, bepInEx < left ? bepInEx : left, playerLog, token, Preloader).ConfigureAwait(false);
+                    await StartupEvents.WaitForBepInExLog(cliLog!, bepInEx < left ? bepInEx : left, unityLog, token, Preloader).ConfigureAwait(false);
                     await cliLog!.WaitAsync(StartupEvents.CliListening, left - clock.Elapsed, StartupEvents.ClientStartupFailures, token).ConfigureAwait(false);
                     using var states = StateWait.Connect(plan.Host, plan.Port);
                     var menuTime = left - clock.Elapsed;
@@ -269,18 +271,22 @@ public sealed class ClientSession : IDisposable, IWorldPins
                         token).ConfigureAwait(false);
                 }, (left, token) => WatchLocalAsync(steamLog, left, token), () => Task.FromResult(SteamSeen()), SteamMessage), cancellation,
                 () => SteamSeen() ? SteamSessionLog.ExitHint(SteamMessage())
-                    : cliLog != null && !cliLog.HasOutput() ? StartupEvents.NoBepInExLog(log, playerLog, Preloader("")) : null,
+                    : cliLog != null && !cliLog.HasOutput() ? StartupEvents.NoBepInExLog(log, unityLog, Preloader("")) : null,
                 [new RunLog("client BepInEx log", prefix + ".game-0.log", Required: true), new RunLog("client Player.log", prefix + ".game-1.log")], account,
-                (process, actor, directory) => ClientFailureEvidence.CaptureLocal(process, actor, plan, directory));
+                (process, actor, directory) => ClientFailureEvidence.CaptureLocal(process, actor, plan, unityLog, directory));
             return session;
         }
         finally { cliLog?.Dispose(); steamLog?.Dispose(); }
     }
 
     /// <summary>The owned launch of the plan's install as the plan's architecture, built for <paramref name="host"/> (injectable for tests).</summary>
-    internal static ProcessStartInfo StartInfo(ClientRunPlan plan, ClientPlatform host) =>
+    internal static ProcessStartInfo StartInfo(ClientRunPlan plan, ClientPlatform host, string launchDirectory) =>
+        LocalLaunch(plan, host, launchDirectory).ToStartInfo();
+
+    /// <summary>The owned launch on this machine, its Unity log in <paramref name="launchDirectory"/>, the run's folder for it.</summary>
+    internal static GameLaunch LocalLaunch(ClientRunPlan plan, ClientPlatform host, string launchDirectory) =>
         GameLaunch.LocalClient(plan.Install, plan.LaunchArguments, plan.Environment, plan.LaunchArchitecture, true, host,
-            plan.LoaderRoot).ToStartInfo();
+            plan.LoaderRoot, launchDirectory ?? throw new ArgumentNullException(nameof(launchDirectory)));
 
     // True once this machine's Steam logged "Logged In Elsewhere" after the launch; false at the deadline, on cancellation or when unreadable.
     private static async Task<bool> WatchLocalAsync(LogWait? steamLog, TimeSpan left, CancellationToken token)
@@ -288,16 +294,6 @@ public sealed class ClientSession : IDisposable, IWorldPins
         if (steamLog == null || left <= TimeSpan.Zero) return false;
         try { await steamLog.WaitAsync(SteamSessionLog.LoggedInElsewhere, left, null, token).ConfigureAwait(false); return true; }
         catch (Exception) { return false; }
-    }
-
-    /// <summary>Where Unity writes the game client's Player.log on <paramref name="platform"/> (company IronGate, product Valheim).</summary>
-    internal static string PlayerLog(ClientPlatform platform)
-    {
-        GameLaunch.RequireClientHost(platform);
-        string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        return platform == ClientPlatform.Windows
-            ? Path.Combine(home, "AppData", "LocalLow", "IronGate", "Valheim", "Player.log")
-            : Path.Combine(home, "Library", "Logs", "IronGate", "Valheim", "Player.log");
     }
 
     /// <summary>

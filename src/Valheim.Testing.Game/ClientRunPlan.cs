@@ -330,11 +330,13 @@ public sealed class ClientRunPlan
     }
 
     /// <summary>
-    /// The owned launch's checks on this machine's install, in order, returning the launch they allow; null for the source of
+    /// The owned launch's checks on this machine's install, in order, returning the launch they allow, its Unity log in
+    /// <paramref name="launchDirectory"/> (the run's folder for this launch); null for the source of
     /// a disposable copy (<see cref="CopySource"/>), which is never launched: it gets the checks that hold for the copy too (install
     /// pins, its plugin builds but ValheimCLI's, standing pins, the staged set's capabilities), and the copy gets all of them.
+    /// Null too for the checks alone (no <paramref name="launchDirectory"/>).
     /// </summary>
-    internal System.Diagnostics.ProcessStartInfo? CheckOwnedInstall(string? hostWorldName = null, IEnumerable<string>? capabilities = null)
+    internal GameLaunch? CheckOwnedInstall(string? hostWorldName = null, IEnumerable<string>? capabilities = null, string? launchDirectory = null)
     {
         CheckInstallPins();
         if (CopySource)
@@ -347,10 +349,11 @@ public sealed class ClientRunPlan
             return null;
         }
         if (InPlace) OwnedClientPreflight.RequireInPlace(Install);
-        var start = ClientSession.StartInfo(this, GameLaunch.CurrentClientHost); // The install's loader and slices.
+        // The install's loader and slices; a check alone names the loader root for the log it never launches.
+        var launch = ClientSession.LocalLaunch(this, GameLaunch.CurrentClientHost, launchDirectory ?? LoaderRoot);
         OwnedClientPreflight.Check(LoaderRoot, Pins, HostWorld, hostWorldName);
         CheckCliManifest(capabilities);
-        return start;
+        return launchDirectory == null ? null : launch;
     }
 
     /// <summary>
