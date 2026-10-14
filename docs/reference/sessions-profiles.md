@@ -1,0 +1,101 @@
+# Disposable profiles
+
+Every owned game process runs from a disposable loader profile: the install's game files, a loader the run chose, and the run's plugins. The install itself is only read, and the toolkit never copies the game.
+
+[Profiles and hosts](../concepts/profiles-and-hosts.md) explains the idea. This page is the contract.
+
+## Who runs from a profile
+
+| Actor | Profile |
+|---|---|
+| An owned client on this machine (`session.OpenClient`, `ClientActor.OnThisMachine`) | Yes, unless it runs [in place](#run-an-install-in-place) |
+| A standalone `PinnedServerRun` server, here or with `--inventory` | Yes |
+| Every actor of a campaign, which `server-load` and `server-load-ab` prepare | Yes |
+| Each `TargetedRegression` arm | Yes, a fresh one per arm |
+| An attached client | No: its operator's install, never read |
+
+A client that leaves and rejoins between rounds reuses its profile.
+
+## What a profile holds
+
+| OS | The game runs from |
+|---|---|
+| Windows | The profile's launch folder, which hard-links the install's launch files |
+| Linux, macOS | The install's own executable, with Doorstop pointed at the profile |
+
+On Windows the launch folder hard-links only these:
+
+| Linked | Files |
+|---|---|
+| The executable | `valheim.exe` or `valheim_server.exe` |
+| Its data | The matching `valheim_Data/**` or `valheim_server_Data/**` |
+| Unity's trees | `MonoBleedingEdge/**`, `D3D12/**` |
+| Root files | `UnityCrashHandler64.exe`, `UnityPlayer.dll`, `steam_api64.dll`, `steamclient64.dll`, `steamwebrtc64.dll`, `tier0_s64.dll`, `vstdlib_s64.dll` |
+
+Everything else stays out: BepInEx, Doorstop, `logs/`, text and log output, crash dumps, `steam_appid.txt`, mod-manager proxies and unknown root DLLs. A left-out root file is recorded as `<actor>ProfileLeftOut` in the provenance, with its reason. An unknown root DLL's reason says to add it to the game's DLL list if a launch then fails during start-up.
+
+Into the profile, the run stages:
+
+| Part | From |
+|---|---|
+| The loader | The pinned BepInExPack_Valheim on Windows and Linux; the install's native loader on macOS; or the environment's `loaderPackage` ([pin a loader](game-run-inputs.md#pin-a-bepinex-loader)) |
+| `BepInEx/config/BepInEx.cfg` | An explicitly selected config, else the loader package's, else the source install's |
+| ValheimCLI | The toolkit's pinned set, replacing any set in the install |
+| Plugins | The run's selection: a dependency lock, `--mod` and its dependencies, or a regression's allowlist |
+
+If a loader package has no `BepInEx.cfg`, a macOS profile keeps the source file and a Windows or Linux profile has none, so BepInEx writes its defaults. The staged config is checked against its source hash.
+
+## Where a profile lives
+
+A profile lives under its environment's `runtime` folder, in a new run directory (`<runtime>/<runId>/runtime` for a server, `<runtime>/vt-prep-<runId>-<actor>` in a campaign).
+
+On Windows a hard link cannot cross volumes, so the runtime must be on the install's NTFS volume. A this-machine runtime follows the install: it stays in ValheimTesting's data folder when that folder is on the install's volume, otherwise it is `<install volume>\ValheimTesting\runs`. Journals and locks stay in the data folder.
+
+| Runtime | Result |
+|---|---|
+| On the install's NTFS volume | Staged |
+| On another volume, or on exFAT, FAT32 or a network share | Refused, naming the required location |
+| The install itself, inside it, or holding it | Refused |
+
+`valheim-test env preflight` and `start` give the same refusals before staging. A Steam library on exFAT, FAT32 or a network share cannot hold a profile: move it to NTFS.
+
+## Source checks
+
+| When | Check |
+|---|---|
+| Before staging | Every supplied pin against the source install; a listing of the install by SHA-256 |
+| Before each launch | The profile's bound pins, and on Windows every root native DLL it linked |
+| After the run | The source install against its listing, by size and modified time |
+
+A changed, missing or added source file fails the run and is never repaired. Set `VALHEIM_TESTING_SOURCE_HASH_AFTER_RUN=1` to compare content hashes after the run. On macOS, preparing a client profile also checks the app bundle's code seal ([Mac session limits](platforms.md#mac-session-limits)).
+
+Pins you leave out are observed from the staged profile and recorded as `observed` in `PinOrigins` ([pins](game-actors-and-pins.md#expected-and-observed-pins)).
+
+## Lifecycle
+
+1. The run journals the profile before it stages it.
+2. The run stages it and checks it.
+3. Once every process launched from it is proven stopped, the run keeps what changed in `runtime-changes/` and removes the profile.
+
+A profile whose process may still run stays, and so does its host lock. `valheim-test env recover --run ID` removes it once the process is gone ([recovery](sessions-leases-and-recovery.md)). Set `VALHEIM_TESTING_KEEP_RUNTIME=1` to keep every profile; `env status` then lists the run as `KEPT`.
+
+On Linux and macOS a launch starts in the profile folder, so Steam's relative `logs/` output lands there and reaches the evidence.
+
+## A clean patchers folder
+
+A clean test runtime is BepInEx core plus your plugins, with an empty `patchers` folder. A preloader patcher left behind by a removed mod breaks the whole run with a `TypeLoadException` on a game type. The `patchers` pin hashes the whole folder, so a leftover patcher is refused before launch. Plans do not name patchers.
+
+## Run an install in place
+
+`--in-place` before the runner's mode, or `"inPlace": true` in a client plan, runs an owned client's install as it is. Nothing is staged and nothing is written into it.
+
+- The install must already hold BepInEx and ValheimCLI; preflight names what is missing.
+- Without a `cliManifest`, `cliPreflight` reads `live only: static check not run: your install, run in place`.
+- Journals, leases and local test characters work as for a profile.
+
+`--in-place` is for an owned client outside a prepared campaign. It does not apply to a server or a campaign actor. `ClientSession.Launch` refuses an owned plan that is neither bound to a profile nor in place.
+
+## Limits
+
+- A Unix preloader failure may still write a crash log beside the source executable.
+- A profile never takes the install's top-level `logs/` folder.

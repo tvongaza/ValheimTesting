@@ -30,6 +30,10 @@ ValheimTesting gives you automated tests for Valheim mods built on BepInEx: unit
 | Pin a package version | [Packages](package-versions.md) |
 | Check that a mod loads on a dedicated server | [Your first server load check](tutorials/first-server-load-check.md) |
 | Find which mod breaks a load, alone or with others | [Check that a mod loads](guides/check-a-mod-loads.md) |
+| Check that my mod's change survives a save, restart and rejoin | [Test a save, restart and rejoin](guides/test-save-restart-rejoin.md) |
+| Prove a fix by running the parent and candidate builds | [Run an A/B regression](guides/run-an-ab-regression.md) |
+| Run the dedicated server on another machine | [Run on another machine](guides/run-on-another-machine.md) |
+| Run a test with two or more players | [Run a session with several clients](guides/run-a-session-with-several-clients.md) |
 | Prepare the machine and mod for a run of the real game | [Before a native run](guides/before-a-native-run.md) |
 | Find why a native run refused or failed, or clean up after it | [Debug a native run](guides/debug-a-native-run.md) |
 | Look up a `valheim-test` command or option | [`valheim-test`](packages/Valheim.Testing.NativeSmoke.md) |

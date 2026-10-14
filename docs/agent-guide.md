@@ -15,7 +15,7 @@ A mod uses the published NuGet packages and the `valheim-test` tool. You never c
 | Save, restart and rejoin | [FullLifecycle](../examples/FullLifecycle/README.md) | Every seed, biome or mod combination |
 | One mod before and after a change | [TargetedRegression](../examples/TargetedRegression/README.md) | Other mods, dedicated servers or restarts |
 | A native run refused, failed or left something | [Debug a native run](guides/debug-a-native-run.md) | Why the mod misbehaves in play |
-| A server and clients on several machines | [Sessions](packages/Valheim.Testing.GameSessions.md#several-machines) | Gameplay beyond what the scenario asserts |
+| A server and clients on several machines | [Run a session with several clients](guides/run-a-session-with-several-clients.md) | Gameplay beyond what the scenario asserts |
 | Not sure | [Choose a test layer](guides/choose-a-test-layer.md) | |
 
 ## The loop

@@ -2,7 +2,7 @@
 
 How `OwnedServerSession` starts, checks, restarts and stops one dedicated server for a test, and how every owned game process is stopped.
 
-The types are in [`Valheim.Testing.Game`](../packages/Valheim.Testing.Game.md). `PinnedServerRun` and a `GameSession`'s `ServerActor` build the session for you from a plan ([GameSessions](../packages/Valheim.Testing.GameSessions.md#game-sessions)). Build one yourself only when a test drives a dedicated server outside a session.
+The types are in [`Valheim.Testing.Game`](../packages/Valheim.Testing.Game.md). `PinnedServerRun` and a `GameSession`'s `ServerActor` build the session for you from a plan ([game sessions](sessions-game-session.md#serveractor)). Build one yourself only when a test drives a dedicated server outside a session.
 
 ## Types
 
@@ -10,7 +10,7 @@ The types are in [`Valheim.Testing.Game`](../packages/Valheim.Testing.Game.md). 
 |---|---|
 | `OwnedServerSession` | Owns one dedicated-server process: `Start()`, `StartAsync()`, `Restart()`, `Stop()`, `Dispose()` |
 | `DirectServerProcess` | Starts a process on this machine from a `ProcessStartInfo` and keeps its output and logs |
-| `HostServer` | Starts the server on a game host ([GameSessions](../packages/Valheim.Testing.GameSessions.md)) |
+| `HostServer` | Starts the server on a game host ([servers on a host](sessions-hosts.md#servers-on-a-host)) |
 | `RecordingTransport` | Writes every command and reply to a new JSON Lines file |
 | `ProcessStop` | How a stopped process ended: `Outcome`, `ExitCode`, `Elapsed`, `Request` |
 

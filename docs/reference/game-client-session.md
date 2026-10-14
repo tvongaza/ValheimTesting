@@ -2,7 +2,7 @@
 
 How a test describes one game client with a `ClientRunPlan`, opens it with `ClientSession`, and what the session checks and writes.
 
-The types are in [`Valheim.Testing.Game`](../packages/Valheim.Testing.Game.md). A client is `owned` (the run launches and stops it) or `attach` (you launched it; the run only connects). A `GameSession` opens its clients for you ([GameSessions](../packages/Valheim.Testing.GameSessions.md#game-sessions)). The [FullLifecycle example](../../examples/FullLifecycle/README.md) uses both modes.
+The types are in [`Valheim.Testing.Game`](../packages/Valheim.Testing.Game.md). A client is `owned` (the run launches and stops it) or `attach` (you launched it; the run only connects). A `GameSession` opens its clients for you ([game sessions](sessions-game-session.md)). The [FullLifecycle example](../../examples/FullLifecycle/README.md) uses both modes.
 
 ## Client plan fields
 
@@ -47,7 +47,7 @@ JSON names are the camelCase of `ClientRunPlan`'s properties.
 | `capabilities` | ValheimCLI commands the run uses, `owner/command` | `[]`; checked before launch and live |
 | `cliManifest` | Owned: full path of one ValheimCLI build's manifest | A profile stages and checks the pinned bundle; in place, no static check ([manifest](game-preflight.md#valheimcli-capability-manifest)) |
 
-The profile itself, what it links and what it leaves out, is on [GameSessions](../packages/Valheim.Testing.GameSessions.md#an-owned-client-on-this-machine-runs-with-a-disposable-loader-profile).
+The profile itself, what it links and what it leaves out, is on [disposable profiles](sessions-profiles.md).
 
 ## Plan checks
 

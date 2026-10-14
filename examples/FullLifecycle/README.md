@@ -31,7 +31,7 @@ You declare your mod's patch in one line. The run fails at runtime-ready, by nam
 public static readonly DeclaredPatch[] Patches = [new("Terminal::InitTerminal", "postfix", "ExampleMod.Plugin+RegisterCommands::Postfix")];
 ```
 
-Your scenario never protects the player. The session protects the joined player (god, ghost and debug mode, read back) as soon as the world is ready. Fly stays off, so the checks measure a player standing on the ground.
+The session protects the joined player (god, ghost and debug mode, read back) as soon as the world is ready, so your scenario never does. Fly stays off.
 
 Observations use ValheimCLI's generic commands: `cli_zdos_at` on the server and `cli_prefabs_at` on the client. If your mod needs a test-only action or observation, add it to your adapter as another extension command.
 
@@ -51,58 +51,13 @@ valheim-test session check examples/FullLifecycle/ExampleMod.Tests/session.json 
 dotnet test examples/FullLifecycle/ExampleMod.Tests/ExampleMod.Tests.csproj -c Release --filter "Category=Native"
 ```
 
-<!-- TODO(docs): capture output of `valheim-test session check ... --hosts` -->
+The native test passes only when the run passed, after the [log scan](../../docs/reference/game-log-scan.md) of every server boot and client. Each run writes a new evidence directory under `session-runs/` in the test output ([what it holds](../../docs/guides/test-save-restart-rejoin.md#check-the-result)).
 
-The native test passes only when the run passed. After the client and server stop, the run [scans their logs](../../docs/reference/game-log-scan.md); a failure pattern fails the run. Each run writes a new directory under `session-runs/` in the test output:
+## The native session
 
-| File | What it records |
-|---|---|
-| `result.json`, `junit.xml` | Every step, with its error; log-scan counts in `result.json` |
-| Server logs | One log per server boot |
-| `connection-N.jsonl`, `client-commands.jsonl` | Every command sent |
-| `client-process.json` | The owned client |
-| Arrival observations | What the client observed on arrival |
+[Test that a change survives a save, restart and rejoin](../../docs/guides/test-save-restart-rejoin.md) walks through the native layer: the dependency locks, `session.json`, the plan and the run. The test finds two private files beside the test project, `session.json` and `dry-site-lifecycle.plan.json`, which `.gitignore` lists. Without them, the native test is skipped with that reason, so `dotnet test` stays offline.
 
-## Prepare the native session
-
-The test finds two private files beside the test project: `session.json` (the session manifest) and `dry-site-lifecycle.plan.json` (the plan). `.gitignore` lists both. If either is missing, the native test is skipped with that reason, so `dotnet test` stays offline.
-
-1. **A server runtime** with BepInEx, the pinned default `valheimCLI.dll`, the mod and the adapter. Its ValheimCLI `[Server] Port` equals the plan's `port`. Keep `BepInEx/patchers` empty. Pin it by hash with `WorldFixture.Manifest`, and its game build, loader and patchers with `InstallPins.Of` in `runtimePins` ([pins](../../docs/reference/game-actors-and-pins.md#pins)). The run refuses a runtime whose game build or loader differs, and runs the server from a disposable loader profile.
-2. **A world fixture** that has never been marked, pinned the same way. Pick the sites from its generator heights, for example with the `capture` probe of [ObserveCheck](../ObserveCheck/README.md) on the `generator` layer. They are your expectations; the scenario never takes them from the mod.
-3. **A client install** with BepInEx and the pinned default `valheimCLI.dll` only. The mod is pinned `absent`, because the claim is that a client without it sees the marker. Its ValheimCLI port differs from the server's. Its ValheimCLI settings include `AllowOnServerClients = true`, because Valheim 1.0 refuses a joined client's cheat commands. Use an existing, disposable local character, never a Steam Cloud character. Pin the install with `InstallPins.Of` in `client.installPins`.
-4. **The plan**: start from [sample-plan.json](ExampleMod.Tests/sample-plan.json), replace every path, hash and coordinate, and save it as `dry-site-lifecycle.plan.json`.
-5. **The session manifest** `session.json`: the dedicated server and one client named `client`, the fixture world and a reviewed dependency lock per role. Without an environment inventory, every actor runs on this machine ([GameSessions](../../docs/packages/Valheim.Testing.GameSessions.md)).
-
-The plan carries your mod's fields. These values are illustrative:
-
-```json
-"drySite": { "x": 120, "z": -380, "ground": 45.2 },
-"wetSite": { "x": 900, "z": 150, "ground": 18.4 },
-"arrival": { "x": 125, "z": -380, "ground": 45.0 },
-```
-
-## Owned or attached client
-
-- **`owned`**: the run launches the client from `client.install` with a disposable loader profile, and stops only that process when the scenario ends. It refuses before launching if something listens on the client's CLI port, no Steam client is running, or the `passwordVariable` is missing from its environment. Run the test in the desktop session where Steam is running and signed in, with a display.
-- **`attach`**: you launch the client and sign in, then run the test. It connects to the client's ValheimCLI port, leaves the world at the end and never touches the process.
-
-The server is always owned. The run copies the fixtures, starts that copy, proves by the adapter's identity handshake that it talks to that process, and stops only it.
-
-## The rounds
-
-The client half is the toolkit's `ClientRounds` ([client rounds](../../docs/reference/game-client-rounds.md)). `MarkerScenario` supplies only what belongs to the mod: the arrival point and step name, the measurement and the check after the restart. The rounds are `first` and `after-restart`, with a confirmed save and a server restart between them:
-
-```csharp
-measure: round => round.Step("the client sees the marker at the dry site", () => RequireClientMarkers(round.Client, plan.DrySite, 1)),
-afterRestart: round => round.Step("the server still has one marker at the dry site, none at the wet site",
-    () => { RequireServerMarkers(round.Server, plan.DrySite, 1); RequireServerMarkers(round.Server, plan.WetSite, 0); }));
-```
-
-See the full call in [MarkerScenario.cs](ExampleMod.Tests/MarkerScenario.cs).
-
-## A native session as a test
-
-Copy [GameSessionFixture.cs](ExampleMod.Tests/GameSessionFixture.cs) into your test project. It runs one session per test class, hands the started session and plan to the tests, then lets the run tear down and report. If the run never started or ended with exit code other than 0, the class fails. A failed test also fails the run's `result.json`. [ExampleSession.cs](ExampleMod.Tests/ExampleSession.cs) reads the two private files and names the session's one client:
+[GameSessionFixture.cs](ExampleMod.Tests/GameSessionFixture.cs) runs one session per test class and hands the started session and plan to the tests. Copy it as it is:
 
 ```csharp
 [Trait("Category", "Native")]
@@ -113,8 +68,10 @@ public sealed class DrySiteSessionTests(ExampleSession fixture) : IClassFixture<
 }
 ```
 
-## Cleanup and its limits
+The server is always owned and runs from a [disposable profile](../../docs/reference/sessions-profiles.md). The client is `owned`, launched from a profile and stopped at the end, or `attach`, which you launch yourself and the run never stops.
 
-On any failure, including an exception or Ctrl+C, the run stops the owned client, then the owned server, and writes the report. The copies stay in the output directory; the pinned sources never change. The run never signs Steam in or out, never stops a process it did not start, never finds processes by name and never edits the client install's settings. An attached client keeps running, in its menu. Before a native run, read [before a native run](../../docs/guides/before-a-native-run.md).
+## Limits
 
-The toolkit's own native acceptance scenarios run on a separate mod and are not an example to copy: [native acceptance suite](../../tests/Valheim.Testing.NativeAcceptance/README.md).
+- The run never signs Steam in or out, and never stops a process it did not start.
+- An attached client keeps running, in its menu.
+- The toolkit's own [native acceptance suite](../../tests/Valheim.Testing.NativeAcceptance/README.md) runs on a separate mod and is not an example to copy.

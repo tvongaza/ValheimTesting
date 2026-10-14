@@ -131,7 +131,7 @@ For each arm, the preflight stages the owned profile and checks:
 - The character is present or registered, and the [owned-run preflight](../../docs/reference/game-preflight.md) passes.
 - `valheimCLI.dll` matches `cli.manifest` and provides every built-in command the run uses. Commands owned by the probe or the mod are checked live, before the first round.
 
-For the full contract, see [Stage checks](../../docs/reference/game-run-inputs.md#stage-checks).
+For the full contract, see [Stage checks](../../docs/reference/sessions-targeted-regression.md#stage-checks).
 
 The tool stages the profile at `vt-prep-regression-<name>-<run-id>/runtime` in the environment's runtime folder. On Windows, the profile holds hard links to the game's files and its own loader. On macOS, it holds the loader and selected files and launches the source game.
 
