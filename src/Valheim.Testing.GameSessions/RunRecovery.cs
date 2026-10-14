@@ -55,8 +55,14 @@ internal static class RunRecovery
         fields.GetValueOrDefault("quitSeconds") is { } text && int.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out int seconds)
             ? TimeSpan.FromSeconds(Math.Min(seconds, ServerRunPlan.MaximumQuitSeconds)) : ClientSession.DefaultQuitTimeout;
 
-    public static async Task<RecoveryReport> RecoverAsync(IReadOnlyDictionary<string, HostProfile> hosts, Func<string, IGameHost> hostFactory, string runId,
-        bool teardown, TimeSpan timeout, CancellationToken cancellation = default, string? leaseHost = null, string? leaseDirectory = null)
+    public static Task<RecoveryReport> RecoverAsync(IReadOnlyDictionary<string, HostProfile> hosts, Func<string, IGameHost> hostFactory, string runId,
+        bool teardown, TimeSpan timeout, CancellationToken cancellation = default, string? leaseHost = null, string? leaseDirectory = null,
+        bool launchGone = false) =>
+        RecoverCoreAsync(hosts, hostFactory, runId, teardown, timeout, cancellation, leaseHost, leaseDirectory, launchGone, null);
+
+    private static async Task<RecoveryReport> RecoverCoreAsync(IReadOnlyDictionary<string, HostProfile> hosts, Func<string, IGameHost> hostFactory, string runId,
+        bool teardown, TimeSpan timeout, CancellationToken cancellation, string? leaseHost, string? leaseDirectory,
+        bool launchGone, IDictionary<string, JournaledHostLock>? recoveryClaims)
     {
         var journal = new RunJournal(runId);
         var status = await RunJournalStatus.InspectAsync(hosts, hostFactory, timeout, cancellation, leaseHost, leaseDirectory).ConfigureAwait(false);
@@ -64,6 +70,35 @@ internal static class RunRecovery
         if (run == null)
             return new(runId, JournalRunState.Unknown, "no readable host's journal names this run" +
                 string.Concat(status.Hosts.Where(host => host.Error != null).Select(host => $"; host {host.Name} could not be read ({host.Error})")), []);
+        if (launchGone)
+        {
+            var claims = new Dictionary<string, JournaledHostLock>(StringComparer.Ordinal);
+            RecoveryReport result;
+            try
+            {
+                var abandoned = await AbandonLaunchesAsync(hosts, hostFactory, journal, run, claims, timeout, cancellation).ConfigureAwait(false);
+                if (abandoned.Refused != null || abandoned.Steps.Any(step => step.Failed)) result = abandoned;
+                else
+                {
+                    var recovered = await RecoverCoreAsync(hosts, hostFactory, runId, teardown, timeout, cancellation,
+                        leaseHost, leaseDirectory, launchGone: false, recoveryClaims: claims).ConfigureAwait(false);
+                    var combinedSteps = abandoned.Steps.Concat(recovered.Steps).ToList();
+                    if (recovered.Refused != null)
+                        combinedSteps.Add(new("run", "remaining recovery", "not attempted after the launch was journalled abandoned: " + recovered.Refused, true));
+                    result = new(runId, run.State, null, combinedSteps)
+                    {
+                        After = recovered.After, Remaining = recovered.Remaining, NotRead = recovered.NotRead,
+                    };
+                }
+            }
+            catch
+            {
+                await ReleaseRecoveryClaimsAsync(claims).ConfigureAwait(false);
+                throw;
+            }
+            var released = await ReleaseRecoveryClaimsAsync(claims).ConfigureAwait(false);
+            return released.Count == 0 ? result : result with { Steps = result.Steps.Concat(released).ToList() };
+        }
         string? refused = run.State switch
         {
             JournalRunState.Live => "it is still going: " + run.Reason,
@@ -455,14 +490,31 @@ internal static class RunRecovery
         foreach (var runLock in Of("lock"))
         {
             string what = "lock " + runLock.What;
-            if (Failed(runLock.Host)) { Step(runLock.Host, what, "kept: something of the run is still left on this host", failed: true); continue; }
+            JournaledHostLock? heldByRecovery = recoveryClaims != null && recoveryClaims.TryGetValue(runLock.Host, out var recoveryHeld)
+                ? recoveryHeld : null;
+            bool recoveryClaim = heldByRecovery != null &&
+                string.Equals(runLock.Fields.GetValueOrDefault("claimant"), heldByRecovery.Owner, StringComparison.Ordinal);
+            if (Failed(runLock.Host))
+            {
+                Step(runLock.Host, what, recoveryClaim
+                    ? "kept as the recovery claim: something of the run is still left on this host"
+                    : "kept: something of the run is still left on this host", failed: true);
+                // The recovery claim is now the run's open lock. Leave it held and in the journal so preflight keeps refusing
+                // this host until a later recovery settles the failed item and releases the exact claimant.
+                if (recoveryClaim) recoveryClaims!.Remove(runLock.Host);
+                continue;
+            }
             try
             {
                 string claimant = runLock.Fields["claimant"];
-                var released = await connections[runLock.Host].ReleaseLockAsync(runLock.What, claimant, timeout, cancellation).ConfigureAwait(false);
+                var released = recoveryClaim
+                    ? await heldByRecovery!.ReleaseAsync(CancellationToken.None).ConfigureAwait(false)
+                    : await connections[runLock.Host].ReleaseLockAsync(runLock.What, claimant, timeout, cancellation).ConfigureAwait(false);
                 if (released.State is not (HostLockState.Released or HostLockState.Free)) throw new HostLockException(released);
                 Step(runLock.Host, what, "released");
-                await Note(runLock.Host, JournalEntry.Of(JournalEntry.LockReleased, ("lock", runLock.What), ("claimant", claimant))).ConfigureAwait(false);
+                // JournaledHostLock couples its own release to the durable note. Older run-owned claims use the recovery note.
+                if (!recoveryClaim)
+                    await Note(runLock.Host, JournalEntry.Of(JournalEntry.LockReleased, ("lock", runLock.What), ("claimant", claimant))).ConfigureAwait(false);
             }
             catch (Exception error) when (error is not OperationCanceledException) { Step(runLock.Host, what, "not released: " + error.Message, failed: true); }
         }
@@ -508,6 +560,251 @@ internal static class RunRecovery
         }
         return new(runId, run.State, null, steps) { After = afterState, Remaining = remaining, NotRead = notRead };
     }
+
+    private static async Task<IReadOnlyList<RecoveryStep>> ReleaseRecoveryClaimsAsync(
+        IReadOnlyDictionary<string, JournaledHostLock> claims)
+    {
+        var steps = new List<RecoveryStep>();
+        foreach (var (host, claim) in claims)
+            try
+            {
+                var released = await claim.ReleaseAsync(CancellationToken.None).ConfigureAwait(false);
+                if (released.State == HostLockState.Released)
+                    steps.Add(new(host, "recovery lock " + claim.Path, "released", false));
+            }
+            catch (Exception error)
+            {
+                steps.Add(new(host, "recovery lock " + claim.Path, "not released: " + error.Message, true));
+            }
+        return steps;
+    }
+
+    // --launch-gone is an explicit operator confirmation, but it is not accepted on trust alone. Every unreadable item must
+    // be an interrupted launch. The recovery checks under a provably stale lock that the run still owns, or under a fresh
+    // journalled recovery claim when no such lock exists. Only an idle result permits a stale lock to be swapped for the
+    // recovery claim. Ordinary recovery receives those same claims, so no launch can begin between the observation, the append
+    // and the handoff.
+    private static async Task<RecoveryReport> AbandonLaunchesAsync(IReadOnlyDictionary<string, HostProfile> hosts,
+        Func<string, IGameHost> hostFactory, RunJournal journal, JournalRunStatus run,
+        IDictionary<string, JournaledHostLock> claims, TimeSpan timeout, CancellationToken cancellation)
+    {
+        var unprovable = run.Items.Where(item => item.Unrecoverable).ToList();
+        string? refused = run.State != JournalRunState.Unrecoverable
+            ? $"--launch-gone applies only to an UNRECOVERABLE run, not {run.State.ToString().ToUpperInvariant()}"
+            : run.Unreadable.Count != 0
+                ? "a journal the run rests on is unreadable: " + string.Join("; ", run.Unreadable.Select(host => $"{host.Name}: {host.Error}"))
+            : unprovable.Count == 0 || unprovable.Any(item => item.Kind != "launch")
+                ? "its unprovable open items are not only interrupted launches: " + string.Join("; ", unprovable.Select(item => $"{item.Kind} {item.What} on {item.Host}"))
+            : null;
+        if (refused != null) return new(run.Run, run.State, refused, []);
+
+        var connections = unprovable.Select(item => item.Host).Distinct(StringComparer.Ordinal)
+            .ToDictionary(name => name, hostFactory, StringComparer.Ordinal);
+
+        // A host without this run's stale lock needs a recovery claim before it can be checked. A host with the stale lock is
+        // already excluded from new runs; keep that exact lock untouched until its process check says idle.
+        foreach (var group in unprovable.GroupBy(item => item.Host, StringComparer.Ordinal))
+        {
+            if (run.Items.Any(item => item.Kind == "lock" && item.Host == group.Key)) continue;
+            try
+            {
+                claims.Add(group.Key, await JournaledHostLock.AcquireAsync(connections[group.Key], hosts[group.Key].Lock,
+                    $"recover --launch-gone {run.Run}", journal, RunJournal.DirectoryFor(hosts[group.Key]), Actor,
+                    timeout, cancellation).ConfigureAwait(false));
+            }
+            catch (Exception error) when (error is not OperationCanceledException)
+            { return new(run.Run, run.State, $"host {group.Key}'s lock was not granted to this recovery: {error.Message}", []); }
+        }
+
+        foreach (var group in unprovable.GroupBy(item => item.Host, StringComparer.Ordinal))
+        {
+            var hashes = group.Select(item => item.Fields.GetValueOrDefault("expectedCommandLineSha256"))
+                .Where(hash => hash is { Length: 64 } && hash.All(Uri.IsHexDigit)).Select(hash => hash!.ToLowerInvariant()).Distinct(StringComparer.Ordinal).ToList();
+            try { await RequireNoLaunchProcessAsync(connections[group.Key], hashes, timeout, cancellation).ConfigureAwait(false); }
+            catch (Exception error) when (error is not OperationCanceledException)
+            { return new(run.Run, run.State, $"host {group.Key} did not prove every Valheim and journalled launch process gone: {error.Message}", []); }
+        }
+
+        // Every process check is idle. Replace each stale run claim with the recovery's own durable claim. There is necessarily
+        // a small release/claim boundary; another run that wins it makes the recovery refuse before any launch is abandoned.
+        foreach (var group in unprovable.GroupBy(item => item.Host, StringComparer.Ordinal))
+        {
+            var staleLocks = run.Items.Where(item => item.Kind == "lock" && item.Host == group.Key).ToList();
+            if (staleLocks.Count == 0) continue;
+            try
+            {
+                foreach (var stale in staleLocks)
+                {
+                    string claimant = stale.Fields["claimant"];
+                    var released = await connections[group.Key].ReleaseLockAsync(stale.What, claimant, timeout, cancellation).ConfigureAwait(false);
+                    if (released.State is not (HostLockState.Released or HostLockState.Free)) throw new HostLockException(released);
+                    await journal.AppendAsync(connections[group.Key], RunJournal.DirectoryFor(hosts[group.Key]), Actor,
+                        JournalEntry.Of(JournalEntry.LockReleased, ("lock", stale.What), ("claimant", claimant)),
+                        timeout, CancellationToken.None).ConfigureAwait(false);
+                }
+                claims.Add(group.Key, await JournaledHostLock.AcquireAsync(connections[group.Key], hosts[group.Key].Lock,
+                    $"recover --launch-gone {run.Run}", journal, RunJournal.DirectoryFor(hosts[group.Key]), Actor,
+                    timeout, cancellation).ConfigureAwait(false));
+            }
+            catch (Exception error) when (error is not OperationCanceledException)
+            { return new(run.Run, run.State, $"host {group.Key}'s stale lock could not be replaced by this recovery: {error.Message}", []); }
+        }
+
+        var steps = new List<RecoveryStep>();
+        foreach (var launch in unprovable)
+        {
+            try
+            {
+                await journal.AppendAsync(connections[launch.Host], RunJournal.DirectoryFor(hosts[launch.Host]), Actor,
+                    JournalEntry.Of(JournalEntry.LaunchAbandoned, ("actor", launch.Actor), ("directory", launch.What),
+                        ("reason", "the host-specific process check found no Valheim image or journalled launch command line and reported sufficient visibility"),
+                        ("operatorConfirmed", "--launch-gone")), timeout, cancellation).ConfigureAwait(false);
+                steps.Add(new(launch.Host, "launch " + launch.What,
+                    "journalled abandoned while this recovery held the host lock after the host-specific process check reported idle; the operator confirmed --launch-gone", false));
+            }
+            catch (Exception error) when (error is not OperationCanceledException)
+            { steps.Add(new(launch.Host, "launch " + launch.What, "could not journal launch-abandoned: " + error.Message, true)); }
+        }
+        return new(run.Run, run.State, null, steps);
+    }
+
+    internal static async Task RequireNoLaunchProcessAsync(IGameHost host, IReadOnlyCollection<string> expectedHashes,
+        TimeSpan timeout, CancellationToken cancellation = default, string processSnapshot = "")
+    {
+        var result = (await host.RunAsync(host.Shell.Kind == HostShellKind.PowerShell ? WindowsLaunchGone : BashLaunchGone,
+            new Dictionary<string, string> { ["hashes"] = string.Join('\n', expectedHashes), ["processSnapshot"] = processSnapshot }, timeout, cancellation).ConfigureAwait(false))
+            .EnsureSuccess($"Checking for Valheim and interrupted-launch processes on {host.Name}");
+        string verdict = InteractiveClient.Line(result.Stdout, "VT-LAUNCH-GONE ")
+            ?? throw new HostOperationException($"No interrupted-launch process verdict from {host.Name}", result);
+        if (verdict == "idle") return;
+        if (verdict.StartsWith("busy ", StringComparison.Ordinal))
+            throw new InvalidOperationException("process " + verdict["busy ".Length..] + " still runs");
+        throw new HostOperationException($"The interrupted-launch process check on {host.Name} was inconclusive ({verdict})", result);
+    }
+
+    // processSnapshot is a deterministic test seam. Production passes empty and enumerates the host. Tests supply the same
+    // fields the listing would have returned; "__unreadable__" exercises the fail-closed verdict without relying on privileges.
+    internal static readonly string WindowsLaunchGone = """
+        $busy = @(); $wanted = @($hashes -split "`n" | Where-Object { $_ })
+        $utf8 = New-Object Text.UTF8Encoding $false
+        $sha = [Security.Cryptography.SHA256]::Create()
+        $gameImages = @('valheim.exe', 'valheim_server.exe', 'valheim', 'valheim_server')
+        if ($processSnapshot -ceq '__unreadable__') { 'VT-LAUNCH-GONE unreadable process-list'; exit 0 }
+        if ($processSnapshot) {
+            try { $processes = @($processSnapshot | ConvertFrom-Json -ErrorAction Stop) }
+            catch { 'VT-LAUNCH-GONE unreadable supplied-process-list'; exit 0 }
+        } else {
+            try { $processes = @(Get-CimInstance Win32_Process -ErrorAction Stop) }
+            catch { 'VT-LAUNCH-GONE unreadable process-list: ' + $_.Exception.Message; exit 0 }
+        }
+        foreach ($p in $processes) {
+            $processIdText = [string]$p.ProcessId
+            $name = [string]$p.Name
+            $path = [string]$p.ExecutablePath
+            $image = if ($name) { $name } elseif ($path) { [IO.Path]::GetFileName($path) } else { '' }
+            # Exact game images only: the toolkit's own valheim-test and Valheim.Testing.* processes must never match.
+            $nameMatch = $gameImages -contains $image.ToLowerInvariant()
+            if (-not $nameMatch -and $path) {
+                $pathImage = [IO.Path]::GetFileName($path)
+                if ($gameImages -contains $pathImage.ToLowerInvariant()) { $image = $pathImage; $nameMatch = $true }
+            }
+            $label = if ($image) { $processIdText + ' (' + $image + ')' } else { $processIdText }
+            if ($nameMatch) { $busy += $label; continue }
+
+            # Win32_Process deliberately returns no path or command line for kernel/minimal processes (including these names),
+            # and a non-elevated caller cannot read those fields for some other users' ordinary processes. Neither is a game
+            # image. Only readable command lines can match a journalled hash; an unreadable non-game process is ignored.
+            if (($p.ProcessId -eq 0 -or $p.ProcessId -eq 4 -or $name -in @('Registry', 'Memory Compression', 'Secure System')) -and -not $path) { continue }
+            if ($wanted.Count -ne 0 -and $null -ne $p.CommandLine) {
+                $hash = -join ($sha.ComputeHash($utf8.GetBytes([string]$p.CommandLine)) | ForEach-Object { $_.ToString('x2') })
+                if ($wanted -contains $hash) { $busy += $label }
+            }
+        }
+        if ($busy.Count -ne 0) { 'VT-LAUNCH-GONE busy ' + ($busy -join ',') }
+        else { 'VT-LAUNCH-GONE idle' }
+        """.ReplaceLineEndings("\n");
+
+    internal static readonly string BashLaunchGone = """
+        set -u
+        export LC_ALL=C
+        os=$(uname -s) || exit 4
+        supplied=
+        if [ "$processSnapshot" = __unreadable__ ]; then echo 'VT-LAUNCH-GONE unreadable process-list'; exit 0
+        elif [ -n "$processSnapshot" ]; then processes=$processSnapshot; supplied=1
+        else
+          if [ "$os" != Darwin ]; then
+            if [ "$(id -u)" != 0 ] && awk '$2 == "/proc" && $4 ~ /(^|,)hidepid=(1|2|invisible|noaccess|ptraceable)(,|$)/ { found=1 } END { exit !found }' /proc/mounts 2>/dev/null; then
+              echo 'VT-LAUNCH-GONE unreadable process-list: /proc hides other users from this non-root process'; exit 0
+            fi
+            if [ -e /.dockerenv ] || [ -e /run/.containerenv ] || [ "$(awk '/^NSpid:/ { print NF }' /proc/self/status 2>/dev/null)" -gt 2 ] 2>/dev/null; then
+              echo 'VT-LAUNCH-GONE unreadable process-list: a container cannot see the host PID namespace'; exit 0
+            fi
+            if [ -e /proc/1/ns/pid ] && [ -e /proc/self/ns/pid ]; then
+              first=$(readlink /proc/1/ns/pid 2>/dev/null) || { echo 'VT-LAUNCH-GONE unreadable process-list: cannot identify PID namespace'; exit 0; }
+              self=$(readlink /proc/self/ns/pid 2>/dev/null) || { echo 'VT-LAUNCH-GONE unreadable process-list: cannot identify PID namespace'; exit 0; }
+              if [ "$first" != "$self" ]; then
+                echo 'VT-LAUNCH-GONE unreadable process-list: this process is not in PID 1s namespace'; exit 0
+              fi
+            fi
+            processes=$(ps -axww -o pid=,uid=,comm=) || { echo 'VT-LAUNCH-GONE unreadable process-list'; exit 0; }
+          else
+            # comm is last: read assigns the rest of the line to the executable path, including spaces. When hashes are needed,
+            # command is also listed once for every process; there is no per-process ps/shasum query.
+            processes=$(ps -axww -o pid=,uid=,comm=) || { echo 'VT-LAUNCH-GONE unreadable process-list'; exit 0; }
+            commands=
+            if [ -n "$hashes" ]; then commands=$(ps -axww -o pid=,uid=,command=) || { echo 'VT-LAUNCH-GONE unreadable process-list'; exit 0; }; fi
+          fi
+        fi
+        busy=; unknown=
+        check_process() {
+          pid=$1; image=$2; mode=$3; supplied_hash=${4-}
+          [ -n "$pid" ] || return
+          lower=$(printf '%s' "$image" | tr '[:upper:]' '[:lower:]')
+          match=
+          if [ "$mode" != mac-hash ]; then
+            # Exact game images only (Linux comm truncates valheim_server.x86_64 to "valheim_server."): never the toolkit itself.
+            name=${lower##*/}; name=${name%% *}; case "$name" in valheim|valheim.exe|valheim_server|valheim_server.exe|valheim.x86_64|valheim_server.x86_64|valheim_server.) match=1 ;; esac
+          fi
+          hash=; unreadable=
+          if [ -z "$match" ] && [ -n "$hashes" ]; then
+            if [ "$mode" = supplied ]; then
+              if [ "$supplied_hash" = unreadable ]; then unreadable=1; else hash=$supplied_hash; fi
+            elif [ "$mode" = mac-hash ]; then
+              if [ -n "$image" ]; then hash=$(printf '%s' "$image" | shasum -a 256 | awk '{print $1}') || unreadable=1
+              else unreadable=1
+              fi
+            elif [ -r "/proc/$pid/cmdline" ]; then
+              hash=$(sha256sum < "/proc/$pid/cmdline" 2>/dev/null | cut -d' ' -f1) || unreadable=1
+            elif [ -e "/proc/$pid" ]; then unreadable=1
+            else return
+            fi
+          fi
+          if [ -z "$match" ] && [ -n "$hashes" ] && [ -z "$unreadable" ] && [ "$mode" != supplied ] && ! [[ $hash =~ ^[0-9a-f]{64}$ ]]; then
+            unreadable=1; hash=
+          fi
+          if [ -z "$match" ] && [ -n "$hash" ]; then
+            while IFS= read -r wanted; do [ -n "$wanted" ] && [ "$hash" = "$wanted" ] && match=1; done <<< "$hashes"
+          fi
+          if [ -n "$match" ]; then busy="${busy:+$busy,}$pid"
+          elif [ -n "$unreadable" ]; then unknown="${unknown:+$unknown,}$pid"
+          fi
+        }
+        if [ -n "$supplied" ]; then
+          # Test rows are pid, uid, precomputed hash (or unreadable), then the image/command as the rest of the line.
+          while read -r pid owner supplied_hash image; do check_process "$pid" "$image" supplied "$supplied_hash"; done <<< "$processes"
+        elif [ "$os" = Darwin ]; then
+          while read -r pid owner image; do check_process "$pid" "$image" mac-name; done <<< "$processes"
+          if [ -n "$hashes" ]; then
+            while read -r pid owner image; do check_process "$pid" "$image" mac-hash; done <<< "$commands"
+          fi
+        else
+          while read -r pid owner image; do check_process "$pid" "$image" linux; done <<< "$processes"
+        fi
+        if [ -n "$busy" ]; then echo "VT-LAUNCH-GONE busy $busy"
+        elif [ -n "$unknown" ]; then echo "VT-LAUNCH-GONE unreadable command-line $unknown"
+        else echo 'VT-LAUNCH-GONE idle'
+        fi
+        """.ReplaceLineEndings("\n");
 
     /// <summary>
     /// Keeps the game's own logs from a host copy of <paramref name="actor"/> in the run's evidence folder on that host,

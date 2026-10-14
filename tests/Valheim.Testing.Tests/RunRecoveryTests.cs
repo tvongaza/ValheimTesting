@@ -15,8 +15,8 @@ public sealed class RunRecoveryTests : IDisposable
     public void Dispose() => Directory.Delete(_root, recursive: true);
 
     private static Dictionary<string, HostProfile> Hosts() => new() { ["pc"] = new HostProfile { Kind = "ssh", Lock = "/var/tmp/vt/lock" } };
-    private Task<RecoveryReport> RecoverAsync(string run, bool teardown = false) =>
-        RunRecovery.RecoverAsync(Hosts(), _ => _host, run, teardown, TimeSpan.FromSeconds(5));
+    private Task<RecoveryReport> RecoverAsync(string run, bool teardown = false, bool launchGone = false) =>
+        RunRecovery.RecoverAsync(Hosts(), _ => _host, run, teardown, TimeSpan.FromSeconds(5), launchGone: launchGone);
     private Task<JournalStatusReport> StatusAsync() => RunJournalStatus.InspectAsync(Hosts(), _ => _host, TimeSpan.FromSeconds(5));
 
     // A run cut short after preparing its server copy, staging a character, leasing an account, taking the lock and starting its server.
@@ -500,6 +500,119 @@ public sealed class RunRecoveryTests : IDisposable
         Assert.DoesNotContain(_host.Scripts, script => script == "stop");
         Directory.Delete(_host.Local("/l/71"), recursive: true);
         Assert.Equal(JournalRunState.Ended, (await StatusAsync()).Runs.Single(run => run.Run == "run-reused").State);
+    }
+
+    [Fact] public async Task LaunchGoneSettlesAMissingPidLaunchThenRecoversTheRunsOwnedLock()
+    {
+        const string run = "run-launch-gone", launch = "/l/run-launch-gone", claimant = "run-launch-gone [claim]";
+        Line(_host, run, "client", Gone, JournalEntry.ProcessIntended, ("launchDirectory", launch),
+            ("expectedCommandLineSha256", FakeServerHost.CommandLineSha256("missing")));
+        _host.Claims.Add(claimant);
+        Line(_host, run, "run", Gone, JournalEntry.LockHeld, ("lock", "/var/tmp/vt/lock"), ("claimant", claimant));
+
+        var report = await RecoverAsync(run, launchGone: true);
+
+        Assert.True(report.Clean, string.Join("\n", report.Steps));
+        Assert.Contains(report.Steps, step => step.What == "launch " + launch && step.Outcome.Contains("operator confirmed --launch-gone", StringComparison.Ordinal));
+        Assert.Contains(report.Steps, step => step.What == "lock /var/tmp/vt/lock" && step.Outcome == "released");
+        Assert.Contains(claimant, _host.Releases);
+        var records = (await RunJournalOnHost.ReadAllAsync(_host, Journal, TimeSpan.FromSeconds(5))).Records;
+        var abandoned = Assert.Single(records, record => record.Run == run && record.Entry.Kind == JournalEntry.LaunchAbandoned);
+        Assert.Equal(("client", launch, "--launch-gone"), (abandoned.Entry.Fields["actor"], abandoned.Entry.Fields["directory"], abandoned.Entry.Fields["operatorConfirmed"]));
+        Assert.Contains("no Valheim image or journalled launch command line", abandoned.Entry.Fields["reason"]);
+        var recoveryHeld = Assert.Single(records, record => record.Run == run && record.Actor == RunRecovery.Actor &&
+            record.Entry.Kind == JournalEntry.LockHeld && record.Entry.Fields["claimant"] != claimant);
+        string recoveryClaimant = recoveryHeld.Entry.Fields["claimant"];
+        var recoveryReleased = Assert.Single(records, record => record.Run == run && record.Actor == RunRecovery.Actor &&
+            record.Entry.Kind == JournalEntry.LockReleased && record.Entry.Fields["claimant"] == recoveryClaimant);
+        var staleReleased = Assert.Single(records, record => record.Run == run && record.Actor == RunRecovery.Actor &&
+            record.Entry.Kind == JournalEntry.LockReleased && record.Entry.Fields["claimant"] == claimant);
+        var ordered = records.ToList();
+        Assert.True(ordered.IndexOf(staleReleased) < ordered.IndexOf(recoveryHeld));
+        Assert.True(ordered.IndexOf(recoveryHeld) < ordered.IndexOf(abandoned));
+        Assert.True(ordered.IndexOf(abandoned) < ordered.IndexOf(recoveryReleased));
+        Assert.Contains(recoveryClaimant, _host.Claims);
+        Assert.Contains(recoveryClaimant, _host.Releases);
+        Assert.Equal(JournalRunState.Ended, Assert.Single((await StatusAsync()).Runs).State);
+    }
+
+    [Fact] public async Task LaunchGoneRefusesWhileAValheimProcessRuns()
+    {
+        const string run = "run-launch-busy", claimant = "run-launch-busy [claim]";
+        Line(_host, run, "client", Gone, JournalEntry.ProcessIntended, ("launchDirectory", "/l/busy"),
+            ("expectedCommandLineSha256", FakeServerHost.CommandLineSha256("81")));
+        _host.Claims.Add(claimant);
+        Line(_host, run, "run", Gone, JournalEntry.LockHeld, ("lock", "/var/tmp/vt/lock"), ("claimant", claimant));
+        _host.Running(81, "9081");
+
+        var report = await RecoverAsync(run, launchGone: true);
+
+        Assert.NotNull(report.Refused);
+        Assert.Contains("process 4242 still runs", report.Refused);
+        Assert.Empty(report.Steps);
+        Assert.DoesNotContain(claimant, _host.Releases);
+        Assert.DoesNotContain("lock", _host.Scripts);
+        Assert.Contains("launch-gone", _host.Scripts);
+        Assert.DoesNotContain((await RunJournalOnHost.ReadAllAsync(_host, Journal, TimeSpan.FromSeconds(5))).Records,
+            record => record.Entry.Kind == JournalEntry.LaunchAbandoned);
+    }
+
+    [Fact] public async Task LaunchGoneKeepsItsRecoveryClaimWhenSomethingOnTheHostFailsToRecover()
+    {
+        const string run = "run-launch-failed-copy", claimant = "run-launch-failed-copy [claim]", runtime = "/srv/runs/run-launch-failed-copy/runtime";
+        Line(_host, run, "client", Gone, JournalEntry.ProcessIntended, ("launchDirectory", "/l/failed-copy"),
+            ("expectedCommandLineSha256", FakeServerHost.CommandLineSha256("missing")));
+        Line(_host, run, "server", Gone, JournalEntry.CopyIntended, ("runtime", runtime), ("stage", runtime + ".stage"));
+        Line(_host, run, "server", Gone, JournalEntry.CopyDone, ("runtime", runtime), ("stage", runtime + ".stage"));
+        _host.Claims.Add(claimant);
+        Line(_host, run, "run", Gone, JournalEntry.LockHeld, ("lock", "/var/tmp/vt/lock"), ("claimant", claimant));
+
+        var report = await RecoverAsync(run, launchGone: true);
+
+        Assert.False(report.Recovered);
+        Assert.Contains(report.Steps, step => step.What == "copy " + runtime && step.Failed);
+        Assert.Contains(report.Steps, step => step.What == "lock /var/tmp/vt/lock" && step.Failed &&
+            step.Outcome.Contains("kept as the recovery claim", StringComparison.Ordinal));
+        var records = (await RunJournalOnHost.ReadAllAsync(_host, Journal, TimeSpan.FromSeconds(5))).Records;
+        string recoveryClaimant = Assert.Single(records, record => record.Run == run && record.Actor == RunRecovery.Actor &&
+            record.Entry.Kind == JournalEntry.LockHeld && record.Entry.Fields["claimant"] != claimant).Entry.Fields["claimant"];
+        Assert.Contains(recoveryClaimant, _host.Claims);
+        Assert.DoesNotContain(recoveryClaimant, _host.Releases);
+        Assert.DoesNotContain(records, record => record.Run == run && record.Actor == RunRecovery.Actor &&
+            record.Entry.Kind == JournalEntry.LockReleased && record.Entry.Fields["claimant"] == recoveryClaimant);
+    }
+
+    [Fact] public async Task LaunchGoneRefusesWhenAnotherOpenItemIsUnprovable()
+    {
+        const string run = "run-launch-and-lease";
+        Line(_host, run, "client", Gone, JournalEntry.ProcessIntended, ("launchDirectory", "/l/lease"));
+        Line(_host, run, "client", Gone, JournalEntry.LeaseHeld, ("account", "alt-old"), ("pool", "steam"), ("owner", "old owner"));
+
+        var report = await RecoverAsync(run, launchGone: true);
+
+        Assert.NotNull(report.Refused);
+        Assert.Contains("not only interrupted launches", report.Refused);
+        Assert.Contains("lease", report.Refused);
+        Assert.DoesNotContain("launch-gone", _host.Scripts);
+        Assert.DoesNotContain((await RunJournalOnHost.ReadAllAsync(_host, Journal, TimeSpan.FromSeconds(5))).Records,
+            record => record.Entry.Kind == JournalEntry.LaunchAbandoned);
+    }
+
+    [Fact] public async Task LaunchGoneRefusesWhenAnotherRunHoldsTheHostLock()
+    {
+        const string run = "run-launch-locked";
+        Line(_host, run, "client", Gone, JournalEntry.ProcessIntended, ("launchDirectory", "/l/locked"));
+        // The other run wins the atomic boundary after this recovery journals its intent but before its claim.
+        _host.BeforeScript = script => { if (script == "lock") _host.HeldBy = "another live run"; };
+
+        var report = await RecoverAsync(run, launchGone: true);
+
+        Assert.NotNull(report.Refused);
+        Assert.Contains("lock was not granted to this recovery", report.Refused);
+        Assert.Contains("another live run", report.Refused);
+        Assert.Empty(report.Steps);
+        Assert.Contains("lock", _host.Scripts);
+        Assert.DoesNotContain("launch-gone", _host.Scripts);
     }
 
     [Fact] public async Task ALiveUnknownOrUnrecoverableRunIsRefusedAndNothingChanges()
@@ -1101,10 +1214,15 @@ public sealed class RunRecoveryTests : IDisposable
 
     [Fact] public async Task TheCommandLineRequiresARunAndSaysWhatItRefused()
     {
-        foreach (string[] args in new[] { new[] { "recover" }, ["teardown", "--run"], ["recover", "--run", "x", "extra"], ["recover", "--hosts", "--run", "x"] })
+        foreach (string[] args in new[] { new[] { "recover" }, ["teardown", "--run"], ["recover", "--run", "x", "extra"], ["recover", "--hosts", "--run", "x"],
+                     ["teardown", "--run", "x", "--launch-gone"] })
             Assert.Equal(2, await EnvCommand.RunAsync(args, new StringWriter(), new StringWriter()));
         var error = new StringWriter();
         Assert.Equal(3, await EnvCommand.RunAsync(["recover", "--run", "../escape", "--inventory", Path.Combine(_root, "missing.json")], new StringWriter(), error));
         Assert.StartsWith("REFUSED: ", error.ToString());
+        error = new StringWriter();
+        Assert.Equal(3, await EnvCommand.RunAsync(["recover", "--run", "../escape", "--launch-gone", "--inventory", Path.Combine(_root, "missing.json")], new StringWriter(), error));
+        Assert.StartsWith("REFUSED: ", error.ToString());
+        Assert.Contains("recover --run ID [--launch-gone]", EnvCommand.Usage);
     }
 }

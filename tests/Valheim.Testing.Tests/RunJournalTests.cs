@@ -63,15 +63,35 @@ public sealed class RunJournalTests : IDisposable
         await new RunJournal("run-b").AppendAsync(host, journal, "run", JournalEntry.Of(JournalEntry.RunEnded, ("state", "passed")), TimeSpan.FromSeconds(30));
         var (all, unreadable) = await RunJournalOnHost.ReadAllAsync(host, journal, TimeSpan.FromSeconds(30));
         Assert.Equal(["run-a", "run-b", "run-b"], all.Select(record => record.Run).Order());
-        Assert.Equal(0, unreadable);
+        Assert.Empty(unreadable);
         Assert.All(all, record => Assert.Equal(JournalRunner.Current, record.Runner));
         // A line cut short (a full disk, a killed write) is counted and skipped; the lines around it still read.
         File.AppendAllText(Path.Combine(journal, "run-a", "server.jsonl"), "{\"utc\":\"2026-10-05T18:");
         (all, unreadable) = await RunJournalOnHost.ReadAllAsync(host, journal, TimeSpan.FromSeconds(30));
         Assert.Equal(3, all.Count);
-        Assert.Equal(1, unreadable);
+        var problem = Assert.Single(unreadable);
+        Assert.Equal(("run-a", Path.Combine(journal, "run-a", "server.jsonl"), 2), (problem.Run, problem.File, problem.Line));
+        Assert.Contains("malformed JSON", problem.Problem);
         Assert.True(JournalRunner.Current.StillRuns());
         Assert.Equal(Environment.ProcessId, JournalRunner.Current.Pid);
+    }
+
+    [Fact] public async Task MalformedFileNameAndMissingContentsWordsAreNamedUnreadableRecords()
+    {
+        var host = new FakeServerHost("journal-transport", _root);
+        string line = new RunJournal("run-malformed-name").Line("server", JournalEntry.Of(JournalEntry.RunEnded, ("state", "passed")));
+        string contents = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(line));
+        string name = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes("/var/tmp/vt/journal/run-missing-contents/server.jsonl"));
+        host.JournalReadAllReply = $"VT-JOURNAL-FILE %%% {contents}\nVT-JOURNAL-FILE {name}\nVT-JOURNAL-END\n";
+
+        var (records, unreadable) = await RunJournalOnHost.ReadAllAsync(host, "/var/tmp/vt/journal", TimeSpan.FromSeconds(5));
+
+        Assert.Equal("run-malformed-name", Assert.Single(records).Run);
+        Assert.Equal(2, unreadable.Count);
+        var malformed = Assert.Single(unreadable, problem => problem.Problem.StartsWith("file name is malformed base64", StringComparison.Ordinal));
+        Assert.Equal(("unknown", "<malformed journal file name word %%%>", 1), (malformed.Run, malformed.File, malformed.Line));
+        var missing = Assert.Single(unreadable, problem => problem.Problem == "file contents word is missing");
+        Assert.Equal(("run-missing-contents", "/var/tmp/vt/journal/run-missing-contents/server.jsonl", 1), (missing.Run, missing.File, missing.Line));
     }
 
     // The process check through the host's own shell, on this test's process: Linux reads /proc, Windows CIM,

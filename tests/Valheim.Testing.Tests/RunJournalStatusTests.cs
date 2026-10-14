@@ -42,6 +42,17 @@ public sealed class RunJournalStatusTests : IDisposable
         File.AppendAllText(file, JsonSerializer.Serialize(line) + "\n");
     }
 
+    private static void LineWithoutRunner(FakeServerHost host, string run, string actor, string kind, params (string Key, string Value)[] fields)
+    {
+        string file = host.Local(Journal + "/" + run + "/" + actor + ".jsonl");
+        Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+        File.AppendAllText(file, JsonSerializer.Serialize(new Dictionary<string, object?>
+        {
+            ["utc"] = T0.AddMinutes(Interlocked.Increment(ref s_minute)).ToString("O"), ["run"] = run, ["actor"] = actor,
+            ["kind"] = kind, ["fields"] = fields.ToDictionary(field => field.Key, field => field.Value),
+        }) + "\n");
+    }
+
     private static JournalRunStatus Run(JournalStatusReport report, string run) => Assert.Single(report.Runs, status => status.Run == run);
 
     [Fact] public async Task DetachedSupervisorIsLiveThenRecoverableAndRecoveryRemovesOnlyItsExactTask()
@@ -329,8 +340,64 @@ public sealed class RunJournalStatusTests : IDisposable
         var report = await InspectAsync();
 
         Assert.False(report.Clean);
-        Assert.Equal("1 journal line could not be read, so what they record is unknown.", Assert.Single(report.Hosts).Error);
+        var host = Assert.Single(report.Hosts);
+        Assert.Equal("1 journal line could not be read, so what they record is unknown.", host.Error);
+        var problem = Assert.Single(host.UnreadableLines);
+        Assert.Equal(("run-cut", Journal + "/run-cut/server.jsonl", 1), (problem.Run, problem.File, problem.Line));
+        Assert.Contains("malformed JSON", problem.Problem);
         Assert.Equal(JournalRunState.Ended, Assert.Single(report.Runs).State);
+
+        var text = new StringWriter(); RunJournalStatus.Write(report, text, json: false);
+        Assert.Contains("run run-cut, file " + Journal + "/run-cut/server.jsonl, line 1: malformed JSON", text.ToString());
+        var json = new StringWriter(); RunJournalStatus.Write(report, json, json: true);
+        using var document = JsonDocument.Parse(json.ToString());
+        var named = document.RootElement.GetProperty("Hosts")[0].GetProperty("UnreadableLines")[0];
+        Assert.Equal("run-cut", named.GetProperty("Run").GetString());
+        Assert.Equal(Journal + "/run-cut/server.jsonl", named.GetProperty("File").GetString());
+        Assert.Equal(1, named.GetProperty("Line").GetInt32());
+        Assert.Contains("malformed JSON", named.GetProperty("Problem").GetString());
+    }
+
+    [Fact] public async Task ARecoveryLineWithoutRunnerIsReadWithItsRunnerUnknown()
+    {
+        const string run = "run-old-recovery";
+        Line(_host, run, "client", Gone, JournalEntry.ProcessIntended, ("launchDirectory", "/l/old"));
+        LineWithoutRunner(_host, run, RunRecovery.Actor, JournalEntry.LaunchSettled, ("actor", "client"), ("directory", "/l/old"));
+
+        var report = await InspectAsync();
+
+        Assert.Null(Assert.Single((await RunJournalOnHost.ReadAllAsync(_host, Journal, TimeSpan.FromSeconds(5))).Records,
+            record => record.Actor == RunRecovery.Actor).Runner);
+        Assert.Null(Assert.Single(report.Hosts).Error);
+        Assert.Equal(JournalRunState.Ended, Run(report, run).State);
+        Assert.Equal(Gone.ToString(), Run(report, run).Runner);
+    }
+
+    [Fact] public async Task ANewerLegacyLineWithoutRunnerDoesNotHideTheLastNamedRunner()
+    {
+        const string run = "run-late-legacy-line";
+        Line(_host, run, "detached", Gone, JournalEntry.CopyIntended, ("runtime", "/l/copy"), ("stage", "/l/stage"));
+        LineWithoutRunner(_host, run, "detached", JournalEntry.CopyDone, ("runtime", "/l/copy"));
+
+        var report = await InspectAsync();
+
+        Assert.Equal(Gone.ToString(), Run(report, run).Runner);
+    }
+
+    [Fact] public async Task AnUnreadableJournalLineNamesItsMissingProperty()
+    {
+        string file = _host.Local(Journal + "/run-missing/client.jsonl");
+        Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+        File.WriteAllText(file, JsonSerializer.Serialize(new Dictionary<string, object?>
+        {
+            ["utc"] = T0.ToString("O"), ["run"] = "run-missing", ["actor"] = "client",
+            ["fields"] = new Dictionary<string, string>(),
+        }) + "\n");
+
+        var problem = Assert.Single(Assert.Single((await InspectAsync()).Hosts).UnreadableLines);
+
+        Assert.Equal(("run-missing", Journal + "/run-missing/client.jsonl", 1), (problem.Run, problem.File, problem.Line));
+        Assert.Equal("property 'kind' is missing", problem.Problem);
     }
 
     [Fact] public async Task KeptCopiesAndLeasesLeaveARunKeptAndAnInterruptedLaunchIsUnrecoverableUnlessTheRunCleanedUp()
@@ -363,6 +430,8 @@ public sealed class RunJournalStatusTests : IDisposable
         var cut = Run(report, "run-launch-cut");
         Assert.Equal(JournalRunState.Unrecoverable, cut.State);
         Assert.Equal("/l/run-launch-cut", Assert.Single(cut.Items).What);
+        var text = new StringWriter(); RunJournalStatus.Write(report, text, json: false);
+        Assert.Contains("valheim-test env recover --run run-launch-cut --launch-gone", text.ToString());
         Assert.Equal(JournalRunState.Ended, Run(report, "run-lock-gone").State);
     }
 

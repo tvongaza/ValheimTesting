@@ -21,6 +21,8 @@ internal sealed record JournalEntry(string Kind, IReadOnlyDictionary<string, str
         ScheduledTaskRetired = "scheduled-task-retired";
     /// <summary>A recovery's word that a launch never journalled as started is over: its pid file's process is stopped or proven gone.</summary>
     public const string LaunchSettled = "launch-settled";
+    /// <summary>An operator-confirmed recovery's word that an otherwise unprovable launch is gone after checking its host.</summary>
+    public const string LaunchAbandoned = "launch-abandoned";
     public const string LeaseHeld = "lease-held", LeaseReleased = "lease-released", LeaseKept = "lease-kept";
     public const string RunEnded = "run-ended", RunRecovered = "run-recovered", CleanupAbandoned = "cleanup-abandoned";
 
@@ -29,7 +31,7 @@ internal sealed record JournalEntry(string Kind, IReadOnlyDictionary<string, str
 }
 
 /// <summary>A journal line as read back: its time, actor and entry, the run it belongs to and the runner that wrote it.</summary>
-internal sealed record JournalRecord(DateTime Utc, string Actor, JournalEntry Entry, JournalRunner Runner)
+internal sealed record JournalRecord(DateTime Utc, string Actor, JournalEntry Entry, JournalRunner? Runner)
 {
     public string Run { get; init; } = "";
 }
@@ -196,7 +198,7 @@ internal sealed class RunJournal
                 try { record = ParseLine(line); }
                 catch (Exception error) when (error is JsonException or FormatException or KeyNotFoundException or InvalidOperationException) { continue; }
                 if (record.Entry.Fields.GetValueOrDefault("runtime") is not { } path) continue;
-                if (record.Entry.Kind is JournalEntry.CopyIntended or JournalEntry.CopyDone) open[path] = record.Runner;
+                if ((record.Entry.Kind is JournalEntry.CopyIntended or JournalEntry.CopyDone) && record.Runner is { } runner) open[path] = runner;
                 else if (record.Entry.Kind is JournalEntry.CopyRetired or JournalEntry.CopyKept) open.Remove(path);
             }
         }
@@ -268,14 +270,47 @@ internal sealed class RunJournal
     {
         using var document = JsonDocument.Parse(line);
         var root = document.RootElement;
-        var fields = root.GetProperty("fields").EnumerateObject().ToDictionary(field => field.Name, field => field.Value.GetString() ?? "", StringComparer.Ordinal);
-        // Every line names its runner; one without is unreadable (KeyNotFoundException), never a run that cannot be judged.
-        var by = root.GetProperty("runner");
-        var runner = new JournalRunner(by.GetProperty("machine").GetString()!, by.GetProperty("pid").GetInt32(),
-            DateTime.Parse(by.GetProperty("startedUtc").GetString()!, null, System.Globalization.DateTimeStyles.RoundtripKind).ToUniversalTime());
-        return new(DateTime.Parse(root.GetProperty("utc").GetString()!, null, System.Globalization.DateTimeStyles.RoundtripKind),
-            root.GetProperty("actor").GetString()!, new JournalEntry(root.GetProperty("kind").GetString()!, fields), runner)
-        { Run = root.GetProperty("run").GetString()! };
+        if (root.ValueKind != JsonValueKind.Object) throw new FormatException("the journal line is not a JSON object");
+        var fieldsElement = Required(root, "fields");
+        if (fieldsElement.ValueKind != JsonValueKind.Object) throw new FormatException("property 'fields' is not an object");
+        var fields = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var field in fieldsElement.EnumerateObject())
+        {
+            if (field.Value.ValueKind != JsonValueKind.String) throw new FormatException($"field '{field.Name}' is not a string");
+            fields[field.Name] = field.Value.GetString()!;
+        }
+        JournalRunner? runner = null;
+        // runner was absent from the first recovery records. It is optional because a recovery is never treated as the run's
+        // runner, and a non-recovery line without it leaves the run's runner unknown instead of hiding the rest of the line.
+        if (root.TryGetProperty("runner", out var by))
+        {
+            if (by.ValueKind != JsonValueKind.Object) throw new FormatException("property 'runner' is not an object");
+            string machine = RequiredString(by, "machine", "runner.machine");
+            var pid = Required(by, "pid", "runner.pid");
+            if (pid.ValueKind != JsonValueKind.Number || !pid.TryGetInt32(out int processId) || processId <= 0)
+                throw new FormatException("property 'runner.pid' is not a positive integer");
+            runner = new JournalRunner(machine, processId, RequiredUtc(by, "startedUtc", "runner.startedUtc"));
+        }
+        return new(RequiredUtc(root, "utc", "utc"), RequiredString(root, "actor", "actor"),
+            new JournalEntry(RequiredString(root, "kind", "kind"), fields), runner)
+        { Run = RequiredString(root, "run", "run") };
+
+        static JsonElement Required(JsonElement parent, string name, string? display = null) =>
+            parent.TryGetProperty(name, out var value) ? value : throw new FormatException($"property '{display ?? name}' is missing");
+        static string RequiredString(JsonElement parent, string name, string display)
+        {
+            var value = Required(parent, name, display);
+            if (value.ValueKind != JsonValueKind.String || string.IsNullOrEmpty(value.GetString()))
+                throw new FormatException($"property '{display}' is not a non-empty string");
+            return value.GetString()!;
+        }
+        static DateTime RequiredUtc(JsonElement parent, string name, string display)
+        {
+            string value = RequiredString(parent, name, display);
+            if (!DateTime.TryParse(value, null, System.Globalization.DateTimeStyles.RoundtripKind, out var parsed))
+                throw new FormatException($"property '{display}' is not a round-trip timestamp");
+            return parsed.ToUniversalTime();
+        }
     }
 
     internal static bool SafeName(string name) =>

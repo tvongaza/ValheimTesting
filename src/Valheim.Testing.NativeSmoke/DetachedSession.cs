@@ -349,7 +349,8 @@ internal static class DetachedSession
         string output = open.Entry.Fields.GetValueOrDefault("output") ?? "";
         if (!Path.IsPathFullyQualified(control) || !Path.IsPathFullyQualified(output))
             throw new InvalidDataException("Run " + run + " has an invalid detached owner journal entry.");
-        var runner = records.Last(record => record.Actor != RunRecovery.Actor).Runner;
+        var runner = RunJournalStatus.LastNamedRunner(records)
+            ?? throw new InvalidDataException("Run " + run + " has no runner in its detached owner journal entry.");
         return new(WindowsScheduledTask.FromJournal(open.Entry.Fields, run), control, output, runner);
     }
 

@@ -4,6 +4,9 @@ using Valheim.Testing.Game;
 
 namespace Valheim.Testing.GameSessions;
 
+/// <summary>One journal line that could not be read, named without exposing its contents.</summary>
+internal sealed record JournalLineProblem(string Run, string File, int Line, string Problem);
+
 /// <summary>
 /// A run's journal on a host other than through this process (#257): appended and read through the host's own shell, so a
 /// remote host's journal and this machine's read the same way. <see cref="RunJournal"/> holds the line format and this
@@ -48,7 +51,7 @@ internal static class RunJournalOnHost
     /// lines could not be read (a line cut short by a full disk or a killed write): those are skipped and counted, never guessed.
     /// Changes nothing.
     /// </summary>
-    public static async Task<(IReadOnlyList<JournalRecord> Records, int Unreadable)> ReadAllAsync(IGameHost host, string journal, TimeSpan timeout,
+    public static async Task<(IReadOnlyList<JournalRecord> Records, IReadOnlyList<JournalLineProblem> Unreadable)> ReadAllAsync(IGameHost host, string journal, TimeSpan timeout,
         CancellationToken cancellation = default)
     {
         var result = (await host.RunAsync(host.Shell.Kind == HostShellKind.PowerShell ? WindowsReadAll : BashReadAll,
@@ -57,22 +60,49 @@ internal static class RunJournalOnHost
         if (InteractiveClient.Line(result.Stdout, "VT-JOURNAL-END") == null)
             throw new HostOperationException($"The run journal on {host.Name} was not read to its end", result);
         var records = new List<JournalRecord>();
-        int unreadable = 0;
-        // One base64 word per file (one encoder per file, not per line), each file's lines in order.
+        var unreadable = new List<JournalLineProblem>();
+        // The file name and contents are separate base64 words; each file's lines remain in order.
         foreach (string raw in result.Stdout.Split('\n'))
         {
             if (!raw.StartsWith("VT-JOURNAL-FILE ", StringComparison.Ordinal)) continue;
+            // Only the line ending is trimmed: an empty file's contents word is empty, and must read as zero lines.
+            string[] parts = raw["VT-JOURNAL-FILE ".Length..].TrimEnd('\r').Split(' ', 2);
+            string file;
+            try { file = Encoding.UTF8.GetString(Convert.FromBase64String(parts[0])); }
+            catch (FormatException error)
+            {
+                file = "<malformed journal file name word " + parts[0] + ">";
+                unreadable.Add(new("unknown", file, 1, "file name is malformed base64: " + error.Message));
+            }
+            string run = RunFrom(file);
+            if (parts.Length != 2)
+            {
+                unreadable.Add(new(run, file, 1, "file contents word is missing"));
+                continue;
+            }
             string text;
-            try { text = Encoding.UTF8.GetString(Convert.FromBase64String(raw["VT-JOURNAL-FILE ".Length..].Trim())); }
-            catch (FormatException) { unreadable++; continue; }
+            try { text = Encoding.UTF8.GetString(Convert.FromBase64String(parts[1])); }
+            catch (FormatException error) { unreadable.Add(new(run, file, 1, "file contents are malformed base64: " + error.Message)); continue; }
+            int number = 0;
             foreach (string line in text.Split('\n'))
             {
+                number++;
                 if (line.Trim().Length == 0) continue;
                 try { records.Add(RunJournal.ParseLine(line)); }
-                catch (Exception error) when (error is JsonException or FormatException or KeyNotFoundException or InvalidOperationException) { unreadable++; }
+                catch (Exception error) when (error is JsonException or FormatException or KeyNotFoundException or InvalidOperationException)
+                {
+                    string problem = error is JsonException ? "malformed JSON: " + error.Message : error.Message;
+                    unreadable.Add(new(run, file, number, problem));
+                }
             }
         }
         return (records, unreadable);
+
+        static string RunFrom(string file)
+        {
+            var parts = file.Split(['/', '\\'], StringSplitOptions.RemoveEmptyEntries);
+            return parts.Length >= 2 ? parts[^2] : "unknown";
+        }
     }
 
     private static List<JournalRecord> Parse(string stdout) =>
@@ -122,12 +152,12 @@ internal static class RunJournalOnHost
         }
         'VT-JOURNAL-END'
         """;
-    // Variables: journal. Every run's files, each sent whole as one base64 word; a missing journal reads as empty.
+    // Variables: journal. Every run's file name and contents, each sent as one base64 word; a missing journal reads as empty.
     internal static readonly string BashReadAll = """
         if [ -d "$journal" ]; then
           for file in "$journal"/*/*.jsonl; do
             [ -f "$file" ] || continue
-            printf 'VT-JOURNAL-FILE %s\n' "$(base64 < "$file" | tr -d '\n')"
+            printf 'VT-JOURNAL-FILE %s %s\n' "$(printf '%s' "$file" | base64 | tr -d '\n')" "$(base64 < "$file" | tr -d '\n')"
           done
         fi
         echo VT-JOURNAL-END
@@ -140,7 +170,7 @@ internal static class RunJournalOnHost
                     $stream = [IO.File]::Open($file, 'Open', 'Read', 'ReadWrite, Delete')
                     try { $bytes = New-Object byte[] $stream.Length; $read = 0; while ($read -lt $bytes.Length) { $n = $stream.Read($bytes, $read, $bytes.Length - $read); if ($n -le 0) { break }; $read += $n } }
                     finally { $stream.Dispose() }
-                    'VT-JOURNAL-FILE ' + [Convert]::ToBase64String($bytes, 0, $read)
+                    'VT-JOURNAL-FILE ' + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($file)) + ' ' + [Convert]::ToBase64String($bytes, 0, $read)
                 }
             }
         }

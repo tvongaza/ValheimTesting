@@ -36,9 +36,13 @@ internal sealed class FakeServerHost : IGameHost
     /// <summary>The journal kind whose append this host refuses (a full disk), or null.</summary>
     public string? JournalFailsFor { get; set; }
     public List<string> Releases { get; } = [];
+    /// <summary>Explicit release verdicts returned before the normal successful fake release.</summary>
+    public Queue<HostLockResult> ReleaseLockResults { get; } = new();
     /// <summary>Another run's claimant holding the lock.</summary>
     public string? HeldBy { get; set; }
     public Dictionary<string, HostResult> Failures { get; } = [];
+    /// <summary>A complete journal-read-all reply for malformed transport-record tests, or null for the mirrored journal.</summary>
+    public string? JournalReadAllReply { get; set; }
     /// <summary>What the preloader-log check replies (HostedClientScripts.Preloader): none by default.</summary>
     public string PreloaderReply { get; set; } = "VT-PRELOADER-END\n";
     /// <summary>Scripts that hang until cancelled.</summary>
@@ -162,6 +166,7 @@ internal sealed class FakeServerHost : IGameHost
         ("journal", [RunJournalOnHost.BashAppend, RunJournalOnHost.WindowsAppend]),
         ("journal-read", [RunJournalOnHost.BashRead, RunJournalOnHost.WindowsRead]),
         ("journal-read-all", [RunJournalOnHost.BashReadAll, RunJournalOnHost.WindowsReadAll]),
+        ("launch-gone", [RunRecovery.BashLaunchGone, RunRecovery.WindowsLaunchGone]),
         ("pid-file", [RunJournalStatus.BashPidFiles, RunJournalStatus.WindowsPidFiles]),
         ("process-probe", [HostProcessProbe.Unix, HostProcessProbe.Windows]),
         ("mac-bundle", [MacAppBundle.Bash]),
@@ -459,12 +464,23 @@ internal sealed class FakeServerHost : IGameHost
             }
             case "journal-read-all":
             {
+                if (JournalReadAllReply != null) return Ok(JournalReadAllReply);
                 string directory = Local(v["journal"]);
                 var text = new StringBuilder();
                 if (Directory.Exists(directory))
                     foreach (string file in Directory.GetFiles(directory, "*.jsonl", SearchOption.AllDirectories))
-                        text.Append("VT-JOURNAL-FILE ").Append(Convert.ToBase64String(File.ReadAllBytes(file))).Append('\n');
+                    {
+                        string hostFile = v["journal"].TrimEnd('/', '\\') + "/" + Path.GetRelativePath(directory, file).Replace('\\', '/');
+                        text.Append("VT-JOURNAL-FILE ").Append(Convert.ToBase64String(Encoding.UTF8.GetBytes(hostFile)))
+                            .Append(' ').Append(Convert.ToBase64String(File.ReadAllBytes(file))).Append('\n');
+                    }
                 return Ok(text.Append("VT-JOURNAL-END\n").ToString());
+            }
+            case "launch-gone":
+            {
+                bool running;
+                lock (_sync) running = _processes.Values.Any(process => !process.Exit(CancellationToken.None).IsCompleted);
+                return Ok(running || GameActive ? "VT-LAUNCH-GONE busy 4242\n" : "VT-LAUNCH-GONE idle\n");
             }
             // As RunJournalStatus's pid-file scripts do: each launch directory's pid file, in order.
             case "pid-file":
@@ -721,12 +737,19 @@ internal sealed class FakeServerHost : IGameHost
     }
     public Task<HostLockResult> CheckLockAsync(string lockPath, string owner, TimeSpan timeout, CancellationToken cancellation = default)
     {
-        bool held; lock (_sync) held = Claims.Contains(owner) && !Releases.Contains(owner);
-        return Task.FromResult(held ? new HostLockResult(HostLockState.Yours, owner, "yours") : new HostLockResult(HostLockState.Free, null, "free"));
+        bool yours;
+        lock (_sync) yours = Claims.Contains(owner) && !Releases.Contains(owner);
+        return Task.FromResult(yours ? new HostLockResult(HostLockState.Yours, owner, "yours")
+            : HeldBy != null ? new HostLockResult(HostLockState.HeldByOther, HeldBy, $"{lockPath} on {Name} is held by another run: {HeldBy}")
+            : new HostLockResult(HostLockState.Free, null, "free"));
     }
     public Task<HostLockResult> ReleaseLockAsync(string lockPath, string owner, TimeSpan timeout, CancellationToken cancellation = default)
     {
-        lock (_sync) Releases.Add(owner);
+        lock (_sync)
+        {
+            if (ReleaseLockResults.TryDequeue(out var result)) return Task.FromResult(result);
+            Releases.Add(owner);
+        }
         AfterRelease?.Invoke(owner);
         return Task.FromResult(new HostLockResult(HostLockState.Released, null, "released"));
     }
