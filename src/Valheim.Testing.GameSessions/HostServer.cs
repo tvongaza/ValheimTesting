@@ -37,17 +37,24 @@ public static class HostServer
     /// boot directory there. Returns once the server process exists, not when it is ready. A reply lost past
     /// <paramref name="timeout"/> is an unknown outcome: a server may be running, and the exception names its boot directory.
     /// </summary>
+    internal static readonly TimeSpan WindowsHandoffStartLimit = TimeSpan.FromMinutes(3);
+
     public static Task<HostServerProcess> StartAsync(IGameHost host, GameLaunch launch, string bootDirectory, TimeSpan timeout,
         IReadOnlyList<string>? logs = null, string? evidence = null, CancellationToken cancellation = default)
         => StartAsync(host, launch, bootDirectory, timeout, logs, evidence, logonSeams: null, cancellation);
 
     // logonSeams: the test seams of Get-VtServerLogon (elevated, session, desktops), so a test forces the interactive-token task.
     internal static async Task<HostServerProcess> StartAsync(IGameHost host, GameLaunch launch, string bootDirectory, TimeSpan timeout,
-        IReadOnlyList<string>? logs, string? evidence, IReadOnlyDictionary<string, string>? logonSeams, CancellationToken cancellation)
+        IReadOnlyList<string>? logs, string? evidence, IReadOnlyDictionary<string, string>? logonSeams, CancellationToken cancellation,
+        HostServerLaunchOwnership? ownership = null)
     {
         ArgumentNullException.ThrowIfNull(host);
         ArgumentNullException.ThrowIfNull(launch);
         if (timeout < TimeSpan.FromSeconds(15)) throw new ArgumentOutOfRangeException(nameof(timeout), "Allow a server start at least 15 s.");
+        // The Windows launcher keeps its game for 4 minutes awaiting the controller's handoff acknowledgement; a longer start
+        // would let it stop a game the controller still accepts.
+        if (launch.Platform == ClientPlatform.Windows && timeout > WindowsHandoffStartLimit)
+            throw new ArgumentOutOfRangeException(nameof(timeout), "A Windows server start waits at most 3 minutes (its launcher awaits the handoff for 4).");
         if (!launch.IsServer || !launch.ForHost)
             throw new ArgumentException("A host starts a dedicated-server launch built for it: GameLaunch.ForServer with the host's platform.", nameof(launch));
         bool windows = launch.Platform == ClientPlatform.Windows;
@@ -62,6 +69,10 @@ public static class HostServer
                 throw new ArgumentException($"'{log}' is not a path inside the runtime.", nameof(logs));
         if (evidence != null && (Directory.Exists(evidence) || File.Exists(evidence))) throw new ArgumentException("The evidence directory must be new: " + evidence, nameof(evidence));
 
+        ownership ??= HostServerLaunchOwnership.Create(launch.Platform);
+        if (!HostServerLaunchOwnership.ValidFileName(ownership.FileName) ||
+            (windows ? !HostServerLaunchOwnership.ValidTask(ownership.TaskName) : ownership.TaskName.Length != 0))
+            throw new ArgumentException("The launcher ownership identity is malformed.", nameof(ownership));
         var variables = new Dictionary<string, string>
         {
             ["runtime"] = launch.GameDirectory, ["logroot"] = launch.WorkingDirectory,
@@ -72,7 +83,7 @@ public static class HostServer
             ["spec"] = launch.Spec(), ["logs"] = string.Join('\n', kept),
             ["crossplay"] = launch.Crossplay ? "1" : "", ["libraries"] = string.Join('\n', CrossplayLibraries.PartyLibraries),
             ["seconds"] = Math.Max(5, (int)Math.Floor(timeout.TotalSeconds) - 10).ToString(CultureInfo.InvariantCulture),
-            ["task"] = "VT-Server-" + Guid.NewGuid().ToString("N"), ["launcher"] = HostServerScripts.WindowsLauncher,
+            ["task"] = ownership.TaskName, ["owner"] = ownership.FileName, ["launcher"] = HostServerScripts.WindowsLauncher,
         };
         foreach (var (name, value) in logonSeams ?? new Dictionary<string, string>())
             variables.Add(name is "elevated" or "session" or "desktops" ? name : throw new ArgumentException("Not a logon seam: " + name, nameof(logonSeams)), value);
@@ -341,8 +352,10 @@ internal static partial class HostServerScripts
     public static readonly string WindowsServerLogonCheck = (WindowsServerLogon + "\n'VT-LOGON ' + (Get-VtServerLogon)\n").ReplaceLineEndings("\n");
 
     // A task starts the server independent of the session that asked (Get-VtServerLogon decides its logon). The task and
-    // launch specification are removed after the child reports its PID. No Steam client is required.
-    // Variables: runtime, logroot, files, dir, spec, logs, seconds, task, launcher.
+    // launch specification are removed after the child reports its PID, which the start acknowledges (handoff.ack). Before the
+    // game starts, the launcher records itself and then the game in the ownership file (owner), which a recovery reads when the
+    // pid file never appeared (#800). No Steam client is required.
+    // Variables: runtime, logroot, files, dir, spec, logs, seconds, task, owner, launcher.
     public static readonly string WindowsStart = (WindowsServerLogon + "\n" + """
         $utf8 = New-Object Text.UTF8Encoding $false
         foreach ($file in ($files -split "`n")) {
@@ -367,9 +380,15 @@ internal static partial class HostServerScripts
         $launcherFile = Join-Path $dir 'launcher.ps1'
         $pidFile = Join-Path $dir 'pid'
         $errorFile = Join-Path $dir 'launcher-error.txt'
+        $ownerFile = Join-Path $dir $owner
+        $taskFile = Join-Path $dir 'launcher-task'
+        $ownerNameFile = Join-Path $dir 'launcher-owner-name'
+        $ackFile = Join-Path $dir 'handoff.ack'
         $verdict = $null
         try {
             [IO.File]::WriteAllText($specFile, $spec, $utf8)
+            [IO.File]::WriteAllText($taskFile, $task, $utf8)
+            [IO.File]::WriteAllText($ownerNameFile, $owner, $utf8)
             [IO.File]::WriteAllText($launcherFile, $launcher, (New-Object Text.UTF8Encoding $true))
             $service = New-Object -ComObject Schedule.Service
             $service.Connect()
@@ -403,7 +422,14 @@ internal static partial class HostServerScripts
                         # hold one for a moment: a file that cannot be read yet is read again on the next look.
                         $started = $null; $reported = $null
                         try { if ([IO.File]::Exists($pidFile)) { $started = [IO.File]::ReadAllText($pidFile, $utf8) } } catch { $unread = $_.Exception.Message }
-                        if ($null -ne $started) { $verdict = 'VT-SERVER started ' + $started.Trim(); break }
+                        if ($null -ne $started) {
+                            $handoff = $started.Trim()
+                            if ($handoff -notmatch '^\d+ \d+$') { $verdict = 'VT-SERVER failed the launcher wrote a malformed process identity'; break }
+                            [IO.File]::WriteAllText($ackFile + '.tmp', 'ack', $utf8)
+                            [IO.File]::Move($ackFile + '.tmp', $ackFile)
+                            $verdict = 'VT-SERVER started ' + $handoff
+                            break
+                        }
                         try { if ([IO.File]::Exists($errorFile)) { $reported = [IO.File]::ReadAllText($errorFile, $utf8) } } catch { $unread = $_.Exception.Message }
                         if ($null -ne $reported) { $verdict = 'VT-SERVER failed the launcher reported: ' + ($reported -replace '\s+', ' ').Trim(); break }
                         # The task's own account of itself: a task that ran and ended without the launcher's file never reached
@@ -425,7 +451,33 @@ internal static partial class HostServerScripts
                     }
                 } finally { $watcher.Dispose() }
             } finally {
-                try { $folder.DeleteTask($task, 0) } catch { }
+                # Until the handoff is acknowledged, this uniquely named task and the launcher's ownership record own what the
+                # launch started. On any other verdict (a deadline, an unreadable pid file, a launcher that already exited) stop
+                # the task's instance, then the game the launcher recorded, by its exact start time, and prove it gone.
+                try {
+                    if ($verdict -like 'VT-SERVER started *') {
+                        # The launcher ends once it sees the acknowledgement: remove its task after that, as before the handoff wait.
+                        $until = [DateTime]::UtcNow.AddSeconds(15)
+                        while ($registered.State -eq 4 -and [DateTime]::UtcNow -lt $until) { [Threading.Thread]::Sleep(100) }
+                    } else {
+                        $left = $null
+                        try { if ($registered.State -in @(2, 4)) { $registered.Stop(0) } } catch { $left = 'stopping its task failed: ' + $_.Exception.Message }
+                        $words = @()
+                        try { if ([IO.File]::Exists($ownerFile)) { $words = @([IO.File]::ReadAllText($ownerFile, $utf8).Trim() -split '\s+') } } catch { $left = 'its ownership record could not be read: ' + $_.Exception.Message }
+                        if ($words.Count -eq 7 -and $words[0] -ceq 'windows' -and $words[1] -ceq $task) {
+                            $ownedGame = $null
+                            try { $ownedGame = [Diagnostics.Process]::GetProcessById([int]$words[5]) } catch [ArgumentException] { }
+                            try {
+                                if ($null -ne $ownedGame -and [string]$ownedGame.StartTime.ToFileTimeUtc() -ceq $words[6]) {
+                                    if (-not $ownedGame.HasExited) { $ownedGame.Kill($true) }
+                                    if (-not $ownedGame.WaitForExit(30000)) { $left = 'its game process ' + $words[5] + ' still runs after it was killed' }
+                                }
+                            } catch [InvalidOperationException] { } # it exited before its start time was read
+                            catch { $left = 'stopping its game process ' + $words[5] + ' failed: ' + $_.Exception.Message }
+                        }
+                        if ($left) { $verdict = [string]$verdict + '; ' + ($left -replace '\s+', ' ').Trim() }
+                    }
+                } finally { try { $folder.DeleteTask($task, 0) } catch { } }
             }
         } finally {
             if ([IO.File]::Exists($specFile)) { [IO.File]::Delete($specFile) }
@@ -439,9 +491,22 @@ internal static partial class HostServerScripts
         $ErrorActionPreference = 'Stop'
         $dir = $PSScriptRoot
         $utf8 = New-Object Text.UTF8Encoding $false
+        $game = $null
         try {
-            # Evidence that the task reached this script, and where: its process and session.
-            [IO.File]::WriteAllText((Join-Path $dir 'launcher.started'), [string]$PID + ' session ' + (Get-Process -Id $PID).SessionId, $utf8)
+            $self = Get-Process -Id $PID
+            $task = [IO.File]::ReadAllText((Join-Path $dir 'launcher-task'), $utf8).Trim()
+            $ownerName = [IO.File]::ReadAllText((Join-Path $dir 'launcher-owner-name'), $utf8).Trim()
+            if ($ownerName -notmatch '^launcher-[0-9a-f]{32}\.owner$' -or $task -notmatch '^VT-Server-[0-9a-f]{32}$') { throw 'The launcher ownership identity is missing or malformed.' }
+            $ownerPath = Join-Path $dir $ownerName
+            function Write-VtOwner([Diagnostics.Process]$ownedGame) {
+                $text = 'windows ' + $task + ' ' + $PID + ' ' + $self.StartTime.ToFileTimeUtc() + ' ' + $self.SessionId
+                if ($null -ne $ownedGame) { $text += ' ' + $ownedGame.Id + ' ' + $ownedGame.StartTime.ToFileTimeUtc() }
+                [IO.File]::WriteAllText($ownerPath + '.tmp', $text, $utf8)
+                [IO.File]::Move($ownerPath + '.tmp', $ownerPath, $true)
+            }
+            # Before the game exists, publish the exact task action and launcher process that own any later child.
+            Write-VtOwner $null
+            [IO.File]::WriteAllText((Join-Path $dir 'launcher.started'), [string]$PID + ' session ' + $self.SessionId, $utf8)
             $start = New-Object Diagnostics.ProcessStartInfo
             $start.UseShellExecute = $false
             $start.CreateNoWindow = $false
@@ -457,12 +522,26 @@ internal static partial class HostServerScripts
             [IO.File]::Delete((Join-Path $dir 'spec.txt'))
             foreach ($key in @($start.Environment.Keys)) { if ($key -like 'DOORSTOP_*') { [void]$start.Environment.Remove($key) } }
             $game = [Diagnostics.Process]::Start($start)
+            # The owner update precedes the ordinary pid publication, so recovery still has an exact game identity in that gap.
+            Write-VtOwner $game
             $temporary = Join-Path $dir 'pid.tmp'
             [IO.File]::WriteAllText($temporary, [string]$game.Id + ' ' + $game.StartTime.ToFileTimeUtc(), $utf8)
             [IO.File]::Move($temporary, (Join-Path $dir 'pid'))
+            # The task, and this launcher with it, owns the game until the controller acknowledges the pid. A controller that
+            # never does (killed, or its reply lost) leaves no game behind: the catch stops it, inside the task's 5-minute limit.
+            $deadline = [DateTime]::UtcNow.AddMinutes(4)
+            while (-not [IO.File]::Exists((Join-Path $dir 'handoff.ack'))) {
+                if ([DateTime]::UtcNow -ge $deadline) { throw 'The controller did not acknowledge the process handoff.' }
+                [Threading.Thread]::Sleep(100)
+            }
         } catch {
+            $launchError = $_.Exception.Message
+            if ($null -ne $game) {
+                try { $game.Kill($true); $game.WaitForExit() }
+                catch { $launchError += '; stopping the process tree also failed: ' + $_.Exception.Message }
+            }
             $temporary = Join-Path $dir 'launcher-error.tmp'
-            [IO.File]::WriteAllText($temporary, $_.Exception.Message, $utf8)
+            [IO.File]::WriteAllText($temporary, $launchError, $utf8)
             [IO.File]::Move($temporary, (Join-Path $dir 'launcher-error.txt'))
             exit 1
         }
@@ -489,7 +568,7 @@ internal static partial class HostServerScripts
         started() { local s; s=$(cat "/proc/$1/stat" 2> /dev/null) || return 1; s=${s##*) }; set -- $s; [ "$1" != Z ] && echo "${20}"; }
         """;
 
-    // Variables: runtime, workdir, exe, files, dir, spec, logs, seconds, crossplay, libraries. A crossplay launch first proves the game's
+    // Variables: runtime, workdir, exe, files, dir, spec, logs, seconds, crossplay, libraries, owner. A crossplay launch first proves the game's
     // libparty.so loads (CrossplayLibraryScripts), and otherwise replies with that check's lines and "libraries". The recorder writes the server's PID and start identity to
     // the boot's pid file (what an interrupted run's recovery reads, #257) and hands the PID back through a FIFO the script already holds open, so the start waits for that event (bounded by seconds) rather than looking for a file; the
     // FIFO is opened read-write at both ends, so neither side can block on a missing partner. The server's own descriptors
@@ -543,16 +622,24 @@ internal static partial class HostServerScripts
         mkfifo -m 600 -- "$dir/started" || exit 3
         exec 3<> "$dir/started"
         cd -- "$workdir" || exit 3
-        setsid bash -c 'f=$1; p=$2; x=$3; shift 3; exec 4<> "$f"; "$@" 4>&- & g=$!; s=$(cat "/proc/$g/stat" 2> /dev/null); s=${s##*) }; set -- $s; printf "%s %s\n" "$g" "${20:-}" > "$p.tmp" && mv -f -- "$p.tmp" "$p"; printf "%s\n" "$g" >&4; exec 4>&-; wait "$g"; printf "%s\n" "$?" > "$x.tmp" && mv -f -- "$x.tmp" "$x"' \
-            vt-server "$dir/started" "$dir/pid" "$dir/exit" env ${signals[@]+"${signals[@]}"} ${unsets[@]+"${unsets[@]}"} ${sets[@]+"${sets[@]}"} "$runtime/$exe" ${args[@]+"${args[@]}"} \
+        setsid bash -c 'f=$1; p=$2; x=$3; o=$4; shift 4; self=$$; s=$(cat "/proc/$self/stat" 2> /dev/null) || exit 3; read -r -a me <<< "${s##*) }"; [ "${me[2]:-}" = "$self" ] && [ "${me[3]:-}" = "$self" ] || exit 3; launcherStart=${me[19]:-}; [ -n "$launcherStart" ] || exit 3; printf "unix %s %s %s %s\n" "$self" "$launcherStart" "$self" "$self" > "$o.tmp" && mv -f -- "$o.tmp" "$o" || exit 3; exec 4<> "$f"; "$@" 4>&- & g=$!; s=$(cat "/proc/$g/stat" 2> /dev/null); s=${s##*) }; set -- $s; gameStart=${20:-}; if [ -n "$gameStart" ]; then printf "unix %s %s %s %s %s %s\n" "$self" "$launcherStart" "$self" "$self" "$g" "$gameStart" > "$o.tmp" && mv -f -- "$o.tmp" "$o"; fi; printf "%s %s\n" "$g" "$gameStart" > "$p.tmp" && mv -f -- "$p.tmp" "$p"; printf "%s\n" "$g" >&4; exec 4>&-; wait "$g"; printf "%s\n" "$?" > "$x.tmp" && mv -f -- "$x.tmp" "$x"' \
+            vt-server "$dir/started" "$dir/pid" "$dir/exit" "$dir/$owner" env ${signals[@]+"${signals[@]}"} ${unsets[@]+"${unsets[@]}"} ${sets[@]+"${sets[@]}"} "$runtime/$exe" ${args[@]+"${args[@]}"} \
             > "$dir/stdout.log" 2> "$dir/stderr.log" < /dev/null 3<&- &
+        launcher=$!
+        launcherStart=$(started "$launcher")
+        abandon() {
+            # The session/process-group leader just created above, signalled only while it is still that start: bash reaps an
+            # exited background job, so its PID (and its emptied group) can be reused. Once it has exited, its game has too.
+            if [ -n "$launcherStart" ] && [ "$(started "$launcher")" = "$launcherStart" ]; then kill -KILL -- "-$launcher" 2> /dev/null || true; fi
+            wait "$launcher" 2> /dev/null || true
+        }
         game=
         read -r -t "$seconds" -u 3 game
         exec 3<&-
         rm -f -- "$dir/started"
-        if [ -z "$game" ]; then echo "VT-SERVER failed no server process within $seconds s"; exit 0; fi
+        if [ -z "$game" ]; then abandon; echo "VT-SERVER failed no server process within $seconds s"; exit 0; fi
         start=$(started "$game")
-        if [ -z "$start" ]; then echo "VT-SERVER failed the server exited at once: $(tail -c 300 "$dir/stderr.log" 2> /dev/null | tr '\n' ' ')"; exit 0; fi
+        if [ -z "$start" ]; then abandon; echo "VT-SERVER failed the server exited at once: $(tail -c 300 "$dir/stderr.log" 2> /dev/null | tr '\n' ' ')"; exit 0; fi
         echo "VT-SERVER started $game $start"
         """).ReplaceLineEndings("\n");
 

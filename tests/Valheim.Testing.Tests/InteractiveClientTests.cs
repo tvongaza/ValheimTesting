@@ -607,17 +607,18 @@ public class InteractiveClientShellTests
             }
             var launch = GameLaunch.ForClientWithLoader(install, install, [], null, ClientPlatform.MacOS,
                 ClientArchitecture.Arm64, macDoorstop: "libdoorstop.dylib");
-            await using var standIn = await StandInClient.StartAsync(host, launch, launchDirectory, Generous,
-                nameof(CheckMacGuiAgentStartAndStop));
-            client = standIn.Process;
-            Assert.True(client.Id > 0);
-            Assert.True(File.Exists(Path.Combine(launchDirectory, "pid")));
-            Assert.NotNull(await HostProcessProbe.CommandLineAsync(host, client.Id, client.StartIdentity, TimeSpan.FromSeconds(10)));
-            Assert.Equal(InteractiveStop.Quit, await client.StopAsync(TimeSpan.FromSeconds(3), TimeSpan.FromSeconds(10)));
-            Assert.True(client.HasExited);
-            string label = File.ReadAllText(Path.Combine(launchDirectory, "label"));
-            // StopAsync's VT-AGENT verdict proves bootout; the exact label is kept as evidence.
-            Assert.StartsWith(InteractiveScripts.MacLabelPrefix, label);
+            await StandInClient.RunAsync(host, launch, launchDirectory, Generous, nameof(CheckMacGuiAgentStartAndStop), async started =>
+            {
+                client = started;
+                Assert.True(client.Id > 0);
+                Assert.True(File.Exists(Path.Combine(launchDirectory, "pid")));
+                Assert.NotNull(await HostProcessProbe.CommandLineAsync(host, client.Id, client.StartIdentity, TimeSpan.FromSeconds(10)));
+                Assert.Equal(InteractiveStop.Quit, await client.StopAsync(TimeSpan.FromSeconds(3), TimeSpan.FromSeconds(10)));
+                Assert.True(client.HasExited);
+                string label = File.ReadAllText(Path.Combine(launchDirectory, "label"));
+                // StopAsync's VT-AGENT verdict proves bootout; the exact label is kept as evidence.
+                Assert.StartsWith(InteractiveScripts.MacLabelPrefix, label);
+            });
         }
         finally
         {
@@ -669,28 +670,29 @@ public class InteractiveClientShellTests
             var secretsBefore = Directory.GetFiles(Path.GetTempPath(), "vt-secrets-*").ToHashSet();
 
             string launchDirectory = Path.Combine(root.Path, "launch-2");
-            await using var standIn = await StandInClient.StartAsync(host, launch, launchDirectory, Generous,
-                nameof(AWindowsClientStartsThroughATaskInTheRunnersDesktopSession));
-            var client = standIn.Process;
-            using (var process = Process.GetProcessById(client.Id))
+            await StandInClient.RunAsync(host, launch, launchDirectory, Generous,
+                nameof(AWindowsClientStartsThroughATaskInTheRunnersDesktopSession), async client =>
             {
-                Assert.Equal("valheim", process.ProcessName, ignoreCase: true);
-                Assert.Equal(process.StartTime.ToFileTimeUtc().ToString(CultureInfo.InvariantCulture), client.StartIdentity);
-                Assert.Equal(process.SessionId, Process.GetCurrentProcess().SessionId);
-            }
-            Assert.NotEqual(0, Run(Path.Combine(system, "schtasks.exe"), "/Query", "/TN", client.TaskName!));
-            // #257: the journalled command line is the started client's, its pid file names it, and the launch spec is gone.
-            var probed = (await HostProcessProbe.ProbeAsync(host, [(client.Id, client.StartIdentity)], Generous))[(client.Id, client.StartIdentity)];
-            Assert.Equal(launch.CommandLineSha256(), probed.CommandLineSha256);
-            var pidFile = Assert.Single(await RunJournalStatus.ReadPidFilesAsync(host, [launchDirectory], Generous, default));
-            Assert.Equal((client.Id, client.StartIdentity), (pidFile.Pid, pidFile.StartIdentity));
-            Assert.False(File.Exists(Path.Combine(launchDirectory, "spec.txt")));
-            Assert.Empty(Directory.GetFiles(Path.GetTempPath(), "vt-secrets-*").Where(file => !secretsBefore.Contains(file)));
-            foreach (string file in Directory.GetFiles(launchDirectory)) Assert.DoesNotContain(canary, File.ReadAllText(file));
+                using (var process = Process.GetProcessById(client.Id))
+                {
+                    Assert.Equal("valheim", process.ProcessName, ignoreCase: true);
+                    Assert.Equal(process.StartTime.ToFileTimeUtc().ToString(CultureInfo.InvariantCulture), client.StartIdentity);
+                    Assert.Equal(process.SessionId, Process.GetCurrentProcess().SessionId);
+                }
+                Assert.NotEqual(0, Run(Path.Combine(system, "schtasks.exe"), "/Query", "/TN", client.TaskName!));
+                // #257: the journalled command line is the started client's, its pid file names it, and the launch spec is gone.
+                var probed = (await HostProcessProbe.ProbeAsync(host, [(client.Id, client.StartIdentity)], Generous))[(client.Id, client.StartIdentity)];
+                Assert.Equal(launch.CommandLineSha256(), probed.CommandLineSha256);
+                var pidFile = Assert.Single(await RunJournalStatus.ReadPidFilesAsync(host, [launchDirectory], Generous, default));
+                Assert.Equal((client.Id, client.StartIdentity), (pidFile.Pid, pidFile.StartIdentity));
+                Assert.False(File.Exists(Path.Combine(launchDirectory, "spec.txt")));
+                Assert.Empty(Directory.GetFiles(Path.GetTempPath(), "vt-secrets-*").Where(file => !secretsBefore.Contains(file)));
+                foreach (string file in Directory.GetFiles(launchDirectory)) Assert.DoesNotContain(canary, File.ReadAllText(file));
 
-            Assert.Equal(InteractiveStop.Stopped, await client.StopAsync(TimeSpan.FromSeconds(30)));
-            Assert.Throws<ArgumentException>(() => Process.GetProcessById(client.Id).Dispose());
-            Assert.False(bystander.HasExited);
+                Assert.Equal(InteractiveStop.Stopped, await client.StopAsync(TimeSpan.FromSeconds(30)));
+                Assert.Throws<ArgumentException>(() => Process.GetProcessById(client.Id).Dispose());
+                Assert.False(bystander.HasExited);
+            });
         }
         finally
         {

@@ -40,6 +40,49 @@ public sealed class RunRecoveryTests : IDisposable
             ("commandLineSha256", FakeServerHost.CommandLineSha256("41")), ("bootDirectory", "/srv/runs/cut/boot-1"));
     }
 
+    // #800: a server launch whose controller died before its pid file existed is named by the launcher's ownership record, written
+    // before the game was spawned. Recovery retires that exact launcher and stops the game it recorded, each proven by ID and start
+    // time (the game by its command line too). A record whose launcher ID now belongs to another start is never acted on, and one
+    // whose game ID was reused proves the launch gone.
+    [Fact]
+    public async Task ALauncherOwnershipRecordRecoversALaunchWithoutAPidFileAndNeverAReusedIdentity()
+    {
+        string owner = HostServerLaunchOwnership.Create(ClientPlatform.Linux).FileName;
+        void Launch(string run, string record)
+        {
+            string directory = "/srv/runs/" + run + "/boot-1";
+            Line(_host, run, "server", Gone, JournalEntry.ProcessIntended, ("bootDirectory", directory),
+                ("expectedCommandLineSha256", FakeServerHost.CommandLineSha256("82")), ("quitSeconds", "0"),
+                ("launcherOwnershipFile", owner), ("launcherTask", ""));
+            Directory.CreateDirectory(_host.Local(directory));
+            File.WriteAllText(Path.Combine(_host.Local(directory), owner), record);
+        }
+        _host.Running(81, "9081");
+        _host.Running(82, "9082");
+        Launch("run-owned", "unix 81 9081 81 81 82 9082\n");
+        _host.Running(83, "8000");                                      // the recorded launcher's ID, started at another time
+        Launch("run-launcher-reused", "unix 83 9083 83 83\n");
+        _host.Running(86, "7000");                                      // launcher gone; the recorded game's ID reused
+        Launch("run-game-reused", "unix 85 9085 85 85 86 9086\n");
+
+        var status = await StatusAsync();
+        var owned = Assert.Single(Assert.Single(status.Runs, run => run.Run == "run-owned").Items);
+        Assert.Equal(("launcher", "81 (started 9081)", false), (owned.Kind, owned.What, owned.Unrecoverable));
+        var reused = Assert.Single(status.Runs, run => run.Run == "run-launcher-reused");
+        Assert.Equal(JournalRunState.Unrecoverable, reused.State);
+        Assert.Contains("gone without recording whether it started the game", Assert.Single(reused.Items).Status);
+        Assert.Equal(JournalRunState.Ended, Assert.Single(status.Runs, run => run.Run == "run-game-reused").State);
+
+        var report = await RecoverAsync("run-owned");
+        Assert.True(report.Recovered, string.Join("\n", report.Steps));
+        Assert.Contains(report.Steps, step => step.What == "launcher 81 (started 9081)" && !step.Failed &&
+            step.Outcome == "stopped; its recorded game was stopped");
+        Assert.False((await RecoverAsync("run-launcher-reused")).Recovered);
+        Assert.Equal([("82", "9082")], _host.Stops);
+        Assert.Equal(["81"], _host.Runs.Where(call => call.Script == "launcher-retire").Select(call => call.Variables["launcherPid"]));
+        Assert.True(_host.IsRunning(83) && _host.IsRunning(86), "a reused ID's process was stopped");
+    }
+
     [Fact]
     public async Task RegressionCharacterIntentWithoutCompletionCannotDeleteASameNamedSave()
     {

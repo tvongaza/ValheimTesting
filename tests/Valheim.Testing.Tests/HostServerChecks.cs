@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using Valheim.Testing.Game;
@@ -8,7 +9,7 @@ using Valheim.Testing.GameSessions;
 // a stand-in server (a script with the server's name that writes ValheimCLI's listening line and keeps running) started,
 // awaited in its log, stopped by identity beside a bystander, and its evidence fetched back. Locally on Linux, and over a real
 // ssh to localhost and into a real container in the game-hosts CI job. Everything lives under one new root, removed at the end.
-internal static class HostServerChecks
+internal static partial class HostServerChecks
 {
     private static readonly TimeSpan Generous = GameHostChecks.Generous;
 
@@ -19,36 +20,38 @@ internal static class HostServerChecks
             string install = prepared.Install, boot = root + "/boot";
             var before = await HostInstall.ListAsync(host, install, Generous);
             var launch = prepared.Launch;
-            await using var running = await StandInServer.StartAsync(host, launch, boot, Generous,
-                nameof(ANativeMacServerProfileStartsAndQuitsByIdentity), logs: []);
-            var process = running.Process;
-            try
+            await StandInServer.RunAsync(host, launch, boot, Generous,
+                nameof(ANativeMacServerProfileStartsAndQuitsByIdentity), async process =>
             {
-                (await host.WaitForLogAsync(boot + "/stdout.log", 0,
-                    new System.Text.RegularExpressions.Regex("native server running"), null, Generous)).EnsureMatched();
-                var found = (await HostProcessProbe.ProbeAsync(host, [(process.Id, process.StartIdentity)], Generous))
-                    [(process.Id, process.StartIdentity)];
-                Assert.Equal(ProbedState.Same, found.State);
-                Assert.Equal(launch.CommandLineSha256(), found.CommandLineSha256);
-                Assert.Equal(HostServerStop.Quit, await process.StopAsync(TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5)));
-                Assert.Equal(0, await process.WaitForExitAsync(CancellationToken.None));
-                Assert.Contains("native server stopped", (await host.RunAsync("cat \"$boot/stdout.log\"",
-                    new Dictionary<string, string> { ["boot"] = boot }, Generous)).Stdout);
-            }
-            finally { if (!process.HasExited) await process.StopAsync(TimeSpan.FromSeconds(5)); }
-            await using var killedServer = await StandInServer.StartAsync(host, launch, root + "/killed", Generous,
-                nameof(ANativeMacServerProfileStartsAndQuitsByIdentity), logs: []);
-            var killed = killedServer.Process;
-            try
+                try
+                {
+                    (await host.WaitForLogAsync(boot + "/stdout.log", 0,
+                        new System.Text.RegularExpressions.Regex("native server running"), null, Generous)).EnsureMatched();
+                    var found = (await HostProcessProbe.ProbeAsync(host, [(process.Id, process.StartIdentity)], Generous))
+                        [(process.Id, process.StartIdentity)];
+                    Assert.Equal(ProbedState.Same, found.State);
+                    Assert.Equal(launch.CommandLineSha256(), found.CommandLineSha256);
+                    Assert.Equal(HostServerStop.Quit, await process.StopAsync(TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5)));
+                    Assert.Equal(0, await process.WaitForExitAsync(CancellationToken.None));
+                    Assert.Contains("native server stopped", (await host.RunAsync("cat \"$boot/stdout.log\"",
+                        new Dictionary<string, string> { ["boot"] = boot }, Generous)).Stdout);
+                }
+                finally { if (!process.HasExited) await process.StopAsync(TimeSpan.FromSeconds(5)); }
+            }, logs: []);
+            await StandInServer.RunAsync(host, launch, root + "/killed", Generous,
+                nameof(ANativeMacServerProfileStartsAndQuitsByIdentity), async killed =>
             {
-                (await host.WaitForLogAsync(root + "/killed/stdout.log", 0,
-                    new System.Text.RegularExpressions.Regex("native server running"), null, Generous)).EnsureMatched();
-                (await host.RunAsync("kill -KILL \"$game\"",
-                    new Dictionary<string, string> { ["game"] = killed.Id.ToString(System.Globalization.CultureInfo.InvariantCulture) }, Generous))
-                    .EnsureSuccess("Killing the Mac server stand-in");
-                Assert.Equal(137, await killed.WaitForExitAsync(CancellationToken.None));
-            }
-            finally { if (!killed.HasExited) await killed.StopAsync(TimeSpan.FromSeconds(5)); }
+                try
+                {
+                    (await host.WaitForLogAsync(root + "/killed/stdout.log", 0,
+                        new System.Text.RegularExpressions.Regex("native server running"), null, Generous)).EnsureMatched();
+                    (await host.RunAsync("kill -KILL \"$game\"",
+                        new Dictionary<string, string> { ["game"] = killed.Id.ToString(System.Globalization.CultureInfo.InvariantCulture) }, Generous))
+                        .EnsureSuccess("Killing the Mac server stand-in");
+                    Assert.Equal(137, await killed.WaitForExitAsync(CancellationToken.None));
+                }
+                finally { if (!killed.HasExited) await killed.StopAsync(TimeSpan.FromSeconds(5)); }
+            }, logs: []);
             HostInstall.RequireSame(before.Files, await HostInstall.ListAsync(host, install, Generous), "Mac server source after a profile boot");
         }, serversRunFromIt: true);
 
@@ -87,16 +90,16 @@ internal static class HostServerChecks
             var before = await HostInstall.ListAsync(host, install, Generous);
             var launch = GameLaunch.ForServerWithLoader(install, profile, ["-batchmode"], null, ServerPlatform.Linux);
             using var evidence = new TempDirectory();
-            await using var standIn = await StandInServer.StartAsync(host, launch, boot, Generous,
-                nameof(AProfileServerKeepsRuntimeWritesOutOfTheInstall),
-                logs: [HostedServerRun.BepInExLog, HostedServerRun.UnityLog], evidence: Path.Combine(evidence.Path, "boot"));
-            var process = standIn.Process;
-            try
+            await StandInServer.RunAsync(host, launch, boot, Generous,
+                nameof(AProfileServerKeepsRuntimeWritesOutOfTheInstall), async process =>
             {
-                (await host.WaitForLogAsync(profile + "/logs/stats_log.txt", 0,
-                    new System.Text.RegularExpressions.Regex("owned runtime output"), null, Generous)).EnsureMatched();
-            }
-            finally { await process.StopAsync(TimeSpan.FromSeconds(15)); }
+                try
+                {
+                    (await host.WaitForLogAsync(profile + "/logs/stats_log.txt", 0,
+                        new System.Text.RegularExpressions.Regex("owned runtime output"), null, Generous)).EnsureMatched();
+                }
+                finally { await process.StopAsync(TimeSpan.FromSeconds(15)); }
+            }, logs: [HostedServerRun.BepInExLog, HostedServerRun.UnityLog], evidence: Path.Combine(evidence.Path, "boot"));
             HostInstall.RequireSame(before.Files, await HostInstall.ListAsync(host, install, Generous), "source install after profile boot");
             (await host.WaitForLogAsync(profile + "/logs/stats_log.txt", 0,
                 new System.Text.RegularExpressions.Regex("owned runtime output"), null, Generous)).EnsureMatched();
@@ -136,41 +139,42 @@ internal static class HostServerChecks
             var launch = GameLaunch.ForServer(runtime, ["-batchmode", "-name", "it's a test"], new Dictionary<string, string> { ["VT_TEST_TOKEN"] = "token-123" }, hostPlatform: ServerPlatform.Linux);
             using var evidence = new TempDirectory();
             string local = Path.Combine(evidence.Path, "boot-1");
-            await using var standIn = await StandInServer.StartAsync(host, launch, root + "/run/boot-1", Generous,
-                nameof(AServerRunsFromAVerifiedCopyAndStopsByIdentity), ["BepInEx/LogOutput.log", "toolkit-unity.log"], local);
-            var process = standIn.Process;
-            try
+            await StandInServer.RunAsync(host, launch, root + "/run/boot-1", Generous,
+                nameof(AServerRunsFromAVerifiedCopyAndStopsByIdentity), async process =>
             {
-                string line = (await host.WaitForLogAsync(runtime + "/BepInEx/LogOutput.log", 0, StartupEvents.CliListening, StartupEvents.StartupFailures, Generous)).EnsureMatched();
-                Assert.EndsWith("this boot", line);
-                // #257: the boot's pid file names the server by ID and start identity, as an interrupted run's recovery reads it.
-                var pidFile = Assert.Single(await RunJournalStatus.ReadPidFilesAsync(host, [root + "/run/boot-1"], Generous, default));
-                Assert.Equal((RunJournalStatus.PidFileState.Found, process.Id, process.StartIdentity), (pidFile.State, pidFile.Pid, pidFile.StartIdentity));
-                await Assert.ThrowsAsync<InvalidOperationException>(() => HostServer.StartAsync(host, launch, root + "/run/boot-1", Generous));
-            }
-            catch
-            {
-                // Stop it anyway, and report what failed first.
-                try { await process.StopAsync(TimeSpan.FromSeconds(15)); } catch { }
-                throw;
-            }
-            Assert.Equal(HostServerStop.Stopped, await process.StopAsync(TimeSpan.FromSeconds(15)));
-            Assert.Equal(137, await process.WaitForExitAsync(CancellationToken.None));
-            Assert.Equal(HostServerStop.AlreadyGone, await process.StopAsync(TimeSpan.FromSeconds(15)));
-            // The bystander is untouched.
-            Assert.True((await host.RunAsync("kill -0 \"$p\"", new Dictionary<string, string> { ["p"] = bystander }, Generous)).Succeeded, "The bystander was stopped.");
+                try
+                {
+                    string line = (await host.WaitForLogAsync(runtime + "/BepInEx/LogOutput.log", 0, StartupEvents.CliListening, StartupEvents.StartupFailures, Generous)).EnsureMatched();
+                    Assert.EndsWith("this boot", line);
+                    var pidFile = Assert.Single(await RunJournalStatus.ReadPidFilesAsync(host, [root + "/run/boot-1"], Generous, default));
+                    Assert.Equal((RunJournalStatus.PidFileState.Found, process.Id, process.StartIdentity), (pidFile.State, pidFile.Pid, pidFile.StartIdentity));
+                    await Assert.ThrowsAsync<InvalidOperationException>(() => HostServer.StartAsync(host, launch, root + "/run/boot-1", Generous));
+                }
+                catch
+                {
+                    try { await process.StopAsync(TimeSpan.FromSeconds(15)); } catch { }
+                    throw;
+                }
+                Assert.Equal(HostServerStop.Stopped, await process.StopAsync(TimeSpan.FromSeconds(15)));
+                Assert.Equal(137, await process.WaitForExitAsync(CancellationToken.None));
+                Assert.Equal(HostServerStop.AlreadyGone, await process.StopAsync(TimeSpan.FromSeconds(15)));
+                Assert.True((await host.RunAsync("kill -0 \"$p\"", new Dictionary<string, string> { ["p"] = bystander }, Generous)).Succeeded, "The bystander was stopped.");
+            }, ["BepInEx/LogOutput.log", "toolkit-unity.log"], local);
 
             // A clean stop sends SIGINT and the stand-in exits by itself (130: ended by SIGINT, not killed); one that ignores
             // SIGINT is killed once the wait is over (137). The bystander is untouched either way.
             async Task<ProcessStop> StopAfterListening(GameLaunch boot, string name, TimeSpan quit)
             {
-                await using var standIn = await StandInServer.StartAsync(host, boot, root + "/run/" + name, Generous,
-                    nameof(AServerRunsFromAVerifiedCopyAndStopsByIdentity), ["BepInEx/LogOutput.log"], Path.Combine(evidence.Path, name));
-                var started = standIn.Process;
-                (await host.WaitForLogAsync(runtime + "/BepInEx/LogOutput.log", 0, StartupEvents.CliListening, StartupEvents.StartupFailures, Generous)).EnsureMatched();
-                var stop = started.StopCleanly(quit, TimeSpan.FromSeconds(15));
-                Assert.True(started.HasExited);
-                return stop with { ExitCode = await started.WaitForExitAsync(CancellationToken.None) };
+                ProcessStop? answer = null;
+                await StandInServer.RunAsync(host, boot, root + "/run/" + name, Generous,
+                    nameof(AServerRunsFromAVerifiedCopyAndStopsByIdentity), async started =>
+                    {
+                        (await host.WaitForLogAsync(runtime + "/BepInEx/LogOutput.log", 0, StartupEvents.CliListening, StartupEvents.StartupFailures, Generous)).EnsureMatched();
+                        var stop = started.StopCleanly(quit, TimeSpan.FromSeconds(15));
+                        Assert.True(started.HasExited);
+                        answer = stop with { ExitCode = await started.WaitForExitAsync(CancellationToken.None) };
+                    }, ["BepInEx/LogOutput.log"], Path.Combine(evidence.Path, name));
+                return answer!;
             }
             var clean = await StopAfterListening(launch, "boot-2", TimeSpan.FromSeconds(15));
             Assert.Equal((StopOutcome.Clean, 130, "SIGINT"), (clean.Outcome, clean.ExitCode, clean.Request));
@@ -275,6 +279,81 @@ internal static class HostServerChecks
     }
 }
 
+internal static partial class HostServerChecks
+{
+    // #800: the controller of a real start is killed while its launcher, paused by the test after recording the game in its
+    // ownership file, has not yet published the pid file; env recover then names the launch by that record alone and stops it.
+    internal static async Task RecoveryStopsALauncherWhoseControllerDiedBeforePidPublication(HostShell shell, string root,
+        string platform, Func<IGameHost, Task<GameLaunch>> prepare)
+    {
+        var controller = new KillableControllerLauncher();
+        var host = new BeforePidPausedHost(new LocalGameHost("interrupted-controller", shell, controller));
+        var launch = await prepare(host);
+        string boot = Path.Combine(root, "boot"), runId = "run-launcher-owner";
+        var ownership = HostServerLaunchOwnership.Create(launch.Platform);
+        var profile = new HostProfile { Kind = "local", Platform = platform, Lock = Path.Combine(root, "host.lock") };
+        var hosts = new Dictionary<string, HostProfile> { [host.Name] = profile };
+        // The interrupted run's journal as HostedServerRun writes it before the start, by a runner that is gone.
+        string line = new RunJournal(runId).Line("server", JournalEntry.Of(JournalEntry.ProcessIntended,
+            ("bootDirectory", boot), ("expectedCommandLineSha256", launch.CommandLineSha256()), ("quitSeconds", "0"),
+            ("launcherOwnershipFile", ownership.FileName), ("launcherTask", ownership.TaskName)));
+        var json = System.Text.Json.Nodes.JsonNode.Parse(line)!.AsObject();
+        json["runner"]!.AsObject()["pid"] = int.MaxValue;
+        json["runner"]!.AsObject()["startedUtc"] = DateTime.UnixEpoch.ToString("O");
+        string journalDirectory = Path.Combine(RunJournal.DirectoryFor(profile), runId);
+        Directory.CreateDirectory(journalDirectory);
+        File.WriteAllText(Path.Combine(journalDirectory, "server.jsonl"), json.ToJsonString() + "\n");
+
+        Guid registration = await StandInProcessGuard.BeginServerAsync(host, launch, boot, [], null,
+            nameof(RecoveryStopsALauncherWhoseControllerDiedBeforePidPublication), Generous);
+        HostServerProcess? captured = null;
+        Task<HostServerProcess>? start = null;
+        try
+        {
+            start = HostServer.StartAsync(host, launch, boot, Generous, [], null, logonSeams: null, cancellation: default, ownership: ownership);
+            string gap = Path.Combine(boot, ownership.FileName + ".controller-gap");
+            var deadline = DateTime.UtcNow.AddSeconds(60);
+            while (!File.Exists(gap) && !start.IsCompleted && DateTime.UtcNow < deadline) await Task.Delay(50);
+            string Detail(string name) => File.Exists(Path.Combine(boot, name)) ? File.ReadAllText(Path.Combine(boot, name)) : "<missing>";
+            string completed = start.IsCompleted ? " The start completed: " + await Record.ExceptionAsync(() => start) : "";
+            Assert.True(File.Exists(gap), "The real launcher did not reach the test's before-pid gap." + completed +
+                " stderr: " + Detail("stderr.log") + " launcher error: " + Detail("launcher-error.txt") + " owner: " + Detail(ownership.FileName));
+            var owner = HostServerLaunchOwnership.Parse(File.ReadAllText(Path.Combine(boot, ownership.FileName)));
+            Assert.NotNull(owner.GamePid);
+            Assert.False(File.Exists(Path.Combine(boot, "pid")));
+            captured = new HostServerProcess(host, owner.GamePid!.Value, owner.GameStartIdentity!, boot,
+                launch.GameDirectory, [], null, launch.WorkingDirectory, launch.Platform);
+            StandInProcessGuard.Started(registration, captured);
+
+            controller.KillController();
+            await Assert.ThrowsAnyAsync<Exception>(() => start);
+
+            var report = await RunRecovery.RecoverAsync(hosts, _ => host, runId, teardown: false, Generous);
+            Assert.True(report.Recovered, string.Join("\n", report.Steps));
+            Assert.Contains(report.Steps, step => step.What == $"launcher {owner.LauncherPid} (started {owner.LauncherStartIdentity})" &&
+                step.Outcome == "stopped; its recorded game was stopped");
+            var state = (await HostProcessProbe.ProbeAsync(host, [(captured.Id, captured.StartIdentity), (owner.LauncherPid, owner.LauncherStartIdentity)],
+                Generous)).Values.Select(process => process.State).ToList();
+            Assert.True(state.All(probed => probed is ProbedState.Gone or ProbedState.Reused), $"Recovery left the game or its launcher: {string.Join(", ", state)}.");
+            Assert.Equal(JournalRunState.Ended, Assert.Single((await RunJournalStatus.InspectAsync(hosts, _ => host, Generous)).Runs).State);
+        }
+        finally
+        {
+            try { controller.KillController(); } catch (InvalidOperationException) { }
+            // A launcher recovery did not stop still waits in the seam: let it go on (and, on Windows, past its handoff wait),
+            // so it ends once its game is stopped below.
+            if (Directory.Exists(boot))
+            {
+                File.WriteAllText(Path.Combine(boot, ownership.FileName + ".release"), "");
+                File.WriteAllText(Path.Combine(boot, "handoff.ack"), "ack");
+            }
+            if (start != null) try { await start; } catch { }
+            if (captured != null) await StandInProcessGuard.StopAndReleaseAsync(registration);
+            else await StandInProcessGuard.CleanupFailedStartAsync(registration);
+        }
+    }
+}
+
 public class LocalHostServerTests
 {
     // The start, stop and port check read Linux's /proc; the listing runs in every local shell.
@@ -325,6 +404,244 @@ public class LocalHostServerTests
     }
 }
 
+public sealed class StandInServerFixtureTests
+{
+    [Fact]
+    public async Task ABodyFailureRemainsTheFailureWhenCleanupAlsoFails()
+    {
+        var body = new InvalidOperationException("body failed");
+        var cleanup = new IOException("cleanup failed");
+
+        var caught = await Assert.ThrowsAsync<InvalidOperationException>(() => StandInServer.RunBodyWithCleanupAsync(
+            () => Task.FromException(body), () => ValueTask.FromException(cleanup)));
+
+        Assert.Same(body, caught);
+        Assert.Same(cleanup, caught.Data[StandInServer.CleanupErrorKey]);
+    }
+}
+
+[Trait("Os", "unix")]
+public sealed class UnixServerLauncherTimeoutTests
+{
+    [Fact]
+    public async Task RecoveryStopsARealLauncherWhoseControllerDiedBeforePidPublication()
+    {
+        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS()) return;
+        using var root = new TempDirectory();
+        await HostServerChecks.RecoveryStopsALauncherWhoseControllerDiedBeforePidPublication(HostShell.Bash, root.Path,
+            OperatingSystem.IsMacOS() ? "macos" : "linux", async host => OperatingSystem.IsMacOS()
+                ? (await MacServerStandIn.PrepareAsync(host, root.Path, GameHostChecks.Generous)).Launch
+                : LauncherTimeoutStandIn.Unix(root.Path, binary: true));
+    }
+
+    [Fact]
+    public async Task RetiringALauncherRecordWithAnotherStartIdentitySignalsNothing()
+    {
+        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS()) return;
+        using var root = new TempDirectory();
+        // A live session leader that is not the recorded launcher: same PID, group and session as the record, another start.
+        using var foreign = Process.Start(new ProcessStartInfo("/usr/bin/perl", ["-MPOSIX", "-e", "POSIX::setsid(); exec '/bin/sleep', '60'"]))!;
+        try
+        {
+            await Task.Delay(500);
+            var record = new HostServerLauncherRecord(ClientPlatform.Linux, foreign.Id, "1", foreign.Id, foreign.Id, "", null, null);
+            string verdict = await HostServerLauncher.RetireAsync(new LocalGameHost("launcher-reused", HostShell.Bash), record, root.Path,
+                TimeSpan.FromSeconds(15), default);
+            Assert.Equal("gone", verdict);
+            Assert.False(foreign.HasExited, "A launcher record with another start identity signalled the live process.");
+        }
+        finally { if (!foreign.HasExited) { foreign.Kill(); foreign.WaitForExit(); } }
+    }
+
+    [Fact]
+    public async Task ATimedOutLinuxHandoffKillsAndReapsItsProcessGroup()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+        using var root = new TempDirectory();
+        var realHost = new LocalGameHost("unix-launcher-timeout", HostShell.Bash);
+        var launch = LauncherTimeoutStandIn.Unix(root.Path);
+        string boot = Path.Combine(root.Path, "boot");
+        Guid registration = await StandInProcessGuard.BeginServerAsync(realHost, launch, boot, [], null,
+            nameof(ATimedOutLinuxHandoffKillsAndReapsItsProcessGroup), TimeSpan.FromSeconds(15));
+        HostServerProcess? captured = null;
+        try
+        {
+            var error = await Assert.ThrowsAsync<InvalidOperationException>(() => HostServer.StartAsync(
+                new LinuxHandoffIgnoringHost(realHost), launch, boot, TimeSpan.FromSeconds(15), logs: []));
+            captured = LauncherTimeoutStandIn.Captured(realHost, launch, boot, "pid", ClientPlatform.Linux);
+            Assert.True(captured != null, "The timed-out launcher recorded no usable identity: " +
+                (File.Exists(Path.Combine(boot, "pid")) ? File.ReadAllText(Path.Combine(boot, "pid")) : "pid file missing") +
+                "; stderr: " + (File.Exists(Path.Combine(boot, "stderr.log")) ? File.ReadAllText(Path.Combine(boot, "stderr.log")) : "missing"));
+            StandInProcessGuard.Started(registration, captured);
+            Assert.Contains("no server process within 5 s", error.Message);
+            var state = (await HostProcessProbe.ProbeAsync(realHost, [(captured.Id, captured.StartIdentity)],
+                TimeSpan.FromSeconds(15)))[(captured.Id, captured.StartIdentity)].State;
+            Assert.True(state is ProbedState.Gone or ProbedState.Reused,
+                $"Timed-out Linux launcher left stand-in process {captured.Id} {state}.");
+        }
+        finally
+        {
+            captured ??= LauncherTimeoutStandIn.Captured(realHost, launch, boot, "pid", ClientPlatform.Linux);
+            if (captured != null) StandInProcessGuard.Started(registration, captured);
+            if (captured != null) await StandInProcessGuard.StopAndReleaseAsync(registration);
+            else await StandInProcessGuard.CleanupFailedStartAsync(registration);
+        }
+    }
+
+    [Fact]
+    public async Task AFailedStartDoesNotAdoptAPidFromAPreexistingBootDirectory()
+    {
+        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS()) return;
+        using var root = new TempDirectory();
+        var host = new LocalGameHost("preexisting-boot", HostShell.Bash);
+        var launch = OperatingSystem.IsMacOS()
+            ? (await MacServerStandIn.PrepareAsync(host, root.Path, GameHostChecks.Generous)).Launch
+            : LauncherTimeoutStandIn.Unix(root.Path);
+        string boot = Path.Combine(root.Path, "old-boot");
+        Directory.CreateDirectory(boot);
+        using var foreign = Process.Start(new ProcessStartInfo("/bin/sleep", "300") { UseShellExecute = false })
+            ?? throw new IOException("Could not start the fixture's foreign process.");
+        var found = (await HostProcessProbe.ProbeAsync(host, [(foreign.Id, "")], TimeSpan.FromSeconds(15)))[(foreign.Id, "")];
+        Assert.Equal(ProbedState.Same, found.State);
+        Assert.NotNull(found.StartIdentity);
+        File.WriteAllText(Path.Combine(boot, "pid"), $"{foreign.Id} {found.StartIdentity}\n");
+        try
+        {
+            var refused = await Assert.ThrowsAsync<InvalidOperationException>(() => StandInServer.StartAsync(host, launch, boot,
+                TimeSpan.FromSeconds(15), nameof(AFailedStartDoesNotAdoptAPidFromAPreexistingBootDirectory), logs: []));
+            Assert.Equal($"{boot} already exists on {host.Name}; give each boot a new directory. Nothing was started.", refused.Message);
+            var after = (await HostProcessProbe.ProbeAsync(host, [(foreign.Id, found.StartIdentity)],
+                TimeSpan.FromSeconds(15)))[(foreign.Id, found.StartIdentity)].State;
+            Assert.Equal(ProbedState.Same, after);
+        }
+        finally
+        {
+            if (!foreign.HasExited) foreign.Kill(entireProcessTree: true);
+            await foreign.WaitForExitAsync();
+        }
+    }
+}
+
+// The fixture's own entry point on a real start and stop: a failed test body stays the failure when the stand-in's cleanup
+// then fails too, and the cleanup error rides along on it. The stop really runs; only its reply is lost.
+[Trait("Os", "unix")]
+public sealed class UnixStandInServerFixtureTests
+{
+    [Fact]
+    public async Task ABodyFailureRemainsPrimaryWhenTheRealFixtureCleanupReplyIsLost()
+    {
+        bool mac = OperatingSystem.IsMacOS();
+        if (!OperatingSystem.IsLinux() && !(mac && System.Runtime.InteropServices.RuntimeInformation.OSArchitecture ==
+            System.Runtime.InteropServices.Architecture.Arm64)) return;
+        var realHost = new LocalGameHost("local-bash", HostShell.Bash);
+        await GameHostChecks.WithRootAsync(realHost, Path.GetTempPath(), async root =>
+        {
+            var launch = mac ? (await MacServerStandIn.PrepareAsync(realHost, root, GameHostChecks.Generous)).Launch
+                : LauncherTimeoutStandIn.Unix(root);
+            var body = new InvalidOperationException("body failed through StandInServer.RunAsync");
+            var caught = await Record.ExceptionAsync(() => StandInServer.RunAsync(
+                new StopReplyLosingHost(realHost), launch, root + "/boot", GameHostChecks.Generous,
+                nameof(ABodyFailureRemainsPrimaryWhenTheRealFixtureCleanupReplyIsLost), _ => Task.FromException(body), logs: []));
+
+            Assert.Same(body, caught);
+            Assert.IsType<HostOperationException>(caught.Data[StandInServer.CleanupErrorKey]);
+            await HostedRuntimeStage.RequireStoppedAsync(realHost, GameHostChecks.Generous,
+                runtimes: [launch.GameDirectory], clientSession: false);
+        }, serversRunFromIt: true);
+    }
+}
+
+[Trait("Os", "windows")]
+public sealed class WindowsServerLauncherTimeoutTests
+{
+    [Fact]
+    public async Task ATimedOutTaskLauncherStopsItsProcessTree()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        using var root = new TempDirectory();
+        var realHost = new LocalGameHost("windows-launcher-timeout", HostShell.Pwsh);
+        try { await HostServer.RequireTaskLogonAsync(realHost, TimeSpan.FromSeconds(30)); }
+        catch (InvalidOperationException) when (Environment.GetEnvironmentVariable("VALHEIM_TESTING_WINDOWS_DESKTOP") != "1") { return; }
+        var launch = LauncherTimeoutStandIn.Windows(root.Path);
+        string boot = Path.Combine(root.Path, "boot with spaces");
+        Guid registration = await StandInProcessGuard.BeginServerAsync(realHost, launch, boot, [], null,
+            nameof(ATimedOutTaskLauncherStopsItsProcessTree), TimeSpan.FromSeconds(15));
+        HostServerProcess? captured = null;
+        try
+        {
+            var error = await Assert.ThrowsAsync<InvalidOperationException>(() => HostServer.StartAsync(
+                new WindowsHandoffIgnoringHost(realHost), launch, boot, TimeSpan.FromSeconds(15), logs: []));
+            captured = LauncherTimeoutStandIn.Captured(realHost, launch, boot,
+                WindowsHandoffIgnoringHost.CaptureFile, ClientPlatform.Windows);
+            Assert.NotNull(captured);
+            StandInProcessGuard.Started(registration, captured);
+            Assert.Contains("no process within 5 s", error.Message);
+            var state = (await HostProcessProbe.ProbeAsync(realHost, [(captured.Id, captured.StartIdentity)],
+                TimeSpan.FromSeconds(15)))[(captured.Id, captured.StartIdentity)].State;
+            Assert.True(state is ProbedState.Gone or ProbedState.Reused,
+                $"Timed-out Windows launcher left stand-in process {captured.Id} {state}.");
+        }
+        finally
+        {
+            captured ??= LauncherTimeoutStandIn.Captured(realHost, launch, boot,
+                WindowsHandoffIgnoringHost.CaptureFile, ClientPlatform.Windows);
+            if (captured != null) StandInProcessGuard.Started(registration, captured);
+            if (captured != null) await StandInProcessGuard.StopAndReleaseAsync(registration);
+            else await StandInProcessGuard.CleanupFailedStartAsync(registration);
+        }
+    }
+
+    [Fact]
+    public async Task RecoveryStopsARealLauncherWhoseControllerDiedBeforePidPublication()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        using var root = new TempDirectory();
+        var probe = new LocalGameHost("windows-interrupted-controller", HostShell.Pwsh);
+        try { await HostServer.RequireTaskLogonAsync(probe, TimeSpan.FromSeconds(30)); }
+        catch (InvalidOperationException) when (Environment.GetEnvironmentVariable("VALHEIM_TESTING_WINDOWS_DESKTOP") != "1") { return; }
+        await HostServerChecks.RecoveryStopsALauncherWhoseControllerDiedBeforePidPublication(HostShell.Pwsh, root.Path, "windows",
+            _ => Task.FromResult(LauncherTimeoutStandIn.Windows(root.Path)));
+    }
+
+    [Fact]
+    public async Task ACompletedTaskLauncherStillStopsItsProcessTreeWhenThePidHandoffFails()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        using var root = new TempDirectory();
+        var realHost = new LocalGameHost("windows-completed-launcher-timeout", HostShell.Pwsh);
+        try { await HostServer.RequireTaskLogonAsync(realHost, TimeSpan.FromSeconds(30)); }
+        catch (InvalidOperationException) when (Environment.GetEnvironmentVariable("VALHEIM_TESTING_WINDOWS_DESKTOP") != "1") { return; }
+        var launch = LauncherTimeoutStandIn.Windows(root.Path);
+        string boot = Path.Combine(root.Path, "completed launcher");
+        Guid registration = await StandInProcessGuard.BeginServerAsync(realHost, launch, boot, [], null,
+            nameof(ACompletedTaskLauncherStillStopsItsProcessTreeWhenThePidHandoffFails), TimeSpan.FromSeconds(15));
+        HostServerProcess? captured = null;
+        try
+        {
+            // A deadline well past the launcher's exit: the controller sees the task end, not its own deadline.
+            var error = await Assert.ThrowsAsync<InvalidOperationException>(() => HostServer.StartAsync(
+                new WindowsHandoffIgnoringHost(realHost, launcherExits: true), launch, boot, TimeSpan.FromSeconds(60), logs: []));
+            captured = LauncherTimeoutStandIn.Captured(realHost, launch, boot,
+                WindowsHandoffIgnoringHost.CaptureFile, ClientPlatform.Windows);
+            Assert.NotNull(captured);
+            StandInProcessGuard.Started(registration, captured);
+            Assert.Contains("task ended without the launcher starting the server", error.Message);
+            var state = (await HostProcessProbe.ProbeAsync(realHost, [(captured.Id, captured.StartIdentity)],
+                TimeSpan.FromSeconds(15)))[(captured.Id, captured.StartIdentity)].State;
+            Assert.True(state is ProbedState.Gone or ProbedState.Reused,
+                $"Completed Windows launcher left stand-in process {captured.Id} {state}.");
+        }
+        finally
+        {
+            captured ??= LauncherTimeoutStandIn.Captured(realHost, launch, boot,
+                WindowsHandoffIgnoringHost.CaptureFile, ClientPlatform.Windows);
+            if (captured != null) StandInProcessGuard.Started(registration, captured);
+            if (captured != null) await StandInProcessGuard.StopAndReleaseAsync(registration);
+            else await StandInProcessGuard.CleanupFailedStartAsync(registration);
+        }
+    }
+}
+
 [Trait("Os", "macos")]
 public sealed class MacStandInServerFixtureTests
 {
@@ -372,8 +689,8 @@ public sealed class MacStandInServerFixtureTests
             var prepared = await MacServerStandIn.PrepareAsync(realHost, root, GameHostChecks.Generous);
             string boot = root + "/boot";
             HostServerProcess? captured = null;
-            Guid registration = StandInProcessGuard.BeginServer(realHost, prepared.Launch, boot, [], null,
-                nameof(AFailedMacStartKillsTheDetachedProcessGroup));
+            Guid registration = await StandInProcessGuard.BeginServerAsync(realHost, prepared.Launch, boot, [], null,
+                nameof(AFailedMacStartKillsTheDetachedProcessGroup), GameHostChecks.Generous);
             HostServerProcess? ReadCaptured()
             {
                 string file = Path.Combine(boot, MacIdentityFailingHost.CaptureFile);
@@ -446,7 +763,7 @@ public sealed class MacStandInServerFixtureTests
             string project = Path.Combine(repository, "tests", "Valheim.Testing.StandInProcessLeakProbe",
                 "Valheim.Testing.StandInProcessLeakProbe.csproj");
             BuildRun run = await FixtureProjects.Dotnet(repository,
-                ["test", project, "-c", "Release", "--nologo", "-v:n"],
+                ["test", project, "-c", "Release", "--no-build", "--nologo", "-v:n"],
                 new Dictionary<string, string?> { ["VT_STANDIN_GUARD_PROBE_ROOT"] = root.Path }, timeoutMinutes: 3);
             process = ChildStandIn(host, root.Path);
             Assert.True(process != null, "The child did not record a stand-in identity.\n" + run.Output);
@@ -535,20 +852,21 @@ public class WindowsSshServerIntegrationTests
             var listing = await HostInstall.ListAsync(host, runtime, TimeSpan.FromSeconds(45));
             Assert.Equal(ServerPlatform.Windows, HostInstall.DetectServer(listing));
             var launch = GameLaunch.ForServer(runtime, ["-n", "60", "127.0.0.1"], hostPlatform: ServerPlatform.Windows);
-            await using var standIn = await StandInServer.StartAsync(host, launch, HostPath.Join(root, "run", "boot-1"),
-                TimeSpan.FromSeconds(90), nameof(AHeadlessServerSurvivesSshAndStopsByExactIdentity));
-            var process = standIn.Process;
-            try
+            await StandInServer.RunAsync(host, launch, HostPath.Join(root, "run", "boot-1"),
+                TimeSpan.FromSeconds(90), nameof(AHeadlessServerSurvivesSshAndStopsByExactIdentity), async process =>
             {
-                var status = await host.RunAsync("""
-                    $p = [Diagnostics.Process]::GetProcessById([int]$game)
-                    if ([string]$p.StartTime.ToFileTimeUtc() -cne $start -or $p.HasExited) { exit 3 }
-                    'VT-TEST alive'
-                    """, new Dictionary<string, string> { ["game"] = process.Id.ToString(), ["start"] = process.StartIdentity }, TimeSpan.FromSeconds(30));
-                Assert.True(status.Succeeded, status.Describe() + " " + status.Stderr);
-                Assert.Contains("VT-TEST alive", status.Stdout);
-            }
-            finally { Assert.Equal(HostServerStop.Stopped, await process.StopAsync(TimeSpan.FromSeconds(15))); stopped = true; }
+                try
+                {
+                    var status = await host.RunAsync("""
+                        $p = [Diagnostics.Process]::GetProcessById([int]$game)
+                        if ([string]$p.StartTime.ToFileTimeUtc() -cne $start -or $p.HasExited) { exit 3 }
+                        'VT-TEST alive'
+                        """, new Dictionary<string, string> { ["game"] = process.Id.ToString(), ["start"] = process.StartIdentity }, TimeSpan.FromSeconds(30));
+                    Assert.True(status.Succeeded, status.Describe() + " " + status.Stderr);
+                    Assert.Contains("VT-TEST alive", status.Stdout);
+                }
+                finally { Assert.Equal(HostServerStop.Stopped, await process.StopAsync(TimeSpan.FromSeconds(15))); stopped = true; }
+            });
         }
         finally
         {
@@ -617,27 +935,27 @@ public class WindowsSshServerIntegrationTests
             var launch = GameLaunch.ForServer(runtime,
                 ["-batchmode", "-nographics", "-name", "VT Windows host check", "-port", "2486", "-world", "VT249" + Guid.NewGuid().ToString("N")[..8],
                  "-password", "throwaway249", "-public", "0", "-savedir", HostPath.Join(root, "world"), "-logFile", HostPath.Join(runtime, "toolkit-unity.log")], hostPlatform: ServerPlatform.Windows);
-            await using var server = await StandInServer.StartAsync(host, launch, boot, TimeSpan.FromSeconds(90),
-                nameof(ADisposableGameServerLoadsBepInExAndQuitsCleanlyOverSsh), ["BepInEx/LogOutput.log", "toolkit-unity.log"]);
-            var process = server.Process;
-            try
+            await StandInServer.RunAsync(host, launch, boot, TimeSpan.FromSeconds(90),
+                nameof(ADisposableGameServerLoadsBepInExAndQuitsCleanlyOverSsh), async process =>
             {
-                string bepinex = HostPath.Join(runtime, "BepInEx", "LogOutput.log");
-                (await host.WaitForLogAsync(bepinex, 0, new System.Text.RegularExpressions.Regex("Chainloader startup complete", System.Text.RegularExpressions.RegexOptions.IgnoreCase),
-                    StartupEvents.StartupFailures, TimeSpan.FromMinutes(6))).EnsureMatched();
-                // The same run must reach a live CLI listener through an SSH loopback tunnel.
-                (await host.WaitForLogAsync(bepinex, 0, StartupEvents.CliListening, StartupEvents.StartupFailures, TimeSpan.FromMinutes(6))).EnsureMatched();
-                using var tunnel = await host.OpenCliTunnelAsync(5557, TimeSpan.FromSeconds(20));
-                using var tcp = new TcpClient();
-                await tcp.ConnectAsync(tunnel.Address, tunnel.LocalPort);
-                Assert.True(tcp.Connected);
-                (await host.WaitForLogAsync(HostPath.Join(runtime, "toolkit-unity.log"), 0,
-                    new System.Text.RegularExpressions.Regex("Opened Steam server", System.Text.RegularExpressions.RegexOptions.IgnoreCase),
-                    StartupEvents.StartupFailures, TimeSpan.FromMinutes(6))).EnsureMatched();
-                Assert.Equal(HostServerStop.Quit, await process.StopAsync(TimeSpan.FromSeconds(45), TimeSpan.FromSeconds(15)));
-                stopped = true;
-            }
-            finally { if (!stopped) { try { await process.StopAsync(TimeSpan.FromSeconds(20), TimeSpan.FromSeconds(15)); stopped = true; } catch { } } }
+                try
+                {
+                    string bepinex = HostPath.Join(runtime, "BepInEx", "LogOutput.log");
+                    (await host.WaitForLogAsync(bepinex, 0, new System.Text.RegularExpressions.Regex("Chainloader startup complete", System.Text.RegularExpressions.RegexOptions.IgnoreCase),
+                        StartupEvents.StartupFailures, TimeSpan.FromMinutes(6))).EnsureMatched();
+                    (await host.WaitForLogAsync(bepinex, 0, StartupEvents.CliListening, StartupEvents.StartupFailures, TimeSpan.FromMinutes(6))).EnsureMatched();
+                    using var tunnel = await host.OpenCliTunnelAsync(5557, TimeSpan.FromSeconds(20));
+                    using var tcp = new TcpClient();
+                    await tcp.ConnectAsync(tunnel.Address, tunnel.LocalPort);
+                    Assert.True(tcp.Connected);
+                    (await host.WaitForLogAsync(HostPath.Join(runtime, "toolkit-unity.log"), 0,
+                        new System.Text.RegularExpressions.Regex("Opened Steam server", System.Text.RegularExpressions.RegexOptions.IgnoreCase),
+                        StartupEvents.StartupFailures, TimeSpan.FromMinutes(6))).EnsureMatched();
+                    Assert.Equal(HostServerStop.Quit, await process.StopAsync(TimeSpan.FromSeconds(45), TimeSpan.FromSeconds(15)));
+                    stopped = true;
+                }
+                finally { if (!stopped) { try { await process.StopAsync(TimeSpan.FromSeconds(20), TimeSpan.FromSeconds(15)); stopped = true; } catch { } } }
+            }, ["BepInEx/LogOutput.log", "toolkit-unity.log"]);
             string? evidence = Environment.GetEnvironmentVariable("VALHEIM_TESTING_SSH_WINDOWS_EVIDENCE");
             if (evidence != null) await host.FetchDirectoryAsync(boot, evidence, TimeSpan.FromMinutes(2));
         }

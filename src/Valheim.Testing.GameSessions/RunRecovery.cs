@@ -173,6 +173,45 @@ internal static class RunRecovery
             { Step(taskItem.Host, what, "not removed: " + error.Message, failed: true); }
         }
 
+        // 0b. A server start interrupted before its pid file existed (#800): the game its launcher recorded is stopped first,
+        // as its run would have stopped it (asked to quit, then killed), once its ID, start time and command line still match;
+        // then the launcher's own group or tree, and on Windows its task registration, only while the launcher is still the one
+        // recorded. A reused ID is never touched.
+        foreach (var launcher in Of("launcher"))
+        {
+            string what = "launcher " + launcher.What;
+            try
+            {
+                var fields = launcher.Fields;
+                var owner = HostServerLauncherRecord.FromFields(fields);
+                var host = connections[launcher.Host];
+                string boot = fields["bootDirectory"], commandLine = fields.GetValueOrDefault("expectedCommandLineSha256") ?? "";
+                string gameOutcome = "";
+                if (owner.GamePid is { } game && owner.GameStartIdentity is { } start)
+                {
+                    var found = (await HostProcessProbe.ProbeAsync(host, [(game, start)], timeout, cancellation).ConfigureAwait(false))[(game, start)];
+                    if (found.State is ProbedState.Gone or ProbedState.Reused) gameOutcome = "; its recorded game was already gone";
+                    else if (found.State != ProbedState.Same || commandLine.Length == 0 ||
+                        !string.Equals(found.CommandLineSha256, commandLine, StringComparison.OrdinalIgnoreCase))
+                        throw new InvalidOperationException($"its recorded game {game} no longer has its ID, start time and command line; nothing was stopped");
+                    else
+                    {
+                        var quit = QuitBudget(fields);
+                        if (hosts[launcher.Host].Platform == "macos")
+                            await MacProcess.StopAsync(host, $"Mac process {game} on {host.Name}", game, start, quit, KillWait, commandLine, cancellation).ConfigureAwait(false);
+                        else
+                            await HostServerProcess.StopOnHostAsync(host, owner.Platform, game, start, boot, quit, KillWait, cancellation).ConfigureAwait(false);
+                        gameOutcome = "; its recorded game was stopped";
+                    }
+                }
+                string retired = await HostServerLauncher.RetireAsync(host, owner, boot, KillWait, cancellation).ConfigureAwait(false);
+                Step(launcher.Host, what, (retired == "gone" ? "already gone" : "stopped") + gameOutcome);
+                await Note(launcher.Host, Settled(launcher.Actor, boot)).ConfigureAwait(false);
+            }
+            catch (Exception error) when (error is not OperationCanceledException)
+            { Step(launcher.Host, what, "not stopped: " + error.Message, failed: true); }
+        }
+
         // 1. Every process on every host first: until all are proven gone, nothing they may use is touched anywhere.
         foreach (var group in Of("process").GroupBy(item => item.Host, StringComparer.Ordinal))
         {

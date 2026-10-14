@@ -442,13 +442,17 @@ internal sealed class HostedServerRun : IServerPlacement
         string quitSeconds = WaitText.WholeSeconds(quit);
         if (LocalMac) return StartLocalMac(launch, output, local, bootDirectory, quitSeconds, cancellation);
         HostServerProcess process;
-        // Journalled before the start: a run interrupted from here leaves a record of where its server's pid file is.
-        // With the command line the server will have, so its pid file alone proves it the run's (#257).
+        // Journalled before the start: a run interrupted from here leaves a record of where its server's pid file is, with the
+        // command line the server will have, so its pid file alone proves it the run's (#257). It also names the launcher's
+        // ownership file (and Windows start task), which the launcher writes before the game exists: a start killed before the
+        // pid file was published is still named by it (#800).
         string expected = launch.CommandLineSha256();
+        var ownership = HostServerLaunchOwnership.Create(launch.Platform);
         JournalAsync(Host, Role.Host, "server", JournalEntry.Of(JournalEntry.ProcessIntended, ("bootDirectory", bootDirectory),
-            ("expectedCommandLineSha256", expected), ("quitSeconds", quitSeconds)), cancellation).GetAwaiter().GetResult();
+            ("expectedCommandLineSha256", expected), ("quitSeconds", quitSeconds),
+            ("launcherOwnershipFile", ownership.FileName), ("launcherTask", ownership.TaskName)), cancellation).GetAwaiter().GetResult();
         try { process = HostServer.StartAsync(Host, launch, bootDirectory, HostedTimeouts.Quick, [BepInExLog, UnityLog], local,
-            logonSeams: null, cancellation: cancellation).GetAwaiter().GetResult(); }
+            logonSeams: null, cancellation: cancellation, ownership: ownership).GetAwaiter().GetResult(); }
         catch (Exception error) when (UnknownOutcome(error) != null)
         {
             // The start's reply was lost: a server may be running there that no session knows. The lock stays.

@@ -4,8 +4,8 @@ using System.Text.Json;
 using Xunit;
 using Valheim.Testing.GameSessions;
 
-// This class checks the real process table. Other test classes launch stand-ins named Valheim.exe and
-// valheim_server.exe; an idle check cannot race those launches and still have a deterministic verdict.
+// Classes in this collection check the real process table (this one, and the launch-gone idle checks). Other test classes
+// launch stand-ins with the game's names; an idle check cannot race those launches and still have a deterministic verdict.
 [CollectionDefinition(nameof(WindowsGameProcessInventory), DisableParallelization = true)]
 public sealed class WindowsGameProcessInventory { }
 
