@@ -21,6 +21,7 @@ public sealed class ClientSession : IDisposable, IWorldPins
     private readonly Action<IOwnedProcess, GameActor?, string>? _failureEvidence;
     private readonly string? _output;
     private readonly bool _ownsCommandLease;
+    private readonly UserSaveFilesGuard? _saveFiles;
     private bool _failureCaptured;
     private readonly object _stopping = new();
     private bool _disposed;
@@ -57,10 +58,10 @@ public sealed class ClientSession : IDisposable, IWorldPins
     public ProcessStop? Stopped { get; private set; }
 
     private ClientSession(GameActor actor, IOwnedProcess? process, IReadOnlyList<RunLog>? logs = null, ClientArchitecture? architecture = null,
-        string? output = null, Action<IOwnedProcess, GameActor?, string>? failureEvidence = null)
+        string? output = null, Action<IOwnedProcess, GameActor?, string>? failureEvidence = null, UserSaveFilesGuard? saveFiles = null)
     {
         Actor = actor; _process = process; Logs = logs ?? []; Architecture = architecture;
-        _output = output; _failureEvidence = failureEvidence;
+        _output = output; _failureEvidence = failureEvidence; _saveFiles = saveFiles;
         _ownsCommandLease = process is ILocalClientProcessIdentity;
         actor.WorldPins = this;
     }
@@ -239,19 +240,28 @@ public sealed class ClientSession : IDisposable, IWorldPins
             var session = Launch(plan, output,
                 () =>
                 {
-                    cliLog = new LogWait(log); // Opened before the launch: an earlier run's lines never count.
-                    if (steamLogPath != null)
+                    DirectServerProcess process;
+                    try
                     {
-                        steamLog = new LogWait(steamLogPath);
-                        steamOffset = steamLog.Offset;
+                        cliLog = new LogWait(log); // Opened before the launch: an earlier run's lines never count.
+                        if (steamLogPath != null)
+                        {
+                            steamLog = new LogWait(steamLogPath);
+                            steamOffset = steamLog.Offset;
+                        }
+                        launched = DateTime.UtcNow;
+                        processIntended?.Invoke();
                     }
-                    launched = DateTime.UtcNow;
-                    processIntended?.Invoke();
-                    var process = new DirectServerProcess(start, prefix, log, unityLog) { Quit = QuitRequest.CloseWindow };
+                    catch (Exception error) { UserSaveFilesGuard.NoProcess(error); throw; } // Before the process: none exists.
+                    try { process = new DirectServerProcess(start, prefix, log, unityLog) { Quit = QuitRequest.CloseWindow }; }
+                    // Process.Start refused it (Win32Exception, InvalidOperationException): none exists. Anything else, such as a failed
+                    // identity read or log file after the start, may leave one running, so it proves nothing.
+                    catch (Exception error) when (error is System.ComponentModel.Win32Exception or InvalidOperationException) { UserSaveFilesGuard.NoProcess(error); throw; }
                     try { processStarted?.Invoke(process); }
-                    catch
+                    catch (Exception error)
                     {
-                        try { process.Stop(TimeSpan.FromSeconds(15)); } finally { process.Dispose(); }
+                        try { process.Stop(TimeSpan.FromSeconds(15)); UserSaveFilesGuard.NoProcess(error); } // Proven stopped.
+                        finally { process.Dispose(); }
                         throw;
                     }
                     return process;
@@ -273,7 +283,8 @@ public sealed class ClientSession : IDisposable, IWorldPins
                 () => SteamSeen() ? SteamSessionLog.ExitHint(SteamMessage())
                     : cliLog != null && !cliLog.HasOutput() ? StartupEvents.NoBepInExLog(log, unityLog, Preloader("")) : null,
                 [new RunLog("client BepInEx log", prefix + ".game-0.log", Required: true), new RunLog("client Player.log", prefix + ".game-1.log")], account,
-                (process, actor, directory) => ClientFailureEvidence.CaptureLocal(process, actor, plan, unityLog, directory));
+                (process, actor, directory) => ClientFailureEvidence.CaptureLocal(process, actor, plan, unityLog, directory),
+                UserSaveFilesGuard.ForLocalClient(output));
             return session;
         }
         finally { cliLog?.Dispose(); steamLog?.Dispose(); }
@@ -305,17 +316,28 @@ public sealed class ClientSession : IDisposable, IWorldPins
         Func<TimeSpan, CancellationToken, Task> ready, CancellationToken cancellation = default) =>
         Launch(plan, output, start, connect, ready, cancellation, null, null);
 
-    // exitHint adds to an early exit's reason, for example that BepInEx never wrote its log.
+    // exitHint adds to an early exit's reason, for example that BepInEx never wrote its log. saveFiles keeps the files the game
+    // writes into the user's own data folder (its recent-servers list, #822) as found: moved aside just before the start, put
+    // back once the process is proven stopped (or never started); left journalled for env recover when its stop is unproven.
     internal static ClientSession Launch(ClientRunPlan plan, string output, Func<IOwnedProcess> start, Func<IGameTransport> connect,
         Func<TimeSpan, CancellationToken, Task> ready, CancellationToken cancellation, Func<string?>? exitHint, IReadOnlyList<RunLog>? logs, ILeasedSteamAccount? account = null,
-        Action<IOwnedProcess, GameActor?, string>? failureEvidence = null)
+        Action<IOwnedProcess, GameActor?, string>? failureEvidence = null, UserSaveFilesGuard? saveFiles = null)
     {
         plan.RequirePasswordSource();
         account?.RequireReady(null);
         var architecture = plan.LaunchArchitecture;
         var clock = Stopwatch.StartNew();
         var deadline = TimeSpan.FromSeconds(plan.StartSeconds);
-        var process = start();
+        saveFiles?.Protect();
+        IOwnedProcess process;
+        try { process = start(); }
+        catch (Exception error)
+        {
+            // Only a start proven to have left no process puts the user's files back now. A client that may still run (an
+            // ambiguous start, an unproven stop) could write them again: the capture stays journalled for env recover.
+            if (UserSaveFilesGuard.ProvesNoProcess(error)) RestoreAfter(saveFiles, error);
+            throw;
+        }
         GameActor? actor = null;
         bool pinsVerified = false;
         try
@@ -345,7 +367,7 @@ public sealed class ClientSession : IDisposable, IWorldPins
             // exact process and strict menu/world pins available to the separate valheim-test cli invocation too.
             if (pinsVerified && process is ILocalClientProcessIdentity identity)
                 OwnedClientCommandLease.Write(output, process.Id, identity.StartFileTimeUtc, plan);
-            return new ClientSession(actor, process, logs, architecture, output, failureEvidence).Using(account);
+            return new ClientSession(actor, process, logs, architecture, output, failureEvidence, saveFiles).Using(account);
         }
         catch (Exception error)
         {
@@ -354,7 +376,8 @@ public sealed class ClientSession : IDisposable, IWorldPins
             // A client whose pins or capabilities failed verification must not receive a diagnostic game command.
             TryCaptureFailure(failureEvidence, process, pinsVerified ? actor : null, output);
             actor?.Dispose();
-            try { process.Stop(TimeSpan.FromSeconds(15)); }
+            bool stopped = false;
+            try { process.Stop(TimeSpan.FromSeconds(15)); stopped = true; }
             finally
             {
                 process.Dispose();
@@ -364,9 +387,18 @@ public sealed class ClientSession : IDisposable, IWorldPins
                     catch (Exception cleanup) when (cleanup is IOException or UnauthorizedAccessException)
                     { error.Data["owned-cli-lease-cleanup"] = cleanup.Message; }
                 }
+                if (stopped) RestoreAfter(saveFiles, error);
             }
             throw;
         }
+    }
+
+    // A restore that fails beside a startup failure is reported with it; the capture stays journalled for env recover.
+    private static void RestoreAfter(UserSaveFilesGuard? saveFiles, Exception error)
+    {
+        try { saveFiles?.Restore(); }
+        catch (Exception restore) when (restore is not OperationCanceledException)
+        { error.Data["user-files-restore"] = restore.Message + " Run env recover for this run to put the user's files back."; }
     }
 
     private static string CommandLog(string output)
@@ -408,8 +440,11 @@ public sealed class ClientSession : IDisposable, IWorldPins
             try
             {
                 if (_process != null)
+                {
                     try { Stopped = _process.StopCleanly(QuitTimeout, TimeSpan.FromSeconds(15)); }
                     finally { _process.Dispose(); }
+                    _saveFiles?.Restore(); // Only once the stop returned: a client that may still run keeps them journalled.
+                }
             }
             finally { if (_ownsCommandLease && _output != null) OwnedClientCommandLease.Retire(_output); }
         }
