@@ -112,7 +112,7 @@ valheim-test server-load --mod /path/to/ServerMod.dll
 
 `env preflight` checks this machine before anything is copied: the run journal and host lock, game processes, ValheimCLI ports, the client desktop and whether Steam is running. `server-load` loads the mod on an owned dedicated server, joins one clean client, prints `SERVER_JOIN_PASS` and writes `result.json` and `junit.xml` under a new `valheim-test-runs/` directory in this machine's ValheimTesting data root. From a directory with exactly one mod project, you can omit `--mod`.
 
-Next: [Debug a mod load or mod conflict](guides/check-a-mod-loads.md) walks through the first run; [one Windows PC](packages/Valheim.Testing.Game.md#on-one-windows-pc) describes the setup; read the [runtime hygiene checklist](runtime-hygiene.md) before you launch. Other hosts are in [platforms](reference/platforms.md).
+Next: [Your first server load check](tutorials/first-server-load-check.md) walks through the first run; [one Windows PC](packages/Valheim.Testing.Game.md#on-one-windows-pc) describes the setup; read the [native-run checklist](guides/before-a-native-run.md) before you launch. Other hosts are in [platforms](reference/platforms.md).
 
 ## Related
 

@@ -10,7 +10,7 @@ Reusable test inputs, fixtures and assertions for Valheim mods. Most tests run w
 2. Copy [ModWithTests](examples/ModWithTests/README.md) beside your mod: a test project that links your mod's real source files and references `Valheim.Testing.Doubles` from NuGet.org.
 3. Run `dotnet test MyMod.Tests/MyMod.Tests.csproj`. No game, Steam or ValheimCLI is needed.
 
-Then [Choose a test layer](docs/guides/choose-a-test-layer.md) picks the layer for each behaviour, [Get started](docs/getting-started.md) runs your first test, [package versions](docs/package-versions.md) lists every package and pin, and the [examples](examples/README.md) go up to native checks with owned game processes. Supported hosts and limits are in [platforms](docs/reference/platforms.md). New to BepInEx and Harmony? The community wiki's [overview](https://github.com/Valheim-Modding/Wiki/wiki/Best-Practices) explains the concepts; check its older samples against 1.0 ([wiki caveats](docs/runtime-hygiene.md#wiki-pages-that-predate-10)). A plugin that will not load, or two mods that conflict: [debugging guide](docs/guides/check-a-mod-loads.md).
+Then [Choose a test layer](docs/guides/choose-a-test-layer.md) picks the layer for each behaviour, [Get started](docs/getting-started.md) runs your first test, [package versions](docs/package-versions.md) lists every package and pin, and the [examples](examples/README.md) go up to native checks with owned game processes. Supported hosts and limits are in [platforms](docs/reference/platforms.md). New to BepInEx and Harmony? The community wiki's [overview](https://github.com/Valheim-Modding/Wiki/wiki/Best-Practices) explains the concepts; check its older samples against 1.0 ([wiki caveats](docs/guides/before-a-native-run.md#older-wiki-pages)). A plugin that will not load, or two mods that conflict: [debugging guide](docs/guides/check-a-mod-loads.md).
 
 To make the test workflow discoverable to your coding agent, [copy the ValheimTesting skill into your mod repository](docs/guides/give-your-agent-the-workflow.md).
 
@@ -48,7 +48,7 @@ Unit, integration, bounded game checks and human judgement: [Choose a test layer
 
 ## Contribute
 
-Mod developers and coding agents are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) has repository ownership, a worked fixture example, local checks (`dotnet run scripts/bootstrap-cli.cs`, then `dotnet run scripts/validate.cs`, on every OS; no game) and PR expectations. Agents start with [AGENTS.md](AGENTS.md) and the [agent workflow](docs/agent-guide.md). Before a native run, read the [runtime hygiene checklist](docs/runtime-hygiene.md).
+Mod developers and coding agents are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) has repository ownership, a worked fixture example, local checks (`dotnet run scripts/bootstrap-cli.cs`, then `dotnet run scripts/validate.cs`, on every OS; no game) and PR expectations. Agents start with [AGENTS.md](AGENTS.md) and the [agent workflow](docs/agent-guide.md). Before a native run, read the [native-run checklist](docs/guides/before-a-native-run.md).
 
 ## License
 

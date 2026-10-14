@@ -39,7 +39,7 @@ A run stops before its action in three cases:
    - The bootstrap exports only the pinned fork commit, builds the transport and checks the plugin and loader hashes.
    - Validation builds all packages and runs a fresh local-feed consumer.
    - Review the diff and the fork's license and provenance.
-   - If an in-game command changed, run one bounded native smoke with strict pins. It must prove three things. The exact default plugin loads. Its capability schema holds. A missing or mismatched capability is refused before the scenario changes the world. Check [runtime hygiene](../runtime-hygiene.md) first.
+   - If an in-game command changed, run one bounded native smoke with strict pins. It must prove three things. The exact default plugin loads. Its capability schema holds. A missing or mismatched capability is refused before the scenario changes the world. Check [before a native run](../guides/before-a-native-run.md) first.
 4. **Merge and release.** Merge the reviewed change, then release from a tag on `main`. `release.yml` publishes the packages and waits for the NuGet.org-only consumer. It then writes `release-contract.json` from the **NuGet.org repository-signed package bytes**.
    - NuGet.org signs packages after upload. These hashes therefore differ from the unsigned GitHub release files hashed in `SHA256SUMS`. Both sets are correct for the bytes they name.
    - The contract refuses a transport whose published nuspec names another fork commit.

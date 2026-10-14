@@ -119,7 +119,7 @@ Then upload the directory:
 
 ## What stays off hosted runners
 
-Some checks launch Valheim or a server. They need a game install, a Steam login and a machine you own. Run them where you run the game, and follow the [runtime hygiene checklist](../runtime-hygiene.md). A self-hosted runner with game access must never run workflows from untrusted pull requests.
+Some checks launch Valheim or a server. They need a game install, a Steam login and a machine you own. Run them where you run the game, and follow the [native-run checklist](before-a-native-run.md). A self-hosted runner with game access must never run workflows from untrusted pull requests.
 
 ## Check the result
 
@@ -147,4 +147,4 @@ A failed test fails the job, and the job log shows the test output. A green job 
 - [Test runner for both target frameworks](../../tools/test-runners/README.md)
 - [Game references for mod projects](../../tools/game-references/README.md)
 - [Valheim.Testing.Bindings](../packages/Valheim.Testing.Bindings.md)
-- [Test-runtime hygiene and evidence rules](../runtime-hygiene.md)
+- [Before a native run](before-a-native-run.md)

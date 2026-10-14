@@ -115,6 +115,6 @@ public sealed class DrySiteSessionTests(ExampleSession fixture) : IClassFixture<
 
 ## Cleanup and its limits
 
-On any failure, including an exception or Ctrl+C, the run stops the owned client, then the owned server, and writes the report. The copies stay in the output directory; the pinned sources never change. The run never signs Steam in or out, never stops a process it did not start, never finds processes by name and never edits the client install's settings. An attached client keeps running, in its menu. Before a native run, read [runtime hygiene](../../docs/runtime-hygiene.md).
+On any failure, including an exception or Ctrl+C, the run stops the owned client, then the owned server, and writes the report. The copies stay in the output directory; the pinned sources never change. The run never signs Steam in or out, never stops a process it did not start, never finds processes by name and never edits the client install's settings. An attached client keeps running, in its menu. Before a native run, read [before a native run](../../docs/guides/before-a-native-run.md).
 
 The toolkit's own native acceptance scenarios run on a separate mod and are not an example to copy: [native acceptance suite](../../tests/Valheim.Testing.NativeAcceptance/README.md).
