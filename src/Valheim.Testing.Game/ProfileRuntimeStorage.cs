@@ -172,9 +172,18 @@ internal static class ProfileRuntimeStorage
         if (!explicitRuntime) return new(null, null);
         string? source = WindowsStorageClassifier.SyntaxRoot(sourcePath), runtime = WindowsStorageClassifier.SyntaxRoot(runtimePath);
         if (source == null || runtime == null || source.Equals(runtime, StringComparison.OrdinalIgnoreCase)) return new(null, null);
-        return new(null, $"the explicit inventory runtime folder {runtimePath} is on {runtime}, not the source install's volume {source}. " +
-            $"Put the inventory runtime on the install's NTFS volume {source}.");
+        return new(null, CrossVolumeRefusal(explicitRuntime, runtimePath, runtime, source, source));
     }
+
+    /// <summary>
+    /// The one wording of the same-volume rule, for the filesystem verdict and the path-syntax placement verdict alike: a
+    /// profile hard-links the install's files, and a hard link cannot cross volumes.
+    /// </summary>
+    private static string CrossVolumeRefusal(bool explicitRuntime, string runtimePath, string runtimeVolume, string sourceVolume,
+        string sourceRoot) =>
+        $"the {(explicitRuntime ? "explicit inventory runtime folder" : "default runtime folder")} {runtimePath} is on {runtimeVolume}, " +
+        $"not the source install's volume {sourceVolume}. A Windows profile hard-links the install's game files, and a hard link cannot cross volumes. " +
+        $"Put {(explicitRuntime ? "the inventory runtime" : "the default runtime")} on the install's NTFS volume {sourceRoot}.";
 
     internal static string? Refusal(string sourcePath, WindowsStorageVolume source, string runtimePath,
         WindowsStorageVolume runtime, bool explicitRuntime = true, bool inPlaceAvailable = false)
@@ -188,8 +197,7 @@ internal static class ProfileRuntimeStorage
             return $"the {runtimeKind} {runtimePath} is on {runtime.Description}, which cannot hold the hard links a Windows profile requires. " +
                 $"Put {(explicitRuntime ? "the inventory runtime" : "the default runtime")} on the install's NTFS volume {source.Root}." + alternative;
         if (!source.SameVolume(runtime))
-            return $"the {runtimeKind} {runtimePath} is on {runtime.Description}, not the source install's volume {source.Description}. " +
-                $"Put {(explicitRuntime ? "the inventory runtime" : "the default runtime")} on the install's NTFS volume {source.Root}." + alternative;
+            return CrossVolumeRefusal(explicitRuntime, runtimePath, runtime.Description, source.Description, source.Root) + alternative;
         return null;
     }
 
