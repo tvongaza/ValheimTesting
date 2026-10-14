@@ -239,6 +239,7 @@ void PreparePages()
         File.WriteAllText(target, content);
     }
     File.Copy(Path.Combine(docs, "toc.yml"), Path.Combine(siteSource, "toc.yml"));
+    File.Copy(Path.Combine(root, "llms.txt"), Path.Combine(siteSource, "llms.txt")); // the agents' index, at the site root
     CheckToc();
 }
 

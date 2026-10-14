@@ -12,6 +12,8 @@
     href: guides/run-tests-in-ci.md
   - name: Check that a mod loads
     href: guides/check-a-mod-loads.md
+  - name: Give your coding agent the workflow
+    href: guides/give-your-agent-the-workflow.md
 - name: Packages
   items:
   - name: Package versions

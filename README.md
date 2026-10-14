@@ -12,7 +12,7 @@ Reusable test inputs, fixtures and assertions for Valheim mods. Most tests run w
 
 Then [Choose a test layer](docs/guides/choose-a-test-layer.md) picks the layer for each behaviour, [Get started](docs/getting-started.md) runs your first test, [package versions](docs/package-versions.md) lists every package and pin, and the [examples](examples/README.md) go up to native checks with owned game processes. Supported hosts and limits are in [platforms](docs/reference/platforms.md). New to BepInEx and Harmony? The community wiki's [overview](https://github.com/Valheim-Modding/Wiki/wiki/Best-Practices) explains the concepts; check its older samples against 1.0 ([wiki caveats](docs/runtime-hygiene.md#wiki-pages-that-predate-10)). A plugin that will not load, or two mods that conflict: [debugging guide](docs/guides/check-a-mod-loads.md).
 
-To make the test workflow discoverable to your coding agent, [copy the ValheimTesting skill into your mod repository](docs/agent-skills.md).
+To make the test workflow discoverable to your coding agent, [copy the ValheimTesting skill into your mod repository](docs/guides/give-your-agent-the-workflow.md).
 
 For a disposable in-game load check, build your mod and run the tool from the directory containing its single `.csproj`:
 

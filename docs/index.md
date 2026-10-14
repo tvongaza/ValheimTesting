@@ -30,6 +30,7 @@ ValheimTesting gives you automated tests for Valheim mods built on BepInEx: unit
 | Pin a package version | [Packages](package-versions.md) |
 | Check that a mod loads on a dedicated server | [What a native check needs](getting-started.md#what-a-native-check-needs) |
 | Find which mod breaks a load, alone or with others | [Check that a mod loads](guides/check-a-mod-loads.md) |
+| Let my coding agent add and run the tests | [Give your coding agent the workflow](guides/give-your-agent-the-workflow.md) |
 
 ## Reference
 
