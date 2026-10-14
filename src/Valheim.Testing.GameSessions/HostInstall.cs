@@ -311,10 +311,17 @@ public static class HostInstall
             gameIsSource ? sourceCheck.SourceBeforeBootPaths() :
                 sourceCheck.ProfileBeforeBootPaths(pluginFiles != null && oneProfileRoot), cancellation).ConfigureAwait(false);
         var loader = loaderRoot == gameRoot ? game :
-            await ListAsync(host, loaderRoot, timeout, pluginFiles == null ? InstallPins.PinPaths : ProfilePinPaths, cancellation).ConfigureAwait(false);
+            await ListAsync(host, loaderRoot, timeout, sourceCheck.LoaderBeforeBootPaths(pluginFiles != null), cancellation).ConfigureAwait(false);
         var source = gameIsSource ? game :
             await ListAsync(host, sourceCheck.Source.Root, timeout, sourceCheck.SourceBeforeBootPaths(), cancellation).ConfigureAwait(false);
         RequireSame(sourceCheck.BeforeBoot, source, "source game before profile launch");
+        if (sourceCheck.StagedBeforeBoot.Count != 0)
+        {
+            var staged = loader.Files.Where(file => sourceCheck.StagedBeforeBoot.ContainsKey(file.Key) || sourceCheck.InStagedFolder(file.Key))
+                .ToDictionary(file => file.Key, file => file.Value, loader.Names);
+            RequireSame(sourceCheck.StagedBeforeBoot, new HostListing(loader.HostName, loader.Shell, loader.Root, staged, []),
+                kind + " staged files");
+        }
         if (sourceCheck.LinkedRootFiles.Count != 0)
         {
             var native = game.Files.Where(file => sourceCheck.LinkedRootFiles.ContainsKey(file.Key))

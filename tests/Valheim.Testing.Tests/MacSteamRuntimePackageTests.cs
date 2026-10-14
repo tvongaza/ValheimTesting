@@ -3,8 +3,29 @@ using Valheim.Testing.Game;
 using Valheim.Testing.GameSessions;
 using Xunit;
 
-public sealed class MacSteamRuntimePackageTests
+public sealed class MacSteamRuntimePackageContractTests : IDisposable
 {
+    private readonly string _root = Directory.CreateTempSubdirectory("vt-steam-contract-").FullName;
+
+    public void Dispose() => Directory.Delete(_root, recursive: true);
+
+    [Fact]
+    public void ClosureVerificationHasOneHostScriptOwner()
+    {
+        string source = Path.Combine(FixtureProjects.RepositoryRoot(), "src");
+        string package = File.ReadAllText(Path.Combine(source, "Valheim.Testing.Game", "MacSteamRuntimePackage.cs"));
+        string onHost = File.ReadAllText(Path.Combine(source, "Valheim.Testing.GameSessions", "MacSteamRuntimeOnHost.cs"));
+        string validate = package[package.IndexOf("public void Validate()", StringComparison.Ordinal)
+            ..package.IndexOf("internal IReadOnlyDictionary<string, string> StageSignedFiles", StringComparison.Ordinal)];
+
+        Assert.Contains("VerificationScript", validate);
+        Assert.DoesNotContain("FileHash.Sha256", validate);
+        Assert.DoesNotContain("/usr/bin/lipo", validate);
+        Assert.Contains("MacSteamRuntimePackage.VerificationScript", onHost);
+        Assert.DoesNotContain("/usr/bin/otool", onHost);
+        Assert.DoesNotContain("internal static readonly string Verify", onHost);
+    }
+
     [Fact] public void RemoteManifestSnapshotDoesNotInspectMacFilesOnItsWindowsRunner()
     {
         string folder = Directory.CreateTempSubdirectory("vt-steam-remote-").FullName;
@@ -25,6 +46,93 @@ public sealed class MacSteamRuntimePackageTests
     }
 
     [Fact]
+    public async Task AnSshMacProfileRunsExactlyTwoSharedRuntimeChecks()
+    {
+        var (host, package, source, selected) = Fixture("two-checks");
+        string run = "/runs/two-checks";
+
+        var prepared = await HostedRuntimeStage.PrepareProfileAsync(host, HostedRuntimeKind.Server, source,
+            run + "/runtime", run + "/staging", [new HostedRuntimeFile(selected, "BepInEx/plugins/selected.dll")],
+            TimeSpan.FromSeconds(30), steamRuntimePackage: package);
+
+        Assert.Equal(2, host.Runs.Count(item => item.Script == "steam-runtime-verify"));
+        Assert.Single(host.Runs, item => item.Script == "steam-runtime-stage");
+        Assert.Equal(package.Files.Keys.Order(StringComparer.Ordinal),
+            prepared.Loader.Files.Keys.Where(path => path.StartsWith("steam-runtime/", StringComparison.Ordinal))
+                .Select(path => path["steam-runtime/".Length..]).Order(StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public async Task AnSshMacProfileRefusesSourceBytesChangedBetweenFirstCheckAndCopy()
+    {
+        var (host, package, source, selected) = Fixture("changed-source");
+        host.BeforeScript = script =>
+        {
+            if (script == "steam-runtime-stage") File.AppendAllText(host.Local(package.Root + "/steamclient.dylib"), "changed");
+        };
+
+        var error = await Assert.ThrowsAsync<HostOperationException>(() => HostedRuntimeStage.PrepareProfileAsync(host,
+            HostedRuntimeKind.Server, source, "/runs/changed/runtime", "/runs/changed/staging",
+            [new HostedRuntimeFile(selected, "BepInEx/plugins/selected.dll")], TimeSpan.FromSeconds(30),
+            steamRuntimePackage: package));
+
+        Assert.Equal(2, host.Runs.Count(item => item.Script == "steam-runtime-verify"));
+        Assert.Equal("VT-STEAM-RUNTIME changed steamclient.dylib\n", error.Result.Stdout);
+        Assert.False(Directory.Exists(host.Local("/runs/changed")));
+    }
+
+    [Fact]
+    public async Task SharedRuntimeCheckRefusesDeclaredVersionMismatch()
+    {
+        var (host, package, _, _) = Fixture("version-mismatch");
+        package.Version = "999";
+
+        var error = await Assert.ThrowsAsync<HostOperationException>(() =>
+            MacSteamRuntimeOnHost.VerifyAsync(host, package, TimeSpan.FromSeconds(30), default));
+
+        Assert.Equal("VT-STEAM-RUNTIME version-changed\n", error.Result.Stdout);
+        Assert.Equal("999", Assert.Single(host.Runs).Variables["expectedVersion"]);
+    }
+
+    private (FakeServerHost Host, MacSteamRuntimePackage Package, string Source, string Selected) Fixture(string name)
+    {
+        var host = new FakeServerHost("ssh-mac", Path.Combine(_root, name));
+        const string source = "/games/valheim", steam = "/steamcmd";
+        void HostFile(string path, string contents)
+        {
+            path = host.Local(path);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, contents);
+        }
+        HostFile(source + "/" + GameLaunch.ServerMacExecutable, "server");
+        HostFile(source + "/valheim_server/Data/Managed/" + InstallPins.GameAssemblyName, "game");
+        HostFile(source + "/BepInEx/core/BepInEx.dll", "core");
+        HostFile(source + "/BepInEx/core/BepInEx.Preloader.dll", "preloader");
+        HostFile(source + "/libdoorstop.dylib", "doorstop");
+        HostFile(steam + "/package/steam_cmd_osx.manifest", "\"osx\"\n{\n  \"version\" \"123\"\n}\n");
+        HostFile(steam + "/steamclient.dylib", "steam client");
+        HostFile(steam + "/crashhandler.dylib", "crash handler");
+        string manifest = host.Local(steam + "/package/steam_cmd_osx.manifest");
+        var package = new MacSteamRuntimePackage
+        {
+            Name = "SteamCMD", Version = "123", Root = steam,
+            SourceManifestSha256 = FileHash.Sha256(manifest), ProfileFormat = MacSteamRuntimePackage.SignedProfileFormat,
+            Files = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["steamclient.dylib"] = FileHash.Sha256(host.Local(steam + "/steamclient.dylib")),
+                ["crashhandler.dylib"] = FileHash.Sha256(host.Local(steam + "/crashhandler.dylib")),
+            },
+        };
+        string selected = Path.Combine(_root, name + "-selected.dll");
+        File.WriteAllText(selected, "selected");
+        return (host, package, source, selected);
+    }
+}
+
+[Trait("Os", "macos")]
+public sealed class MacSteamRuntimePackageTests
+{
+    [Fact]
     public async Task PinsTheNativeClosureAndRefusesChangedOrMissingMembers()
     {
         if (!OperatingSystem.IsMacOS()) return;
@@ -44,6 +152,9 @@ public sealed class MacSteamRuntimePackageTests
             var package = MacSteamRuntimePackage.Capture(root);
             Assert.Equal("123", package.Version);
             Assert.Equal(new[] { "crashhandler.dylib", "libtier0_s.dylib", "steamclient.dylib" }, package.Files.Keys.Order(StringComparer.Ordinal));
+            package.Version = "999";
+            Assert.Contains("VT-STEAM-RUNTIME version-changed", Assert.Throws<InvalidDataException>(package.Validate).Message);
+            package.Version = "123";
             string manifest = Path.Combine(root, "reviewed.json");
             package.Write(manifest);
             _ = MacSteamRuntimePackage.Read(manifest);
@@ -91,6 +202,13 @@ public sealed class MacSteamRuntimePackageTests
             Assert.Equal(FileHash.Sha256(Path.Combine(run, "runtime", "steam-runtime", "steamclient.dylib")),
                 prepared.Loader.Files["steam-runtime/steamclient.dylib"]);
             Assert.False(Directory.Exists(Path.Combine(run, "staging")));
+            string changedOutput = Path.Combine(run, "runtime", "steam-runtime", "libtier0_s.dylib");
+            File.AppendAllText(changedOutput, "changed after staging");
+            var beforeBoot = await Assert.ThrowsAsync<InvalidOperationException>(() => HostInstall.CheckProfilePinsAsync(host,
+                prepared.Pins, prepared.GameRoot, prepared.LoaderRoot, prepared.SourceCheck, "prepared server profile before launch",
+                TimeSpan.FromSeconds(60), default));
+            Assert.Contains("prepared server profile before launch staged files", beforeBoot.Message);
+            Assert.Contains("steam-runtime/libtier0_s.dylib", beforeBoot.Message);
             await HostedRuntimeStage.RetireAsync(host, prepared.LoaderRoot, Path.Combine(run, "staging"), TimeSpan.FromSeconds(60));
 
             await MacSteamRuntimeOnHost.VerifyAsync(host, remote, TimeSpan.FromSeconds(60), default);
@@ -103,23 +221,16 @@ public sealed class MacSteamRuntimePackageTests
                 Assert.Equal(sha, FileHash.Sha256(Path.Combine(sshProfile, "steam-runtime", relative)));
                 Assert.Equal(package.Files[relative], FileHash.Sha256(Path.Combine(root, relative)));
             }
+
             string commandManifest = Path.Combine(root, "command.json");
             Assert.Equal(0, MacSteamRuntimeCommand.Run(["capture", "--steamcmd", root, "--output", commandManifest]));
             Assert.Equal(3, MacSteamRuntimeCommand.Run(["capture", "--steamcmd", root, "--output", commandManifest]));
 
             File.AppendAllText(Path.Combine(root, "libtier0_s.dylib"), "changed");
-            Assert.Contains("libtier0_s.dylib", Assert.Throws<InvalidDataException>(() => MacSteamRuntimePackage.Read(manifest)).Message);
-            string refusedProfile = Path.Combine(root, "refused-profile");
-            Directory.CreateDirectory(refusedProfile);
-            await Assert.ThrowsAnyAsync<Exception>(() => MacSteamRuntimeOnHost.StageAsync(host, remote, refusedProfile, TimeSpan.FromSeconds(60), default));
-            Assert.Empty(Directory.EnumerateFileSystemEntries(refusedProfile));
+            Assert.Contains("libtier0_s.dylib", Assert.Throws<InvalidDataException>(package.Validate).Message);
             Compile(root, source, "libtier0_s.dylib");
             File.Delete(Path.Combine(root, "crashhandler.dylib"));
-            Assert.Contains("crashhandler.dylib", Assert.Throws<FileNotFoundException>(() => MacSteamRuntimePackage.Read(manifest)).Message);
-            string missingProfile = Path.Combine(root, "missing-profile");
-            Directory.CreateDirectory(missingProfile);
-            await Assert.ThrowsAnyAsync<Exception>(() => MacSteamRuntimeOnHost.StageAsync(host, remote, missingProfile, TimeSpan.FromSeconds(60), default));
-            Assert.Empty(Directory.EnumerateFileSystemEntries(missingProfile));
+            Assert.Contains("crashhandler.dylib", Assert.Throws<InvalidDataException>(package.Validate).Message);
 
             Compile(root, source, "crashhandler.dylib");
             Assert.Equal(0, ExitCode("/usr/bin/install_name_tool", "-id",

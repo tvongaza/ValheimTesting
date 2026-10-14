@@ -102,7 +102,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         var preparedListing = await ProfileSourceCheck.InspectAsync(host, Install, TimeSpan.FromSeconds(30));
         var sourceCheck = ProfileSourceCheck.Prepare(preparedListing, [GameLaunch.ServerLinuxExecutable]);
         sourceCheck.RecordPreparedProfile(preparedListing,
-            await HostInstall.ListAsync(host, owned, TimeSpan.FromSeconds(30), cancellation: CancellationToken.None));
+            await HostInstall.ListAsync(host, owned, TimeSpan.FromSeconds(30), cancellation: CancellationToken.None), []);
         var hosted = HostedServerRun.Create(environment, plan, "test", new FakeRunHooks { Host = _ => host, RunId = RunId }, prepared: true,
             sourceChecks: new Dictionary<string, ProfileSourceCheck> { ["server"] = sourceCheck });
         Assert.True(hosted.Prepared);
@@ -133,7 +133,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         environment.Server.PreparedSourceRoot = Install;
         var sourceCheck = ProfileSourceCheck.Prepare(await ProfileSourceCheck.InspectAsync(host, Install, TimeSpan.FromSeconds(30)), []);
         sourceCheck.RecordPreparedProfile(sourceCheck.Source,
-            await HostInstall.ListAsync(host, owned, TimeSpan.FromSeconds(30), cancellation: CancellationToken.None));
+            await HostInstall.ListAsync(host, owned, TimeSpan.FromSeconds(30), cancellation: CancellationToken.None), []);
         var hosted = HostedServerRun.Create(environment, plan, "test", new FakeRunHooks { Host = _ => host, RunId = RunId }, prepared: true,
             sourceChecks: new Dictionary<string, ProfileSourceCheck> { ["server"] = sourceCheck });
         Assert.Equal(Install, hosted.GameDirectory);
@@ -161,7 +161,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         environment.Server.PreparedSourceRoot = source;
         var sourceCheck = ProfileSourceCheck.Prepare(await ProfileSourceCheck.InspectAsync(host, source, TimeSpan.FromSeconds(30)), ["UnityPlayer.dll"]);
         var ownedListing = await HostInstall.ListAsync(host, owned, TimeSpan.FromSeconds(30), cancellation: CancellationToken.None);
-        sourceCheck.RecordPreparedProfile(ownedListing, ownedListing);
+        sourceCheck.RecordPreparedProfile(ownedListing, ownedListing, []);
         var hosted = HostedServerRun.Create(environment, plan, "test", new FakeRunHooks { Host = _ => host, RunId = RunId }, prepared: true,
             sourceChecks: new Dictionary<string, ProfileSourceCheck> { ["server"] = sourceCheck });
         await hosted.LockAndPrepareRuntimeAsync(new ScenarioReport("prepared profile"), plan, CancellationToken.None);
