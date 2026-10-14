@@ -581,7 +581,8 @@ internal sealed class KillableControllerLauncher : IProcessLauncher
 
 // The Windows launcher with its pid publication replaced: it records the game's identity for the test only, then either
 // keeps running (a launcher the deadline overtakes) or exits at once (a task whose action completed without a handoff).
-internal sealed class WindowsHandoffIgnoringHost(IGameHost inner, bool launcherExits = false) : DelegatingGameHost(inner)
+// beforeOwnerRecord: the launcher stops instead right after it spawned the game, before its ownership record names it (#814).
+internal sealed class WindowsHandoffIgnoringHost(IGameHost inner, bool launcherExits = false, bool beforeOwnerRecord = false) : DelegatingGameHost(inner)
 {
     internal const string CaptureFile = "test-start-identity";
 
@@ -591,7 +592,7 @@ internal sealed class WindowsHandoffIgnoringHost(IGameHost inner, bool launcherE
         if (ReferenceEquals(script, HostServerScripts.WindowsStart))
         {
             var changed = new Dictionary<string, string>(variables ?? throw new InvalidOperationException("The Windows start had no variables."));
-            const string handoff = "[IO.File]::Move($temporary, (Join-Path $dir 'pid'))";
+            string handoff = beforeOwnerRecord ? "Write-VtOwner $game" : "[IO.File]::Move($temporary, (Join-Path $dir 'pid'))";
             string replacement = $"[IO.File]::WriteAllText((Join-Path $dir '{CaptureFile}'), [string]$game.Id + ' ' + $game.StartTime.ToFileTimeUtc(), $utf8); " +
                 (launcherExits ? "exit 0" : "[Threading.Thread]::Sleep([Threading.Timeout]::Infinite)");
             string launcher = changed["launcher"];
@@ -599,6 +600,26 @@ internal sealed class WindowsHandoffIgnoringHost(IGameHost inner, bool launcherE
                 throw new TestSeamMismatchException("The Windows handoff seam no longer matches the launcher script.");
             changed["launcher"] = launcher.Replace(handoff, replacement, StringComparison.Ordinal);
             variables = changed;
+        }
+        return Inner.RunAsync(script, variables, timeout, cancellation);
+    }
+}
+
+/// <summary>
+/// Pauses the real Windows controller (the start script) once it has read the launcher's pid file and before it acknowledges it:
+/// it writes <c>OWNER.controller-gap</c> into the boot directory and waits there until the test kills it (#814).
+/// </summary>
+internal sealed class AfterPidControllerPausedHost(IGameHost inner) : DelegatingGameHost(inner)
+{
+    public override Task<HostResult> RunAsync(string script, IReadOnlyDictionary<string, string>? variables, TimeSpan timeout,
+        CancellationToken cancellation = default)
+    {
+        if (ReferenceEquals(script, HostServerScripts.WindowsStart))
+        {
+            const string anchor = "[IO.File]::WriteAllText($ackFile + '.tmp', 'ack', $utf8)";
+            if (script.Split(anchor).Length != 2) throw new TestSeamMismatchException("The Windows after-pid seam no longer matches the start script.");
+            script = script.Replace(anchor, "[IO.File]::WriteAllText($ownerFile + '.controller-gap', 'x', $utf8); " +
+                "[Threading.Thread]::Sleep([Threading.Timeout]::Infinite); " + anchor, StringComparison.Ordinal);
         }
         return Inner.RunAsync(script, variables, timeout, cancellation);
     }

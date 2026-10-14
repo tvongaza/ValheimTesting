@@ -167,9 +167,29 @@ internal static class RunRecovery
             if (InteractiveClient.Line(result.Stdout, "VT-AGENT ") != "removed")
                 throw new HostOperationException($"The Mac client GUI agent on {hostName} could not be proven removed", result);
         }
-        // A process adopted from a launch's pid file: once it is stopped or gone, its launch is settled too.
-        Task SettleAdopted(JournalItem process) => process.Fields.GetValueOrDefault("adoptedFrom") is { Length: > 0 } directory
-            ? Note(process.Host, Settled(process.Actor, directory)) : Task.CompletedTask;
+        // A process adopted from a launch's pid file: once it is stopped or gone, its launch is settled too. A Windows launch's
+        // launcher and start task, which its ownership record names (#814), are retired first, through the launcher's one owner,
+        // only while the launcher is still the recorded one; a launch that cannot be retired stays unsettled.
+        async Task SettleAdopted(JournalItem process)
+        {
+            if (process.Fields.GetValueOrDefault("adoptedFrom") is not { Length: > 0 } directory) return;
+            if (process.Fields.ContainsKey("launcherPid"))
+            {
+                var owner = HostServerLauncherRecord.FromFields(process.Fields);
+                string what = $"launcher {owner.LauncherPid} (started {owner.LauncherStartIdentity})";
+                try
+                {
+                    string retired = await HostServerLauncher.RetireAsync(connections[process.Host], owner, directory, KillWait, cancellation).ConfigureAwait(false);
+                    Step(process.Host, what, (retired == "gone" ? "already gone" : "stopped") + $"; its start task {owner.TaskName} removed if it was left");
+                }
+                catch (Exception error) when (error is not OperationCanceledException)
+                {
+                    Step(process.Host, what, "not stopped: " + error.Message, failed: true);
+                    return;
+                }
+            }
+            await Note(process.Host, Settled(process.Actor, directory)).ConfigureAwait(false);
+        }
         bool Local(JournalItem item) => item.Fields.GetValueOrDefault("local") == "true" && hosts[item.Host].Kind == "local";
 
         // 0. A detached supervisor's OS task first. Its exact definition is checked again before it is stopped and removed;

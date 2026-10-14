@@ -354,9 +354,10 @@ internal static partial class HostServerScripts
     // A task starts the server independent of the session that asked (Get-VtServerLogon decides its logon). The task and
     // launch specification are removed after the child reports its PID, which the start acknowledges (handoff.ack). Before the
     // game starts, the launcher records itself and then the game in the ownership file (owner), which a recovery reads when the
-    // pid file never appeared (#800). No Steam client is required.
+    // pid file never appeared (#800). A start that gives up marks itself abandoned (handoff.abandon), which the launcher checks
+    // after its first record and before it spawns the game, then kills the recorded launcher's tree (#814). No Steam client is required.
     // Variables: runtime, logroot, files, dir, spec, logs, seconds, task, owner, launcher.
-    public static readonly string WindowsStart = (WindowsServerLogon + "\n" + """
+    public static readonly string WindowsStart = (WindowsServerLogon + "\n" + HostServerLauncher.WindowsStopFunction + "\n" + """
         $utf8 = New-Object Text.UTF8Encoding $false
         foreach ($file in ($files -split "`n")) {
             if ($file -and -not [IO.File]::Exists((Join-Path $runtime $file))) { 'VT-SERVER missing ' + $file; exit 0 }
@@ -384,6 +385,7 @@ internal static partial class HostServerScripts
         $taskFile = Join-Path $dir 'launcher-task'
         $ownerNameFile = Join-Path $dir 'launcher-owner-name'
         $ackFile = Join-Path $dir 'handoff.ack'
+        $abandonFile = Join-Path $dir 'handoff.abandon'
         $verdict = $null
         try {
             [IO.File]::WriteAllText($specFile, $spec, $utf8)
@@ -452,30 +454,46 @@ internal static partial class HostServerScripts
                 } finally { $watcher.Dispose() }
             } finally {
                 # Until the handoff is acknowledged, this uniquely named task and the launcher's ownership record own what the
-                # launch started. On any other verdict (a deadline, an unreadable pid file, a launcher that already exited) stop
-                # the task's instance, then the game the launcher recorded, by its exact start time, and prove it gone.
+                # launch started. On any other verdict (a deadline, an unreadable pid file, a launcher that already exited) kill
+                # the launcher's process tree by its recorded identity, stop the task's instance, then the game the launcher
+                # recorded, by its exact start time, and prove each gone.
                 try {
                     if ($verdict -like 'VT-SERVER started *') {
                         # The launcher ends once it sees the acknowledgement: remove its task after that, as before the handoff wait.
                         $until = [DateTime]::UtcNow.AddSeconds(15)
                         while ($registered.State -eq 4 -and [DateTime]::UtcNow -lt $until) { [Threading.Thread]::Sleep(100) }
                     } else {
-                        $left = $null
-                        try { if ($registered.State -in @(2, 4)) { $registered.Stop(0) } } catch { $left = 'stopping its task failed: ' + $_.Exception.Message }
+                        $left = @()
+                        # A launcher that has not yet spawned its game sees this mark before it would, and never does. It records
+                        # itself before it looks, so a launcher this read misses cannot start a game (#814).
+                        try { [IO.File]::WriteAllText($abandonFile, 'abandoned', $utf8) } catch { $left += 'marking the start abandoned failed: ' + $_.Exception.Message }
+                        # The launcher's whole process tree first, while it is the recorded launcher: the task stop below ends only the
+                        # launcher, which would leave a game it spawned but has not recorded yet running with no record of it (#814).
                         $words = @()
-                        try { if ([IO.File]::Exists($ownerFile)) { $words = @([IO.File]::ReadAllText($ownerFile, $utf8).Trim() -split '\s+') } } catch { $left = 'its ownership record could not be read: ' + $_.Exception.Message }
+                        try { if ([IO.File]::Exists($ownerFile)) { $words = @([IO.File]::ReadAllText($ownerFile, $utf8).Trim() -split '\s+') } } catch { $left += 'its ownership record could not be read: ' + $_.Exception.Message }
+                        if ($words.Count -in @(5, 7) -and $words[0] -ceq 'windows' -and $words[1] -ceq $task) {
+                            try {
+                                $stopped = Stop-VtLauncher $words[2] $words[3] $words[4] 30
+                                if ($stopped -eq 'running') { $left += 'its launcher ' + $words[2] + ' still runs after it was killed' }
+                                elseif ($stopped -in @('mismatch', 'unreadable')) { $left += 'its launcher ' + $words[2] + ' could not be proven the recorded one (' + $stopped + ') and was not stopped' }
+                            } catch { $left += 'stopping its launcher ' + $words[2] + ' failed: ' + $_.Exception.Message }
+                        }
+                        try { if ($registered.State -in @(2, 4)) { $registered.Stop(0) } } catch { $left += 'stopping its task failed: ' + $_.Exception.Message }
+                        # Then the game the launcher recorded, read again: a launcher that had already exited left it with no parent.
+                        $words = @()
+                        try { if ([IO.File]::Exists($ownerFile)) { $words = @([IO.File]::ReadAllText($ownerFile, $utf8).Trim() -split '\s+') } } catch { $left += 'its ownership record could not be read: ' + $_.Exception.Message }
                         if ($words.Count -eq 7 -and $words[0] -ceq 'windows' -and $words[1] -ceq $task) {
                             $ownedGame = $null
                             try { $ownedGame = [Diagnostics.Process]::GetProcessById([int]$words[5]) } catch [ArgumentException] { }
                             try {
                                 if ($null -ne $ownedGame -and [string]$ownedGame.StartTime.ToFileTimeUtc() -ceq $words[6]) {
                                     if (-not $ownedGame.HasExited) { $ownedGame.Kill($true) }
-                                    if (-not $ownedGame.WaitForExit(30000)) { $left = 'its game process ' + $words[5] + ' still runs after it was killed' }
+                                    if (-not $ownedGame.WaitForExit(30000)) { $left += 'its game process ' + $words[5] + ' still runs after it was killed' }
                                 }
                             } catch [InvalidOperationException] { } # it exited before its start time was read
-                            catch { $left = 'stopping its game process ' + $words[5] + ' failed: ' + $_.Exception.Message }
+                            catch { $left += 'stopping its game process ' + $words[5] + ' failed: ' + $_.Exception.Message }
                         }
-                        if ($left) { $verdict = [string]$verdict + '; ' + ($left -replace '\s+', ' ').Trim() }
+                        foreach ($why in $left) { $verdict = [string]$verdict + '; ' + ($why -replace '\s+', ' ').Trim() }
                     }
                 } finally { try { $folder.DeleteTask($task, 0) } catch { } }
             }
@@ -521,6 +539,9 @@ internal static partial class HostServerScripts
             }
             [IO.File]::Delete((Join-Path $dir 'spec.txt'))
             foreach ($key in @($start.Environment.Keys)) { if ($key -like 'DOORSTOP_*') { [void]$start.Environment.Remove($key) } }
+            # After the ownership record above: a controller that gave up either finds that record, and kills this launcher's
+            # tree, or marked the start abandoned before it looked, which this sees.
+            if ([IO.File]::Exists((Join-Path $dir 'handoff.abandon'))) { throw 'The controller gave up on the start before the server was started.' }
             $game = [Diagnostics.Process]::Start($start)
             # The owner update precedes the ordinary pid publication, so recovery still has an exact game identity in that gap.
             Write-VtOwner $game

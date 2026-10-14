@@ -281,6 +281,24 @@ internal static partial class HostServerChecks
 
 internal static partial class HostServerChecks
 {
+    // The journal of a run interrupted during a local server start, as HostedServerRun writes it before the start, by a runner
+    // that is gone: its process-intended line alone. Returns the one local host's inventory.
+    internal static Dictionary<string, HostProfile> InterruptedServerJournal(string root, string hostName, string platform, string runId,
+        string boot, GameLaunch launch, HostServerLaunchOwnership ownership)
+    {
+        var profile = new HostProfile { Kind = "local", Platform = platform, Lock = Path.Combine(root, "host.lock") };
+        string line = new RunJournal(runId).Line("server", JournalEntry.Of(JournalEntry.ProcessIntended,
+            ("bootDirectory", boot), ("expectedCommandLineSha256", launch.CommandLineSha256()), ("quitSeconds", "0"),
+            ("launcherOwnershipFile", ownership.FileName), ("launcherTask", ownership.TaskName)));
+        var json = System.Text.Json.Nodes.JsonNode.Parse(line)!.AsObject();
+        json["runner"]!.AsObject()["pid"] = int.MaxValue;
+        json["runner"]!.AsObject()["startedUtc"] = DateTime.UnixEpoch.ToString("O");
+        string journalDirectory = Path.Combine(RunJournal.DirectoryFor(profile), runId);
+        Directory.CreateDirectory(journalDirectory);
+        File.WriteAllText(Path.Combine(journalDirectory, "server.jsonl"), json.ToJsonString() + "\n");
+        return new Dictionary<string, HostProfile> { [hostName] = profile };
+    }
+
     // #800: the controller of a real start is killed while its launcher, paused by the test after recording the game in its
     // ownership file, has not yet published the pid file; env recover then names the launch by that record alone and stops it.
     internal static async Task RecoveryStopsALauncherWhoseControllerDiedBeforePidPublication(HostShell shell, string root,
@@ -291,18 +309,7 @@ internal static partial class HostServerChecks
         var launch = await prepare(host);
         string boot = Path.Combine(root, "boot"), runId = "run-launcher-owner";
         var ownership = HostServerLaunchOwnership.Create(launch.Platform);
-        var profile = new HostProfile { Kind = "local", Platform = platform, Lock = Path.Combine(root, "host.lock") };
-        var hosts = new Dictionary<string, HostProfile> { [host.Name] = profile };
-        // The interrupted run's journal as HostedServerRun writes it before the start, by a runner that is gone.
-        string line = new RunJournal(runId).Line("server", JournalEntry.Of(JournalEntry.ProcessIntended,
-            ("bootDirectory", boot), ("expectedCommandLineSha256", launch.CommandLineSha256()), ("quitSeconds", "0"),
-            ("launcherOwnershipFile", ownership.FileName), ("launcherTask", ownership.TaskName)));
-        var json = System.Text.Json.Nodes.JsonNode.Parse(line)!.AsObject();
-        json["runner"]!.AsObject()["pid"] = int.MaxValue;
-        json["runner"]!.AsObject()["startedUtc"] = DateTime.UnixEpoch.ToString("O");
-        string journalDirectory = Path.Combine(RunJournal.DirectoryFor(profile), runId);
-        Directory.CreateDirectory(journalDirectory);
-        File.WriteAllText(Path.Combine(journalDirectory, "server.jsonl"), json.ToJsonString() + "\n");
+        var hosts = InterruptedServerJournal(root, host.Name, platform, runId, boot, launch, ownership);
 
         Guid registration = await StandInProcessGuard.BeginServerAsync(host, launch, boot, [], null,
             nameof(RecoveryStopsALauncherWhoseControllerDiedBeforePidPublication), Generous);
@@ -588,6 +595,140 @@ public sealed class WindowsServerLauncherTimeoutTests
             if (captured != null) StandInProcessGuard.Started(registration, captured);
             if (captured != null) await StandInProcessGuard.StopAndReleaseAsync(registration);
             else await StandInProcessGuard.CleanupFailedStartAsync(registration);
+        }
+    }
+
+    // #814: a launcher stopped after it spawned its game and before its ownership record names the game. The controller's
+    // failed handoff kills the launcher's process tree by the launcher's recorded identity before it stops the task (which ends
+    // the launcher alone), so the game goes with it.
+    [Fact]
+    public async Task AFailedHandoffStopsAGameItsLauncherHasNotRecordedYet()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        using var root = new TempDirectory();
+        var realHost = new LocalGameHost("windows-launcher-before-owner", HostShell.Pwsh);
+        try { await HostServer.RequireTaskLogonAsync(realHost, TimeSpan.FromSeconds(30)); }
+        catch (InvalidOperationException) when (Environment.GetEnvironmentVariable("VALHEIM_TESTING_WINDOWS_DESKTOP") != "1") { return; }
+        var launch = LauncherTimeoutStandIn.Windows(root.Path);
+        string boot = Path.Combine(root.Path, "before owner record");
+        var ownership = HostServerLaunchOwnership.Create(ClientPlatform.Windows);
+        Guid registration = await StandInProcessGuard.BeginServerAsync(realHost, launch, boot, [], null,
+            nameof(AFailedHandoffStopsAGameItsLauncherHasNotRecordedYet), TimeSpan.FromSeconds(15));
+        HostServerProcess? captured = null;
+        try
+        {
+            var error = await Assert.ThrowsAsync<InvalidOperationException>(() => HostServer.StartAsync(
+                new WindowsHandoffIgnoringHost(realHost, beforeOwnerRecord: true), launch, boot, TimeSpan.FromSeconds(15), [], null,
+                logonSeams: null, cancellation: default, ownership: ownership));
+            captured = LauncherTimeoutStandIn.Captured(realHost, launch, boot,
+                WindowsHandoffIgnoringHost.CaptureFile, ClientPlatform.Windows);
+            Assert.NotNull(captured);
+            StandInProcessGuard.Started(registration, captured);
+            Assert.Contains("no process within", error.Message);
+            // The gap itself: the ownership record names the launcher only, never the game.
+            Assert.Null(HostServerLaunchOwnership.Parse(File.ReadAllText(Path.Combine(boot, ownership.FileName))).GamePid);
+            var state = (await HostProcessProbe.ProbeAsync(realHost, [(captured.Id, captured.StartIdentity)],
+                TimeSpan.FromSeconds(15)))[(captured.Id, captured.StartIdentity)].State;
+            Assert.True(state is ProbedState.Gone or ProbedState.Reused,
+                $"A launcher stopped before it recorded its game left stand-in process {captured.Id} {state}: {error.Message}");
+        }
+        finally
+        {
+            captured ??= LauncherTimeoutStandIn.Captured(realHost, launch, boot,
+                WindowsHandoffIgnoringHost.CaptureFile, ClientPlatform.Windows);
+            if (captured != null) StandInProcessGuard.Started(registration, captured);
+            if (captured != null) await StandInProcessGuard.StopAndReleaseAsync(registration);
+            else await StandInProcessGuard.CleanupFailedStartAsync(registration);
+        }
+    }
+
+    // #814: the controller dies after the launcher published the pid file and before it acknowledged it, so the launcher still
+    // holds its start task. env recover adopts the game from the pid file, stops it, then retires the launcher and that exact task.
+    // When the game is already gone (it crashed, or the launcher's own stop ended it), the launch is recovered as its launcher,
+    // whose task is removed all the same.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RecoveryFromAPidFileRemovesTheLaunchersStartTask(bool gameGoneFirst)
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        using var root = new TempDirectory();
+        var controller = new KillableControllerLauncher();
+        var realHost = new LocalGameHost("windows-after-pid-controller", HostShell.Pwsh, controller);
+        try { await HostServer.RequireTaskLogonAsync(realHost, TimeSpan.FromSeconds(30)); }
+        catch (InvalidOperationException) when (Environment.GetEnvironmentVariable("VALHEIM_TESTING_WINDOWS_DESKTOP") != "1") { return; }
+        var host = new AfterPidControllerPausedHost(realHost);
+        var launch = LauncherTimeoutStandIn.Windows(root.Path);
+        string boot = Path.Combine(root.Path, "boot"), runId = "run-pid-file-task";
+        var ownership = HostServerLaunchOwnership.Create(ClientPlatform.Windows);
+        var hosts = HostServerChecks.InterruptedServerJournal(root.Path, host.Name, "windows", runId, boot, launch, ownership);
+        async Task<int> Registered()
+        {
+            var result = (await realHost.RunAsync("""
+                $service = New-Object -ComObject Schedule.Service
+                $service.Connect()
+                'VT-TASK ' + @($service.GetFolder('\').GetTasks(1) | Where-Object { $_.Path -ceq ('\' + $task) }).Count
+                """, new Dictionary<string, string> { ["task"] = ownership.TaskName }, TimeSpan.FromSeconds(30))).EnsureSuccess("Counting the start task");
+            return int.Parse(InteractiveClient.Line(result.Stdout, "VT-TASK ") ?? "-1", System.Globalization.CultureInfo.InvariantCulture);
+        }
+
+        Guid registration = await StandInProcessGuard.BeginServerAsync(realHost, launch, boot, [], null,
+            nameof(RecoveryFromAPidFileRemovesTheLaunchersStartTask) + gameGoneFirst, TimeSpan.FromSeconds(15));
+        HostServerProcess? captured = null;
+        Task<HostServerProcess>? start = null;
+        try
+        {
+            start = HostServer.StartAsync(host, launch, boot, TimeSpan.FromSeconds(60), [], null, logonSeams: null, cancellation: default, ownership: ownership);
+            string gap = Path.Combine(boot, ownership.FileName + ".controller-gap");
+            var deadline = DateTime.UtcNow.AddSeconds(60);
+            while (!File.Exists(gap) && !start.IsCompleted && DateTime.UtcNow < deadline) await Task.Delay(50);
+            Assert.True(File.Exists(gap), "The controller did not reach the test's after-pid gap." +
+                (start.IsCompleted ? " The start completed: " + await Record.ExceptionAsync(() => start) : ""));
+            captured = LauncherTimeoutStandIn.Captured(realHost, launch, boot, "pid", ClientPlatform.Windows);
+            Assert.NotNull(captured);
+            StandInProcessGuard.Started(registration, captured);
+            var owner = HostServerLaunchOwnership.Parse(File.ReadAllText(Path.Combine(boot, ownership.FileName)));
+
+            controller.KillController();
+            await Assert.ThrowsAnyAsync<Exception>(() => start);
+            Assert.Equal(1, await Registered()); // the dead controller never removed it
+            if (gameGoneFirst)
+            {
+                using (var game = System.Diagnostics.Process.GetProcessById(captured.Id)) { game.Kill(); game.WaitForExit(15_000); }
+                Assert.Equal(JournalRunState.Recoverable, Assert.Single((await RunJournalStatus.InspectAsync(hosts, _ => realHost, TimeSpan.FromSeconds(60))).Runs).State);
+            }
+
+            var report = await RunRecovery.RecoverAsync(hosts, _ => realHost, runId, teardown: false, TimeSpan.FromSeconds(60));
+            Assert.True(report.Recovered, string.Join("\n", report.Steps));
+            if (gameGoneFirst)
+                Assert.Contains(report.Steps, step => step.What == $"launcher {owner.LauncherPid} (started {owner.LauncherStartIdentity})" &&
+                    step.Outcome.EndsWith("; its recorded game was already gone", StringComparison.Ordinal) && !step.Failed);
+            else
+            {
+                Assert.Contains(report.Steps, step => step.What == $"process {captured.Id} (started {captured.StartIdentity})" && !step.Failed);
+                Assert.Contains(report.Steps, step => step.What == $"launcher {owner.LauncherPid} (started {owner.LauncherStartIdentity})" &&
+                    step.Outcome.StartsWith("stopped; its start task", StringComparison.Ordinal));
+            }
+            Assert.Equal(0, await Registered());
+            var state = (await HostProcessProbe.ProbeAsync(realHost, [(captured.Id, captured.StartIdentity), (owner.LauncherPid, owner.LauncherStartIdentity)],
+                TimeSpan.FromSeconds(15))).Values.Select(process => process.State).ToList();
+            Assert.True(state.All(probed => probed is ProbedState.Gone or ProbedState.Reused), $"Recovery left the game or its launcher: {string.Join(", ", state)}.");
+            Assert.Equal(JournalRunState.Ended, Assert.Single((await RunJournalStatus.InspectAsync(hosts, _ => realHost, TimeSpan.FromSeconds(60))).Runs).State);
+        }
+        finally
+        {
+            try { controller.KillController(); } catch (InvalidOperationException) { }
+            // A launcher recovery did not stop still waits for the acknowledgement: give it, so it ends.
+            if (Directory.Exists(boot)) File.WriteAllText(Path.Combine(boot, "handoff.ack"), "ack");
+            if (start != null) try { await start; } catch { }
+            if (captured != null) await StandInProcessGuard.StopAndReleaseAsync(registration);
+            else await StandInProcessGuard.CleanupFailedStartAsync(registration);
+            // Never leave a test's task registered on the machine, whatever the assertions found.
+            await realHost.RunAsync("""
+                $service = New-Object -ComObject Schedule.Service
+                $service.Connect()
+                try { $service.GetFolder('\').DeleteTask($task, 0) } catch { }
+                """, new Dictionary<string, string> { ["task"] = ownership.TaskName }, TimeSpan.FromSeconds(30));
         }
     }
 

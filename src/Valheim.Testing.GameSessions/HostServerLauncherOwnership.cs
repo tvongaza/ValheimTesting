@@ -186,15 +186,23 @@ internal static class HostServerLauncher
 
     internal static readonly string WindowsInspect = ("$ErrorActionPreference = 'Stop'\n" + WindowsIdentity + "\n'VT-LAUNCHER ' + $vtLauncher\n").ReplaceLineEndings("\n");
 
+    // Kills the recorded launcher's process tree, so a game it spawned goes with it whether or not it recorded the game yet,
+    // only while WindowsIdentity proves it the recorded launcher. Its word: stopped, running (it outlived the kill), or what
+    // WindowsIdentity found instead (gone, reused, mismatch, unreadable). The one launcher stop: a recovery's (WindowsRetire)
+    // and the start's own when its handoff fails (HostServerScripts.WindowsStart).
+    internal const string WindowsStopFunction = "function Stop-VtLauncher([string]$launcherPid, [string]$launcherStart, [string]$launcherSession, [int]$waitSeconds) {\n" +
+        WindowsIdentity + "\n" + """
+        if ($vtLauncher -ne 'owned') { return $vtLauncher }
+        $process.Kill($true)
+        if ($process.WaitForExit($waitSeconds * 1000)) { 'stopped' } else { 'running' }
+        }
+        """;
+
     // Kills the launcher's process tree only while it is the recorded launcher, then removes the launch's task registration
     // when the interrupted start left it: the exact task name the launch journalled, starting this boot directory's launcher.
-    internal static readonly string WindowsRetire = ("$ErrorActionPreference = 'Stop'\n" + WindowsIdentity + "\n" + """
-        if ($vtLauncher -in @('mismatch', 'unreadable')) { 'VT-LAUNCHER ' + $vtLauncher; exit 0 }
-        if ($vtLauncher -eq 'owned') {
-            $process.Kill($true)
-            if (-not $process.WaitForExit([int]$seconds * 1000)) { 'VT-LAUNCHER running'; exit 0 }
-            $vtLauncher = 'stopped'
-        }
+    internal static readonly string WindowsRetire = ("$ErrorActionPreference = 'Stop'\n" + WindowsStopFunction + "\n" + """
+        $vtLauncher = Stop-VtLauncher $launcherPid $launcherStart $launcherSession ([int]$seconds)
+        if ($vtLauncher -in @('mismatch', 'unreadable', 'running')) { 'VT-LAUNCHER ' + $vtLauncher; exit 0 }
         $service = New-Object -ComObject Schedule.Service
         $service.Connect()
         $folder = $service.GetFolder('\')
