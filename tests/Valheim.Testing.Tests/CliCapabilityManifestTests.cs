@@ -3,6 +3,7 @@ using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Valheim.Testing.Game;
 using Valheim.Testing.Game.Fakes;
+using Valheim.Testing.GameSessions;
 using Xunit;
 
 // The static ValheimCLI capability check (#124): an owned client's ValheimCLI plugin, compared by SHA256 with the manifest of one
@@ -114,6 +115,47 @@ public sealed class CliCapabilityManifestTests : IDisposable
         previousPlan.Capabilities = [.. PlayerPlacement.ArrivalCapabilities];
         Assert.Contains(CliCapabilities.TeleportSignals,
             Assert.Throws<InvalidOperationException>(() => previousPlan.CheckCliManifest()).Message);
+    }
+
+    // #808: a campaign profile on a Windows client host reached over SSH is checked on that host, before launch. Its files are only
+    // on the host: the runner's disk has nothing at the profile's path, so a check that read it here would refuse every remote client.
+    [Fact] public void ARemoteProfilesManifestCheckReadsItsPluginOnItsHost()
+    {
+        var builds = new Builds();
+        var host = new FakeServerHost("client-host", Path.Combine(_root, "mirror"), windows: true);
+        const string root = @"C:\vt-808\runtime";
+        string plugin = host.Local(HostPath.Join(root, "BepInEx/plugins/" + Core));
+        void OnHost(string relative, byte[] image)
+        {
+            string path = host.Local(HostPath.Join(root, relative));
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllBytes(path, image);
+        }
+        OnHost("BepInEx/plugins/" + Core, builds.Current);
+        OnHost("BepInEx/plugins/Mod/BepInEx.dll", builds.BepInEx); // A DLL that is not ValheimCLI is not judged.
+        var plan = new ClientRunPlan
+        {
+            Mode = "owned", Install = root, CliManifest = Manifest(builds), Prepared = true,
+            PreparedCliCheck = (manifest, capabilities) => InstallSelection.CheckCliManifestAsync(host, root, manifest, capabilities,
+                TimeSpan.FromSeconds(30), CancellationToken.None).GetAwaiter().GetResult(),
+        };
+        Assert.False(Directory.Exists(plan.LoaderRoot)); // Nothing of the profile is on this machine.
+
+        var check = plan.CheckCliManifest(PlayerPlacement.ArrivalCapabilities)!;
+        Assert.Equal(new[] { "BepInEx/plugins/valheimCLI.dll" }, check.Files);
+        Assert.Equal(PlayerPlacement.ArrivalCapabilities.Order(StringComparer.Ordinal), check.Capabilities.Order(StringComparer.Ordinal));
+        Assert.Equal(new[] { "list", "fetch" }, host.Scripts); // One listing, then only the plugins folder is fetched: there is no scripts folder.
+
+        // A previous build on the host lacks the arrival's teleport signals: refused, as another build.
+        File.WriteAllBytes(plugin, builds.Previous);
+        var previous = Assert.Throws<InvalidOperationException>(() => plan.CheckCliManifest(PlayerPlacement.ArrivalCapabilities)).Message;
+        Assert.Contains("another build", previous);
+        Assert.Contains(CliCapabilities.TeleportSignals, previous);
+
+        // The plugin missing on the host: refused, naming where it was looked for.
+        File.Delete(plugin);
+        Assert.Contains(@"valheimCLI.dll (plugin valheimCLI.valheimCLI) is not installed in BepInEx/plugins or BepInEx/scripts of C:\vt-808\runtime on client-host",
+            Assert.Throws<InvalidOperationException>(() => plan.CheckCliManifest(PlayerPlacement.ArrivalCapabilities)).Message);
     }
 
     [Fact] public void TheLiveListingOfAClientThatLoadedThePluginConfirmsTheManifest()

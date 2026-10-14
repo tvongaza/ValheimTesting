@@ -15,7 +15,8 @@ namespace Valheim.Testing.GameSessions;
 /// machine, or fetched into an owned local folder from another host (<see cref="IGameHost.FetchDirectoryAsync"/>) and checked
 /// against the listing's hashes. A file changed in place after the listing is refused by the profile stage, which compares the
 /// install with its listing once the profile is made. Paths compare as the install's host lists them, never as the runner's filesystem does. Dispose it
-/// once the profile is prepared: that removes the fetched files and the generated config.
+/// once the profile is prepared: that removes the fetched files and the generated config. A prepared profile's ValheimCLI set is
+/// read on its host the same way (<see cref="CheckCliManifestAsync"/>).
 /// </summary>
 internal sealed class InstallSelection : IDisposable
 {
@@ -184,42 +185,15 @@ internal sealed class InstallSelection : IDisposable
     {
         // The install's paths compare as its host's listing does: ignoring case on Windows, exactly on a bash host.
         var names = source.Names;
-        bool inPlace = host.Kind == GameHostKind.Local;
         var selection = new List<HostedRuntimeFile>();
         var replaced = new List<HostedRuntimeFile>();
         foreach (string folder in Folders)
         {
             string prefix = "BepInEx/" + folder + "/";
-            // Each listed file below the folder, by its path below it (macOS Finder and AppleDouble files are never part of an install).
-            var found = source.Files.Where(file => file.Key.Length > prefix.Length && names.Equals(file.Key[..prefix.Length], prefix) &&
-                !FileHash.IsMacMetadata(file.Key)).ToList();
-            if (found.Count == 0) continue;
-            // The folder as the install spells it, which a Windows host may write in another case.
-            string spelling = found[0].Key[..(prefix.Length - 1)];
-            var listed = found.ToDictionary(file => file.Key[prefix.Length..], file => (file.Key, Sha: file.Value), StringComparer.Ordinal);
-            string fetched = Path.Combine(work, "BepInEx", folder);
-            if (!inPlace)
-            {
-                await host.FetchDirectoryAsync(HostPath.Join(install, spelling), fetched, timeout, cancellation).ConfigureAwait(false);
-                // Exactly the listed files arrived, each with the listing's hash.
-                foreach (string file in Directory.EnumerateFiles(fetched, "*", SearchOption.AllDirectories))
-                {
-                    string below = Path.GetRelativePath(fetched, file).Replace('\\', '/');
-                    if (!FileHash.IsMacMetadata(below) && !listed.ContainsKey(below))
-                        throw new IOException($"BepInEx/{folder}/{below} arrived from {install} on {host.Name}, but the install's listing does not hold it.");
-                }
-                foreach (var (below, (key, sha)) in listed)
-                {
-                    string local = Path.Combine(fetched, below.Replace('/', Path.DirectorySeparatorChar));
-                    if (!File.Exists(local) || !FileHash.Sha256(local).Equals(sha, StringComparison.OrdinalIgnoreCase))
-                        throw new IOException($"{key} in {install} on {host.Name} arrived missing or changed: it differs from the install's listing.");
-                }
-            }
-            foreach (var (below, (key, _)) in listed.OrderBy(file => file.Key, StringComparer.Ordinal))
+            var listed = await FolderHereAsync(host, install, source, folder, work, timeout, cancellation).ConfigureAwait(false);
+            foreach (var (below, (key, local)) in listed.OrderBy(file => file.Key, StringComparer.Ordinal))
             {
                 string relative = prefix + below;
-                string local = inPlace ? Path.Combine(install, key.Replace('/', Path.DirectorySeparatorChar))
-                    : Path.Combine(fetched, below.Replace('/', Path.DirectorySeparatorChar));
                 if (names.Equals(key, BepInExSettings.RelativePath)) continue;
                 if (folder is "plugins" or "scripts" && relative.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)
                     && (Path.GetFileName(relative).Equals(cli.Plugin.File, StringComparison.OrdinalIgnoreCase) || CliBuildManifest.Plugins(local)?.Any(CliBuildManifest.IsCliPlugin) == true))
@@ -236,5 +210,72 @@ internal sealed class InstallSelection : IDisposable
         foreach (var cliFile in cliFiles.Located)
             selection.Add(new HostedRuntimeFile(cliFile.Path, "BepInEx/plugins/" + cliFile.File.File));
         return (selection, replaced);
+    }
+
+    /// <summary>
+    /// The one reading of a BepInEx <paramref name="folder"/> of <paramref name="root"/> on its host as files on this machine: each
+    /// file <paramref name="listing"/> holds below it (macOS Finder and AppleDouble files are never part of an install), by its path
+    /// below the folder, with its path in the root as the host spells it and its local file. On this machine the files are read in
+    /// place; from another host the folder is fetched into <paramref name="work"/>'s <c>BepInEx/&lt;folder&gt;</c>, and exactly the
+    /// listed files must arrive, each with the listing's hash. Empty when the listing holds nothing below the folder.
+    /// </summary>
+    private static async Task<Dictionary<string, (string Key, string Local)>> FolderHereAsync(IGameHost host, string root, HostListing listing,
+        string folder, string work, TimeSpan timeout, CancellationToken cancellation)
+    {
+        string prefix = "BepInEx/" + folder + "/";
+        var found = listing.Files.Where(file => file.Key.Length > prefix.Length && listing.Names.Equals(file.Key[..prefix.Length], prefix) &&
+            !FileHash.IsMacMetadata(file.Key)).ToList();
+        var here = new Dictionary<string, (string Key, string Local)>(StringComparer.Ordinal);
+        if (found.Count == 0) return here;
+        if (host.Kind == GameHostKind.Local)
+        {
+            foreach (var (key, _) in found) here[key[prefix.Length..]] = (key, Path.Combine(root, key.Replace('/', Path.DirectorySeparatorChar)));
+            return here;
+        }
+        // The folder as the root spells it, which a Windows host may write in another case.
+        string spelling = found[0].Key[..(prefix.Length - 1)];
+        var listed = found.ToDictionary(file => file.Key[prefix.Length..], file => (file.Key, Sha: file.Value), StringComparer.Ordinal);
+        string fetched = Path.Combine(work, "BepInEx", folder);
+        await host.FetchDirectoryAsync(HostPath.Join(root, spelling), fetched, timeout, cancellation).ConfigureAwait(false);
+        // Exactly the listed files arrived, each with the listing's hash.
+        foreach (string file in Directory.EnumerateFiles(fetched, "*", SearchOption.AllDirectories))
+        {
+            string below = Path.GetRelativePath(fetched, file).Replace('\\', '/');
+            if (!FileHash.IsMacMetadata(below) && !listed.ContainsKey(below))
+                throw new IOException($"BepInEx/{folder}/{below} arrived from {root} on {host.Name}, but the install's listing does not hold it.");
+        }
+        foreach (var (below, (key, sha)) in listed)
+        {
+            string local = Path.Combine(fetched, below.Replace('/', Path.DirectorySeparatorChar));
+            if (!File.Exists(local) || !FileHash.Sha256(local).Equals(sha, StringComparison.OrdinalIgnoreCase))
+                throw new IOException($"{key} in {root} on {host.Name} arrived missing or changed: it differs from the install's listing.");
+            here[below] = (key, local);
+        }
+        return here;
+    }
+
+    /// <summary>
+    /// The static ValheimCLI manifest check (<see cref="CliCapabilityManifest.Check(string, IEnumerable{string})"/>) of a profile's
+    /// loader root on its host (#808): its <c>BepInEx/plugins</c> and <c>BepInEx/scripts</c> as the host lists them, read as a
+    /// selection is (<see cref="FolderHereAsync"/>), so a client on another machine is checked on that machine, never at the same
+    /// path on this one. The fetched copy is removed before this returns.
+    /// </summary>
+    internal static async Task<CliManifestCheck> CheckCliManifestAsync(IGameHost host, string root, CliCapabilityManifest manifest,
+        IReadOnlyList<string> capabilities, TimeSpan timeout, CancellationToken cancellation)
+    {
+        var listing = await HostInstall.ListAsync(host, root, timeout, ["BepInEx/plugins", "BepInEx/scripts"], cancellation).ConfigureAwait(false);
+        string work = Path.Combine(Path.GetTempPath(), "vt-cli-check-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var dlls = new Dictionary<string, string>(StringComparer.Ordinal); // local file → its path in the root
+            foreach (string folder in new[] { "plugins", "scripts" })
+                foreach (var (key, local) in (await FolderHereAsync(host, root, listing, folder, work, timeout, cancellation).ConfigureAwait(false)).Values)
+                    if (HostedRuntimeStage.IsStartupPlugin(key)) dlls[Path.GetFullPath(local)] = key;
+            return manifest.Check(dlls.Keys, $"in BepInEx/plugins or BepInEx/scripts of {root} on {host.Name}", local => dlls[local], capabilities);
+        }
+        finally
+        {
+            if (Directory.Exists(work)) Directory.Delete(work, recursive: true);
+        }
     }
 }
