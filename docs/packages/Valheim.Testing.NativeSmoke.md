@@ -1,59 +1,183 @@
 # Valheim.Testing.NativeSmoke
 
-[Current preview API reference](https://tvongaza.github.io/ValheimTesting/reference/). This command-line tool's supported entry points are the commands documented below, rather than a public .NET library surface.
+[Current preview API reference](https://tvongaza.github.io/ValheimTesting/reference/). This package is the `valheim-test` .NET tool; its supported surface is the commands below, not a .NET library.
 
-*Assistant-written (Claude).*
-
-`valheim-test`, a .NET tool from [ValheimTesting](https://github.com/tvongaza/ValheimTesting): one-command disposable checks that a mod loads in the real game, an A/B run that isolates a load interaction between two mods, an editable consumer project for your own assertions, and the commands that look after the machines a native test runs on. Each run pins what it stages, keeps private evidence, and removes what it made. `start` defaults to a disposable loader profile. `server-load` and `server-load-ab` do the same for local Windows, macOS and Linux actors and for remote Windows or Linux actors. A remote macOS dedicated server uses a prepared profile campaign; remote GUI clients use a prepared profile campaign through SSH ([#613](https://github.com/tvongaza/ValheimTesting/issues/613)). Profiles are the only launch mode: `start`, `server-load` and `server-load-ab` never copy the game install ([launch modes](https://github.com/tvongaza/ValheimTesting/blob/main/docs/packages/Valheim.Testing.GameSessions.md#an-owned-client-on-this-machine-runs-with-a-disposable-loader-profile)). A pass means the selected plugins loaded and a client entered the world; it says nothing about a mod's gameplay. For a step-by-step single-mod and mod-conflict investigation, including how to read failed setup versus failed gameplay, see [Debug a mod load or mod conflict](https://github.com/tvongaza/ValheimTesting/blob/main/docs/guides/check-a-mod-loads.md).
-
-| Command | What it does |
-|---|---|
-| `start [--mod DLL] [--output NEW_DIR]` | A client-side mod (or a selected pair) loads in an owned client hosting a disposable world; `--compare-mod` runs a second build of it against the same world |
-| `server-load --mod DLL` | A server-side mod loads on an owned dedicated server, and one clean client (the mod absent) joins it |
-| `build --project MOD.csproj` | Publicize the installed game's required compile references privately and build a mod without copying its DLL into the live game |
-| `server-load-ab ... --remove-mod DLL` | The same load with and without one mod, to isolate a load interaction |
-| `finish --run ID` | Ask the live owner of a foreground `--hold` run to finish and clean up |
-| `init [server] --output NEW_DIR` | An editable project that reruns a `start` or `server-load` run with your own assertions |
-| `env list`, `env preflight` | What the environment inventory holds (this machine with no file), and whether a one-off can run on it |
-| `env status`, `env recover`, `env teardown` | What earlier runs left on each host, from their run journals, and clearing it |
-| `session check SESSION [--hosts]` | A session file (several actors on several machines) checked before anything is copied |
-
-`valheim-test help` lists the commands; a command given wrong options prints its whole usage. If it does not list a command named here, the installed tool predates it: `dotnet tool update --global Valheim.Testing.NativeSmoke --prerelease`. Exit codes: 0 passed (for `env` and `session check`: nothing to refuse), 1 a run failed, 2 a usage error, 3 refused before the run, or a run whose outcome is unknown (read its evidence; `env status` shows what it left), and for `env` and `session check` something refused or left to recover.
+`valheim-test` checks that a mod loads in the real game. Each run stages a disposable loader profile of a Steam install, keeps private evidence and removes what it made; the install is only read. New to the tool? Start with [Your first server load check](../tutorials/first-server-load-check.md).
 
 ## Install
 
 ```sh
-dotnet tool install --global Valheim.Testing.NativeSmoke --prerelease
+dotnet tool install Valheim.Testing.NativeSmoke --version 0.1.0-rc.1 --global
 ```
 
-The built-in `start` and `server-load` scenarios run from the tool's assemblies; they do not restore an editable consumer. `start --mod DLL` needs no NuGet.org access, while `server-load` may restore packages to build its adapter unless you supply `--adapter DLL`. The new `--project`, `--scenario-project` and `--adapter-project` forms build local projects and may need their declared NuGet dependencies. On Homebrew macOS installs, a global .NET tool may need `DOTNET_ROOT` set to the directory reported by `dotnet --info` before its apphost launches.
+The tool needs the .NET 10 SDK. If a Homebrew .NET on macOS cannot start the tool, set `DOTNET_ROOT` to the directory `dotnet --info` reports.
 
-## One machine: build and run
+## Commands
 
-### Build a mod against the installed game
+| Command | Does |
+|---|---|
+| [`start`](#start) | Loads a client-side mod in an owned client that hosts a disposable world |
+| [`server-load`](#server-load) | Loads a server-side mod on an owned dedicated server; one clean client joins |
+| [`server-load-ab`](#server-load-ab) | Runs `server-load` with and without one mod, to isolate a load interaction |
+| [`server-load-phases`](#server-load-phases) | Runs ordered server-only fixture bakes |
+| [`build`](#build) | Builds a mod against the selected install's publicized assemblies, privately |
+| [`init`](#init) | Creates an editable test project that reruns a `start` or `server-load` run |
+| [`finish`](#hold-and-finish) | Asks a held run to finish and clean up |
+| [`cli`](#cli) | Sends one strictly pinned command to a running owned client or server |
+| [`env`](#env) | Lists this machine's environments, checks it, and clears what runs left |
+| [`session check`](#session-check) | Checks a session file and, with `--hosts`, its hosts |
+| [`detach`](#detach) | Experimental: a held Windows dedicated server that outlives the terminal |
+| [`steam-runtime capture`](#steam-runtime-capture) | Pins SteamCMD's macOS server libraries for a Mac server profile |
 
-For a mod that needs publicized game assemblies, run `build` from the checkout before the native test. `build`, `start` and `server-load` share one mod-input stage: `build` chooses its game and loader exactly as the command that runs that role does. With no `--role` (a client mod) it takes `start`'s client: `--game DIR`, `--inventory FILE` with `--client-env NAME`, and `--client-loader-package FILE`. With `--role server` it takes `server-load`'s server: `--server DIR`, `--inventory FILE` with `--server-env NAME`, and `--loader-package FILE`. An environment's `loaderPackage` applies as it does in a run, so a vanilla Steam install (as profile runs leave it) builds against that package's BepInEx core. The command reads the project's publicized reference names, writes those assemblies under a new private output folder, and passes their paths to MSBuild. `BepInEx.dll`, Harmony and declared third-party references such as Jotunn are copied to that private folder. A third-party reference comes from `--dependency NAME=DLL`, or is found once in the chosen loader's core or a `--search-root DIR|DLL`, the same roots the run resolves from; the game folder's own `BepInEx/plugins` is never read, because a profile run never loads it. The original Valheim install, including a signed macOS app bundle, is only read. No game assemblies or third-party DLLs belong in Git.
+`valheim-test help` lists every command with its usage.
+
+### Exit codes
+
+| Code | `start`, `server-load`, `server-load-ab` | `env`, `session check` | `cli` |
+|---|---|---|---|
+| 0 | Passed | Nothing to refuse or recover | ValheimCLI accepted the command |
+| 1 | The run failed | Not used | Not accepted, or the screenshot incomplete |
+| 2 | Usage error (not `server-load-ab`) | Usage error | Usage error |
+| 3 | Refused, or the outcome is unknown | Something refused or left to recover | Refused; no command sent |
+
+`server-load-ab` reports a usage error, `--hold` and `--preflight-only` included, as `REFUSED:` without a usage line, and exits 3. `build`, `init` and `finish` exit 0 when done, 2 on a usage error and 3 when refused.
+
+## Run options
+
+`start`, `server-load`, `server-load-ab` and `build` share these options. A command refuses an option it does not take as `Unknown option`. "Repeat": give it more than once.
+
+**Mod inputs**
+
+| Option | Taken by | Does |
+|---|---|---|
+| `--mod DLL` | start, server-load, server-load-ab | A mod to load. Repeat for a set. Without it, `start` and `server-load` pick the current project's one built plugin |
+| `--project MOD.csproj` | start, server-load, build | Builds the mod privately first; leave out `--mod` and `--build-inputs` |
+| `--build-inputs FILE` | start, server-load | The `build-inputs.json` from `build`; the run refuses a changed mod or reference |
+| `--dependency NAME=DLL` | start, server-load, build | A third-party compile reference for `--project`. Repeat |
+| `--search-root DIR\|DLL` | all four | A folder or exact DLL to search for dependencies. Repeat |
+| `--optional-reference ASSEMBLY` | start, server-load, server-load-ab | Confirms a reference that is deliberately absent. Repeat |
+| `--scenario TEST.dll`, `--scenario-project TEST.csproj` | start, server-load | A mod-owned scenario; one or the other ([scenarios](#your-own-scenario)) |
+| `--output NEW_DIR` | all four | A new folder outside the mod project. Default: a new folder under `valheim-test-runs/` in ValheimTesting's data folder |
+
+The [dependency resolver](../reference/game-run-inputs.md#resolve-mod-dependencies) chooses files and writes `dependencies.lock.json`. It never downloads a mod.
+
+**Machine and installs**
+
+| Option | Taken by | Does |
+|---|---|---|
+| `--inventory FILE` | all four | Uses a file's environments instead of [this machine](../reference/game-launch.md#this-machine-with-no-file) |
+| `--game DIR` | start, build | The client install to use |
+| `--client-env NAME` | all four | The client environment to use from the inventory |
+| `--server DIR` | server-load, server-load-ab, build | The dedicated-server install to use |
+| `--server-env NAME` | server-load, server-load-ab, build | The server environment to use from the inventory |
+| `--client DIR` | server-load, server-load-ab | The clean client's install |
+| `--client-architecture x64\|arm64` | start, server-load, server-load-ab | The macOS client slice ([Apple Silicon](../reference/platforms.md#native-apple-silicon-client)) |
+| `--join HOST:PORT` | server-load, server-load-ab | The address a client on another machine joins |
+
+**Loader and ValheimCLI**
+
+| Option | Taken by | Does |
+|---|---|---|
+| `--loader-package FILE` | server-load, server-load-ab, build | A [reviewed loader](../reference/game-run-inputs.md#pin-a-bepinex-loader) for the server's profile |
+| `--client-loader-package FILE` | all four | A reviewed loader for the client's profile |
+| `--cli-manifest FILE --cli-files DIR` | start, server-load, server-load-ab | A ValheimCLI core and packs from one build |
+| `--steam-runtime-package FILE` | server-load | A Mac server's [pinned SteamCMD libraries](#steam-runtime-capture) |
+
+**Timing, logs and holds**
+
+| Option | Taken by | Does |
+|---|---|---|
+| `--join-seconds 10..900` | start, server-load, server-load-ab | The deadline to enter the world. Default 180 |
+| `--server-startup-seconds 1..3600` | server-load, server-load-ab | The deadline for the server to become ready. Default 300 |
+| `--expected-log-error EXACT_HEADER --expected-log-reason REASON` | start, server-load, server-load-ab | Admits one known BepInEx error by its whole header line, with a reason |
+| `--hold` | start, server-load | Keeps a passing run's game open ([hold](#hold-and-finish)) |
+
+## start
 
 ```sh
-valheim-test build --role server --project /path/to/MyServerMod/MyServerMod.csproj --output /private/runs/mod-build
-# Omit --role server for a client mod. --game DIR (client) or --server DIR (server) selects a particular install;
-# --inventory FILE with --client-env/--server-env selects an environment and its loaderPackage.
-# Jotunn and other third-party references come from a search root or an exact DLL:
-valheim-test build --project /path/to/MyMod/MyMod.csproj --search-root /path/to/mod-deps
-valheim-test build --project /path/to/MyMod/MyMod.csproj --dependency Jotunn=/path/to/Jotunn.dll
+valheim-test start --mod /path/to/MyMod.dll
 ```
 
-The command prints the built mod and `build-inputs.json`. Pass both to a native run using `--mod` and `--build-inputs`: the run refuses a changed mod, publicized reference, original game assembly, loader core or third-party compile reference before launch. Build a server mod against the dedicated server selected for its run; the client and dedicated-server assemblies can differ even at the same displayed game version. Each build makes fresh private references, so an older game's publicized copies cannot be silently reused. `build-inputs.json` records the full game-code SHA256, each reference hash and the publicizer version. It and the build log contain local paths and stay in private evidence. A missing third-party dependency is named and must be selected with `--search-root` or `--dependency`; the tool does not download mod DLLs. The native run uses each selected compile dependency as an exact DLL choice, even when a search directory contains a different build. Give `--search-root DIR` for dependencies kept elsewhere, or `--search-root FILE.dll` to choose one exact build from an ambiguous directory.
+`start` loads a client-side mod in an owned Windows or macOS client that hosts the packaged world with the packaged character. It prints `run ID:`, a log-scan line and a `PASS` or `FAIL` result line.
 
-The mod's project must accept command-line MSBuild properties for its game path, managed path, BepInEx core, publicized path and deployment destination. `build` sets `ValheimPath`, `ValheimManaged`, `BepInExCore`, `PUBLICIZED_PATH`, `BEPINEX_CORE` and `CopyOutputDLLPath` for existing project conventions; the deployment destination is a private folder. For projects importing the [game-reference source files](../../tools/game-references/README.md), a `ValheimReference` may point at a publicized file under the supplied `PUBLICIZED_PATH`. A project that hardcodes a live plugin copy outside these properties must remove or guard that copy before using this command.
+| Option | Does |
+|---|---|
+| `--source COMMIT` | Records the mod build's source commit |
+| `--compare-mod DLL --compare-source COMMIT` | Runs a second build of the first mod against the same world, as arms `before` and `after` |
 
-### Run a mod-owned scenario with the same preparation
+Both compared builds must declare the same plugin identities. The client needs its desktop session and a running Steam client. Through SSH on Windows, `start` launches the client in the signed-in desktop through a scheduled task; on macOS, run it from the unlocked console.
 
-Put one public `IOneShotServerScenario` implementation in a .NET 10 test project. Its `RunAsync(GameSession, OneShotServerContext)` method receives the already prepared server and optional clean client, the exact fixture UID and the run report. For a server-only assertion, return `false` from `RequiresClient` and pass `--server-only`; for a client scenario, return `true`, omit `--server-only`, and open the prepared `context.ClientPlan` through `session.OpenClient`. The toolkit remains responsible for the actor processes, pins, private evidence and cleanup, including when the assertion throws. The [compiling example](../../examples/OneShotServerScenario/MetadataScenario.cs) shows the small server-only shape.
+## server-load
 
-If your scenario needs settings or local files, also implement `IOneShotScenarioPreflight`. `ValidateInputs()` runs once before the fixture is staged or a game process starts; throw an actionable error there when an input is missing. Return a snapshot of the validated values rather than a path to reread later. The runner passes that *same object* as `context.ValidatedInputs`, which `context.RequireInputs<T>()` checks for you. For example, read a site-plan JSON and source commit in `ValidateInputs()`, return `new ReviewInputs(planJson, commit)`, then use `context.RequireInputs<ReviewInputs>()` in `RunAsync`. This hook must only read settings and local files: it must not change a game install, save or shared state. A failed check is a setup refusal, not a failed gameplay assertion.
+```sh
+valheim-test server-load --mod /path/to/ServerMod.dll
+```
 
-After cloning a mod and its test project, one command can build the mod against the selected dedicated server, build the scenario project and run them together:
+`server-load` prints the server and client it chose, writes `campaign.json` and runs the read-only host preflight before anything is copied. Then one clean client without the mod joins the owned server.
+
+| Option | Does |
+|---|---|
+| `--server-only` | Runs no client. Prints `SERVER_LOAD_PASS` instead of `SERVER_JOIN_PASS` |
+| `--preflight-only` | Stops after `PREFLIGHT PASSED` |
+| `--config FILE` | A config file for the server. Repeat |
+| `--plugin-file FILE`, `--plugin-dir DIR` | A mod's assets beside its DLL; DLLs are refused. Repeat |
+| `--adapter DLL` | A built test adapter, instead of building the bundled one |
+| `--adapter-project ADAPTER.csproj` | Builds a mod's own adapter; needs `--session-capability` and `--session-token-variable` |
+| `--adapter-property NAME={mod}\|{cli}` | Maps an adapter project property to the pinned mod or ValheimCLI DLL. Repeat |
+| `--session-capability OWNER/session --session-token-variable NAME` | The custom adapter's capability and token variable |
+| `--world-fixture DIR` | Loads a pinned world fixture instead of the packaged world |
+| `--bake-fixture NEW_DIR` | Saves the world as a new fixture; see [Bake a fixture](../reference/fixture-authoring.md) |
+| `--assert-command TEXT --assert-line PREFIX` | One server command whose reply proves the mod is ready; needs `--server-only` |
+| `--before-save-command TEXT --before-save-line PREFIX` | One change before a bake saves |
+
+The result line is `SERVER_JOIN_PASS`, `SERVER_LOAD_PASS` or `SERVER_LOAD_FAIL`, with the evidence's size and path. The server must be on this machine. Building the bundled adapter needs NuGet.org; offline, pass `--adapter DLL`.
+
+## server-load-ab
+
+```sh
+valheim-test server-load-ab \
+  --mod /path/to/FirstMod.dll --mod /path/to/SecondMod.dll \
+  --remove-mod /path/to/SecondMod.dll \
+  --output /path/to/new-run
+```
+
+`--remove-mod DLL` names one of at least two `--mod` DLLs; `--output` is required. It refuses `--hold`, `--preflight-only`, `--project`, `--build-inputs`, `--dependency`, `--scenario`, `--scenario-project`, `--steam-runtime-package`, `--world-fixture` and the adapter-project, bake and assertion options. The full set runs in `before/` and the set without that mod in `after/`. The result line is `SERVER_MODSET_AB_PASS` or `SERVER_MODSET_AB_FAIL`.
+
+## server-load-phases
+
+```sh
+valheim-test server-load-phases --plan FILE --output NEW_DIR
+```
+
+Both paths must be absolute. The plan and its output are on [Bake a fixture](../reference/fixture-authoring.md#ordered-phases).
+
+## build
+
+```sh
+valheim-test build --project /path/to/MyMod/MyMod.csproj
+```
+
+`build` publicizes the selected install's assemblies into a new private folder and builds the mod against them, never into a game.
+
+| Option | Does |
+|---|---|
+| `--role client\|server` | Builds against the client (default, as `start` selects it) or the dedicated server (as `server-load` selects it) |
+
+With `--role server` it takes `--server`, `--server-env` and `--loader-package`; otherwise `--game`, `--client-env` and `--client-loader-package`. It prints `Built mod:` and `Build inputs:`. Pass both to a run with `--mod DLL --build-inputs FILE`.
+
+It sets `VALHEIM_INSTALL`, `VALHEIM_MANAGED`, `ValheimPath`, `ValheimManaged`, `BEPINEX_CORE`, `BepInExCore`, `PUBLICIZED_PATH`, `PublicizedAssembliesPath` and `CopyOutputDLLPath` (a private folder), and empties `CopyOutputDLLPath2` and `CopyOutputDLLPath3`. Guard any other copy into a game first. Give a missing third-party reference with `--dependency` or `--search-root`.
+
+## Your own scenario
+
+A mod's test project can hold one public scenario that runs on the prepared game:
+
+| Interface | Runs on | Example |
+|---|---|---|
+| `IOneShotServerScenario` | `server-load`; `RequiresClient` false needs `--server-only` | [MetadataScenario.cs](../../examples/OneShotServerScenario/MetadataScenario.cs) |
+| `IOneShotHostedScenario` | `start` | [HostedWorldScenario.cs](../../examples/OneShotServerScenario/HostedWorldScenario.cs) |
+| `IOneShotScenarioPreflight` | Either; `ValidateInputs()` runs before anything is staged | `context.RequireInputs<T>()` reads its result |
+
+One command builds the mod, the scenario and its adapter, then runs them:
 
 ```sh
 valheim-test server-load --server-only \
@@ -62,202 +186,136 @@ valheim-test server-load --server-only \
   --adapter-project /path/to/MyMod.TestAdapter/MyMod.TestAdapter.csproj \
   --adapter-property 'MyModDll={mod}' \
   --session-capability mymod.testing/session \
-  --session-token-variable MYMOD_TEST_SESSION_TOKEN \
-  --dependency Jotunn=/path/to/Jotunn.dll \
-  --server-startup-seconds 900 \
-  --output /private/runs/my-mod-scenario
+  --session-token-variable MYMOD_TEST_SESSION_TOKEN
 ```
 
-`--adapter-project` is optional for a scenario that needs no mod-specific game command. It builds the adapter privately against the pinned ValheimCLI core (`CliDll`) and mod (`ModDll`). If the adapter's project uses its own property for the mod reference, map it once with `--adapter-property 'MyModDll={mod}'`; `{cli}` also selects the pinned CLI file. Only those two pinned placeholders are accepted. Name the custom adapter's registered session capability and token variable; the one-shot preflight refuses to start a game without them, because the built-in adapter has a different identity. `--dependency` or `--search-root` selects each third-party compile dependency; the server install's own `BepInEx` is not searched. No arbitrary mod DLL is downloaded. Use `--preflight-only` to resolve the same pins and validate the scenario without starting Valheim. If the mod and scenario DLLs are already built, use `--mod DLL --build-inputs FILE --scenario DLL` instead. The prepared `campaign.json`, `plan.json`, dependency locks, `build-inputs.json`, adapter inputs, scenario source hashes and native result remain under the private output. On another host, run the same one-shot command from the checkout with a new output folder; its own inventory and game build are selected and pinned there. Compare the two hosts' recorded plans and hashes before treating their results as the same test input. For an exact pinned campaign replay, copy its private inputs to the other host, verify that host's game and mod hashes, and use `valheim-test init server --output NEW_DIR` to create an editable consumer for `campaign.json`; adapt its scenario and environment binding there. A different game build requires a new local mod build; changing a hash by hand is not a valid rerun.
+A scenario owns its assertions, so it refuses `--hold`, `--bake-fixture` and `--assert-command`.
 
-For `--adapter-project`, `adapter-build/source-inputs/manifest.json` retains the compiler-embedded source bytes, including linked and generated C# files, and checks each against the compiled adapter's debug checksum. It also retains the project and raw imports of any extension, evaluated compiler properties, target-populated analyzers and resources, resolved reference files and built project-reference DLLs. File identities, resource metadata, compiler settings and hashes enter the source-input digest; selected mod and ValheimCLI binaries are recorded separately so two arms can compare their observer inputs. The adapter compiles once: the same build reports its item and property values, and the tool compares them with what the project declared before the build began. The build refuses a declared input or an import that changed during that compile, before launch; inputs only the build resolves, such as reference assemblies, are recorded as the build left them. `adapter-build/inputs.json` binds the source-input digest to the adapter DLL hash and selected mod/ValheimCLI hashes; `result.json` repeats `adapterSourceInputSha256` and `adapterSha256`. Compare `adapterSourceInputSha256` across baseline and candidate arms to show they compiled the same observer inputs even when their mod DLL paths differ. Keep the output private because source, reference binaries and local paths are retained there.
-
-For a mod tested in a world hosted by the client, implement `IOneShotHostedScenario` instead. Its `Run(ClientRound)` receives the joined hosting client, report, output and fixture UID; add assertions with `round.Step`. The [hosted example](../../examples/OneShotServerScenario/HostedWorldScenario.cs) compiles in the same sample project. Run it on a Windows or macOS client install with the desktop and Steam available:
-
-A hosted scenario can use the same `IOneShotScenarioPreflight` hook. Override `Run(ClientRound, object? validatedInputs)` to receive the exact preflight value; the default overload calls the existing `Run(ClientRound)` for scenarios that need no input snapshot.
+## init
 
 ```sh
-valheim-test start \
-  --project /path/to/MyMod/MyMod.csproj \
-  --scenario-project /path/to/MyMod.SystemTests/MyMod.SystemTests.csproj \
-  --dependency Jotunn=/path/to/Jotunn.dll
+valheim-test init --output NEW_DIR
+valheim-test init server --output NEW_DIR
 ```
 
-`start` selects a client install and builds against that client's game assemblies. `server-load` selects a dedicated-server install and builds against its assemblies. Both commands use the same private build and scenario loader, and both pin the resulting DLL for that run. For the edit–test loop, keep the command and edit the mod or assertion project between invocations: each invocation compiles the current source, creates a fresh output folder by default, and writes a new hash. No standing mod pin has to be updated. An old result remains tied to its earlier build; an already built `--mod DLL --build-inputs FILE` run still refuses changed bytes until it is rebuilt.
+`init` creates an editable consumer project for a `start` run's `regression.json`, or with `server` for a `server-load` run's `campaign.json`. It pins the `Valheim.Testing.Game` this tool carries, and with `server` also `Valheim.Testing.GameSessions`, and restores from NuGet.org. A tool built from source refuses, because NuGet.org does not serve its version; `--candidate-feed LOCAL_PACKAGE_DIR` is for maintainers ([CONTRIBUTING](../../CONTRIBUTING.md)).
 
-For a mod that generates a network on first world load, `--server-startup-seconds 900` gives the dedicated server a bounded 15 minutes to become ready (default 300 seconds; maximum 3600). A large Roads world has taken over 30 minutes on a test PC, so choose a realistic bound for that scenario. Use a small mod for routine edit-loop checks.
-
-The usual setup is one Windows PC with Valheim and the free Valheim Dedicated Server installed through Steam, each with BepInExPack_Valheim, and the Steam client running and signed in. Nothing else is written by hand: the machine's installs, ports and folders are detected, and `valheim-test env list` prints what it found, what it assumed and every path it tried for anything missing ([this machine, with no file](https://github.com/tvongaza/ValheimTesting/blob/main/docs/reference/game-launch.md#this-machine-with-no-file)). `valheim-test env preflight` checks the local actors before any copy: the run journal and host lock, conflicting game processes, ValheimCLI ports, the client desktop, and whether Steam is running for a client. `start` and `server-load` use the same local checks. A running Steam process or a remembered login does not prove an active sign-in, so preflight does not claim to verify one. After launch, a fresh `[Steamworks.NET] SteamAPI_Init() failed` line in the client's BepInEx log ends startup promptly and is kept with the run's evidence; a client started while Steam runs with no user signed in (for example at its account picker) logs it at once. Steam's own `[S_API FAIL] SteamAPI_Init() failed; connect to global user failed.` goes only to the game process's standard error, never to the BepInEx log or Player.log: the run keeps it where it captures the client's standard error (a direct launch's `client-boot.stderr.log`, a macOS or Linux host's `game.stderr.log`; seen there on macOS), a Windows client started through its desktop task has no standard-error capture, and startup does not watch for it. Dedicated-server-only runs do not need Steam.
-
-For a server-only mod, `server-load` loads it on an owned dedicated server and, by default, joins one owned clean client (ValheimCLI only, the mod pinned absent). On one Windows PC with Valheim and the free Valheim Dedicated Server installed through Steam, each with BepInExPack_Valheim installed (or the loader as `--loader-package`), nothing else is needed; valheim-test brings its pinned ValheimCLI when its build carries the bundle (otherwise give `VALHEIMCLI_BUNDLE`):
+## hold and finish
 
 ```sh
-valheim-test server-load --mod /path/to/ServerMod.dll
+valheim-test server-load --mod /path/to/ServerMod.dll --hold
+valheim-test finish --run ID
 ```
 
-You can invoke `valheim-test start` through SSH on a Windows PC. Before it stages a fixture or profile, it checks that the SSH user has exactly one desktop session and Steam is running there. From SSH's session 0 it starts the owned client in that desktop through a temporary scheduled task. From an ordinary terminal already in a desktop session, it uses the direct owned-client launch instead. If Steam is absent or the session changes between the check and launch, the run refuses. Leave the desktop unlocked for a native run; a locked desktop can leave the game stalled at its first scene, which the startup deadline and kept logs will report. On shutdown, a session-0 run asks the game to close through a second short-lived desktop task. The run records whether the window close was actually requested and whether the client quit cleanly or needed a kill; process identity is checked again before either action. Its logs are kept with the result.
+`--hold` keeps the owned game running after the checks pass; a failing run is never held. It prints `HELD run` with the run ID and the `cli` commands that reach the game. `finish --run ID`, or Ctrl+C on the runner, stops and cleans up. If a held game exits, the run fails.
 
-### Migrate an older edit-build-test command
+## cli
 
-Use `valheim-test start --project MOD.csproj` for a client mod, adding `--scenario-project TEST.csproj` when the round needs mod-specific assertions. Relative project, scenario and selected-input paths are resolved from the directory where `valheim-test` is run. The older YAML plan entry point has no direct equivalent in this tool: move its commands and assertions into an [`IOneShotHostedScenario` or `IOneShotServerScenario`](#run-a-mod-owned-scenario-with-the-same-preparation).
+```sh
+valheim-test cli --evidence RUN_EVIDENCE --phase world --command TEXT
+```
 
-From another terminal, an interactive command can use `--hold` followed by `valheim-test cli --evidence RUN/evidence/smoke --role client --phase world --command "COMMAND"` for a Windows or macOS client, or `valheim-test cli --evidence RUN/evidence --role server --phase world --command "COMMAND"` for a local Windows, macOS or Linux dedicated server. The passthrough verifies the selected role's process, local listener and strict pins before sending the command; servers reached through SSH remain out of scope.
 
-The teardown log scan runs automatically. Each one-shot arm prints one line with the failure, warning and expected totals plus the three most frequent role/pattern counts; A/B output labels both lines. `result.json` keeps every pattern's severity, count and first occurrence. To change classifications beyond `--expected-log-error`, use the [`valheim-test init` consumer](#your-own-assertions-init): its `regression.json` can use `logScan` to make a specific warning pattern fail, define a mod-owned pattern, or name an expected line, always with a reason. A direct `start` invocation rewrites its generated `regression.json` and has no `logScan` input of its own. This replaces a blanket fail-on-warning switch and a presentation-only grouping by BepInEx source or number-masked message: it keeps the actionable pattern and first occurrence instead. See [Log scan at teardown](../reference/game-log-scan.md).
-
-| Older setting | `valheim-test` replacement |
+| Option | Does |
 |---|---|
-| `VALHEIM_PATH` | `start --game DIR`, or `--inventory FILE --client-env NAME`; the selected install is read while the mod and loader are staged in a disposable profile |
-| `VALHEIM_CLI` | No separate executable: use one staged build through `--cli-manifest FILE --cli-files DIR`, `VALHEIMCLI_BUNDLE`, or the bundle pinned into the tool |
-| `VALHEIM_EXPECTATIONS` | No standing pins file for `start`: the tool derives strict plugin and world pins from the exact staged build; on Windows and macOS, `valheim-test cli --expect-strict FILE` accepts independently prepared pins for another world state |
+| `--evidence RUN_EVIDENCE` | The evidence folder holding the role's lease |
+| `--role client\|server` | Needed only when the folder holds both leases |
+| `--phase menu\|world` | Which published pins to verify first |
+| `--expect-strict FILE` | Other strict pins, in place of `--phase` |
+| `--command TEXT` | One game command; `cli_screenshot` takes only a size, 1 to 4 |
+| `--timeout-seconds 1..15` | The command deadline. Default 5 |
 
-The old stop-after behavior is now the default cleanup; `--hold` is the explicit exception. The environment inventory owns the ValheimCLI port. `--join-seconds` bounds world entry, while the lifecycle steps use their own bounded waits. A non-default build configuration can still be produced by the mod's normal build and selected with `--mod DLL`; `--project` uses the tool's controlled private build.
+| Run | Evidence folder |
+|---|---|
+| `start` | `RUN/evidence/smoke` |
+| `server-load`, the server | `RUN/evidence` |
+| `server-load`, the joined client | `RUN/evidence/client` |
 
-## A client-side mod: start
+It checks the exact process, the port's owner and the strict pins, records the command in `owned-cli-command-*.jsonl`, sends it once and never retries.
+
+## env
+
+| Command | Does |
+|---|---|
+| `env list [--inventory FILE] [--json]` | Prints each environment, `detected:` and `NOT FOUND:` lines. No verdict |
+| `env preflight [--inventory FILE] [--json]` | Checks this machine before a one-off run. Prints `ELIGIBLE` or `REFUSED` |
+| `env status [--inventory FILE] [--json]` | Lists what earlier runs left, from their journals. Changes nothing |
+| `env recover --run ID [--inventory FILE] [--json]` | Removes what it can prove the run left, except what it kept on purpose |
+| `env recover --run ID --launch-gone` | Settles a run whose only unprovable items are launches you confirmed are gone |
+| `env teardown --run ID [--inventory FILE] [--json]` | As `recover`, and also removes what the run kept on purpose |
+| `env teardown --copy PATH [--inventory FILE]` | Removes one copy made before runs journalled their copies |
+| `env teardown --run ID --machine-gone [--inventory FILE]` | Releases the Steam leases of a run whose machine is gone for good |
+
+`env preflight` checks this machine only ([its refusals](../reference/game-launch.md#env-list-and-env-preflight)). `env status` prints each run that left something with its state:
+
+| State | Means |
+|---|---|
+| `LIVE` | Its runner still runs; nothing is touched |
+| `UNKNOWN` | It never journalled its end and its runner cannot be checked from here |
+| `RECOVERABLE` | It left items that are provably its own; `env recover --run ID` |
+| `UNRECOVERABLE` | Something cannot be proven gone or its own |
+| `KEPT` | It ended and kept a runtime or lease on purpose; `env teardown --run ID` |
+
+The last line is `N runs ended and left nothing. Nothing was changed.` `env status` exits 0 only when every run ended and left nothing; a `KEPT` run, an unjournalled copy or an unreadable host exits 3. `env recover` that keeps a runtime on purpose names `env teardown --run ID` and exits 3. [Debug a native run](../guides/debug-a-native-run.md#clean-up-what-a-run-left) says when to use each.
+
+## session check
 
 ```sh
-dotnet tool install --global Valheim.Testing.NativeSmoke --prerelease
-valheim-test start \
-  --game /path/to/prepared/Valheim \
-  --mod /path/to/MyMod.dll \
-  --output /path/to/a/new/private-run
+valheim-test session check SESSION [--hosts] [--json]
 ```
 
-By default, `start` stages only a disposable BepInEx profile and launches the installed game with that loader. On macOS, no game file is copied or edited. On Windows, the profile's owned launch folder hard-links only the executable, its matching `_Data/**` tree, `MonoBleedingEdge/**`, `D3D12/**`, `UnityCrashHandler64.exe`, and the allow-listed root DLLs: `UnityPlayer.dll`, `steam_api64.dll`, `steamclient64.dll`, `steamwebrtc64.dll`, `tier0_s64.dll` and `vstdlib_s64.dll`. Text and log output and crash dumps are left out even below those trees; BepInEx, Doorstop, `logs/`, unrelated nested files and other root files, including the 32-bit Steam DLLs, are not linked. The profile receives its own selected loader, the launch supplies `SteamAppId` instead of linking `steam_appid.txt`, and the source install's proxy and other mod-manager files remain untouched. A root omission other than a known proxy or loader file is recorded as `<actor>ProfileLeftOut` in the result's provenance with its reason; nested omissions are recorded once per top-level folder with a file count. The result records the staging time. Preflight prints the selected runtime folder and requires its source and runtime roots on the same NTFS volume before staging. A default runtime follows the install's resolved volume; if Windows cannot identify that volume, inventory reading keeps the default under ValheimTesting's data folder and preflight warns, then staging tries the hard links and reports their own error if they fail. An explicit inventory `runtime` on another drive is still skipped during remote placement; a known cross-volume or unsupported-filesystem result is refused with the required location and the reason (a profile hard-links the install's files, and a hard link cannot cross volumes). `env preflight` and `start` give the same refusal. For `start` and `server-load`, move a Steam library on exFAT, FAT32 or a network share to NTFS; an inventory may instead name `runtime` on the same hard-link-capable volume as the install. `--in-place` is not an option for these commands or their campaign actors; it is available only to a mod's [`PinnedServerRun` runner for an owned client outside a prepared campaign](Valheim.Testing.GameSessions.md#pinned-server-runner). Back-to-back use with a third-party mod manager still needs a native acceptance check.
+`session check` reports every problem with a `session.json`'s inputs and actor assignment without contacting a host, then `ELIGIBLE` or `REFUSED` lines. `--hosts` adds the read-only host checks (installs, loaders, ports, free space, conflicting games, journals, signed-in Steam accounts) and prints `READY` when they pass. Sessions: [GameSessions](Valheim.Testing.GameSessions.md#several-machines).
 
-Profile preparation hashes the source install once. Staging then hashes only the files copied into the profile, and every boot rechecks only the pinned paths plus the root files that a Windows profile hard-links. After the last owned process stops, the run compares the complete source install, including `logs/`, with that preparation snapshot by size and the highest modified-time precision the host's `stat` supplies, and records the source-integrity verdict in `result.json`; a difference names the files and fails the run without repairing them. This metadata check can miss a same-size rewrite whose modified time was preserved or restored. Set `VALHEIM_TESTING_SOURCE_HASH_AFTER_RUN=1` on a gate run to re-hash the complete source and rule that out.
-
-On macOS, `start` requires the unlocked console user's Aqua session before it records the run or stages the profile. Launch it from that desktop; an SSH or locked session is refused immediately. A missing fresh BepInEx startup log remains a separate failure after launch.
-
-When `start`, `server-load`, or `server-load-ab` refuses after creating its safe output directory, it writes `REFUSED.txt` with the reason. Treat that folder as failed evidence, and check `valheim-test env status` before another run; a refusal marker does not replace the run journal's cleanup check. A path rejected as inside a game install or account directory is never written to.
-
-On a local Apple Silicon Mac, `start`, `server-load`, and `server-load-ab` default to native arm64; Intel Macs default to x64. An environment inventory can choose either slice on its client recipe, and `--client-architecture x64|arm64` overrides it for one run. Select x64 explicitly when a mod or loader requires Rosetta. `env list` prints the selected slice and the slices the local game and selected loader support. `env preflight` and the one-shot commands refuse a missing arm64 game, Doorstop, or native BepInEx core before staging; they never silently fall back to Rosetta. The derived `regression.json` or `campaign.json` and `client-plan.json`, `client-process.json`, and the result provenance record the chosen slice. See [native Apple Silicon setup](../reference/platforms.md#native-apple-silicon-client).
-
-`start` allows 180 seconds for the hosted world to open by default. A mod that generates a world on first load may need a longer bounded deadline, for example `--join-seconds 600` (allowed range: 10–900). The run records the chosen value in `regression.json` and still fails if the game never enters the world.
-
-While a Windows or macOS `start` run is still using its owned desktop client, a second terminal can inspect it. A held `start` has already loaded and verified its hosted world, so use `valheim-test cli --evidence RUN/evidence/smoke --phase world --command "cli_manifest"`; `--phase menu` applies only while an owned client is still at its strictly verified menu, before it joins or hosts a world. Use `--phase world` after a hosted world or a `server-load --hold` joined client has verified its fixture world. The world pins are published only after that check, by the join or host start itself (`SessionControl.JoinWorld`, `JoinHost` and `HostWorlds.Start`, so no caller needs to), removed by any later leave, join attempt or verification of another pin set for that client (even a join whose reply was lost), and retired with the owned session or its recovery. Before the join, or after a failed or changed-world check, the world phase refuses without sending a command. Use `--expect-strict FILE` for other independently pinned world states. The passthrough checks the exact process start identity and the selected strict pins, issues only one command and never retries it; `--timeout-seconds 1..15` bounds a command. Commands can change the game. Each invocation creates a private `owned-cli-command-*.jsonl` record beside that run's evidence **before** sending its strict pin check or command, and prints its path; review the record before sharing evidence. It refuses after the owned process stops. A failed startup or world entry also keeps `client-failure-diagnostic.json`, log tails and, only for a still strictly pinned client that can service the command and permits cheats, a `cli_screenshot` image before teardown. See [the agent diagnostic recipe](../agent-guide.md#diagnose-an-owned-game-that-does-not-reach-its-menu-or-world).
-
-### Keep a passing run open for inspection
-
-Add `--hold` to `start` or `server-load` (including `server-load --server-only`) to keep its owned game running **in the foreground** after the normal load or join checks pass. The command prints a run ID. From another shell on the same runner machine, signal the original runner to close the game and perform its normal cleanup:
-
-```sh
-valheim-test start --mod /path/to/MyMod.dll --output /path/to/new/private-run --hold
-# In another shell, using the run ID printed above:
-valheim-test finish --run run-YYYYMMDDTHHMMSSZ-1234abcd
-# Wait for the original foreground command to exit, then check:
-valheim-test env status
-```
-
-`--output` (and a fixture bake's destination) must be a new folder outside every install, mod project, world source and account folder the run uses. The check resolves symlinks and junctions on both sides first (`/tmp` and `/private/tmp` are one folder, and so is an alias of an install), so a linked path cannot reach a protected tree; a link loop is refused with an error naming the path.
-
-Inspect a held Windows or macOS client through `valheim-test cli --evidence /path/to/new/private-run/evidence/smoke --role client --phase world --command "cli_screenshot 2"` (captures at 2x: a lone number 1..4 is the supersize; a name is refused, since the runner chooses the destination). Inspect a held local Windows, macOS or Linux dedicated server through `valheim-test cli --evidence /path/to/new/private-run/evidence --role server --phase world --command cli_manifest`. Without `--role`, the command uses the one role whose lease the evidence directory holds (a server-only hold needs none); when it contains both leases, omitting `--role` is refused as ambiguous, and when it contains neither (`finish` retired the hold, or it was never held) the refusal says it holds no lease. The command checks the exact process start identity, proves every listener on the recorded port belongs to that PID, verifies the selected role's strict pins, and records the command. A server lease is published only after the boot has passed its read-only bootstrap and strict verification, so `cli` refuses while a server is still starting; its world pins contain the verified `worlduid`. Screenshot commands write to a run-unique private evidence path and record its SHA-256 beside the command trace; a queued reply without a complete file fails. Because the game writes directly into the run evidence, normal teardown and `env recover` have no screenshot in the user's Valheim save folder to remove. `server-load --hold` keeps both the dedicated server and its clean joined client running; `--server-only --hold` keeps only the server. The joined client's lease and pins are in its own evidence folder, `RUN/evidence/client`, and the hold prints that client command only once the client has published its lease, which a client on another machine never does. A folder without the selected role's lease is refused with that reason. Servers reached through SSH are out of scope for `cli`: the owning run itself must execute locally on the server host so it can publish the host-local lease. Copying evidence there or invoking only `cli` there cannot create one. If any owned game exits unexpectedly during the hold, the run records a failed step and tears down instead of waiting for a finish request. Ctrl+C on the foreground runner also initiates its teardown. A killed terminal is not a successful finish: `env status` shows its journalled copies and exact process, and `env recover --run ID` is the recovery path once the owner is proven gone. Successful recovery also removes that dead run's hold marker. This is an interactive inspection mode, not a detached session or a replacement for a mod's assertions.
-
-The experimental Windows `detach server-load` starts a **server-only** held run under Task Scheduler, so the invoking terminal or SSH session can exit. It requires one signed-in desktop session for the runner's task, but the Steam client is not required for a dedicated server. Supply absolute server, mod and output paths; the output must be new. It returns only after the exact pinned server has reached the held state:
+## detach
 
 ```powershell
 valheim-test detach server-load --server 'C:\Games\Valheim dedicated server' --mod 'C:\Mods\MyMod.dll' --server-only --output 'C:\ValheimTesting\runs\inspection-1'
 valheim-test detach status
-valheim-test detach finish --run RUN_ID
-# After an interrupted start or dead supervisor:
-valheim-test env recover --run RUN_ID
+valheim-test detach finish --run ID
 ```
 
-The starter allocates the run ID before staging. The ordinary run journal records each unique control, runner and selected mod-directory snapshot (including adjacent managed dependencies) before its directory is created, and records the scheduled task before registration. That task record includes its complete action list, principal and logon/run level, zero triggers, and the execution-affecting settings detached registration explicitly sets. The task is demand-start-only and recoverable. The scheduled runner adopts the same run ID before its input-stage preflight, so `env status` reports it as `LIVE`; after that exact supervisor dies, the same command reports what remains as `RECOVERABLE` and names `env recover --run ID`. `detach status` exits 0 when nothing is left to recover, a `LIVE` run included, and 3 when a run left something or a journal could not be read. The supervisor adopts the run under the run's control lock, an exclusive handle on `supervisor.lock` in the control folder that it holds while it runs. Recovery takes that lock and reads the run again before it stops or removes anything: it refuses a run whose supervisor holds the lock, and a supervisor that starts while a recovery holds it, or whose task a recovery already retired, refuses before it adopts the run. The lock is a local file, so recover a detached run on its own machine. A run's host locks record their exact unique claimant before the atomic claim and record release afterwards. Recovery checks that claimant and releases it only for a dead run; it also rechecks the complete scheduled-task definition before stopping or deleting the task. A same-name task whose definition changed is left untouched and reported as unrecoverable. Recovery then removes only the run's journalled snapshots and ordinary game-owned state. There is no separate detached ownership record or token recovery path. The readiness marker and launcher are transient control files inside the journalled control folder; startup stdout/stderr are the lasting evidence. `detach finish` copies them into the run output before recovery removes that folder; recovery also keeps them under `recovered-detached/<run>/` in this machine's ValheimTesting data root, so recovering a startup that never created `--output` does not consume that path and block a retry.
+Experimental, Windows only. `detach server-load` starts a server-only held run under Task Scheduler and returns once it is held; it needs a signed-in desktop session and absolute paths. `detach status` exits 0 when nothing is left to recover, a live run included. Recover an interrupted start with `env recover --run ID` on the same machine.
 
-It refuses a mod directory over 512 MiB or 10,000 files. Additional explicit input paths, such as a custom world or loader package, are not staged in this first mode; use foreground `--hold` for them. `detach finish` asks the exact live owner to stop, waits for its exit, then invokes ordinary journal recovery. Its verdict is the end the run journalled, so a repeated `finish` reports that end again (exit 0 for a run that passed). If the owner died, finish recovers its surviving owned game and exits with failure; it never reports that interrupted run as passed. This first detached mode does not restart a session, swap a build, attach a client or send ad-hoc commands; use a scripted scenario for those checks.
-
-A Windows or Linux profile always runs on the pinned BepInExPack_Valheim ([the loader](#the-bepinex-loader)); the selected game needs no BepInEx of its own, and its own loader is never read. `--client-loader-package` names a [reviewed extracted loader set](https://github.com/tvongaza/ValheimTesting/blob/main/docs/reference/game-run-inputs.md#pin-a-bepinex-loader) instead. It also needs one ValheimCLI core-and-pack set: `--cli-manifest` with `--cli-files` from one build, or `VALHEIMCLI_BUNDLE` naming a folder with its manifest and DLLs, or else the bundle pinned in this repository's `cli-dependency.json` (`bundle`: the asset's URL and SHA-256), which a build embeds and a run extracts once under ValheimTesting's own folder (`cli/<commit>`) and checks file by file. The run prints which one it used. A ValheimCLI already installed in the game is never picked up on its own; name it with `--cli-files` to use it. It never silently downloads or mixes plugin builds. Every one-shot path (`start`, `server-load`, `server-load-ab` and fixture bake) stages the pinned bundle's core **and every pack**, even if the particular command does not use a pack. The dependency lock records every staged pack's SHA-256; a missing or changed pack is refused before the runtime is staged. This keeps the staged ValheimCLI set identical across commands and avoids command-name guesses for scripted or mod-owned commands. `start` runs on the inventory's client environment: this machine's Valheim with no `--inventory`, `--game` as a local install override, or a file's (`--client-env NAME` picks one); `--client-loader-package` overrides that selected client's loader; it must be on this machine. It prints what it detected. Its ValheimCLI port is the environment's, as printed, and the character is checked against this machine's detected Steam userdata. The chosen environment is written beside the run's `regression.json` as `environments.json`, so its consumer and bundle use the same machine. Each run has its own journalled owned runtime folder, `<runtime>/vt-prep-regression-native-smoke-<time>-<run-id>/runtime`. On Homebrew macOS installs, a global .NET tool may need `DOTNET_ROOT` set to the directory reported by `dotnet --info` before its apphost launches. `init` needs the .NET 10 SDK and NuGet.org to build its generated project, as does `server-load`'s adapter build without `--adapter`.
-Repeat `--mod DLL` for a selected client-side pair. Repeat `--search-root DIR` for explicit local dependency trees, or name one exact DLL with `--search-root FILE.dll`. Byte-identical copies of a dependency with the same assembly and plugin identity count as one choice; the lock records every discovered source path and stages just one. Different builds still require an explicit choice. If an assembly reference is used only behind a disabled soft integration, repeat `--optional-reference ASSEMBLY` to confirm that deliberate omission; the dependency lock records each decision. Use `--client-loader-package FILE` for a captured BepInEx/Doorstop package. The ValheimCLI port is the client environment's, which the inventory chooses and the run prints. `--expected-log-error` applies to the mod-bearing actor (client for `start`, server for `server-load`); it accepts a known benign BepInEx error's **whole, exact header line** only when paired with `--expected-log-reason`. Every other error still fails. Every input is read, never edited. The output directory must be new. Its `dependencies.lock.json` records unresolved choices even if setup stops; a ready run also keeps its manifest, source world and character, and `evidence/`. The owned profile is removed at the end; an incomplete unmarked one is left for inspection instead of being deleted blindly.
-
-To compare two builds of the first selected mod, add `--compare-mod /path/to/NewBuild.dll --compare-source NEW_COMMIT`. The command runs `before` and `after` against the same world and companion DLLs, retaining a separate result for each. It refuses a changed companion, dependency, optional-reference decision or ValheimCLI build before launch. Both builds must declare the same plugin identities; this is a build comparison, not an add/remove-mod comparison. A failed first arm stops the comparison and keeps its evidence.
-
-From a directory containing exactly one mod project, `start` or `server-load` can omit `--mod`: the tool inspects the newest built output and selects its single `[BepInPlugin]` DLL. It refuses several projects, missing or ambiguous plugin outputs, and source newer than the DLL; build first or give an explicit `--mod DLL`. The selection reason is printed and recorded in the run's provenance. `server-load-ab` still needs explicit mods, because its two arms must name the same fixed inputs. Without `--output`, either one-shot command creates a new timestamped directory under this machine's ValheimTesting data root (`valheim-test-runs/`); the command prints the full path. An explicit `--output` inside the mod project is refused so generated adapter sources cannot become part of the next mod build.
-
-## A server-side mod: server-load
-
-The actors come from the [environment inventory](https://github.com/tvongaza/ValheimTesting/blob/main/docs/reference/game-launch.md#this-machine-with-no-file). With no `--inventory`, that is this machine: its Steam installs, the ValheimCLI ports 5688/5689 and the game port 2486, the packaged smoke world and the packaged disposable character. The command prints what it detected and chose (`detected:`, `server:`, `client: local-client (default; --server-only to skip)`). It then writes the campaign it derived to `campaign.json` in the output (with `environments.json` when `--server`/`--client` override the detected installs) and runs the read-only host preflight, all before anything is copied. A client that cannot run (no Valheim install, Steam not running or signed in) is refused with the reason; the client is never dropped silently. `--server-only` skips the client's join. `--preflight-only` stops after the preflight. `--output` defaults to a new `valheim-test-runs/<UTC time>` directory under this machine's ValheimTesting data root, outside the mod project. `--inventory FILE` uses a file's environments instead (`--server-env`/`--client-env NAME` pick ones other than the first). The server must be on this machine, because the mod is resolved and its adapter built against the server's own install; a server elsewhere runs as a campaign or with `PinnedServerRun --inventory`. A client on another machine needs `--join HOST:PORT`, this machine's address as that host reaches it. A local macOS dedicated server uses the same campaign path; its fixture is placed in the signed-in user's default `worlds_local` only after collision checks and is moved into the run's evidence after the server stops. For a remote macOS server use a prepared profile campaign; `server-load` itself keeps its server local for adapter compilation.
-
-`--server DIR` and `--client DIR` point at other installs on this machine:
+## steam-runtime capture
 
 ```sh
-valheim-test server-load \
-  --server /path/to/prepared/dedicated-server \
-  --mod /path/to/ServerMod.dll \
-  --client /path/to/prepared/client \
-  --output /path/to/a/new/private-server-run
+valheim-test steam-runtime capture --steamcmd DIR --output NEW_FILE
 ```
 
-The source server and client may instead be unmodded installs. Supply reviewed, extracted loader manifests for each platform and one coherent ValheimCLI bundle explicitly:
+macOS only. It writes a reviewed manifest of SteamCMD's native server libraries. Pass it to `server-load` as `--steam-runtime-package FILE` for a Mac dedicated server profile ([Steam runtime package](../reference/platforms.md#steam-runtime-package)).
 
-```sh
-valheim-test server-load \
-  --server /path/to/unmodded/dedicated-server \
-  --client /path/to/unmodded/client \
-  --loader-package /private/server-loader.json \
-  --client-loader-package /private/client-loader.json \
-  --cli-manifest /private/ValheimCLI/cli-capabilities.json \
-  --cli-files /private/ValheimCLI \
-  --mod /path/to/ServerMod.dll \
-  --output /private/runs/server-load-1
-```
+## What every run does
 
-`--loader-package` selects the server's BepInEx core for dependency resolution and adapter compilation. Without it, the chosen server environment's loader package is used; otherwise, on Windows and Linux, the pinned BepInExPack_Valheim ([the loader](#the-bepinex-loader)). `server-load-ab` makes this same server choice once, uses that core for both dependency locks and adapter compilation, and passes the selected server package to both arms. Its results record which pin the server ran on. The client package is separate because a dedicated server's loader files are not assumed to work in the client. Each arm independently selects and records its client package; it is pinned within that arm, but is not frozen across arms. Packages are applied only to owned runtimes. On local Windows hosts the default is an owned, hard-linked launch folder with the chosen Doorstop proxy beside the executable; the source install is not edited. That folder must be on the game's NTFS volume, which can make hard links. Remote Windows, Linux and macOS campaign clients use profiles by default; a remote Mac GUI client needs its SSH user signed in to Steam at the unlocked console. Remote macOS dedicated servers use prepared profile campaigns. The command still needs a compatible game build and local, reviewed loader and ValheimCLI files. It does not download a dependency. `server-load-ab` accepts the same setup options except `--hold` and `--preflight-only`.
+| Behaviour | Rule |
+|---|---|
+| Profiles | Each actor runs from a disposable loader profile; the install is only read ([profiles](Valheim.Testing.GameSessions.md#an-owned-client-on-this-machine-runs-with-a-disposable-loader-profile)) |
+| Loader | Windows and Linux: the pinned BepInExPack_Valheim from [loader-dependency.json](../../loader-dependency.json), or a named loader package; never the install's. macOS: its loader package, or the install's native loader |
+| ValheimCLI | `--cli-manifest` and `--cli-files`, else `VALHEIMCLI_BUNDLE`, else the bundle pinned in the tool. The run prints which |
+| Output | Must be new and outside every install and the mod project; a refusal writes `REFUSED.txt` with the reason |
+| Journal | Every copy, character, process, lease and lock is journalled before it is made, for `env status` |
+| User files | The client's recent-servers list is moved aside before launch and put back after |
+| Log scan | Logs are scanned at teardown ([log scan](../reference/game-log-scan.md)); one summary line per arm |
 
-The command builds its [test-only adapter](https://github.com/tvongaza/ValheimTesting/blob/main/src/Valheim.Testing.NativeSmoke/SessionAdapter/README.md) from source embedded in the tool against the exact game and ValheimCLI core it selected. Building the adapter restores .NET Framework reference assemblies from NuGet.org; to run offline, build it once and pass it with `--adapter DLL`, which also covers an independently built adapter. The command prepares an owned server runtime, isolates its plugins, scripts, configs and patchers, then stages the selected mods, their resolved dependencies, ValheimCLI and the adapter. Unless `--server-only`, it prepares a separate client runtime containing ValheimCLI alone, stages the clean disposable character for that run, and requires the client to join with every selected server plugin pinned absent. Both owned processes, their profiles or copies, and the staged character are cleaned up on success or failure. With `--server-only`, it only checks server load and socket readiness, printing `SERVER_LOAD_PASS` rather than a client-join pass. Like every owned server, its server gets test access on each boot (devcommands, then `confirmcheats`, each verified); the load smoke itself issues no other test command and does not request admin-only player protection. Its disposable server plan waits at most 20 seconds to quit before a recorded kill; it makes no save-on-quit or crossplay-retirement claim. Use the full server runner and its shutdown assertions for those claims.
+| Environment variable | Does |
+|---|---|
+| `VALHEIMCLI_BUNDLE` | A folder with one ValheimCLI manifest and its DLLs |
+| `VALHEIM_TESTING_KEEP_RUNTIME=1` | Keeps the owned runtime; `env status` then reports the run as `KEPT` |
+| `VALHEIM_TESTING_SOURCE_HASH_AFTER_RUN=1` | Re-hashes the whole source install after the run, not only sizes and times |
 
-Repeat `--mod`, `--search-root` and `--optional-reference` as above. Use `--config FILE` for chosen server settings, such as disabling expensive world generation when it is irrelevant to the setup check. Use `--plugin-file FILE` and `--plugin-dir DIR` for a mod's external assets beside its DLL in `BepInEx/plugins`. The staged configs and asset bytes enter the strict runtime manifest; DLLs inside asset directories are refused so they cannot bypass dependency resolution. The output contains private plans and evidence, including a password in `plan.json`; do not publish it.
+## What a run writes
 
-`--world-fixture DIR` loads a pinned copy of a named world instead of the packaged smoke world, with either a server-only run or a clean joined client. The client uses a disposable character that has never visited a world; the runner verifies the fixture UID and file hashes before use. If the world has a bake manifest, it verifies that too. To save generated state as a new fixture, use `--server-only` with `--bake-fixture NEW_DIR` and a strict `--assert-command TEXT --assert-line PREFIX` that proves the mod is ready. An optional `--before-save-command TEXT --before-save-line PREFIX` makes one deliberate change first. The built-in `cli_zdos_at`, `cli_containers_at`, `cli_prefabs_at`, and `cli_piece_support` observations require the pinned default ValheimCLI plugin; a mod's own command does not. The runner confirms an advancing save, gives the server up to five minutes to save again at clean quit, reserves ten minutes for cleanup including world fetch and runtime retirement, checks the fetched world's UID and hashes, then writes the new fixture with both the confirmed and exported save numbers. It refuses an existing destination or an unconfirmed save. See the [fixture-bake recipe](../reference/fixture-authoring.md) for commands and the persistence check.
+| File | Holds |
+|---|---|
+| `dependencies.lock.json` | Every resolved file and dependency decision |
+| `campaign.json`, `plan.json`, `client-plan.json` | `server-load`'s derived inputs; `plan.json` holds the server password |
+| `regression.json`, `environments.json` | `start`'s derived inputs |
+| `evidence/` | `result.json`, `junit.xml` and the kept logs ([where each log is](../guides/debug-a-native-run.md#read-the-kept-logs)) |
 
-Disk use: a Windows `server-load` normally holds owned launch folders with hard links to game files and private loader files, whether its host is local or reached by SSH. Linux and local macOS actors stage loader profiles without copying game files. When it ends, the run removes its owned runtimes after keeping what changed in `evidence/runtime-changes/` ([what the output keeps](https://github.com/tvongaza/ValheimTesting/blob/main/docs/packages/Valheim.Testing.GameSessions.md#pinned-server-runner)). The final line prints the evidence's size. Set `VALHEIM_TESTING_KEEP_RUNTIME=1` to keep the whole owned runtime for debugging.
+`result.json` reports each step with its phase, four states and the `Toolkit` that ran ([evidence](../reference/evidence.md)). Keep the output private: it holds local paths, a server password, account identifiers and a copy of your recent-servers list.
 
-## Isolate a load interaction: server-load-ab
+## Limits
 
-To isolate a load interaction, change `server-load` to `server-load-ab` and add `--remove-mod /path/to/SecondMod.dll`. The command resolves both sets before launch, runs the full set in `before/`, then runs the same fixture without that one mod in `after/`. It keeps the surviving mod files, ValheimCLI, server/client installs, configs and selected assets pinned between arms; dependencies used only by the removed mod may disappear. A native failure in the full-set arm still runs the removal arm and keeps both results; an input/setup refusal stops before the second arm. A difference narrows a load interaction but does not assign fault to a mod. Both arms are load/join checks, so use small fixture plugins for routine runner validation and reserve expensive real-mod generation for a specific regression.
-
-## Your own assertions: init
-
-`valheim-test init --output NEW_DIR` creates the hosted consumer, for the `regression.json` a `start` run writes (with the `environments.json` beside it); `valheim-test init server --output NEW_DIR` creates the server consumer, for a `server-load` run's `campaign.json` (with the unbound `plan.json` and `client-plan.json` beside it). `init` builds a test consumer; `build` builds the mod itself using private references. `init` pins the `Valheim.Testing.Game` this tool runs, so the consumer reads the tool's files, and restores and builds it from NuGet.org alone. A tool built from a source checkout pins its unreleased Game version, which NuGet.org does not serve, so `init` refuses there; use a released tool.
-
-## The BepInEx loader
-
-Every Windows and Linux profile runs on the BepInExPack_Valheim this tool pins, [loader-dependency.json](https://github.com/tvongaza/ValheimTesting/blob/main/loader-dependency.json) (unmodified, notices in THIRD-PARTY-NOTICES.md), which the tool carries: never the install's own loader, which is not read. A macOS profile keeps its explicit arm64 package, or its install's native loader ([platforms](../reference/platforms.md#native-apple-silicon-client)). A run that still uses an install's own loader (an owned client run in place, a standalone `PinnedServerRun` server) has its Doorstop proxy and configuration checked as one version before launch.
-
-- **Explicit override.** `--loader-package FILE` (server) and `--client-loader-package FILE`, or an environment's `loaderPackage`, name a [reviewed extracted loader set](../reference/game-run-inputs.md#pin-a-bepinex-loader) instead.
-- **BepInEx.cfg.** A plan or regression may select its own `BepInEx/config/BepInEx.cfg`; otherwise the profile has the loader package's default. On Windows and Linux the install's `BepInEx.cfg` is never carried onto a package; a macOS profile keeps it beside an arm64 package that has none.
-- **A newer pack** reaches runs through a new pin in a toolkit release.
-
-The run prints which pin each actor uses, and `result.json` records it as `<actor>LoaderShipped` (the pack's version, SHA-256 and pin) beside `<actor>LoaderPackage`.
-
-## What runs left: env status, recover and teardown
-
-`server-load`, `server-load-ab` and every session journal their copies, characters, processes, Steam leases and host locks before making them. Every `start` run does the same for its disposable profile, character, exact client process and the fixture world its client hosts (placed in that client's `worlds_local` as a campaign's hosting client places it, moved out after into the arm's evidence as `<runId>/host-world/` and copied to `host-world/` beside it). Normal cleanup retires each entry. An owned client writes Unity's log to `toolkit-unity.log` in the run's own launch folder, never the user's `Player.log` or the install; the game still adds the server it joins to the user's `serverlist_local/recent` whatever the launch asks, so the run moves that list (and `recent.old`) aside into its own folder (`user-files-<run>-client-*`, journalled) before the client starts and puts the user's back once the client has stopped (or provably never started), keeping the client's version in that folder's `after/`; one run at a time holds a folder's list, so a second run's capture is refused, changing nothing; after an interruption, or a start that may have left a client running, `env recover` restores them (#822). After an interruption, `valheim-test env status [--inventory FILE] [--json]` lists what remains without changing it and names an unreadable line by run, file, line number and problem ([what runs left](https://github.com/tvongaza/ValheimTesting/blob/main/docs/packages/Valheim.Testing.GameSessions.md#pinned-server-runner)); `valheim-test env recover --run ID` removes only what it can prove belongs to the run. If its only unprovable items are interrupted launches, `valheim-test env recover --run ID --launch-gone` checks under the run's still-held lock (or a new recovery claim when it has none), then swaps an idle stale lock for the journalled recovery claim and holds it across the operator-confirmed abandon and ordinary recovery. Windows uses `Win32_Process` image names plus readable command lines and treats a hidden game command line as busy while ignoring hidden non-game command lines; macOS uses one all-user `ps` command with the whole command field; Linux uses `ps` plus required `/proc` command lines and refuses non-root `hidepid` or a detected container/PID namespace. Listing or required-observation failures refuse. A failed recovery keeps its claim so preflight continues to refuse the host. Never settle a verdict by editing, moving or deleting a journal file.
-
-A character intent without a completed stage is not proof that a same-named save belongs to the run. For `start`, recovery checks the registered source's SHA-256 before deleting an incomplete copy; a missing file is cleared, while a differing file or extra backup is left for inspection. A hosted character whose stage never confirmed completion is never deleted by name, even if its bytes match the registered source: it could have been a personal save already present when staging began. Move it out of `characters_local` for safekeeping after inspection, then retry recovery. A plain `start` killed midway through staging its profile or copying the game leaves an incomplete owned runtime without its final marker. A separate claim written before copying lets recovery remove only that run's partial copy. Without a matching claim, recovery leaves the directory untouched. A copy from before runs journalled them can be inspected and removed with `env teardown --copy PATH` ([copies left behind](https://github.com/tvongaza/ValheimTesting/blob/main/docs/packages/Valheim.Testing.GameSessions.md#pinned-server-runner)).
-
-Recovery checks a process's ID, start time and command line before stopping it. If `env recover --run ID` succeeds but deliberately keeps a runtime for inspection, it reports the remaining item kinds and count, names `env teardown --run ID`, and exits 3 because `env status` is still not clean. Its JSON result distinguishes `Recovered: true` from `Clean: false` and lists `Remaining`; exit 0 means the run left nothing. `env teardown --run ID` also removes what a run kept on purpose. A second Ctrl+C during cleanup exits with code 3, leaving a recoverable journal entry ([cancellation](https://github.com/tvongaza/ValheimTesting/blob/main/docs/packages/Valheim.Testing.GameSessions.md#pinned-server-runner)). `session check --hosts` checks every host the session needs; `env preflight` reads this machine's journal and any local hosts in its inventory. Both refuse a running or unrecovered run and name the run to recover.
-
-## Several machines: sessions
-
-A server and clients on several machines run as a session: an inventory file (the machines, how to reach them, and the installs on each: [several machines](https://github.com/tvongaza/ValheimTesting/blob/main/docs/packages/Valheim.Testing.GameSessions.md#several-machines)) and a session file, `session.json`, that names the actors (a dedicated server and named clients, or a client hosting the world and its peers), each one's dependency lock and disposable character, and the world fixture ([a campaign: remote clients and Steam identities](https://github.com/tvongaza/ValheimTesting/blob/main/docs/packages/Valheim.Testing.GameSessions.md#a-campaign-remote-clients-and-steam-identities)). `valheim-test session check SESSION [--json]` reports every independent problem with the inputs and the actor assignment without contacting a host; `--hosts` adds the read-only host checks: the selected installs and loaders, ValheimCLI ports, free space for the copies, a game already running where a client needs the desktop session, the run journals, and each client host's signed-in Steam account. Mutable state is checked again under the host locks and Steam leases before launch.
-
-The scenario itself is the mod's: it runs from the mod's own test project on the toolkit's `GameSession` (copy the [FullLifecycle example](https://github.com/tvongaza/ValheimTesting/blob/main/examples/FullLifecycle/README.md)'s `GameSessionFixture`, an xUnit adapter for one session per test class, and its `ExampleSession`, which finds `session.json` beside the tests and skips the native test without it). The [native acceptance suite](https://github.com/tvongaza/ValheimTesting/blob/main/tests/Valheim.Testing.NativeAcceptance/README.md#prepare-the-campaign) has a server-plus-two-clients test: setup, exercise, assertions and teardown, with explicit waits and a rejoin.
-
-- **Shared machines.** A host runs one owned run at a time (its lock); every actor on a host gets its own ValheimCLI and game port, its own copy and its own disposable character. A client needs the desktop session of a signed-in Steam account, so one desktop session runs one client; two clients need two accounts, read from each host and refused when shared ([Steam account leases](https://github.com/tvongaza/ValheimTesting/blob/main/docs/packages/Valheim.Testing.GameSessions.md#steam-account-leases)). The toolkit never signs in to Steam: the right account signed in on each client host stays a person's step that `session check --hosts` reports.
-- **Hosted and read-only clients.** A client can host the world instead of a dedicated server, its peers joining it ([a hosting client in a session](https://github.com/tvongaza/ValheimTesting/blob/main/docs/packages/Valheim.Testing.GameSessions.md#a-hosting-client-in-a-session)); an attached client (one its operator started) is driven but never stopped, its install neither read nor changed, and it keeps devcommands only ([actors, fixtures and reports](https://github.com/tvongaza/ValheimTesting/blob/main/docs/reference/game-actors-and-pins.md#actors-fixtures-and-reports)).
-- **macOS.** A Mac runs one client actor. A local Mac dedicated server can use a disposable loader profile. Capture a local SteamCMD build with `valheim-test steam-runtime capture --steamcmd DIR --output steam-runtime.json`, then pass `--steam-runtime-package steam-runtime.json` to `server-load --server-only`; the same `steamRuntimePackage` field works in a server campaign role. The profile checks the pinned source before and after it stages arm64-only, locally signed copies, then checks those staged hashes before boot without changing SteamCMD or the installed game. A server-only profile run passed with Steam.app closed on 11 October 2026; an arm64 server plus an SSH-to-localhost arm64 client passed a native joined-client load check on 11 October 2026; a runner on another machine remains unverified. For a remote GUI client, leave the Mac awake with its console session unlocked and Steam signed in; the display itself need not stay lit ([desktop constraints](Valheim.Testing.GameSessions.md#clients-in-a-hosts-desktop-session)). The source manifest and hashes are private evidence; do not publish the Valve binaries.
-
-## What a result says
-
-Every run writes `result.json` and `junit.xml` into its evidence: each step in its phase and the four states (preflight passed, runtime ready, scenario passed, cleanup verified), so a failed setup is never read as a failed mod ([phases and the four reported states](https://github.com/tvongaza/ValheimTesting/blob/main/docs/packages/Valheim.Testing.GameSessions.md#pinned-server-runner)). Its `Toolkit` names what ran: each toolkit package and the ValheimCLI transport with version, SHA-256 and whether it is `released` (built by the release workflow), a `candidate` or `unreleased` (a source build), and its `Plugins` the plugin pins each actor's game confirmed. Keep the evidence private: plans, manifests and game logs may hold local paths, passwords or account identifiers, and a client's evidence holds a copy of your recent-servers list.
-
-## Evidence on record
-
-The packaged world and character were made by Valheim 1.0.16 and checked in a native client. Recheck them with a new game version. Each copy of the character has the same player ID, so run only one client with it at a time.
-
-On a Windows 1.0.16 client, the command passed 12/12 steps with one selected example mod and 12/12 with that mod plus its test adapter. Both runs used strict pins, entered the packaged hosted world, and left no character, world copy or owned install behind. The station's pre-existing saves and launcher matched their before-run hashes. The first arm failed solely on a known BepInEx Unity-log-writer line, so the passing arms named that exact line and a reason; no general error suppression was added.
-
-The dedicated-server path also passed a strict 17-step Windows 1.0.16 run with two selected server mods and a clean joined client containing neither mod. That is setup and interoperability evidence, not a gameplay result; use fast fixture mods for routine runner checks rather than repeating a long catalogue or world generation.
-
-The tool carries the `Valheim.Testing.Game` it was built with; its generated consumer references that same version as a package rather than a project. Native setup/load results do not establish the mod's gameplay behavior. Keep the generated manifest and game logs private; they may contain local paths or account identifiers.
+- A pass proves the plugins loaded and the game entered a world, not the mod's gameplay.
+- `server-load` keeps its server on this machine. A server on another machine runs as a [session](Valheim.Testing.GameSessions.md#several-machines).
+- `cli` reaches only games a run on this machine owns.
+- The packaged world and character come from one game version; recheck them after a game update. Run one client with the packaged character at a time.

@@ -16,7 +16,7 @@ Read the mod repository's own instructions first. The mod's tests, adapters and 
    - One mod before and after a change: `TargetedRegression` ([example](https://github.com/tvongaza/ValheimTesting/blob/main/examples/TargetedRegression/README.md)).
 2. Pin exact published versions from the [package table](https://github.com/tvongaza/ValheimTesting/blob/main/docs/package-versions.md).
 3. Run the mod's test project with `dotnet test`. Stop if that answers the question.
-4. A native check starts the game on the user's machine: ask first. Read the [runtime hygiene checklist](https://github.com/tvongaza/ValheimTesting/blob/main/docs/runtime-hygiene.md), run `valheim-test env preflight`, then one guide's command. Read `result.json` and the log scan.
+4. A native check starts the game on the user's machine: ask first. Read the [native-run checklist](https://github.com/tvongaza/ValheimTesting/blob/main/docs/guides/before-a-native-run.md), run `valheim-test env preflight`, then one guide's command. Read `result.json` and the log scan.
 5. Afterwards, `valheim-test env status` must list nothing your run left. Recover an interrupted run with `valheim-test env recover --run ID`; if recovery keeps something for inspection (exit 3), remove it with `valheim-test env teardown --run ID`.
 6. Report what you tested, the build and package versions, the checks run with pass or fail, the checks not run, the evidence paths, the teardown status and the next step ([report shape](https://github.com/tvongaza/ValheimTesting/blob/main/docs/agent-guide.md#completion-and-handoff)).
 

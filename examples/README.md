@@ -23,7 +23,7 @@ The native runners, ObserveCheck and TargetedRegression, are console programs th
 - Visual Studio: **Properties → Debug → Open debug launch profiles UI**
 - Rider: **Run → Edit Configurations**
 
-Native runs still need a disposable game install, world and character. See [runtime hygiene](../docs/runtime-hygiene.md).
+Native runs still need a disposable game install, world and character. See [before a native run](../docs/guides/before-a-native-run.md).
 
 ## Not examples
 

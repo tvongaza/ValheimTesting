@@ -47,7 +47,7 @@ These rows use `Valheim.Testing.Game` with ValheimCLI in the game, or the `valhe
 |---|---|---|
 | A game type conflicts or is missing | The test project mixes source doubles with game assemblies | Link source files only; see [Test logic that uses game types](test-logic-that-uses-game-types.md) |
 | A package does not restore | The pin names an unpublished version | Pin an exact version from [Packages](../package-versions.md) |
-| A native run hangs, or passes but proves nothing | Runtime, load order, characters, timing or evidence rules | Go through the [runtime hygiene checklist](../runtime-hygiene.md) |
+| A native run hangs, or passes but proves nothing | Runtime, load order, characters, timing or evidence rules | Go through the [native-run checklist](before-a-native-run.md) |
 
 ## Related
 

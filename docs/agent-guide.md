@@ -14,7 +14,8 @@ A mod uses the published NuGet packages and the `valheim-test` tool. You never c
 | Check that a mod loads, or find which mod breaks a set | [Check that a mod loads](guides/check-a-mod-loads.md) | The mod's gameplay |
 | Save, restart and rejoin | [FullLifecycle](../examples/FullLifecycle/README.md) | Every seed, biome or mod combination |
 | One mod before and after a change | [TargetedRegression](../examples/TargetedRegression/README.md) | Other mods, dedicated servers or restarts |
-| A server and clients on several machines | [Sessions](packages/Valheim.Testing.NativeSmoke.md#several-machines-sessions) | Gameplay beyond what the scenario asserts |
+| A native run refused, failed or left something | [Debug a native run](guides/debug-a-native-run.md) | Why the mod misbehaves in play |
+| A server and clients on several machines | [Sessions](packages/Valheim.Testing.GameSessions.md#several-machines) | Gameplay beyond what the scenario asserts |
 | Not sure | [Choose a test layer](guides/choose-a-test-layer.md) | |
 
 ## The loop
@@ -27,7 +28,7 @@ A mod uses the published NuGet packages and the `valheim-test` tool. You never c
    ```
 
    A passing run exits 0. If it answers the question, stop here.
-3. A native check starts the game on the user's machine, so ask first. Read the [runtime hygiene checklist](runtime-hygiene.md): it covers runs that hang or pass without proving anything. Then check the machine:
+3. A native check starts the game on the user's machine, so ask first. Read the [native-run checklist](guides/before-a-native-run.md): it covers runs that hang or pass without proving anything. Then check the machine:
 
    ```sh
    valheim-test env preflight
@@ -80,21 +81,7 @@ Rules for code that drives the game:
 
 ## Diagnose an owned game that does not reach its menu or world
 
-Before it stops a failed owned client, the runner writes `client-failure-diagnostic.json` into the run's evidence. It records:
-
-- the process session, window title and responding state
-- the names of two tail files beside it, `client-failure-bepinex-tail.log` and `client-failure-player-tail.log`, which hold the last 80 lines of the BepInEx log and of Unity's log (`toolkit-unity.log` in the run's launch folder)
-- one screenshot attempt through the pinned ValheimCLI, or the reason it was not taken
-
-`--hold` keeps only a run that passed, so this is for inspecting a held passing run, not a game that never reached its menu or world. While a run is held, a second terminal can send one strictly pinned command to its owned client. For a held `start` run:
-
-```sh
-valheim-test cli --evidence RUN/evidence/smoke --phase world --command "cli_manifest"
-```
-
-For a held `server-load` run, the client's lease is in `RUN/evidence/client`.
-
-The tool checks the process's exact start identity and the strict pins, sends the command once, and never retries it. It records the command in an `owned-cli-command-*.jsonl` file in the evidence before sending, and prints the path. It never enables cheats. The options, roles and phases are under [Keep a passing run open for inspection](packages/Valheim.Testing.NativeSmoke.md#keep-a-passing-run-open-for-inspection).
+Read `client-failure-diagnostic.json`, the kept logs and a held run's state as [Debug a native run](guides/debug-a-native-run.md) describes.
 
 ## Completion and handoff
 

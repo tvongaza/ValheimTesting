@@ -1,5 +1,9 @@
 - name: Get started
   href: getting-started.md
+- name: Tutorials
+  items:
+  - name: Your first server load check
+    href: tutorials/first-server-load-check.md
 - name: Guides
   items:
   - name: Choose a test layer
@@ -12,6 +16,10 @@
     href: guides/run-tests-in-ci.md
   - name: Check that a mod loads
     href: guides/check-a-mod-loads.md
+  - name: Before a native run
+    href: guides/before-a-native-run.md
+  - name: Debug a native run
+    href: guides/debug-a-native-run.md
   - name: Give your coding agent the workflow
     href: guides/give-your-agent-the-workflow.md
 - name: Packages
@@ -28,7 +36,7 @@
     href: packages/Valheim.Testing.Game.md
   - name: Valheim.Testing.GameSessions
     href: packages/Valheim.Testing.GameSessions.md
-  - name: Valheim.Testing.NativeSmoke
+  - name: Valheim.Testing.NativeSmoke (valheim-test)
     href: packages/Valheim.Testing.NativeSmoke.md
   - name: Valheim.Testing.Adapter
     href: packages/Valheim.Testing.Adapter.md

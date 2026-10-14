@@ -90,7 +90,7 @@ Check the same independently declared expectations before and after the save, th
 | Pinned world dumps | [Pinned world dumps](../reference/world-dump-contract.md) |
 | Baking a saved fixture | [Bake a fixture](../reference/fixture-authoring.md) |
 | Several processes or machines as one run | [Valheim.Testing.GameSessions](Valheim.Testing.GameSessions.md) |
-| Checklist before a native run | [Runtime hygiene](../runtime-hygiene.md) |
+| Checklist before a native run | [Before a native run](../guides/before-a-native-run.md) |
 
 ## Test fakes
 

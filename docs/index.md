@@ -28,8 +28,11 @@ ValheimTesting gives you automated tests for Valheim mods built on BepInEx: unit
 | Test heights, slopes, biomes or zone seams without the game | [Test terrain decisions](guides/test-terrain-decisions.md) |
 | Run my tests on every push and pull request | [Run tests in CI](guides/run-tests-in-ci.md) |
 | Pin a package version | [Packages](package-versions.md) |
-| Check that a mod loads on a dedicated server | [What a native check needs](getting-started.md#what-a-native-check-needs) |
+| Check that a mod loads on a dedicated server | [Your first server load check](tutorials/first-server-load-check.md) |
 | Find which mod breaks a load, alone or with others | [Check that a mod loads](guides/check-a-mod-loads.md) |
+| Prepare the machine and mod for a run of the real game | [Before a native run](guides/before-a-native-run.md) |
+| Find why a native run refused or failed, or clean up after it | [Debug a native run](guides/debug-a-native-run.md) |
+| Look up a `valheim-test` command or option | [`valheim-test`](packages/Valheim.Testing.NativeSmoke.md) |
 | Let my coding agent add and run the tests | [Give your coding agent the workflow](guides/give-your-agent-the-workflow.md) |
 
 ## Reference
