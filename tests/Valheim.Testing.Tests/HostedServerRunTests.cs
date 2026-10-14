@@ -386,6 +386,10 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.Contains("fetch", host.Scripts);
         Assert.False(Directory.Exists(host.Local(windowsRuns + @"\run-test\runtime")));
         Assert.Contains("fake boot", File.ReadAllText(Path.Combine(Output, "boot-1", "game-0.log")));
+        // A Windows server's start task keeps no stdout, so the scan does not list one it would always find missing.
+        var roles = Result().GetProperty("Logs").EnumerateArray().Select(log => log.GetProperty("Role").GetString()).ToList();
+        Assert.Contains("boot-1 Unity log", roles);
+        Assert.DoesNotContain("boot-1 stdout", roles);
         var prebootProfile = Assert.Single(host.Runs, run => run.Script == "list" &&
             run.Variables["root"] == windowsRuns + @"\run-test\runtime" &&
             run.Variables["dirs"].Split('\n').Contains("UnityPlayer.dll"));
@@ -538,6 +542,8 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.All(origins.EnumerateObject(), origin => Assert.Equal("observed", origin.Value.GetString()));
         Assert.Equal("observed", origins.GetProperty("plugins.test.mod").GetString());
         Assert.Equal("observed", origins.GetProperty("worldUid").GetString());
+        // A Linux server's recorder keeps its stdout, scanned with the rest.
+        Assert.Contains(result.GetProperty("Logs").EnumerateArray(), log => log.GetProperty("Role").GetString() == "boot-1 stdout");
         Assert.Contains(server.Events, item => item.StartsWith("pins", StringComparison.Ordinal));
         Assert.Equal(FileHash.Md5(mod), result.GetProperty("Plugins").GetProperty("server").GetProperty("test.mod").GetString());
         Assert.False(result.GetProperty("Provenance").TryGetProperty("environment", out _));
