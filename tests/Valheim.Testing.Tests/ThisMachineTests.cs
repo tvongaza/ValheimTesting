@@ -168,6 +168,12 @@ public sealed class ThisMachineTests : IDisposable
         string cross = Assert.IsType<string>(ProfileRuntimeStorage.Refusal(@"C:\game", ntfsC, @"D:\runs", ntfsD));
         Assert.Contains("explicit inventory runtime folder", cross);
         Assert.Contains("Put the inventory runtime on the install's NTFS volume", cross);
+        Assert.Contains("hard link cannot cross volumes", cross); // #821: the reason, not only the two volumes
+
+        // The path-syntax verdict (a remote Windows host, no probe) is the same rule in the same words.
+        string syntax = Assert.IsType<string>(ProfileRuntimeStorage.PlacementVerdict(@"C:\game", @"D:\runs", explicitRuntime: true).Refusal);
+        Assert.Equal(cross.Replace("D:\\ (NTFS)", @"D:\").Replace("C:\\ (NTFS)", @"C:\"), syntax);
+        Assert.Null(ProfileRuntimeStorage.PlacementVerdict(@"C:\game", @"D:\runs", explicitRuntime: false).Refusal);
 
         foreach (var unsupported in new[]
         {

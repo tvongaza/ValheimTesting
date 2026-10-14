@@ -23,7 +23,8 @@ internal static class LocalHostPreflight
         Action? MacDesktop = null,
         Func<bool>? SteamRunning = null,
         Func<EnvironmentInventory, CancellationToken, Task<IReadOnlyList<CampaignPreflightProblem>>>? Journals = null,
-        Func<string?>? Packaged = null);
+        Func<string?>? Packaged = null,
+        Func<string, IGameHost>? HostFactory = null);
 
     internal static IDisposable ReplaceDefaultProbesForTest(Probes probes)
     {
@@ -61,7 +62,7 @@ internal static class LocalHostPreflight
         foreach (var group in roles.GroupBy(actor => actor.Recipe.Host, StringComparer.Ordinal))
         {
             IGameHost host;
-            try { host = hostFactory?.Invoke(group.Key) ?? new ResolvedEnvironment { Hosts = inventory.Hosts }.CreateHost(group.Key); }
+            try { host = hostFactory?.Invoke(group.Key) ?? probes.HostFactory?.Invoke(group.Key) ?? new ResolvedEnvironment { Hosts = inventory.Hosts }.CreateHost(group.Key); }
             catch (Exception error) when (Refusal(error))
             {
                 problems.Add(new(group.Key, "host", error.Message));
@@ -72,20 +73,12 @@ internal static class LocalHostPreflight
                 foreach (var actor in group)
                     try
                     {
-                        bool explicitRuntime = actor.Recipe.RuntimeExplicit;
-                        string runtime = actor.Recipe.Runtime;
-                        if (actor.Recipe.Roles.Contains("client"))
-                        {
-                            var root = ProfileRuntimeStorage.DefaultRoot(EnvironmentInventory.ThisMachine,
-                                actor.Recipe.Install, CliBundle.DataRoot);
-                            runtime = HostPath.Join(root.Path, "local-clients");
-                            explicitRuntime = false;
-                        }
                         if (probes.ProfileStorage is { } profileStorage)
-                            _ = await profileStorage(host, actor.Recipe.Install, runtime, explicitRuntime, timeout, cancellation).ConfigureAwait(false);
+                            _ = await profileStorage(host, actor.Recipe.Install, actor.Recipe.Runtime, actor.Recipe.RuntimeExplicit,
+                                timeout, cancellation).ConfigureAwait(false);
                         else
-                            _ = await HostedRuntimeStage.RequireProfileStorageAsync(host, actor.Recipe.Install, runtime,
-                                timeout, cancellation, explicitRuntime: explicitRuntime).ConfigureAwait(false);
+                            _ = await HostedRuntimeStage.RequireProfileStorageAsync(host, actor.Recipe.Install, actor.Recipe.Runtime,
+                                timeout, cancellation, explicitRuntime: actor.Recipe.RuntimeExplicit).ConfigureAwait(false);
                     }
                     catch (Exception error) when (Refusal(error)) { problems.Add(new(actor.Name, "profile storage", error.Message)); }
             try

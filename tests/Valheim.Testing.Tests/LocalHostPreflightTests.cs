@@ -117,42 +117,90 @@ public sealed class LocalHostPreflightTests : IDisposable
         Assert.DoesNotContain(host.Scripts, script => script is "profile-seed" or "apply-stage");
     }
 
-    [Fact]
-    public async Task WindowsClientPreflightChecksTheDefaultRuntimeThatLocalClientCopyUses()
+    // #821: a client's profile is staged under the environment's own runtime folder (a regression, a campaign), so preflight
+    // checks that folder through the same check the stage runs. It once substituted LocalClientCopy's default folder and
+    // reported ELIGIBLE for an inventory runtime on another volume, which start then refused.
+    private static EnvironmentInventory WindowsClientInventory(string runtime, bool runtimeExplicit = true) => new()
     {
-        if (!OperatingSystem.IsWindows()) return;
-        var machine = new FakeMachine("windows");
-        using var useMachine = EnvironmentInventory.UseMachine(machine);
-        var inventory = new EnvironmentInventory
+        Hosts = new() { ["pc"] = new HostProfile { Kind = "local", Platform = "windows", Shell = "pwsh", Lock = @"C:\vt\lock" } },
+        Environments = [new EnvironmentRecipe { Name = "client", Host = "pc", Roles = ["client"], Install = @"C:\game",
+            Runtime = runtime, RuntimeExplicit = runtimeExplicit, CliPort = 5551 }],
+    };
+
+    private static LocalHostPreflight.Probes AllButStorage() => new(
+        Processes: (_, _, _, _) => Task.CompletedTask,
+        Port: (_, _, _, _) => Task.CompletedTask,
+        Lock: (_, _, _, _) => Task.FromResult(new HostLockResult(HostLockState.Free, null, "free")),
+        Desktop: _ => Task.CompletedTask, SteamRunning: () => true,
+        Journals: (_, _) => Task.FromResult<IReadOnlyList<CampaignPreflightProblem>>([]), Packaged: () => null);
+
+    [Fact]
+    public async Task AClientRuntimeOnAnotherVolumeIsRefusedWithTheHardLinkLimit()
+    {
+        var inventory = WindowsClientInventory(@"V:\vtrun\local-client");
+        var host = new FakeServerHost("pc", Path.Combine(_root, "client-storage-mirror"), windows: true, kind: GameHostKind.Local)
         {
-            Hosts = new() { ["pc"] = new HostProfile { Kind = "local", Platform = "windows", Shell = "pwsh", Lock = @"C:\vt\lock" } },
-            Environments = [new EnvironmentRecipe { Name = "client", Host = "pc", Roles = ["client"],
-                Install = @"C:\game", Runtime = @"D:\inventory-runs", CliPort = 5551 }],
+            ProfileSourceVolume = new WindowsStorageVolume(@"C:\", "volume-c", "NTFS", false),
+            ProfileRuntimeVolume = new WindowsStorageVolume(@"V:\", "volume-v", "NTFS", false),
         };
-        var host = new FakeServerHost("pc", Path.Combine(_root, "client-storage-mirror"), windows: true, kind: GameHostKind.Local);
-        string? checkedRuntime = null;
-        bool? checkedExplicit = null;
-        var probes = new LocalHostPreflight.Probes(
-            Processes: (_, _, _, _) => Task.CompletedTask,
-            Port: (_, _, _, _) => Task.CompletedTask,
-            Lock: (_, _, _, _) => Task.FromResult(new HostLockResult(HostLockState.Free, null, "free")),
-            ProfileStorage: (_, _, runtime, explicitRuntime, _, _) =>
-            {
-                checkedRuntime = runtime;
-                checkedExplicit = explicitRuntime;
-                return Task.FromResult<string?>(null);
-            },
-            Desktop: _ => Task.CompletedTask, SteamRunning: () => true,
-            Journals: (_, _) => Task.FromResult<IReadOnlyList<CampaignPreflightProblem>>([]), Packaged: () => null);
 
         var problems = await LocalHostPreflight.InspectAsync(inventory,
             [new LocalHostPreflight.Actor("client", inventory.Environments[0])], TimeSpan.FromSeconds(1),
-            hostFactory: _ => host, probes: probes);
+            hostFactory: _ => host, probes: AllButStorage());
 
-        Assert.Empty(problems);
-        Assert.NotEqual(@"D:\inventory-runs", checkedRuntime);
-        Assert.EndsWith(@"runs\local-clients", checkedRuntime, StringComparison.OrdinalIgnoreCase);
-        Assert.False(checkedExplicit);
+        var refused = Assert.Single(problems);
+        Assert.Equal(("client", "profile storage"), (refused.Actor, refused.Input));
+        Assert.Contains(@"the explicit inventory runtime folder V:\vtrun\local-client is on V:\ (NTFS), not the source install's volume C:\ (NTFS)", refused.Message);
+        Assert.Contains("hard-links the install's game files, and a hard link cannot cross volumes", refused.Message);
+        Assert.Contains(@"Put the inventory runtime on the install's NTFS volume C:\.", refused.Message);
+        // The folder probed is the inventory's own, never a default the stage does not use; nothing was staged.
+        Assert.Equal(@"V:\vtrun\local-client", host.Runs.Single(run => run.Script == "profile-storage").Variables["runtime"]);
+        Assert.DoesNotContain(host.Scripts, script => script is "profile-seed" or "apply-stage");
+    }
+
+    [Fact]
+    public async Task AClientRuntimeOnTheInstallVolumeAndTheDefaultRuntimePass()
+    {
+        foreach (bool runtimeExplicit in new[] { true, false })
+        {
+            var inventory = WindowsClientInventory(@"C:\vtrun\local-client", runtimeExplicit);
+            var host = new FakeServerHost("pc", Path.Combine(_root, "client-same-mirror-" + runtimeExplicit), windows: true, kind: GameHostKind.Local);
+
+            Assert.Empty(await LocalHostPreflight.InspectAsync(inventory,
+                [new LocalHostPreflight.Actor("client", inventory.Environments[0])], TimeSpan.FromSeconds(1),
+                hostFactory: _ => host, probes: AllButStorage()));
+        }
+    }
+
+    // #821: env preflight is the same check start runs, with the same words, so the operator learns of the unreachable runtime
+    // before starting. (The seams are only the fake host and its volumes; the verdict, wording and runtime are production's.)
+    [Fact]
+    public async Task EnvPreflightRefusesACrossVolumeClientRuntimeWithTheWordsStartUses()
+    {
+        var host = new FakeServerHost("pc", Path.Combine(_root, "env-mirror"), windows: true, kind: GameHostKind.Local)
+        {
+            ProfileSourceVolume = new WindowsStorageVolume(@"C:\", "volume-c", "NTFS", false),
+            ProfileRuntimeVolume = new WindowsStorageVolume(@"V:\", "volume-v", "NTFS", false),
+        };
+        using var probes = LocalHostPreflight.ReplaceDefaultProbesForTest(AllButStorage() with { HostFactory = _ => host });
+        string file = Path.Combine(_root, "windows-inventory.json");
+        File.WriteAllText(file, System.Text.Json.JsonSerializer.Serialize(new
+        {
+            hosts = new Dictionary<string, object> { ["pc"] = new { kind = "local", platform = "windows", shell = "pwsh", @lock = @"C:\vt\lock" } },
+            environments = new[] { new { name = "client", host = "pc", roles = new[] { "client" }, install = @"C:\game",
+                runtime = @"V:\vtrun\local-client", architecture = "x64", cliPort = 5551 } },
+            leaseHost = "pc", leaseDirectory = @"C:\vt\leases",
+        }));
+
+        var output = new StringWriter();
+        var error = new StringWriter();
+        Assert.Equal(3, await EnvCommand.RunAsync(["preflight", "--inventory", file], output, error));
+
+        Assert.True(error.ToString().Length == 0, error.ToString());
+        string refusal = Assert.Single(output.ToString().Split('\n'), line => line.StartsWith("REFUSED client profile storage: ", StringComparison.Ordinal));
+        Assert.Contains(@"the explicit inventory runtime folder V:\vtrun\local-client is on V:\ (NTFS), not the source install's volume C:\ (NTFS)", refusal);
+        Assert.Contains("a hard link cannot cross volumes", refusal);
+        Assert.DoesNotContain("ELIGIBLE", output.ToString());
     }
 
     // #703: a Windows host without PowerShell 7 is refused by preflight with the one fix: the winget command, run in a desktop
