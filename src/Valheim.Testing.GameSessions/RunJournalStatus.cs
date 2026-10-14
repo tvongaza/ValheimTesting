@@ -35,8 +35,13 @@ internal sealed record JournalItem(string Kind, string Host, string Actor, strin
 internal sealed record JournalRunStatus(string Run, JournalRunState State, string Reason, DateTime FirstUtc, DateTime LastUtc,
     IReadOnlyList<string> Hosts, string? Runner, IReadOnlyList<JournalItem> Items)
 {
+    /// <summary>
+    /// The run's journalled end, as <see cref="RunFinish"/> wrote it (the last one); null when none was written. What a run's
+    /// outcome is read from once its runner is gone (#811: a repeated <c>detach finish</c>), never from whether a process still runs.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore] public JournalRunEnd? End { get; init; }
     /// <summary>An explicit end was written, rather than inferred from a locally proven dead runner and empty state.</summary>
-    [System.Text.Json.Serialization.JsonIgnore] public bool EndRecorded { get; init; }
+    [System.Text.Json.Serialization.JsonIgnore] public bool EndRecorded => End != null;
     /// <summary>Launches never journalled as started whose pid file proves their process gone: a recovery journals them settled.</summary>
     [System.Text.Json.Serialization.JsonIgnore] public IReadOnlyList<JournalItem> SettledLaunches { get; init; } = [];
     /// <summary>
@@ -48,6 +53,13 @@ internal sealed record JournalRunStatus(string Run, JournalRunState State, strin
     /// judges a run by its own hosts reads it (<c>env recover</c>'s post-recovery check, and any later run-level check, #508).
     /// </summary>
     [System.Text.Json.Serialization.JsonIgnore] public IReadOnlyList<JournalHostStatus> Unreadable { get; init; } = [];
+}
+
+/// <summary>A run's journalled end: its state word (<see cref="RunFinish.State"/>) and whether its own cleanup was verified.</summary>
+internal sealed record JournalRunEnd(string State, bool CleanupVerified)
+{
+    /// <summary>The run's own flow ended it passed.</summary>
+    public bool Passed => State == RunFinish.State(RunOutcome.Passed);
 }
 
 /// <summary>One host's journal as read: where, how many runs, and why it (or some of it) could not be read.</summary>
@@ -63,8 +75,14 @@ internal sealed record JournalStatusReport(IReadOnlyList<JournalHostStatus> Host
 {
     /// <summary>Copies on this machine that no journal names (made before runs journalled them): removed only by name.</summary>
     public IReadOnlyList<OwnedCopy> Unjournalled { get; init; } = [];
-    /// <summary>Every host's journal was read whole, every run left nothing and no unjournalled copy is left.</summary>
-    public bool Clean => Hosts.All(host => host.Error == null) && Runs.All(run => run.State == JournalRunState.Ended) && Unjournalled.Count == 0;
+    /// <summary>
+    /// Every host's journal was read whole, every run is still going or ended having left nothing, and no unjournalled copy is
+    /// left: nothing to recover (<c>detach status</c>'s success, #811: a live run is a successful status).
+    /// </summary>
+    public bool NothingToRecover => Hosts.All(host => host.Error == null) && Unjournalled.Count == 0 &&
+        Runs.All(run => run.State is JournalRunState.Ended or JournalRunState.Live);
+    /// <summary>Nothing to recover and no run still going: every run left nothing.</summary>
+    public bool Clean => NothingToRecover && Runs.All(run => run.State == JournalRunState.Ended);
 }
 
 /// <summary>
@@ -276,7 +294,7 @@ internal static class RunJournalStatus
             runs.Add(new(run.Key, state, reason, ordered[0].Record.Utc, ordered[^1].Record.Utc, runHosts, runner?.ToString(),
                 items.OrderBy(item => item.Host, StringComparer.Ordinal).ThenBy(item => item.SinceUtc).ToList())
             {
-                SettledLaunches = settled, EndRecorded = isEnded,
+                SettledLaunches = settled, End = isEnded ? new JournalRunEnd(end.State, end.Cleaned) : null,
                 Unreadable = hostStatus.Where(host => host.Error != null && (host.Reached || host.Name == leaseHost)).ToList(),
             });
         }

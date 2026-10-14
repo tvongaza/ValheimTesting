@@ -29,14 +29,26 @@ public static class EnvironmentRuns
     /// Only the hosts are needed, not an install. Changes nothing. Returns true when every host was read and every run left
     /// nothing. <paramref name="json"/> writes the report as JSON instead of text (without the <c>detected:</c> lines).
     /// </summary>
-    public static async Task<bool> WriteRunStatusAsync(string? inventoryPath, TextWriter output, bool json = false, CancellationToken cancellation = default)
+    public static async Task<bool> WriteRunStatusAsync(string? inventoryPath, TextWriter output, bool json = false, CancellationToken cancellation = default) =>
+        (await WriteRunStatusReportAsync(inventoryPath, output, json, cancellation).ConfigureAwait(false)).Clean;
+
+    /// <summary>As <see cref="WriteRunStatusAsync"/>, returning the whole report for a caller with its own verdict (<c>detach status</c>).</summary>
+    internal static async Task<JournalStatusReport> WriteRunStatusReportAsync(string? inventoryPath, TextWriter output, bool json = false,
+        CancellationToken cancellation = default)
     {
         ArgumentNullException.ThrowIfNull(output);
         var inventory = EnvironmentInventory.ReadHosts(inventoryPath, EnvironmentInventory.ThisMachine);
         if (!json) foreach (string line in inventory.Detected) output.WriteLine("detected: " + line);
         var report = await StatusAsync(inventory, cancellation).ConfigureAwait(false);
         RunJournalStatus.Write(report, output, json);
-        return report.Clean;
+        return report;
+    }
+
+    /// <summary>Run <paramref name="runId"/> as <c>env status</c> judges it on the inventory's hosts (this machine when null); null when no readable journal names it.</summary>
+    internal static async Task<JournalRunStatus?> RunStatusAsync(string? inventoryPath, string runId, CancellationToken cancellation = default)
+    {
+        var report = await StatusAsync(EnvironmentInventory.ReadHosts(inventoryPath, EnvironmentInventory.ThisMachine), cancellation).ConfigureAwait(false);
+        return report.Runs.SingleOrDefault(run => run.Run == runId);
     }
 
     /// <summary>

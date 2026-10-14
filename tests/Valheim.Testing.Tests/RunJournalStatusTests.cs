@@ -70,8 +70,9 @@ public sealed class RunJournalStatusTests : IDisposable
         host.ScheduledTasks[deadTask.Label] = (deadTask, WindowsScheduledTask.State.Running);
         host.ScheduledTasks[otherTask.Label] = (otherTask, WindowsScheduledTask.State.Stopped);
         host.ScheduledTasks[changedTask.Label] = (changedTask with { PrincipalUserId = @"TEST\another-user" }, WindowsScheduledTask.State.Running);
-        static (string, string)[] Fields(WindowsScheduledTask task) => task.Entry(JournalEntry.ScheduledTaskIntended,
-            ("control", task.Launcher[..task.Launcher.LastIndexOf('\\')]), ("output", @"C:\evidence"))
+        // Control directories that are gone: no launcher there, so no supervisor can start and recovery needs no control lock (#811).
+        (string, string)[] Fields(WindowsScheduledTask task) => task.Entry(JournalEntry.ScheduledTaskIntended,
+            ("control", Path.Combine(_root, "gone-control", task.Label)), ("output", @"C:\evidence"))
             .Fields.Select(field => (field.Key, field.Value)).ToArray();
         Line(host, "run-live", "detached", JournalRunner.Current, JournalEntry.ScheduledTaskStarted, Fields(liveTask));
         Line(host, "run-dead", "detached", Gone, JournalEntry.ScheduledTaskIntended, Fields(deadTask));
@@ -100,6 +101,89 @@ public sealed class RunJournalStatusTests : IDisposable
         Assert.Contains(otherTask.Label, host.ScheduledTasks.Keys);
         Assert.Contains(changedTask.Label, host.ScheduledTasks.Keys);
         Assert.Equal(JournalRunState.Ended, Run(await RunJournalStatus.InspectAsync(hosts, _ => host, TimeSpan.FromSeconds(5)), "run-dead").State);
+    }
+
+    // #811: a detached run whose starter gave up (its runner, gone, is the starter) and whose task has not started yet. Its control
+    // directory is a run-owned discard-only directory, as DetachedSession makes it.
+    private (FakeServerHost Host, Dictionary<string, HostProfile> Hosts, WindowsScheduledTask Task, string Control) StarterGaveUp(string run)
+    {
+        var host = new FakeServerHost("pc", Path.Combine(_root, "windows-" + run), kind: GameHostKind.Local, windows: true);
+        string control = OwnedDirectory(host, run, "detached control and startup logs");
+        var task = new WindowsScheduledTask(WindowsScheduledTask.Prefix + run, "ValheimTesting detached run " + run,
+            @"C:\Program Files\PowerShell\7\pwsh.exe", Path.Combine(control, "launcher.ps1"), Path.Combine(_root, "tool"), @"TEST\runner");
+        host.ScheduledTasks[task.Label] = (task, WindowsScheduledTask.State.NotStarted);
+        Line(host, run, "detached", Gone, JournalEntry.ScheduledTaskIntended, TaskFields(task, control));
+        var hosts = new Dictionary<string, HostProfile> { ["pc"] = new() { Kind = "local", Platform = "windows", Shell = "pwsh", Lock = "/var/tmp/vt/lock" } };
+        return (host, hosts, task, control);
+    }
+
+    private static (string, string)[] TaskFields(WindowsScheduledTask task, string control) =>
+        [.. task.Entry(JournalEntry.ScheduledTaskIntended, ("control", control), ("output", @"C:\evidence")).Fields.Select(field => (field.Key, field.Value))];
+
+    // A discard-only directory journalled as the given actor would (JournalOwnedDirectory), never completed, on this machine.
+    private string OwnedDirectory(FakeServerHost host, string run, string purpose, string actor = "detached", JournalRunner? runner = null)
+    {
+        string id = Guid.NewGuid().ToString("N");
+        string path = Directory.CreateDirectory(Path.Combine(_root, "runs", "valheim-test-" + id)).FullName;
+        File.WriteAllText(Path.Combine(path, "launcher.ps1"), "# the supervisor's launcher");
+        Line(host, run, actor, runner ?? Gone, JournalEntry.CopyIntended, ("runtime", path), ("local", "true"), ("cleanup", "delete"),
+            ("ownerId", id), ("purpose", purpose));
+        return path;
+    }
+
+    // #811, the reviewed race: recovery read the run as recoverable (its starter gone), then the scheduled supervisor started and
+    // adopted it, the seam at that point. Recovery must not stop the task or remove its directories under the live supervisor.
+    [Fact] public async Task RecoveryNeverClearsADetachedRunThatASupervisorAdoptedAfterItsFirstRead()
+    {
+        const string run = "run-adopted-during-recovery";
+        var (host, hosts, task, control) = StarterGaveUp(run);
+        Assert.Equal(JournalRunState.Recoverable, Run(await RunJournalStatus.InspectAsync(hosts, _ => host, TimeSpan.FromSeconds(5)), run).State);
+        DetachedControlLock? supervisor = null;
+        RecoveryReport report;
+        using (RunRecovery.AfterFirstReadForTest(() =>
+        {
+            // As DetachedSession.AdoptRun: the control lock, then its first journal line as the run's runner (this live process).
+            supervisor = DetachedControlLock.TryTake(control);
+            host.ScheduledTasks[task.Label] = (task, WindowsScheduledTask.State.Running);
+            Line(host, run, "detached", JournalRunner.Current, JournalEntry.ScheduledTaskStarted, TaskFields(task, control));
+            return Task.CompletedTask;
+        }))
+            report = await RunRecovery.RecoverAsync(hosts, _ => host, run, teardown: false, TimeSpan.FromSeconds(5));
+        try
+        {
+            Assert.NotNull(supervisor);
+            Assert.Contains("control lock", report.Refused, StringComparison.Ordinal);
+            Assert.Empty(report.Steps);
+            Assert.Equal(WindowsScheduledTask.State.Running, host.ScheduledTasks[task.Label].State);
+            Assert.DoesNotContain(WindowsScheduledTask.RetireScript, host.Scripts);
+            Assert.True(File.Exists(Path.Combine(control, "launcher.ps1")));
+            Assert.Equal(JournalRunState.Live, Run(await RunJournalStatus.InspectAsync(hosts, _ => host, TimeSpan.FromSeconds(5)), run).State);
+        }
+        finally { supervisor?.Dispose(); }
+    }
+
+    // #811: a supervisor that adopted the run after recovery's first read and died before recovery took the control lock. What it
+    // journalled meanwhile is the run's too: recovery acts on its read under the lock, so nothing the supervisor left is missed.
+    [Fact] public async Task RecoveryActsOnTheRunAsReadUnderItsControlLock()
+    {
+        const string run = "run-adopted-and-died";
+        var (host, hosts, task, control) = StarterGaveUp(run);
+        var deadSupervisor = new JournalRunner(Environment.MachineName, 999_999_996, T0.AddHours(-1));
+        string? staged = null;
+        RecoveryReport report;
+        using (RunRecovery.AfterFirstReadForTest(() =>
+        {
+            Line(host, run, "detached", deadSupervisor, JournalEntry.ScheduledTaskStarted, TaskFields(task, control));
+            staged = OwnedDirectory(host, run, "the supervisor's staged input", "server", deadSupervisor);
+            host.ScheduledTasks[task.Label] = (task, WindowsScheduledTask.State.Stopped);
+            return Task.CompletedTask;
+        }))
+            report = await RunRecovery.RecoverAsync(hosts, _ => host, run, teardown: false, TimeSpan.FromSeconds(5));
+
+        Assert.True(report.Clean, report.Refused + string.Join("\n", report.Steps));
+        Assert.DoesNotContain(task.Label, host.ScheduledTasks.Keys);
+        Assert.False(Directory.Exists(control));
+        Assert.False(Directory.Exists(staged));
     }
 
     [Fact] public async Task RecoveryReleasesAnExactLockClaimJournalledBeforeAcquisitionWhenItsRunnerIsDead()

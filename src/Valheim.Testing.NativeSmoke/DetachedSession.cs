@@ -41,8 +41,9 @@ internal static class DetachedSession
         output ??= Console.Out; error ??= Console.Error;
         if (!(seams?.Windows == true || OperatingSystem.IsWindows()))
         { error.WriteLine("REFUSED: detached sessions currently require a local Windows Task Scheduler owner; foreground --hold works on other hosts."); return 3; }
+        // A live run is a successful status (#811): exit 3 only when something is left to recover or a journal could not be read.
         if (args is ["status"])
-            return await EnvironmentRuns.WriteRunStatusAsync(null, output).ConfigureAwait(false) ? 0 : 3;
+            return (await EnvironmentRuns.WriteRunStatusReportAsync(null, output).ConfigureAwait(false)).NothingToRecover ? 0 : 3;
         if (args is ["finish", "--run", var finishRun]) return await FinishAsync(finishRun, output, error).ConfigureAwait(false);
         if (args is not ["server-load", .. var serverArgs])
         { error.WriteLine("Usage: " + Usage); return 2; }
@@ -198,8 +199,10 @@ internal static class DetachedSession
         WorldFixture.Verify(source, manifest);
     }
 
-    // The supervisor's first journal line adopts the starter's run before the campaign creates any host state.
-    internal static void AdoptRun(string run)
+    // The supervisor's first journal line adopts the starter's run before the campaign creates any host state. It is written under
+    // the run's control lock (#811), which the supervisor then holds for as long as it runs: a recovery that holds the lock first
+    // is clearing the run, so the supervisor refuses before it adopts anything. Dispose the result when the supervisor ends.
+    internal static IDisposable AdoptRun(string run)
     {
         string configured = ConfiguredRun ?? "";
         string control = ConfiguredControlDirectory ?? "";
@@ -212,7 +215,40 @@ internal static class DetachedSession
             executable.Length == 0 || taskUser.Length == 0 || !Path.IsPathFullyQualified(control) || !Path.IsPathFullyQualified(tool) || !Path.IsPathFullyQualified(output))
             throw new InvalidOperationException("The detached run or scheduled owner environment is invalid.");
         var task = new WindowsScheduledTask(label, "ValheimTesting detached run " + run, executable, Path.Combine(control, "launcher.ps1"), tool, taskUser);
-        new RunJournal(run).AppendLocal(Actor, task.Entry(JournalEntry.ScheduledTaskStarted, ("control", control), ("output", output)));
+        var held = DetachedControlLock.TryTake(control)
+            ?? throw new InvalidOperationException("Another process holds detached run " + run + "'s control lock: a recovery is clearing the run, so this supervisor does not adopt it.");
+        // A recovery that already retired this task (under the lock, which it has since released) is removing the run's copies:
+        // a supervisor that started before that stop and only now reaches this point must not adopt the run under it.
+        if (TaskRetired(run, label))
+        {
+            held.Dispose();
+            throw new InvalidOperationException("A recovery already retired detached run " + run + "'s scheduled task, so this supervisor does not adopt it.");
+        }
+        try { new RunJournal(run).AppendLocal(Actor, task.Entry(JournalEntry.ScheduledTaskStarted, ("control", control), ("output", output))); }
+        catch { held.Dispose(); throw; }
+        return held;
+    }
+
+    // Whether this machine's journal for the run records the named task retired. Unreadable lines are skipped: only a journalled
+    // retirement refuses adoption.
+    private static bool TaskRetired(string run, string task)
+    {
+        string directory = Path.Combine(RunJournal.LocalDirectory, run);
+        if (!Directory.Exists(directory)) return false;
+        foreach (string file in Directory.EnumerateFiles(directory, "*.jsonl"))
+        {
+            string text;
+            using (var stream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+            using (var reader = new StreamReader(stream)) text = reader.ReadToEnd();
+            foreach (string line in text.Split('\n').Where(line => line.Trim().Length != 0))
+            {
+                JournalRecord record;
+                try { record = RunJournal.ParseLine(line); }
+                catch (Exception error) when (error is JsonException or FormatException or KeyNotFoundException or InvalidOperationException) { continue; }
+                if (record.Entry.Kind == JournalEntry.ScheduledTaskRetired && record.Entry.Fields.GetValueOrDefault("task") == task) return true;
+            }
+        }
+        return false;
     }
 
     internal static void SignalHeld(string run, string evidence, int pid, string started, string? readyOverride = null, string? controlOverride = null)
@@ -324,15 +360,14 @@ internal static class DetachedSession
 
     private sealed record Owner(WindowsScheduledTask Task, string Control, string Output, JournalRunner Runner);
 
+    // The run's last journalled detached owner, retired or not: a repeated finish reads the same owner and reports the run's end.
     private static async Task<Owner> ReadOwnerAsync(string run)
     {
         var host = new LocalGameHost("this machine", HostShell.ThisMachine);
         // In time order, as RunJournalStatus reads them: per-actor files are not ordered among themselves.
         var records = (await RunJournalOnHost.ReadAsync(host, RunJournal.LocalDirectory, run, TimeSpan.FromSeconds(60)).ConfigureAwait(false))
             .OrderBy(record => record.Utc).ToList();
-        var open = records.Where(record => record.Entry.Kind is JournalEntry.ScheduledTaskIntended or JournalEntry.ScheduledTaskStarted)
-            .LastOrDefault(record => !records.Any(later => later.Utc >= record.Utc && later.Entry.Kind == JournalEntry.ScheduledTaskRetired &&
-                later.Entry.Fields.GetValueOrDefault("task") == record.Entry.Fields.GetValueOrDefault("task")));
+        var open = records.LastOrDefault(record => record.Entry.Kind is JournalEntry.ScheduledTaskIntended or JournalEntry.ScheduledTaskStarted);
         if (open == null) throw new InvalidDataException("Run " + run + " has no journalled detached owner to finish.");
         string control = open.Entry.Fields.GetValueOrDefault("control") ?? "";
         string output = open.Entry.Fields.GetValueOrDefault("output") ?? "";
@@ -350,7 +385,7 @@ internal static class DetachedSession
         {
             var owner = await ReadOwnerAsync(run).ConfigureAwait(false);
             bool live = owner.Runner.OnThisMachine && owner.Runner.StillRuns();
-            int ownerExit = live ? 0 : 1;
+            int ownerExit = 0; // Only an owner this finish waited for has an exit to read.
             if (live)
             {
                 ForegroundHold.Request(run, owner.Control);
@@ -368,8 +403,13 @@ internal static class DetachedSession
             }
             int clean = await EnvCommand.RunAsync(["recover", "--run", run], output, error).ConfigureAwait(false);
             if (clean != 0) throw new InvalidOperationException("The run still owns state; inspect env status.");
-            output.WriteLine((ownerExit == 0 ? "DETACHED FINISHED run " : "DETACHED RECOVERED FAILED run ") + run + "; owned state verified clear.");
-            return ownerExit == 0 ? 0 : 1;
+            // The verdict is the run's journalled end (#811), not whether its supervisor still runs: a repeated finish, or one after the
+            // supervisor ended, reports the end the run wrote. A run its owner never ended (it died) has none and never passes.
+            var end = (await EnvironmentRuns.RunStatusAsync(null, run).ConfigureAwait(false))?.End;
+            bool passed = end is { Passed: true } && ownerExit == 0;
+            output.WriteLine((passed ? "DETACHED FINISHED run " : "DETACHED RECOVERED FAILED run ") + run + "; its journalled end: " +
+                (end?.State ?? "none") + "; owned state verified clear.");
+            return passed ? 0 : 1;
         }
         catch (Exception failure) when (failure is ArgumentException or IOException or InvalidDataException or InvalidOperationException or
                                              UnauthorizedAccessException or OperationCanceledException or JsonException or HostOperationException or
