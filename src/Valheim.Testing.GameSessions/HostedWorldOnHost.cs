@@ -6,9 +6,11 @@ namespace Valheim.Testing.GameSessions;
 /// <summary>
 /// A hosted fixture world on a campaign client's own host (#258 step 8b, part b), this machine included (#807): placed into that
 /// host user's <c>worlds_local</c> before the client hosts it, and moved out again into the run's directory on that host (then
-/// fetched into the evidence) once no client can still host it. Only entries named for the world (<c>&lt;name&gt;</c>,
-/// <c>&lt;name&gt;.*</c>, <c>&lt;name&gt;_*</c>, in any case) are ever touched, and the placement refuses when one exists: a
-/// user's world is never overwritten or used. The placement is journalled on the host before the ship (a
+/// fetched into the evidence) once no client can still host it. The one placement owner of a hosting client's fixture world (#829):
+/// a campaign's, <c>start</c>'s, a session's and rounds a caller drives. Only entries named for the world are ever touched, by one
+/// rule (<see cref="HostedWorld.IsNamedFor"/>: <c>&lt;name&gt;</c>, <c>&lt;name&gt;.*</c>, <c>&lt;name&gt;_backup*</c>, in any case),
+/// which the refusal, the move-out and recovery's presence check share (<see cref="BashNamed"/>, <see cref="WindowsNamed"/>); the
+/// placement refuses when one exists, so a user's world is never overwritten or used. The placement is journalled on the host before the ship (a
 /// <see cref="JournalEntry.CopyIntended"/> that <c>holds</c> <c>hosted-world</c>), so <c>env recover</c> moves a world a killed run
 /// left behind out of the user's worlds in the same way (<see cref="RunRecovery"/>), once the world there states the journalled
 /// world UID (<see cref="RequireOwnWorldAsync"/>).
@@ -61,11 +63,36 @@ internal static class HostedWorldOnHost
     /// Where any hosting client's world goes: <paramref name="worldsDirectory"/> on <paramref name="host"/>, shipped through and
     /// moved out into the run's own folder under <paramref name="root"/> there (<c>&lt;root&gt;/&lt;runId&gt;/host-world</c>, the
     /// folder <c>env recover</c> requires): a campaign client's role runtime (<see cref="ForCampaignClient"/>), or the arm's evidence
-    /// for <c>start</c>'s client on this machine (<c>TargetedRegression</c>, #818). Both are placed and journalled the same way.
+    /// for <c>start</c>'s client on this machine (<c>TargetedRegression</c>, #818), or the output of a session's or a caller's rounds
+    /// on this machine (<see cref="ThisMachine"/>). All are placed and journalled the same way.
     /// </summary>
     internal static Site ForClient(IGameHost host, string hostName, string worldsDirectory, string root, string runId,
         Func<JournalEntry, CancellationToken, Task> journal, Func<CancellationToken, Task> hold) =>
         new(host, hostName, worldsDirectory, HostPath.Join(root, runId, "host-world-stage"), HostPath.Join(root, runId, "host-world"), journal, hold);
+
+    /// <summary>
+    /// Where a hosting client on this machine places its world when its runner has no site of its own (a session's
+    /// <see cref="HostingClientActor"/>, or rounds a caller drives with <see cref="HostedClientRounds.Run"/>): the checked
+    /// <c>worlds_local</c> here, shipped through and moved out into <c>&lt;output&gt;/&lt;runId&gt;/host-world</c> (a later placement of
+    /// the same run into the same output: <c>&lt;output&gt;/placement-&lt;n&gt;/&lt;runId&gt;/host-world</c>), journalled in this
+    /// machine's journal under the run the flow journals when it places the world (<see cref="RunJournal.ThisProcess"/>) as <paramref name="actor"/>, as the
+    /// fixture's own copy is. <c>env status</c> lists a world a killed run left and <c>env recover --run</c> moves it out.
+    /// </summary>
+    internal static Func<string, IHostedWorldSite> ThisMachine(string output, string actor)
+    {
+        var host = new LocalGameHost("this machine", HostShell.ThisMachine);
+        return worlds =>
+        {
+            var journal = RunJournal.ThisProcess; // The run this flow journals as it places the world, for every line of the placement.
+            // Each placement its own folder (#829 review): another hosted run into the same output, in the same run, takes the next
+            // free root (<output>, then <output>/placement-2 and so on), so <root>/<runId>/host-world is never one an earlier run made.
+            string root = output;
+            for (int n = 2; Path.Exists(Path.Combine(root, journal.RunId)); n++) root = Path.Combine(output, $"placement-{n}");
+            return ForClient(host, host.Name, worlds, root, journal.RunId,
+                (entry, _) => { journal.AppendLocal(actor, entry); return Task.CompletedTask; },
+                _ => Task.CompletedTask); // No lock: the caller owns this machine's client, as it owns the client it opens.
+        };
+    }
 
     /// <summary>
     /// The client's <c>worlds_local</c> on its host, beside the <c>characters_local</c> the campaign staged its character in
@@ -83,7 +110,7 @@ internal static class HostedWorldOnHost
     /// <summary>
     /// Refuses when the host's worlds already hold an entry named for the world, before anything is copied (a refused run leaves
     /// nothing, #820), then copies <paramref name="plan"/>'s fixture into <paramref name="output"/> (verified, the input evidence,
-    /// as <see cref="HostedWorld.Place"/> does), journals the placement, ships the fixture into the run's stage folder on the host
+    /// kept), journals the placement, ships the fixture into the run's stage folder on the host
     /// and verifies every file there, then moves its entries (all named for the world) into the host's worlds, refusing one that
     /// appeared meanwhile.
     /// </summary>
@@ -224,26 +251,46 @@ internal static class HostedWorldOnHost
         return true;
     }
 
-    // The world's metadata files, base64: <name>.fwl and <name>/_main.<n>.fwl2 (the name's own case; any case on Windows, whose
-    // folders ignore it). VT-WORLD-METAS says whether any entry named for the world (as MoveOut moves them) is there at all.
-    // Metadata is a few hundred bytes; a file over 1 MiB is named, not read.
-    internal static readonly string WindowsMetadata = """
-        $ErrorActionPreference = 'Stop'
-        $lower = $name.ToLowerInvariant(); $present = $false
+    // The one rule of what is named for a world on a host (HostedWorld.IsNamedFor): <name>, <name>.* and the game's <name>_backup*,
+    // in any case. A hosting client runs on Windows or macOS, whose folders ignore case, so the game takes campaign.fwl for
+    // Campaign.fwl: the refusal must see it, and a move-out may take it, because the refusal proved nothing named for the world was
+    // there before the placement. Lower-casing is culture-free (C locale, invariant culture). Each script below uses it.
+    internal const string WindowsNamed = """
+        $lower = $name.ToLowerInvariant()
+        function Test-VtNamed([string]$leaf) {
+            $l = $leaf.ToLowerInvariant()
+            return ($l -ceq $lower -or $l.StartsWith($lower + '.', [StringComparison]::Ordinal) -or $l.StartsWith($lower + '_backup', [StringComparison]::Ordinal))
+        }
+
+        """;
+    internal const string BashNamed = """
+        lower=$(printf '%s' "$name" | LC_ALL=C tr '[:upper:]' '[:lower:]')
+        vt_named() {
+            l=$(printf '%s' "$1" | LC_ALL=C tr '[:upper:]' '[:lower:]')
+            case "$l" in "$lower"|"$lower".*|"$lower"_backup*) return 0 ;; esac
+            return 1
+        }
+
+        """;
+
+    // The metadata of every entry named for the world (the one rule, any case, as MoveOut moves them), base64: a <entry>.fwl file
+    // and the _main.<n>.fwl2 files of an <entry>/ folder (Valheim 1.0's chunked save), each labelled with its path in worlds_local.
+    // VT-WORLD-METAS says whether any entry named for the world is there at all. Metadata is a few hundred bytes; a file over 1 MiB
+    // is named, not read.
+    internal static readonly string WindowsMetadata = "$ErrorActionPreference = 'Stop'\n" + WindowsNamed + """
+        $present = $false; $files = @()
         if ([IO.Directory]::Exists($worlds)) {
             foreach ($entry in @([IO.Directory]::EnumerateFileSystemEntries($worlds))) {
-                $l = [IO.Path]::GetFileName($entry).ToLowerInvariant()
-                if ($l -ceq $lower -or $l.StartsWith($lower + '.', [StringComparison]::Ordinal) -or $l.StartsWith($lower + '_backup', [StringComparison]::Ordinal)) { $present = $true }
-            }
-            $files = @()
-            $flat = Join-Path $worlds ($name + '.fwl')
-            if ([IO.File]::Exists($flat)) { $files += ,@($flat, ($name + '.fwl')) }
-            $folder = Join-Path $worlds $name
-            if ([IO.Directory]::Exists($folder)) {
-                foreach ($file in @([IO.Directory]::EnumerateFiles($folder))) {
-                    $leaf = [IO.Path]::GetFileName($file)
-                    if ($leaf -match '^_main\.[0-9]+\.fwl2$') { $files += ,@($file, ($name + '/' + $leaf)) }
+                $leaf = [IO.Path]::GetFileName($entry)
+                if (-not (Test-VtNamed $leaf)) { continue }
+                $present = $true
+                if ([IO.Directory]::Exists($entry)) {
+                    foreach ($file in @([IO.Directory]::EnumerateFiles($entry))) {
+                        $inner = [IO.Path]::GetFileName($file)
+                        if ($inner -match '^_main\.[0-9]+\.fwl2$') { $files += ,@($file, ($leaf + '/' + $inner)) }
+                    }
                 }
+                elseif ($leaf.ToLowerInvariant().EndsWith('.fwl', [StringComparison]::Ordinal)) { $files += ,@($entry, $leaf) }
             }
             foreach ($file in $files) {
                 if ((Get-Item -LiteralPath $file[0]).Length -gt 1048576) { 'VT-WORLD-META-LARGE ' + $file[1]; continue }
@@ -252,68 +299,62 @@ internal static class HostedWorldOnHost
         }
         if ($present) { 'VT-WORLD-METAS present' } else { 'VT-WORLD-METAS absent' }
         """;
-    internal static readonly string BashMetadata = """
-        set -eu
+    internal static readonly string BashMetadata = "set -eu\n" + BashNamed + """
         present=absent
+        meta() {
+            size=$(wc -c < "$1" | tr -d ' ')
+            if [ "$size" -gt 1048576 ]; then printf 'VT-WORLD-META-LARGE %s\n' "$2"; return; fi
+            printf 'VT-WORLD-META %s %s\n' "$2" "$(base64 < "$1" | tr -d '\n\r')"
+        }
         if [ -d "$worlds" ]; then
             for entry in "$worlds"/* "$worlds"/.[!.]*; do
                 [ -e "$entry" ] || [ -L "$entry" ] || continue
                 leaf=${entry##*/}
-                case "$leaf" in "$name"|"$name".*|"$name"_backup*) present=present ;; esac
+                vt_named "$leaf" || continue
+                present=present
+                if [ -d "$entry" ]; then
+                    for file in "$entry"/_main.*.fwl2; do
+                        [ -f "$file" ] || continue
+                        inner=${file##*/}
+                        case "$inner" in _main.*[!0-9]*.fwl2|_main..fwl2) continue ;; esac
+                        meta "$file" "$leaf/$inner"
+                    done
+                elif [ -f "$entry" ]; then
+                    case "$l" in *.fwl) meta "$entry" "$leaf" ;; esac
+                fi
             done
-            meta() {
-                size=$(wc -c < "$1" | tr -d ' ')
-                if [ "$size" -gt 1048576 ]; then printf 'VT-WORLD-META-LARGE %s\n' "$2"; return; fi
-                printf 'VT-WORLD-META %s %s\n' "$2" "$(base64 < "$1" | tr -d '\n\r')"
-            }
-            if [ -f "$worlds/$name.fwl" ]; then meta "$worlds/$name.fwl" "$name.fwl"; fi
-            if [ -d "$worlds/$name" ]; then
-                for file in "$worlds/$name"/_main.*.fwl2; do
-                    [ -f "$file" ] || continue
-                    leaf=${file##*/}
-                    case "$leaf" in _main.*[!0-9]*.fwl2|_main..fwl2) continue ;; esac
-                    meta "$file" "$name/$leaf"
-                done
-            fi
         fi
         printf 'VT-WORLD-METAS %s\n' "$present"
         """;
 
-    // Entries named for the world: <name>, <name>.*, <name>_* (any case): the placement refuses any of them, so a user's world is
-    // never used. worlds_local is created when missing. Lower-casing is culture-free (C locale, invariant culture).
-    internal static readonly string WindowsEntries = """
-        $ErrorActionPreference = 'Stop'
+    // Entries named for the world: the placement refuses any of them, so a user's world is never used. worlds_local is created
+    // when missing.
+    internal static readonly string WindowsEntries = "$ErrorActionPreference = 'Stop'\n" + WindowsNamed + """
         if (-not [IO.Directory]::Exists($worlds)) { [void][IO.Directory]::CreateDirectory($worlds) }
-        $lower = $name.ToLowerInvariant()
         foreach ($entry in [IO.Directory]::EnumerateFileSystemEntries($worlds)) {
-            $leaf = [IO.Path]::GetFileName($entry); $l = $leaf.ToLowerInvariant()
-            if ($l -ceq $lower -or $l.StartsWith($lower + '.', [StringComparison]::Ordinal) -or $l.StartsWith($lower + '_', [StringComparison]::Ordinal)) { 'VT-WORLD-ENTRY ' + $leaf }
+            $leaf = [IO.Path]::GetFileName($entry)
+            if (Test-VtNamed $leaf) { 'VT-WORLD-ENTRY ' + $leaf }
         }
         'VT-WORLD-ENTRIES done'
         """;
-    internal static readonly string BashEntries = """
-        set -eu
+    internal static readonly string BashEntries = "set -eu\n" + BashNamed + """
         mkdir -p -- "$worlds"
-        lower=$(printf '%s' "$name" | LC_ALL=C tr '[:upper:]' '[:lower:]')
         for entry in "$worlds"/* "$worlds"/.[!.]*; do
             [ -e "$entry" ] || [ -L "$entry" ] || continue
-            leaf=${entry##*/}; l=$(printf '%s' "$leaf" | LC_ALL=C tr '[:upper:]' '[:lower:]')
-            case "$l" in "$lower"|"$lower".*|"$lower"_*) printf 'VT-WORLD-ENTRY %s\n' "$leaf" ;; esac
+            leaf=${entry##*/}
+            if vt_named "$leaf"; then printf 'VT-WORLD-ENTRY %s\n' "$leaf"; fi
         done
         echo 'VT-WORLD-ENTRIES done'
         """;
-    // Moves the world's own entries from $worlds into $to (created): <name>, <name>.* and the game's <name>_backup* (the name's own
-    // case; any case on Windows, whose folders ignore it). Every destination is checked first, and none may exist: nothing is
-    // ever overwritten, merged or deleted. Across volumes (Windows) an entry is copied, then removed from where it was.
-    internal static readonly string WindowsMoveOut = ProtectedPaths.PowerShellInside + ProtectedPaths.PowerShellRemove + """
-        $ErrorActionPreference = 'Stop'
-        $lower = $name.ToLowerInvariant()
+    // Moves the world's own entries (the same rule) from $worlds into $to (created). Every destination is checked first, and none
+    // may exist: nothing is ever overwritten, merged or deleted. Across volumes (Windows) an entry is copied, then removed from where it was.
+    internal static readonly string WindowsMoveOut = ProtectedPaths.PowerShellInside + ProtectedPaths.PowerShellRemove + "$ErrorActionPreference = 'Stop'\n" + WindowsNamed + """
         [void][IO.Directory]::CreateDirectory($to)
         $moves = @()
         if ([IO.Directory]::Exists($worlds)) {
             foreach ($entry in @([IO.Directory]::EnumerateFileSystemEntries($worlds))) {
-                $leaf = [IO.Path]::GetFileName($entry); $l = $leaf.ToLowerInvariant()
-                if (-not ($l -ceq $lower -or $l.StartsWith($lower + '.', [StringComparison]::Ordinal) -or $l.StartsWith($lower + '_backup', [StringComparison]::Ordinal))) { continue }
+                $leaf = [IO.Path]::GetFileName($entry)
+                if (-not (Test-VtNamed $leaf)) { continue }
                 $dest = Join-Path $to $leaf
                 if ([IO.File]::Exists($dest) -or [IO.Directory]::Exists($dest)) { 'VT-WORLD-EXISTS ' + $leaf; exit 4 }
                 $moves += ,@($entry, $dest, $leaf)
@@ -331,15 +372,14 @@ internal static class HostedWorldOnHost
         }
         'VT-WORLD-MOVE done'
         """;
-    internal static readonly string BashMoveOut = """
-        set -eu
+    internal static readonly string BashMoveOut = "set -eu\n" + BashNamed + """
         mkdir -p -- "$to"
         moves=""
         if [ -d "$worlds" ]; then
             for entry in "$worlds"/* "$worlds"/.[!.]*; do
                 [ -e "$entry" ] || [ -L "$entry" ] || continue
                 leaf=${entry##*/}
-                case "$leaf" in "$name"|"$name".*|"$name"_backup*) ;; *) continue ;; esac
+                vt_named "$leaf" || continue
                 if [ -e "$to/$leaf" ] || [ -L "$to/$leaf" ]; then printf 'VT-WORLD-EXISTS %s\n' "$leaf"; exit 4; fi
                 moves="$moves$leaf
         "

@@ -7,7 +7,7 @@ namespace Valheim.Testing.Game;
 /// </summary>
 /// <remarks>
 /// <see cref="Prepare"/> writes only to a new directory. A run copies that pinned source through
-/// <see cref="WorldFixture.Copy"/> or <see cref="HostedWorld.Place"/> and never edits the packaged source.
+/// <see cref="WorldFixture.Copy"/> or a hosting client's journalled placement (<see cref="HostedWorld"/>) and never edits the packaged source.
 /// The save format belongs to Valheim; a later game version must pass a native load check before being claimed compatible.
 /// </remarks>
 public static class DefaultSmokeWorld

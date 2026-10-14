@@ -279,7 +279,7 @@ public sealed class HostingClientActorTests : IDisposable
         Assert.Equal(new[] { "the scenario failed", "stop only the owned hosting client host" }, report.Steps.Where(s => !s.Passed).Select(s => s.Name));
         Assert.DoesNotContain(report.Steps, s => s.Name.StartsWith("move the hosted world", StringComparison.Ordinal) || s.Name == "the host leaves its world to its menu");
         Assert.Equal(new[] { Name + ".db", Name + ".fwl" }, OurWorldFiles().Order(StringComparer.Ordinal));
-        Assert.Equal(Worlds + " (" + Name + ")", report.Provenance["hostWorldLeftInPlace"]);
+        Assert.Equal("this machine: " + Worlds + " (" + Name + ")", report.Provenance["hostWorldLeftInPlace"]);
     }
 
     [Fact] public async Task AJoinRefusesAPeerOfTheWrongKind()

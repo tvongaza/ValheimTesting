@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Valheim.Testing.Game;
 using Valheim.Testing.Game.Fakes;
+using Valheim.Testing.GameSessions;
 using Xunit;
 
 // ClientRounds, both kinds of client, with a fake owned process and no game, Steam or network connection:
@@ -613,6 +614,75 @@ public sealed class ClientRoundsTests : IDisposable
         // The verified input copy stays beside it, as the server runner keeps its fixture copies.
         Assert.Single(Directory.GetDirectories(Output, "valheim-test-*"));
         Assert.True(File.Exists(Path.Combine(Output, "first-reading.json"))); Assert.True(File.Exists(Path.Combine(Output, "after-restart-reading.json")));
+    }
+
+    // #829: hosted rounds a caller drives directly placed their world unjournalled (HostedWorld.Place), so a killed run left it in
+    // the client's worlds_local where env status listed nothing and env recover moved nothing. They now place it through the one
+    // journalled site: the runner is killed while the operator's client still hosts the world the game saved, env status lists the
+    // world, env recover moves it (proven by its world UID) into the run's folder in the output, and the user's own world stays.
+    [Fact] public async Task AKilledDirectHostedRunsWorldIsListedAndRecovered()
+    {
+        string journal = Path.Combine(_root, "journal"), runId = RunJournal.NewRunId();
+        var hosts = new Dictionary<string, HostProfile> { ["local"] = new HostProfile { Kind = "local", Lock = Path.Combine(_root, "lock") } };
+        IGameHost here = new LocalGameHost("this machine", HostShell.ThisMachine);
+        using (RunJournal.UseLocalDirectory(journal))
+        using (RunJournal.UseRun(runId))
+        {
+            var report = new ScenarioReport("host");
+            Assert.Throws<OperationCanceledException>(() => RunHosted(report, HostPlan("attach"), new Game(Worlds), round => round.Step("hold until the runner is killed", () =>
+            {
+                File.WriteAllText(Path.Combine(Worlds, Name + ".db"), "saved by the game");
+                throw new OperationCanceledException("the runner was killed");
+            })));
+            Assert.Contains(Name, report.Provenance["hostWorldLeftInPlace"]);
+        }
+        // The runner is killed: its lines now name a process that is gone.
+        foreach (string file in Directory.EnumerateFiles(Path.Combine(journal, runId), "*.jsonl"))
+            File.WriteAllLines(file, File.ReadAllLines(file).Select(line =>
+            {
+                var node = System.Text.Json.Nodes.JsonNode.Parse(line)!;
+                node["runner"]!["pid"] = RunJournalStatusTests.Gone.Pid;
+                node["runner"]!["startedUtc"] = RunJournalStatusTests.Gone.StartedUtc.ToString("O");
+                return node.ToJsonString();
+            }));
+        async Task<JournalRunStatus> Status() =>
+            Assert.Single((await RunJournalStatus.InspectAsync(hosts, _ => here, TimeSpan.FromSeconds(30))).Runs, run => run.Run == runId);
+
+        string world = Path.Combine(Worlds, Name);
+        var left = await Status();
+        Assert.Equal(JournalRunState.Recoverable, left.State);
+        Assert.Equal(world, Assert.Single(left.Items, item => item.Kind == "copy").What);
+
+        var recovered = await RunRecovery.RecoverAsync(hosts, _ => here, runId, teardown: false, TimeSpan.FromSeconds(30));
+
+        Assert.True(recovered.Clean, string.Join("\n", recovered.Steps));
+        Assert.Contains($"world UID {WorldUid} as journalled", Assert.Single(recovered.Steps, step => step.What == "copy " + world).Outcome);
+        Assert.Empty(OurWorldFiles());
+        Assert.Equal(new[] { "MyWorld.db", "MyWorld.fwl" }, Directory.EnumerateFileSystemEntries(Worlds).Select(Path.GetFileName).Order(StringComparer.Ordinal));
+        Assert.Equal("the user's world", File.ReadAllText(Path.Combine(Worlds, "MyWorld.fwl")));
+        Assert.Equal("saved by the game", File.ReadAllText(Path.Combine(Output, runId, "host-world", Name + ".db")));
+        Assert.Equal(JournalRunState.Ended, (await Status()).State);
+    }
+
+    // #829 review: hosted rounds on this machine name their stage and keep folders after the run they journal, and one process is
+    // one run outside a run scope. Two hosted runs into one output in that run each get their own folder: the second is not refused
+    // after its placement was journalled, both move their world out, and the evidence goes to host-world and host-world-2.
+    [Fact] public void TwoHostedRunsIntoOneOutputInOneRunEachPlaceAndMoveOutTheirWorld()
+    {
+        string runId = RunJournal.NewRunId();
+        using (RunJournal.UseLocalDirectory(Path.Combine(_root, "journal")))
+        using (RunJournal.UseRun(runId))
+            foreach (string run in new[] { "first", "second" })
+            {
+                var report = new ScenarioReport(run); var plan = HostPlan("attach");
+                using (new FakeClientDataDirectory(Save)) // its own round name, as evidence is never overwritten
+                    new ClientRounds { Client = plan, Report = report, Output = Output, Rounds = [run] }.Run(Open(plan, new Game(Worlds)), Measure());
+                Assert.True(report.Passed, run + ": " + string.Join("; ", report.Steps.Where(s => !s.Passed).Select(s => s.Name + ": " + s.Error)));
+                Assert.Empty(OurWorldFiles());
+            }
+        foreach (string evidence in new[] { "host-world", "host-world-2" }) Assert.True(File.Exists(Path.Combine(Output, evidence, Name + ".fwl")), evidence);
+        Assert.True(File.Exists(Path.Combine(Output, runId, "host-world", Name + ".fwl")));
+        Assert.True(File.Exists(Path.Combine(Output, "placement-2", runId, "host-world", Name + ".fwl")));
     }
 
     [ClientHostFact] public void HostingClientCannotAdvertiseWorldPinsBeforeItsFixtureLoads()

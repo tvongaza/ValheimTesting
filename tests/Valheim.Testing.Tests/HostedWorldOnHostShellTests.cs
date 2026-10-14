@@ -11,19 +11,25 @@ public sealed class HostedWorldOnHostShellTests : IDisposable
     private string To => Path.Combine(_root, "runs", "run-1", "host-world");
     public void Dispose() => Directory.Delete(_root, recursive: true);
 
+    // A user's worlds_local: the world's own entries as the game writes them (its chunked folder and a backup), one in another case,
+    // and the user's other worlds, one of them <name>_mine (a world of its own name, which the game never writes for Campaign).
+    private static readonly string[] Named = ["Campaign", "Campaign_backup_auto-20261006.db", "campaign.fwl"];
+    private static readonly string[] Others = ["Campaign2.fwl", "MyWorld.fwl", "Campaign_mine.fwl", "Campaig.fwl"];
     private void User()
     {
         Directory.CreateDirectory(Path.Combine(Worlds, "Campaign"));
         File.WriteAllText(Path.Combine(Worlds, "Campaign", "_main.0.fwl2"), "world");
         File.WriteAllText(Path.Combine(Worlds, "Campaign_backup_auto-20261006.db"), "backup");
-        foreach (string other in new[] { "Campaign2.fwl", "MyWorld.fwl", "Campaign_mine.fwl", "campaign.fwl" })
-            File.WriteAllText(Path.Combine(Worlds, other), "the user's");
+        foreach (string other in Others.Append("campaign.fwl")) File.WriteAllText(Path.Combine(Worlds, other), "the user's");
     }
     private static IGameHost Host(string shell) => new LocalGameHost("local-" + shell, HostShell.Parse(shell));
     private static bool Windows(IGameHost host) => host.Shell.Kind == HostShellKind.PowerShell;
 
+    // #829: one rule for what is named for a world. The refusal before a placement and the move-out after it take exactly the same
+    // entries (<name>, <name>.*, <name>_backup*, any case), and they are the ones HostedWorld.IsNamedFor, the fixture's own rule,
+    // names: so a move-out only ever takes what the refusal proved absent before the run placed it, and takes back all it placed.
     [Theory, MemberData(nameof(LocalGameHostShellTests.Shells), MemberType = typeof(LocalGameHostShellTests))]
-    public async Task TheRefusalSeesEveryEntryNamedForTheWorldInAnyCase(string shell)
+    public async Task TheRefusalAndTheMoveOutTakeTheSameEntriesTheFixtureRuleNames(string shell)
     {
         User();
         var host = Host(shell);
@@ -31,11 +37,18 @@ public sealed class HostedWorldOnHostShellTests : IDisposable
             new Dictionary<string, string> { ["worlds"] = Worlds, ["name"] = "Campaign" }, TimeSpan.FromSeconds(60))).EnsureSuccess("entries");
         var listed = result.Stdout.Split('\n').Select(line => line.TrimEnd('\r')).Where(line => line.StartsWith("VT-WORLD-ENTRY ", StringComparison.Ordinal))
             .Select(line => line["VT-WORLD-ENTRY ".Length..]).Order(StringComparer.Ordinal).ToList();
-        Assert.Equal(new[] { "Campaign", "Campaign_backup_auto-20261006.db", "Campaign_mine.fwl", "campaign.fwl" }.Order(StringComparer.Ordinal), listed);
+        Assert.Equal(Named.Order(StringComparer.Ordinal), listed);
+        Assert.Equal(Named.Order(StringComparer.Ordinal), Directory.EnumerateFileSystemEntries(Worlds).Select(Path.GetFileName)
+            .Where(leaf => HostedWorld.IsNamedFor(leaf!, "Campaign")).Order(StringComparer.Ordinal));
+
+        var moved = await HostedWorldOnHost.MoveOut(host, Worlds, "Campaign", To, TimeSpan.FromSeconds(60), CancellationToken.None);
+        Assert.Equal(listed, moved.Order(StringComparer.Ordinal));
+        Assert.Equal("world", File.ReadAllText(Path.Combine(To, "Campaign", "_main.0.fwl2")));
+        Assert.Equal(Others.Order(StringComparer.Ordinal), Directory.EnumerateFileSystemEntries(Worlds).Select(Path.GetFileName).Order(StringComparer.Ordinal));
     }
 
     [Theory, MemberData(nameof(LocalGameHostShellTests.Shells), MemberType = typeof(LocalGameHostShellTests))]
-    public async Task AMoveTakesOnlyTheWorldAndItsBackupsAndNeverOverwrites(string shell)
+    public async Task AMoveNeverOverwrites(string shell)
     {
         User();
         var host = Host(shell);
@@ -44,15 +57,7 @@ public sealed class HostedWorldOnHostShellTests : IDisposable
         await Assert.ThrowsAnyAsync<Exception>(() => HostedWorldOnHost.MoveOut(host, Worlds, "Campaign", To, TimeSpan.FromSeconds(60), CancellationToken.None));
         Assert.True(File.Exists(Path.Combine(Worlds, "Campaign", "_main.0.fwl2")));
         Assert.True(File.Exists(Path.Combine(Worlds, "Campaign_backup_auto-20261006.db")));
-        Directory.Delete(Path.Combine(To, "Campaign"));
-
-        var moved = await HostedWorldOnHost.MoveOut(host, Worlds, "Campaign", To, TimeSpan.FromSeconds(60), CancellationToken.None);
-        // The world's own case on a case-sensitive folder; Windows folders ignore case, so campaign.fwl is the world's there.
-        var expected = new List<string> { "Campaign", "Campaign_backup_auto-20261006.db" };
-        if (Windows(host) || OperatingSystem.IsWindows()) expected.Add("campaign.fwl");
-        Assert.Equal(expected.Order(StringComparer.Ordinal), moved.Order(StringComparer.Ordinal));
-        Assert.Equal("world", File.ReadAllText(Path.Combine(To, "Campaign", "_main.0.fwl2")));
-        foreach (string kept in new[] { "Campaign2.fwl", "MyWorld.fwl", "Campaign_mine.fwl" }) Assert.True(File.Exists(Path.Combine(Worlds, kept)), kept);
+        Assert.True(File.Exists(Path.Combine(Worlds, "campaign.fwl")));
     }
 
     // #807: what env recover reads before it moves a journalled world: the UID every metadata file of Valheim 1.0's chunked folder
@@ -76,5 +81,10 @@ public sealed class HostedWorldOnHostShellTests : IDisposable
         Assert.False(await Check("Absent", "4242"));
         File.WriteAllText(Path.Combine(Worlds, "Partial.db"), "data");
         Assert.Contains("holds no world metadata", (await Assert.ThrowsAsync<InvalidDataException>(() => Check("Partial", "4242"))).Message);
+
+        // #829: every entry a move-out would take is read, in any case, not only <name>.fwl and <name>/: another world's metadata
+        // under a backup name (in another case) is refused, so the world stays where it is.
+        File.Copy(Path.Combine(FakeInstalls.World(Path.Combine(_root, "other"), uid: 9999), "Campaign.fwl"), Path.Combine(Worlds, "CAMPAIGN_backup_auto-1.fwl"));
+        Assert.Contains("UID 9999, not the fixture's 4242", (await Assert.ThrowsAsync<InvalidDataException>(() => Check("Campaign", "4242"))).Message);
     }
 }

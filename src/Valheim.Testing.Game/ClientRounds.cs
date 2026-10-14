@@ -10,8 +10,9 @@ namespace Valheim.Testing.Game;
 /// <list type="bullet">
 /// <item>a client that joins an owned dedicated server (<see cref="Run(GameActor, Func{ClientSession}, Action{ClientRound}, Action{ClientRound})"/>,
 /// with <see cref="OwnedServer"/> and <see cref="WorldUid"/>);</item>
-/// <item>a client that hosts a fixture world itself, as a listen server or locally (<see cref="Run(Func{ClientSession}, Action{ClientRound})"/>,
-/// with the plan's <see cref="ClientRunPlan.HostWorld"/> section): it is both the server and the client of each round.</item>
+/// <item>a client that hosts a fixture world itself, as a listen server or locally (<c>HostedClientRounds.Run</c> in
+/// <c>Valheim.Testing.GameSessions</c>, whose journalled site places the world, with the plan's <see cref="ClientRunPlan.HostWorld"/>
+/// section): it is both the server and the client of each round.</item>
 /// </list>
 /// <see cref="Run(GameActor, Func{ClientSession}, Action{ClientRound}, Action{ClientRound})"/> opens the client, then for each of <see cref="Rounds"/>:
 /// <list type="number">
@@ -28,7 +29,7 @@ namespace Valheim.Testing.Game;
 /// A hosting client's rounds first run the plan's static preflight (<see cref="ClientRunPlan.Preflight(IEnumerable{string})"/>:
 /// the fixture's pinned files and own world UID, and an owned client's install, whose ValheimCLI set must also provide
 /// <see cref="CliCapabilities.HostedRounds"/> when the plan names a <see cref="ClientRunPlan.CliManifest"/>), check the native
-/// client's save directory, and place the fixture world (<see cref="HostedWorld"/>), so a wrong fixture, install or
+/// client's save directory, and place the fixture world through the run's journalled site (<see cref="HostedWorld"/>), so a wrong fixture, install or
 /// ValheimCLI set stops the run before the fixture is copied or the game started. After opening the client they require the
 /// session commands the rounds use (<see cref="CliCapabilities.HostedRounds"/>); each round then hosts the world
 /// (<see cref="HostWorlds.Start"/>; from the second round on, this is the hosted world's restart), measures, saves with
@@ -84,12 +85,6 @@ public sealed class ClientRounds
     public Func<GameActor, CrossplayLobby>? Lobby { get; init; }
     public CancellationToken Cancellation { get; init; }
     /// <summary>
-    /// A hosting client's journalled placement, given its checked <c>worlds_local</c> (<c>start</c>'s, #818): the placement is
-    /// journalled before the copy, so <c>env recover</c> moves a world a killed run left. Null places it with <see cref="HostedWorld.Place"/>.
-    /// </summary>
-    internal Func<string, IHostedWorldSite>? JournalledWorldSite { get; init; }
-
-    /// <summary>
     /// Runs a joining client's rounds against <paramref name="server"/>, the owned server's current actor, opening the client
     /// with <paramref name="openClient"/> (for example <see cref="ClientSession.Open"/>). <paramref name="measure"/> runs in
     /// each round once the player is in place; <paramref name="afterRestart"/>, if given, runs after each restart before the
@@ -102,14 +97,17 @@ public sealed class ClientRounds
     }
 
     /// <summary>
-    /// Runs a hosting client's rounds (the plan's <see cref="ClientRunPlan.HostWorld"/> section), opening the client with
-    /// <paramref name="openClient"/> (for example <see cref="ClientSession.Open"/>). In <paramref name="measure"/>,
-    /// <see cref="ClientRound.Server"/> and <see cref="ClientRound.Client"/> are the same host.
+    /// Runs a hosting client's rounds (the plan's <see cref="ClientRunPlan.HostWorld"/> section), placing its world through
+    /// <paramref name="site"/>, the run's journalled site given the checked <c>worlds_local</c> (#829: the one placement owner, so
+    /// <c>env recover</c> moves a world a killed run left), and opening the client with <paramref name="openClient"/> (for example
+    /// <see cref="ClientSession.Open"/>). In <paramref name="measure"/>, <see cref="ClientRound.Server"/> and
+    /// <see cref="ClientRound.Client"/> are the same host. Callers use <c>HostedClientRounds.Run</c> or <c>start</c>'s own site.
     /// </summary>
-    public void Run(Func<ClientSession> openClient, Action<ClientRound> measure)
+    internal void RunHosted(Func<string, IHostedWorldSite> site, Func<ClientSession> openClient, Action<ClientRound> measure)
     {
+        ArgumentNullException.ThrowIfNull(site);
         var plan = CheckHosted();
-        RunRounds(new HostedWorldRounds(this, plan), openClient, measure, afterRestart: null);
+        RunRounds(new HostedWorldRounds(this, plan, site), openClient, measure, afterRestart: null);
     }
 
     // The one loop: open, then per round enter the world, measure, save between rounds, leave, restart; then the one teardown.
@@ -233,9 +231,9 @@ public sealed class ClientRounds
     // Hosts the plan's fixture world on the client itself; the next round's start is the hosted world's restart. What a hosting
     // client does with its world (preflight, placement, start, release) is HostedWorldLifecycle's, as for HostingClientActor; the
     // rounds open and close the client themselves (openClient).
-    private sealed class HostedWorldRounds(ClientRounds rounds, HostWorldPlan plan) : IRoundsWorld
+    private sealed class HostedWorldRounds(ClientRounds rounds, HostWorldPlan plan, Func<string, IHostedWorldSite> site) : IRoundsWorld
     {
-        private readonly HostedWorldLifecycle _world = new(rounds.Client, rounds.Output, rounds.Cancellation, journalledSite: rounds.JournalledWorldSite);
+        private readonly HostedWorldLifecycle _world = new(rounds.Client, rounds.Output, rounds.Cancellation, localSite: site);
         private ClientRunPlan Client => rounds.Client;
         private ScenarioReport Report => rounds.Report;
         public string LeaveStep => "the host leaves to its menu";
@@ -295,7 +293,7 @@ public sealed class ClientRounds
     {
         CheckRoundNames(Rounds);
         if (string.IsNullOrWhiteSpace(ArriveStep)) throw new ArgumentException("ArriveStep: name the arrival step.");
-        if (Client.HostWorld != null) throw new ArgumentException("Client: this client hosts its own world (hostWorld); run it with Run(openClient, measure), without a server.");
+        if (Client.HostWorld != null) throw new ArgumentException("Client: this client hosts its own world (hostWorld); run it with HostedClientRounds.Run(rounds, openClient, measure) (Valheim.Testing.GameSessions), without a server.");
         if (OwnedServer == null) throw new ArgumentException("OwnedServer: a joining client's rounds wait on and restart the owned server; supply it, for example the runner's ServerActor (session.Server).");
         if (string.IsNullOrWhiteSpace(WorldUid)) throw new ArgumentException("WorldUid: name the owned server's world UID, which the joined client must report.");
         if (Client.Crossplay && Lobby == null) throw new ArgumentException("Lobby: a crossplay client joins the server's PlayFab lobby; supply Lobby, for example with CrossplayServer.WaitForLobby.");

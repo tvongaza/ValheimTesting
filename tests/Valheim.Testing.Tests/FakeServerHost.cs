@@ -719,15 +719,11 @@ internal sealed class FakeServerHost : IGameHost
             case "world-entries":
             case "world-move":
             {
-                // Entries named for the world (<name>, <name>.*, <name>_*, any case), as the host scripts select them.
-                // As the host scripts select them: any case for the refusal; for a move, the name's own case (any on Windows), its
-                // <name>.* files and the game's <name>_backup* entries, never over an existing destination.
-                string worlds = Local(v["worlds"]), world = v["name"], lower = world.ToLowerInvariant();
+                // Entries named for the world, as the host scripts select them for the refusal and the move-out alike: the one rule
+                // (HostedWorld.IsNamedFor: <name>, <name>.*, <name>_backup*, any case); a move never goes over an existing destination.
+                string worlds = Local(v["worlds"]), world = v["name"];
                 if (name == "world-entries") Directory.CreateDirectory(worlds);
-                var comparison = Windows ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
-                bool Named(string leaf) => name == "world-entries"
-                    ? leaf.ToLowerInvariant() is var l && (l == lower || l.StartsWith(lower + ".", StringComparison.Ordinal) || l.StartsWith(lower + "_", StringComparison.Ordinal))
-                    : leaf.Equals(world, comparison) || leaf.StartsWith(world + ".", comparison) || leaf.StartsWith(world + "_backup", comparison);
+                bool Named(string leaf) => HostedWorld.IsNamedFor(leaf, world);
                 var entries = Directory.Exists(worlds) ? Directory.EnumerateFileSystemEntries(worlds).Where(entry => Named(Path.GetFileName(entry))).ToList() : [];
                 if (name == "world-entries") return Ok(string.Concat(entries.Select(entry => "VT-WORLD-ENTRY " + Path.GetFileName(entry) + "\n")) + "VT-WORLD-ENTRIES done\n");
                 string to = Local(v["to"]);
@@ -740,18 +736,22 @@ internal sealed class FakeServerHost : IGameHost
             }
             case "world-meta":
             {
-                // As the host scripts: whether an entry MoveOut would move is there, and the world's metadata files, base64.
+                // As the host scripts: whether an entry MoveOut would move is there, and the metadata of every such entry, base64:
+                // an <entry>.fwl file, and the _main.<n>.fwl2 files of an <entry>/ folder.
                 string worlds = Local(v["worlds"]), world = v["name"];
-                var comparison = Windows ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
-                bool present = Directory.Exists(worlds) && Directory.EnumerateFileSystemEntries(worlds).Select(Path.GetFileName)
-                    .Any(leaf => leaf!.Equals(world, comparison) || leaf.StartsWith(world + ".", comparison) || leaf.StartsWith(world + "_backup", comparison));
+                var named = Directory.Exists(worlds) ? Directory.EnumerateFileSystemEntries(worlds).Where(entry => HostedWorld.IsNamedFor(Path.GetFileName(entry), world))
+                    .Order(StringComparer.Ordinal).ToList() : [];
                 var reply = new StringBuilder();
-                if (File.Exists(Path.Combine(worlds, world + ".fwl")))
-                    reply.Append("VT-WORLD-META " + world + ".fwl " + Convert.ToBase64String(File.ReadAllBytes(Path.Combine(worlds, world + ".fwl"))) + "\n");
-                if (Directory.Exists(Path.Combine(worlds, world)))
-                    foreach (string file in Directory.EnumerateFiles(Path.Combine(worlds, world)).Where(file => Regex.IsMatch(Path.GetFileName(file), @"^_main\.[0-9]+\.fwl2$")).Order(StringComparer.Ordinal))
-                        reply.Append("VT-WORLD-META " + world + "/" + Path.GetFileName(file) + " " + Convert.ToBase64String(File.ReadAllBytes(file)) + "\n");
-                return Ok(reply + "VT-WORLD-METAS " + (present ? "present" : "absent") + "\n");
+                foreach (string entry in named)
+                {
+                    string leaf = Path.GetFileName(entry);
+                    if (Directory.Exists(entry))
+                        foreach (string file in Directory.EnumerateFiles(entry).Where(file => Regex.IsMatch(Path.GetFileName(file), @"^_main\.[0-9]+\.fwl2$")).Order(StringComparer.Ordinal))
+                            reply.Append("VT-WORLD-META " + leaf + "/" + Path.GetFileName(file) + " " + Convert.ToBase64String(File.ReadAllBytes(file)) + "\n");
+                    else if (leaf.EndsWith(".fwl", StringComparison.OrdinalIgnoreCase))
+                        reply.Append("VT-WORLD-META " + leaf + " " + Convert.ToBase64String(File.ReadAllBytes(entry)) + "\n");
+                }
+                return Ok(reply + "VT-WORLD-METAS " + (named.Count != 0 ? "present" : "absent") + "\n");
             }
             case "client-keep":
             {
