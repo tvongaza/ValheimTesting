@@ -23,7 +23,7 @@ Run the commands from any directory. Give each run its own `--output` directory.
 ### 0. Install the tool
 
 ```sh
-dotnet tool install Valheim.Testing.NativeSmoke --version 0.1.0-preview.31 --global
+dotnet tool install Valheim.Testing.NativeSmoke --version 0.1.0-rc.1 --global
 ```
 
 This installs `valheim-test`.
