@@ -145,6 +145,9 @@ internal sealed class CampaignClients
             return await OpenLocalMacClientAsync(report, output, plan, name, role, hostProfile, cancellation).ConfigureAwait(false);
         if (platform != ClientPlatform.MacOS && plan.LaunchArchitecture != ClientArchitecture.X64)
             throw new ArgumentException($"Profile client '{name}' on {platform} needs x64; architecture arm64 is for a macOS client.");
+        // A client on this machine listens on its role's CLI port, and its command lease records the plan's (#819): the two must agree.
+        if (hostProfile.Kind == "local" && plan.Port != role.CliPort)
+            throw new ArgumentException($"Client '{name}' on a local host must use its role's CLI port {role.CliPort}; its plan names {plan.Port}.");
         var host = ClientHost(role);
         string gameRoot = role.PreparedGameRoot ?? role.Install;
         string loaderRoot = role.PreparedLoaderRoot ?? role.Install;
@@ -244,13 +247,15 @@ internal sealed class CampaignClients
                     HostedServerRun.WarnUnexpectedCommandLine(host, client.Id, expected, commandLine);
                     NoteAsync(host, role.Host, name, JournalEntry.Of(JournalEntry.ProcessStarted, ("pid", client.Id.ToString(CultureInfo.InvariantCulture)),
                         ("startIdentity", client.StartIdentity), ("commandLineSha256", commandLine), ("launchDirectory", launchDirectory))).GetAwaiter().GetResult();
-                    var process = new HostedClientProcess(client, host, loaderRoot, tunnel, local,
-                        platform == ClientPlatform.MacOS ? () =>
-                        {
-                            NoteAsync(host, role.Host, name, JournalEntry.Of(JournalEntry.MacAgentRetired,
-                                ("launchDirectory", launchDirectory))).GetAwaiter().GetResult();
-                            lock (_clientState) _pendingMacAgents.Remove(name);
-                        } : null);
+                    Action? macAgentRetired = platform == ClientPlatform.MacOS ? () =>
+                    {
+                        NoteAsync(host, role.Host, name, JournalEntry.Of(JournalEntry.MacAgentRetired,
+                            ("launchDirectory", launchDirectory))).GetAwaiter().GetResult();
+                        lock (_clientState) _pendingMacAgents.Remove(name);
+                    } : null;
+                    // A client on a `local` host runs on this machine: its session publishes the command lease (#819).
+                    var process = HostedClientProcess.Of(client, host, loaderRoot, tunnel, local,
+                        hostProfile.Kind == "local" ? _hooks : null, macAgentRetired);
                     if (account != null) account.Process = process; // Its lease is released only once this process is gone.
                     return process;
                 },

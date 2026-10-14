@@ -39,7 +39,10 @@ internal static class OwnedCliCommand
             string evidence = Path.GetFullPath(values["--evidence"]);
             string role = values.TryGetValue("--role", out string? chosen) ? chosen : DefaultRole(evidence);
             string leaseFile = Path.Combine(evidence, OwnedClientCommandLease.LeaseFile(role));
-            string leaseJson = OperatingSystem.IsWindows() ? File.ReadAllText(leaseFile) : ReadPrivateUnixLease(leaseFile, role);
+            string leaseJson;
+            try { leaseJson = OperatingSystem.IsWindows() ? File.ReadAllText(leaseFile) : ReadPrivateUnixLease(leaseFile, role); }
+            catch (Exception missing) when (missing is FileNotFoundException or DirectoryNotFoundException)
+            { throw new FileNotFoundException(MissingLease(role, evidence), leaseFile, missing); }
             var lease = JsonSerializer.Deserialize<OwnedClientCommandLease>(leaseJson)
                 ?? throw new InvalidDataException($"The owned {role} identity file is empty.");
             if (lease.Pid <= 0 || lease.Port is < 1 or > 65535 || lease.StartFileTimeUtc.Length == 0 ||
@@ -51,6 +54,7 @@ internal static class OwnedCliCommand
             RequirePortOwner(lease.Port, lease.Pid, role);
             string pins = values.TryGetValue("--expect-strict", out string? supplied) ? supplied :
                 Path.Combine(evidence, OwnedClientCommandLease.PhasePins(role, values["--phase"]));
+            if (supplied == null && !File.Exists(pins)) throw new FileNotFoundException(MissingPhasePins(role, values["--phase"], pins), pins);
             string expected = StrictExpectations.Load(pins);
             // A separate invocation is outside the runner's connection log. Open its own create-new record before
             // any pin check or game command, so a mutating diagnostic cannot succeed without private evidence.
@@ -81,6 +85,19 @@ internal static class OwnedCliCommand
         catch (Exception failure) when (failure is IOException or InvalidDataException or ArgumentException or InvalidOperationException or JsonException or TimeoutException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
         { error.WriteLine("REFUSED: " + failure.Message); return 3; }
     }
+
+    // The refusal for an evidence folder without the role's lease. A lease exists only while an owned game this machine's run
+    // started is running and has passed its strict startup check; a game on another machine never has one here.
+    internal static string MissingLease(string role, string evidence) =>
+        $"No owned {role} command lease ({OwnedClientCommandLease.LeaseFile(role)}) in {evidence}. A run publishes one only for a {role} " +
+        $"on this machine, once it passed its strict startup check, and retires it when the {role} stops: this {role} is still starting, " +
+        "has stopped, runs on another machine, or this is not its evidence folder.";
+
+    // The refusal for a live lease without the phase's pins: world pins exist only while the game is in its verified world.
+    private static string MissingPhasePins(string role, string phase, string pins) => phase == "world"
+        ? $"The owned {role} is not in a verified world ({Path.GetFileName(pins)} is absent): its world pins are published once it has " +
+          "entered and verified its fixture world, and removed by any later leave, world change or restart. No command was sent."
+        : $"The owned {role}'s menu pins ({Path.GetFileName(pins)}) are absent; no command was sent.";
 
     // Only the built-in screenshot is redirected into private evidence. The one argument it takes is its supersize, 1..4;
     // a name is refused, since the owned runner chooses the destination and a caller's name would be silently dropped.
@@ -165,7 +182,7 @@ internal static class OwnedCliCommand
         if (descriptor < 0)
         {
             int error = Marshal.GetLastPInvokeError();
-            if (error == 2) throw new FileNotFoundException($"Could not find the owned {role} identity file: " + path, path);
+            if (error == 2) throw new FileNotFoundException(null, path); // Run words the refusal (MissingLease).
             throw new InvalidOperationException(PrivateLeaseMessage(role), new System.ComponentModel.Win32Exception(error));
         }
         var handle = new SafeFileHandle((IntPtr)descriptor, ownsHandle: true);
@@ -236,7 +253,7 @@ internal static class OwnedCliCommand
         if (descriptor < 0)
         {
             int error = Marshal.GetLastPInvokeError();
-            if (error == 2) throw new FileNotFoundException($"Could not find the owned {role} identity file: " + path, path);
+            if (error == 2) throw new FileNotFoundException(null, path); // Run words the refusal (MissingLease).
             throw new InvalidOperationException(PrivateLeaseMessage(role), new System.ComponentModel.Win32Exception(error));
         }
         var handle = new SafeFileHandle((IntPtr)descriptor, ownsHandle: true);

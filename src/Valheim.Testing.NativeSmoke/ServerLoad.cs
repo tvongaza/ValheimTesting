@@ -412,7 +412,9 @@ internal static class ServerLoad
                 });
                 if (hold)
                     round.Step("keep the owned server and client running until finish", () =>
-                        ForegroundHold.HoldAsync(session.Report.Provenance["runId"], GameSession.ActorOutput(session.Output, "client"),
+                        // The client's own evidence folder, where its session published any command lease: the hold's hint names it.
+                        ForegroundHold.HoldAsync(session.Report.Provenance["runId"],
+                            opened?.Output ?? throw new InvalidOperationException("The owned client's evidence folder is missing."),
                             session.Cancellation,
                             [("server", server.CurrentProcess ?? throw new InvalidOperationException("The owned server process is missing.")),
                              ("client", opened?.OwnedProcess ?? throw new InvalidOperationException("The owned client process is missing."))],
