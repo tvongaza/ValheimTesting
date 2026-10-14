@@ -71,6 +71,12 @@ public sealed class ClientRunPlan
     /// <summary>The profile owner's narrow source check, run immediately before launch; includes Windows linked native DLLs.</summary>
     [JsonIgnore] internal Action? PreparedSourceCheck { get; set; }
     /// <summary>
+    /// The profile owner's static ValheimCLI check of <see cref="LoaderRoot"/> where the profile is (<see cref="CheckCliManifest"/>):
+    /// a campaign's profile is on its client's host, which may be another machine than this one (#808). Null for a profile on this
+    /// machine, whose files are read here. Never read from a plan file.
+    /// </summary>
+    [JsonIgnore] internal Func<CliCapabilityManifest, IReadOnlyList<string>, CliManifestCheck>? PreparedCliCheck { get; set; }
+    /// <summary>
     /// An owned client whose <see cref="Install"/> is still the source of the disposable copy its run will make: the checks that
     /// read the install's ValheimCLI files wait for the copy, and its ValheimCLI pins are the staged set's.
     /// </summary>
@@ -357,7 +363,7 @@ public sealed class ClientRunPlan
     /// with nothing read, also for an attached client and an owned one run in place without a manifest, whose capabilities only
     /// the live check sees (<see cref="CliPreflight"/> says so). Refuses a missing manifest (<see cref="FileNotFoundException"/>),
     /// a malformed one (<see cref="InvalidDataException"/>) and an install that is not its set or lacks a capability
-    /// (<see cref="InvalidOperationException"/>).
+    /// (<see cref="InvalidOperationException"/>). A profile on another host is read there, as its profile owner bound it.
     /// </summary>
     public CliManifestCheck? CheckCliManifest(IEnumerable<string>? capabilities = null)
     {
@@ -371,7 +377,8 @@ public sealed class ClientRunPlan
         }
         if (CliManifest == null)
             return InPlace ? null : throw new InvalidOperationException("This owned client's disposable profile names no staged ValheimCLI manifest; its profile owner binds one.");
-        return CliCapabilityManifest.Read(CliManifest).Check(LoaderRoot, wanted);
+        var manifest = CliCapabilityManifest.Read(CliManifest);
+        return PreparedCliCheck is { } onItsHost ? onItsHost(manifest, wanted) : manifest.Check(LoaderRoot, wanted);
     }
 
     /// <summary>Checks owned pinned files and always refuses a profile if its source game changed after staging.</summary>

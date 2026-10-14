@@ -245,6 +245,10 @@ public sealed class PreparedHostedCampaign : IAsyncDisposable
         string path = Path.Combine(Path.GetFullPath(outputDirectory), name + "-cli-manifest.json");
         NativeDependencyLock.ReadReady(manifest.Clients[name].DependencyLock).CliManifest.Write(path);
         client.CliManifest = path;
+        // The profile is on the client's host, which may not be this machine: its static ValheimCLI check reads it there (#808).
+        string loaderRoot = LoaderListings[name].Root;
+        client.PreparedCliCheck = (cli, capabilities) => InstallSelection.CheckCliManifestAsync(HostFor(role.Host), loaderRoot, cli, capabilities,
+            _timeout, CancellationToken.None).GetAwaiter().GetResult();
         client.Prepared = true;
     }
 

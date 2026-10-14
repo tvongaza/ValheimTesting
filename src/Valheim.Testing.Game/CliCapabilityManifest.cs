@@ -171,10 +171,21 @@ public sealed class CliCapabilityManifest
     /// </summary>
     public CliManifestCheck Check(string install, IEnumerable<string> capabilities)
     {
-        var wanted = Wanted(capabilities);
         install = Path.GetFullPath(install);
-        var location = Locate(OwnedClientPreflight.InstalledDlls(install), "in BepInEx/plugins or BepInEx/scripts",
-            path => Path.GetRelativePath(install, path).Replace('\\', '/'));
+        return Check(OwnedClientPreflight.InstalledDlls(install), "in BepInEx/plugins or BepInEx/scripts",
+            path => Path.GetRelativePath(install, path).Replace('\\', '/'), capabilities);
+    }
+
+    /// <summary>
+    /// <see cref="Check(string, IEnumerable{string})"/> of an install's startup DLLs (its <c>BepInEx/plugins</c> and
+    /// <c>BepInEx/scripts</c>) given as files on this machine, wherever the install itself is: <paramref name="where"/> says where
+    /// they were looked for and <paramref name="show"/> names each by its path in the install. A profile on another host is read
+    /// so, from a copy of those folders checked against the host's listing (#808).
+    /// </summary>
+    internal CliManifestCheck Check(IEnumerable<string> dlls, string where, Func<string, string> show, IEnumerable<string> capabilities)
+    {
+        var wanted = Wanted(capabilities);
+        var location = Locate(dlls, where, show);
         if (location.Problems.Count != 0)
         {
             var costs = wanted.Where(Capabilities.ContainsKey).ToList();
@@ -184,7 +195,7 @@ public sealed class CliCapabilityManifest
                 $"Install the manifest's pinned {PluginFile} once, with no other ValheimCLI plugin, and retry before launch.");
         }
         RequireCapabilities(wanted);
-        return new CliManifestCheck(Build, location.Located.Select(found => Path.GetRelativePath(install, found.Path).Replace('\\', '/')).ToList(), wanted);
+        return new CliManifestCheck(Build, location.Located.Select(found => show(found.Path)).ToList(), wanted);
     }
 
     /// <summary>

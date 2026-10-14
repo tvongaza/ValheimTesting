@@ -231,6 +231,15 @@ public sealed class NativeDependencyResolverTests : IDisposable
             Assert.Equal("test-server.example:2456", clients["client-b"].Join);
             Assert.Equal("vt-three", clients["client-c"].Character);
             Assert.All(clients.Values, role => Assert.True(File.Exists(role.CliManifest)));
+            // #808: a bound client's static ValheimCLI check reads its profile on its own host, which this machine does not have.
+            var remote = clients["client-b"];
+            Assert.False(Directory.Exists(remote.LoaderRoot));
+            Assert.Equal(new[] { "BepInEx/plugins/valheimCLI.dll" }, remote.CheckCliManifest()!.Files);
+            string cli = hosts["client-b"].Local(HostPath.Join(remote.LoaderRoot, "BepInEx/plugins/valheimCLI.dll")), aside = cli + ".aside";
+            File.Move(cli, aside);
+            Assert.Contains("is not installed in BepInEx/plugins or BepInEx/scripts of " + remote.LoaderRoot + " on client-b",
+                Assert.Throws<InvalidOperationException>(() => remote.CheckCliManifest()).Message);
+            File.Move(aside, cli);
             Assert.True(File.Exists(hosts["client-a"].Local(@"C:\save\characters_local\vt-one.fch")));
             Assert.True(File.Exists(hosts["client-b"].Local(@"C:\save\characters_local\vt-two.fch")));
             Assert.True(File.Exists(hosts["client-c"].Local(@"C:\Users\tester\AppData\LocalLow\IronGate\Valheim\characters_local\vt-three.fch")));
