@@ -17,6 +17,29 @@ internal static class Program
             Thread.Sleep(TimeSpan.FromMinutes(2));
             return;
         }
+        if (args is ["owned-cli-listener"])
+        {
+            using var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+            listener.Start();
+            using var process = System.Diagnostics.Process.GetCurrentProcess();
+            Console.WriteLine(string.Join(' ', ((System.Net.IPEndPoint)listener.LocalEndpoint).Port, process.Id,
+                process.StartTime.ToFileTimeUtc().ToString(System.Globalization.CultureInfo.InvariantCulture)));
+            Console.Out.Flush();
+            using var client = listener.AcceptTcpClient();
+            using var stream = client.GetStream();
+            using var reader = new StreamReader(stream, new System.Text.UTF8Encoding(false));
+            using var writer = new StreamWriter(stream, new System.Text.UTF8Encoding(false)) { AutoFlush = true, NewLine = "\n" };
+            writer.WriteLine("VALHEIM_CLI_READY");
+            writer.WriteLine("VALHEIM_CLI_CAPS completion");
+            while (reader.ReadLine() is { } line)
+            {
+                string command = line[(line.IndexOf(':', 5) + 1)..];
+                writer.WriteLine("OUTPUT:1");
+                writer.WriteLine(command.StartsWith("cli_expect --strict ", StringComparison.Ordinal) ? "OK: EXPECT" : "OK: MANIFEST");
+                writer.WriteLine("END_OUTPUT");
+            }
+            return;
+        }
         if (args is ["tcp-listener6", var portText])
         {
             int port = int.Parse(portText, System.Globalization.CultureInfo.InvariantCulture);

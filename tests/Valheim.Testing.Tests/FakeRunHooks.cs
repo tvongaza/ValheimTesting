@@ -39,6 +39,7 @@ internal sealed class FakeRunHooks : IHostedRunHooks
         LocalMacLaunch != null ? LocalMacLaunch(plan, output, account, cancellation, processStarted) : Real.LaunchLocalMac(plan, output, account, cancellation, processStarted);
     ShippedLoader.Choice? IHostedRunHooks.PinnedLoader(string actor, string install, string platform) => PinnedLoader?.Invoke(actor, install, platform);
     CliBundleSource? IHostedRunHooks.CliSet() => CliSet != null ? CliSet() : TestCliSet.Source;
+    string IHostedRunHooks.LocalProcessStartFileTimeUtc(int pid, string hostStartIdentity) => hostStartIdentity;
     RunCancellation IHostedRunHooks.Cancellation(out bool owned)
     {
         if (Cancellation == null) return Real.Cancellation(out owned);

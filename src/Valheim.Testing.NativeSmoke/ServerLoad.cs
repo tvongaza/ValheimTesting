@@ -414,14 +414,16 @@ internal static class ServerLoad
                         ForegroundHold.HoldAsync(session.Report.Provenance["runId"], GameSession.ActorOutput(session.Output, "client"),
                             session.Cancellation,
                             [("server", server.CurrentProcess ?? throw new InvalidOperationException("The owned server process is missing.")),
-                             ("client", opened?.OwnedProcess ?? throw new InvalidOperationException("The owned client process is missing."))])
+                             ("client", opened?.OwnedProcess ?? throw new InvalidOperationException("The owned client process is missing."))],
+                            serverEvidence: session.Output)
                             .GetAwaiter().GetResult());
             });
         }
         else if (hold)
             session.Report.Step("keep the owned server running until finish", () =>
                 ForegroundHold.HoldAsync(session.Report.Provenance["runId"], session.Output, session.Cancellation,
-                    [("server", server.CurrentProcess ?? throw new InvalidOperationException("The owned server process is missing."))], client: false)
+                    [("server", server.CurrentProcess ?? throw new InvalidOperationException("The owned server process is missing."))], client: false,
+                    serverEvidence: session.Output)
                     .GetAwaiter().GetResult());
         if (bake)
             session.Report.Step("confirm an advancing save before exporting the fixture", () =>

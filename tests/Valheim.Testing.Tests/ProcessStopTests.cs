@@ -73,6 +73,30 @@ public class ProcessStopTests
         finally { bystander.Kill(); bystander.WaitForExit(); }
     }
 
+    // A launch that exits before its start identity can be read (a reaped child on macOS or Linux): its output is still
+    // captured, the process handle is released, and the failure names the exit. The seam reads the identity only after
+    // the exit, so the order is deterministic.
+    [Fact] public void AnInstantExitKeepsItsOutputAndReleasesTheProcessWhenItsIdentityCannotBeRead()
+    {
+        using var dir = new TempDirectory();
+        var start = OperatingSystem.IsWindows()
+            ? new ProcessStartInfo("cmd.exe", "/c echo early-out& echo early-err 1>&2& exit 7") { CreateNoWindow = true }
+            : new ProcessStartInfo("/bin/sh") { ArgumentList = { "-c", "echo early-out; echo early-err >&2; exit 7" } };
+        Process? launched = null;
+        string prefix = Path.Combine(dir.Path, "instant");
+        var error = Assert.Throws<IOException>(() => new DirectServerProcess(start, prefix, process =>
+        {
+            launched = process;
+            process.WaitForExit();
+            throw new InvalidOperationException("Process has exited, so the requested information is not available.");
+        }));
+        Assert.Contains("exit 7", error.Message);
+        Assert.Contains("early-out", File.ReadAllText(prefix + ".stdout.log"));
+        Assert.Contains("early-err", File.ReadAllText(prefix + ".stderr.log"));
+        Assert.NotNull(launched);
+        Assert.Throws<InvalidOperationException>(() => launched!.ExitCode); // Disposed: no process is associated any more.
+    }
+
     [Fact] public void ZeroQuitTimeoutKillsWithoutSendingAQuitRequest()
     {
         using var dir = new TempDirectory();

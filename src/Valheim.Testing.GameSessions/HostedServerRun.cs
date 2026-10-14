@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
@@ -22,6 +21,7 @@ internal sealed class HostedServerRun : IServerPlacement
     internal const string BepInExLog = "BepInEx/LogOutput.log", UnityLog = "toolkit-unity.log";
     private readonly IHostedRunHooks _hooks;
     private readonly string _owner;
+    private readonly ServerRunPlan _plan;
     // The campaign's clients, their leases and their hosts' locks: owned by CampaignClients, as in a campaign without a server.
     private readonly CampaignClients _clientActors;
     private JournaledHostLock? _lock;
@@ -43,12 +43,16 @@ internal sealed class HostedServerRun : IServerPlacement
     // The reviewed loader package a standalone run's inventory recipe names (EnvironmentRuns.PlaceServer), else null: the pinned one.
     private readonly string? _loaderPackage;
     private WorldCopy _world;
+    // The current boot's launch-recorded identity and its start probe, kept until startup verification has passed: only
+    // then is it published as the local server command lease (IServerPlacement.PublishCommandLease).
+    private (int Pid, string StartIdentity, ProbedProcess? Found)? _leaseCandidate;
     private enum WorldCopy { None, Intended, Shipped, Verified }
 
-    private HostedServerRun(ResolvedEnvironment profile, GameRole role, HostProfile hostProfile, IGameHost host, string runId, string runner, IHostedRunHooks hooks,
+    private HostedServerRun(ResolvedEnvironment profile, GameRole role, HostProfile hostProfile, IGameHost host, string runId, string runner, ServerRunPlan plan, IHostedRunHooks hooks,
         string? preparedRuntime, string? loaderPackage, IReadOnlyDictionary<string, ProfileSourceCheck>? sourceChecks)
     {
         Profile = profile; Role = role; HostProfile = hostProfile; Host = host; RunId = runId; _hooks = hooks; _owner = runner + " " + runId;
+        _plan = plan;
         _loaderPackage = loaderPackage;
         _journal = new RunJournal(runId);
         // A campaign prepared the server's disposable profile already (<runtime>/vt-prep-<id>-server/runtime): that is the one
@@ -129,7 +133,7 @@ internal sealed class HostedServerRun : IServerPlacement
         if (prepared && loaderPackage != null) throw new ArgumentException("A campaign's prepared server profile already has its loader.", nameof(loaderPackage));
         hooks ??= HostedRunHooks.Production;
         var host = hooks.CreateHost(profile, role.Host);
-        return new HostedServerRun(profile, role, hostProfile, host, hooks.RunId(campaignRunId), runner, hooks,
+        return new HostedServerRun(profile, role, hostProfile, host, hooks.RunId(campaignRunId), runner, plan, hooks,
             prepared ? role.Install : null, loaderPackage, sourceChecks);
     }
 
@@ -430,10 +434,13 @@ internal sealed class HostedServerRun : IServerPlacement
                 "prepared server profile before launch", HostedTimeouts.Long, cancellation,
                 _preparedPluginFiles).GetAwaiter().GetResult();
         }
+        // A new boot has no command capability until it passes startup verification; the preceding boot's is retired now.
+        _leaseCandidate = null;
+        RetireServerCommandLease(output);
         string local = Path.Combine(output, "boot-" + n), bootDirectory = HostPath.Join(RunDirectory, "boot-" + n);
         // The stop's quit budget, journalled so env recover gives the server the same time to save (#665).
         string quitSeconds = WaitText.WholeSeconds(quit);
-        if (LocalMac) return StartLocalMac(launch, local, bootDirectory, quitSeconds, cancellation);
+        if (LocalMac) return StartLocalMac(launch, output, local, bootDirectory, quitSeconds, cancellation);
         HostServerProcess process;
         // Journalled before the start: a run interrupted from here leaves a record of where its server's pid file is.
         // With the command line the server will have, so its pid file alone proves it the run's (#257).
@@ -460,17 +467,19 @@ internal sealed class HostedServerRun : IServerPlacement
             () =>
             {
                 // The command line's hash is the third fact env recover requires before it stops the process (#257 Q2).
-                string commandLine = HostProcessProbe.CommandLineAsync(Host, process.Id, process.StartIdentity, HostedTimeouts.Quick).GetAwaiter().GetResult() ?? "";
+                var found = HostProcessProbe.StartedProcessAsync(Host, process.Id, process.StartIdentity, HostedTimeouts.Quick).GetAwaiter().GetResult();
+                string commandLine = found?.CommandLineSha256 ?? "";
                 WarnUnexpectedCommandLine(Host, process.Id, expected, commandLine);
                 NoteAsync(Host, Role.Host, "server", JournalEntry.Of(JournalEntry.ProcessStarted, ("pid", process.Id.ToString(CultureInfo.InvariantCulture)),
                     ("startIdentity", process.StartIdentity), ("commandLineSha256", commandLine), ("bootDirectory", bootDirectory),
                     ("taskLogon", process.TaskLogon ?? ""), ("quitSeconds", quitSeconds))).GetAwaiter().GetResult();
+                _leaseCandidate = (process.Id, process.StartIdentity, found);
             });
     }
 
     // The macOS server is local to the runner. Its launch must come from GameLaunch.ToStartInfo: that path carries the
     // native architecture and both DYLD variables through /usr/bin/arch, which a host-shell launch would strip.
-    private ServerBoot StartLocalMac(GameLaunch launch, string local, string bootDirectory, string quitSeconds, CancellationToken cancellation)
+    private ServerBoot StartLocalMac(GameLaunch launch, string output, string local, string bootDirectory, string quitSeconds, CancellationToken cancellation)
     {
         string expected = launch.CommandLineSha256();
         JournalAsync(Host, Role.Host, "server", JournalEntry.Of(JournalEntry.ProcessIntended, ("bootDirectory", bootDirectory),
@@ -503,6 +512,7 @@ internal sealed class HostedServerRun : IServerPlacement
                     NoteAsync(Host, Role.Host, "server", JournalEntry.Of(JournalEntry.ProcessStarted,
                         ("pid", process.Id.ToString(CultureInfo.InvariantCulture)), ("startIdentity", found.StartIdentity),
                         ("commandLineSha256", found.CommandLineSha256), ("bootDirectory", bootDirectory), ("quitSeconds", quitSeconds))).GetAwaiter().GetResult();
+                    _leaseCandidate = (process.Id, found.StartIdentity, found);
                 });
         }
         catch
@@ -515,6 +525,82 @@ internal sealed class HostedServerRun : IServerPlacement
             throw;
         }
     }
+
+    // The lease is an optional diagnostic capability: no failure to retire, verify or write it ever fails a boot. Each one
+    // warns and leaves no lease, so a separate cli refuses instead.
+    private void RetireServerCommandLease(string output)
+    {
+        if (HostProfile.Kind != "local") return;
+        try { OwnedClientCommandLease.RetireServer(output); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        { Console.Error.WriteLine("Warning: the owned server's previous command lease could not be retired: " + error.Message); }
+    }
+
+    internal void WriteServerCommandLease(string output, int pid, string startIdentity, ProbedProcess? found)
+    {
+        if (HostProfile.Kind != "local") return; // A lease is usable only by another invocation on this machine.
+        // A restart or a failed refresh must not leave the preceding boot's live capability behind.
+        RetireServerCommandLease(output);
+        // A PID which is gone or belongs to another process is no longer this launch's capability. In particular, never
+        // adopt the current occupant's identity: the launch-recorded pair is the only one this run may publish.
+        if (found?.State is ProbedState.Gone or ProbedState.Reused) return;
+        if (found?.State != ProbedState.Same || found.StartIdentity != startIdentity)
+        {
+            Console.Error.WriteLine($"Warning: the owned server process {pid} on {Host.Name} could not be verified before its command lease was written " +
+                $"({found?.State.ToString() ?? "probe failed"}); no server command lease was published.");
+            return;
+        }
+
+        string leaseIdentity;
+        try { leaseIdentity = _hooks.LocalProcessStartFileTimeUtc(pid, startIdentity); }
+        catch (Exception error) when (error is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException or
+            InvalidOperationException or OverflowException or System.ComponentModel.Win32Exception)
+        {
+            Console.Error.WriteLine($"Warning: the local identity of owned server process {pid} could not be read: {error.Message}; " +
+                "no server command lease was published.");
+            return;
+        }
+
+        ProbedProcess confirmed;
+        try
+        {
+            confirmed = HostProcessProbe.ProbeAsync(Host, [(pid, startIdentity)], HostedTimeouts.Quick)
+                .GetAwaiter().GetResult()[(pid, startIdentity)];
+        }
+        catch (Exception error)
+        {
+            Console.Error.WriteLine($"Warning: the owned server process {pid} on {Host.Name} could not be rechecked before its command lease was written: " +
+                $"{error.Message}; no server command lease was published.");
+            return;
+        }
+        if (confirmed.State != ProbedState.Same || confirmed.StartIdentity != startIdentity)
+        {
+            Console.Error.WriteLine($"Warning: the owned server process {pid} on {Host.Name} changed while its command lease was prepared " +
+                $"({confirmed.State}); no server command lease was published.");
+            return;
+        }
+        try { OwnedClientCommandLease.WriteServer(output, pid, leaseIdentity, Role.CliPort, RuntimeDirectory, _plan); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            Console.Error.WriteLine($"Warning: the owned server's command lease could not be written: {error.Message}; no server command lease was published.");
+            RetireServerCommandLease(output); // Never leave half a capability.
+        }
+    }
+
+    // ServerActor calls these only after Start or Restart returned: after the read-only bootstrap and strict verification.
+    void IServerPlacement.PublishCommandLease(string output)
+    {
+        if (_leaseCandidate is { } boot) WriteServerCommandLease(output, boot.Pid, boot.StartIdentity, boot.Found);
+    }
+
+    void IServerPlacement.PublishVerifiedWorld(string worldUid, string output)
+    {
+        if (HostProfile.Kind != "local") return;
+        try { OwnedClientCommandLease.WriteVerifiedServerWorld(output, _plan, worldUid); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        { Console.Error.WriteLine($"Warning: the owned server's world command pins could not be written: {error.Message}; world-phase commands stay refused."); }
+    }
+    bool IServerPlacement.PublishesCommandLease => HostProfile.Kind == "local";
 
     IGameTransport IServerPlacement.Connect() => Connect(Tunnel);
 
@@ -554,6 +640,10 @@ internal sealed class HostedServerRun : IServerPlacement
         retirement ??= new RunRetirement(report, output);
         serverStopped &= !_serverMayRun;
         var failures = new List<Exception>();
+        if (HostProfile.Kind == "local")
+            try { OwnedClientCommandLease.RetireServer(output); }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            { failures.Add(error); Console.Error.WriteLine("Teardown: " + error.Message); }
         async Task Try(string step, Func<Task> action)
         {
             // An abandoned cleanup (RunCancellation.BeginCleanup) attempts nothing more; the journal names what is left.

@@ -473,13 +473,29 @@ public sealed class DirectServerProcess : IOwnedProcess, ILocalClientProcessIden
     /// <summary>How <see cref="StopCleanly"/> asks the process to quit: <see cref="QuitRequest.Interrupt"/> for a dedicated server (the default), <see cref="QuitRequest.CloseWindow"/> for a game client.</summary>
     public QuitRequest Quit { get; init; } = QuitRequest.Interrupt;
     public DirectServerProcess(ProcessStartInfo start, string logPrefix, params string[] gameLogs)
+        : this(start, logPrefix, OwnedClientCommandLease.LocalStartFileTimeUtc, gameLogs) { }
+
+    // Test seam: startIdentity reads the launch's identity (production: OwnedClientCommandLease.LocalStartFileTimeUtc).
+    internal DirectServerProcess(ProcessStartInfo start, string logPrefix, Func<Process, string> startIdentity, params string[] gameLogs)
     {
         _logPrefix = logPrefix; _gameLogs = gameLogs;
         start.UseShellExecute = false; start.RedirectStandardOutput = true; start.RedirectStandardError = true;
         _process = Process.Start(start) ?? throw new IOException("Could not start the owned process.");
-        _startFileTimeUtc = _process.StartTime.ToFileTimeUtc().ToString(System.Globalization.CultureInfo.InvariantCulture);
+        // Output first: a process that exits at once still leaves what it printed, whatever happens to its identity read.
         _stdout = Capture(_process.StandardOutput, logPrefix + ".stdout.log");
         _stderr = Capture(_process.StandardError, logPrefix + ".stderr.log");
+        try { _startFileTimeUtc = startIdentity(_process); }
+        catch (Exception error) when (error is InvalidOperationException or IOException or InvalidDataException or System.ComponentModel.Win32Exception)
+        {
+            // Nothing owns this launch yet, so this constructor ends it: stop it (already exited, normally), keep its output and
+            // game logs, and release the process handle before reporting why.
+            string exit;
+            try { Stop(TimeSpan.FromSeconds(5)); exit = "exit " + _process.ExitCode.ToString(System.Globalization.CultureInfo.InvariantCulture); }
+            catch (Exception stop) when (stop is InvalidOperationException or TimeoutException or IOException or System.ComponentModel.Win32Exception)
+            { exit = "its output may be incomplete: " + stop.Message; }
+            finally { _process.Dispose(); }
+            throw new IOException($"The owned process's start identity could not be read ({exit}): {error.Message} Its output is in {logPrefix}.std*.log.", error);
+        }
     }
     public async Task<int> WaitForExitAsync(CancellationToken cancellation)
     {

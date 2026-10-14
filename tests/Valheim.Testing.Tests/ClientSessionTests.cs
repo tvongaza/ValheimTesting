@@ -69,7 +69,7 @@ public sealed class ClientSessionTests : IDisposable
         File.WriteAllText(log, new string('x', 512 * 1024));
         File.AppendAllLines(log, Enumerable.Range(1, 100).Select(n => "log " + n));
         string evidence = Path.Combine(_output, "failure");
-        string start = current.StartTime.ToFileTimeUtc().ToString(System.Globalization.CultureInfo.InvariantCulture);
+        string start = OwnedClientCommandLease.LocalStartFileTimeUtc(current.Id);
         ClientFailureEvidence.CaptureLocal(new ExactProcess(current.Id, start), null, plan, evidence);
         string[] tail = File.ReadAllLines(Path.Combine(evidence, "client-failure-bepinex-tail.log"));
         Assert.Equal(80, tail.Length);
@@ -90,11 +90,28 @@ public sealed class ClientSessionTests : IDisposable
 
     }
 
-    private sealed class ExactProcess(int id, string start) : IOwnedProcess, IClientProcessIdentity
+    // A client whose launch has exited keeps its "exited" facts: the exact identity still matches (it is read whether or
+    // not the process runs), the launch's own exit is reported, and no screenshot is attempted.
+    [ClientHostFact] public void AnExitedClientIsReportedAsExitedWithItsFactsAndIsNeverScreenshotted()
+    {
+        using var current = System.Diagnostics.Process.GetCurrentProcess();
+        var plan = Plan(); plan.Install = _output; plan.Port = 1;
+        string start = OwnedClientCommandLease.LocalStartFileTimeUtc(current.Id);
+        var transport = new ScriptedTransport().OnPrefix("cli_screenshot_path64 ", _ => ScriptedTransport.Ok("screenshot"));
+        using var actor = transport.Actor();
+        string evidence = Path.Combine(_output, "exited");
+        ClientFailureEvidence.CaptureLocal(new ExactProcess(current.Id, start, exited: true), actor, plan, evidence);
+        using var facts = System.Text.Json.JsonDocument.Parse(File.ReadAllText(Path.Combine(evidence, "client-failure-diagnostic.json")));
+        Assert.Equal("exited", facts.RootElement.GetProperty("process").GetString());
+        Assert.True(facts.RootElement.TryGetProperty("sessionId", out _));
+        Assert.DoesNotContain(transport.Commands, command => command.StartsWith("cli_screenshot_path64 ", StringComparison.Ordinal));
+    }
+
+    private sealed class ExactProcess(int id, string start, bool exited = false) : IOwnedProcess, IClientProcessIdentity
     {
         public int Id => id;
         public string StartFileTimeUtc => start;
-        public bool HasExited => false;
+        public bool HasExited => exited;
         public Task<int> WaitForExitAsync(CancellationToken cancellation) => Task.FromResult(0);
         public void Stop(TimeSpan timeout) { }
         public void Dispose() { }

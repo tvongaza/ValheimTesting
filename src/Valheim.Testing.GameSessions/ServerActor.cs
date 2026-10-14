@@ -20,6 +20,8 @@ public sealed class ServerActor : IOwnedServer, IDisposable
     // A scripted server instead (Fakes.FakeGameSession): a no-game world that answers as an owned server.
     private readonly (IOwnedServer Server, Func<GameActor> FirstBoot, string? LiveLog, Func<GameActor, CrossplayLobby>? Lobby)? _scripted;
     private readonly ServerRunPlan? _plan;
+    private readonly IServerPlacement? _placement;
+    private readonly string? _output;
     /// <summary>The plan this server runs, when it was given one (its pins are the server's plugin pins).</summary>
     internal ServerRunPlan? Plan => _plan;
     private readonly CancellationToken _cancellation;
@@ -32,7 +34,7 @@ public sealed class ServerActor : IOwnedServer, IDisposable
         ArgumentNullException.ThrowIfNull(placement); ArgumentNullException.ThrowIfNull(plan);
         ArgumentException.ThrowIfNullOrEmpty(output); ArgumentException.ThrowIfNullOrEmpty(sessionTokenVariable);
         string runtime = RuntimeDirectory = placement.RuntimeDirectory, world = WorldDirectory = placement.WorldDirectory;
-        Host = placement.Host; _plan = plan; _cancellation = cancellation;
+        Host = placement.Host; _plan = plan; _placement = placement; _output = output; _cancellation = cancellation;
         int boot = 0, connection = 0;
         _session = new OwnedServerSession(token =>
         {
@@ -146,12 +148,49 @@ public sealed class ServerActor : IOwnedServer, IDisposable
     internal bool MayStillRun { get; private set; }
 
     /// <summary>Starts the first boot and returns its strictly pinned, test-access-ready actor (<see cref="OwnedServerSession.StartAsync"/>).</summary>
-    public GameActor Start() => _game = _scripted is { } scripted ? scripted.FirstBoot() : _session!.Start();
+    public GameActor Start()
+    {
+        _game = _scripted is { } scripted ? scripted.FirstBoot() : _session!.Start();
+        PublishCommandCapability();
+        return _game;
+    }
     /// <summary>Stops only this server, then starts it again with test access; returns the new boot's actor.</summary>
     public GameActor Restart()
     {
         _game = null; // A failed stop never leaves the stopped boot's handle current.
-        return _game = _scripted is { } scripted ? scripted.Server.Restart() : _session!.Restart();
+        _game = _scripted is { } scripted ? scripted.Server.Restart() : _session!.Restart();
+        PublishCommandCapability();
+        return _game;
+    }
+    // The boot's local command capability (valheim-test cli --role server), published only once Start or Restart returned:
+    // after the read-only bootstrap and strict verification, so a separate command never reaches a boot still being
+    // verified. It is optional: a failure warns and publishes less (no lease, or no world pins), never fails the boot.
+    private void PublishCommandCapability()
+    {
+        if (_placement?.PublishesCommandLease != true) return;
+        _placement.PublishCommandLease(_output!);
+        string worldUid;
+        if (!_plan!.Pins.TryGetValue("worlduid", out worldUid!))
+        {
+            // Startup owns world readiness and strict verification. Placement receives only the resulting identity; it
+            // neither discovers capabilities nor performs another game observation.
+            SessionState state;
+            try { state = new SessionControl(_game!).Read(); }
+            catch (Exception error) when (error is InvalidOperationException or IOException or InvalidDataException or TimeoutException or
+                JsonException or FormatException or UnauthorizedAccessException)
+            {
+                Console.Error.WriteLine("Warning: the owned server's world could not be read for its command pins: " + error.Message +
+                    "; world-phase commands stay refused.");
+                return;
+            }
+            if (!state.Dedicated || !state.WorldReady || state.WorldUid == null)
+            {
+                Console.Error.WriteLine("Warning: the owned server's exact world is not verified; its world command pins were not published.");
+                return;
+            }
+            worldUid = state.WorldUid;
+        }
+        _placement.PublishVerifiedWorld(worldUid, _output!);
     }
     /// <summary>Waits until <paramref name="server"/>, this server's current actor, accepts game connections, within the plan's startup deadline.</summary>
     public void WaitUntilJoinable(GameActor server)
@@ -187,6 +226,12 @@ internal interface IServerPlacement
     /// <summary>A new connection to the server's ValheimCLI.</summary>
     IGameTransport Connect();
     StartupEvents? Events(ServerRunPlan plan);
+    /// <summary>Whether this placement publishes a host-local command capability once a boot passed startup verification.</summary>
+    bool PublishesCommandLease => false;
+    /// <summary>Publishes the current boot's command lease after it completed strict verification; never throws (it warns).</summary>
+    void PublishCommandLease(string output) { }
+    /// <summary>Publishes the exact world UID supplied by startup after this boot completed strict verification; remote placements do nothing.</summary>
+    void PublishVerifiedWorld(string worldUid, string output) { }
 }
 
 /// <summary>A started boot: its process, the logs its stop keeps, its <c>boot-N.process.json</c> facts, and what the placement records once that file is written.</summary>

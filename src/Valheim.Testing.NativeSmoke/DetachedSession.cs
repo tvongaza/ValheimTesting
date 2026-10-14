@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Globalization;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text.Json;
@@ -116,7 +115,7 @@ internal static class DetachedSession
                     ". Check valheim-test env status, then use valheim-test env recover --run " + run + ".");
                 return 3;
             }
-            bool exact = seams?.ExactOwner?.Invoke(ready.Pid, ready.Started) ?? ExactOwner(ready.Pid, ready.Started);
+            bool exact = seams?.ExactOwner?.Invoke(ready.Pid, ready.Started) ?? ForegroundHold.ExactOwner(ready.Pid, ready.Started);
             if (ready.Run != run || !exact)
             {
                 error.WriteLine("REFUSED: the held runner exited or changed identity before detach returned; inspect env status for " + run + ".");
@@ -321,16 +320,6 @@ internal static class DetachedSession
             throw new TimeoutException("The detached runner did not reach its held state within ten minutes.");
         }
         finally { watcher.Created -= onChange; watcher.Changed -= onChange; watcher.Renamed -= onRename; }
-    }
-
-    private static bool ExactOwner(int pid, string started)
-    {
-        try
-        {
-            using var process = Process.GetProcessById(pid);
-            return !process.HasExited && process.StartTime.ToFileTimeUtc().ToString(CultureInfo.InvariantCulture) == started;
-        }
-        catch (Exception error) when (error is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception) { return false; }
     }
 
     private sealed record Owner(WindowsScheduledTask Task, string Control, string Output, JournalRunner Runner);
