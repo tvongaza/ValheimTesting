@@ -45,7 +45,6 @@ sealed class Valheim.Testing.Game.BepInExLoaderPackage
   method System.Void .ctor()
   method System.Void Validate()
   method System.Void Write(System.String path)
-  method static System.String DoorstopMismatch(System.String install)
   method static Valheim.Testing.Game.BepInExLoaderPackage Capture(System.String root, System.String name, System.String version)
   method static Valheim.Testing.Game.BepInExLoaderPackage Read(System.String path)
   property System.Collections.Generic.Dictionary`2<System.String,System.String> Files { get; set; }
@@ -183,18 +182,18 @@ static class Valheim.Testing.Game.CliCapabilities
   method static System.Void Require(Valheim.Testing.Game.GameActor actor, System.Collections.Generic.IEnumerable`1<System.String> paths)
   method static System.Void Require(Valheim.Testing.Game.GameActor actor, params System.String[] paths)
 sealed class Valheim.Testing.Game.CliCapabilityManifest
+  field const System.String PluginFile = "valheimCLI.dll"
+  field const System.String PluginGuid = "valheimCLI.valheimCLI"
   method System.Void .ctor()
-  method System.Void RequireDefaultPlugin()
   method System.Void Validate()
   method System.Void Write(System.String path)
-  method Valheim.Testing.Game.CliCapabilityManifest ForCapabilities(System.Collections.Generic.IEnumerable`1<System.String> capabilities)
   method Valheim.Testing.Game.CliManifestCheck Check(System.String install, System.Collections.Generic.IEnumerable`1<System.String> capabilities)
   method static Valheim.Testing.Game.CliCapabilityManifest Generate(System.String build, System.Collections.Generic.IEnumerable`1<System.String> files, System.String listing = null)
   method static Valheim.Testing.Game.CliCapabilityManifest Read(System.String path)
   property System.Collections.Generic.IReadOnlyDictionary`2<System.String,System.Int32> Capabilities { get; }
-  property System.Collections.Generic.List`1<Valheim.Testing.Game.CliManifestFile> Files { get; set; }
   property System.Int32 Schema { get; set; }
   property System.String Build { get; set; }
+  property Valheim.Testing.Game.CliManifestFile Plugin { get; set; }
 [result shape] sealed class Valheim.Testing.Game.CliManifestCheck : System.IEquatable`1<Valheim.Testing.Game.CliManifestCheck>
   method System.Boolean Equals(Valheim.Testing.Game.CliManifestCheck other)
   method System.Void .ctor(System.String Build, System.Collections.Generic.IReadOnlyList`1<System.String> Files, System.Collections.Generic.IReadOnlyList`1<System.String> Capabilities)
@@ -240,7 +239,6 @@ sealed class Valheim.Testing.Game.ClientRound
   property Valheim.Testing.Game.ScenarioReport Report { get; }
 sealed class Valheim.Testing.Game.ClientRounds
   method System.Void .ctor()
-  method System.Void Run(System.Func`1<Valheim.Testing.Game.ClientSession> openClient, System.Action`1<Valheim.Testing.Game.ClientRound> measure)
   method Valheim.Testing.Game.GameActor Run(Valheim.Testing.Game.GameActor server, System.Func`1<Valheim.Testing.Game.ClientSession> openClient, System.Action`1<Valheim.Testing.Game.ClientRound> measure, System.Action`1<Valheim.Testing.Game.ClientRound> afterRestart = null)
   property System.Boolean ProtectPlayer { get; init; }
   property System.Collections.Generic.IReadOnlyList`1<System.String> Rounds { get; init; }
@@ -263,12 +261,10 @@ sealed class Valheim.Testing.Game.ClientRunPlan
   method System.Void RequirePasswordSource()
   method System.Void Validate(params System.String[] absentPlugins)
   method Valheim.Testing.Game.CliManifestCheck CheckCliManifest(System.Collections.Generic.IEnumerable`1<System.String> capabilities = null)
-  property System.Boolean CopyGame { get; set; }
   property System.Boolean Crossplay { get; set; }
   property System.Boolean InPlace { get; set; }
   property System.Boolean JoinsHost { get; set; }
   property System.Boolean Owned { get; }
-  property System.Boolean Pinned { get; }
   property System.Boolean Targetable { get; set; }
   property System.Collections.Generic.Dictionary`2<System.String,System.String> Environment { get; set; }
   property System.Collections.Generic.Dictionary`2<System.String,System.String> Pins { get; set; }
@@ -287,13 +283,12 @@ sealed class Valheim.Testing.Game.ClientRunPlan
   property System.String MenuExpectations { get; }
   property System.String Mode { get; set; }
   property System.String PasswordVariable { get; set; }
-  property System.String Pinning { get; set; }
   property System.String[] Capabilities { get; set; }
   property System.String[] LaunchArguments { get; set; }
   property Valheim.Testing.Game.ClientArchitecture LaunchArchitecture { get; }
   property Valheim.Testing.Game.HostWorldPlan HostWorld { get; set; }
   property Valheim.Testing.Game.InstallPins InstallPins { get; set; }
-sealed class Valheim.Testing.Game.ClientSession : System.IDisposable
+sealed class Valheim.Testing.Game.ClientSession : System.IDisposable, Valheim.Testing.Game.IWorldPins
   method System.Void Dispose()
   method static Valheim.Testing.Game.ClientSession Attach(Valheim.Testing.Game.ClientRunPlan plan, System.String output, Valheim.Testing.Game.IGameTransport transport = null)
   method static Valheim.Testing.Game.ClientSession Launch(Valheim.Testing.Game.ClientRunPlan plan, System.String output, System.Func`1<Valheim.Testing.Game.IOwnedProcess> start, System.Func`1<Valheim.Testing.Game.IGameTransport> connect, System.Func`3<System.TimeSpan,System.Threading.CancellationToken,System.Threading.Tasks.Task> ready, System.Threading.CancellationToken cancellation = null)
@@ -455,7 +450,7 @@ static class Valheim.Testing.Game.DefaultSmokeWorld
   field const System.String Uid = "3010640879"
   method static Valheim.Testing.Game.WorldIdentity Prepare(System.String newRoot)
   method static Valheim.Testing.Game.WorldIdentity PrepareServerSaveRoot(System.String newRoot)
-sealed class Valheim.Testing.Game.DirectServerProcess : System.IDisposable, Valheim.Testing.Game.IClientProcessIdentity, Valheim.Testing.Game.IOwnedProcess
+sealed class Valheim.Testing.Game.DirectServerProcess : System.IDisposable, Valheim.Testing.Game.IClientProcessIdentity, Valheim.Testing.Game.ILocalClientProcessIdentity, Valheim.Testing.Game.IOwnedProcess
   method System.Threading.Tasks.Task`1<System.Int32> WaitForExitAsync(System.Threading.CancellationToken cancellation)
   method System.Void .ctor(System.Diagnostics.ProcessStartInfo start, System.String logPrefix, params System.String[] gameLogs)
   method System.Void Dispose()
@@ -551,12 +546,6 @@ sealed class Valheim.Testing.Game.EnvironmentInventory
   property System.String LeaseDirectory { get; set; }
   property System.String LeaseHost { get; set; }
   property System.String SteamUserData { get; }
-static class Valheim.Testing.Game.EnvironmentPinning
-  field const System.String None = "none"
-  field const System.String NotPinned = "environment not pinned"
-  field const System.String Strict = "strict"
-  method static System.Boolean IsStrict(System.String value, System.String owner)
-  method static System.String Warning(System.String what)
 sealed class Valheim.Testing.Game.EnvironmentRecipe
   method System.Void .ctor()
   property System.Collections.Generic.List`1<System.String> Roles { get; set; }
@@ -734,7 +723,6 @@ sealed class Valheim.Testing.Game.GameActor : System.IDisposable
   method Valheim.Testing.Game.Observation ObserveComplete(Valheim.Testing.Game.Capability command, System.String source, params System.String[] arguments)
   method static System.Text.Json.JsonDocument ParseLine(Valheim.Testing.Game.GameReply reply, System.String prefix)
   method static System.Text.Json.JsonDocument ParseLine(valheim_cli.Testing.CommandResult reply, System.String prefix)
-  property System.Boolean Pinned { get; }
   property System.Int64 LongestMainThreadIdleMs { get; }
   property System.String BusyNote { get; }
   property System.String Name { get; }
@@ -754,7 +742,6 @@ sealed class Valheim.Testing.Game.GameActor : System.IDisposable
   field const Valheim.Testing.Game.GameConnectionStatus ErrorVersion = 3
   field const Valheim.Testing.Game.GameConnectionStatus None = 0
 sealed class Valheim.Testing.Game.GameLaunch
-  field const System.String ClientLinuxExecutable = "valheim.x86_64"
   field const System.String ClientMacBundle = "Valheim.app"
   field const System.String ClientWindowsExecutable = "valheim.exe"
   field const System.String ConsoleArgument = "-console"
@@ -886,7 +873,7 @@ sealed class Valheim.Testing.Game.HostProfile
   property System.String[] SshOptions { get; set; }
 sealed class Valheim.Testing.Game.HostWorldPlan
   method System.Void .ctor()
-  method System.Void Validate(System.Boolean pinned)
+  method System.Void Validate()
   method Valheim.Testing.Game.WorldIdentity Preflight()
   property System.Boolean Crossplay { get; set; }
   property System.Int32 SaveSeconds { get; set; }
@@ -901,7 +888,6 @@ sealed class Valheim.Testing.Game.HostedWorld : System.IDisposable
   method System.Void Dispose()
   method static System.String DefaultSaveDirectory(Valheim.Testing.Game.ClientPlatform platform)
   method static System.String NameOf(System.Collections.Generic.IEnumerable`1<System.String> relativePaths)
-  method static Valheim.Testing.Game.HostedWorld Place(Valheim.Testing.Game.HostWorldPlan plan, System.String saveDirectory, System.String output, System.Boolean pinned)
   property System.String CollectedTo { get; }
   property System.String FixtureCopy { get; }
   property System.String Host { get; }
@@ -1145,7 +1131,6 @@ sealed class Valheim.Testing.Game.NativeDependencyLock
 sealed class Valheim.Testing.Game.NativeDependencyRequest
   method System.Void .ctor()
   method static Valheim.Testing.Game.NativeDependencyRequest Read(System.String path)
-  property System.Boolean RequireToolkitCommands { get; set; }
   property System.Collections.Generic.List`1<System.String> Capabilities { get; set; }
   property System.Collections.Generic.List`1<System.String> Mods { get; set; }
   property System.Collections.Generic.List`1<System.String> OptionalReferences { get; set; }
@@ -1469,7 +1454,6 @@ enum Valheim.Testing.Game.QuitRequest
 sealed class Valheim.Testing.Game.RecordingTransport : System.IDisposable, Valheim.Testing.Game.IGameThreadStatusTransport, Valheim.Testing.Game.IGameTransport
   method System.Collections.Generic.IReadOnlyDictionary`2<System.String,System.String> ReadStatus()
   method System.Void .ctor(Valheim.Testing.Game.IGameTransport inner, System.String file)
-  method System.Void .ctor(Valheim.Testing.Game.IGameTransport inner, System.String file, System.String environment)
   method System.Void Dispose()
   method valheim_cli.Testing.CommandResult Execute(System.String command, System.TimeSpan timeout)
 sealed class Valheim.Testing.Game.RegressionArm
@@ -1640,7 +1624,6 @@ sealed class Valheim.Testing.Game.ScenarioReport
   method System.Void .ctor(System.String name)
   method System.Void Attach(Valheim.Testing.Game.EvidenceReference published)
   method System.Void Attach(Valheim.Testing.Game.IEvidence evidence)
-  method System.Void MarkNotPinned(System.String why)
   method System.Void RecordFailure(System.String name, System.Exception error)
   method System.Void RecordFailure(Valheim.Testing.Game.StepPhase phase, System.String name, System.Exception error)
   method System.Void RecordPlugins(System.String actor, System.Collections.Generic.IReadOnlyDictionary`2<System.String,System.String> pins)
@@ -1655,12 +1638,12 @@ sealed class Valheim.Testing.Game.ScenarioReport
   property System.Boolean ScenarioPassed { get; }
   property System.Collections.Generic.Dictionary`2<System.String,System.String> Provenance { get; }
   property System.Collections.Generic.IReadOnlyDictionary`2<System.String,System.Collections.Generic.IReadOnlyDictionary`2<System.String,System.String>> Plugins { get; }
+  property System.Collections.Generic.IReadOnlyDictionary`2<System.String,System.String> PinOrigins { get; }
   property System.Collections.Generic.List`1<Valheim.Testing.Game.EvidenceReference> Evidence { get; }
   property System.Collections.Generic.List`1<Valheim.Testing.Game.LogFileScan> Logs { get; }
   property System.Collections.Generic.List`1<Valheim.Testing.Game.StepResult> Steps { get; }
   property System.Int32 Schema { get; }
   property System.String Name { get; }
-  property System.String Pinning { get; }
   property Valheim.Testing.Game.ToolkitProvenance Toolkit { get; }
 [result shape] enum Valheim.Testing.Game.ServerPlatform
   field const Valheim.Testing.Game.ServerPlatform Linux = 1
@@ -1680,14 +1663,12 @@ class Valheim.Testing.Game.ServerRunPlan
   method System.Void RequireEnvironmentFlag(System.String variable, System.String purpose)
   method System.Void RequireScenario(params System.String[] known)
   method System.Void ValidateServerPlan(System.Collections.Generic.IEnumerable`1<System.String> requiredPlugins, System.String sessionTokenVariable)
-  method Valheim.Testing.Game.InstallPins CheckRuntimePins(System.String runtime)
   method Valheim.Testing.Game.StartupEvents DedicatedStartupEvents(System.String runtime)
   method static System.String ExecutableFor(Valheim.Testing.Game.ServerPlatform platform)
   method static System.Void CheckLaunchHost(Valheim.Testing.Game.ServerPlatform platform, System.Boolean windowsHost)
   method static System.Void CheckLaunchHost(Valheim.Testing.Game.ServerPlatform platform, Valheim.Testing.Game.ServerPlatform host)
   method static T Read<T>(System.String path)
   property System.Boolean Crossplay { get; set; }
-  property System.Boolean Pinned { get; }
   property System.Collections.Generic.Dictionary`2<System.String,System.String> Environment { get; set; }
   property System.Collections.Generic.Dictionary`2<System.String,System.String> Pins { get; set; }
   property System.Collections.Generic.Dictionary`2<System.String,Valheim.Testing.Game.LogClassification> LogScan { get; set; }
@@ -1697,7 +1678,6 @@ class Valheim.Testing.Game.ServerRunPlan
   property System.Int32 StartupSeconds { get; set; }
   property System.String Executable { get; set; }
   property System.String ExpectCommand { get; }
-  property System.String Pinning { get; set; }
   property System.String Scenario { get; set; }
   property System.String[] Arguments { get; set; }
   property Valheim.Testing.Game.InstallPins RuntimePins { get; set; }
