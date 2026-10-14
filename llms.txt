@@ -1,0 +1,48 @@
+# ValheimTesting
+
+> Reusable test inputs, fixtures and assertions for Valheim mods: unit tests against game doubles with no game, and disposable native checks that drive a real dedicated server and client.
+
+ValheimTesting serves mod authors and the coding agents that work in their mod repositories. A mod's tests live in the mod's own repository and use the published NuGet packages and the `valheim-test` tool; testing a mod needs none of this repository's source. To change the toolkit itself, start at AGENTS.md and CONTRIBUTING.md. The documentation site is https://tvongaza.github.io/ValheimTesting/.
+
+## Start
+
+- [Get started](https://github.com/tvongaza/ValheimTesting/blob/main/docs/getting-started.md): add a test project to a mod, pin the packages and run the first test
+- [Choose a test layer](https://github.com/tvongaza/ValheimTesting/blob/main/docs/guides/choose-a-test-layer.md): which layer tests which behaviour, and what each layer cannot prove
+- [Package versions](https://github.com/tvongaza/ValheimTesting/blob/main/docs/package-versions.md): every package, its version and the pins to copy
+- [Examples](https://github.com/tvongaza/ValheimTesting/blob/main/examples/README.md): runnable examples, from the first unit test to a native session
+
+## Guides
+
+- [Test logic that uses game types](https://github.com/tvongaza/ValheimTesting/blob/main/docs/guides/test-logic-that-uses-game-types.md): source-link mod code and test it against the game doubles
+- [Test terrain decisions](https://github.com/tvongaza/ValheimTesting/blob/main/docs/guides/test-terrain-decisions.md): heights, slopes, biomes and zone seams without the game
+- [Run tests in CI](https://github.com/tvongaza/ValheimTesting/blob/main/docs/guides/run-tests-in-ci.md): run a mod's tests in GitHub Actions
+- [Check that a mod loads](https://github.com/tvongaza/ValheimTesting/blob/main/docs/guides/check-a-mod-loads.md): `valheim-test server-load`, `start` and `server-load-ab`
+- [Runtime hygiene](https://github.com/tvongaza/ValheimTesting/blob/main/docs/runtime-hygiene.md): what to check before a native run, and the evidence rules
+
+## Reference
+
+- [valheim-test](https://github.com/tvongaza/ValheimTesting/blob/main/docs/packages/Valheim.Testing.NativeSmoke.md): every command and option of the tool
+- [Valheim.Testing](https://github.com/tvongaza/ValheimTesting/blob/main/docs/packages/Valheim.Testing.md): declared terrain, grid dumps, rendering and static overrides
+- [Valheim.Testing.Doubles](https://github.com/tvongaza/ValheimTesting/blob/main/docs/packages/Valheim.Testing.Doubles.md): source-only doubles of the Unity, Valheim, BepInEx and Jotunn types
+- [Valheim.Testing.Game](https://github.com/tvongaza/ValheimTesting/blob/main/docs/packages/Valheim.Testing.Game.md): one game process from outside, its pins, observations and reports
+- [Valheim.Testing.GameSessions](https://github.com/tvongaza/ValheimTesting/blob/main/docs/packages/Valheim.Testing.GameSessions.md): a server and clients as one run, on this PC or other machines
+- [Valheim.Testing.Adapter](https://github.com/tvongaza/ValheimTesting/blob/main/docs/packages/Valheim.Testing.Adapter.md): source for a mod's game-side test adapter plugin
+- [Valheim.Testing.Bindings](https://github.com/tvongaza/ValheimTesting/blob/main/docs/packages/Valheim.Testing.Bindings.md): check offline that a built mod's game references still bind
+- [Evidence](https://github.com/tvongaza/ValheimTesting/blob/main/docs/reference/evidence.md): what a native run's `result.json` links to
+- [Log scan](https://github.com/tvongaza/ValheimTesting/blob/main/docs/reference/game-log-scan.md): the log patterns that fail a run at teardown
+- [Platforms](https://github.com/tvongaza/ValheimTesting/blob/main/docs/reference/platforms.md): which host runs which role
+- [API reference](https://tvongaza.github.io/ValheimTesting/reference/): every public type, generated from source
+
+## Agents
+
+- [Agent workflow](https://github.com/tvongaza/ValheimTesting/blob/main/docs/agent-guide.md): the task table, the loop, how to read results, the report and where problems go
+- [Skill](https://github.com/tvongaza/ValheimTesting/blob/main/.agents/skills/valheim-mod-testing/SKILL.md): the valheim-mod-testing skill to copy into a mod repository
+- [Give your coding agent the workflow](https://github.com/tvongaza/ValheimTesting/blob/main/docs/guides/give-your-agent-the-workflow.md): install the skill and write the mod's AGENTS.md
+- [AGENTS.md](https://github.com/tvongaza/ValheimTesting/blob/main/AGENTS.md): for agents changing ValheimTesting itself
+
+## Optional
+
+- [CONTRIBUTING.md](https://github.com/tvongaza/ValheimTesting/blob/main/CONTRIBUTING.md): repository ownership, local validation and pull requests
+- [ValheimCLI release contract](https://github.com/tvongaza/ValheimTesting/blob/main/docs/maintainers/valheimcli-release-contract.md): what the toolkit takes from the pinned ValheimCLI fork, and how a fork pin moves
+- [Compatibility policy](https://github.com/tvongaza/ValheimTesting/blob/main/docs/reference/compatibility.md): the proposed compatibility policy for the first stable release
+- [Writing the docs](https://github.com/tvongaza/ValheimTesting/blob/main/docs/maintainers/writing-docs.md): the rules every page follows

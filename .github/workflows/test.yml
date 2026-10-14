@@ -471,6 +471,11 @@ jobs:
           refused "$(last 'https://github.com/tvongaza/valheimCLI/blob/review/x/README.md links a review branch')"
           echo '[short](https://github.com/tvongaza/valheimCLI/tree/main/docs)' >> docs/getting-started.md
           refused "$(last 'https://github.com/tvongaza/valheimCLI/tree/main/docs links the valheimCLI fork at a branch or short commit')"
+          echo '[gone](https://github.com/tvongaza/ValheimTesting/blob/main/docs/agent-skills.md)' >> llms.txt
+          refused "FAIL llms.txt:$(wc -l < llms.txt): https://github.com/tvongaza/ValheimTesting/blob/main/docs/agent-skills.md: docs/agent-skills.md does not exist"
+          skill=.agents/skills/valheim-mod-testing/SKILL.md
+          echo '[gone](https://github.com/tvongaza/ValheimTesting/blob/main/docs/agent-guide.md#no-such-heading)' >> "$skill"
+          refused "FAIL $skill:$(wc -l < "$skill"): https://github.com/tvongaza/ValheimTesting/blob/main/docs/agent-guide.md#no-such-heading: docs/agent-guide.md has no heading with the anchor #no-such-heading"
           git diff --exit-code
   game-hosts:
     name: game hosts (ssh to localhost, container)

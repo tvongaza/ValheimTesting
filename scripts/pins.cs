@@ -640,7 +640,11 @@ List<Problem> DocsProblems()
     var problems = new List<Problem>();
     var versioned = new Regex(@"preview\.?\s?\d|\bv?\d+\.\d+\.\d+\b|\b20\d\d-\d\d-\d\d\b|\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+20\d\d\b", RegexOptions.IgnoreCase);
     var anchors = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
-    foreach (string file in Walk(root, ".md"))
+    // Walk skips dot-folders, so the agent skill under .agents/ is added, and so is llms.txt (Markdown links to main).
+    var pages = Walk(root, ".md");
+    if (Directory.Exists(Path.Combine(root, ".agents"))) pages.AddRange(Walk(Path.Combine(root, ".agents"), ".md"));
+    if (File.Exists(Path.Combine(root, "llms.txt"))) pages.Add("llms.txt");
+    foreach (string file in pages)
     {
         foreach (var (line, text, heading) in MarkdownLines(File.ReadLines(Path.Combine(root, file))))
         {

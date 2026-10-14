@@ -10,6 +10,7 @@ on:
       - 'cli-dependency.json'
       - 'docs/**'
       - '!docs/maintainers/**'
+      - 'llms.txt'
       - 'toolkit-versions.json'
       - 'scripts/api-docs.cs'
       - 'scripts/versioned-api-docs.cs'
