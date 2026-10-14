@@ -73,8 +73,9 @@ internal static class ServerLoad
         try
         {
             // The scheduled supervisor must become this run's journal runner before ModInputStage's local journal preflight.
-            // Otherwise the still-live starter looks like another process's live run and the supervisor refuses itself.
-            if (DetachedSession.ConfiguredRun is { } detachedRun) DetachedSession.AdoptRun(detachedRun);
+            // Otherwise the still-live starter looks like another process's live run and the supervisor refuses itself. It holds the
+            // run's control lock until it ends (#811).
+            using var supervisor = DetachedSession.ConfiguredRun is { } detachedRun ? DetachedSession.AdoptRun(detachedRun) : null;
             output = Output(parsed!);
             if (parsed.Options.TryGetValue("--adapter", out string? adapterFile) && !File.Exists(Path.GetFullPath(adapterFile)))
                 throw new FileNotFoundException("A selected file is missing: " + Path.GetFullPath(adapterFile), Path.GetFullPath(adapterFile));

@@ -99,15 +99,30 @@ internal static class RunRecovery
             var released = await ReleaseRecoveryClaimsAsync(claims).ConfigureAwait(false);
             return released.Count == 0 ? result : result with { Steps = result.Steps.Concat(released).ToList() };
         }
-        string? refused = run.State switch
+        string? Refusal(JournalRunStatus judged) => judged.State switch
         {
-            JournalRunState.Live => "it is still going: " + run.Reason,
-            JournalRunState.Unknown => run.Reason,
-            JournalRunState.Unrecoverable => run.Reason + ": " + string.Join("; ", run.Items.Where(item => item.Unrecoverable).Select(item => $"{item.Kind} {item.What} on {item.Host}: {item.Status}")),
+            JournalRunState.Live => "it is still going: " + judged.Reason,
+            JournalRunState.Unknown => judged.Reason,
+            JournalRunState.Unrecoverable => judged.Reason + ": " + string.Join("; ", judged.Items.Where(item => item.Unrecoverable).Select(item => $"{item.Kind} {item.What} on {item.Host}: {item.Status}")),
             JournalRunState.Kept when !teardown => "it kept what it left on purpose; env teardown --run " + runId + " removes it",
             _ => null,
         };
+        string? refused = Refusal(run);
         if (refused != null) return new(runId, run.State, refused, []);
+
+        // A detached run (#811): its scheduled supervisor may adopt the run between that read and the first stop, as the run's
+        // runner. Under the run's control lock no supervisor can adopt it, and one that already did holds the lock while it runs;
+        // so the run is read again under the lock, and that read is what the recovery acts on. Released once its task is retired.
+        if (s_afterFirstReadForTest.Value is { } afterFirstRead) await afterFirstRead().ConfigureAwait(false);
+        using var control = new ControlLocks();
+        if (control.Take(run, hosts, runId) is { } held) return new(runId, run.State, held, []);
+        if (control.Any)
+        {
+            status = await RunJournalStatus.InspectAsync(hosts, hostFactory, timeout, cancellation, leaseHost, leaseDirectory).ConfigureAwait(false);
+            run = status.Runs.SingleOrDefault(candidate => candidate.Run == runId);
+            if (run == null) return new(runId, JournalRunState.Unknown, "no readable host's journal names this run any more", []);
+            if (Refusal(run) is { } now) return new(runId, run.State, now, []);
+        }
 
         var items = run.Items.Where(item => teardown || !item.Kept).ToList();
         if (items.Count == 0 && run.SettledLaunches.Count == 0)
@@ -172,6 +187,8 @@ internal static class RunRecovery
             catch (Exception error) when (error is not OperationCanceledException)
             { Step(taskItem.Host, what, "not removed: " + error.Message, failed: true); }
         }
+        // With its task gone no supervisor can start; the control directory the lock is in may now be removed with the run's copies.
+        control.Dispose();
 
         // 0b. A server start interrupted before its pid file existed (#800): the game its launcher recorded is stopped first,
         // as its run would have stopped it (asked to quit, then killed), once its ID, start time and command line still match;
@@ -601,6 +618,60 @@ internal static class RunRecovery
             { Step("run", "post-recovery status", "could not verify what remains: " + error.Message, failed: true); }
         }
         return new(runId, run.State, null, steps) { After = afterState, Remaining = remaining, NotRead = notRead };
+    }
+
+    private static readonly AsyncLocal<Func<Task>?> s_afterFirstReadForTest = new();
+
+    /// <summary>
+    /// For tests only: runs after a recovery's first read of the run and before it takes the run's control lock, the window in which
+    /// a detached supervisor can adopt the run (#811).
+    /// </summary>
+    internal static IDisposable AfterFirstReadForTest(Func<Task> action)
+    {
+        var outer = s_afterFirstReadForTest.Value;
+        s_afterFirstReadForTest.Value = action;
+        return new Restore(() => s_afterFirstReadForTest.Value = outer);
+    }
+
+    private sealed class Restore(Action restore) : IDisposable
+    {
+        public void Dispose() => restore();
+    }
+
+    // The control locks of a run's detached supervisors (#811), one per scheduled task it journalled.
+    private sealed class ControlLocks : IDisposable
+    {
+        private readonly List<DetachedControlLock> _held = [];
+        public bool Any => _held.Count != 0;
+
+        // Why the recovery is refused, or null once every lock is held. A task whose control directory is gone has no launcher, so
+        // no supervisor of it can start. The lock is a file handle on the run's own machine: another machine cannot hold it.
+        public string? Take(JournalRunStatus run, IReadOnlyDictionary<string, HostProfile> hosts, string runId)
+        {
+            foreach (var task in run.Items.Where(item => item.Kind == "scheduled-task"))
+            {
+                string control = task.Fields.GetValueOrDefault("control") ?? "";
+                string? refused = hosts[task.Host].Kind != "local"
+                    ? $"its detached supervisor's control lock is on {task.Host}; recover the run on that machine"
+                    : !Path.IsPathFullyQualified(control) ? $"scheduled task {task.What} journalled no absolute control directory" : null;
+                if (refused == null)
+                    try
+                    {
+                        if (DetachedControlLock.TryTake(control) is { } taken) _held.Add(taken);
+                        else refused = $"another process holds its control lock in {control}: its detached supervisor adopted the run " +
+                            $"(valheim-test detach finish --run {runId} finishes it), or another recovery is clearing it";
+                    }
+                    catch (DirectoryNotFoundException) { }
+                if (refused != null) { Dispose(); return refused; }
+            }
+            return null;
+        }
+
+        public void Dispose()
+        {
+            foreach (var held in _held) held.Dispose();
+            _held.Clear();
+        }
     }
 
     private static async Task<IReadOnlyList<RecoveryStep>> ReleaseRecoveryClaimsAsync(

@@ -180,21 +180,9 @@ public sealed class DetachedSessionTests : IDisposable
             var before = await LocalHostPreflight.InspectAsync(new EnvironmentInventory(), [], TimeSpan.FromSeconds(30), probes: probes);
             Assert.Contains(before, problem => problem.Input == "run journal" && problem.Message.Contains(run, StringComparison.Ordinal));
 
-            string control = Path.Combine(rig.Root, "control"), tool = Path.Combine(rig.Root, "tool"), output = Path.Combine(rig.Root, "output");
-            var values = new Dictionary<string, string?>
+            string control = Directory.CreateDirectory(Path.Combine(rig.Root, "control")).FullName, output = Path.Combine(rig.Root, "output");
+            using (SupervisorEnvironment(run, control, Path.Combine(rig.Root, "tool"), output))
             {
-                ["VALHEIM_TEST_DETACH_RUN"] = run,
-                ["VALHEIM_TEST_DETACH_CONTROL"] = control,
-                ["VALHEIM_TEST_DETACH_TASK"] = WindowsScheduledTask.Prefix + run,
-                ["VALHEIM_TEST_DETACH_TASK_EXECUTABLE"] = OperatingSystem.IsWindows() ? @"C:\Program Files\PowerShell\7\pwsh.exe" : "/usr/local/bin/pwsh",
-                ["VALHEIM_TEST_DETACH_TASK_USER"] = @"TEST\runner",
-                ["VALHEIM_TEST_DETACH_TOOL"] = tool,
-                ["VALHEIM_TEST_DETACH_OUTPUT"] = output,
-            };
-            var previous = values.Keys.ToDictionary(key => key, Environment.GetEnvironmentVariable, StringComparer.Ordinal);
-            try
-            {
-                foreach (var (key, value) in values) Environment.SetEnvironmentVariable(key, value);
                 using var preflight = LocalHostPreflight.ReplaceDefaultProbesForTest(probes);
                 rig.Write("game/" + ServerRunPlan.ExecutableFor(HostProfile.CurrentPlatform switch
                 {
@@ -212,10 +200,8 @@ public sealed class DetachedSessionTests : IDisposable
                 Assert.Equal(0, exit);
                 Assert.True(inspected);
             }
-            finally
-            {
-                foreach (var (key, value) in previous) Environment.SetEnvironmentVariable(key, value);
-            }
+            // The supervisor held the run's control lock only while it ran (#811).
+            using (Assert.IsType<DetachedControlLock>(DetachedControlLock.TryTake(control))) { }
             var adopted = File.ReadAllLines(journal).Select(RunJournal.ParseLine).Last();
             Assert.Equal(JournalEntry.ScheduledTaskStarted, adopted.Entry.Kind);
             Assert.Equal(JournalRunner.Current, adopted.Runner);
@@ -450,5 +436,168 @@ public sealed class DetachedSessionTests : IDisposable
             }
             Assert.True(process.ExitCode == 0, process.StandardError.ReadToEnd());
         }
+    }
+
+    // The environment the scheduled task gives its supervisor (DetachedSession's launcher), restored on dispose.
+    internal static IDisposable SupervisorEnvironment(string run, string control, string tool, string output)
+    {
+        var values = new Dictionary<string, string?>
+        {
+            ["VALHEIM_TEST_DETACH_RUN"] = run,
+            ["VALHEIM_TEST_DETACH_CONTROL"] = control,
+            ["VALHEIM_TEST_DETACH_TASK"] = WindowsScheduledTask.Prefix + run,
+            ["VALHEIM_TEST_DETACH_TASK_EXECUTABLE"] = OperatingSystem.IsWindows() ? @"C:\Program Files\PowerShell\7\pwsh.exe" : "/usr/local/bin/pwsh",
+            ["VALHEIM_TEST_DETACH_TASK_USER"] = @"TEST\runner",
+            ["VALHEIM_TEST_DETACH_TOOL"] = tool,
+            ["VALHEIM_TEST_DETACH_OUTPUT"] = output,
+        };
+        var previous = values.Keys.ToDictionary(key => key, Environment.GetEnvironmentVariable, StringComparer.Ordinal);
+        foreach (var (key, value) in values) Environment.SetEnvironmentVariable(key, value);
+        return new Restore(() => { foreach (var (key, value) in previous) Environment.SetEnvironmentVariable(key, value); });
+    }
+
+    private sealed class Restore(Action restore) : IDisposable { public void Dispose() => restore(); }
+
+    // One journal line in this machine's journal, as RunJournal writes it, with the runner chosen by the test.
+    internal static void LocalLine(string run, string actor, JournalRunner runner, DateTime utc, JournalEntry entry)
+    {
+        string file = Path.Combine(RunJournal.LocalDirectory, run, actor + ".jsonl");
+        Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+        File.AppendAllText(file, JsonSerializer.Serialize(new Dictionary<string, object>
+        {
+            ["utc"] = utc.ToString("O"), ["run"] = run, ["actor"] = actor, ["kind"] = entry.Kind, ["fields"] = entry.Fields,
+            ["runner"] = new { machine = runner.Machine, pid = runner.Pid, startedUtc = runner.StartedUtc.ToString("O") },
+        }) + "\n");
+    }
+
+    // #811: the supervisor adopts the run only under its control lock, and holds the lock while it runs. A recovery that took the
+    // lock first is clearing the run, so the supervisor refuses before it journals anything.
+    [Fact]
+    public void ASupervisorAdoptsOnlyUnderTheRunsControlLockAndHoldsItWhileItRuns()
+    {
+        using var machine = new FakeDataRoot(Path.Combine(_root, "control-lock-data"));
+        const string run = "run-control-lock";
+        string control = Directory.CreateDirectory(Path.Combine(_root, "control-lock")).FullName;
+        string journal = Path.Combine(RunJournal.LocalDirectory, run, "detached.jsonl");
+        using var environment = SupervisorEnvironment(run, control, Path.Combine(_root, "tool"), Path.Combine(_root, "output"));
+
+        using (var recovery = DetachedControlLock.TryTake(control))
+        {
+            Assert.NotNull(recovery);
+            var refused = Assert.Throws<InvalidOperationException>(() => DetachedSession.AdoptRun(run));
+            Assert.Contains("control lock", refused.Message, StringComparison.Ordinal);
+            Assert.False(File.Exists(journal)); // Nothing adopted: the run stays the recovery's to clear.
+        }
+
+        using (DetachedSession.AdoptRun(run))
+        {
+            Assert.Equal(JournalEntry.ScheduledTaskStarted, RunJournal.ParseLine(Assert.Single(File.ReadAllLines(journal))).Entry.Kind);
+            Assert.Null(DetachedControlLock.TryTake(control)); // A recovery cannot take it from a live supervisor.
+        }
+        using (Assert.IsType<DetachedControlLock>(DetachedControlLock.TryTake(control))) { }
+    }
+
+    // #811: a supervisor that started before a recovery stopped its task, and reaches adoption only after the recovery released
+    // the lock, finds the task journalled retired and refuses before it journals anything.
+    [Fact]
+    public void ASupervisorDoesNotAdoptARunWhoseTaskARecoveryRetired()
+    {
+        using var machine = new FakeDataRoot(Path.Combine(_root, "retired-data"));
+        const string run = "run-retired-task";
+        string control = Directory.CreateDirectory(Path.Combine(_root, "retired-control")).FullName;
+        string journal = Path.Combine(RunJournal.LocalDirectory, run, "detached.jsonl");
+        using var environment = SupervisorEnvironment(run, control, Path.Combine(_root, "tool"), Path.Combine(_root, "output"));
+        new RunJournal(run).AppendLocal("detached", JournalEntry.Of(JournalEntry.ScheduledTaskRetired, ("task", WindowsScheduledTask.Prefix + run)));
+        string before = File.ReadAllText(journal);
+
+        var refused = Assert.Throws<InvalidOperationException>(() => DetachedSession.AdoptRun(run));
+
+        Assert.Contains("already retired", refused.Message, StringComparison.Ordinal);
+        Assert.Equal(before, File.ReadAllText(journal)); // Nothing journalled.
+        using (Assert.IsType<DetachedControlLock>(DetachedControlLock.TryTake(control))) { } // The lock was released.
+    }
+
+    // #811: detach status reports a live run as a success; only what is left to recover makes it exit 3.
+    [Fact]
+    public async Task DetachStatusExitsZeroWhileARunIsLiveAndThreeOnlyForWhatIsLeftToRecover()
+    {
+        using var machine = new FakeDataRoot(Path.Combine(_root, "status-data"));
+        using var detected = EnvironmentInventory.UseMachine(new FakeMachine(HostProfile.CurrentPlatform) { DataRoot = Path.Combine(_root, "status-machine") });
+        var copy = JournalEntry.Of(JournalEntry.CopyIntended, ("runtime", Path.Combine(_root, "status-copy")));
+        LocalLine("run-status-live", "detached", JournalRunner.Current, DateTime.UtcNow.AddMinutes(-2), copy);
+        LocalLine("run-status-ended", "detached", RunJournalStatusTests.Gone, DateTime.UtcNow.AddMinutes(-3),
+            JournalEntry.Of(JournalEntry.CopyRetired, ("runtime", Path.Combine(_root, "status-copy"))));
+
+        var output = new StringWriter(); var error = new StringWriter();
+        Assert.Equal(0, await DetachedSession.RunAsync(["status"], output, error, new DetachedSession.Seams(Windows: true)));
+        Assert.Contains("LIVE run-status-live", output.ToString());
+
+        LocalLine("run-status-left", "detached", RunJournalStatusTests.Gone, DateTime.UtcNow.AddMinutes(-1), copy);
+        output = new StringWriter();
+        Assert.Equal(3, await DetachedSession.RunAsync(["status"], output, error, new DetachedSession.Seams(Windows: true)));
+        Assert.Contains("RECOVERABLE run-status-left", output.ToString());
+    }
+
+    // #811: a repeated detach finish, after the first finished and recovered the run, reports the end the run journalled, not
+    // whether its supervisor still runs: passed for a run that passed; a failed end, or none (its supervisor died), fails.
+    [Theory]
+    [InlineData("passed", 0)]
+    [InlineData("failed", 1)]
+    [InlineData(null, 1)]
+    public async Task ARepeatedFinishReportsTheRunsJournalledEnd(string? end, int expected)
+    {
+        using var machine = new FakeDataRoot(Path.Combine(_root, "finish-data"));
+        using var detected = EnvironmentInventory.UseMachine(new FakeMachine(HostProfile.CurrentPlatform) { DataRoot = Path.Combine(_root, "finish-machine") });
+        string run = "run-finished-" + (end ?? "none");
+        string control = Path.Combine(_root, "finish-control"), output = Directory.CreateDirectory(Path.Combine(_root, "finish-output")).FullName;
+        FinishedRun(run, control, output, end, retired: true);
+
+        var text = new StringWriter(); var error = new StringWriter();
+        int exit = await DetachedSession.RunAsync(["finish", "--run", run], text, error, new DetachedSession.Seams(Windows: true));
+
+        Assert.True(exit == expected, text + "\n" + error);
+        Assert.Contains((expected == 0 ? "DETACHED FINISHED run " : "DETACHED RECOVERED FAILED run ") + run, text.ToString());
+        if (end != null) Assert.Contains("its journalled end: " + end, text.ToString());
+    }
+
+    // A detached run whose supervisor ended it: the starter's task intent, the supervisor's adoption and end, and (once a first
+    // finish recovered it) the recovery's retirement of the task.
+    internal static void FinishedRun(string run, string control, string output, string? end, bool retired)
+    {
+        var starter = RunJournalStatusTests.Gone;
+        var supervisor = new JournalRunner(Environment.MachineName, 999_999_997, DateTime.UtcNow.AddHours(-2));
+        var task = new WindowsScheduledTask(WindowsScheduledTask.Prefix + run, "ValheimTesting detached run " + run,
+            @"C:\Program Files\PowerShell\7\pwsh.exe", Path.Combine(control, "launcher.ps1"), Path.Combine(control, "tool"), @"TEST\runner");
+        var at = DateTime.UtcNow.AddMinutes(-30);
+        LocalLine(run, "detached", starter, at, task.Entry(JournalEntry.ScheduledTaskIntended, ("control", control), ("output", output)));
+        LocalLine(run, "detached", supervisor, at.AddMinutes(1), task.Entry(JournalEntry.ScheduledTaskStarted, ("control", control), ("output", output)));
+        if (end != null) LocalLine(run, "run", supervisor, at.AddMinutes(2), JournalEntry.Of(JournalEntry.RunEnded, ("state", end), ("cleanupVerified", "true")));
+        if (retired) LocalLine(run, RunRecovery.Actor, JournalRunner.Current, at.AddMinutes(3), task.Entry(JournalEntry.ScheduledTaskRetired));
+    }
+}
+
+// #811 on the real Task Scheduler: the reviewed case, a finish after the supervisor ended with its task's record not yet
+// retired. Recovery finds the task gone; the verdict is the run's journalled end, so a run that passed is reported passed.
+[Trait("Os", "windows")]
+[Collection(nameof(DetachedEnvironmentVariables))]
+public sealed class WindowsDetachedFinishTests : IDisposable
+{
+    private readonly string _root = Directory.CreateTempSubdirectory("vt-detached-finish-").FullName;
+    public void Dispose() => Directory.Delete(_root, recursive: true);
+
+    [OsFact("windows")]
+    public async Task AFinishAfterTheSupervisorEndedReportsThePassedEndItJournalled()
+    {
+        using var machine = new FakeDataRoot(Path.Combine(_root, "data"));
+        using var detected = EnvironmentInventory.UseMachine(new FakeMachine(HostProfile.CurrentPlatform) { DataRoot = Path.Combine(_root, "machine") });
+        string run = "run-ended-" + Guid.NewGuid().ToString("N")[..8]; // No task of this name is registered.
+        DetachedSessionTests.FinishedRun(run, Path.Combine(_root, "control"), Directory.CreateDirectory(Path.Combine(_root, "output")).FullName,
+            "passed", retired: false);
+
+        var text = new StringWriter(); var error = new StringWriter();
+        int exit = await DetachedSession.RunAsync(["finish", "--run", run], text, error);
+
+        Assert.True(exit == 0, text + "\n" + error);
+        Assert.Contains("DETACHED FINISHED run " + run + "; its journalled end: passed", text.ToString());
     }
 }
