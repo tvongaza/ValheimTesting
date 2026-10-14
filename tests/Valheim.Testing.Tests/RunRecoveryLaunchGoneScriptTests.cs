@@ -74,7 +74,7 @@ public sealed class BashLaunchGoneScriptTests
 [Collection(nameof(WindowsGameProcessInventory))]
 public sealed class MacLaunchGoneScriptTests
 {
-    [Fact]
+    [OsFact("macos")]
     public async Task RealMacProcessListingReportsThisCiRunnerIdle() =>
         await RunRecovery.RequireNoLaunchProcessAsync(new LocalGameHost("launch-gone-mac", HostShell.Bash), [], TimeSpan.FromSeconds(30));
 }
