@@ -21,7 +21,7 @@ dotnet test MyMod.Tests/MyMod.Tests.csproj -c Release
 
 Success is **5 passed, 0 failed**, exit 0. A failed assertion returns nonzero.
 
-The project pins `Valheim.Testing.Doubles` `0.1.0-preview.15` from NuGet.org. Inside a ValheimTesting checkout, `NuGet.Config` also offers the local `.packages` feed. To be sure you test the published package, run from a copy outside the checkout.
+The project pins `Valheim.Testing.Doubles` `0.1.0-rc.1` from NuGet.org. Inside a ValheimTesting checkout, `NuGet.Config` also offers the local `.packages` feed. To be sure you test the published package, run from a copy outside the checkout.
 
 The five tests cover submerged ground, the exact allowed boundary, dry ground, sampling at x/z instead of the object's y, and the previous world returning after a throw.
 

@@ -22,7 +22,7 @@ Copy [`MyMod.Tests/`](../examples/ModWithTests/MyMod.Tests/MyMod.Tests.csproj) n
 
 ```xml
 <Compile Include="../YourMod/YourRule.cs" Link="Mod/YourRule.cs" />
-<PackageReference Include="Valheim.Testing.Doubles" Version="[0.1.0-preview.15]" PrivateAssets="all" />
+<PackageReference Include="Valheim.Testing.Doubles" Version="[0.1.0-rc.1]" PrivateAssets="all" />
 ```
 
 Reference no game assembly and no plugin project: the doubles have the game's type names. Keep Harmony patches and `Awake` out of the linked file.
@@ -80,7 +80,7 @@ A passing test proves the mod's decision on declared inputs. It does not prove t
 If the code under test uses no Unity or Valheim type, reference `Valheim.Testing` from your existing test project instead and pass an `ITerrain` into the real production method:
 
 ```xml
-<PackageReference Include="Valheim.Testing" Version="[0.1.0-preview.14]" />
+<PackageReference Include="Valheim.Testing" Version="[0.1.0-rc.1]" />
 ```
 
 Every other package and version is in the [package table](package-versions.md).
@@ -103,7 +103,7 @@ More in [Test logic that uses game types](guides/test-logic-that-uses-game-types
 One Windows PC with Valheim and the free Valheim Dedicated Server tool from Steam, the Steam client running and signed in, and PowerShell 7 ([host shells](reference/platforms.md#host-shells)). A `--server-only` run does not need Steam. `valheim-test` stages a disposable profile with its pinned BepInEx loader and ValheimCLI for each install and leaves the install untouched. <!-- TODO(docs): verify after #711 -->
 
 ```sh
-dotnet tool install Valheim.Testing.NativeSmoke --version 0.1.0-preview.31 --global
+dotnet tool install Valheim.Testing.NativeSmoke --version 0.1.0-rc.1 --global
 valheim-test env preflight
 valheim-test server-load --mod /path/to/ServerMod.dll
 ```

@@ -9,8 +9,8 @@
 Add the package to a separate system-test project, never to the mod. It targets net10.0.
 
 ```xml
-<PackageReference Include="Valheim.Testing.Game" Version="[0.1.0-preview.62]" />
-<PackageReference Include="Valheim.Testing.GameSessions" Version="[0.1.0-preview.24]" />
+<PackageReference Include="Valheim.Testing.Game" Version="[0.1.0-rc.1]" />
+<PackageReference Include="Valheim.Testing.GameSessions" Version="[0.1.0-rc.1]" />
 ```
 
 Brackets pin an exact version; the released versions are in the [package table](../package-versions.md).
