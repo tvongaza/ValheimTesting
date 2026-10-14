@@ -1103,7 +1103,7 @@ public sealed class RunRecoveryTests : IDisposable
         File.WriteAllText(Path.Combine(runtime, "preloader_20261005_221500.log"), "[Error  : Preloader] it broke");
         File.WriteAllText(Path.Combine(runtime, "preloader_20260901_101500.log"), "an old crash of the install");
         File.SetLastWriteTimeUtc(Path.Combine(runtime, "preloader_20260901_101500.log"), DateTime.UtcNow.AddDays(-30));
-        // A client's copy: its logs too, the host user's Player.log among them.
+        // A client's copy: its logs too. Its Unity log is in its launch folder, already the run's (#822).
         const string ClientPrep = "/srv/runs/server/vt-prep-cut-client";
         Directory.CreateDirectory(Path.Combine(_host.Local(ClientPrep + "/runtime"), "BepInEx"));
         File.WriteAllText(Path.Combine(_host.Local(ClientPrep + "/runtime"), "BepInEx", "LogOutput.log"), "client log");
@@ -1125,10 +1125,11 @@ public sealed class RunRecoveryTests : IDisposable
             "; left out as older than the copy: preloader_20260901_101500.log", Assert.Single(report.Steps, step => step.What == "copy " + Prep + "/runtime").Outcome);
         Assert.Equal("removed; its game logs are in /srv/runs/server/run-cut/recovered-client (BepInEx/LogOutput.log)",
             Assert.Single(report.Steps, step => step.What == "copy " + ClientPrep + "/runtime").Outcome);
-        // Since the copy was made (its journalled start); the host user's Player.log only for a client.
+        // Since the copy was made (its journalled start); only the copy's own logs, the Unity log by its one name, never the host
+        // user's Player.log (#822).
         var keeps = _host.Runs.Where(run => run.Script == "keep-logs").ToList();
-        Assert.Equal("false", Assert.Single(keeps, run => run.Variables["runtime"] == Prep + "/runtime").Variables["client"]);
-        Assert.Equal("true", Assert.Single(keeps, run => run.Variables["runtime"] == ClientPrep + "/runtime").Variables["client"]);
+        Assert.All(keeps, run => Assert.Equal(new[] { "keep", "runtime", "since", "unitylog" }, run.Variables.Keys.Order(StringComparer.Ordinal)));
+        Assert.All(keeps, run => Assert.Equal(GameLaunch.UnityLogName, run.Variables["unitylog"]));
         var copiedAt = DateTimeOffset.FromUnixTimeSeconds(long.Parse(keeps[0].Variables["since"], System.Globalization.CultureInfo.InvariantCulture));
         Assert.InRange(copiedAt, DateTimeOffset.UtcNow.AddDays(-2), DateTimeOffset.UtcNow.AddHours(-12)); // T0, the journal's time, not now.
         // Each log is kept before its copy is removed.
@@ -1364,49 +1365,39 @@ public sealed class RunRecoveryTests : IDisposable
     }
 
     // The real scripts on this machine (PowerShell on Windows, bash elsewhere): a copy's logs written since it was made are kept
-    // in the run's folder with their names, older ones are only named, a client's Player.log is kept the same way, and a copy
-    // that holds no log of the run makes no folder. Only a prepared copy's logs are kept.
+    // in the run's folder with their names, older ones are only named, and a copy that holds no log of the run makes no folder.
+    // Only a prepared copy's logs are kept.
     [Fact] public async Task TheRealKeepScriptKeepsOnlyLogsWrittenSinceTheCopyWasMade()
     {
         var local = new LocalGameHost("pc", HostShell.ThisMachine);
         string runs = Path.Combine(_root, "runs", "env"), runtime = Path.Combine(runs, "vt-prep-run-real-client", "runtime");
         Directory.CreateDirectory(Path.Combine(runtime, "BepInEx"));
         File.WriteAllText(Path.Combine(runtime, "BepInEx", "LogOutput.log"), "bepinex");
+        File.WriteAllText(Path.Combine(runtime, GameLaunch.UnityLogName), "unity");
         File.WriteAllText(Path.Combine(runtime, "preloader_1.log"), "old preloader");
-        string player = Path.Combine(_root, "profile", "Player.log");
-        Directory.CreateDirectory(Path.GetDirectoryName(player)!); File.WriteAllText(player, "player");
         var copied = DateTime.UtcNow.AddMinutes(-10);
         File.SetLastWriteTimeUtc(Path.Combine(runtime, "preloader_1.log"), copied.AddDays(-3)); // Came with the install.
 
-        var logs = await RunRecovery.KeepLogsAsync(local, runtime, "run-real", "client", copied, TimeSpan.FromSeconds(60), playerLog: player);
+        var logs = await RunRecovery.KeepLogsAsync(local, runtime, "run-real", "client", copied, TimeSpan.FromSeconds(60));
         Assert.Equal(Path.Combine(runs, "run-real", "recovered-client"), logs.Folder);
-        Assert.Equal(["BepInEx/LogOutput.log", "Player.log"], logs.Kept);
+        Assert.Equal(["BepInEx/LogOutput.log", "toolkit-unity.log"], logs.Kept);
         Assert.Equal(["preloader_1.log"], logs.Older);
         Assert.Equal("bepinex", File.ReadAllText(Path.Combine(logs.Folder, "BepInEx", "LogOutput.log")));
-        Assert.Equal("player", File.ReadAllText(Path.Combine(logs.Folder, "Player.log")));
+        Assert.Equal("unity", File.ReadAllText(Path.Combine(logs.Folder, "toolkit-unity.log")));
         Assert.False(File.Exists(Path.Combine(logs.Folder, "preloader_1.log")));
 
-        File.SetLastWriteTimeUtc(player, copied.AddHours(-1)); // An earlier client's.
         string server = Path.Combine(runs, "vt-prep-run-real2-server", "runtime");
         Directory.CreateDirectory(server); File.WriteAllText(Path.Combine(server, "toolkit-unity.log"), "unity");
-        logs = await RunRecovery.KeepLogsAsync(local, server, "run-real2", "client", copied, TimeSpan.FromSeconds(60), playerLog: player);
-        Assert.Equal(["toolkit-unity.log"], logs.Kept);
-        Assert.Equal(["Player.log"], logs.Older);
+        File.SetLastWriteTimeUtc(Path.Combine(server, "toolkit-unity.log"), copied.AddHours(-1)); // An earlier run's.
+        logs = await RunRecovery.KeepLogsAsync(local, server, "run-real2", "server", copied, TimeSpan.FromSeconds(60));
+        Assert.Empty(logs.Kept);
+        Assert.Equal(["toolkit-unity.log"], logs.Older);
 
         string empty = Directory.CreateDirectory(Path.Combine(runs, "vt-prep-run-empty-server", "runtime")).FullName;
         logs = await RunRecovery.KeepLogsAsync(local, empty, "run-empty", "server", copied, TimeSpan.FromSeconds(60));
         Assert.Empty(logs.Kept);
         Assert.False(Directory.Exists(logs.Folder));
         await Assert.ThrowsAsync<ArgumentException>(() => RunRecovery.KeepLogsAsync(local, Path.Combine(runs, "elsewhere", "runtime"), "run-x", "server", copied, TimeSpan.FromSeconds(60)));
-    }
-
-    [Theory]
-    [InlineData(HostShellKind.PowerShell, "")]
-    [InlineData(HostShellKind.Bash, "Library/Logs/IronGate/Valheim/Player.log")]
-    public void RecoverySelectsTheHostPlatformPlayerLog(HostShellKind shell, string expected)
-    {
-        Assert.Equal(expected, RunRecovery.PlayerLogArgument(shell, ""));
-        Assert.Equal("/explicit/Player.log", RunRecovery.PlayerLogArgument(shell, "/explicit/Player.log"));
     }
 
     [Fact] public async Task TheCommandLineRequiresARunAndSaysWhatItRefused()

@@ -29,7 +29,7 @@ public sealed partial class GameLaunch
     internal static void ValidateClientEnvironment(IReadOnlyDictionary<string, string> environment, IEnumerable<string> arguments)
     {
         ArgumentNullException.ThrowIfNull(environment);
-        BepInExLoader.RefuseOverrides(environment, arguments, StringComparer.OrdinalIgnoreCase, nameof(GameLaunch));
+        RefuseClientLogFile(BepInExLoader.RefuseOverrides(environment, arguments, StringComparer.OrdinalIgnoreCase, nameof(GameLaunch)));
         foreach (var (name, value) in environment)
         {
             if (!VariableName.IsMatch(name ?? "")) throw new ArgumentException($"'{name}' is not a client environment variable name.", nameof(environment));
@@ -40,9 +40,9 @@ public sealed partial class GameLaunch
 
     private GameLaunch(bool server, ClientPlatform platform, bool forHost, string gameDirectory, string loaderDirectory, string executable, IReadOnlyList<string> arguments,
         IReadOnlyDictionary<string, string> environment, IReadOnlyDictionary<string, string> prepended, IReadOnlyList<string> requiredFiles,
-        bool separateRoots, ClientArchitecture macArchitecture = ClientArchitecture.X64, IEnumerable<string>? secretVariables = null)
+        bool separateRoots, ClientArchitecture macArchitecture = ClientArchitecture.X64, IEnumerable<string>? secretVariables = null, string? unityLog = null)
     {
-        IsServer = server; Platform = platform; ForHost = forHost; GameDirectory = gameDirectory;
+        IsServer = server; Platform = platform; ForHost = forHost; GameDirectory = gameDirectory; UnityLog = unityLog;
         // Windows profiles own the launch folder beside their executable. A Unix profile keeps the game in its source install,
         // but every relative runtime write belongs under the owned loader profile.
         WorkingDirectory = separateRoots ? loaderDirectory : gameDirectory;
@@ -82,6 +82,12 @@ public sealed partial class GameLaunch
     public IReadOnlyList<string> SecretVariables { get; }
 
     internal bool IsServer { get; }
+    /// <summary>
+    /// The file this client launch's <c>-logFile</c> names: <see cref="UnityLogName"/> in the run's launch folder it was built for,
+    /// a path on the machine or host it runs on. Every reader of an owned client's Unity log takes it from here. Null for a launch
+    /// built without a launch folder (<see cref="ForClient"/>), which leaves Unity's default log.
+    /// </summary>
+    internal string? UnityLog { get; }
     // The source game root. A Unix profile's WorkingDirectory is its separate owned loader root.
     internal string GameDirectory { get; }
     // The operating system the launch runs on (ClientPlatform is also the host type).
@@ -249,14 +255,21 @@ public sealed partial class GameLaunch
         return LocalClient(install, arguments, environment, selected, console, CurrentClientHost);
     }
 
-    internal static GameLaunch ForClientWithLoader(string install, string loader, IEnumerable<string> arguments,
-        IReadOnlyDictionary<string, string>? environment, ClientPlatform hostPlatform, ClientArchitecture architecture,
+    /// <summary>
+    /// An owned client's launch on a host, its Unity log in <paramref name="launchDirectory"/> (the run's launch folder there,
+    /// which the interactive client's start makes): <c>-logFile</c> with <see cref="UnityLog"/> ends its arguments, and a
+    /// caller's own <c>-logFile</c> is refused.
+    /// </summary>
+    internal static GameLaunch ForOwnedClientOnHost(ClientPlatform hostPlatform, string install, string? loader, IEnumerable<string> arguments,
+        IReadOnlyDictionary<string, string>? environment, ClientArchitecture architecture, string launchDirectory,
         IEnumerable<string>? secretVariables = null, string? macDoorstop = null) =>
-        ClientOnHost(hostPlatform, install, arguments, environment, architecture, true, secretVariables, loader, macDoorstop);
+        ClientOnHost(hostPlatform, install, arguments, environment, architecture, true, secretVariables, loader, macDoorstop,
+            launchDirectory ?? throw new ArgumentNullException(nameof(launchDirectory)));
 
     // A launch for this machine, built as if on builtOn (so every machine's branches are tested on any OS).
+    // An owned launch names its launchDirectory (the run's folder for it), where Unity writes its log; ForClient names none.
     internal static GameLaunch LocalClient(string installDirectory, IEnumerable<string> arguments, IReadOnlyDictionary<string, string>? environment,
-        ClientArchitecture architecture, bool console, ClientPlatform builtOn, string? loaderDirectory = null)
+        ClientArchitecture architecture, bool console, ClientPlatform builtOn, string? loaderDirectory = null, string? launchDirectory = null)
     {
         ArgumentNullException.ThrowIfNull(arguments);
         string install = FullInstall(installDirectory);
@@ -276,7 +289,8 @@ public sealed partial class GameLaunch
 
         environment ??= new Dictionary<string, string>();
         var names = builtOn == ClientPlatform.Windows ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
-        var passed = WithConsole(BepInExLoader.RefuseOverrides(environment, arguments, names, nameof(GameLaunch)), console);
+        string? unityLog = launchDirectory == null ? null : Path.Combine(Path.GetFullPath(launchDirectory), UnityLogName);
+        var passed = ClientArguments(BepInExLoader.RefuseOverrides(environment, arguments, names, nameof(GameLaunch)), console, unityLog);
         // DYLD_INSERT_LIBRARIES splits on ':', so such a path cannot be represented. Checked only where the launch can run;
         // a Windows machine builds these launches only when a test injects the host.
         if (platform != ClientPlatform.Windows && !OperatingSystem.IsWindows() && (install.Contains(':') || loader.Contains(':')))
@@ -285,11 +299,12 @@ public sealed partial class GameLaunch
         var (set, prepended, required) = Loader(server: false, platform, environment, names, LocalJoin(install), LocalJoin(loader),
             separateRoots, Relative(install, executable), macDoorstop == null ? null : Relative(loader, macDoorstop));
         return new GameLaunch(server: false, platform, forHost: false, install, loader, executable, passed, set, prepended, required,
-            separateRoots, architecture);
+            separateRoots, architecture, unityLog: unityLog);
     }
 
     private static GameLaunch ClientOnHost(ClientPlatform platform, string install, IEnumerable<string> arguments, IReadOnlyDictionary<string, string>? environment,
-        ClientArchitecture architecture, bool console, IEnumerable<string>? secretVariables, string? loaderDirectory = null, string? macDoorstop = null)
+        ClientArchitecture architecture, bool console, IEnumerable<string>? secretVariables, string? loaderDirectory = null, string? macDoorstop = null,
+        string? launchDirectory = null)
     {
         ArgumentNullException.ThrowIfNull(arguments);
         RequireClientHost(platform);
@@ -305,7 +320,9 @@ public sealed partial class GameLaunch
         if (windows && separateRoots)
             throw new ArgumentException("A Windows Doorstop proxy must be beside the client executable; use an owned launch folder for both.", nameof(loaderDirectory));
         var names = windows ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
-        var passed = WithConsole(BepInExLoader.RefuseOverrides(environment ?? new Dictionary<string, string>(), arguments, names, nameof(GameLaunch)), console);
+        string? unityLog = launchDirectory == null ? null
+            : HostJoin(HostRoot(windows, launchDirectory, nameof(launchDirectory), "launch folder", server: false), windows, UnityLogName);
+        var passed = ClientArguments(BepInExLoader.RefuseOverrides(environment ?? new Dictionary<string, string>(), arguments, names, nameof(GameLaunch)), console, unityLog);
         // A Windows client's arguments travel as one quoted command line, which can hold a line break.
         RequireHostArguments(passed, lineBreaks: windows);
         // The client's start script puts the loader's entries in front of the caller's own value.
@@ -315,7 +332,7 @@ public sealed partial class GameLaunch
         var loaderJoin = (string relative) => HostJoin(loader, windows, relative);
         var (set, prepended, required) = Loader(server: false, platform, environment, names, join, loaderJoin, separateRoots, executable, macDoorstop);
         return new GameLaunch(server: false, platform, forHost: true, root, loader, HostJoin(root, windows, executable), passed, set, prepended, required,
-            separateRoots, macArchitecture: architecture, secretVariables: secretVariables);
+            separateRoots, macArchitecture: architecture, secretVariables: secretVariables, unityLog: unityLog);
     }
 
     // The loader's part of every launch, one rule set for both roles, here and on a host: the caller's variables first, then
@@ -352,11 +369,23 @@ public sealed partial class GameLaunch
     private static Func<string, string> LocalJoin(string root) => relative => Path.Combine(root, relative.Replace('/', Path.DirectorySeparatorChar));
     private static string Relative(string root, string path) => Path.GetRelativePath(root, path).Replace('\\', '/');
 
-    // -console first unless left out or already passed (in any case, as the game reads it).
-    private static List<string> WithConsole(List<string> passed, bool console)
+    // -console first unless left out or already passed (in any case, as the game reads it), then the caller's arguments, then for
+    // an owned launch -logFile naming its own Unity log (#822): without it Unity writes Player.log into the user's own folder,
+    // rotating their last game's log to Player-prev.log. An owned launch refuses a caller's -logFile, so this is the one place
+    // its log is chosen.
+    private static List<string> ClientArguments(List<string> passed, bool console, string? unityLog)
     {
+        if (unityLog != null) RefuseClientLogFile(passed);
         if (console && !passed.Contains(ConsoleArgument, StringComparer.OrdinalIgnoreCase)) passed.Insert(0, ConsoleArgument);
+        if (unityLog != null) { passed.Add(LogFileArgument); passed.Add(unityLog); }
         return passed;
+    }
+
+    private static void RefuseClientLogFile(IEnumerable<string> arguments)
+    {
+        if (arguments.Any(argument => argument.Equals(LogFileArgument, StringComparison.OrdinalIgnoreCase)))
+            throw new ArgumentException($"Remove {LogFileArgument} from the client's launch arguments: an owned launch writes Unity's log to " +
+                $"{UnityLogName} in the run's own launch folder, where the run keeps it, so the user's Player.log is never touched.", nameof(arguments));
     }
 
     private static void RequireX64(ClientPlatform platform, ClientArchitecture architecture)

@@ -65,7 +65,8 @@ public sealed class LocalClientJournalTests : IDisposable
 
         new LocalClientJournal(plan, evidence, desktopTask: false, hostPlatformForTest: ClientPlatform.MacOS).Begin();
 
-        string expected = GameLaunch.LocalClient(game, [], null, ClientArchitecture.X64, true, ClientPlatform.MacOS, loader).CommandLineSha256();
+        // The direct launch's folder is the evidence, where ClientSession has Unity write its log (#822).
+        string expected = GameLaunch.LocalClient(game, [], null, ClientArchitecture.X64, true, ClientPlatform.MacOS, loader, launchDirectory: evidence).CommandLineSha256();
         var entry = Assert.Single(File.ReadAllLines(Path.Combine(journal, "run-unix-profile-intent", "client.jsonl"))
             .Select(RunJournal.ParseLine)).Entry;
         Assert.Equal(expected, entry.Fields["expectedCommandLineSha256"]);

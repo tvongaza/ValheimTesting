@@ -379,7 +379,7 @@ internal sealed class FakeServerHost : IGameHost
                 return Ok("VT-STAGED selected files only\n");
             }
             // As RunRecovery's real scripts do (RunRecoveryTests runs them on this machine): each log in the copy written since the
-            // copy was made (since, Unix seconds), and a client's Player.log (playerlog, a mirrored path here); older ones are named.
+            // copy was made (since, Unix seconds); older ones are named.
             case "keep-logs":
             {
                 var reply = new StringBuilder();
@@ -396,10 +396,9 @@ internal sealed class FakeServerHost : IGameHost
                 if (Directory.Exists(runtime))
                 {
                     Save(Path.Combine(runtime, "BepInEx", "LogOutput.log"), "BepInEx/LogOutput.log");
-                    Save(Path.Combine(runtime, "toolkit-unity.log"), "toolkit-unity.log");
+                    Save(Path.Combine(runtime, v["unitylog"]), v["unitylog"]);
                     foreach (string file in Directory.GetFiles(runtime, "preloader_*.log")) Save(file, Path.GetFileName(file));
                 }
-                if (v["client"] == "true" && v["playerlog"].Length != 0) Save(Local(v["playerlog"]), "Player.log");
                 return Ok(reply + "VT-LOGS-DONE\n");
             }
             case "cleanup-stage":
@@ -627,6 +626,15 @@ internal sealed class FakeServerHost : IGameHost
                     Directory.CreateDirectory(Path.GetDirectoryName(log)!);
                     File.WriteAllText(log, "[Info   :valheimCLI] Command server listening on 127.0.0.1:5578\n");
                 }
+                // As Unity does: its log goes to the file the launch's -logFile names (#822).
+                var arguments = Spec(v["spec"]).Where(line => line.Kind == "arg").Select(line => line.Text).ToList();
+                int logFile = arguments.IndexOf("-logFile");
+                if (logFile >= 0 && logFile + 1 < arguments.Count)
+                {
+                    string unity = Local(arguments[logFile + 1]);
+                    Directory.CreateDirectory(Path.GetDirectoryName(unity)!);
+                    File.WriteAllText(unity, $"Unity player log of client {id}\n");
+                }
                 lock (_sync) _processes[id] = ("555", ct => exit.Task.WaitAsync(ct), () => exit.TrySetResult(137));
                 // A Windows start runs through a scheduled task, which it removes before it replies.
                 return Ok($"VT-INTERACTIVE started {id} 555\n" + (Windows ? "VT-TASK removed\n" : ""));
@@ -751,7 +759,9 @@ internal sealed class FakeServerHost : IGameHost
                 string source = Path.Combine(Local(v["install"]), "BepInEx", "LogOutput.log");
                 if (File.Exists(source)) File.Copy(source, Path.Combine(dir, "game-0.log"));
                 else File.WriteAllText(Path.Combine(dir, "game-0.log.absent"), "absent");
-                File.WriteAllText(Path.Combine(dir, "game-1.log.absent"), "absent");
+                string unity = Local(v["unitylog"]); // As the real script: the launch's -logFile (#822).
+                if (File.Exists(unity)) File.Copy(unity, Path.Combine(dir, "game-1.log"));
+                else File.WriteAllText(Path.Combine(dir, "game-1.log.absent"), "absent");
                 return Ok("VT-KEPT\n");
             }
             case "move-aside":

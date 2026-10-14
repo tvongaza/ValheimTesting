@@ -163,13 +163,14 @@ internal sealed class CampaignClients
             macDoorstop = await RemoteMacClientPreflight.SelectLoaderAsync(host, loaderRoot, plan.LaunchArchitecture,
                 HostedTimeouts.Quick, cancellation).ConfigureAwait(false);
         }
-        var launch = GameLaunch.ForClientWithLoader(gameRoot, loaderRoot, plan.LaunchArguments, plan.Environment,
-            platform, plan.LaunchArchitecture, plan.PasswordVariable is { } password ? new[] { password } : null, macDoorstop);
+        int n = Interlocked.Increment(ref _clients);
+        string runDirectory = HostPath.Join(role.Runtime, RunId), launchDirectory = HostPath.Join(runDirectory, "client-" + n);
+        // Unity's log goes to the run's launch folder on the host (#822), never the install (an inventory host's own, run in place).
+        var launch = GameLaunch.ForOwnedClientOnHost(platform, gameRoot, loaderRoot, plan.LaunchArguments, plan.Environment,
+            plan.LaunchArchitecture, launchDirectory, plan.PasswordVariable is { } password ? new[] { password } : null, macDoorstop);
         var account = await HoldAccountAsync(report, name, () => host, cancellation).ConfigureAwait(false);
         // A dedicated server's lock covers its own host; another client host is locked for the rest of the run.
         await LockHostAsync(role.Host, host, hostProfile, cancellation).ConfigureAwait(false);
-        int n = Interlocked.Increment(ref _clients);
-        string runDirectory = HostPath.Join(role.Runtime, RunId), launchDirectory = HostPath.Join(runDirectory, "client-" + n);
         string log = HostPath.Join(loaderRoot, HostedServerRun.BepInExLog);
         var listing = await HostInstall.ListAsync(host, gameRoot, HostedTimeouts.Long, InstallPins.PinPaths, cancellation).ConfigureAwait(false);
         var loader = loaderRoot == gameRoot ? listing :
@@ -254,7 +255,7 @@ internal sealed class CampaignClients
                         lock (_clientState) _pendingMacAgents.Remove(name);
                     } : null;
                     // A client on a `local` host runs on this machine: its session publishes the command lease (#819).
-                    var process = HostedClientProcess.Of(client, host, loaderRoot, tunnel, local,
+                    var process = HostedClientProcess.Of(client, host, loaderRoot, launch.UnityLog!, tunnel, local,
                         hostProfile.Kind == "local" ? _hooks : null, macAgentRetired);
                     if (account != null) account.Process = process; // Its lease is released only once this process is gone.
                     return process;

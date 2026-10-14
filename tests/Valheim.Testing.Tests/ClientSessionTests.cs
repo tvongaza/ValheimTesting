@@ -70,7 +70,11 @@ public sealed class ClientSessionTests : IDisposable
         File.AppendAllLines(log, Enumerable.Range(1, 100).Select(n => "log " + n));
         string evidence = Path.Combine(_output, "failure");
         string start = OwnedClientCommandLease.LocalStartFileTimeUtc(current.Id);
-        ClientFailureEvidence.CaptureLocal(new ExactProcess(current.Id, start), null, plan, evidence);
+        string unity = Path.Combine(_output, "launch", GameLaunch.UnityLogName); // The launch's own -logFile (#822).
+        Directory.CreateDirectory(Path.GetDirectoryName(unity)!);
+        File.WriteAllLines(unity, ["Unity started", "Unity failed here"]);
+        ClientFailureEvidence.CaptureLocal(new ExactProcess(current.Id, start), null, plan, unity, evidence);
+        Assert.Equal(new[] { "Unity started", "Unity failed here" }, File.ReadAllLines(Path.Combine(evidence, "client-failure-player-tail.log")));
         string[] tail = File.ReadAllLines(Path.Combine(evidence, "client-failure-bepinex-tail.log"));
         Assert.Equal(80, tail.Length);
         Assert.Equal("log 21", tail[0]);
@@ -78,13 +82,13 @@ public sealed class ClientSessionTests : IDisposable
         Assert.Contains("same owned process", File.ReadAllText(Path.Combine(evidence, "client-failure-diagnostic.json")));
 
         string mismatch = Path.Combine(_output, "mismatch");
-        ClientFailureEvidence.CaptureLocal(new ExactProcess(current.Id, "1"), null, plan, mismatch);
+        ClientFailureEvidence.CaptureLocal(new ExactProcess(current.Id, "1"), null, plan, Path.Combine(_output, GameLaunch.UnityLogName), mismatch);
         Assert.Contains("different launch", File.ReadAllText(Path.Combine(mismatch, "client-failure-diagnostic.json")));
 
         var transport = new ScriptedTransport().OnPrefix("cli_screenshot_path64 ", _ => ScriptedTransport.Ok("That command is a cheat"));
         using var actor = transport.Actor();
         string refused = Path.Combine(_output, "cheat-refused");
-        ClientFailureEvidence.CaptureLocal(new ExactProcess(current.Id, start), actor, plan, refused);
+        ClientFailureEvidence.CaptureLocal(new ExactProcess(current.Id, start), actor, plan, Path.Combine(_output, GameLaunch.UnityLogName), refused);
         Assert.Contains("CLI refused", File.ReadAllText(Path.Combine(refused, "client-failure-diagnostic.json")));
         Assert.Single(transport.Commands.Where(command => command.StartsWith("cli_screenshot_path64 ", StringComparison.Ordinal)));
 
@@ -100,7 +104,7 @@ public sealed class ClientSessionTests : IDisposable
         var transport = new ScriptedTransport().OnPrefix("cli_screenshot_path64 ", _ => ScriptedTransport.Ok("screenshot"));
         using var actor = transport.Actor();
         string evidence = Path.Combine(_output, "exited");
-        ClientFailureEvidence.CaptureLocal(new ExactProcess(current.Id, start, exited: true), actor, plan, evidence);
+        ClientFailureEvidence.CaptureLocal(new ExactProcess(current.Id, start, exited: true), actor, plan, Path.Combine(_output, GameLaunch.UnityLogName), evidence);
         using var facts = System.Text.Json.JsonDocument.Parse(File.ReadAllText(Path.Combine(evidence, "client-failure-diagnostic.json")));
         Assert.Equal("exited", facts.RootElement.GetProperty("process").GetString());
         Assert.True(facts.RootElement.TryGetProperty("sessionId", out _));
@@ -195,7 +199,7 @@ public sealed class ClientSessionTests : IDisposable
         using var install = ClientLaunchTests.Install.For(ClientPlatform.Windows);
         var plan = Plan(); plan.Install = install.Root;
         plan.Environment["PROCEDURALROADS_GENERATE_ROADS_ON_LOAD"] = "0";
-        var launch = ClientSession.StartInfo(plan, ClientPlatform.Windows);
+        var launch = ClientSession.StartInfo(plan, ClientPlatform.Windows, _output);
         Assert.Equal("0", launch.Environment["PROCEDURALROADS_GENERATE_ROADS_ON_LOAD"]);
     }
 
@@ -260,7 +264,7 @@ public sealed class ClientSessionTests : IDisposable
         using var install = ClientLaunchTests.Install.Mac(universalDoorstop: true, core: ClientLaunchTests.NativeDetour);
         var plan = Owned(install.Root, architecture);
         plan.Validate();
-        var arguments = ClientSession.StartInfo(plan, ClientPlatform.MacOS).ArgumentList.ToList();
+        var arguments = ClientSession.StartInfo(plan, ClientPlatform.MacOS, _output).ArgumentList.ToList();
         Assert.Equal(slice, arguments[0]);
         string doorstop = native ? Path.Combine(install.Root, "libdoorstop.dylib") : Path.Combine(install.Root, "doorstop_libs", "libdoorstop_x64.dylib");
         Assert.Equal(new[] { "-e", "DYLD_INSERT_LIBRARIES=" + doorstop }, ClientLaunchTests.ExportPair(arguments, "DYLD_INSERT_LIBRARIES"));
@@ -276,11 +280,13 @@ public sealed class ClientSessionTests : IDisposable
         var launch = GameLaunch.LocalClient(game.Root, [], null, ClientArchitecture.Arm64, true, ClientPlatform.MacOS, profile.Root);
         Assert.Contains("DYLD_INSERT_LIBRARIES", launch.Unset);
         Assert.Contains("DYLD_LIBRARY_PATH", launch.Unset);
-        var start = ClientSession.StartInfo(plan, ClientPlatform.MacOS);
+        var start = ClientSession.StartInfo(plan, ClientPlatform.MacOS, _output);
         Assert.Equal("/usr/bin/arch", start.FileName);
         Assert.Contains(game.Executable, start.ArgumentList);
         Assert.Equal(new[] { "-e", "DYLD_INSERT_LIBRARIES=" + Path.Combine(profile.Root, "libdoorstop.dylib") },
             ClientLaunchTests.ExportPair(start.ArgumentList.ToList(), "DYLD_INSERT_LIBRARIES"));
+        // Unity's log goes to the run's launch folder, neither the profile nor the source game (#822).
+        Assert.Equal(new[] { "-logFile", Path.Combine(_output, GameLaunch.UnityLogName) }, start.ArgumentList.ToArray()[^2..]);
     }
 
     [Fact] public void AnOmittedArchitectureUsesTheCurrentHostsDefaultMacSlice()
@@ -290,7 +296,7 @@ public sealed class ClientSessionTests : IDisposable
         bool native = OperatingSystem.IsMacOS() && System.Runtime.InteropServices.RuntimeInformation.OSArchitecture == System.Runtime.InteropServices.Architecture.Arm64;
         Assert.Equal(native ? ClientArchitecture.Arm64 : ClientArchitecture.X64, plan.LaunchArchitecture);
         plan.Validate();
-        var arguments = ClientSession.StartInfo(plan, ClientPlatform.MacOS).ArgumentList.ToList();
+        var arguments = ClientSession.StartInfo(plan, ClientPlatform.MacOS, _output).ArgumentList.ToList();
         Assert.Equal(native ? "-arm64" : "-x86_64", arguments[0]);
         string doorstop = native ? Path.Combine(install.Root, "libdoorstop.dylib") : Path.Combine(install.Root, "doorstop_libs", "libdoorstop_x64.dylib");
         Assert.Equal(new[] { "-e", "DYLD_INSERT_LIBRARIES=" + doorstop }, ClientLaunchTests.ExportPair(arguments, "DYLD_INSERT_LIBRARIES"));
@@ -300,10 +306,10 @@ public sealed class ClientSessionTests : IDisposable
     [Fact] public void AnArm64PlanForAnInstallThatCannotRunNativelyIsRefusedBeforeLaunch()
     {
         using var pack = ClientLaunchTests.Install.Mac();
-        var error = Assert.Throws<InvalidOperationException>(() => ClientSession.StartInfo(Owned(pack.Root, "arm64"), ClientPlatform.MacOS));
+        var error = Assert.Throws<InvalidOperationException>(() => ClientSession.StartInfo(Owned(pack.Root, "arm64"), ClientPlatform.MacOS, _output));
         Assert.Contains("No Doorstop library in the install has an arm64 slice", error.Message);
         using var legacy = ClientLaunchTests.Install.Mac(universalDoorstop: true, core: ClientLaunchTests.LegacyDetour);
-        error = Assert.Throws<InvalidOperationException>(() => ClientSession.StartInfo(Owned(legacy.Root, "arm64"), ClientPlatform.MacOS));
+        error = Assert.Throws<InvalidOperationException>(() => ClientSession.StartInfo(Owned(legacy.Root, "arm64"), ClientPlatform.MacOS, _output));
         Assert.Contains("MonoMod before 25", error.Message);
         // The public launch refuses the same plan before it reserves the port, checks Steam or starts anything: on a Mac for
         // the loader, elsewhere because a macOS client runs only on a Mac.
@@ -317,11 +323,11 @@ public sealed class ClientSessionTests : IDisposable
         using var install = ClientLaunchTests.Install.For(platform);
         var error = Assert.Throws<ArgumentException>(() => Owned(install.Root, "arm64").Validate());
         Assert.Contains($"this {platform} client is x64 only", error.Message);
-        Assert.Throws<ArgumentException>(() => ClientSession.StartInfo(Owned(install.Root, "arm64"), platform));
+        Assert.Throws<ArgumentException>(() => ClientSession.StartInfo(Owned(install.Root, "arm64"), platform, _output));
         foreach (string? x64 in new[] { null, "x64" })
         {
             var plan = Owned(install.Root, x64); plan.Validate();
-            Assert.Equal(install.Executable, ClientSession.StartInfo(plan, platform).FileName);
+            Assert.Equal(install.Executable, ClientSession.StartInfo(plan, platform, _output).FileName);
         }
     }
 
@@ -468,7 +474,7 @@ public sealed class ClientSessionTests : IDisposable
             plan.Install = install.Root;
             plan.Architecture = "x64";
             plan.RequirePasswordSource();
-            var launch = ClientSession.StartInfo(plan, GameLaunch.CurrentClientHost);
+            var launch = ClientSession.StartInfo(plan, GameLaunch.CurrentClientHost, _output);
             Assert.Equal(secret, launch.Environment[variable]);
             Assert.DoesNotContain(secret, System.Text.Json.JsonSerializer.Serialize(plan));
 
@@ -515,11 +521,23 @@ public sealed class ClientSessionTests : IDisposable
         Assert.Equal(logs, session.Logs);
     }
 
-    [Theory]
-    [InlineData(ClientPlatform.Windows, "AppData", "LocalLow", "IronGate", "Valheim", "Player.log")]
-    [InlineData(ClientPlatform.MacOS, "Library", "Logs", "IronGate", "Valheim", "Player.log")]
-    public void UnityWritesTheClientsPlayerLogUnderTheUsersProfile(ClientPlatform platform, params string[] under) =>
-        Assert.Equal(Path.Combine(new[] { Environment.GetFolderPath(Environment.SpecialFolder.UserProfile) }.Concat(under).ToArray()), ClientSession.PlayerLog(platform));
+    // #822: without -logFile Unity writes Player.log into the user's own folder (rotating their last game's to Player-prev.log).
+    // Every owned launch on this machine names its own log in the run's launch folder instead, never the install: an install
+    // run in place is the user's own and keeps no file of the run. The plan's check alone builds no launch to start.
+    [Theory] [InlineData(ClientPlatform.Windows, false)] [InlineData(ClientPlatform.MacOS, false)]
+    [InlineData(ClientPlatform.Windows, true)] [InlineData(ClientPlatform.MacOS, true)]
+    public void AnOwnedClientsUnityLogIsInItsLaunchFolderNeverTheInstallOrTheUsersPlayerLog(ClientPlatform platform, bool inPlace)
+    {
+        using var install = ClientLaunchTests.Install.For(platform);
+        var plan = Owned(install.Root, "x64"); plan.InPlace = inPlace;
+        var launch = ClientSession.LocalLaunch(plan, platform, _output);
+        Assert.Equal(Path.Combine(_output, GameLaunch.UnityLogName), launch.UnityLog);
+        var arguments = launch.ToStartInfo().ArgumentList.ToList();
+        Assert.Equal(new[] { "-logFile", launch.UnityLog }, arguments[^2..]);
+        Assert.DoesNotContain(arguments, argument => argument.Contains("Player.log", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(arguments, argument => argument.StartsWith(install.Root + Path.DirectorySeparatorChar, StringComparison.Ordinal)
+            && argument.EndsWith(GameLaunch.UnityLogName, StringComparison.Ordinal));
+    }
 
     [Fact] public void ALeftoverPatcherInTheInstallRefusesTheLaunch()
     {

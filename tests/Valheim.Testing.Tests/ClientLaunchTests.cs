@@ -24,14 +24,13 @@ public class ClientLaunchTests
         var errors = new[]
         {
             Assert.Throws<PlatformNotSupportedException>(() => GameLaunch.ForClient("/home/steam/valheim", [], hostPlatform: ClientPlatform.Linux)),
-            Assert.Throws<PlatformNotSupportedException>(() => GameLaunch.ForClientWithLoader("/game/valheim", "/owned/profile", [], null, ClientPlatform.Linux, ClientArchitecture.X64)),
+            Assert.Throws<PlatformNotSupportedException>(() => GameLaunch.ForOwnedClientOnHost(ClientPlatform.Linux, "/game/valheim", "/owned/profile", [], null, ClientArchitecture.X64, "/runs/client-1")),
             Assert.Throws<PlatformNotSupportedException>(() => GameLaunch.LocalClient(install.Root, [], null, ClientArchitecture.X64, true, ClientPlatform.Linux)),
             Assert.Throws<PlatformNotSupportedException>(() => GameLaunch.RequireClientExecutable(install.Root, ClientPlatform.Linux)),
             // An install holding the Linux client is refused on any host.
             Assert.Throws<PlatformNotSupportedException>(() => GameLaunch.DetectClient(install.Root)),
             Assert.Throws<PlatformNotSupportedException>(() => GameLaunch.RequireClientExecutable(install.Root, ClientPlatform.Windows)),
             Assert.Throws<PlatformNotSupportedException>(() => GameLaunch.LocalClient(install.Root, [], null, ClientArchitecture.X64, true, ClientPlatform.MacOS)),
-            Assert.Throws<PlatformNotSupportedException>(() => ClientSession.PlayerLog(ClientPlatform.Linux)),
             Assert.Throws<PlatformNotSupportedException>(() => HostedWorld.DefaultSaveDirectory(ClientPlatform.Linux)),
         };
         Assert.All(errors, error => Assert.Equal(refusal, error.Message));
@@ -139,6 +138,54 @@ public class ClientLaunchTests
             GameLaunch.LocalClient(install.Root, ["-windowed", "-Console"], null, ClientArchitecture.X64, true, ClientPlatform.Windows).ToStartInfo().ArgumentList);
         Assert.Equal(new[] { "-windowed" },
             GameLaunch.LocalClient(install.Root, ["-windowed"], null, ClientArchitecture.X64, false, ClientPlatform.Windows).ToStartInfo().ArgumentList);
+    }
+
+    // #822: without -logFile Unity writes Player.log into the user's own save-data folder and rotates their last game's log to
+    // Player-prev.log. An owned launch, here and on a host, names its own log in the run's launch folder: never the install (an
+    // install run in place is the user's own), never the profile. A caller's -logFile is refused before anything is copied
+    // (the plan's check) or started. A plain ForClient, which names no launch folder, leaves Unity's default as it was.
+    [Theory] [InlineData(ClientPlatform.Windows)] [InlineData(ClientPlatform.MacOS)]
+    public void AnOwnedLaunchHereWritesUnitysLogIntoItsLaunchFolder(ClientPlatform platform)
+    {
+        using var install = Install.For(platform);
+        string launchFolder = Path.Combine(Path.GetDirectoryName(install.Root)!, "run " + Guid.NewGuid().ToString("N"), "client-1");
+        var owned = GameLaunch.LocalClient(install.Root, ["-windowed"], null, ClientArchitecture.X64, true, platform, launchDirectory: launchFolder);
+        string log = Path.Combine(launchFolder, GameLaunch.UnityLogName);
+        Assert.Equal(log, owned.UnityLog);
+        Assert.Equal(new[] { "-logFile", log }, owned.ToStartInfo().ArgumentList.ToArray()[^2..]);
+        var plain = GameLaunch.LocalClient(install.Root, ["-windowed"], null, ClientArchitecture.X64, true, platform);
+        Assert.Null(plain.UnityLog);
+        Assert.DoesNotContain(plain.Arguments, argument => argument.Equals("-logFile", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Theory] [InlineData(ClientPlatform.Windows)] [InlineData(ClientPlatform.MacOS)]
+    public void AnOwnedLaunchRefusesACallersOwnLogFile(ClientPlatform platform)
+    {
+        using var install = Install.For(platform);
+        foreach (string spelling in new[] { "-logFile", "-logfile", "-LOGFILE" })
+        {
+            var error = Assert.Throws<ArgumentException>(() => GameLaunch.LocalClient(install.Root, [spelling, "elsewhere.log"], null, ClientArchitecture.X64, true, platform,
+                launchDirectory: install.Root + "-run"));
+            Assert.Contains(GameLaunch.UnityLogName, error.Message);
+            Assert.Throws<ArgumentException>(() => GameLaunch.ValidateClientEnvironment(new Dictionary<string, string>(), ["-windowed", spelling, "elsewhere.log"]));
+            Assert.Throws<ArgumentException>(() => GameLaunch.ForOwnedClientOnHost(ClientPlatform.Windows, @"C:\Games\Valheim", null, [spelling, "x"], null,
+                ClientArchitecture.X64, @"C:\runs\r1\client-1"));
+        }
+    }
+
+    [Fact] public void AnOwnedLaunchOnAHostWritesUnitysLogIntoItsLaunchFolder()
+    {
+        // A Windows client run in place from the user's own install: the log is the run's, not a new file in the install.
+        var windows = GameLaunch.ForOwnedClientOnHost(ClientPlatform.Windows, @"C:\Games\Valheim", null, ["-windowed"], null, ClientArchitecture.X64,
+            @"C:\runs\r1\client-1");
+        Assert.Equal(new[] { "-console", "-windowed", "-logFile", @"C:\runs\r1\client-1\toolkit-unity.log" }, windows.Arguments);
+        Assert.Equal(@"C:\runs\r1\client-1\toolkit-unity.log", windows.UnityLog);
+        // A Mac profile runs the source game with its own loader: the log is neither's.
+        var mac = GameLaunch.ForOwnedClientOnHost(ClientPlatform.MacOS, "/Applications/Valheim", "/Users/tester/runs/profile", [], null,
+            ClientArchitecture.Arm64, "/Users/tester/runs/r1/client-1", macDoorstop: "libdoorstop.dylib");
+        Assert.Equal(new[] { "-console", "-logFile", "/Users/tester/runs/r1/client-1/toolkit-unity.log" }, mac.Arguments);
+        Assert.Throws<ArgumentException>(() => GameLaunch.ForOwnedClientOnHost(ClientPlatform.MacOS, "/Applications/Valheim", null, [], null,
+            ClientArchitecture.Arm64, "relative/client-1", macDoorstop: "libdoorstop.dylib"));
     }
     [Theory]
     [InlineData("enabled = false", "target_assembly=BepInEx\\core\\BepInEx.Preloader.dll")]

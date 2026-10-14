@@ -27,6 +27,14 @@ public sealed partial class GameLaunch
     internal const string LinuxClientRefusal = "Linux hosts run the dedicated server only; start the client on Windows or macOS.";
     public const string ClientMacBundle = "Valheim.app";
     public const string ConsoleArgument = "-console";
+    internal const string LogFileArgument = "-logFile";
+    /// <summary>
+    /// The one name of the toolkit's Unity log (#822). An owned client launch passes <c>-logFile</c> with it in the run's own launch
+    /// folder (<see cref="UnityLog"/>), never the install, so the game neither writes the user's own <c>Player.log</c> nor leaves a
+    /// file in an install run in place. A dedicated server's plan names it in its runtime (<c>-logFile {runtime}/toolkit-unity.log</c>),
+    /// and recovery keeps it from a runtime by this name.
+    /// </summary>
+    internal const string UnityLogName = "toolkit-unity.log";
     // A SIP-protected system binary: the kernel strips DYLD_* from its environment, so they are passed with -e.
     // It execs the game in place, so the started PID is still the game's.
     public const string MacArchLauncher = "/usr/bin/arch";

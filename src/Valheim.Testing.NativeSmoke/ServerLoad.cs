@@ -265,7 +265,7 @@ internal static class ServerLoad
                 "windows" => ServerPlatform.Windows, "macos" => ServerPlatform.MacOS, _ => ServerPlatform.Linux,
             }),
             Arguments = ["-batchmode", "-nographics", "-name", worldName, "-port", server.GamePort.ToString(CultureInfo.InvariantCulture),
-                "-world", worldName, "-password", password, "-public", "0", "-savedir", "{world}", "-logFile", "{runtime}/toolkit-unity.log"],
+                "-world", worldName, "-password", password, "-public", "0", "-savedir", "{world}", "-logFile", "{runtime}/" + GameLaunch.UnityLogName],
             Environment = new Dictionary<string, string> { [SmokeSessionContract.SelectedGuidsVariable] = string.Join(";", selectedGuids) },
             Port = server.CliPort,
             StartupSeconds = parsed.Options.TryGetValue("--server-startup-seconds", out string? startupSeconds)

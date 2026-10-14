@@ -1625,6 +1625,10 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.IsType<InvalidOperationException>(failed);
         Assert.Single(clientHost.Stops);
         Assert.Contains("listening on 127.0.0.1:5578", File.ReadAllText(Path.Combine(Output, "player", "client-1", "game-0.log")));
+        // Unity's log is the launch's own -logFile in the run's launch folder, kept from there, never the host user's Player.log (#822).
+        Assert.StartsWith("Unity player log of client ", File.ReadAllText(Path.Combine(Output, "player", "client-1", "game-1.log")));
+        var keep = Assert.Single(clientHost.Runs, run => run.Script == "client-keep").Variables;
+        Assert.Equal(HostPath.Join(keep["dir"], GameLaunch.UnityLogName), keep["unitylog"]);
         var roles = Result().GetProperty("Logs").EnumerateArray().Select(log => log.GetProperty("Role").GetString()).ToList();
         Assert.Contains("client-1 BepInEx log", roles);
         Assert.Contains("client-1 Player.log", roles);
