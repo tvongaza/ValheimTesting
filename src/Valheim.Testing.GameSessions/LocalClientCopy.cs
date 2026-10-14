@@ -25,20 +25,31 @@ internal sealed class LocalClientCopy
     private readonly RunJournal _journal;
     private readonly ClientRunPlan _plan;
     private readonly Unbound _unbound;
-    private int _retired;
+    private readonly ProfileSourceCheck _sourceCheck;
+    private int _retired, _sourceVerified;
 
     // The plan as it was before it was bound, restored when the profile is retired: a plan reused later makes a new profile.
     private sealed record Unbound(string Install, InstallPins? InstallPins, Dictionary<string, string> Pins, string? CliManifest,
         string? LoaderRoot, string? LaunchMode, string? SourceGameRoot, string? SourceGameHash, string? LeftOut,
-        SortedDictionary<string, string> PinOrigins, Dictionary<string, string> SourceCliPins, IReadOnlyList<string> ReplacedCliPaths);
+        SortedDictionary<string, string> PinOrigins, Dictionary<string, string> SourceCliPins, IReadOnlyList<string> ReplacedCliPaths,
+        Action? SourceCheck);
 
-    private LocalClientCopy(IGameHost host, string actor, string runtime, string stage, string launchRoot, RunJournal journal, ClientRunPlan plan, Unbound unbound)
-    { _host = host; _actor = actor; _runtime = runtime; _stage = stage; _launchRoot = launchRoot; _journal = journal; _plan = plan; _unbound = unbound; }
+    private LocalClientCopy(IGameHost host, string actor, string runtime, string stage, string launchRoot, RunJournal journal,
+        ClientRunPlan plan, Unbound unbound, ProfileSourceCheck sourceCheck)
+    { _host = host; _actor = actor; _runtime = runtime; _stage = stage; _launchRoot = launchRoot; _journal = journal; _plan = plan; _unbound = unbound; _sourceCheck = sourceCheck; }
 
     /// <summary>The owned folder retired with this client's profile.</summary>
     internal string Runtime => _runtime;
     /// <summary>The game root used to prove the launched process has stopped before retiring the owned folder.</summary>
     internal string LaunchRoot => _launchRoot;
+    internal string SourceVerdictName => _sourceCheck.VerdictName(_actor);
+
+    internal async Task VerifySourceAsync()
+    {
+        if (Volatile.Read(ref _sourceVerified) != 0) return;
+        await _sourceCheck.VerifyAfterRunAsync(_host, StepTimeout).ConfigureAwait(false);
+        Interlocked.Exchange(ref _sourceVerified, 1);
+    }
 
     /// <summary>
     /// Makes <paramref name="plan"/>'s disposable profile and binds the plan to it. <paramref name="actor"/> names the client in the
@@ -59,7 +70,6 @@ internal sealed class LocalClientCopy
         actor = JournalActor(actor);
         string source = Path.TrimEndingDirectorySeparator(Path.GetFullPath(plan.Install));
         if (!Directory.Exists(source)) throw new DirectoryNotFoundException($"The client install {source} does not exist.");
-        plan.CheckOwnedInstall(); // The source's own checks: a wrong game build or plugin is refused before staging.
 
         // The ValheimCLI set the profile stages: the plan's, its DLLs beside its manifest, or the toolkit's pinned bundle.
         string manifestPath = plan.CliManifest ?? (cliBundle ?? (() => PinnedCliBundle.Source()))()?.Manifest
@@ -111,9 +121,9 @@ internal sealed class LocalClientCopy
             ("runtimeKind", "client"), ("launchRoot", profile.GameRoot)));
         var unbound = new Unbound(plan.Install, plan.InstallPins, plan.Pins, plan.CliManifest, plan.PreparedLoaderRoot, plan.PreparedLaunchMode,
             plan.PreparedSourceGameRoot, plan.PreparedSourceGameHash, plan.PreparedLeftOut, plan.PreparedPinOrigins,
-            plan.PreparedSourceCliPins, plan.PreparedReplacedCliPaths);
-        Bind(plan, source, profile, manifestPath, bound, selection.Replaced);
-        return new LocalClientCopy(host, actor, runtime, stage, profile.GameRoot, journal, plan, unbound);
+            plan.PreparedSourceCliPins, plan.PreparedReplacedCliPaths, plan.PreparedSourceCheck);
+        Bind(plan, source, profile, manifestPath, bound, selection.Replaced, host);
+        return new LocalClientCopy(host, actor, runtime, stage, profile.GameRoot, journal, plan, unbound, profile.SourceCheck);
     }
 
     /// <summary>
@@ -121,25 +131,35 @@ internal sealed class LocalClientCopy
     /// journals it retired and restores the plan as it was before it was bound. Once only. A game still running from the
     /// profile's launch root is refused first, which leaves it to <c>env recover</c>.
     /// </summary>
-    internal async Task RetireAsync()
+    internal async Task RetireAsync(bool verifySource = true)
     {
         if (Interlocked.Exchange(ref _retired, 1) != 0) return;
         await HostedRuntimeStage.RequireStoppedAsync(_host, StepTimeout, runtimes: [_launchRoot], clientSession: false).ConfigureAwait(false);
-        await HostedRuntimeStage.RetireAsync(_host, _runtime, _stage, StepTimeout).ConfigureAwait(false);
-        _journal.AppendLocal(_actor, JournalEntry.Of(JournalEntry.CopyRetired, ("runtime", _runtime)));
+        Exception? integrity = null;
+        try { if (verifySource) await VerifySourceAsync().ConfigureAwait(false); }
+        catch (Exception error) { integrity = error; }
+        try
+        {
+            await HostedRuntimeStage.RetireAsync(_host, _runtime, _stage, StepTimeout).ConfigureAwait(false);
+            _journal.AppendLocal(_actor, JournalEntry.Of(JournalEntry.CopyRetired, ("runtime", _runtime)));
+        }
+        catch (Exception cleanup) when (integrity != null)
+        { throw new AggregateException("Source integrity failed and the disposable client profile was not retired.", integrity, cleanup); }
         _plan.Install = _unbound.Install; _plan.InstallPins = _unbound.InstallPins; _plan.Pins = _unbound.Pins; _plan.CliManifest = _unbound.CliManifest;
         _plan.PreparedLoaderRoot = _unbound.LoaderRoot; _plan.PreparedLaunchMode = _unbound.LaunchMode;
         _plan.PreparedSourceGameRoot = _unbound.SourceGameRoot; _plan.PreparedSourceGameHash = _unbound.SourceGameHash;
         _plan.PreparedLeftOut = _unbound.LeftOut;
         _plan.PreparedPinOrigins = _unbound.PinOrigins; _plan.PreparedSourceCliPins = _unbound.SourceCliPins;
         _plan.PreparedReplacedCliPaths = _unbound.ReplacedCliPaths;
+        _plan.PreparedSourceCheck = _unbound.SourceCheck;
         _plan.Prepared = false;
+        if (integrity != null) throw integrity;
     }
 
     // The plan, bound to its profile: the profile's game and loader roots and install pins, its plugin pins with the staged
     // set's in place of any ValheimCLI pin the plan carried (each file's MD5, as the session derives them), and the staged set's manifest.
     private static void Bind(ClientRunPlan plan, string source, HostedRuntimeStage.PreparedProfile profile,
-        string manifestPath, InstallSelection.BoundPins bound, IReadOnlyList<string> replacedCliPaths)
+        string manifestPath, InstallSelection.BoundPins bound, IReadOnlyList<string> replacedCliPaths, IGameHost host)
     {
         plan.Install = profile.GameRoot;
         plan.PreparedLoaderRoot = profile.GameRoot == profile.LoaderRoot ? null : profile.LoaderRoot;
@@ -154,6 +174,9 @@ internal sealed class LocalClientCopy
         {
             ["installPins"] = expectedInstallPins != null && expectedInstallPins.SameAs(profile.Pins) ? "plan" : "observed",
         };
+        plan.PreparedSourceCheck = () => HostInstall.CheckProfilePinsAsync(host, profile.Pins, profile.GameRoot,
+            profile.LoaderRoot, profile.SourceCheck, "prepared client profile before launch", StepTimeout,
+            CancellationToken.None).GetAwaiter().GetResult();
         foreach (var (key, origin) in bound.PluginOrigins()) plan.PreparedPinOrigins[key] = origin;
         plan.PreparedSourceCliPins = new Dictionary<string, string>(bound.SourceCliPins, StringComparer.Ordinal);
         plan.PreparedReplacedCliPaths = replacedCliPaths.Order(StringComparer.Ordinal).ToArray();

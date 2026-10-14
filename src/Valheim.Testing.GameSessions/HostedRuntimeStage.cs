@@ -192,7 +192,7 @@ internal static partial class HostedRuntimeStage
         if (loaderPackage != null && loaderPackage.Files.ContainsKey(BepInExLoader.WindowsProxy) !=
             (host.Shell.Kind == HostShellKind.PowerShell))
             throw new InvalidDataException("The reviewed loader package does not match the host platform.");
-        var sourceListing = await HostInstall.ListAsync(host, source, timeout, cancellation: cancellation).ConfigureAwait(false);
+        var sourceListing = await ProfileSourceCheck.InspectAsync(host, source, timeout, cancellation).ConfigureAwait(false);
         if (kind == HostedRuntimeKind.Server) _ = HostInstall.DetectServer(sourceListing);
         else
         {

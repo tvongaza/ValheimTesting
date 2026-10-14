@@ -68,6 +68,8 @@ public sealed class ClientRunPlan
     [JsonIgnore] internal Dictionary<string, string> PreparedSourceCliPins { get; set; } = new(StringComparer.Ordinal);
     /// <summary>Install-relative ValheimCLI paths the profile replaced. Never read from a plan file.</summary>
     [JsonIgnore] internal IReadOnlyList<string> PreparedReplacedCliPaths { get; set; } = [];
+    /// <summary>The profile owner's narrow source check, run immediately before launch; includes Windows linked native DLLs.</summary>
+    [JsonIgnore] internal Action? PreparedSourceCheck { get; set; }
     /// <summary>
     /// An owned client whose <see cref="Install"/> is still the source of the disposable copy its run will make: the checks that
     /// read the install's ValheimCLI files wait for the copy, and its ValheimCLI pins are the staged set's.
@@ -379,9 +381,7 @@ public sealed class ClientRunPlan
         if (InstallPins is { } pins) pins.Check(Install, LoaderRoot, "client install");
         else if (!CopySource)
             throw new ArgumentException("Pin the in-place owned client's game build, loader and patchers in installPins.");
-        if (PreparedSourceGameRoot is { } source && PreparedSourceGameHash is { } expected &&
-            !Valheim.Testing.Game.InstallPins.GameHash(source).Equals(expected, StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException("The source game changed after its loader profile was staged. Refuse this launch and prepare a new profile against the current game build.");
+        PreparedSourceCheck?.Invoke();
     }
     private static string Expect(IEnumerable<string> lines)
     {

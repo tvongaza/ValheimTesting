@@ -490,7 +490,14 @@ internal sealed class FakeServerHost : IGameHost
                     if (patterns.Length != 0 && !patterns.Any(pattern => MatchesListedPath(relative, pattern, Windows || v.GetValueOrDefault("nocase") == "1"))) continue;
                     if ((File.GetAttributes(file) & FileAttributes.ReparsePoint) != 0)
                         return Ok("VT-LIST links\n./" + relative + "\n");
-                    text.Append(FileHash.Sha256(file)).Append("  ./").Append(relative).Append('\n');
+                    if (v.GetValueOrDefault("metadata") == "1")
+                    {
+                        var info = new FileInfo(file);
+                        text.Append("VT-STATE ").Append(info.Length).Append(' ').Append(info.LastWriteTimeUtc.Ticks).Append(' ')
+                            .Append(Convert.ToBase64String(Encoding.UTF8.GetBytes(relative))).Append('\n');
+                    }
+                    if (v.GetValueOrDefault("content") != "0")
+                        text.Append(FileHash.Sha256(file)).Append("  ./").Append(relative).Append('\n');
                 }
                 if (File.Exists(Path.Combine(root, GameLaunch.ServerLinuxExecutable))) text.Append("VT-EXEC ").Append(GameLaunch.ServerLinuxExecutable).Append('\n');
                 return Ok(text.Append("VT-LIST done\n").ToString());

@@ -206,6 +206,51 @@ public sealed class TargetedRegressionTests : IDisposable
         Assert.False(File.Exists(Path.Combine(lockPath, "owner")));
     }
 
+    [ClientHostFact] public async Task SourceIntegrityFailureRetiresTheProfileAndReleasesTheHostLockBeforeItIsRaised()
+    {
+        var inventory = _rig.Inventory();
+        var runner = new TargetedRegression(_rig.Manifest(), inventory: inventory)
+        {
+            SaveDirectory = _rig.Save,
+            BundleInspection = (_, _) => new(MacBundleInspection.State.Accepted, 0, "synthetic test install"),
+            ProcessCheck = (_, _) => Task.CompletedTask,
+            PinnedLoader = (_, _) => null,
+        };
+        string lockPath = inventory.Hosts["local"].Lock;
+        runner.Stage("parent");
+        File.WriteAllText(Path.Combine(_rig.Game, "written-during-run.txt"), "integrity failure");
+
+        var error = Assert.Throws<IOException>(runner.Remove);
+
+        Assert.Contains("Source integrity failed", error.Message);
+        Assert.False(Directory.Exists(runner.Install));
+        Assert.False(File.Exists(Path.Combine(lockPath, "owner")));
+        var host = new LocalGameHost("test", HostShell.ThisMachine);
+        Assert.Equal(HostLockState.Free, (await host.CheckLockAsync(lockPath, "another run", TimeSpan.FromSeconds(10))).State);
+    }
+
+    [ClientHostFact] public void SourceIntegrityAndLockReleaseFailuresAreBothReported()
+    {
+        var inventory = _rig.Inventory();
+        var runner = new TargetedRegression(_rig.Manifest(), inventory: inventory)
+        {
+            SaveDirectory = _rig.Save,
+            BundleInspection = (_, _) => new(MacBundleInspection.State.Accepted, 0, "synthetic test install"),
+            ProcessCheck = (_, _) => Task.CompletedTask,
+            PinnedLoader = (_, _) => null,
+        };
+        string lockPath = inventory.Hosts["local"].Lock;
+        runner.Stage("parent");
+        File.WriteAllText(Path.Combine(_rig.Game, "written-during-run.txt"), "integrity failure");
+        File.WriteAllText(Path.Combine(lockPath, "owner"), "another run");
+
+        var error = Assert.Throws<AggregateException>(runner.Remove);
+
+        Assert.Contains(error.InnerExceptions, failure => failure.Message.Contains("Source integrity failed", StringComparison.Ordinal));
+        Assert.Contains(error.InnerExceptions, failure => failure is HostLockException);
+        Assert.False(Directory.Exists(runner.Install));
+    }
+
     [ClientHostFact] public void AValidManifestStagesOnlyTheAllowlistThenPreflightsEveryArm()
     {
         var regression = _rig.Regression(_rig.Manifest(), ["example.probe/read"]);
@@ -467,7 +512,15 @@ public sealed class TargetedRegressionTests : IDisposable
     [Fact] public void AReplacedWindowsSourceGameIsRefusedBeforeTheLinkedProfileLaunches()
     {
         if (!OperatingSystem.IsWindows()) return;
-        var regression = _rig.Regression(_rig.Manifest());
+        var inventory = _rig.Inventory();
+        var regression = new TargetedRegression(_rig.Manifest(), inventory: inventory)
+        {
+            SaveDirectory = _rig.Save,
+            BundleInspection = (_, _) => new(MacBundleInspection.State.Accepted, 0, "synthetic test install"),
+            ProcessCheck = (_, _) => Task.CompletedTask,
+            PinnedLoader = (_, _) => null,
+        };
+        string lockPath = inventory.Hosts["local"].Lock;
         var arm = regression.Stage("parent");
         string sourceAssembly = InstallPins.GameAssembly(_rig.Game);
         string replacement = sourceAssembly + ".replacement";
@@ -477,13 +530,16 @@ public sealed class TargetedRegressionTests : IDisposable
             File.Move(replacement, sourceAssembly, overwrite: true);
             // The launch folder still has the old hard-linked file; checking it alone would pass.
             arm.Plan.InstallPins!.Check(arm.Plan.Install, arm.Plan.LoaderRoot, "linked profile");
-            Assert.Contains("source game changed", Assert.Throws<InvalidOperationException>(arm.Plan.CheckInstallPins).Message,
-                StringComparison.OrdinalIgnoreCase);
+            var beforeLaunch = Assert.Throws<InvalidOperationException>(arm.Plan.CheckInstallPins);
+            Assert.Contains("source game before profile launch", beforeLaunch.Message, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("assembly_valheim.dll", beforeLaunch.Message, StringComparison.OrdinalIgnoreCase);
         }
         finally
         {
             if (File.Exists(replacement)) File.Delete(replacement);
-            regression.Remove();
+            var retirement = Assert.Throws<IOException>(regression.Remove);
+            Assert.Contains("assembly_valheim.dll", retirement.Message, StringComparison.OrdinalIgnoreCase);
+            Assert.False(File.Exists(Path.Combine(lockPath, "owner")));
         }
     }
 

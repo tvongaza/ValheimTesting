@@ -104,6 +104,8 @@ public sealed class TargetedRegression
     private double _lastStageSeconds;
     private string? _activeGameRoot;
     private InstallPins? _activePins;
+    private ProfileSourceCheck? _activeSourceCheck;
+    private bool _sourceVerified;
     private string? _activeLeftOut; // the profile's left-out root files, as run evidence
 
     public RegressionInputs Inputs { get; }
@@ -320,7 +322,10 @@ public sealed class TargetedRegression
                 Mode = "owned", Install = gameRoot, PreparedLoaderRoot = gameRoot == install ? null : install,
                 PreparedLaunchMode = "profile",
                 PreparedSourceGameRoot = Path.GetFullPath(Game),
-                PreparedSourceGameHash = installPins.Game,
+                PreparedSourceCheck = () => HostInstall.CheckProfilePinsAsync(_host, installPins, gameRoot, install,
+                    _activeSourceCheck ?? throw new InvalidOperationException("The profile source check was not retained."),
+                    "prepared regression client before launch", LocalClientCopy.StepTimeout, CancellationToken.None)
+                    .GetAwaiter().GetResult(),
                 Port = Port, Character = env.Client.Character,
                 Architecture = Architecture,
                 LaunchArguments = env.Client.LaunchArguments, Environment = env.Client.Environment,
@@ -449,6 +454,16 @@ public sealed class TargetedRegression
             if (directClientJournal != null)
                 try { directClientJournal.Complete(); }
                 catch (Exception error) { report.RecordFailure(StepPhase.Cleanup, "owned client process was not proved stopped", error); }
+            if (_activeSourceCheck != null)
+                try
+                {
+                    report.Step(StepPhase.Cleanup, _activeSourceCheck.VerdictName("client"), () =>
+                    {
+                        RequireStopped([_activeGameRoot ?? Install], clientSession: false);
+                        VerifySource();
+                    });
+                }
+                catch (Exception error) { Console.Error.WriteLine("Teardown: " + error.Message); }
             if (characterStage != null)
                 try { report.Step(StepPhase.Cleanup, "remove only the staged test character", characterStage.Dispose); }
                 catch (Exception error) { if (report.Steps.All(step => step.Passed)) report.RecordFailure(StepPhase.Cleanup, "character cleanup failed", error); }
@@ -500,17 +515,32 @@ public sealed class TargetedRegression
     /// <summary>Retires the copy made by this runner through the shared hosted-runtime owner.</summary>
     public void Remove()
     {
+        Exception? retirement = null;
         if (!_prepared)
         {
             if (Directory.Exists(Install) || Directory.Exists(_stage))
                 throw new InvalidOperationException($"The disposable install or staging directory at {Install} was not proven cleaned by this runner. Use env recover for a run that was interrupted; this runner never removes a copy by its name alone.");
         }
-        else RetirePrepared();
+        else
+            try { RetirePrepared(); }
+            catch (Exception error)
+            {
+                // RetirePrepared clears _prepared only after stop proof and successful removal. Only that delayed source
+                // verdict may be raised after releasing the lock; an unretired profile keeps its lock for recovery.
+                if (_prepared) throw;
+                retirement = error;
+            }
         if (_hostLock is { } held)
         {
-            held.ReleaseAsync().GetAwaiter().GetResult();
-            _hostLock = null;
+            try
+            {
+                held.ReleaseAsync().GetAwaiter().GetResult(); // JournaledHostLock checks the release and journals it (#797).
+                _hostLock = null;
+            }
+            catch (Exception release) when (retirement != null)
+            { throw new AggregateException("The regression profile was retired with an integrity failure and its host lock release also failed.", retirement, release); }
         }
+        if (retirement != null) System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw(retirement);
     }
 
     internal static readonly JsonSerializerOptions ManifestJson = new() { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
@@ -526,10 +556,13 @@ public sealed class TargetedRegression
             throw new InvalidOperationException($"The disposable install {Install} overlaps the pinned BepInEx package {package.Root}; keep the package outside the install so cleanup cannot delete it.");
         if (package == null && !Directory.Exists(Path.Combine(source, InstallPins.CoreDirectory)))
             throw new InvalidOperationException($"game: {source} has no {InstallPins.CoreDirectory}. Install BepInEx (BepInExPack_Valheim) in the prepared game first, or name a reviewed loader package.");
+        var inspected = HostedRuntimeStage.InspectSourceAsync(_host, HostedRuntimeKind.Client, source, package,
+            LocalClientCopy.StepTimeout).GetAwaiter().GetResult();
         if (Inputs.GamePins != null)
         {
-            var chosen = new InstallPins { Game = InstallPins.GameHash(source),
-                Loader = package?.Loader ?? InstallPins.Of(source).Loader, Patchers = Inputs.GamePins.Patchers };
+            var found = HostInstall.Pins(inspected);
+            var chosen = new InstallPins { Game = found.Game,
+                Loader = package?.Loader ?? found.Loader, Patchers = Inputs.GamePins.Patchers };
             Inputs.GamePins.Compare(chosen, "prepared game and selected loader package", "Managed");
         }
         if (_prepared) RetirePrepared();
@@ -551,9 +584,12 @@ public sealed class TargetedRegression
             var stageClock = Stopwatch.StartNew();
             var profile = HostedRuntimeStage.PrepareProfileAsync(_host, HostedRuntimeKind.Client, source, Install, _stage,
                 selected, LocalClientCopy.StepTimeout, loaderPackage: package,
+                inspectedSource: inspected,
                 inspectMac: BundleInspection == null ? null : (_, install, timeout, _) => Task.FromResult(BundleInspection(install, timeout))).GetAwaiter().GetResult();
             _activeGameRoot = profile.GameRoot;
             _activePins = profile.Pins;
+            _activeSourceCheck = profile.SourceCheck;
+            _sourceVerified = false;
             _activeLeftOut = HostedRuntimeStage.ProfileLeftOut.Describe(profile.LeftOut);
             _lastStageSeconds = stageClock.Elapsed.TotalSeconds;
             _journal.AppendLocal(actor, JournalEntry.Of(JournalEntry.CopyDone, ("runtime", Install),
@@ -573,12 +609,29 @@ public sealed class TargetedRegression
     private void RetirePrepared()
     {
         RequireStopped([_activeGameRoot ?? Install], clientSession: false);
-        HostedRuntimeStage.RetireAsync(_host, Install, _stage, LocalClientCopy.StepTimeout).GetAwaiter().GetResult();
+        Exception? integrity = null;
+        try { VerifySource(); }
+        catch (Exception error) { integrity = error; }
+        try { HostedRuntimeStage.RetireAsync(_host, Install, _stage, LocalClientCopy.StepTimeout).GetAwaiter().GetResult(); }
+        catch (Exception cleanup) when (integrity != null)
+        { throw new AggregateException("Source integrity failed and the regression profile was not retired.", integrity, cleanup); }
         _journal.AppendLocal("regression-" + Inputs.Name, JournalEntry.Of(JournalEntry.CopyRetired, ("runtime", Install)));
         _prepared = false;
         _activeGameRoot = null;
         _activePins = null;
+        _activeSourceCheck = null;
         _activeLeftOut = null;
+        if (integrity != null) throw integrity;
+    }
+
+    private void VerifySource()
+    {
+        if (_sourceVerified) return;
+        var check = _activeSourceCheck ?? throw new InvalidOperationException("The profile source check was not retained.");
+        // The report owns this verdict. Cache a failed verdict too, so later copy retirement removes the profile without
+        // listing the same source again or reporting the same integrity finding a second time.
+        _sourceVerified = true;
+        check.VerifyAfterRunAsync(_host, LocalClientCopy.StepTimeout).GetAwaiter().GetResult();
     }
 
     private void RequireStopped(IReadOnlyCollection<string>? runtimes, bool clientSession)

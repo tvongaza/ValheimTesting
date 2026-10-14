@@ -447,7 +447,8 @@ public static class PinnedServerRun
             var environment = prepared!.Environment;
             var journal = prepared.Journal;
             actors = new CampaignClients(environment, runId, options.Name + " " + runId, options.Hooks, serverHost: null,
-                (host, name, actor, entry, token) => journal.AppendAsync(host, prepared.JournalOf(name), actor, entry, TimeSpan.FromSeconds(60), token));
+                (host, name, actor, entry, token) => journal.AppendAsync(host, prepared.JournalOf(name), actor, entry, TimeSpan.FromSeconds(60), token),
+                prepared.SourceChecks);
             var hostPlan = named![hostName];
             report.Provenance["role"] = "host";
             report.Provenance["hostCrossplay"] = hostPlan.HostWorld!.Crossplay ? "true" : "false";
@@ -635,7 +636,8 @@ public static class PinnedServerRun
             }
             // The runtime is a profile of the server host's install (this machine's too), checked and staged there; nothing else
             // of the install is read here.
-            hosted = HostedServerRun.Create(environment, plan, options.Name, options.Hooks, prepared: prepared != null, prepared?.Journal.RunId, serverLoaderPackage);
+            hosted = HostedServerRun.Create(environment, plan, options.Name, options.Hooks, prepared: prepared != null,
+                prepared?.Journal.RunId, serverLoaderPackage, prepared?.SourceChecks);
             if (RunJournal.ThisProcess.RunId != hosted.RunId) hostedRun = RunJournal.UseRun(hosted.RunId);
             report.Provenance.TryAdd("runId", hosted.RunId); // a standalone run's; a campaign's is already there
             hosted.Record(report.Provenance);

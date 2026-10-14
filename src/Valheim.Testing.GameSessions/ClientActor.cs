@@ -182,7 +182,21 @@ internal sealed class LocalClientPlacement : IClientPlacement
     /// clients was not proven stopped is kept (<c>valheim-test env status</c> names it, <c>env recover</c> removes it). The first
     /// failure is rethrown after all were tried.
     /// </summary>
-    internal async Task RetireAsync()
+    internal async Task VerifySourcesAsync(Func<string, Func<Task>, Task> step)
+    {
+        List<(LocalClientCopy Copy, ClientRunPlan Plan, List<Func<bool>> Stopped)> copies;
+        lock (_copies) copies = [.. _copies];
+        foreach (var (copy, _, launches) in copies)
+        {
+            bool stopped;
+            lock (_copies) stopped = launches.All(proven => proven());
+            if (stopped) await step(copy.SourceVerdictName, copy.VerifySourceAsync).ConfigureAwait(false);
+            else await step(copy.SourceVerdictName + " (incomplete: client stop not proven)",
+                () => Task.FromException(new IOException("Source integrity is incomplete because the client stop was not proven."))).ConfigureAwait(false);
+        }
+    }
+
+    internal async Task RetireAsync(bool verifySource = true)
     {
         List<(LocalClientCopy Copy, ClientRunPlan Plan, List<Func<bool>> Stopped)> copies;
         lock (_copies) { _closed = true; copies = [.. _copies]; _copies.Clear(); }
@@ -196,7 +210,7 @@ internal sealed class LocalClientPlacement : IClientPlacement
                 failures.Add(new IOException($"The disposable client copy {copy.Runtime} is kept: a client launched from it was not proven stopped. valheim-test env status names it; env recover removes it."));
                 continue;
             }
-            try { await copy.RetireAsync().ConfigureAwait(false); }
+            try { await copy.RetireAsync(verifySource).ConfigureAwait(false); }
             catch (Exception error) { failures.Add(new IOException($"The disposable client copy {copy.Runtime} was not removed ({error.Message}); valheim-test env status names it and env recover removes it.", error)); }
         }
         if (failures.Count == 1) throw failures[0];

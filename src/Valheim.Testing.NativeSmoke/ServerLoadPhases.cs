@@ -21,7 +21,7 @@ internal static class ServerLoadPhases
     private static readonly HashSet<string> FileInputs = new(StringComparer.Ordinal)
     { "--inventory", "--adapter", "--cli-manifest", "--mod", "--config", "--plugin-file" };
     private static readonly HashSet<string> DirectoryInputs = new(StringComparer.Ordinal)
-    { "--server", "--cli-files", "--plugin-dir", "--search-root" };
+    { "--cli-files", "--plugin-dir", "--search-root" };
 
     internal sealed class Plan
     {

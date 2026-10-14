@@ -112,16 +112,19 @@ public sealed class PreparedHostedCampaign : IAsyncDisposable
     private readonly TimeSpan _timeout;
     // Per actor: the root files its profile left out of the game install, as run evidence.
     private readonly IReadOnlyDictionary<string, string> _profileLeftOut;
+    private readonly IReadOnlyDictionary<string, ProfileSourceCheck> _sourceChecks;
 
     internal PreparedHostedCampaign(HostedCampaignManifest manifest, ResolvedEnvironment profile, IReadOnlyDictionary<string, HostListing> listings,
         IReadOnlyDictionary<string, HostListing> loaderListings,
         IReadOnlyDictionary<string, HostedRuntimeFile[]> selections,
         IReadOnlyList<(string Host, string Actor, string Runtime, string Stage)> copies,
         IReadOnlyList<(string Host, string Actor, HostedCampaignCharacter Character)> characters, Func<string, IGameHost>? hostFactory, TimeSpan timeout,
-        RunJournal journal, IReadOnlyDictionary<string, string>? profileLeftOut = null)
+        RunJournal journal, IReadOnlyDictionary<string, string>? profileLeftOut = null,
+        IReadOnlyDictionary<string, ProfileSourceCheck>? sourceChecks = null)
     {
         Journal = journal;
         _profileLeftOut = profileLeftOut ?? new Dictionary<string, string>();
+        _sourceChecks = sourceChecks ?? new Dictionary<string, ProfileSourceCheck>();
         Manifest = manifest; _profile = profile; Listings = listings; LoaderListings = loaderListings; Selections = selections;
         _copies = copies; _characters = characters; _hostFactory = hostFactory; _timeout = timeout;
     }
@@ -231,11 +234,11 @@ public sealed class PreparedHostedCampaign : IAsyncDisposable
             client.Architecture = manifest.Clients[name].Architecture.Length != 0 ? manifest.Clients[name].Architecture : role.Architecture;
         client.Port = role.CliPort;
         client.InstallPins = Pins(name);
-        if (client.PreparedLoaderRoot != null)
-        {
-            client.PreparedSourceGameRoot = client.Install;
-            client.PreparedSourceGameHash = client.InstallPins.Game;
-        }
+        if (client.PreparedLoaderRoot != null) client.PreparedSourceGameRoot = client.Install;
+        if (_sourceChecks.TryGetValue(name, out var sourceCheck))
+            client.PreparedSourceCheck = () => HostInstall.CheckProfilePinsAsync(HostFor(role.Host), client.InstallPins,
+                role.PreparedGameRoot ?? role.Install, role.PreparedLoaderRoot ?? role.Install, sourceCheck,
+                "prepared client profile before launch", _timeout, CancellationToken.None).GetAwaiter().GetResult();
         client.Pins = Bound(client.Pins, HostedCampaignPreparation.PluginPins(name, Selections[name], client.Pins));
         client.Character = manifest.Clients[name].Character?.FileName ??
             throw new ArgumentException($"Client {name} has no registered character.");
@@ -254,6 +257,7 @@ public sealed class PreparedHostedCampaign : IAsyncDisposable
     }
 
     internal IReadOnlyList<(string Host, string Actor, string Runtime, string Stage)> Copies => _copies;
+    internal IReadOnlyDictionary<string, ProfileSourceCheck> SourceChecks => _sourceChecks;
     internal IReadOnlyList<(string Host, string Actor, HostedCampaignCharacter Character)> Characters => _characters;
     internal IGameHost HostFor(string name) => _hostFactory?.Invoke(name) ?? _profile.CreateHost(name);
     internal string LockOf(string name) => _profile.Hosts[name].Lock;
@@ -982,6 +986,7 @@ public static class HostedCampaignPreparation
         var listings = new ConcurrentDictionary<string, HostListing>(StringComparer.Ordinal);
         var loaderListings = new ConcurrentDictionary<string, HostListing>(StringComparer.Ordinal);
         var profileLeftOut = new ConcurrentDictionary<string, string>(StringComparer.Ordinal);
+        var sourceChecks = new ConcurrentDictionary<string, ProfileSourceCheck>(StringComparer.Ordinal);
         try
         {
             // A host has one claim for the whole preparation. Independent actors prepare concurrently, including
@@ -1019,10 +1024,9 @@ public static class HostedCampaignPreparation
                         loader, readiness.SourceListings[name], steamRuntimePackage: steamRuntime).ConfigureAwait(false);
                     listings[name] = prepared.Game;
                     loaderListings[name] = prepared.Loader;
+                    sourceChecks[name] = prepared.SourceCheck;
                     if (HostedRuntimeStage.ProfileLeftOut.Describe(prepared.LeftOut) is { } leftOut) profileLeftOut[name] = leftOut;
                     role.PreparedSourceRoot = prepared.Source.Root;
-                    if (profile.Hosts[hostName].Kind != "local")
-                        role.PreparedSourceFiles = prepared.Source.Files;
                     if (prepared.GameRoot != prepared.LoaderRoot)
                     {
                         role.PreparedGameRoot = prepared.GameRoot;
@@ -1058,12 +1062,13 @@ public static class HostedCampaignPreparation
                     role.Install = runtime;
                 })).ConfigureAwait(false);
             })).ConfigureAwait(false);
-            return new PreparedHostedCampaign(manifest, profile, listings, loaderListings, selections, copies.ToArray(), stagedCharacters.ToArray(), hostFactory, timeout, journal, profileLeftOut);
+            return new PreparedHostedCampaign(manifest, profile, listings, loaderListings, selections, copies.ToArray(),
+                stagedCharacters.ToArray(), hostFactory, timeout, journal, profileLeftOut, sourceChecks);
         }
         catch (Exception original)
         {
             Func<Task> remove = () => new PreparedHostedCampaign(manifest, profile, listings, loaderListings, selections, copies.ToArray(),
-                stagedCharacters.ToArray(), hostFactory, timeout, journal, profileLeftOut).DisposeAsync().AsTask();
+                stagedCharacters.ToArray(), hostFactory, timeout, journal, profileLeftOut, sourceChecks).DisposeAsync().AsTask();
             try
             {
                 await (cleanupStep?.Invoke("remove the failed preparation's copies and characters", remove) ?? remove()).ConfigureAwait(false);

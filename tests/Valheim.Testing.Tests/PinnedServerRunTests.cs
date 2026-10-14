@@ -119,12 +119,13 @@ public sealed class PinnedServerRunTests : IDisposable
                 "check the server host's install against the pinned runtime and stage its profile", "copy and verify pinned world",
                 "ship and verify the world copy on the server host", "server runtime has the plan's server executable",
                 "server runtime is the pinned game build, loader and patchers", "prepared only; no game launched",
+                "verify server's source install after the run (size and modified time)",
                 "remove the server host's runtime copy, keeping what the run changed", "release the server host's lock" ],
             result.GetProperty("Steps").EnumerateArray().Select(s => s.GetProperty("Name").GetString()));
         // Validate prepares and cleans up; it runs no scenario, so the scenario state is not reported as passed.
         Assert.Equal((true, true, false, true), (result.GetProperty("PreflightPassed").GetBoolean(), result.GetProperty("RuntimeReady").GetBoolean(),
             result.GetProperty("ScenarioPassed").GetBoolean(), result.GetProperty("CleanupVerified").GetBoolean()));
-        Assert.Equal([ "Preflight", .. storage.Select(_ => "Preflight"), .. task.Select(_ => "Setup"), "Setup", "Setup", "Setup", "Setup", "Setup", "Setup", "Setup", "Cleanup", "Cleanup" ],
+        Assert.Equal([ "Preflight", .. storage.Select(_ => "Preflight"), .. task.Select(_ => "Setup"), "Setup", "Setup", "Setup", "Setup", "Setup", "Setup", "Setup", "Cleanup", "Cleanup", "Cleanup" ],
             result.GetProperty("Steps").EnumerateArray().Select(s => s.GetProperty("Phase").GetString()));
         var provenance = result.GetProperty("Provenance");
         Assert.Equal(("this machine", EnvironmentInventory.LocalHost, EnvironmentInventory.LocalHost + ":" + LocalServerMachine.Install),
@@ -244,8 +245,13 @@ public sealed class PinnedServerRunTests : IDisposable
         var stop = Assert.Single(result.GetProperty("Steps").EnumerateArray(), s => s.GetProperty("Name").GetString() == "stop only owned server");
         Assert.False(stop.GetProperty("Passed").GetBoolean()); Assert.Equal("Fake server refused to stop.", stop.GetProperty("Error").GetString());
         var junit = System.Xml.Linq.XDocument.Load(Path.Combine(Output, "junit.xml")).Root!;
-        // The stop and the host's lock, which a server that may still run keeps (env recover releases it once it has stopped).
-        Assert.Equal("2", junit.Attribute("failures")!.Value);
+        // The stop, the unproven source-integrity verdict, and the host's lock, which a server that may still run keeps
+        // (env recover releases it once it has stopped).
+        Assert.Equal("3", junit.Attribute("failures")!.Value);
+        Assert.Contains(result.GetProperty("Steps").EnumerateArray(), s =>
+            s.GetProperty("Name").GetString()!.Contains("source", StringComparison.OrdinalIgnoreCase)
+            && !s.GetProperty("Passed").GetBoolean()
+            && s.GetProperty("Error").GetString()!.Contains("not proven stopped", StringComparison.Ordinal));
         Assert.Contains("may still run", Assert.Single(result.GetProperty("Steps").EnumerateArray(), s => s.GetProperty("Name").GetString() == "release the server host's lock").GetProperty("Error").GetString());
         // The failed stop is in the Cleanup suite; the runtime was ready, and cleanup is not verified.
         var cleanup = junit.Elements("testsuite").Single(s => s.Attribute("name")!.Value.EndsWith(" / cleanup", StringComparison.Ordinal));

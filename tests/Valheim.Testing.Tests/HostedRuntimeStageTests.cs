@@ -1,5 +1,6 @@
 using Valheim.Testing.Game;
 using System.Diagnostics;
+using System.Text.Json;
 using Xunit;
 using Valheim.Testing.GameSessions;
 
@@ -355,6 +356,15 @@ public sealed class HostedRuntimeStageTests : IDisposable
         Assert.Equal(FileHash.Sha256(Path.Combine(source, "vstdlib_s64.dll")), prepared.Loader.Files["vstdlib_s64.dll"]);
         Assert.Equal(before, WorldFixture.Manifest(source));
         Assert.False(Directory.Exists(Path.Combine(parent, "staging")));
+        string retirementOutput = Path.Combine(_root, "windows-profile-retirement");
+        await new RunRetirement(null, retirementOutput).HostAsync("windows-profile", host, prepared.Loader,
+            prepared.LoaderRoot, launched: true, serverStopped: true);
+        var changes = JsonDocument.Parse(File.ReadAllText(Path.Combine(retirementOutput, "runtime-changes", "changes.json"))).RootElement;
+        Assert.Equal(0, changes.GetProperty("Added").GetArrayLength());
+        Assert.Equal(0, changes.GetProperty("Changed").GetArrayLength());
+        Assert.Equal(0, changes.GetProperty("Missing").GetArrayLength());
+        Assert.Equal(0, changes.GetProperty("KeptBytes").GetInt64());
+        Assert.False(Directory.Exists(prepared.LoaderRoot));
         await HostedRuntimeStage.RetireAsync(host, prepared.LoaderRoot, Path.Combine(parent, "staging"), TimeSpan.FromSeconds(45));
         Assert.False(Directory.Exists(parent));
         Assert.Equal(before, WorldFixture.Manifest(source));
@@ -671,6 +681,10 @@ public sealed class HostedRuntimeStageTests : IDisposable
         else Assert.False(File.Exists(profileConfig));
         Assert.False(listing.Files.ContainsKey("BepInEx/core/stale.dll"));
         Assert.Equal(package.Loader, prepared.Pins.Loader);
+        // No source-loader file was copied in this case. An empty selected scope must skip its check, not list and hash the
+        // entire launch folder (the final owner-selected profile listing is always narrow).
+        Assert.DoesNotContain(host.Runs, run => run.Script == "list" && run.Variables["root"] == runtime &&
+            run.Variables["dirs"].Length == 0);
         WorldFixture.Verify(install, before);
         Assert.Equal(before.Count, WorldFixture.Manifest(install).Count);
     }
