@@ -33,7 +33,7 @@ Each package's page is its reference: what it is for, the types a test calls, ho
 | [`Valheim.Testing`](src/Valheim.Testing) ([reference](docs/packages/Valheim.Testing.md)) | Composable terrain, exact recorded-input replay, pinned grid dumps, terrain rendering with contours, parity checks and `StaticOverride` (scoped static and environment overrides for any test); no ValheimCLI dependency | netstandard2.0 |
 | [`Valheim.Testing.Game`](src/Valheim.Testing.Game) ([reference](docs/packages/Valheim.Testing.Game.md)) | One game process from outside: typed observations, fixtures, owned server and client sessions, comparisons and JSON/JUnit reports | net10.0 |
 | [`Valheim.Testing.GameSessions`](src/Valheim.Testing.GameSessions) ([reference](docs/packages/Valheim.Testing.GameSessions.md)) | Game sessions: a dedicated server, clients and hosted worlds as one run (`GameSession`, `PinnedServerRun`), on this PC or on other machines over SSH or a container, with host locks, Steam-account leases and recovery of what a run left; built on `Valheim.Testing.Game` | net10.0 |
-| [`Valheim.Testing.Cli`](cli-dependency.json) ([reference](docs/packages/Valheim.Testing.Cli.md)) | ValheimCLI's client transport and YAML runner, packaged unchanged from pinned ValheimCLI source (MIT, warp) | net10.0 |
+| [`Valheim.Testing.Cli`](cli-dependency.json) ([reference](docs/packages/Valheim.Testing.Cli.md)) | ValheimCLI's client transport and YAML runner, packaged unchanged from pinned ValheimCLI source (MIT, by Warpalicious) | net10.0 |
 | [`Valheim.Testing.Adapter`](src/Valheim.Testing.Adapter) ([reference](docs/packages/Valheim.Testing.Adapter.md)) | Source compiled into a mod's game-side test adapter plugin: registration with ValheimCLI, the owned-session identity the runners check, and read-only observations | source (net48, C# 10) |
 | [`Valheim.Testing.Doubles`](src/Valheim.Testing.Doubles) ([reference](docs/packages/Valheim.Testing.Doubles.md)) | Source-only doubles of the Unity, Valheim, BepInEx and Jotunn types a mod's pure-logic sources use, compiled into your test project; every type is partial; `ValheimWorldScope` puts back every static they keep (a mod scopes its own with `StaticOverride`) | source (C# 10); [member index](docs/packages/Valheim.Testing.Doubles.members.txt) |
 | [`Valheim.Testing.Bindings`](src/Valheim.Testing.Bindings) ([reference](docs/packages/Valheim.Testing.Bindings.md)) | Offline check that a built mod's references into the game assemblies still bind (Mono.Cecil); missing members fail, access changes are reported separately | netstandard2.0 |
@@ -49,6 +49,10 @@ Unit, integration, bounded game checks and human judgement: [Choose a test layer
 ## Contribute
 
 Mod developers and coding agents are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) has repository ownership, a worked fixture example, local checks (`dotnet run scripts/bootstrap-cli.cs`, then `dotnet run scripts/validate.cs`, on every OS; no game) and PR expectations. Agents start with [AGENTS.md](AGENTS.md) and the [agent workflow](docs/agent-guide.md). Before a native run, read the [native-run checklist](docs/guides/before-a-native-run.md).
+
+## Credits
+
+ValheimTesting is built on [ValheimCLI](https://github.com/jneb802/valheimCLI), created by **Warpalicious** ([Thunderstore](https://thunderstore.io/c/valheim/p/warpalicious/)) and licensed MIT. Every native check talks to the game through ValheimCLI: its in-game plugin runs the commands, and its client transport, which ships as `Valheim.Testing.Cli`, sends them. This project uses a pinned fork, [tvongaza/valheimCLI](https://github.com/tvongaza/valheimCLI), which adds the commands and packs the toolkit needs. Thank you, Warpalicious, for building and sharing it.
 
 ## License
 

@@ -4,6 +4,8 @@ ValheimTesting is licensed under the MIT license by Tys von Gaza; see [LICENSE](
 
 ## ValheimCLI source import
 
+ValheimCLI was created by Warpalicious (GitHub `jneb802`, "warp"); the original project is [jneb802/valheimCLI](https://github.com/jneb802/valheimCLI). ValheimTesting uses the pinned fork [tvongaza/valheimCLI](https://github.com/tvongaza/valheimCLI).
+
 The initial source extraction came through [tvongaza/valheimCLI at 4c4bdc9](https://github.com/tvongaza/valheimCLI/tree/4c4bdc916db49682db855e55f361df47267c4152). Its repository license carried the notice below, retained here for imported material. It also covers the ReloadCheck probe moved from ValheimCLI later, as listed in [PROVENANCE.md](PROVENANCE.md). The separate `Valheim.Testing.Cli` package is ValheimCLI's transport packaged unchanged and carries ValheimCLI's own license.
 
 MIT License

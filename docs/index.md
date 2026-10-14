@@ -46,3 +46,5 @@ ValheimTesting gives you automated tests for Valheim mods built on BepInEx: unit
 - [Package pages](packages/Valheim.Testing.md): each package has its own page. Start with `Valheim.Testing`.
 
 Source, issues and contributions: [github.com/tvongaza/ValheimTesting](https://github.com/tvongaza/ValheimTesting).
+
+Native checks run through [ValheimCLI](https://github.com/jneb802/valheimCLI), created by Warpalicious; see [credits](https://github.com/tvongaza/ValheimTesting#credits).
