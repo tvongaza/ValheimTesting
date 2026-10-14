@@ -9,7 +9,7 @@ Every page follows these rules. A reviewer can check each one.
 2. **Short sentences.** No sentence over 30 words. Paragraphs have at most four sentences and one idea.
 3. **Condition first, then instruction.** "If your Steam library is elsewhere, set `VALHEIM_PATH`." Never the reverse.
 4. **Say what the reader does, then what they see.** Every command block is followed by its result (an output block, or one sentence naming the file it writes).
-5. **No history.** No issue numbers, PR numbers, "previously", "formerly", "renamed from", "removed in", measurement anecdotes or dates in body text. Issue numbers appear only inside `<!-- TODO(docs): ... -->`. Native evidence lives in the dated records; a page may say "checked natively" and link the record once.
+5. **No history.** No issue numbers, PR numbers, "previously", "formerly", "renamed from", "removed in", measurement anecdotes or dates in body text. Issue numbers appear only inside `<!-- TODO(docs): ... -->`.
 6. **No filler.** Delete "simply", "just", "easy", "note that", "it is worth", "in order to", and any sentence that restates the heading.
 7. **One home per fact.** A fact is written on one page; every other page links to it. If you are about to paraphrase another page, link instead.
 8. **Honest scope, no hedging prose.** State a limit in one sentence under **Limits**; do not weave caveats through every paragraph.
@@ -42,7 +42,7 @@ A page is exactly one type. If a reference page starts giving advice, move the a
 - Per-change notes, issue archaeology, "the one exception is…" chains: state the rule; put the exception in one clause.
 - Paragraphs that explain why a design is right. One sentence of rationale at most; the rest goes to a concept page or is deleted.
 - Repeated safety reminders. They live once, on the [runtime hygiene checklist](../runtime-hygiene.md) and in AGENTS.md.
-- Native measurement narratives ("ran it ten times…", "median 10.35 s"). Keep the claim, link the record.
+- Native measurement narratives ("ran it ten times…", "median 10.35 s"). Keep the claim as behaviour.
 - Any behaviour an open release issue removes, such as Linux game clients or the Doorstop 3/4 pairing rules.
 
 ## Exactness
@@ -81,5 +81,5 @@ After: "A pull request changes code, tests and docs. Leave versions, pins, `tool
 - **The site publishes `docs/index.md`, `getting-started.md`, `package-versions.md` and every page in `guides/`, `concepts/`, `tutorials/`, `packages/` and `reference/`.** To publish a new page, put it in one of those folders and add it to `docs/toc.yml`; `dotnet run scripts/api-docs.cs` fails when a published page has no entry. `maintainers/` and the agent pages stay on GitHub. Write links as relative paths: the build keeps links to published pages and points every other link, such as `examples/` or `CONTRIBUTING.md`, at the same file in the build's source revision.
 - **No bylines** (`*Assistant-written (Claude).*` and similar) on any page.
 - **No inbound-link protection.** Nobody uses the docs yet. Move, merge, rename and delete pages freely, and fix every link in the same change.
-- **Dated validation records are deleted** (`docs/native-validation-*.md`). Where a page relies on one, state the durable fact as behaviour on that page, for example: a mod that reads a private game member at run time needs `AllowUnsafeBlocks=true`, and `IgnoresAccessChecksTo` alone throws `FieldAccessException`. Don't add "a native campaign proved X" claims.
+- **No dated validation records.** State a durable fact as behaviour on the page that needs it, for example: a mod that reads a private game member at run time needs `AllowUnsafeBlocks=true`, and `IgnoresAccessChecksTo` alone throws `FieldAccessException`. Don't add "a native campaign proved X" claims.
 - **ValheimCLI problems** go to the pinned ValheimCLI fork, or to this repository's issues with the `valheimcli` label. Toolkit bugs go to this repository's issues.

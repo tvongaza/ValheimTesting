@@ -6,7 +6,7 @@
 
 `Valheim.Testing.Adapter` is a source package that you compile into your mod's **test-only** BepInEx adapter. It gives the adapter an owned-session identity, a gated global-key fixture command and helpers for your own commands. Production mods never reference it.
 
-Generic observations belong to the default `valheimCLI.dll`, not to a mod's adapter: `valheim.observe/harmony`, `content-census`, `zones`, `custom-data`, `globalkeys`, `config`, `unresolved-prefabs`, `dungeon-rooms` and the `review-*` commands. <!-- TODO(docs): verify after #670 --> The [release contract](../valheimcli-release-contract.md) records the exact ValheimCLI fork and bundle that each release uses.
+Generic observations belong to the default `valheimCLI.dll`, not to a mod's adapter: `valheim.observe/harmony`, `content-census`, `zones`, `custom-data`, `globalkeys`, `config`, `unresolved-prefabs`, `dungeon-rooms` and the `review-*` commands. The [release contract](../maintainers/valheimcli-release-contract.md) records the exact ValheimCLI fork and bundle that each release uses.
 
 For the minimal pattern, see [FullLifecycle's adapter](../../examples/FullLifecycle/ExampleMod.TestAdapter/Plugin.cs). The [native acceptance adapter](../../tests/Valheim.Testing.NativeAcceptance/AcceptanceMod.Adapter/Plugin.cs) adds commands for its own marker and a guarded fixture mutation.
 

@@ -1,69 +1,169 @@
 # Observe an already prepared game
 
-**Audience:** a mod author who already has a disposable game running with ValheimCLI and wants one measured fact from it. **Concept:** attach, verify strict pins, run one probe, keep the report.
+Attach to a disposable game that ValheimCLI already runs, verify strict pins, run one read-only probe and keep the report.
 
-```
-ObserveCheck <host> <port> <pins-file> <new-output-directory> <probe> [probe arguments]
-```
+## Run it
 
-[ObserveCheck.cs](ObserveCheck.cs) is the whole flow: it reads and validates the probe's input, loads the strict pins (world UID and exact plugin hashes, see [getting started](../../docs/getting-started.md)), refuses an existing output directory, connects, verifies the pins (a `Preflight` step), runs the probe (one step) and writes `result.json` (with the SHA-256 of the pins and of the input file), `junit.xml` and `commands.jsonl` (every command and reply) into the new directory. Exit 0 means the probe passed; 1 a failure, including a refused input, a pin mismatch or an incomplete measurement; 2 invalid usage. Failed runs keep their files.
-
-It never launches or stops the game, moves or teleports the player, changes cheats, generates a zone or edits ground; arrange arrival and protection separately (for example with `SessionControl.JoinWorld` and `PlayerPlacement.Arrive` in your own runner). Only the `session` probe's `save`, `join` and `leave` change the game. Coordinates in the samples below are illustrative, not known Valheim sites. A copy of today's measurement used as its own expected value is not an independent test. Review private world data before publishing a report.
+From the repository root, after [bootstrap](../../CONTRIBUTING.md#set-up-and-validate-locally):
 
 ```sh
-# From the repository root, after bootstrap (CONTRIBUTING.md):
 dotnet run --project examples/ObserveCheck -c Release -- 127.0.0.1 5555 /absolute/pins.txt /new/out paint /absolute/paint-plan.json
 ```
 
-To build it outside this repository, copy the directory and pass `-p:ToolkitPackageVersion=` with a published `Valheim.Testing.Game` version of 0.1.0-preview.35 or later (phased reports); preview.20 and earlier do not compile it.
+The arguments are:
+
+```text
+ObserveCheck <host> <port> <pins-file> <new-output-directory> <probe> [probe arguments]
+```
+
+The pins file holds the strict pins: the world UID and the exact plugin hashes. See [strict pins](../../docs/reference/game-actors-and-pins.md#strict-pins-from-tests). The output directory must not exist yet.
+
+[ObserveCheck.cs](ObserveCheck.cs) is the whole flow:
+
+1. Read and validate the probe's input.
+2. Load the pins and refuse an existing output directory.
+3. Connect and verify the pins in a `Preflight` step.
+4. Run the probe as one step.
+5. Write the report.
+
+To build it outside this repository, copy the directory. Then pass `-p:ToolkitPackageVersion=` with a published `Valheim.Testing.Game` version from [Packages](../../docs/package-versions.md).
+
+The check never launches or stops the game. It never moves or teleports the player, changes cheats, generates a zone or edits ground. Only `session` `save`, `join` and `leave` change the game. Arrange arrival and protection in your own runner, for example with `SessionControl.JoinWorld` and `PlayerPlacement.Arrive`.
+
+## Results
+
+| Exit | Meaning |
+|---|---|
+| 0 | The probe passed. |
+| 1 | Failure: refused input, pin mismatch or incomplete measurement. |
+| 2 | Invalid usage. |
+
+A run that connects writes these files into the new directory:
+
+| File | Holds |
+|---|---|
+| `result.json` | Steps, and the SHA-256 of the pins and input file |
+| `junit.xml` | The steps as JUnit XML |
+| `commands.jsonl` | Every command and reply |
+
+Each probe also writes its own file, listed in its section. Failed runs keep their files. A report names input files only. A `session` report records the action without the address or character. Review private world data before you publish a report.
+
+The coordinates below are illustrative, not known Valheim sites. Derive expected values independently. A copy of today's measurement used as its own expected value is not a test. For the probe types, see [terrain, surface and paint probes](../../docs/reference/game-observations.md#terrain-surface-and-paint-probes).
 
 ## ground: generator or loaded-ground heights
 
-`ground <height-plan.json>`, through `TerrainProbe` and the default ValheimCLI plugin. 1–256 distinct x/z points with **independently derived** heights, on one layer: `generator` (raw generator height) or `loaded-ground` (the loaded heightmap). Writes `terrain.json` with every expected/actual/residual.
+`ground` reads heights through `TerrainProbe` and the default ValheimCLI plugin. It reads 1–256 distinct x/z points on one layer. `generator` reads the raw generator height, and `loaded-ground` reads the loaded heightmap.
+
+```text
+ground <height-plan.json>
+```
 
 ```json
 {"layer": "loaded-ground", "expectedFrom": "hand-derived level target for the fixture, revision ...", "tolerance": 0.05,
  "samples": [{"x": 8, "z": 10, "height": 37}]}
 ```
 
-Wrong coordinates, layer or units, missing loaded ground, unknown properties, duplicates, nonfinite values and empty plans fail. Generator height is not loaded ground, a collider or paint.
+It writes `terrain.json` with every expected, actual and residual value.
+
+It fails on wrong coordinates, layer or units, and on missing loaded ground. It also fails on unknown properties, duplicates, nonfinite values and empty plans. Generator height is not loaded ground, a collider or paint.
 
 ## surface: a client's ground, collider and support
 
-`surface <surface-plan.json>`, through `SurfacePlan`, `SurfaceProbe` and `PlayerPlacement.RequireSupported`. Each sample needs both the loaded heightmap vertex and **that heightmap's own mesh collider** within tolerance; samples are integer coordinates on the native one-metre grid (`Heightmap.GetWorldHeight` reads the nearest vertex). Missing or unloaded ground fails; it is never replaced by the generator. With a `support` point, three observations half a second apart must show the player grounded, stationary (at most 0.15 m/s), alive and not flying, attached or teleporting, within 2 m horizontally and 0.3 m vertically; declare it on dry ground. Without one, `result.json` records grounding as not checked. Writes `surfaces.json` and `support.json`.
+`surface` uses `SurfacePlan`, `SurfaceProbe` and `PlayerPlacement.RequireSupported`. For each sample, it reads the loaded heightmap vertex and that heightmap's own mesh collider. Both must match within tolerance. Samples are integer coordinates on the native one-metre grid. `Heightmap.GetWorldHeight` reads the nearest vertex.
+
+```text
+surface <surface-plan.json>
+```
 
 ```json
 {"expectedFrom": "independent declared profile applied to captured pre-write native vertices", "tolerance": 0.05,
  "samples": [{"x": 32, "z": 0, "height": 65}], "support": {"x": 32, "z": 0, "height": 65}}
 ```
 
-For a vanilla-client replication check, pin the tested mod `absent` on the client and use only ValheimCLI there. Run the same plan again after a confirmed save, server restart and rejoin for persistence evidence.
+It writes `surfaces.json`, and `support.json` when the plan declares a `support` point. Declare the point on dry ground. Three observations, half a second apart, must show the player:
+
+- grounded, alive and stationary (at most 0.15 m/s);
+- not flying, attached or teleporting;
+- within 2 m horizontally and 0.3 m vertically of the point.
+
+Without a `support` point, `result.json` records grounding as not checked.
+
+It fails on missing or unloaded ground and never substitutes the generator. It also fails on a heightmap or collider mismatch, or a player who is not settled.
+
+For a vanilla-client replication check, pin the tested mod `absent` on the client and use only ValheimCLI there. For persistence, run the same plan again after a confirmed save, a server restart and a rejoin.
 
 ## paint: loaded paint channels
 
-`paint <paint-plan.json>`, through `PaintPlan` and `PaintProbe` (`valheim.world/terrain-paint`). Reads the loaded heightmap's raw paint texture at integer texels, as normalized RGBA; not a compiler stamp or a screenshot. Missing maps and out-of-range texels are incomplete, never black. Alpha is compared separately and can carry vegetation or lava information, so it is not labelled transparency. Writes `paint.json` with every channel residual.
+`paint` reads through `PaintPlan` and `PaintProbe` (`valheim.world/terrain-paint`). It reads the loaded heightmap's raw paint texture at integer texels, as normalized RGBA. It reads neither a compiler stamp nor a screenshot.
+
+```text
+paint <paint-plan.json>
+```
 
 ```json
 {"expectedFrom": "independently declared fixture mask", "tolerance": 0.01,
  "samples": [{"x": 32, "z": 0, "r": 1, "g": 0, "b": 0, "a": 0.25}]}
 ```
 
-Declare the profile before writing terrain: core, fading edge, untouched ground with existing paint, both sides of a zone seam (sample beside the seam, not on it). A raw mask match is not a visual verdict.
+It writes `paint.json` with every channel residual.
+
+Missing maps and out-of-range texels are incomplete, never black. Alpha is compared separately. It can carry vegetation or lava information, so it is not transparency.
+
+Declare the profile before you write terrain. Cover the core, the fading edge and untouched ground with existing paint. Cover both sides of a zone seam, sampling beside the seam rather than on it. A raw mask match is not a visual verdict.
 
 ## capture: record a bounded grid for exact replay
 
-`capture <x> <z> <spacing> <countX> <countZ> generator|loaded-ground`, through `TerrainCapture`. At most 256 samples, spacing 0.25–256 m; writes `capture.json` (world, game version, layer, provenance and a SHA-256 integrity check). `loaded-ground` has no biome or river facts, and unloaded samples make the capture refused. Load it in a mod test with `TerrainCapture.Load(path).Terrain`: the replay serves only the recorded coordinates and throws for anything else. A capture is recorded input, not an independent expectation, and mutable ground is sampled over several frames, so it is not an atomic snapshot. One generator sample is `capture <x> <z> 1 1 1 generator`.
+`capture` records a grid through `TerrainCapture`. It takes at most 256 samples, with a spacing of 0.25–256 m.
+
+```text
+capture <x> <z> <spacing> <countX> <countZ> generator|loaded-ground
+```
+
+One generator sample is `capture <x> <z> 1 1 1 generator`.
+
+It writes `capture.json` with the world, game version, layer, provenance and a SHA-256 integrity check. `loaded-ground` has no biome or river facts. Unloaded samples make the capture refused.
+
+In a mod test, load the capture with `TerrainCapture.Load(path).Terrain`. The replay serves only the recorded coordinates and throws for any other coordinate. A capture is recorded input, not an independent expectation. It samples mutable ground over several frames, so it is not an atomic snapshot.
 
 ## walk: record a person walking a route
 
-`walk <route.json> <seconds 5..600>`, through `WalkingProbe`. A person drives the client normally while the probe samples position, motion and support every 250 ms (`samples.jsonl`); it issues no movement, teleport, cheat or save. The route is an ordered array of checkpoints (`x`, `y`, `z`, horizontal `radius`, `heightTolerance`) whose areas do not overlap; place them at the approach, the turns and the destination, in each direction.
+`walk` uses `WalkingProbe` while a person drives the client normally. It samples position, motion and support every 250 ms and issues no movement, teleport, cheat or save.
+
+```text
+walk <route.json> <seconds 5..600>
+```
+
+The route is an ordered array of checkpoints with `x`, `y`, `z`, a horizontal `radius` and a `heightTolerance`. Checkpoint areas must not overlap. Place them at the approach, the turns and the destination, in each direction.
 
 ```json
 [{"x": 0, "y": 10, "z": 0, "radius": 2, "heightTolerance": 1}, {"x": 20, "y": 12, "z": 0, "radius": 2, "heightTolerance": 1}]
 ```
 
-Exit 0 means the trace qualifies for review: checkpoints reached in order without large gaps, teleport-like jumps, flying, attachment or death, with enough grounded samples. It does **not** mean the road is usable: `review.json` (linked from `result.json` as `walking-review` evidence) starts `not-reviewed`. The reviewer confirms the run was ordinary walking, then records accepted / needs-work, coordinates and a screenshot or clip per issue: walked both ways, no climbing or jumping where a walk was intended, switchbacks that do not merge, no obstructive rocks, stairs, edges, supports or water, and a usable approach height at the destination.
+It writes `samples.jsonl` and `review.json`. `result.json` links the review as `walking-review` [evidence](../../docs/reference/evidence.md).
+
+It fails if the client is not in a world, or if the trace does not qualify. Exit 0 means the trace qualifies for review. The checkpoints were reached in order without large gaps, teleport-like jumps, flying, attachment or death. Enough samples were grounded.
+
+Exit 0 does **not** mean the road is usable. `review.json` starts as `not-reviewed`. A reviewer first confirms the run was ordinary walking. The reviewer then records accepted or needs-work, with coordinates and a screenshot or clip for each issue.
 
 ## session: state, save, join, leave
 
-`session state | save <worldUid> | join <address> <character> [password-env] | leave`, through `SessionControl` (default ValheimCLI plugin). `state` writes `session.json`. `save` waits for any earlier save, issues one, and requires the save number to advance in the same world (`saveNumber` in `result.json`); a client logout is not proof that the server saved. `join` turns the client's devcommands on first (ValheimCLI refuses a join without them) and joins an existing disposable character exactly once; `password-env` names an environment variable in the **game's** process, never a value, and omitting it clears the previous password. `leave` returns to the menu. At the menu there is no world yet, so pin only the plugins for `join` (menu pins), and the world too once joined. Mutations are never retried on a timeout, and every transition invalidates the actor's pins: verify the destination world's pins before anything else. For a test that joins and waits for the world, use `SessionControl.JoinWorld` or `WaitForWorld` in your own runner.
+`session` uses `SessionControl` and the default ValheimCLI plugin.
+
+```text
+session state | save <worldUid> | join <address> <character> [password-env] | leave
+```
+
+| Action | Does | Writes |
+|---|---|---|
+| `state` | Reads the session | `session.json` |
+| `save` | Waits for earlier saves, saves once; save number must advance | `saveNumber` in `result.json` |
+| `join` | Turns devcommands on, joins an existing disposable character once | Nothing extra |
+| `leave` | Returns to the menu | Nothing extra |
+
+- A client logout is not proof that the server saved.
+- ValheimCLI refuses a join without devcommands.
+- `password-env` names an environment variable in the **game's** process, never a value. If you omit it, the previous password is cleared.
+- At the menu there is no world yet. For `join`, pin only the plugins (menu pins). Once you have joined, pin the world too.
+- Mutations are never retried on a timeout. Every transition invalidates the actor's pins, so verify the destination world's pins first.
+
+If your test joins and then waits for the world, use `SessionControl.JoinWorld` or `WaitForWorld` in your own runner.

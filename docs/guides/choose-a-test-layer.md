@@ -2,7 +2,7 @@
 
 ## When to use this
 
-You have one behaviour to protect and have not decided how to test it. Start in your mod's repository with the cheapest layer that can observe the behaviour. Move down the table only when the cheaper layer cannot reach it. If the immediate problem is a mod that does not load, go to [Debug a mod load or mod conflict](../debugging-mods.md) first.
+You have one behaviour to protect and have not decided how to test it. Start in your mod's repository with the cheapest layer that can observe the behaviour. Move down the table only when the cheaper layer cannot reach it. If the immediate problem is a mod that does not load, go to [Debug a mod load or mod conflict](check-a-mod-loads.md) first.
 
 ## Pick a layer
 
@@ -26,10 +26,10 @@ These rows use `Valheim.Testing.Game` with ValheimCLI in the game, or the `valhe
 | Loaded height, collision or paint reaching a client | ObserveCheck `surface` or `paint` | [`surface`](../../examples/ObserveCheck/README.md#surface-a-clients-ground-collider-and-support), [`paint`](../../examples/ObserveCheck/README.md#paint-loaded-paint-channels) | Appearance; a human judges it |
 | Generator heights against loaded ground | ObserveCheck `ground` | [`ground`](../../examples/ObserveCheck/README.md#ground-generator-or-loaded-ground-heights) | Collider, paint or walking behaviour |
 | A bounded grid sample recorded for exact replay | ObserveCheck `capture` | [`capture`](../../examples/ObserveCheck/README.md#capture-record-a-bounded-grid-for-exact-replay) | That the sampled value is independently correct |
-| A named loaded-terrain site before, after or on failure | Terrain site snapshots | [Terrain site snapshots](../terrain-site-snapshots.md) | Generator height, ZDO state or human usability |
-| Saved objects, containers and structures near a site | Area object snapshots | [Area object snapshots](../area-object-snapshots.md) | Terrain, paint or a mod-specific correctness verdict |
+| A named loaded-terrain site before, after or on failure | Terrain site snapshots | [Terrain site snapshots](../reference/evidence.md#terrain-site-snapshots) | Generator height, ZDO state or human usability |
+| Saved objects, containers and structures near a site | Area object snapshots | [Area object snapshots](../reference/evidence.md#area-object-snapshots) | Terrain, paint or a mod-specific correctness verdict |
 | Save, restart and rejoin under owned process control | `PinnedServerRun`, `ClientRounds`, `SessionControl` | [FullLifecycle](../../examples/FullLifecycle/README.md), [ObserveCheck `session`](../../examples/ObserveCheck/README.md#session-state-save-join-leave) | A client when replication matters |
-| Whether a mod loads, or which mod set conflicts | `valheim-test server-load`, `server-load-ab` or `start` | [Debug a mod load or mod conflict](../debugging-mods.md) | The mod's gameplay behaviour; which mod owns a conflict |
+| Whether a mod loads, or which mod set conflicts | `valheim-test server-load`, `server-load-ab` or `start` | [Debug a mod load or mod conflict](check-a-mod-loads.md) | The mod's gameplay behaviour; which mod owns a conflict |
 | One mod before and after a change (A/B) in the real game | `TargetedRegression` runner | [TargetedRegression](../../examples/TargetedRegression/README.md): preflight without the game, then one run per arm | Other mods, dedicated servers or restarts |
 | Walking and appearance | ObserveCheck `walk` plus a person | [`walk`](../../examples/ObserveCheck/README.md#walk-record-a-person-walking-a-route) | Acceptance; the human verdict is recorded separately |
 
@@ -55,5 +55,5 @@ These rows use `Valheim.Testing.Game` with ValheimCLI in the game, or the `valhe
 - [Test terrain decisions](test-terrain-decisions.md)
 - [Run tests in CI](run-tests-in-ci.md)
 - [ValheimCLI capability authoring guide](https://github.com/tvongaza/valheimCLI/blob/e596a7d984feaaa695f5c2999964b64e23fbfd92/docs/command-packs.md): add a mod-specific game-side action or observation
-- [Evidence linked from result.json](../evidence.md): where a native run's snapshots, stills and round JSON are
+- [Evidence linked from result.json](../reference/evidence.md): where a native run's snapshots, stills and round JSON are
 - [Packages](../package-versions.md): every package, version and pin

@@ -426,7 +426,7 @@ static int StopTestHosts(int rootPid)
     catch (System.ComponentModel.Win32Exception error)
     {
         throw new InvalidOperationException($"Could not list processes with {start.FileName} ({error.Message}). On Windows that is PowerShell 7: " +
-            "install it with winget install --id Microsoft.PowerShell --source winget (docs/platforms.md#host-shells).", error);
+            "install it with winget install --id Microsoft.PowerShell --source winget (docs/reference/platforms.md#host-shells).", error);
     }
     using (var listing = started ?? throw new InvalidOperationException("Could not list processes."))
     {

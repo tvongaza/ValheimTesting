@@ -10,6 +10,8 @@
     href: guides/test-terrain-decisions.md
   - name: Run tests in CI
     href: guides/run-tests-in-ci.md
+  - name: Check that a mod loads
+    href: guides/check-a-mod-loads.md
 - name: Packages
   items:
   - name: Package versions
@@ -44,6 +46,34 @@
     href: reference/world-dump-contract.md
   - name: Bake a fixture
     href: reference/fixture-authoring.md
+  - name: Game - actors and pins
+    href: reference/game-actors-and-pins.md
+  - name: Game - waiting and owned processes
+    href: reference/game-waiting.md
+  - name: Game - launching servers and clients
+    href: reference/game-launch.md
+  - name: Game - clients in system tests
+    href: reference/game-client-session.md
+  - name: Game - owned-run preflight
+    href: reference/game-preflight.md
+  - name: Game - joining and placing a player
+    href: reference/game-player-placement.md
+  - name: Game - refused joins, crossplay, hosted worlds
+    href: reference/game-joins.md
+  - name: Game - plan rules and client rounds
+    href: reference/game-client-rounds.md
+  - name: Game - world observations
+    href: reference/game-observations.md
+  - name: Game - content and Harmony census
+    href: reference/game-content-census.md
+  - name: Game - log scan at teardown
+    href: reference/game-log-scan.md
+  - name: Game - regressions, loaders, dependencies
+    href: reference/game-run-inputs.md
+  - name: Evidence
+    href: reference/evidence.md
+  - name: Platforms
+    href: reference/platforms.md
 - name: API reference
   items:
   - name: API reference
