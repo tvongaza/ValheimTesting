@@ -4,6 +4,9 @@
 
 ValheimTesting serves mod authors and the coding agents that work in their mod repositories. A mod's tests live in the mod's own repository and use the published NuGet packages and the `valheim-test` tool; testing a mod needs none of this repository's source. To change the toolkit itself, start at AGENTS.md and CONTRIBUTING.md. The documentation site is https://tvongaza.github.io/ValheimTesting/.
 
+
+Native checks run through ValheimCLI, created by Warpalicious ([jneb802/valheimCLI](https://github.com/jneb802/valheimCLI), MIT); the toolkit uses the pinned fork [tvongaza/valheimCLI](https://github.com/tvongaza/valheimCLI).
+
 ## Start
 
 - [Get started](https://github.com/tvongaza/ValheimTesting/blob/main/docs/getting-started.md): add a test project to a mod, pin the packages and run the first test

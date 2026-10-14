@@ -2,6 +2,8 @@
 
 [API reference](https://tvongaza.github.io/ValheimTesting/reference/) and [pinned ValheimCLI fork](https://github.com/tvongaza/valheimCLI). The fork owns the transport's source and game-side command contracts.
 
+ValheimCLI was created by **Warpalicious** ([jneb802/valheimCLI](https://github.com/jneb802/valheimCLI), MIT). This package is its transport, built unchanged from the pinned fork, which adds the commands and packs the toolkit needs. Its MIT license (copyright warp) is packed with it.
+
 ## Purpose
 
 This package is ValheimCLI's external client and YAML test-plan runner, packaged by [ValheimTesting](https://github.com/tvongaza/ValheimTesting). It connects to the in-game ValheimCLI plugin over TCP. It sends commands, reads replies and runs YAML test plans with strict environment pins. It contains no game, Unity or BepInEx assemblies.
