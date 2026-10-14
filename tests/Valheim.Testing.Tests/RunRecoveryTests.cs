@@ -1,3 +1,4 @@
+using Valheim.Testing.Game.Fakes;
 using Valheim.Testing.Game;
 using Xunit;
 using Valheim.Testing.GameSessions;
@@ -1083,17 +1084,17 @@ public sealed class RunRecoveryTests : IDisposable
     }
 
     // #258 step 8b: a hosted world a killed run left in a campaign client's own worlds_local is moved out into that run's
-    // host-world folder (never deleted), with the game's backup beside it; the user's own world stays. A journal line that does
-    // not name a worlds_local, or a keep folder outside this run's directory, is refused and nothing moves.
+    // host-world folder (never deleted), with the game's backup beside it, once its metadata states the journalled world UID; the
+    // user's own world stays. A journal line that does not name a worlds_local or a world UID, or a keep folder outside this run's
+    // directory, is refused and nothing moves.
     [Fact] public async Task RecoverMovesAHostedWorldOutOfTheClientsWorldsIntoTheRunsFolder()
     {
         const string Worlds = "/home/p/.config/unity3d/IronGate/Valheim/worlds_local", KeepIn = "/srv/runs/run-host/host-world";
-        Directory.CreateDirectory(_host.Local(Worlds + "/Campaign"));
-        File.WriteAllText(_host.Local(Worlds + "/Campaign/_main.0.fwl2"), "world");
+        ChunkedWorld(Worlds, "Campaign", 4242);
         File.WriteAllText(_host.Local(Worlds + "/Campaign_backup_auto-1.db"), "backup");
         File.WriteAllText(_host.Local(Worlds + "/MyWorld.fwl"), "the user's world");
         Line(_host, "run-host", "host", Gone, JournalEntry.CopyIntended, ("runtime", Worlds + "/Campaign"), ("stage", ""), ("parent", Worlds),
-            ("holds", "hosted-world"), ("world", "Campaign"), ("keepIn", KeepIn));
+            ("holds", "hosted-world"), ("world", "Campaign"), ("worldUid", "4242"), ("keepIn", KeepIn));
         Line(_host, "run-host", "host", Gone, JournalEntry.CopyDone, ("runtime", Worlds + "/Campaign"), ("files", "1"), ("verified", "true"));
 
         var recovered = await RecoverAsync("run-host");
@@ -1101,19 +1102,126 @@ public sealed class RunRecoveryTests : IDisposable
         Assert.True(recovered.Recovered, string.Join("\n", recovered.Steps));
         Assert.StartsWith("moved out of the client's worlds into " + KeepIn, Assert.Single(recovered.Steps, step => step.What == "copy " + Worlds + "/Campaign").Outcome);
         Assert.Equal(new[] { "MyWorld.fwl" }, Directory.EnumerateFileSystemEntries(_host.Local(Worlds)).Select(Path.GetFileName));
-        Assert.Equal("world", File.ReadAllText(_host.Local(KeepIn + "/Campaign/_main.0.fwl2")));
+        Assert.Equal("chunk", File.ReadAllText(_host.Local(KeepIn + "/Campaign/0_0.chunk")));
         Assert.Equal("backup", File.ReadAllText(_host.Local(KeepIn + "/Campaign_backup_auto-1.db")));
         Assert.All((await StatusAsync()).Runs, run => Assert.Equal(JournalRunState.Ended, run.State));
 
-        // Refused: a folder that is not a worlds_local, and a keep folder outside the run's directory. Nothing moves.
-        foreach (var (run, parent, keepIn) in new[] { ("run-odd", "/home/p/Documents", "/srv/runs/run-odd/host-world"), ("run-far", Worlds, "/srv/elsewhere/host-world") })
+        // Refused: a folder that is not a worlds_local, a line without the world UID, and a keep folder outside the run's directory.
+        // Nothing moves.
+        foreach (var (run, parent, keepIn, uid) in new[]
         {
-            Directory.CreateDirectory(_host.Local(parent + "/Other"));
+            ("run-odd", "/home/p/Documents", "/srv/runs/run-odd/host-world", "7"), ("run-nouid", Worlds, "/srv/runs/run-nouid/host-world", ""),
+            ("run-far", Worlds, "/srv/elsewhere/host-world", "7"),
+        })
+        {
+            ChunkedWorld(parent, "Other", 7);
             Line(_host, run, "host", Gone, JournalEntry.CopyIntended, ("runtime", parent + "/Other"), ("stage", ""), ("parent", parent),
-                ("holds", "hosted-world"), ("world", "Other"), ("keepIn", keepIn));
+                ("holds", "hosted-world"), ("world", "Other"), ("worldUid", uid), ("keepIn", keepIn));
             Assert.False((await RecoverAsync(run)).Recovered);
             Assert.True(Directory.Exists(_host.Local(parent + "/Other")));
+            Assert.DoesNotContain(_host.Runs, call => call.Script == "world-move" && call.Variables["name"] == "Other");
         }
+    }
+
+    // #807: the name is not the proof. A world in the client's worlds under the journalled name that states another world UID (one
+    // the user made after the run's was moved away by hand), or whose identity cannot be read, is refused: it stays where it is and
+    // the run stays recoverable. With nothing named for the world left, the copy is retired as gone.
+    [Fact] public async Task RecoverNeverMovesASameNamedWorldThatIsNotTheRunsOwn()
+    {
+        const string Worlds = "/home/p/.config/unity3d/IronGate/Valheim/worlds_local";
+        void Journalled(string run, string world) => Line(_host, run, "host", Gone, JournalEntry.CopyIntended, ("runtime", Worlds + "/" + world), ("stage", ""),
+            ("parent", Worlds), ("holds", "hosted-world"), ("world", world), ("worldUid", "4242"), ("keepIn", "/srv/runs/" + run + "/host-world"));
+        ChunkedWorld(Worlds, "Campaign", 9999);
+        Journalled("run-mine", "Campaign");
+        var refused = await RecoverAsync("run-mine");
+        Assert.False(refused.Recovered);
+        Assert.Contains("UID 9999, not the fixture's 4242", Assert.Single(refused.Steps, step => step.What == "copy " + Worlds + "/Campaign").Outcome);
+        Assert.Equal("chunk", File.ReadAllText(_host.Local(Worlds + "/Campaign/0_0.chunk")));
+        Assert.DoesNotContain(_host.Runs, call => call.Script == "world-move");
+
+        Directory.CreateDirectory(_host.Local(Worlds + "/Unread"));
+        File.WriteAllText(_host.Local(Worlds + "/Unread/0_0.chunk"), "chunk");
+        Journalled("run-unread", "Unread");
+        Assert.Contains("holds no world metadata", Assert.Single((await RecoverAsync("run-unread")).Steps, step => step.What == "copy " + Worlds + "/Unread").Outcome);
+        Assert.True(File.Exists(_host.Local(Worlds + "/Unread/0_0.chunk")));
+
+        Journalled("run-gone", "Vanished");
+        var gone = await RecoverAsync("run-gone");
+        Assert.True(gone.Recovered, string.Join("\n", gone.Steps));
+        Assert.Equal("nothing left in the client's worlds", Assert.Single(gone.Steps, step => step.What == "copy " + Worlds + "/Vanished").Outcome);
+    }
+
+    // #807, with fakes: a killed `start` whose hosting client runs on this machine. The campaign places its fixture world in this
+    // machine's worlds_local through the same journalled site as a remote client's, so env status lists the staged world, env
+    // recover moves it (a chunked save folder the game rewrote, proven by its world UID) out into the run's folder, the user's own
+    // world stays, nothing is left, and the next run's placement of the same fixture is not refused.
+    [Fact] public async Task RecoverRetiresTheWorldAKilledLocalHostingClientLeftSoTheNextStartPlacesIt()
+    {
+        const string Data = "/Users/t/Library/Application Support/IronGate/Valheim", Worlds = Data + "/worlds_local", Run = "run-killed-hold";
+        var here = new FakeServerHost("here", Path.Combine(_root, "here"), kind: GameHostKind.Local);
+        var hosts = new Dictionary<string, HostProfile> { ["here"] = new HostProfile { Kind = "local", Lock = "/var/tmp/vt/lock" } };
+        var environment = new ResolvedEnvironment
+        {
+            Hosts = hosts, Clients = { ["host"] = new GameRole { Host = "here", Install = "/game/client", Runtime = "/runs", CliPort = 5578 } },
+        };
+        var character = new HostedCampaignCharacter { FileName = "vt-host", CharactersLocalDirectory = Data + "/characters_local" };
+        Directory.CreateDirectory(here.Local(Worlds));
+        File.WriteAllText(here.Local(Worlds + "/MyWorld.fwl"), "the user's world");
+        string fixture = Path.Combine(_root, "fixture");
+        Directory.CreateDirectory(Path.Combine(fixture, "Campaign"));
+        File.Copy(Path.Combine(FakeInstalls.World(Path.Combine(_root, "flat")), "Campaign.fwl"), Path.Combine(fixture, "Campaign", "_main.0.fwl2"));
+        File.WriteAllText(Path.Combine(fixture, "Campaign", "_main.0.db2"), "fixture");
+        var plan = new HostWorldPlan { World = new() { Source = fixture, Sha256 = new(WorldFixture.Manifest(fixture)) }, WorldUid = "4242" };
+        // The simulated client's data directory is the same one, so a world placed without the campaign's site lands there too.
+        using var data = new FakeClientDataDirectory(here.Local(Data));
+        // The hosting client's placement as the campaign makes it, on the site it chooses; the runner's journal lines as a runner
+        // that was then killed writes them.
+        HostedWorld Place(string run)
+        {
+            var site = HostedWorldOnHost.ForCampaignClient(environment, "host", run, character, here,
+                (entry, _) => { Line(here, run, "host", Gone, entry.Kind, [.. entry.Fields.Select(field => (field.Key, field.Value))]); return Task.CompletedTask; },
+                _ => Task.CompletedTask);
+            var section = new ClientRunPlan { Mode = "attach", Port = 5578, Character = "vt-host", HostWorld = plan };
+            var lifecycle = new HostedWorldLifecycle(section, Directory.CreateDirectory(Path.Combine(_root, "out-" + run)).FullName, CancellationToken.None, site);
+            lifecycle.CheckSaveDirectory();
+            lifecycle.PlaceWorld();
+            return lifecycle.World!;
+        }
+
+        Place(Run);
+        Assert.True(File.Exists(here.Local(Worlds + "/Campaign/_main.0.fwl2")));
+        // The game hosted it and saved: a newer save beside the fixture's, in Valheim 1.0's chunked folder. Then the runner was killed.
+        File.Copy(here.Local(Worlds + "/Campaign/_main.0.fwl2"), here.Local(Worlds + "/Campaign/_main.1.fwl2"));
+        File.WriteAllText(here.Local(Worlds + "/Campaign/0_0.chunk"), "saved by the game");
+
+        var status = await RunJournalStatus.InspectAsync(hosts, _ => here, TimeSpan.FromSeconds(5));
+        var left = Assert.Single(status.Runs);
+        Assert.Equal(JournalRunState.Recoverable, left.State);
+        Assert.Equal(Worlds + "/Campaign", Assert.Single(left.Items, item => item.Kind == "copy").What);
+
+        var recovered = await RunRecovery.RecoverAsync(hosts, _ => here, Run, teardown: false, TimeSpan.FromSeconds(5));
+
+        Assert.True(recovered.Clean, string.Join("\n", recovered.Steps));
+        Assert.Contains("world UID 4242 as journalled", Assert.Single(recovered.Steps, step => step.What == "copy " + Worlds + "/Campaign").Outcome);
+        Assert.Equal(new[] { "MyWorld.fwl" }, Directory.EnumerateFileSystemEntries(here.Local(Worlds)).Select(Path.GetFileName));
+        Assert.Equal("saved by the game", File.ReadAllText(here.Local("/runs/" + Run + "/host-world/Campaign/0_0.chunk")));
+        Assert.All((await RunJournalStatus.InspectAsync(hosts, _ => here, TimeSpan.FromSeconds(5))).Runs, run => Assert.Equal(JournalRunState.Ended, run.State));
+
+        // The next start places the same fixture: nothing named for it is left to refuse it.
+        var next = Place("run-next");
+        Assert.True(File.Exists(here.Local(Worlds + "/Campaign/_main.0.fwl2")));
+        next.Collect();
+    }
+
+    // A chunked world folder as Valheim 1.0 writes one: <name>/_main.<n>.fwl2 stating the world, its data and a chunk.
+    private void ChunkedWorld(string worlds, string name, long uid)
+    {
+        string folder = _host.Local(worlds + "/" + name);
+        Directory.CreateDirectory(folder);
+        string flat = FakeInstalls.World(Path.Combine(_root, "flat-" + name + "-" + uid), name, uid);
+        File.Copy(Path.Combine(flat, name + ".fwl"), Path.Combine(folder, "_main.1.fwl2"), overwrite: true);
+        File.WriteAllText(Path.Combine(folder, "_main.1.db2"), "data");
+        File.WriteAllText(Path.Combine(folder, "0_0.chunk"), "chunk");
     }
 
     // #738: the staging path is read from the journal. One that is not the copy's own <parent>/staging (a corrupt or hand-edited

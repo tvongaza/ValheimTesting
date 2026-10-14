@@ -54,4 +54,27 @@ public sealed class HostedWorldOnHostShellTests : IDisposable
         Assert.Equal("world", File.ReadAllText(Path.Combine(To, "Campaign", "_main.0.fwl2")));
         foreach (string kept in new[] { "Campaign2.fwl", "MyWorld.fwl", "Campaign_mine.fwl" }) Assert.True(File.Exists(Path.Combine(Worlds, kept)), kept);
     }
+
+    // #807: what env recover reads before it moves a journalled world: the UID every metadata file of Valheim 1.0's chunked folder
+    // states (or a flat <name>.fwl's). Another UID is refused; entries without readable metadata are refused; nothing there is
+    // reported as nothing. Only the world's own files are read: a <name>_mine.fwl of the user's says nothing.
+    [Theory, MemberData(nameof(LocalGameHostShellTests.Shells), MemberType = typeof(LocalGameHostShellTests))]
+    public async Task TheIdentityCheckReadsTheWorldUidFromTheChunkedFolder(string shell)
+    {
+        var host = Host(shell);
+        Directory.CreateDirectory(Path.Combine(Worlds, "Campaign"));
+        string flat = FakeInstalls.World(Path.Combine(_root, "flat"));
+        File.Copy(Path.Combine(flat, "Campaign.fwl"), Path.Combine(Worlds, "Campaign", "_main.1.fwl2"));
+        File.Copy(Path.Combine(flat, "Campaign.fwl"), Path.Combine(Worlds, "Campaign", "_main.12.fwl2"));
+        File.WriteAllText(Path.Combine(Worlds, "Campaign", "_main.1.db2"), "data");
+        File.WriteAllText(Path.Combine(Worlds, "Campaign", "0_0.chunk"), "chunk");
+        File.Copy(Path.Combine(FakeInstalls.World(Path.Combine(_root, "mine"), uid: 9999), "Campaign.fwl"), Path.Combine(Worlds, "Campaign_mine.fwl"));
+        Task<bool> Check(string name, string uid) => HostedWorldOnHost.RequireOwnWorldAsync(host, Worlds, name, uid, TimeSpan.FromSeconds(60), CancellationToken.None);
+
+        Assert.True(await Check("Campaign", "4242"));
+        Assert.Contains("UID 4242, not the fixture's 7", (await Assert.ThrowsAsync<InvalidDataException>(() => Check("Campaign", "7"))).Message);
+        Assert.False(await Check("Absent", "4242"));
+        File.WriteAllText(Path.Combine(Worlds, "Partial.db"), "data");
+        Assert.Contains("holds no world metadata", (await Assert.ThrowsAsync<InvalidDataException>(() => Check("Partial", "4242"))).Message);
+    }
 }

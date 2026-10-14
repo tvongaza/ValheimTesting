@@ -421,7 +421,7 @@ public static class PinnedServerRun
             report.Step(StepPhase.Preflight, "the plan agrees with the campaign", () =>
             {
                 HostedCampaignPreparation.CheckHostedPlan(inspection, named);
-                // A local host's world goes to this machine's client data directory, which must be that host's.
+                // A local hosting client runs on this machine, so the local host must be this machine's platform.
                 var profile = inspection.Inputs!.Profile;
                 string host = HostedCampaignPreparation.HostOf(named);
                 var hostProfile = profile.Hosts[profile.Clients[host].Host];
@@ -455,22 +455,17 @@ public static class PinnedServerRun
             report.Provenance["cliPreflight"] = hostPlan.CliPreflight;
             report.Provenance["clientMode"] = hostPlan.Mode;
             var placement = actors.Placement(report);
-            // The hosting client's world: in this machine's client data directory for a local host, else in its host user's own
-            // worlds_local (beside the characters_local its character was staged in), moved out into the run's folder there after.
+            // The hosting client's world, on any host (this machine's too, #807): in its host user's own worlds_local (beside the
+            // characters_local its character was staged in), journalled before it is placed, moved out into the run's folder there after.
             var hostRole = environment.Clients[hostName];
             bool localHost = environment.Hosts[hostRole.Host].Kind == "local";
-            HostedWorldOnHost.Site? site = null;
-            if (!localHost)
-            {
-                var character = prepared.Characters.FirstOrDefault(staged => staged.Actor == hostName).Character
-                    ?? throw new InvalidOperationException($"The hosting client {hostName} has no staged character, so its host user's worlds_local is unknown.");
-                var clientHost = actors.ClientHost(hostName);
-                site = new HostedWorldOnHost.Site(clientHost, hostRole.Host, HostedWorldOnHost.WorldsBeside(character.CharactersLocalDirectory),
-                    HostPath.Join(hostRole.Runtime, runId, "host-world-stage"), HostPath.Join(hostRole.Runtime, runId, "host-world"),
-                    (entry, token) => journal.AppendAsync(clientHost, prepared.JournalOf(hostRole.Host), hostName, entry, TimeSpan.FromSeconds(60), token),
-                    token => actors.HoldHostAsync(hostName, token));
-                report.Provenance["hostWorldOn"] = hostRole.Host + ": " + site.WorldsDirectory;
-            }
+            var character = prepared.Characters.FirstOrDefault(staged => staged.Actor == hostName).Character
+                ?? throw new InvalidOperationException($"The hosting client {hostName} has no staged character, so its host user's worlds_local is unknown.");
+            var clientHost = actors.ClientHost(hostName);
+            var site = HostedWorldOnHost.ForCampaignClient(environment, hostName, runId, character, clientHost,
+                (entry, token) => journal.AppendAsync(clientHost, prepared.JournalOf(hostRole.Host), hostName, entry, TimeSpan.FromSeconds(60), token),
+                token => actors.HoldHostAsync(hostName, token));
+            report.Provenance["hostWorldOn"] = hostRole.Host + ": " + site.WorldsDirectory;
             var peers = named.Where(client => client.Key != hostName).OrderBy(client => client.Key, StringComparer.Ordinal).ToList();
             var campaignActors = actors;
             game = new GameSession(report, full, null, server: null,

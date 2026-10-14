@@ -4,13 +4,14 @@ using Valheim.Testing.Game;
 namespace Valheim.Testing.GameSessions;
 
 /// <summary>
-/// A hosted fixture world on a campaign client's own host (#258 step 8b, part b): placed into that host user's
-/// <c>worlds_local</c> before the client hosts it, and moved out again into the run's directory on that host (then fetched
-/// into the evidence) once no client can still host it. Only entries named for the world (<c>&lt;name&gt;</c>,
+/// A hosted fixture world on a campaign client's own host (#258 step 8b, part b), this machine included (#807): placed into that
+/// host user's <c>worlds_local</c> before the client hosts it, and moved out again into the run's directory on that host (then
+/// fetched into the evidence) once no client can still host it. Only entries named for the world (<c>&lt;name&gt;</c>,
 /// <c>&lt;name&gt;.*</c>, <c>&lt;name&gt;_*</c>, in any case) are ever touched, and the placement refuses when one exists: a
 /// user's world is never overwritten or used. The placement is journalled on the host before the ship (a
 /// <see cref="JournalEntry.CopyIntended"/> that <c>holds</c> <c>hosted-world</c>), so <c>env recover</c> moves a world a killed run
-/// left behind out of the user's worlds in the same way (<see cref="RunRecovery"/>).
+/// left behind out of the user's worlds in the same way (<see cref="RunRecovery"/>), once the world there states the journalled
+/// world UID (<see cref="RequireOwnWorldAsync"/>).
 /// </summary>
 internal static class HostedWorldOnHost
 {
@@ -41,6 +42,20 @@ internal static class HostedWorldOnHost
     {
         public HostedWorld Place(HostWorldPlan plan, string output, CancellationToken cancellation) =>
             HostedWorldOnHost.Place(this, plan, output, cancellation);
+    }
+
+    /// <summary>
+    /// Where a campaign's hosting client <paramref name="client"/> places its world: its host user's own <c>worlds_local</c>, beside
+    /// the <c>characters_local</c> its character was staged in, shipped through and moved out into the run's folder in its role's
+    /// runtime there. The same on every host, this machine included: a local hosting client's world is journalled as a remote one's
+    /// is, so <c>env status</c> lists it and <c>env recover</c> moves it out after a killed run (#807).
+    /// </summary>
+    internal static Site ForCampaignClient(ResolvedEnvironment environment, string client, string runId, HostedCampaignCharacter character,
+        IGameHost clientHost, Func<JournalEntry, CancellationToken, Task> journal, Func<CancellationToken, Task> hold)
+    {
+        var role = environment.Clients[client];
+        return new Site(clientHost, role.Host, WorldsBeside(character.CharactersLocalDirectory),
+            HostPath.Join(role.Runtime, runId, "host-world-stage"), HostPath.Join(role.Runtime, runId, "host-world"), journal, hold);
     }
 
     /// <summary>
@@ -76,7 +91,7 @@ internal static class HostedWorldOnHost
                 throw new InvalidOperationException($"The client's worlds on {site.HostName} already hold {string.Join(", ", existing)} in {site.WorldsDirectory}: a fixture world is never copied over a world. Remove or rename that one yourself, or rename the fixture world.");
             // Journalled before the ship: no journal line, no world in the user's worlds.
             site.Journal(JournalEntry.Of(JournalEntry.CopyIntended, ("runtime", world), ("stage", ""), ("parent", site.WorldsDirectory), ("holds", Holds),
-                ("world", name), ("keepIn", site.KeepIn)), cancellation).GetAwaiter().GetResult();
+                ("world", name), ("worldUid", plan.WorldUid), ("keepIn", site.KeepIn)), cancellation).GetAwaiter().GetResult();
             // Shipped into the run's stage first (with the ship's own SOURCE.txt, which never reaches the user's worlds), verified there.
             site.Host.ShipFilesAsync(copy.DirectoryPath, site.Stage, HostedTimeouts.Long, cancellation).GetAwaiter().GetResult();
             var listing = HostInstall.ListAsync(site.Host, site.Stage, HostedTimeouts.Long, null, cancellation).GetAwaiter().GetResult();
@@ -141,11 +156,14 @@ internal static class HostedWorldOnHost
     /// <summary>
     /// What env recover requires of a journalled hosted world before it moves anything: the folder is a <c>worlds_local</c>, the
     /// world name is a fixture world's, the copy is that folder's entry of that name, and the folder it moves to is in this run's
-    /// directory. Returns the world's name.
+    /// directory, and the world UID placed is named. Returns the world's name and UID.
     /// </summary>
-    internal static string RequireJournalled(IReadOnlyDictionary<string, string> fields, string runtime, string runId)
+    internal static (string Name, string WorldUid) RequireJournalled(IReadOnlyDictionary<string, string> fields, string runtime, string runId)
     {
         string worlds = fields.GetValueOrDefault("parent") ?? "", name = fields.GetValueOrDefault("world") ?? "", keepIn = fields.GetValueOrDefault("keepIn") ?? "";
+        string uid = fields.GetValueOrDefault("worldUid") ?? "";
+        if (!long.TryParse(uid, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out _))
+            throw new InvalidDataException("its journal names no world UID, so the world in the client's worlds cannot be proven the run's own");
         string Leaf(string path) => path.Replace('\\', '/').TrimEnd('/').Split('/').Last();
         if (!Leaf(worlds).Equals("worlds_local", StringComparison.OrdinalIgnoreCase))
             throw new InvalidDataException($"its journal names {worlds}, which is not a client's worlds_local");
@@ -157,8 +175,98 @@ internal static class HostedWorldOnHost
         var segments = keepIn.Replace('\\', '/').TrimEnd('/').Split('/');
         if (!RunJournal.SafeName(runId) || segments.Length < 3 || segments[^1] != "host-world" || segments[^2] != runId || segments.Any(segment => segment is "." or ".."))
             throw new InvalidDataException($"its journal names {keepIn}, which is not this run's host-world folder (<runtime>/{runId}/host-world)");
-        return name;
+        return (name, uid);
     }
+
+    /// <summary>
+    /// Before env recover moves a journalled world out of a client's worlds: every metadata file of the world there
+    /// (<c>&lt;name&gt;/_main.&lt;n&gt;.fwl2</c>, Valheim 1.0's chunked save folder, or <c>&lt;name&gt;.fwl</c>) must state
+    /// <paramref name="worldUid"/>, the fixture's UID the run journalled before placing it. A world the user made under that name has
+    /// another UID and is refused, as is one whose identity cannot be read (entries named for the world but no readable metadata).
+    /// The game rewrites the files once it hosted the world, so the UID, not the bytes, is what stays the run's. Returns false when
+    /// nothing named for the world is there.
+    /// </summary>
+    internal static async Task<bool> RequireOwnWorldAsync(IGameHost host, string worlds, string name, string worldUid, TimeSpan timeout, CancellationToken cancellation)
+    {
+        var result = (await host.RunAsync(host.Shell.Kind == HostShellKind.PowerShell ? WindowsMetadata : BashMetadata,
+            new Dictionary<string, string> { ["worlds"] = worlds, ["name"] = name }, timeout, cancellation).ConfigureAwait(false))
+            .EnsureSuccess($"Reading the hosted world's identity in the client's worlds on {host.Name}");
+        string? done = InteractiveClient.Line(result.Stdout, "VT-WORLD-METAS ");
+        if (done is not ("present" or "absent")) throw new HostOperationException($"Unexpected reply while reading the hosted world's identity on {host.Name}", result);
+        var lines = result.Stdout.Split('\n').Select(line => line.TrimEnd('\r')).ToList();
+        if (lines.FirstOrDefault(line => line.StartsWith("VT-WORLD-META-LARGE ", StringComparison.Ordinal)) is { } large)
+            throw new InvalidDataException($"{large["VT-WORLD-META-LARGE ".Length..]} in {worlds} is too large to be world metadata, so the world there cannot be proven the run's");
+        var read = lines.Where(line => line.StartsWith("VT-WORLD-META ", StringComparison.Ordinal)).Select(line =>
+        {
+            string[] parts = line["VT-WORLD-META ".Length..].Split(' ');
+            if (parts.Length != 2) throw new HostOperationException($"Unexpected world metadata line from {host.Name}", result);
+            return WorldIdentity.Parse(Convert.FromBase64String(parts[1]), parts[0]);
+        }).ToList();
+        if (read.Count == 0)
+        {
+            if (done == "absent") return false;
+            throw new InvalidDataException($"{name} in {worlds} holds no world metadata ({name}/_main.<n>.fwl2 or {name}.fwl), so it cannot be proven the run's world UID {worldUid}; inspect it and move it out yourself");
+        }
+        var other = read.FirstOrDefault(identity => identity.UidText != worldUid);
+        if (other != null)
+            throw new InvalidDataException($"{other.File} in {worlds} states world {other.Name} with UID {other.UidText}, not the fixture's {worldUid} the run placed: a world of the same name that is not the run's stays where it is");
+        return true;
+    }
+
+    // The world's metadata files, base64: <name>.fwl and <name>/_main.<n>.fwl2 (the name's own case; any case on Windows, whose
+    // folders ignore it). VT-WORLD-METAS says whether any entry named for the world (as MoveOut moves them) is there at all.
+    // Metadata is a few hundred bytes; a file over 1 MiB is named, not read.
+    internal static readonly string WindowsMetadata = """
+        $ErrorActionPreference = 'Stop'
+        $lower = $name.ToLowerInvariant(); $present = $false
+        if ([IO.Directory]::Exists($worlds)) {
+            foreach ($entry in @([IO.Directory]::EnumerateFileSystemEntries($worlds))) {
+                $l = [IO.Path]::GetFileName($entry).ToLowerInvariant()
+                if ($l -ceq $lower -or $l.StartsWith($lower + '.', [StringComparison]::Ordinal) -or $l.StartsWith($lower + '_backup', [StringComparison]::Ordinal)) { $present = $true }
+            }
+            $files = @()
+            $flat = Join-Path $worlds ($name + '.fwl')
+            if ([IO.File]::Exists($flat)) { $files += ,@($flat, ($name + '.fwl')) }
+            $folder = Join-Path $worlds $name
+            if ([IO.Directory]::Exists($folder)) {
+                foreach ($file in @([IO.Directory]::EnumerateFiles($folder))) {
+                    $leaf = [IO.Path]::GetFileName($file)
+                    if ($leaf -match '^_main\.[0-9]+\.fwl2$') { $files += ,@($file, ($name + '/' + $leaf)) }
+                }
+            }
+            foreach ($file in $files) {
+                if ((Get-Item -LiteralPath $file[0]).Length -gt 1048576) { 'VT-WORLD-META-LARGE ' + $file[1]; continue }
+                'VT-WORLD-META ' + $file[1] + ' ' + [Convert]::ToBase64String([IO.File]::ReadAllBytes($file[0]))
+            }
+        }
+        if ($present) { 'VT-WORLD-METAS present' } else { 'VT-WORLD-METAS absent' }
+        """;
+    internal static readonly string BashMetadata = """
+        set -eu
+        present=absent
+        if [ -d "$worlds" ]; then
+            for entry in "$worlds"/* "$worlds"/.[!.]*; do
+                [ -e "$entry" ] || [ -L "$entry" ] || continue
+                leaf=${entry##*/}
+                case "$leaf" in "$name"|"$name".*|"$name"_backup*) present=present ;; esac
+            done
+            meta() {
+                size=$(wc -c < "$1" | tr -d ' ')
+                if [ "$size" -gt 1048576 ]; then printf 'VT-WORLD-META-LARGE %s\n' "$2"; return; fi
+                printf 'VT-WORLD-META %s %s\n' "$2" "$(base64 < "$1" | tr -d '\n\r')"
+            }
+            if [ -f "$worlds/$name.fwl" ]; then meta "$worlds/$name.fwl" "$name.fwl"; fi
+            if [ -d "$worlds/$name" ]; then
+                for file in "$worlds/$name"/_main.*.fwl2; do
+                    [ -f "$file" ] || continue
+                    leaf=${file##*/}
+                    case "$leaf" in _main.*[!0-9]*.fwl2|_main..fwl2) continue ;; esac
+                    meta "$file" "$name/$leaf"
+                done
+            fi
+        fi
+        printf 'VT-WORLD-METAS %s\n' "$present"
+        """;
 
     // Entries named for the world: <name>, <name>.*, <name>_* (any case): the placement refuses any of them, so a user's world is
     // never used. worlds_local is created when missing. Lower-casing is culture-free (C locale, invariant culture).
