@@ -1,6 +1,6 @@
 # Valheim.Testing.Bindings
 
-[Current preview API reference](https://tvongaza.github.io/ValheimTesting/reference/). This page covers the library and its `valheim-bindings` tool.
+[API reference](https://tvongaza.github.io/ValheimTesting/reference/). This page covers the library and its `valheim-bindings` tool.
 
 Check offline that a built mod's references into the game still bind.
 

@@ -212,9 +212,16 @@ void PreparePages()
         if (!content.StartsWith("# ", StringComparison.Ordinal))
             throw new InvalidDataException($"docs/{page} needs its title heading first.");
         bool packageGuide = Path.GetDirectoryName(file) == packages;
+        // A release snapshot's package guide links its own frozen reference; a guide without the live link would keep pointing
+        // at the moving site, so it is refused rather than published.
+        const string liveReference = "[API reference](https://tvongaza.github.io/ValheimTesting/reference/)";
         if (packageGuide && releaseVersion != null)
-            content = content.Replace("[Current preview API reference](https://tvongaza.github.io/ValheimTesting/reference/)",
+        {
+            if (!content.Contains(liveReference, StringComparison.Ordinal))
+                throw new InvalidDataException($"docs/{page} has no {liveReference} link for the {releaseVersion} snapshot to point at its own reference.");
+            content = content.Replace(liveReference,
                 "[This release's API reference](https://tvongaza.github.io/ValheimTesting/versions/" + releaseVersion + "/reference/)");
+        }
         content = RewriteLinks(content, Path.GetDirectoryName(file)!, "docs/" + page, revision);
         string sourceLink = "https://github.com/tvongaza/ValheimTesting/tree/" + revision;
         int headingEnd = content.IndexOf('\n');

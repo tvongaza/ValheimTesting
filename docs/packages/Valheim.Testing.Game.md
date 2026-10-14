@@ -1,6 +1,6 @@
 # Valheim.Testing.Game
 
-[Current preview API reference](https://tvongaza.github.io/ValheimTesting/reference/). This page is the package's README; each type's members are in the reference.
+[API reference](https://tvongaza.github.io/ValheimTesting/reference/). This page is the package's README; each type's members are in the reference.
 
 `Valheim.Testing.Game` drives the real game from a test: it launches and stops dedicated servers and clients, talks to them through ValheimCLI with strict pins, waits on game events, and writes JSON and JUnit reports. Use it for checks that need the game, such as a save and restart, replication to a client or what the log says.
 
