@@ -22,17 +22,40 @@ internal static class HostedWorldOnHost
     /// <summary>The game's user-data root on an SSH Mac, from that host's own home rather than the runner's home.</summary>
     internal static async Task<string> MacSaveRootAsync(IGameHost host, TimeSpan timeout, CancellationToken cancellation)
     {
-        var result = (await host.RunAsync("""
-            set -eu
-            [ "$(uname -s)" = Darwin ] && [ -d "$HOME" ] || exit 4
-            printf 'VT-MAC-HOME %s\n' "$HOME"
-            """, null, timeout, cancellation).ConfigureAwait(false)).EnsureSuccess($"Finding the Mac save root on {host.Name}");
+        var result = (await host.RunAsync(MacHome, null, timeout, cancellation).ConfigureAwait(false)).EnsureSuccess($"Finding the Mac save root on {host.Name}");
         string home = InteractiveClient.Line(result.Stdout, "VT-MAC-HOME ")
             ?? throw new HostOperationException($"The Mac on {host.Name} did not name its home directory", result);
         if (!home.StartsWith('/') || home.Any(char.IsControl) || home.Split('/').Any(part => part is "." or ".."))
             throw new InvalidDataException($"The Mac on {host.Name} reported an unsafe home directory.");
         return HostPath.Join(home, HostedWorld.MacSaveRelative);
     }
+
+    /// <summary>
+    /// A game client's user-data root on its host (where the game keeps its recent-servers list, whatever the launch asks): on a
+    /// Mac (bash) <see cref="MacSaveRootAsync"/>, on Windows (PowerShell) the host user's <c>AppData\LocalLow\IronGate\Valheim</c>.
+    /// </summary>
+    internal static async Task<string> ClientSaveRootAsync(IGameHost host, TimeSpan timeout, CancellationToken cancellation)
+    {
+        if (host.Shell.Kind != HostShellKind.PowerShell) return await MacSaveRootAsync(host, timeout, cancellation).ConfigureAwait(false);
+        var result = (await host.RunAsync(WindowsProfile, null, timeout, cancellation).ConfigureAwait(false)).EnsureSuccess($"Finding the client save root on {host.Name}");
+        string profile = InteractiveClient.Line(result.Stdout, "VT-WINDOWS-PROFILE ")
+            ?? throw new HostOperationException($"{host.Name} did not name its user profile", result);
+        if (!System.Text.RegularExpressions.Regex.IsMatch(profile, @"^[A-Za-z]:\\") || profile.Any(char.IsControl) || profile.Split('\\', '/').Any(part => part is "." or ".."))
+            throw new InvalidDataException($"{host.Name} reported an unsafe user profile.");
+        return HostPath.Join(profile, HostedWorld.WindowsSaveRelative);
+    }
+
+    internal static readonly string MacHome = """
+        set -eu
+        [ "$(uname -s)" = Darwin ] && [ -d "$HOME" ] || exit 4
+        printf 'VT-MAC-HOME %s\n' "$HOME"
+        """.ReplaceLineEndings("\n");
+
+    internal static readonly string WindowsProfile = """
+        $profileDirectory = [Environment]::GetFolderPath('UserProfile')
+        if (-not $profileDirectory -or -not [IO.Directory]::Exists($profileDirectory)) { exit 4 }
+        'VT-WINDOWS-PROFILE ' + $profileDirectory
+        """.ReplaceLineEndings("\n");
 
     /// <summary>
     /// Where a placed world goes on its host (<paramref name="WorldsDirectory"/>), the run's folder it is shipped to first

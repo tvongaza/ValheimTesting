@@ -29,6 +29,8 @@ internal sealed class FakeServerHost : IGameHost
     public string ServerTaskLogon { get; set; } = "s4u";
     public GameHostKind Kind => _kind;
     public bool Windows { get; }
+    /// <summary>The host user's home as the fake reports it (its Valheim data folder lies under it, in the mirror).</summary>
+    public string Home => Windows ? @"C:\Users\tester" : "/Users/tester";
     public HostShell Shell => Windows ? HostShell.Pwsh : HostShell.Bash;
     public int TunnelPort { get; }
     public List<(string Script, IReadOnlyDictionary<string, string> Variables)> Runs { get; } = [];
@@ -163,6 +165,9 @@ internal sealed class FakeServerHost : IGameHost
         ("client-keep", [HostedClientScripts.BashKeep, HostedClientScripts.PowerShellKeep]),
         ("preloader", [HostedClientScripts.BashPreloader, HostedClientScripts.PowerShellPreloader]),
         ("move-aside", [HostedClientScripts.BashMoveAside, HostedClientScripts.PowerShellMoveAside]),
+        ("user-files", [UserSaveFiles.BashScript, UserSaveFiles.PowerShellScript]),
+        ("mac-home", [HostedWorldOnHost.MacHome]),
+        ("windows-profile", [HostedWorldOnHost.WindowsProfile]),
         ("preflight-read", [HostClientPreflight.BashRead, HostClientPreflight.PowerShellRead]),
         ("preflight-exists", [HostClientPreflight.BashExists, HostClientPreflight.PowerShellExists]),
         ("steam-user", [SteamSignedInUsers.PowerShell, SteamSignedInUsers.Bash]),
@@ -635,6 +640,10 @@ internal sealed class FakeServerHost : IGameHost
                     Directory.CreateDirectory(Path.GetDirectoryName(unity)!);
                     File.WriteAllText(unity, $"Unity player log of client {id}\n");
                 }
+                // As the game does whatever the launch asks (#822): it adds the server it joins to the host user's recent-servers list.
+                string recent = Local(HostPath.Join(Home, Windows ? HostedWorld.WindowsSaveRelative : HostedWorld.MacSaveRelative, "serverlist_local", "recent"));
+                Directory.CreateDirectory(Path.GetDirectoryName(recent)!);
+                File.WriteAllText(recent, $"127.0.0.1:2456 joined by client {id}\n");
                 lock (_sync) _processes[id] = ("555", ct => exit.Task.WaitAsync(ct), () => exit.TrySetResult(137));
                 // A Windows start runs through a scheduled task, which it removes before it replies.
                 return Ok($"VT-INTERACTIVE started {id} 555\n" + (Windows ? "VT-TASK removed\n" : ""));
@@ -763,6 +772,67 @@ internal sealed class FakeServerHost : IGameHost
                 if (File.Exists(unity)) File.Copy(unity, Path.Combine(dir, "game-1.log"));
                 else File.WriteAllText(Path.Combine(dir, "game-1.log.absent"), "absent");
                 return Ok("VT-KEPT\n");
+            }
+            // The host user's home, as the real scripts report it; their Valheim data folder is under it in the mirror.
+            case "mac-home": return Ok("VT-MAC-HOME " + Home + "\n");
+            case "windows-profile": return Ok("VT-WINDOWS-PROFILE " + Home + "\n");
+            // As UserSaveFiles' scripts do (UserSaveFilesTests runs them on this machine), on the mirror: capture copies and hashes
+            // each file, isolate moves the captured ones aside, restore keeps a run version under after/ and puts the user's back.
+            case "user-files":
+            {
+                string root = Local(v["saveRoot"]), backup = Local(v["backup"]), marker = Local(v["marker"]);
+                void Release() { if (File.Exists(marker) && File.ReadAllText(marker).Trim() == v["backup"]) File.Delete(marker); }
+                var entries = v["files"].Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(line => line.Split(' ', 2)).ToList();
+                string At(string folder, string name) => Path.Combine([folder, .. name.Split('/')]);
+                var reply = new StringBuilder();
+                switch (v["mode"])
+                {
+                    case "capture":
+                        if (Directory.Exists(backup)) return new HostResult(HostOutcome.Exited, 4, "VT-USER-FILES-EXISTS\n", "", TimeSpan.Zero, false);
+                        if (File.Exists(marker)) return new HostResult(HostOutcome.Exited, 4, "VT-USER-FILES-HELD " + File.ReadAllText(marker), "", TimeSpan.Zero, false);
+                        Directory.CreateDirectory(Path.GetDirectoryName(marker)!);
+                        File.WriteAllText(marker, v["backup"] + "\n");
+                        Directory.CreateDirectory(backup);
+                        foreach (var entry in entries)
+                        {
+                            string original = At(root, entry[1]), hash = "-";
+                            if (File.Exists(original))
+                            {
+                                hash = FileHash.Sha256(original);
+                                Directory.CreateDirectory(Path.GetDirectoryName(At(backup, entry[1]))!);
+                                File.Copy(original, At(backup, entry[1]));
+                            }
+                            reply.Append("VT-USER-FILE " + entry[1] + " " + hash + "\n");
+                        }
+                        return Ok(reply.ToString());
+                    case "isolate":
+                        foreach (var entry in entries) if (entry[0] != "-") File.Delete(At(root, entry[1]));
+                        return Ok("VT-USER-FILES-ISOLATED\n");
+                    case "undo":
+                        foreach (var entry in entries)
+                            if (entry[0] != "-" && !File.Exists(At(root, entry[1]))) File.Copy(At(backup, entry[1]), At(root, entry[1]));
+                        Release();
+                        return Ok("VT-USER-FILES-UNDONE\n");
+                    default:
+                        foreach (var entry in entries)
+                        {
+                            string original = At(root, entry[1]), after = At(Path.Combine(backup, "after"), entry[1]);
+                            string current = File.Exists(original) ? FileHash.Sha256(original) : "-";
+                            if (current != entry[0] && current != "-" && !File.Exists(after))
+                            {
+                                Directory.CreateDirectory(Path.GetDirectoryName(after)!);
+                                File.Copy(original, after);
+                            }
+                            if (entry[0] == "-") { if (File.Exists(original)) File.Delete(original); }
+                            else if (current != entry[0])
+                            {
+                                Directory.CreateDirectory(Path.GetDirectoryName(original)!);
+                                File.Copy(At(backup, entry[1]), original, overwrite: true);
+                            }
+                        }
+                        Release();
+                        return Ok("VT-USER-FILES-RESTORED\n");
+                }
             }
             case "move-aside":
             {

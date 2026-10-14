@@ -89,16 +89,23 @@ internal static class DesktopClientSession
             var session = ClientSession.Launch(plan, output,
                 () =>
                 {
-                    var process = InteractiveClient.StartAsync(host, launch, launchDirectory,
-                        HostedTimeouts.ClientStart(plan), cancellation: cancellation,
-                        beforeLaunch: processIntended).GetAwaiter().GetResult();
+                    InteractiveClientProcess process;
+                    try
+                    {
+                        process = InteractiveClient.StartAsync(host, launch, launchDirectory,
+                            HostedTimeouts.ClientStart(plan), cancellation: cancellation,
+                            beforeLaunch: processIntended).GetAwaiter().GetResult();
+                    }
+                    // Only a refusal that proves the start made no process lets the user's files go back at once (#822).
+                    catch (Exception error) when (InteractiveClient.NeverStarted(error)) { UserSaveFilesGuard.NoProcess(error); throw; }
                     try
                     {
                         processStarted?.Invoke(process);
                     }
-                    catch
+                    catch (Exception error)
                     {
-                        try { process.Stop(TimeSpan.FromSeconds(15)); } finally { process.Dispose(); }
+                        try { process.Stop(TimeSpan.FromSeconds(15)); UserSaveFilesGuard.NoProcess(error); } // Proven stopped.
+                        finally { process.Dispose(); }
                         throw;
                     }
                     return HostedClientProcess.Of(process, host, plan.Install, launch.UnityLog!, tunnel, keptDirectory, HostedRunHooks.Production);
@@ -120,7 +127,8 @@ internal static class DesktopClientSession
                             StartupEvents.ClientStartupFailures, menuTime, next).ConfigureAwait(false)).EnsureMatched(),
                         token).ConfigureAwait(false);
                 }, cancellation, null, keptLogs, failureEvidence: (process, actor, directory) =>
-                    ClientFailureEvidence.CaptureLocal(process, actor, plan, launch.UnityLog!, directory));
+                    ClientFailureEvidence.CaptureLocal(process, actor, plan, launch.UnityLog!, directory),
+                    saveFiles: UserSaveFilesGuard.ForLocalClient(output)); // This user's recent-servers list, kept as found (#822).
             foreach (var kept in session.Logs) logs.Add(kept);
             return session;
         }

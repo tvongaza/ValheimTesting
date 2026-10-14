@@ -1422,6 +1422,10 @@ public sealed partial class HostedServerRunTests : IDisposable
         string clientInstall = clientHost.Local("/Users/tester/valheim");
         FakeInstalls.MacClient(clientInstall);
         File.WriteAllText(Path.Combine(clientInstall, "BepInEx", "LogOutput.log"), "an earlier run's log\n");
+        // The host user's own recent-servers list, which the client adds to whatever the launch asks (#822).
+        string recent = clientHost.Local("/Users/tester/" + HostedWorld.MacSaveRelative + "/serverlist_local/recent");
+        Directory.CreateDirectory(Path.GetDirectoryName(recent)!);
+        File.WriteAllText(recent, "the user's servers\n");
         var (plan, profile) = Write(host, withClient: true);
         var clientTransport = new ScriptedTransport();
         var client = PreparedClient(clientHost);
@@ -1436,6 +1440,10 @@ public sealed partial class HostedServerRunTests : IDisposable
         }, clientHost, clientTransport));
         Assert.Equal(0, code);
         Assert.Equal(77, pid);
+        // The user's list is as the run found it; the client's version is kept in the run's folder on its host.
+        Assert.Equal("the user's servers\n", File.ReadAllText(recent));
+        Assert.Equal("127.0.0.1:2456 joined by client 77\n", File.ReadAllText(clientHost.Local("/Users/tester/runs/" + RunId + "/" +
+            UserSaveFiles.BackupName(RunId, "client-1") + "/after/serverlist_local/recent")));
         // The launch used the profile's install and a launch directory in this run's directory on the client's host.
         var start = Assert.Single(clientHost.Runs, run => run.Script == "client-start");
         Assert.Equal("/Users/tester/valheim", start.Variables["install"]);
@@ -1444,7 +1452,9 @@ public sealed partial class HostedServerRunTests : IDisposable
         // The client host's journal (#257): its lock held and released, the client journalled before its start, then its process.
         var clientJournal = await RunJournalOnHost.ReadAsync(clientHost, "/Users/tester/journal", RunId, TimeSpan.FromSeconds(5));
         // A Mac client's GUI agent is journalled around its process: intended before the start, retired once the client is stopped.
-        Assert.Equal([JournalEntry.ProcessIntended, JournalEntry.MacAgentIntended, JournalEntry.ProcessStarted, JournalEntry.MacAgentRetired],
+        // The host user's recent-servers list is captured before the start and restored once the client stopped (#822).
+        Assert.Equal([JournalEntry.UserFilesCaptured, JournalEntry.ProcessIntended, JournalEntry.MacAgentIntended, JournalEntry.ProcessStarted,
+            JournalEntry.MacAgentRetired, JournalEntry.UserFilesRestored],
             clientJournal.Where(record => record.Actor == "player").Select(record => record.Entry.Kind));
         Assert.Equal("77", clientJournal.Single(record => record.Entry.Kind == JournalEntry.ProcessStarted).Entry.Fields["pid"]);
         Assert.Equal(FakeServerHost.CommandLineSha256("77"), clientJournal.Single(record => record.Entry.Kind == JournalEntry.ProcessStarted).Entry.Fields["commandLineSha256"]);

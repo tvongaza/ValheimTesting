@@ -1091,6 +1091,32 @@ public sealed class RunRecoveryTests : IDisposable
         Assert.Equal(JournalRunState.Ended, after.State);
     }
 
+    // #822: a run cut short while its client ran leaves the host user's recent-servers list moved aside, and the client's own
+    // version in its place. Recover puts the user's back and keeps the client's in the backup; a backup another run names is refused.
+    [Theory] [InlineData("run-recent", true)] [InlineData("run-other", false)]
+    public async Task RecoverPutsBackTheHostUsersRecentServersList(string backupRun, bool restored)
+    {
+        const string run = "run-recent";
+        string root = "/Users/tester/" + HostedWorld.MacSaveRelative, backup = "/srv/runs/" + run + "/" + UserSaveFiles.BackupName(backupRun, "client-1");
+        string recent = _host.Local(root + "/serverlist_local/recent"), saved = _host.Local(backup + "/serverlist_local/recent");
+        Directory.CreateDirectory(Path.GetDirectoryName(saved)!); File.WriteAllText(saved, "the user's servers\n");
+        Directory.CreateDirectory(Path.GetDirectoryName(recent)!); File.WriteAllText(recent, "127.0.0.1:2456\n");
+        string marker = "/var/tmp/vt/user-files/" + UserSaveFiles.MarkerName(UserSaveFiles.Kind.ClientServerList, root, windows: false);
+        Directory.CreateDirectory(Path.GetDirectoryName(_host.Local(marker))!); File.WriteAllText(_host.Local(marker), backup + "\n");
+        Line(_host, run, "player", Gone, JournalEntry.UserFilesCaptured, ("files", "client-server-list"), ("saveRoot", root), ("backup", backup),
+            ("marker", marker), ("hashes", FileHash.Sha256(saved) + ",-"));
+
+        var report = await RecoverAsync(run);
+
+        Assert.Equal(restored, report.Recovered);
+        Assert.Equal(restored ? "the user's servers\n" : "127.0.0.1:2456\n", File.ReadAllText(recent));
+        Assert.Equal(restored, File.Exists(_host.Local(backup + "/after/serverlist_local/recent")));
+        Assert.Equal(!restored, File.Exists(_host.Local(marker))); // Released with the restore, so the next run may capture.
+        var step = Assert.Single(report.Steps, step => step.What == "client recent-servers list");
+        Assert.Equal(restored, step.Outcome.StartsWith("restored", StringComparison.Ordinal));
+        Assert.Equal(restored ? JournalRunState.Ended : JournalRunState.Recoverable, Assert.Single((await StatusAsync()).Runs).State);
+    }
+
     // #412: the game's logs inside a copy are what explains why the run was interrupted. Recover keeps them in the run's
     // evidence folder on the host (beside its boot-N and client launch folders) before the copy goes, and names them. A log
     // older than the copy came with the install: it is named, not kept.

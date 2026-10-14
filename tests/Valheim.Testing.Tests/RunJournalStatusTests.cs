@@ -242,20 +242,20 @@ public sealed class RunJournalStatusTests : IDisposable
         Assert.False(status.Clean); // the incomplete control still blocks preflight
     }
 
-    [Fact] public async Task ACapturedMacAccessListStaysVisibleUntilRestorationIsJournalled()
+    [Theory] [InlineData("mac-server-lists", "server")] [InlineData("client-server-list", "client-1")]
+    public async Task CapturedUserFilesStayVisibleUntilRestorationIsJournalled(string files, string label)
     {
-        const string run = "run-mac-lists";
-        const string backup = "/runs/run-mac-lists/server-lists";
-        Line(_host, run, "server", Gone, JournalEntry.MacListsCaptured,
-            ("saveRoot", "/Users/test/Library/Application Support/IronGate/Valheim"), ("backup", backup),
-            ("admin", "-"), ("permitted", "-"), ("banned", "-"));
+        const string run = "run-user-files";
+        string backup = "/runs/run-user-files/" + UserSaveFiles.BackupName(run, label);
+        Line(_host, run, label, Gone, JournalEntry.UserFilesCaptured, ("files", files),
+            ("saveRoot", "/Users/test/Library/Application Support/IronGate/Valheim"), ("backup", backup), ("hashes", "-,-"));
         var pending = Run(await InspectAsync(), run);
         Assert.Equal(JournalRunState.Recoverable, pending.State);
         var item = Assert.Single(pending.Items);
-        Assert.Equal("mac-lists", item.Kind);
-        Assert.Equal("user access lists captured, not restored", item.Status);
+        Assert.Equal("user-files", item.Kind);
+        Assert.Equal("the user's Valheim files moved aside, not restored", item.Status);
 
-        Line(_host, run, "server", Gone, JournalEntry.MacListsRestored, ("backup", backup));
+        Line(_host, run, label, Gone, JournalEntry.UserFilesRestored, ("backup", backup));
         var restored = Run(await InspectAsync(), run);
         Assert.Empty(restored.Items);
     }

@@ -380,10 +380,10 @@ internal static class RunRecovery
         }
 
         // 2b. Each host's characters and prepared copies, under its lock, once no process of the run is left on it.
-        foreach (var group in Of("mac-lists").Concat(Of("character")).Concat(Of("copy").Where(item => !Local(item))).GroupBy(item => item.Host, StringComparer.Ordinal))
+        foreach (var group in Of("user-files").Concat(Of("character")).Concat(Of("copy").Where(item => !Local(item))).GroupBy(item => item.Host, StringComparer.Ordinal))
         {
             var host = connections[group.Key];
-            var lists = group.Where(item => item.Kind == "mac-lists").ToList();
+            var lists = group.Where(item => item.Kind == "user-files").ToList();
             var characters = group.Where(item => item.Kind == "character").ToList();
             var copies = group.Where(item => item.Kind == "copy").ToList();
             if (Failed(group.Key))
@@ -404,27 +404,27 @@ internal static class RunRecovery
                 await HostedRuntimeStage.RequireStoppedAsync(host, timeout,
                     runtimes: copies.Select(copy => copy.Fields.GetValueOrDefault("launchRoot") ?? copy.What).ToList(),
                     // An actor's caller-chosen name is not its role: every client profile journals runtimeKind client.
-                    clientSession: characters.Count != 0 || copies.Any(copy => copy.Fields.GetValueOrDefault("runtimeKind") == "client"))
+                    clientSession: characters.Count != 0 || copies.Any(copy => copy.Fields.GetValueOrDefault("runtimeKind") == "client") ||
+                        lists.Any(item => UserSaveFiles.KindOf(item.Fields) == UserSaveFiles.Kind.ClientServerList))
                     .ConfigureAwait(false);
                 foreach (var item in lists)
                 {
+                    // The user's own Valheim files a game wrote outside the run (#822): put back as the run found them.
+                    string what = UserSaveFiles.KindOf(item.Fields) == UserSaveFiles.Kind.MacServerLists ? "Mac server access lists" : "client recent-servers list";
                     try
                     {
-                        if (hosts[group.Key].Platform != "macos")
+                        if (UserSaveFiles.KindOf(item.Fields) == UserSaveFiles.Kind.MacServerLists && hosts[group.Key].Platform != "macos")
                             throw new InvalidDataException("Mac server access lists can be restored only on their Mac host.");
-                        if (host.Kind == GameHostKind.Local)
-                            MacServerLists.FromJournal(item.Fields, runId).Restore();
-                        else
-                        {
-                            string saveRoot = await HostedWorldOnHost.MacSaveRootAsync(host, timeout, cancellation).ConfigureAwait(false);
-                            await MacServerLists.FromRemoteJournal(item.Fields, runId, host, saveRoot)
-                                .RestoreAsync(timeout, cancellation).ConfigureAwait(false);
-                        }
-                        Step(group.Key, "Mac server access lists", "restored; versions written during the run kept in its backup");
-                        await Note(group.Key, JournalEntry.Of(JournalEntry.MacListsRestored, ("backup", item.Fields["backup"]))).ConfigureAwait(false);
+                        var files = host.Kind == GameHostKind.Local
+                            ? UserSaveFiles.FromJournal(item.Fields, runId, HostedWorld.DefaultSaveDirectory(GameLaunch.CurrentClientHost))
+                            : UserSaveFiles.FromJournal(item.Fields, runId, await HostedWorldOnHost.ClientSaveRootAsync(host, timeout, cancellation).ConfigureAwait(false),
+                                UserSaveFilesOnHost.Remote(host, timeout));
+                        await files.RestoreAsync().ConfigureAwait(false);
+                        Step(group.Key, what, "restored; versions written during the run kept in its backup");
+                        await Note(group.Key, files.Restored()).ConfigureAwait(false);
                     }
                     catch (Exception error) when (error is not OperationCanceledException)
-                    { Step(group.Key, "Mac server access lists", "not restored: " + error.Message, failed: true); }
+                    { Step(group.Key, what, "not restored: " + error.Message, failed: true); }
                 }
                 if (Failed(group.Key)) continue; // preserve the run's other copies and lock until its user files are restored
                 foreach (var character in characters)

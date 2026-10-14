@@ -203,45 +203,54 @@ internal sealed class CampaignClients
             var session = ClientSession.Launch(plan, output,
                 () =>
                 {
-                    if (platform == ClientPlatform.MacOS)
-                        RemoteMacClientPreflight.RequireDesktopAsync(host, HostedTimeouts.Quick, cancellation).GetAwaiter().GetResult();
-                    if (ownedSource != null)
-                        HostInstall.CheckProfilePinsAsync(host,
-                            plan.InstallPins ?? throw new ArgumentException("The prepared client profile has no install pins."),
-                            gameRoot, loaderRoot, ownedSource, "prepared client profile before launch",
-                            HostedTimeouts.Long, cancellation).GetAwaiter().GetResult();
-                    else lock (_clientState) _inPlaceSourceActors.Add(name);
                     string expected = launch.CommandLineSha256();
-                    JournalAsync(host, role.Host, name, JournalEntry.Of(JournalEntry.ProcessIntended, ("launchDirectory", launchDirectory),
-                        ("expectedCommandLineSha256", expected)), cancellation).GetAwaiter().GetResult();
-                    if (platform == ClientPlatform.MacOS)
+                    try
                     {
-                        JournalAsync(host, role.Host, name, JournalEntry.Of(JournalEntry.MacAgentIntended,
-                            ("launchDirectory", launchDirectory)), cancellation).GetAwaiter().GetResult();
-                        lock (_clientState) _pendingMacAgents[name] = role.Host;
+                        if (platform == ClientPlatform.MacOS)
+                            RemoteMacClientPreflight.RequireDesktopAsync(host, HostedTimeouts.Quick, cancellation).GetAwaiter().GetResult();
+                        if (ownedSource != null)
+                            HostInstall.CheckProfilePinsAsync(host,
+                                plan.InstallPins ?? throw new ArgumentException("The prepared client profile has no install pins."),
+                                gameRoot, loaderRoot, ownedSource, "prepared client profile before launch",
+                                HostedTimeouts.Long, cancellation).GetAwaiter().GetResult();
+                        else lock (_clientState) _inPlaceSourceActors.Add(name);
+                        JournalAsync(host, role.Host, name, JournalEntry.Of(JournalEntry.ProcessIntended, ("launchDirectory", launchDirectory),
+                            ("expectedCommandLineSha256", expected)), cancellation).GetAwaiter().GetResult();
+                        if (platform == ClientPlatform.MacOS)
+                        {
+                            JournalAsync(host, role.Host, name, JournalEntry.Of(JournalEntry.MacAgentIntended,
+                                ("launchDirectory", launchDirectory)), cancellation).GetAwaiter().GetResult();
+                            lock (_clientState) _pendingMacAgents[name] = role.Host;
+                        }
                     }
+                    // Nothing was started yet: the user's recent-servers list may go back at once (#822).
+                    catch (Exception error) { UserSaveFilesGuard.NoProcess(error); throw; }
                     var started = account == null ? InteractiveClient.StartAsync(host, launch, launchDirectory, start, cancellation)
                         : InteractiveClient.StartAsync(account.Hold, host, launch, launchDirectory, start, cancellation);
                     InteractiveClientProcess client;
                     try { client = started.GetAwaiter().GetResult(); }
-                    catch (Exception error) when (platform == ClientPlatform.MacOS && InteractiveClient.NeverStarted(error))
+                    catch (Exception error) when (InteractiveClient.NeverStarted(error))
                     {
-                        // The script proved no process or agent from this attempt exists. Settle both
+                        // The script proved no process (or Mac agent) from this attempt exists. Settle a Mac client's
                         // intents before releasing the host lock and account; ambiguous replies stay owned.
-                        try
+                        if (platform == ClientPlatform.MacOS)
                         {
-                            JournalAsync(host, role.Host, name, JournalEntry.Of(JournalEntry.LaunchSettled,
-                                ("actor", name), ("directory", launchDirectory)), CancellationToken.None).GetAwaiter().GetResult();
-                            JournalAsync(host, role.Host, name, JournalEntry.Of(JournalEntry.MacAgentRetired,
-                                ("launchDirectory", launchDirectory)), CancellationToken.None).GetAwaiter().GetResult();
-                            lock (_clientState) _pendingMacAgents.Remove(name);
+                            try
+                            {
+                                JournalAsync(host, role.Host, name, JournalEntry.Of(JournalEntry.LaunchSettled,
+                                    ("actor", name), ("directory", launchDirectory)), CancellationToken.None).GetAwaiter().GetResult();
+                                JournalAsync(host, role.Host, name, JournalEntry.Of(JournalEntry.MacAgentRetired,
+                                    ("launchDirectory", launchDirectory)), CancellationToken.None).GetAwaiter().GetResult();
+                                lock (_clientState) _pendingMacAgents.Remove(name);
+                            }
+                            catch (Exception journalError)
+                            {
+                                throw new InvalidOperationException($"The client did not start on {host.Name}, but its launch refusal could not be recorded. " +
+                                    $"Keep the run owned and inspect its journal before recovery: {journalError.Message}",
+                                    new AggregateException(error, journalError));
+                            }
                         }
-                        catch (Exception journalError)
-                        {
-                            throw new InvalidOperationException($"The client did not start on {host.Name}, but its launch refusal could not be recorded. " +
-                                $"Keep the run owned and inspect its journal before recovery: {journalError.Message}",
-                                new AggregateException(error, journalError));
-                        }
+                        UserSaveFilesGuard.NoProcess(error); // The user's recent-servers list may go back at once (#822).
                         throw;
                     }
                     string commandLine = HostProcessProbe.CommandLineAsync(host, client.Id, client.StartIdentity, HostedTimeouts.Quick).GetAwaiter().GetResult() ?? "";
@@ -295,7 +304,11 @@ internal sealed class CampaignClients
                 // A client that quit before its menu: Steam's log says whether another computer took the account.
                 () => FinalLook().GetAwaiter().GetResult() ? SteamSessionLog.ExitHint(SteamMessage()) : null,
                 [new RunLog($"client-{n} BepInEx log", Path.Combine(local, "game-0.log"), Required: true), new RunLog($"client-{n} Player.log", Path.Combine(local, "game-1.log"))],
-                account?.Hold);
+                account?.Hold,
+                // The host user's recent-servers list, kept as found (#822): backed up in the run's folder there, journalled on the host.
+                saveFiles: UserSaveFilesOnHost.ForClient(host, hostProfile, runDirectory, RunId, "client-" + n,
+                    entry => JournalAsync(host, role.Host, name, entry, cancellation), entry => NoteAsync(host, role.Host, name, entry),
+                    HostedTimeouts.Quick, cancellation));
             if (account != null) account.Session = session;
             return session;
         }

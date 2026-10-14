@@ -35,7 +35,7 @@ internal sealed class HostedServerRun : IServerPlacement
     private readonly SortedDictionary<string, string> _sourceCliPins = new(StringComparer.Ordinal);
     private IReadOnlyList<string> _replacedCliPaths = [];
     private HostedWorld? _macWorld;
-    private MacServerLists? _macLists;
+    private UserSaveFiles? _macLists;
     private bool _serverMayRun;
     // A standalone run's own profile and world copy on the server host, journalled before their scripts run (#257): from then on
     // teardown removes them, even a partial one, or leaves them open in the journal for env recover.
@@ -204,11 +204,11 @@ internal sealed class HostedServerRun : IServerPlacement
         if (MacServer)
             await report.StepAsync(StepPhase.Setup, "preserve the Mac server's user-level access lists", async () =>
             {
-                string backup = HostPath.Join(RunDirectory, "server-lists");
-                _macLists = LocalMac ? MacServerLists.Capture(WorldDirectory, backup)
-                    : await MacServerLists.CaptureRemoteAsync(Host, WorldDirectory, backup, HostedTimeouts.Quick, cancellation).ConfigureAwait(false);
+                string backup = HostPath.Join(RunDirectory, UserSaveFiles.BackupName(RunId, "server"));
+                _macLists = await UserSaveFiles.CaptureAsync(UserSaveFiles.Kind.MacServerLists, WorldDirectory, backup,
+                    UserSaveFilesOnHost.Markers(Host, HostProfile), LocalMac ? null : UserSaveFilesOnHost.Remote(Host, HostedTimeouts.Quick)).ConfigureAwait(false);
                 await JournalAsync(Host, Role.Host, "server", _macLists.Captured(), cancellation).ConfigureAwait(false);
-                await _macLists.IsolateAsync(HostedTimeouts.Quick, cancellation).ConfigureAwait(false);
+                await _macLists.IsolateAsync().ConfigureAwait(false);
             }).ConfigureAwait(false);
         // A supplied manifest remains an expected pin. A standalone strict run may omit it and bind the profile listing below.
         bool verified = plan.Runtime.Sha256.Count != 0;
@@ -664,9 +664,9 @@ internal sealed class HostedServerRun : IServerPlacement
             if (serverStopped || !launched && !_serverMayRun)
             {
                 int before = failures.Count;
-                await Try("restore the Mac server's user-level access lists", () => _macLists.RestoreAsync(HostedTimeouts.Quick, cleanup)).ConfigureAwait(false);
+                await Try("restore the Mac server's user-level access lists", () => _macLists.RestoreAsync()).ConfigureAwait(false);
                 if (failures.Count == before)
-                    await NoteAsync(Host, Role.Host, "server", JournalEntry.Of(JournalEntry.MacListsRestored, ("backup", HostPath.Join(RunDirectory, "server-lists")))).ConfigureAwait(false);
+                    await NoteAsync(Host, Role.Host, "server", _macLists.Restored()).ConfigureAwait(false);
                 else serverStopped = false; // the lock and backup stay for env recover
             }
             else
