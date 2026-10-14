@@ -160,7 +160,7 @@ internal sealed class MacSteamRuntimePackage
           IFS=/ read -ra components <<< "$relative"
           for component in "${components[@]}"; do
             part="$part/$component"
-            [ ! -L "$part" ] || { echo 'VT-STEAM-RUNTIME linked'; exit 4; }
+            [ ! -L "$part" ] || { echo "VT-STEAM-RUNTIME linked $relative"; exit 4; }
           done
           [ -f "$part" ] || { echo "VT-STEAM-RUNTIME missing $relative"; exit 4; }
           actual=$(/usr/bin/shasum -a 256 "$part" | /usr/bin/awk '{print $1}')

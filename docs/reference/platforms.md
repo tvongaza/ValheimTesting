@@ -127,18 +127,20 @@ The run copies only the pinned files into its disposable profile. It thins them 
 
 Only the pinned files are hashed, so extra files in the SteamCMD folder never reach the profile. An extra file in the staged profile's `steam-runtime/` folder is refused.
 
-<!-- TODO(docs): verify after #810 -->
-A refused package names the file that changed, with the verification script's reason, for example `VT-STEAM-RUNTIME changed libaudio.dylib`:
+A refused package names the file that changed. The refusal carries the verification script's `VT-STEAM-RUNTIME <reason> [file]` line, for example `VT-STEAM-RUNTIME changed libaudio.dylib`:
 
 | Reason | Meaning |
 |---|---|
 | `changed` | A pinned file's hash differs. |
 | `missing` | A pinned file is gone. |
-| `linked` | A path in the package is a symbolic link. |
+| `linked` | A pinned file's path has a symbolic link in it. |
 | `architecture` | A pinned file has no arm64 slice. |
 | `manifest-changed` | `package/steam_cmd_osx.manifest` differs. |
 | `version-changed` | The SteamCMD build differs. |
+| `manifest` | `package/steam_cmd_osx.manifest` is missing or linked. |
 | `source` | The SteamCMD folder is missing or linked. |
+| `unsupported` | The host is not macOS. |
+| `exists` | The profile already has a `steam-runtime/` folder. |
 
 If you update SteamCMD, re-capture the manifest.
 

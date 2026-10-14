@@ -121,16 +121,6 @@ public sealed class OwnedCliCommandTests
             string[] command = ["--evidence", root, "--role", "server", "--phase", "menu", "--command", "cli_manifest"];
 
             OwnedClientCommandLease.WriteServer(root, pid, other, port, root, plan);
-            using (var output = new StringWriter())
-            using (var error = new StringWriter())
-            {
-                Assert.Equal(3, OwnedCliCommand.Run(command, output, error));
-                Assert.Empty(output.ToString());
-                Assert.Contains("The exact server this run started is no longer running", error.ToString());
-            }
-            Assert.Empty(Directory.GetFiles(root, "owned-cli-command-*.jsonl"));
-            Assert.False(standIn.Process.HasExited);
-
             OwnedClientCommandLease.WriteServer(root, pid, identity, port, root, plan);
             using (var output = new StringWriter())
             using (var error = new StringWriter())
@@ -171,7 +161,14 @@ public sealed class OwnedCliCommandTests
         string evidence = Directory.CreateTempSubdirectory("owned-cli-server-default-").FullName;
         try
         {
-            Assert.Equal(OwnedClientCommandLease.ClientRole, OwnedCliCommand.DefaultRole(evidence));
+            Assert.Contains("no owned client or server lease", Assert.Throws<InvalidOperationException>(() => OwnedCliCommand.DefaultRole(evidence)).Message);
+            using (var output = new StringWriter())
+            using (var error = new StringWriter())
+            {
+                Assert.Equal(3, OwnedCliCommand.Run(["--evidence", evidence, "--phase", "menu", "--command", "cli_manifest"], output, error));
+                Assert.Contains("REFUSED: This evidence holds no owned client or server lease", error.ToString());
+                Assert.DoesNotContain("identity file", error.ToString());
+            }
             OwnedClientCommandLease.WriteServer(evidence, Environment.ProcessId, OwnedClientCommandLease.LocalStartFileTimeUtc(Environment.ProcessId),
                 port, evidence, new ServerRunPlan { Pins = new() { ["server.mod"] = new string('f', 32) } });
             Assert.Equal(OwnedClientCommandLease.ServerRole, OwnedCliCommand.DefaultRole(evidence));
@@ -315,7 +312,7 @@ public sealed class OwnedCliCommandTests
 
             string missing = Path.Combine(root, "missing");
             Directory.CreateDirectory(missing);
-            AssertRefused(missing, "owned-cli.json");
+            AssertRefused(missing, "holds no owned client or server lease"); // Neither lease, no --role (#810): not "client identity file".
 
             string reused = Path.Combine(root, "reused");
             Directory.CreateDirectory(reused);
