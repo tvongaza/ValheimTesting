@@ -91,7 +91,7 @@ A job that builds your plugin has the game's assemblies. That job can also run t
       - name: Check that game references still bind
         shell: bash
         run: |
-          dotnet tool install Valheim.Testing.Bindings.Tool --version 0.1.0-rc.1 --tool-path .tools
+          dotnet tool install Valheim.Testing.Bindings.Tool --version 0.1.0 --tool-path .tools
           .tools/valheim-bindings MyMod/bin/Release/MyMod.dll --game-dir "$VALHEIM_MANAGED"
 ```
 

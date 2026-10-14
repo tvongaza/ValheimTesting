@@ -7,7 +7,7 @@
 ## Install
 
 ```sh
-dotnet tool install Valheim.Testing.NativeSmoke --version 0.1.0-rc.1 --global
+dotnet tool install Valheim.Testing.NativeSmoke --version 0.1.0 --global
 ```
 
 The tool needs the .NET 10 SDK. If a Homebrew .NET on macOS cannot start the tool, set `DOTNET_ROOT` to the directory `dotnet --info` reports.
