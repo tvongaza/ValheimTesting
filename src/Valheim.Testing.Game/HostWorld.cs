@@ -67,12 +67,14 @@ public sealed class HostWorldPlan
 }
 
 /// <summary>
-/// A fixture world placed in a game client's local worlds for one hosted run. <see cref="Place"/> first refuses when
-/// anything named for the world is already in <c>worlds_local</c> (a user's world is never overwritten or used, and a refused
-/// run copies nothing), then copies and verifies the fixture into the output directory, as the server runner does (that copy
-/// stays as the input evidence), and copies it into <c>worlds_local</c>. <see cref="Collect"/> (also <see cref="Dispose"/>) moves the world, with whatever the game wrote
-/// for it (saves, <c>.old</c> files, backups), out of the client's worlds into <c>host-world</c> in the output directory.
-/// Collect only once the client no longer hosts it: after an owned client stopped, or after the host left to its menu.
+/// A fixture world placed in a hosting client's local worlds for one hosted run. Its one placement owner is the hosting layer's
+/// journalled site (<c>HostedWorldOnHost</c> in <c>Valheim.Testing.GameSessions</c>), on a campaign client's host or on this machine:
+/// it refuses when anything named for the world (<see cref="IsNamedFor"/>) is already in <c>worlds_local</c> (a user's world is never
+/// overwritten or used, and a refused run copies nothing), copies and verifies the fixture into the output directory (that copy stays
+/// as the input evidence), journals the placement and places the fixture in <c>worlds_local</c>. <see cref="Collect"/> (also
+/// <see cref="Dispose"/>) moves the world, with whatever the game wrote for it (saves, <c>.old</c> files, backups), out of the client's
+/// worlds into the run's folder on its host, and fetches it into <c>host-world</c> in the output directory. Collect only once the client
+/// no longer hosts it: after an owned client stopped, or after the host left to its menu.
 /// </summary>
 public sealed class HostedWorld : IDisposable
 {
@@ -82,18 +84,18 @@ public sealed class HostedWorld : IDisposable
     /// <summary>The world's name, the stem of the fixture's <c>.fwl</c>: what <c>cli_start_host_world</c> starts.</summary>
     public string Name { get; }
     public string WorldUid { get; }
-    /// <summary>The client's <c>worlds_local</c> directory: a path on the client's host when it is placed there (<see cref="Host"/>).</summary>
+    /// <summary>The client's <c>worlds_local</c> directory, a path on the client's host (<see cref="Host"/>).</summary>
     public string WorldsDirectory { get; }
-    /// <summary>The host a journalled site placed the world on (a campaign client's, or <c>start</c>'s on this machine), or null for <see cref="Place"/>'s.</summary>
-    public string? Host { get; }
-    // A world on a campaign client's host: moved out there and fetched into the given evidence folder (HostedWorldOnHost).
-    private readonly Func<string, string>? _collectOnHost;
+    /// <summary>The host the journalled site placed the world on: a campaign client's, or this machine.</summary>
+    public string Host { get; }
+    // Moves the world out on its host into the run's folder there and fetches it into the given evidence folder (HostedWorldOnHost).
+    private readonly Func<string, string> _collectOnHost;
     /// <summary>The verified copy of the fixture in the output directory.</summary>
     public string FixtureCopy { get; }
     /// <summary>Where <see cref="Collect"/> moved the world, or null before it has.</summary>
     public string? CollectedTo { get; private set; }
 
-    private HostedWorld(string name, string worldUid, string worlds, string copy, string output, string? host = null, Func<string, string>? collectOnHost = null)
+    private HostedWorld(string name, string worldUid, string worlds, string copy, string output, string host, Func<string, string> collectOnHost)
     { Name = name; WorldUid = worldUid; WorldsDirectory = worlds; FixtureCopy = copy; _output = output; Host = host; _collectOnHost = collectOnHost; }
 
     /// <summary>A world placed in a hosting client's worlds through its journalled site (<c>HostedWorldOnHost.Place</c>).</summary>
@@ -101,49 +103,11 @@ public sealed class HostedWorld : IDisposable
         new(name, worldUid, worlds, copy, output, host, collect);
 
     /// <summary>
-    /// Refuses when <paramref name="saveDirectory"/>'s <c>worlds_local</c> already holds an entry named for the world, before
-    /// anything is copied; then copies <paramref name="plan"/>'s fixture into <paramref name="output"/>, verifies its hashes, and
-    /// copies it into that <c>worlds_local</c>.
-    /// </summary>
-    public static HostedWorld Place(HostWorldPlan plan, string saveDirectory, string output)
-    {
-        if (!Path.IsPathFullyQualified(saveDirectory)) throw new ArgumentException("Give the client's data directory as a full path.", nameof(saveDirectory));
-        // Refused before the fixture is copied, so a refused run leaves no copy behind (#820); the copy refuses any other set of files.
-        string name = NameOf(plan.World.Sha256.Keys);
-        string worlds = Path.Combine(saveDirectory, "worlds_local");
-        Directory.CreateDirectory(worlds);
-        if (Entries(worlds, name).FirstOrDefault() is { } existing)
-            throw new InvalidOperationException($"The client's worlds already hold {Path.GetFileName(existing)} in {worlds}: a fixture world is never copied over a world. Remove or rename that one yourself, or rename the fixture world.");
-        var copy = WorldFixture.Copy(plan.World.Source, output, plan.World.Sha256);
-        copy.Preserve = true;
-        try
-        {
-            foreach (var item in copy.SourceHashes)
-            {
-                string target = Path.Combine(worlds, item.Key);
-                Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-                using (var from = File.OpenRead(Path.Combine(copy.DirectoryPath, item.Key)))
-                using (var to = new FileStream(target, FileMode.CreateNew, FileAccess.Write))
-                    from.CopyTo(to);
-                if (FileHash.Sha256(target) != item.Value) throw new IOException("The placed fixture world changed while copying: " + item.Key);
-            }
-        }
-        catch
-        {
-            // Nothing named for the world was there before, so everything named for it now is this copy's.
-            foreach (string entry in Entries(worlds, name).ToArray())
-                if (Directory.Exists(entry)) Directory.Delete(entry, recursive: true); else File.Delete(entry);
-            throw;
-        }
-        copy.Dispose(); // kept (Preserve) as evidence; nothing uses it after placement, so this process lets go of it
-        return new HostedWorld(name, plan.WorldUid, worlds, copy.DirectoryPath, output);
-    }
-
-    /// <summary>
     /// The world's name from a fixture's relative paths, in either layout the game loads: a chunked save (exactly one
     /// directory <c>&lt;name&gt;/</c> at the root with a <c>_main.&lt;n&gt;.fwl2</c> in it, as Valheim 1.0 writes worlds) or the
     /// older pair (exactly one <c>&lt;name&gt;.fwl</c> at the root). The name is at least 3 characters and a valid file name,
-    /// and every other entry is named for it (<c>&lt;name&gt;.*</c>, <c>&lt;name&gt;_*</c> or inside <c>&lt;name&gt;/</c>).
+    /// and every other entry is inside <c>&lt;name&gt;/</c> or named for it (<see cref="IsNamedFor"/>), so the placement's move-out
+    /// takes back everything it placed.
     /// </summary>
     public static string NameOf(IEnumerable<string> relativePaths)
     {
@@ -159,7 +123,7 @@ public sealed class HostedWorld : IDisposable
         foreach (string path in paths)
         {
             string first = path.Split('/', '\\')[0];
-            if (!Named(first, name)) throw new ArgumentException($"The host fixture holds {path}, which is not named for its world {name}; keep only the world's files.");
+            if (!IsNamedFor(first, name)) throw new ArgumentException($"The host fixture holds {path}, which is not named for its world {name}; keep only the world's files.");
         }
         if (chunked.Length == 0 && paths.Length < 2) throw new ArgumentException($"The host fixture holds only {worlds[0]}: add the world's data ({name}.db), or the game generates the world afresh.");
         return name;
@@ -198,7 +162,7 @@ public sealed class HostedWorld : IDisposable
             argument.StartsWith("--savedir=", StringComparison.OrdinalIgnoreCase));
 
     // Valheim 1.0.16 on macOS ignored -savedir for a hosted client and read worlds_local from the signed-in user's
-    // default data directory. Check before Place creates or copies anything; a world with the same name can have another UID.
+    // default data directory. Check before the placement creates or copies anything; a world with the same name can have another UID.
     internal static void RequireNativeSaveDirectory(ClientPlatform platform, string? requested, IEnumerable<string> launchArguments,
         string defaultDirectory)
     {
@@ -211,10 +175,9 @@ public sealed class HostedWorld : IDisposable
     }
 
     /// <summary>
-    /// Moves every entry named for the world out of the client's worlds into <c>host-world</c> (then <c>host-world-2</c>
-    /// and so on) in the output directory. Runs once; a failure leaves the rest in place and is rethrown. A world on a campaign
-    /// client's host is moved out into the run's folder there (handed over, as a server's world copy is) and fetched into
-    /// <c>host-world</c>.
+    /// Moves every entry named for the world out of the client's worlds into the run's folder on its host (handed over, as a server's
+    /// world copy is) and fetches it into <c>host-world</c> (then <c>host-world-2</c> and so on) in the output directory. Runs once;
+    /// a failure leaves the rest in place and is rethrown.
     /// </summary>
     public void Collect()
     {
@@ -225,26 +188,22 @@ public sealed class HostedWorld : IDisposable
             for (int n = 2; Path.Exists(target); n++) target = Path.Combine(_output, $"host-world-{n}");
             _target = target;
         }
-        if (_collectOnHost != null) { CollectedTo = _collectOnHost(_target); return; }
-        Directory.CreateDirectory(_target);
-        foreach (string entry in Entries(WorldsDirectory, Name).ToArray()) Move(entry, Path.Combine(_target, Path.GetFileName(entry)));
-        CollectedTo = _target;
+        CollectedTo = _collectOnHost(_target);
     }
 
     public void Dispose() => Collect();
 
-    private static bool Named(string entry, string name) =>
-        entry.Equals(name, StringComparison.OrdinalIgnoreCase) || entry.StartsWith(name + ".", StringComparison.OrdinalIgnoreCase) || entry.StartsWith(name + "_", StringComparison.OrdinalIgnoreCase);
-
-    private static IEnumerable<string> Entries(string worlds, string name) =>
-        Directory.Exists(worlds) ? Directory.EnumerateFileSystemEntries(worlds).Where(entry => Named(Path.GetFileName(entry), name)) : Enumerable.Empty<string>();
-
-    private static void Move(string from, string to)
+    /// <summary>
+    /// Whether a <c>worlds_local</c> entry is one the game reads or writes for world <paramref name="name"/>: <c>&lt;name&gt;</c> (Valheim
+    /// 1.0's chunked save folder), <c>&lt;name&gt;.*</c> (<c>.fwl</c>, <c>.db</c> and their <c>.old</c> copies) or the game's backups
+    /// <c>&lt;name&gt;_backup*</c>, in any case: a hosting client runs on Windows or macOS, whose folders ignore case, so to the game
+    /// <c>campaign.fwl</c> is <c>Campaign.fwl</c>. A fixture holds only such entries; the hosting layer's placement refuses any of them
+    /// already there and its move-out takes exactly them (its host scripts select by this same rule).
+    /// </summary>
+    internal static bool IsNamedFor(string entry, string name)
     {
-        if (!Directory.Exists(from)) { File.Move(from, to); return; }
-        Directory.CreateDirectory(to);
-        foreach (string child in Directory.EnumerateFileSystemEntries(from).ToArray()) Move(child, Path.Combine(to, Path.GetFileName(child)));
-        Directory.Delete(from);
+        string l = entry.ToLowerInvariant(), n = name.ToLowerInvariant();
+        return l == n || l.StartsWith(n + ".", StringComparison.Ordinal) || l.StartsWith(n + "_backup", StringComparison.Ordinal);
     }
 }
 

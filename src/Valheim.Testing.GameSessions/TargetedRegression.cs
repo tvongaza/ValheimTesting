@@ -420,8 +420,7 @@ public sealed class TargetedRegression
             new ClientRounds
             {
                 Client = staged.Plan, Report = report, Output = output, Rounds = rounds, Cancellation = cancellation,
-                JournalledWorldSite = worlds => HostedWorldSite(output, worlds),
-            }.Run(() =>
+            }.RunHosted(worlds => HostedWorldSite(output, worlds), () =>
             {
                 staged.Verify();
                 ClientSession client;

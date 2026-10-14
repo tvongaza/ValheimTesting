@@ -8,7 +8,7 @@ namespace Valheim.Testing.GameSessions;
 /// <list type="number">
 /// <item><see cref="Prepare"/>: the plan's static preflight (<see cref="ClientRunPlan.Preflight(IEnumerable{string})"/> with
 /// <see cref="CliCapabilities.HostedRounds"/>), the native client's save directory, then the fixture world placed in its local
-/// worlds (<see cref="HostedWorld.Place"/>). <see cref="GameSession.StartAsync"/> records each part as its own step, before any
+/// worlds through its journalled site (<see cref="HostedWorld"/>; on this machine journalled in this machine's run journal). <see cref="GameSession.StartAsync"/> records each part as its own step, before any
 /// actor starts.</item>
 /// <item><see cref="Start"/>: the client to its strictly pinned menu, through its placement, once (<see cref="ClientActor"/>).</item>
 /// <item><see cref="Host"/>: it hosts the placed world (<see cref="HostWorlds.Start"/>), protected unless
@@ -39,7 +39,9 @@ public sealed class HostingClientActor : IOwnedServer, IDisposable
         // A hosting client on this machine has its own placement: closing it removes its disposable copy.
         _client = new ClientActor(name, plan, output, placement, cancellation);
         _retiresCopy = placement is LocalClientPlacement;
-        _world = new HostedWorldLifecycle(plan, output, cancellation, site);
+        // On this machine, the same journalled site as a campaign's (#829): env recover moves a world a killed run left.
+        _world = site != null ? new HostedWorldLifecycle(plan, output, cancellation, site)
+            : new HostedWorldLifecycle(plan, output, cancellation, localSite: HostedWorldOnHost.ThisMachine(output, name));
         _cancellation = cancellation; _local = placement is LocalClientPlacement; _placement = placement;
     }
 

@@ -4,12 +4,27 @@ namespace Valheim.Testing.Game;
 /// What a hosting client does with its fixture world, apart from opening and closing the client: the preflight, the save
 /// directory, the placement, the start and leave, and the release once no client can still host it (#332). Shared by
 /// a session's hosting client and <see cref="ClientRounds"/>' hosted rounds, which open their client themselves.
-/// A campaign client's world goes to its <paramref name="site"/>; a client on this machine's goes to the save directory checked
-/// here, through <paramref name="journalledSite"/> when the run journals it (<c>start</c>, #818), else <see cref="HostedWorld.Place"/>.
+/// Every placement goes through the hosting layer's journalled site (#829): a campaign client's world to its <paramref name="site"/>;
+/// a client on this machine's to the save directory checked here, through <paramref name="localSite"/> given that <c>worlds_local</c>.
 /// </summary>
-internal sealed class HostedWorldLifecycle(ClientRunPlan plan, string output, CancellationToken cancellation, IHostedWorldSite? site = null,
-    Func<string, IHostedWorldSite>? journalledSite = null)
+internal sealed class HostedWorldLifecycle
 {
+    private readonly ClientRunPlan plan;
+    private readonly string output;
+    private readonly CancellationToken cancellation;
+    private readonly IHostedWorldSite? site;
+    private readonly Func<string, IHostedWorldSite>? localSite;
+
+    /// <param name="site">A campaign client's site, whose <c>worlds_local</c> is known before the save directory is checked.</param>
+    /// <param name="localSite">For a client on this machine: its journalled site, given the checked <c>worlds_local</c>.</param>
+    public HostedWorldLifecycle(ClientRunPlan plan, string output, CancellationToken cancellation, IHostedWorldSite? site = null,
+        Func<string, IHostedWorldSite>? localSite = null)
+    {
+        if ((site == null) == (localSite == null))
+            throw new ArgumentException("A hosting client's world is placed through exactly one journalled site: its campaign host's, or this machine's.");
+        this.plan = plan; this.output = output; this.cancellation = cancellation; this.site = site; this.localSite = localSite;
+    }
+
     private readonly object _state = new();
     private HostedWorld? _world;
     private string? _saveDirectory;
@@ -35,10 +50,8 @@ internal sealed class HostedWorldLifecycle(ClientRunPlan plan, string output, Ca
     {
         if (site == null) { plan.Preflight(CliCapabilities.HostedRounds); return; }
         plan.HostWorld!.Preflight();
-        // The staged set's manifest (bound by the campaign) must offer the session commands hosting uses; its files are on the host.
-        if (plan.Owned)
-            CliCapabilityManifest.Read(plan.CliManifest ?? throw new InvalidOperationException("A campaign host's client names no staged ValheimCLI manifest; the campaign binds one."))
-                .RequireCapabilities(CliCapabilities.HostedRounds.Concat(plan.Capabilities.Where(CliCapabilities.IsBuiltInCapability)));
+        // The staged set (bound by the campaign) must offer the session commands hosting uses; its files are read on the host.
+        plan.CheckCliManifest(CliCapabilities.HostedRounds);
     }
     /// <summary>The native client's save directory, which holds <c>worlds_local</c>; a native macOS client must use its signed-in user's default.</summary>
     public void CheckSaveDirectory()
@@ -64,9 +77,7 @@ internal sealed class HostedWorldLifecycle(ClientRunPlan plan, string output, Ca
             if (_world != null) throw new InvalidOperationException("The fixture world is placed already.");
             saveDirectory = _saveDirectory ?? throw new InvalidOperationException("Check the client's save directory before placing the fixture world.");
         }
-        var world = site != null ? site.Place(Section, output, cancellation)
-            : journalledSite != null ? journalledSite(Path.Combine(saveDirectory, "worlds_local")).Place(Section, output, cancellation)
-            : HostedWorld.Place(Section, saveDirectory, output);
+        var world = (site ?? localSite!(Path.Combine(saveDirectory, "worlds_local"))).Place(Section, output, cancellation);
         lock (_state) _world = world;
     }
     /// <summary>The three preparation steps in <paramref name="report"/>: preflight, save directory, placement; the placed world's name is recorded.</summary>
@@ -104,7 +115,7 @@ internal sealed class HostedWorldLifecycle(ClientRunPlan plan, string output, Ca
     {
         var world = World;
         if (world == null) return;
-        if (!(released ?? WorldReleased)) { report.Provenance["hostWorldLeftInPlace"] = (world.Host != null ? world.Host + ": " : "") + world.WorldsDirectory + " (" + world.Name + ")"; return; }
+        if (!(released ?? WorldReleased)) { report.Provenance["hostWorldLeftInPlace"] = world.Host + ": " + world.WorldsDirectory + " (" + world.Name + ")"; return; }
         report.Step(StepPhase.Cleanup, "move the hosted world from the client's local worlds into the evidence", world.Collect);
         report.Provenance["hostWorldEvidence"] = world.CollectedTo!;
     }
@@ -113,7 +124,7 @@ internal sealed class HostedWorldLifecycle(ClientRunPlan plan, string output, Ca
 /// <summary>
 /// Where a hosting client's world goes, its machine's <c>worlds_local</c>, and how the fixture is placed there: shipped, verified
 /// and journalled by the hosting layer, so <c>env recover</c> can move a world a killed run left (a campaign client's on any host,
-/// <c>start</c>'s on this machine).
+/// one on this machine for <c>start</c>, a session or rounds a caller drives). The one placement owner (#829).
 /// </summary>
 internal interface IHostedWorldSite
 {

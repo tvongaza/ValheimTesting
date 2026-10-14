@@ -1470,7 +1470,15 @@ public sealed class NativeDependencyResolverTests : IDisposable
     // staged in), journalled first; the peer joins the host by its Steam ID; teardown closes the peer, the host leaves and stops,
     // and the world is moved out of the user's worlds into the run's folder on that host and fetched into the evidence. Nothing
     // named for the world is left in the user's worlds, and their own world is untouched.
-    [Fact] public async Task AHostedCampaignPlacesTheWorldOnTheHostsMachineAndMovesItOutAfter()
+    [Fact] public Task AHostedCampaignPlacesTheWorldOnTheHostsMachineAndMovesItOutAfter() => HostedCampaign(localHost: false);
+
+    // #813: the same campaign with the hosting client on this machine (pc is the inventory's local host, a macOS one, launched
+    // through the local client launch seam). #809 gave it the same journalled site as a remote client's: its placement is journalled
+    // in the campaign's journal (copy-intended, copy-done, copy-retired for the world), moved out into the client role's runtime,
+    // and the user's own worlds_local is untouched. Putting back the local exception (no site for a local host) fails it.
+    [OsFact("macos")] public Task AHostedCampaignWithALocalHostingClientPlacesItsWorldThroughTheJournalledSite() => HostedCampaign(localHost: true);
+
+    private async Task HostedCampaign(bool localHost)
     {
         string clientMod = _rig.Write("hosted-campaign/Client.dll", RegressionRig.Assembly("Client", new("example.client")));
         string clientLock = Lock(clientMod, "hosted-client");
@@ -1481,35 +1489,57 @@ public sealed class NativeDependencyResolverTests : IDisposable
         Directory.CreateDirectory(Path.Combine(world, "Campaign"));
         File.Copy(Path.Combine(flat, "Campaign.fwl"), Path.Combine(world, "Campaign", "_main.0.fwl2"));
         File.WriteAllText(Path.Combine(world, "Campaign", "_main.0.db2"), "fixture");
+        // A host's path: on this machine (a local pc), a real one in the test's folder, read in place as a local host's files are.
+        string pcHere = Path.Combine(_rig.Root, "pc-here");
+        string On(string name, string path) => localHost && name == "pc" ? pcHere + path : path;
         var hosts = new Dictionary<string, FakeServerHost>(StringComparer.Ordinal);
         foreach (var (name, port, account) in new[] { ("pc", 15578, 501), ("laptop", 15579, 502) })
         {
-            var host = new FakeServerHost(name, Path.Combine(_rig.Root, "hosted-mirror-" + name), tunnelPort: port) { SteamUserReply = $"VT-STEAMUSER account {account}\n" };
+            var host = localHost && name == "pc"
+                ? new FakeServerHost(name, "/", tunnelPort: port, kind: GameHostKind.Local) { SteamUserReply = $"VT-STEAMUSER account {account}\n" }
+                : new FakeServerHost(name, Path.Combine(_rig.Root, "hosted-mirror-" + name), tunnelPort: port) { SteamUserReply = $"VT-STEAMUSER account {account}\n" };
             hosts[name] = host;
-            string source = host.Local("/game/client");
+            string source = host.Local(On(name, "/game/client"));
             FakeInstalls.MacClient(source);
+            if (localHost && name == "pc")
+                foreach (string binary in new[] { Path.Combine(source, GameLaunch.ClientMacBundle, "Contents", "MacOS", "Valheim"), Path.Combine(source, "libdoorstop.dylib") })
+                {
+                    File.WriteAllBytes(binary, ClientLaunchTests.Fat(ClientLaunchTests.X86_64, ClientLaunchTests.Arm64)); // read here, as a local launch reads it
+                    if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(binary, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+                }
             Directory.CreateDirectory(Path.Combine(source, "BepInEx", "plugins"));
-            Directory.CreateDirectory(host.Local("/Users/t/Library/Application Support/IronGate/Valheim/characters_local"));
-            Directory.CreateDirectory(host.Local("/Users/t/userdata"));
+            Directory.CreateDirectory(host.Local(On(name, "/Users/t/Library/Application Support/IronGate/Valheim/characters_local")));
+            Directory.CreateDirectory(host.Local(On(name, "/Users/t/userdata")));
         }
+        string worlds = On("pc", "/Users/t/Library/Application Support/IronGate/Valheim/worlds_local");
+        // A placement on this machine without the campaign's site would use this user's own data directory: simulated here as the
+        // same folder, so even that never reaches the real one.
+        using var data = localHost ? new FakeClientDataDirectory(On("pc", "/Users/t/Library/Application Support/IronGate/Valheim")) : null;
+        // This machine's own checks a local client's preflight makes (its desktop, a running Steam), through their seam: never the
+        // real ones, so the test does not depend on what runs here.
+        int steamChecks = 0;
+        using var probes = localHost ? LocalHostPreflight.ReplaceDefaultProbesForTest(new(MacDesktop: () => { }, Packaged: () => null,
+            SteamRunning: () => { steamChecks++; return true; })) : null;
         // The host user's own world beside where the fixture goes: never touched.
-        Directory.CreateDirectory(hosts["pc"].Local("/Users/t/Library/Application Support/IronGate/Valheim/worlds_local"));
-        File.WriteAllText(hosts["pc"].Local("/Users/t/Library/Application Support/IronGate/Valheim/worlds_local/MyWorld.fwl"), "the user's world");
+        Directory.CreateDirectory(hosts["pc"].Local(worlds));
+        File.WriteAllText(hosts["pc"].Local(worlds + "/MyWorld.fwl"), "the user's world");
         string inventory = Path.Combine(_rig.Root, "hosted-inventory.json");
         File.WriteAllText(inventory, JsonSerializer.Serialize(new
         {
-            hosts = hosts.Keys.ToDictionary(name => name, name => new { kind = "ssh", platform = "macos", shell = "bash", @lock = "/locks/run.lock", destination = "test@" + name }),
+            hosts = hosts.Keys.ToDictionary(name => name, name => localHost && name == "pc"
+                ? (object)new { kind = "local", platform = "macos", shell = "bash", @lock = On(name, "/locks/run.lock") }
+                : new { kind = "ssh", platform = "macos", shell = "bash", @lock = "/locks/run.lock", destination = "test@" + name }),
             environments = new[]
             {
-                new { name = "pc-client", host = "pc", roles = new[] { "client" }, install = "/game/client", runtime = "/runs", cliPort = 5578, localCliPort = 6578, architecture = "x64" },
+                new { name = "pc-client", host = "pc", roles = new[] { "client" }, install = On("pc", "/game/client"), runtime = On("pc", "/runs"), cliPort = 5578, localCliPort = localHost ? 0 : 6578, architecture = "x64" },
                 new { name = "laptop-client", host = "laptop", roles = new[] { "client" }, install = "/game/client", runtime = "/runs", cliPort = 5579, localCliPort = 6579, architecture = "x64" },
             },
-            leaseHost = "pc", leaseDirectory = "/leases",
+            leaseHost = "pc", leaseDirectory = On("pc", "/leases"),
         }));
-        object Character(string store, string registered, string file) => new
+        object Character(string host, string store, string registered, string file) => new
         {
             store, registeredName = registered, fileName = file,
-            charactersLocalDirectory = "/Users/t/Library/Application Support/IronGate/Valheim/characters_local", steamUserDataDirectory = "/Users/t/userdata",
+            charactersLocalDirectory = On(host, "/Users/t/Library/Application Support/IronGate/Valheim/characters_local"), steamUserDataDirectory = On(host, "/Users/t/userdata"),
         };
         string manifest = Path.Combine(_rig.Root, "hosted-campaign.json");
         File.WriteAllText(manifest, JsonSerializer.Serialize(new
@@ -1517,8 +1547,8 @@ public sealed class NativeDependencyResolverTests : IDisposable
             inventory, world, worldUid = "4242",
             clients = new Dictionary<string, object>
             {
-                ["host"] = new { dependencyLock = clientLock, environmentCandidates = new[] { "pc-client" }, character = Character(storeA, "hosta", "vt-host") },
-                ["peer"] = new { dependencyLock = clientLock, environmentCandidates = new[] { "laptop-client" }, differentHostFrom = new[] { "host" }, character = Character(storeB, "peerb", "vt-peer") },
+                ["host"] = new { dependencyLock = clientLock, environmentCandidates = new[] { "pc-client" }, character = Character("pc", storeA, "hosta", "vt-host") },
+                ["peer"] = new { dependencyLock = clientLock, environmentCandidates = new[] { "laptop-client" }, differentHostFrom = new[] { "host" }, character = Character("laptop", storeB, "peerb", "vt-peer") },
             },
         }));
         var preflight = await HostedCampaignPreparation.InspectAsync(manifest, TimeSpan.FromSeconds(30), name => hosts[name], pinnedLoader: null);
@@ -1526,7 +1556,6 @@ public sealed class NativeDependencyResolverTests : IDisposable
 
         // The host: at its menu until it hosts; an open Steam server while it does. The peer joins it by its Steam ID.
         bool hosting = false, joined = false; int readings = 0;
-        string worlds = "/Users/t/Library/Application Support/IronGate/Valheim/worlds_local";
         bool placedWhileHosting = false;
         var hostTransport = new ScriptedTransport()
             .ClientAccess(() => hosting, () => hosting)
@@ -1579,6 +1608,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         };
         var sections = new Dictionary<string, ClientRunPlan> { ["host"] = Section(host: true), ["peer"] = Section(host: false) };
         bool scenarioRan = false;
+        var localProcess = new FakeOwnedProcess(81);
         var options = new HostedRunOptions<Dictionary<string, ClientRunPlan>>
         {
             Name = "hosted-campaign", ReadPlan = _ => throw new InvalidOperationException("A campaign plan is in memory."), Host = plan => plan["host"],
@@ -1590,7 +1620,17 @@ public sealed class NativeDependencyResolverTests : IDisposable
                 Assert.True(joined);
                 scenarioRan = true;
             },
-            Hooks = new FakeRunHooks { Host = name => hosts[name], Connect = port => port == 15578 ? hostTransport : peerTransport, StateWaits = false, RunId = "run-hosted" },
+            Hooks = new FakeRunHooks
+            {
+                Host = name => hosts[name], Connect = port => port is 15578 or 5578 or 6578 ? hostTransport : peerTransport, StateWaits = false, RunId = "run-hosted",
+                // The hosting client on this machine: launched through the local client launch seam, no game, its process faked.
+                RequireMacGui = localHost ? () => { } : null,
+                LocalMacLaunch = localHost ? (plan, launchOutput, account, cancellation, processStarted) =>
+                {
+                    processStarted?.Invoke(localProcess);
+                    return ClientSession.Launch(plan, launchOutput, () => localProcess, () => hostTransport, (_, _) => Task.CompletedTask, cancellation, null, null, account);
+                } : null,
+            },
         };
         string output = Path.Combine(_rig.Root, "hosted-run");
         int code = await PinnedServerRun.RunCampaignAsync(manifest, sections, plan => plan, output, options);
@@ -1605,10 +1645,10 @@ public sealed class NativeDependencyResolverTests : IDisposable
         int listed = placed.FindIndex(run => run.Script == "world-entries");
         Assert.True(listed >= 0);
         Assert.Equal(worlds, placed[listed].Variables["worlds"]);
-        Assert.Contains(placed, run => run.Script == "world-move" && run.Variables["to"] == "/runs/run-hosted/host-world");
+        Assert.Contains(placed, run => run.Script == "world-move" && run.Variables["to"] == On("pc", "/runs/run-hosted/host-world"));
         Assert.Equal(new[] { "MyWorld.fwl" }, Directory.EnumerateFileSystemEntries(pc.Local(worlds)).Select(Path.GetFileName));
         Assert.Equal("the user's world", File.ReadAllText(pc.Local(worlds + "/MyWorld.fwl")));
-        Assert.True(File.Exists(pc.Local("/runs/run-hosted/host-world/Campaign/_main.0.fwl2")));
+        Assert.True(File.Exists(pc.Local(On("pc", "/runs/run-hosted/host-world/Campaign/_main.0.fwl2"))));
         string evidence = result.GetProperty("Provenance").GetProperty("hostWorldEvidence").GetString()!;
         Assert.True(File.Exists(Path.Combine(evidence, "Campaign", "_main.0.fwl2")));
         Assert.True(File.Exists(Path.Combine(evidence, "Campaign_backup_auto-20261006.db")));
@@ -1619,7 +1659,8 @@ public sealed class NativeDependencyResolverTests : IDisposable
         var cleanup = steps.Select(step => step.Name).SkipWhile(name => !name.StartsWith("stop only the owned client peer", StringComparison.Ordinal)).ToList();
         Assert.Equal(new[] { "stop only the owned client peer", "the host leaves its world to its menu", "stop only the owned hosting client host",
             "move the hosted world from the client's local worlds into the evidence" }, cleanup.Take(4));
-        Assert.Single(hosts["laptop"].Stops); Assert.Single(pc.Stops);
+        Assert.Single(hosts["laptop"].Stops);
+        if (localHost) { Assert.Equal(1, localProcess.Stops); Assert.True(steamChecks > 0); } else Assert.Single(pc.Stops); // a local client is this machine's process
         Assert.Equal(pc.Claims.Count, pc.Releases.Count); Assert.Equal(hosts["laptop"].Claims.Count, hosts["laptop"].Releases.Count);
     }
 
