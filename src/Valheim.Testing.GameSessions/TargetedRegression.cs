@@ -417,7 +417,11 @@ public sealed class TargetedRegression
             if (_activeLeftOut != null) report.Provenance["profileLeftOut"] = _activeLeftOut;
             report.Provenance["disposableStageSeconds"] = _lastStageSeconds.ToString("F3", System.Globalization.CultureInfo.InvariantCulture);
             File.WriteAllText(Path.Combine(output, "run-manifest.json"), JsonSerializer.Serialize(staged.Manifest, ManifestJson));
-            new ClientRounds { Client = staged.Plan, Report = report, Output = output, Rounds = rounds, Cancellation = cancellation }.Run(() =>
+            new ClientRounds
+            {
+                Client = staged.Plan, Report = report, Output = output, Rounds = rounds, Cancellation = cancellation,
+                JournalledWorldSite = worlds => HostedWorldSite(output, worlds),
+            }.Run(() =>
             {
                 staged.Verify();
                 ClientSession client;
@@ -476,6 +480,26 @@ public sealed class TargetedRegression
         }
         return report;
     }
+
+    /// <summary>
+    /// Where the client places its hosted fixture world (#818): <paramref name="worlds"/>, the checked <c>worlds_local</c> on this
+    /// machine, through the one journalled site a campaign's hosting client uses (<see cref="HostedWorldOnHost.ForClient"/>). The
+    /// placement is journalled (with the fixture's world UID) before anything reaches the user's worlds, and the world is moved out
+    /// after into the run's folder in the arm's evidence, <c>&lt;output&gt;/&lt;runId&gt;/host-world</c> (and fetched into
+    /// <c>host-world</c> beside it), so <c>env recover</c> moves a world a killed run left there too. Each arm has its own folder,
+    /// and nothing stays in the client environment's runtime.
+    /// </summary>
+    private HostedWorldOnHost.Site HostedWorldSite(string output, string worlds) =>
+        HostedWorldOnHost.ForClient(_host, _host.Name, worlds, output, _journal.RunId,
+            (entry, _) => { _journal.AppendLocal("client", entry); return Task.CompletedTask; },
+            _ =>
+            {
+                // Before the user's worlds are read or changed: this run holds this machine's lock, and no game runs here.
+                if (_hostLock == null && !SkipHostLockForTest)
+                    throw new InvalidOperationException("This run does not hold this machine's lock, so the client's worlds are not its to change; stage the arm first.");
+                RequireStopped(null, clientSession: true);
+                return Task.CompletedTask;
+            });
 
     private void JournalCharacterEvent(CharacterStageEvent point, string characters, string userData, string name, string expectedSha256) =>
         _journal.AppendLocal("client", CharacterEntry(point, characters, userData, name, expectedSha256));

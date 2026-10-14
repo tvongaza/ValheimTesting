@@ -162,6 +162,7 @@ Strict pins check every command: each plugin's GUID and MD5, and the world's UID
 | `run-manifest.json` | Every arm's commit and hash, the allowlist, install pins, world and capabilities; no machine path |
 | `client-commands.jsonl` | The command trace |
 | `host-world/` | The hosted world after the run |
+| `<runId>/` | The run's own folder: the world as it left the client's worlds (`host-world/`, where `env recover` also moves a killed run's world) and its staging record |
 
 The directory also holds the scenario's own JSON files. Each arm gets a fresh profile, and the example retires it before exiting. If a run is interrupted, it leaves a journal for `valheim-test env recover`.
 

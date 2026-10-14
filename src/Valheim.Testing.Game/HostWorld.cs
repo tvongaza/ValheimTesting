@@ -67,10 +67,10 @@ public sealed class HostWorldPlan
 }
 
 /// <summary>
-/// A fixture world placed in a game client's local worlds for one hosted run. <see cref="Place"/> copies and verifies
-/// the fixture into the output directory, as the server runner does (that copy stays as the input evidence), then copies
-/// it into <c>worlds_local</c>, refusing when anything named for the world is already there: a user's world is never
-/// overwritten or used. <see cref="Collect"/> (also <see cref="Dispose"/>) moves the world, with whatever the game wrote
+/// A fixture world placed in a game client's local worlds for one hosted run. <see cref="Place"/> first refuses when
+/// anything named for the world is already in <c>worlds_local</c> (a user's world is never overwritten or used, and a refused
+/// run copies nothing), then copies and verifies the fixture into the output directory, as the server runner does (that copy
+/// stays as the input evidence), and copies it into <c>worlds_local</c>. <see cref="Collect"/> (also <see cref="Dispose"/>) moves the world, with whatever the game wrote
 /// for it (saves, <c>.old</c> files, backups), out of the client's worlds into <c>host-world</c> in the output directory.
 /// Collect only once the client no longer hosts it: after an owned client stopped, or after the host left to its menu.
 /// </summary>
@@ -84,7 +84,7 @@ public sealed class HostedWorld : IDisposable
     public string WorldUid { get; }
     /// <summary>The client's <c>worlds_local</c> directory: a path on the client's host when it is placed there (<see cref="Host"/>).</summary>
     public string WorldsDirectory { get; }
-    /// <summary>The host the world is placed on (a campaign client's), or null for this machine.</summary>
+    /// <summary>The host a journalled site placed the world on (a campaign client's, or <c>start</c>'s on this machine), or null for <see cref="Place"/>'s.</summary>
     public string? Host { get; }
     // A world on a campaign client's host: moved out there and fetched into the given evidence folder (HostedWorldOnHost).
     private readonly Func<string, string>? _collectOnHost;
@@ -96,24 +96,26 @@ public sealed class HostedWorld : IDisposable
     private HostedWorld(string name, string worldUid, string worlds, string copy, string output, string? host = null, Func<string, string>? collectOnHost = null)
     { Name = name; WorldUid = worldUid; WorldsDirectory = worlds; FixtureCopy = copy; _output = output; Host = host; _collectOnHost = collectOnHost; }
 
-    /// <summary>A world placed in a campaign client's worlds on its host (<c>HostedWorldOnHost.Place</c>).</summary>
+    /// <summary>A world placed in a hosting client's worlds through its journalled site (<c>HostedWorldOnHost.Place</c>).</summary>
     internal static HostedWorld OnHost(string name, string worldUid, string worlds, string copy, string output, string host, Func<string, string> collect) =>
         new(name, worldUid, worlds, copy, output, host, collect);
 
     /// <summary>
-    /// Copies <paramref name="plan"/>'s fixture into <paramref name="output"/>, verifies its hashes, and then copies it into
-    /// <paramref name="saveDirectory"/>'s <c>worlds_local</c>.
+    /// Refuses when <paramref name="saveDirectory"/>'s <c>worlds_local</c> already holds an entry named for the world, before
+    /// anything is copied; then copies <paramref name="plan"/>'s fixture into <paramref name="output"/>, verifies its hashes, and
+    /// copies it into that <c>worlds_local</c>.
     /// </summary>
     public static HostedWorld Place(HostWorldPlan plan, string saveDirectory, string output)
     {
         if (!Path.IsPathFullyQualified(saveDirectory)) throw new ArgumentException("Give the client's data directory as a full path.", nameof(saveDirectory));
-        var copy = WorldFixture.Copy(plan.World.Source, output, plan.World.Sha256);
-        copy.Preserve = true;
-        string name = NameOf(copy.SourceHashes.Keys);
+        // Refused before the fixture is copied, so a refused run leaves no copy behind (#820); the copy refuses any other set of files.
+        string name = NameOf(plan.World.Sha256.Keys);
         string worlds = Path.Combine(saveDirectory, "worlds_local");
         Directory.CreateDirectory(worlds);
         if (Entries(worlds, name).FirstOrDefault() is { } existing)
             throw new InvalidOperationException($"The client's worlds already hold {Path.GetFileName(existing)} in {worlds}: a fixture world is never copied over a world. Remove or rename that one yourself, or rename the fixture world.");
+        var copy = WorldFixture.Copy(plan.World.Source, output, plan.World.Sha256);
+        copy.Preserve = true;
         try
         {
             foreach (var item in copy.SourceHashes)

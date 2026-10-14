@@ -643,6 +643,7 @@ public sealed class ClientRoundsTests : IDisposable
         Assert.Contains("never copied over a world", error.Message);
         Assert.Equal(new[] { "place the disposable fixture world in the client's local worlds" }, Failed(report));
         Assert.Equal(0, _opens); Assert.Empty(game.Transport.Commands);
+        Assert.Empty(Directory.GetDirectories(Output, "valheim-test-*")); // refused before the fixture is copied (#820)
         Assert.Equal("the user's own", File.ReadAllText(Path.Combine(Worlds, existing)));
         Assert.Equal(new[] { existing }, Directory.EnumerateFiles(Worlds).Select(Path.GetFileName).Where(f => !f!.StartsWith("MyWorld", StringComparison.Ordinal)));
     }
