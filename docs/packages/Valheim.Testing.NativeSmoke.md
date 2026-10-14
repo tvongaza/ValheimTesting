@@ -1,6 +1,6 @@
 # Valheim.Testing.NativeSmoke
 
-[Current preview API reference](https://tvongaza.github.io/ValheimTesting/reference/). This package is the `valheim-test` .NET tool; its supported surface is the commands below, not a .NET library.
+[API reference](https://tvongaza.github.io/ValheimTesting/reference/). This package is the `valheim-test` .NET tool; its supported surface is the commands below, not a .NET library.
 
 `valheim-test` checks that a mod loads in the real game. Each run stages a disposable loader profile of a Steam install, keeps private evidence and removes what it made; the install is only read. New to the tool? Start with [Your first server load check](../tutorials/first-server-load-check.md).
 

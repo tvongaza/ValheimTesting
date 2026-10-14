@@ -1,6 +1,6 @@
 # Valheim.Testing.Adapter
 
-[Current preview API reference](https://tvongaza.github.io/ValheimTesting/reference/). This page is the package's README.
+[API reference](https://tvongaza.github.io/ValheimTesting/reference/). This page is the package's README.
 
 ## Purpose
 

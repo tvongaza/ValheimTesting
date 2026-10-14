@@ -1,6 +1,6 @@
 # Valheim.Testing.Cli
 
-[Current preview API reference](https://tvongaza.github.io/ValheimTesting/reference/) and [pinned ValheimCLI fork](https://github.com/tvongaza/valheimCLI). The fork owns the transport's source and game-side command contracts.
+[API reference](https://tvongaza.github.io/ValheimTesting/reference/) and [pinned ValheimCLI fork](https://github.com/tvongaza/valheimCLI). The fork owns the transport's source and game-side command contracts.
 
 ## Purpose
 
