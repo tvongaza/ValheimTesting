@@ -414,9 +414,17 @@ jobs:
           echo '// changed' >> src/Valheim.Testing/Terrain.cs
           refused versions "Valheim.Testing.Game $released is on NuGet.org, and its source changed since it was built (*): src/Valheim.Testing/Terrain.cs."
           # Cutting a release (#683): bump gives the changed Game, and each package that references it, a new version; then
-          # versions refuses nothing.
+          # versions refuses nothing. While NuGet.org's newest is a stable release, bump refuses to guess the next version
+          # ("choose its next version by hand"); the maintainer sets it, and bump keeps a version NuGet.org never served.
           echo '// changed' >> "$game/ZonePreparation.cs"
-          dotnet run scripts/pins.cs -- bump
+          if ! out=$(dotnet run scripts/pins.cs -- bump 2>&1); then
+            echo "$out"
+            case "$out" in *"choose its next version by hand"*) ;; *) echo "::error::bump failed"; exit 1 ;; esac
+            for project in src/Valheim.Testing*/Valheim.Testing*.csproj; do
+              sed -i -E 's#<Version>[^<]+</Version>#<Version>0.1.1-preview.1</Version>#' "$project"
+            done
+            dotnet run scripts/pins.cs -- bump
+          fi
           if grep -q "<Version>$released</Version>" "$game/Valheim.Testing.Game.csproj"; then echo "::error::bump left Game at $released"; exit 1; fi
           dotnet run scripts/pins.cs -- versions
           git checkout --no-overlay HEAD -- src "${embedded[@]}"
