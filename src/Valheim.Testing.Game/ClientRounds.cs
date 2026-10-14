@@ -83,6 +83,11 @@ public sealed class ClientRounds
     /// </summary>
     public Func<GameActor, CrossplayLobby>? Lobby { get; init; }
     public CancellationToken Cancellation { get; init; }
+    /// <summary>
+    /// A hosting client's journalled placement, given its checked <c>worlds_local</c> (<c>start</c>'s, #818): the placement is
+    /// journalled before the copy, so <c>env recover</c> moves a world a killed run left. Null places it with <see cref="HostedWorld.Place"/>.
+    /// </summary>
+    internal Func<string, IHostedWorldSite>? JournalledWorldSite { get; init; }
 
     /// <summary>
     /// Runs a joining client's rounds against <paramref name="server"/>, the owned server's current actor, opening the client
@@ -230,7 +235,7 @@ public sealed class ClientRounds
     // rounds open and close the client themselves (openClient).
     private sealed class HostedWorldRounds(ClientRounds rounds, HostWorldPlan plan) : IRoundsWorld
     {
-        private readonly HostedWorldLifecycle _world = new(rounds.Client, rounds.Output, rounds.Cancellation);
+        private readonly HostedWorldLifecycle _world = new(rounds.Client, rounds.Output, rounds.Cancellation, journalledSite: rounds.JournalledWorldSite);
         private ClientRunPlan Client => rounds.Client;
         private ScenarioReport Report => rounds.Report;
         public string LeaveStep => "the host leaves to its menu";

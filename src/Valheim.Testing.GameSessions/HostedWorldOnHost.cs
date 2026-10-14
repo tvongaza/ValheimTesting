@@ -54,9 +54,18 @@ internal static class HostedWorldOnHost
         IGameHost clientHost, Func<JournalEntry, CancellationToken, Task> journal, Func<CancellationToken, Task> hold)
     {
         var role = environment.Clients[client];
-        return new Site(clientHost, role.Host, WorldsBeside(character.CharactersLocalDirectory),
-            HostPath.Join(role.Runtime, runId, "host-world-stage"), HostPath.Join(role.Runtime, runId, "host-world"), journal, hold);
+        return ForClient(clientHost, role.Host, WorldsBeside(character.CharactersLocalDirectory), role.Runtime, runId, journal, hold);
     }
+
+    /// <summary>
+    /// Where any hosting client's world goes: <paramref name="worldsDirectory"/> on <paramref name="host"/>, shipped through and
+    /// moved out into the run's own folder under <paramref name="root"/> there (<c>&lt;root&gt;/&lt;runId&gt;/host-world</c>, the
+    /// folder <c>env recover</c> requires): a campaign client's role runtime (<see cref="ForCampaignClient"/>), or the arm's evidence
+    /// for <c>start</c>'s client on this machine (<c>TargetedRegression</c>, #818). Both are placed and journalled the same way.
+    /// </summary>
+    internal static Site ForClient(IGameHost host, string hostName, string worldsDirectory, string root, string runId,
+        Func<JournalEntry, CancellationToken, Task> journal, Func<CancellationToken, Task> hold) =>
+        new(host, hostName, worldsDirectory, HostPath.Join(root, runId, "host-world-stage"), HostPath.Join(root, runId, "host-world"), journal, hold);
 
     /// <summary>
     /// The client's <c>worlds_local</c> on its host, beside the <c>characters_local</c> the campaign staged its character in
@@ -72,23 +81,25 @@ internal static class HostedWorldOnHost
     }
 
     /// <summary>
-    /// Copies <paramref name="plan"/>'s fixture into <paramref name="output"/> (verified, the input evidence, as
-    /// <see cref="HostedWorld.Place"/> does), refuses when the host's worlds already hold an entry named for the world, journals the
-    /// placement, ships the fixture into the run's stage folder on the host and verifies every file there, then moves its entries
-    /// (all named for the world) into the host's worlds, refusing one that appeared meanwhile.
+    /// Refuses when the host's worlds already hold an entry named for the world, before anything is copied (a refused run leaves
+    /// nothing, #820), then copies <paramref name="plan"/>'s fixture into <paramref name="output"/> (verified, the input evidence,
+    /// as <see cref="HostedWorld.Place"/> does), journals the placement, ships the fixture into the run's stage folder on the host
+    /// and verifies every file there, then moves its entries (all named for the world) into the host's worlds, refusing one that
+    /// appeared meanwhile.
     /// </summary>
     internal static HostedWorld Place(Site site, HostWorldPlan plan, string output, CancellationToken cancellation)
     {
+        // The pinned manifest names the world; the copy below refuses any other set of files.
+        string name = HostedWorld.NameOf(plan.World.Sha256.Keys);
+        string world = HostPath.Join(site.WorldsDirectory, name);
+        site.Hold(cancellation).GetAwaiter().GetResult();
+        var existing = Entries(site, name, cancellation);
+        if (existing.Count != 0)
+            throw new InvalidOperationException($"The client's worlds on {site.HostName} already hold {string.Join(", ", existing)} in {site.WorldsDirectory}: a fixture world is never copied over a world. Remove or rename that one yourself, or rename the fixture world.");
         var copy = WorldFixture.Copy(plan.World.Source, output, plan.World.Sha256);
         copy.Preserve = true;
         try
         {
-            string name = HostedWorld.NameOf(copy.SourceHashes.Keys);
-            string world = HostPath.Join(site.WorldsDirectory, name);
-            site.Hold(cancellation).GetAwaiter().GetResult();
-            var existing = Entries(site, name, cancellation);
-            if (existing.Count != 0)
-                throw new InvalidOperationException($"The client's worlds on {site.HostName} already hold {string.Join(", ", existing)} in {site.WorldsDirectory}: a fixture world is never copied over a world. Remove or rename that one yourself, or rename the fixture world.");
             // Journalled before the ship: no journal line, no world in the user's worlds.
             site.Journal(JournalEntry.Of(JournalEntry.CopyIntended, ("runtime", world), ("stage", ""), ("parent", site.WorldsDirectory), ("holds", Holds),
                 ("world", name), ("worldUid", plan.WorldUid), ("keepIn", site.KeepIn)), cancellation).GetAwaiter().GetResult();

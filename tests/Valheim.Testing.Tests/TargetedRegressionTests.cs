@@ -2,6 +2,7 @@ using System.Reflection;
 using System.Reflection.Emit;
 using System.Text;
 using Valheim.Testing.Game;
+using Valheim.Testing.Game.Fakes;
 using Valheim.Testing.GameSessions;
 using Xunit;
 
@@ -607,6 +608,156 @@ public sealed class TargetedRegressionTests : IDisposable
         report.Write(output);
         Assert.Contains("owned cleanup not verified", File.ReadAllText(Path.Combine(output, "result.json")));
         Assert.False(report.CleanupVerified);
+    }
+
+    // ---- start's hosted fixture world (#818, #820) ----
+    // Through start's own seam: TargetedRegression.Run with its hosted ClientRounds, a fake hosting client (no game), this
+    // machine's real host scripts and the run journal on disk, then env status and env recover as the command runs them.
+
+    private const string FixtureWorld = "SealFixture";
+    private string Worlds => Path.Combine(_rig.Save, "worlds_local");
+    private Dictionary<string, HostProfile> Hosts() => new() { ["local"] = new HostProfile { Kind = "local", Lock = Path.Combine(_rig.Root, "lock") } };
+    private static readonly IGameHost Here = new LocalGameHost("this machine", HostShell.ThisMachine);
+
+    // A hosting client at its menu until it starts a world, then the world's UID once loaded and its player after.
+    private ScriptedTransport HostingClient()
+    {
+        bool hosting = false; int readings = 0, save = 5;
+        return new ScriptedTransport()
+            .ClientAccess(() => hosting, () => hosting)
+            .OnPrefix("cli_select_character ", _ => ScriptedTransport.Ok("OK: Selected character 'smoketest' (smoketest, Local)"))
+            .OnPrefix("cli_start_host_world ", command =>
+            {
+                hosting = true; readings = 0;
+                return ScriptedTransport.Ok($"OK: Starting hosted world '{command.Split(' ')[1]}' using character 'smoketest' (smoketest, Local); open=true, public=False, crossplay=False, backend=Steamworks, passwordSet=False");
+            })
+            .Extension("valheim.session", "state", _ =>
+            {
+                int reading = hosting ? ++readings : 0;
+                bool present = hosting && reading > 1, player = hosting && reading > 2;
+                return new
+                {
+                    source = "session-state", complete = true, phase = present ? "world-present" : hosting ? "loading" : "menu", worldUid = present ? _rig.Uid : null,
+                    worldPresent = present, worldReady = present, server = present, dedicated = false, localPlayer = player, playerReady = player,
+                    saving = false, loadError = false, connectionStatus = present ? "Connected" : "None",
+                };
+            })
+            .Extension("valheim.session", "save", _ => new { source = "session-save", complete = true, worldUid = _rig.Uid, saved = true, before = save, after = ++save, milliseconds = 10 }, readOnly: false)
+            .Extension("valheim.session", "leave", _ => { hosting = false; return new { source = "session-leave", complete = true, action = "leave" }; }, readOnly: false)
+            .On("cli_set_player_safety true", _ => ScriptedTransport.Ok("OK: playerSafety enabled=True god=True ghost=True debugMode=True cheats=True ghostReplicated=True"));
+    }
+
+    // One start run (a new run ID, as the command allocates): each arm in turn on one regression, each in its own evidence folder
+    // with its own client process, as the command runs them; the last arm's report and folder, and the run ID.
+    private (ScenarioReport Report, string Output, string RunId) Start(Func<LocalFakeOwnedProcess> process, Action<ClientRound>? measure = null,
+        bool end = true, string[]? arms = null)
+    {
+        string runId = RunJournal.NewRunId();
+        using var run = RunJournal.UseRun(runId);
+        var regression = _rig.Regression(_rig.Manifest());
+        ScenarioReport? report = null; string? output = null;
+        foreach (string arm in arms ?? ["parent"])
+        {
+            output = Path.Combine(_rig.Root, "out-" + runId, "evidence", arm);
+            var client = process();
+            report = regression.Run(arm, output, "smoke", ["first"], measure ?? (_ => { }), default, null,
+                (plan, directory, _, _) => ClientSession.Launch(plan, directory, () => client, HostingClient, (_, _) => Task.CompletedTask), afterStaged: null);
+            if (!report.Passed) break;
+        }
+        regression.Remove();
+        // As the command ends a run it did not lose (none for a killed one).
+        if (end) Assert.True(RunFinish.EndAsync(run, new RunEnd(report!.Passed ? RunOutcome.Passed : RunOutcome.Failed, CleanupProven: true)).GetAwaiter().GetResult());
+        return (report!, output!, runId);
+    }
+
+    // The runner is killed: its lines now name a process that is gone.
+    private void Kill(string runId)
+    {
+        foreach (string file in Directory.EnumerateFiles(Path.Combine(_rig.Root, "journal", runId), "*.jsonl"))
+            File.WriteAllLines(file, File.ReadAllLines(file).Select(line =>
+            {
+                var node = System.Text.Json.Nodes.JsonNode.Parse(line)!;
+                node["runner"]!["pid"] = RunJournalStatusTests.Gone.Pid;
+                node["runner"]!["startedUtc"] = RunJournalStatusTests.Gone.StartedUtc.ToString("O");
+                return node.ToJsonString();
+            }));
+    }
+
+    private JournalRunStatus Status(string runId) =>
+        Assert.Single(RunJournalStatus.InspectAsync(Hosts(), _ => Here, TimeSpan.FromSeconds(30)).GetAwaiter().GetResult().Runs, run => run.Run == runId);
+
+    // #818: a killed `start --hold` left its hosted fixture world in the client's worlds_local, unjournalled, so env status listed
+    // nothing, env recover said nothing was left, and the next start refused. Its placement is now the campaign's journalled site:
+    // env status lists it, env recover moves it (a chunked folder the game rewrote, proven by its world UID) into the run's
+    // folder, the user's own world stays, and the next start places and hosts the fixture again.
+    [ClientHostFact] public void AKilledStartsHostedWorldIsListedAndRecoveredSoTheNextStartRuns()
+    {
+        using var data = new FakeClientDataDirectory(_rig.Save);
+        Directory.CreateDirectory(Worlds);
+        File.WriteAllText(Path.Combine(Worlds, "MyWorld.fwl"), "the user's world");
+        // The runner is killed while it holds the hosting client in its world, after the game saved it: here, the round stops
+        // there and the client never stops, so the world stays in the client's worlds, as a killed runner leaves it.
+        var held = new LocalFakeOwnedProcess(41) { StopFailure = () => new IOException("the runner was killed") };
+        var (killed, killedOutput, runId) = Start(() => held, round => round.Step("hold until the runner is killed", () =>
+        {
+            File.Copy(Path.Combine(Worlds, FixtureWorld, "_main.1.fwl2"), Path.Combine(Worlds, FixtureWorld, "_main.2.fwl2"));
+            File.WriteAllText(Path.Combine(Worlds, FixtureWorld, "0_0.chunk"), "saved by the game");
+            throw new OperationCanceledException("the runner was killed");
+        }), end: false);
+        Assert.False(killed.Passed);
+        Assert.True(File.Exists(Path.Combine(Worlds, FixtureWorld, "0_0.chunk")));
+        Kill(runId);
+
+        string journalled = Path.Combine(Worlds, FixtureWorld);
+        var left = Status(runId);
+        Assert.Equal(JournalRunState.Recoverable, left.State);
+        Assert.Equal(journalled, Assert.Single(left.Items, item => item.Kind == "copy").What);
+
+        var recovered = RunRecovery.RecoverAsync(Hosts(), _ => Here, runId, teardown: false, TimeSpan.FromSeconds(30)).GetAwaiter().GetResult();
+
+        Assert.True(recovered.Clean, string.Join("\n", recovered.Steps));
+        Assert.Contains($"world UID {_rig.Uid} as journalled", Assert.Single(recovered.Steps, step => step.What == "copy " + journalled).Outcome);
+        Assert.Equal(new[] { "MyWorld.fwl" }, Directory.EnumerateFileSystemEntries(Worlds).Select(Path.GetFileName));
+        Assert.Equal("saved by the game", File.ReadAllText(Path.Combine(killedOutput, runId, "host-world", FixtureWorld, "0_0.chunk")));
+        Assert.Equal(JournalRunState.Ended, Status(runId).State);
+
+        // The next start, an A/B run, places the same fixture for each arm, hosts it and moves it into that arm's evidence (its own
+        // run folder there, so the arms never meet); the run ends clean and leaves nothing in the client environment's runtime.
+        int pid = 50;
+        var (next, output, nextRun) = Start(() => new LocalFakeOwnedProcess(pid++), arms: ["parent", "candidate"]);
+        Assert.True(next.Passed, string.Join("; ", next.Steps.Where(step => !step.Passed).Select(step => step.Name + ": " + step.Error)));
+        Assert.Equal(Path.Combine(output, "host-world"), next.Provenance["hostWorldEvidence"]);
+        foreach (string arm in new[] { "parent", "candidate" })
+        {
+            string evidence = Path.Combine(Path.GetDirectoryName(output)!, arm);
+            Assert.True(File.Exists(Path.Combine(evidence, "host-world", FixtureWorld, "_main.1.fwl2")), arm);
+            Assert.True(File.Exists(Path.Combine(evidence, nextRun, "host-world", FixtureWorld, "_main.1.fwl2")), arm);
+        }
+        Assert.Equal(new[] { "MyWorld.fwl" }, Directory.EnumerateFileSystemEntries(Worlds).Select(Path.GetFileName));
+        Assert.False(Path.Exists(Path.Combine(_rig.Runtime, nextRun)));
+        Assert.Equal(JournalRunState.Ended, Status(nextRun).State);
+    }
+
+    // #820: a start refused before launch because the client's worlds already hold the fixture world's name copied the fixture
+    // first and left that copy journalled, so the run stayed recoverable and blocked the next one. The refusal now comes before
+    // any copy: the user's world is untouched, no fixture copy exists, and the run ends with nothing left.
+    [ClientHostFact] public void AStartRefusedForAWorldAlreadyThereLeavesNothingToRecover()
+    {
+        using var data = new FakeClientDataDirectory(_rig.Save);
+        Directory.CreateDirectory(Path.Combine(Worlds, FixtureWorld));
+        File.WriteAllText(Path.Combine(Worlds, FixtureWorld, "0_0.chunk"), "the user's own");
+        var (refused, output, runId) = Start(() => new LocalFakeOwnedProcess(43));
+
+        Assert.False(refused.Passed);
+        var failed = Assert.Single(refused.Steps, step => !step.Passed);
+        Assert.Equal("place the disposable fixture world in the client's local worlds", failed.Name);
+        Assert.Contains("never copied over a world", failed.Error);
+        Assert.False(File.Exists(Path.Combine(output, "client-process.json"))); // the client was never launched
+        Assert.Equal("the user's own", File.ReadAllText(Path.Combine(Worlds, FixtureWorld, "0_0.chunk")));
+        var status = Status(runId);
+        Assert.Equal(JournalRunState.Ended, status.State);
+        Assert.Empty(status.Items);
+        Assert.Empty(Directory.GetDirectories(output, "valheim-test-*")); // no fixture copy was made
     }
 
     // ---- the ValheimCLI set (#124's capability manifest) ----
