@@ -139,7 +139,7 @@ On success, the command prints a `PHASES PASS:` line that names the final fixtur
 | `name` | Distinct per phase. Lowercase letters, digits or hyphens, 1-40 characters. |
 | `args` | This phase's options, as option/value pairs. |
 
-`commonArgs` selects the server environment, loader, adapter and ValheimCLI bundle. <!-- TODO(docs): verify after #745 -->
+`commonArgs` selects the server environment, loader, adapter and ValheimCLI bundle with `--inventory`, `--server`, `--server-env`, `--loader-package`, `--adapter`, `--cli-manifest` and `--cli-files`.
 
 A phase's `args` can use `--mod`, `--config`, `--plugin-file`, `--plugin-dir`, `--search-root`, `--optional-reference`, `--assert-command`, `--assert-line`, `--before-save-command`, `--before-save-line`, `--expected-log-error` and `--expected-log-reason`. Each phase needs at least one `--mod` and its own `--assert-command` and `--assert-line`. The runner adds `--server-only`, `--world-fixture`, `--bake-fixture` and `--output` itself.
 

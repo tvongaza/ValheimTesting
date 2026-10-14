@@ -1,6 +1,6 @@
 # Packages
 
-Every ValheimTesting package, its newest released version and what it is for. The versions come from [`toolkit-versions.json`](../toolkit-versions.json), and every snippet in these docs pins exactly them.
+Every ValheimTesting package, its newest released version and its use. [`toolkit-versions.json`](../toolkit-versions.json) records the versions. Every snippet in these docs pins exactly these versions.
 
 ## Pin
 
@@ -16,47 +16,50 @@ Every ValheimTesting package, its newest released version and what it is for. Th
 | [Valheim.Testing.Cli](https://www.nuget.org/packages/Valheim.Testing.Cli) | `0.1.0-preview.18` | ValheimCLI's client transport; the Game package depends on it ([page](packages/Valheim.Testing.Cli.md)) |
 | [Valheim.Testing.NativeSmoke](https://www.nuget.org/packages/Valheim.Testing.NativeSmoke) | `0.1.0-preview.31` | `valheim-test`: one-command native load checks ([page](packages/Valheim.Testing.NativeSmoke.md)) |
 
-A unit-test project that links the mod's sources:
+For a unit-test project that links your mod's sources:
 
 ```xml
 <PackageReference Include="Valheim.Testing.Doubles" Version="[0.1.0-preview.15]" PrivateAssets="all" />
 ```
 
-A unit-test project for code already free of Unity types:
+For a unit-test project whose code is already free of Unity types:
 
 ```xml
 <PackageReference Include="Valheim.Testing" Version="[0.1.0-preview.14]" />
 ```
 
-A separate system-test project that drives the real game, and a game session (a server and clients as one run):
+For a separate system-test project that drives the real game. Add the second line for a game session, which is a server and clients as one run:
 
 ```xml
 <PackageReference Include="Valheim.Testing.Game" Version="[0.1.0-preview.62]" />
 <PackageReference Include="Valheim.Testing.GameSessions" Version="[0.1.0-preview.24]" />
 ```
 
-A game-side test adapter plugin compiles the adapter source:
+For a game-side test adapter plugin, which compiles the adapter source:
 
 ```xml
 <PackageReference Include="Valheim.Testing.Adapter" Version="[0.1.0-preview.9]" PrivateAssets="all" />
 ```
 
-A test that checks a built mod DLL against the game's assemblies in code:
+For a test that checks a built mod DLL against the game's assemblies in code:
 
 ```xml
 <PackageReference Include="Valheim.Testing.Bindings" Version="[0.1.0-preview.3]" />
 ```
 
-The two tools, for a mod's CI job and for native checks:
+For the two tools:
 
 ```sh
 dotnet tool install Valheim.Testing.Bindings.Tool --version 0.1.0-preview.3 --tool-path .tools
 dotnet tool install Valheim.Testing.NativeSmoke --version 0.1.0-preview.31 --global
 ```
 
-Brackets mean an exact NuGet version: pin exact versions so a new release cannot change a passing build. Move a pin deliberately, in its own change.
+The first command installs `valheim-bindings` into `.tools` for your mod's CI job. The second installs `valheim-test` globally for native checks.
+
+Brackets mean an exact NuGet version, so a new release cannot change a passing build. Move a pin on purpose, in its own change.
 
 ## Limits
 
-Test packages belong in test projects, never in a production mod or a player's plugins folder. Pure helpers target netstandard2.0; external game tools and examples target net10.0. To test against an unpublished build, see [Try an unpublished build in a mod](../CONTRIBUTING.md#try-an-unpublished-build-in-a-mod).
-
+- Test packages belong in test projects. Never ship them in a production mod or a player's plugins folder.
+- Pure helpers target netstandard2.0. External game tools and examples target net10.0.
+- To test against an unpublished build, see [Try an unpublished build in a mod](../CONTRIBUTING.md#try-an-unpublished-build-in-a-mod).

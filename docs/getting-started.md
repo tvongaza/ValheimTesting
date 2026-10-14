@@ -100,7 +100,7 @@ More in [Test logic that uses game types](guides/test-logic-that-uses-game-types
 
 ## What a native check needs
 
-One Windows PC with Valheim and the free Valheim Dedicated Server tool from Steam, the Steam client running and signed in, and PowerShell 7 ([host shells](platforms.md#host-shells)). A `--server-only` run does not need Steam. `valheim-test` stages a disposable profile with its pinned BepInEx loader and ValheimCLI for each install and leaves the install untouched. <!-- TODO(docs): verify after #711 -->
+One Windows PC with Valheim and the free Valheim Dedicated Server tool from Steam, the Steam client running and signed in, and PowerShell 7 ([host shells](reference/platforms.md#host-shells)). A `--server-only` run does not need Steam. `valheim-test` stages a disposable profile with its pinned BepInEx loader and ValheimCLI for each install and leaves the install untouched. <!-- TODO(docs): verify after #711 -->
 
 ```sh
 dotnet tool install Valheim.Testing.NativeSmoke --version 0.1.0-preview.31 --global
@@ -112,7 +112,7 @@ valheim-test server-load --mod /path/to/ServerMod.dll
 
 `env preflight` checks this machine before anything is copied: the run journal and host lock, game processes, ValheimCLI ports, the client desktop and whether Steam is running. `server-load` loads the mod on an owned dedicated server, joins one clean client, prints `SERVER_JOIN_PASS` and writes `result.json` and `junit.xml` under a new `valheim-test-runs/` directory in this machine's ValheimTesting data root. From a directory with exactly one mod project, you can omit `--mod`.
 
-Next: [Debug a mod load or mod conflict](debugging-mods.md) walks through the first run; [one Windows PC](packages/Valheim.Testing.Game.md#on-one-windows-pc) describes the setup; read the [runtime hygiene checklist](runtime-hygiene.md) before you launch. Other hosts are in [platforms](platforms.md).
+Next: [Debug a mod load or mod conflict](guides/check-a-mod-loads.md) walks through the first run; [one Windows PC](packages/Valheim.Testing.Game.md#on-one-windows-pc) describes the setup; read the [runtime hygiene checklist](runtime-hygiene.md) before you launch. Other hosts are in [platforms](reference/platforms.md).
 
 ## Related
 

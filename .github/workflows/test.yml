@@ -459,7 +459,7 @@ jobs:
             case "$out" in *$1*) ;; *) echo "::error::docs refused, but not with: $1"; return 1 ;; esac
             git checkout -- .
           }
-          page=docs/packages/Valheim.Testing.Game.md
+          page=docs/reference/game-waiting.md
           sed -i 's/^## Waiting$/## Waiting (preview 13)/' "$page"
           refused "FAIL $page:$(grep -n '^## Waiting' "$page" | cut -d: -f1): A heading names a version or a date"
           last() { echo "FAIL docs/getting-started.md:$(wc -l < docs/getting-started.md): $1"; }

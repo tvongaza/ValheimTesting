@@ -1,41 +1,57 @@
 # Targeted native regression
 
-**Audience:** a mod author checking one fix in the real game. **Concept:** A/B regression of a parent and a candidate build.
+Check one fix in the real game. You run the same scenario on a parent build and a candidate build of your mod, then compare the two results.
 
-A copyable template for a small A/B regression in the real game: **one owned client hosts one disposable fixture world with one mod under test**, once with the parent build and once with the candidate. You fill in a short `regression.json`, get a preflight result **without opening the game**, then run each arm through the toolkit's strict-pinned hosted [`ClientRounds`](../../docs/packages/Valheim.Testing.Game.md#hosted-listen-server-worlds) runner. Restarts, dedicated servers and several clients belong in [FullLifecycle](../FullLifecycle/README.md) instead.
+One owned client hosts one disposable fixture world with one mod under test. You fill in a short `regression.json` and run a preflight that never opens the game. Then you run each arm through the toolkit's strict-pinned hosted [`ClientRounds`](../../docs/reference/game-joins.md#hosted-listen-server-worlds) runner. For restarts, dedicated servers or several clients, use [FullLifecycle](../FullLifecycle/README.md).
 
 | File | What it is | Change it? |
 |---|---|---|
 | [Program.cs](Program.cs) | The `preflight` and `run` commands, each with optional `--inventory` and `--client-env` | No; copy it as is |
-| [Scenario.cs](Scenario.cs) | The rounds and assertions: everything that is the same on every machine | Yes: your mod's steps |
-| [regression.sample.json](regression.sample.json) | The regression's inputs: which files are staged, the fixture and the character; nothing about the machine | Yes: copy it outside the repository and fill it in |
+| [Scenario.cs](Scenario.cs) | The rounds and assertions, the same on every machine | Yes: your mod's steps |
+| [regression.sample.json](regression.sample.json) | The files to stage, the fixture and the character | Yes: copy it outside the repository |
 
-The sample scenario tests FullLifecycle's ExampleMod with its test adapter as the probe: its Harmony patch is applied, and `examplemod_mark` marks the ground where the host stands with exactly one pole in the host's saved objects. Keep paths, ports and names out of `Scenario.cs`, so the source you ran is the source you can share.
+The sample scenario tests FullLifecycle's ExampleMod and uses its test adapter as the probe. It checks that the mod's Harmony patch is applied. It also checks that `examplemod_mark` leaves exactly one pole where the host stands. Keep paths, ports and names out of `Scenario.cs`, so the source you ran is the source you can share.
 
-**The machine is not in the file.** The game install (only read), the folder for the disposable loader profile and the client's ValheimCLI port come from the client environment: this machine's detected Valheim with no option, or the one `--client-env NAME` names in `--inventory environments.json` (see [the environment inventory](../../docs/packages/Valheim.Testing.Game.md#this-machines-environment-inventory)). Without `--inventory`, an `environments.json` beside `regression.json` is used when there is one. `valheim-test start` writes the same `regression.json`. An older manifest with `game`, `install`, `client.port`, `client.saveDirectory` or `client.steamUserDataDirectory` is refused, naming where each now comes from.
+**The machine is not in the file.** The client environment supplies three things: the game install (only read), the disposable profile folder and the client's ValheimCLI port. By default, that environment is this machine's detected Valheim. To pick another, add `--inventory environments.json --client-env NAME` after the command; see [this machine, with no file](../../docs/reference/game-launch.md#this-machine-with-no-file). If you leave out `--inventory` and an `environments.json` sits beside `regression.json`, the tool uses that file. `valheim-test start` writes the same `regression.json`.
 
-In this checkout, the example builds against the GameSessions source project while the change is in preview. `scripts/consumer.cs` copies it outside the checkout, replaces that project reference with the exact GameSessions candidate or released package, and restores it from the corresponding feed. This tests the package a mod author will install, including its exact Game dependency. Once the package is published, a copied runner can replace the project reference with an exact `Valheim.Testing.GameSessions` package reference. The normal `dotnet run --project` commands below use your .NET environment; `valheim-test start` owns its caches.
+In this checkout, the example references the GameSessions source project. In your copy, use an exact `Valheim.Testing.GameSessions` package reference ([versions](../../docs/package-versions.md)) instead.
 
-For a mod with several dependencies, use the [native dependency resolver](../../docs/native-dependency-resolution.md) to discover a pinned local set and confirm that the default ValheimCLI plugin provides your scenario's built-in commands. Review unresolved choices before filling `regression.json`; the resolver never treats a direct assembly reference as optional on its own.
+If your mod has several dependencies, run the [dependency resolver](../../docs/reference/game-run-inputs.md#resolve-mod-dependencies) before you fill in `regression.json`.
 
 ## Which files come from where
 
 | Source | Files | In `regression.json` |
 |---|---|---|
-| Valheim | The game install, run by Steam in your desktop session | Not in the file: the client environment's install (only read) |
-| BepInEx (BepInExPack_Valheim) | `BepInEx/core`, the Doorstop loader (`winhttp.dll` and `doorstop_config.ini` on Windows), `BepInEx/config/BepInEx.cfg` | A reviewed package, else on Windows the toolkit's pinned BepInExPack_Valheim (macOS: the source install's loader), staged into the owned profile |
-| ValheimCLI | One `valheimCLI.dll` with all built-in commands, and its [capability manifest](../../docs/packages/Valheim.Testing.Game.md#valheimcli-capability-manifest) | `cli.core`, `cli.manifest` |
-| The mod under test | Its parent and candidate builds, each with its source commit | `mod.arms` |
-| The mod's dependencies | Every DLL the mod needs to load: the plugin each hard `[BepInDependency]` names, and libraries it references (for example JsonDotNET's detector plugin and `Newtonsoft.Json.dll`) | `plugins` |
-| A test probe (optional) | A small plugin that serves the scenario's observations, such as ExampleMod.TestAdapter | `probe` |
+| Valheim | The game install, run by Steam in your desktop session | Not in the file: the client environment's install |
+| BepInEx | `BepInEx/core`, the Doorstop loader, `BepInEx/config/BepInEx.cfg` | Not in the file: the client environment's `loaderPackage` ([a reviewed package](../../docs/reference/game-run-inputs.md#pin-a-bepinex-loader)), else the pinned BepInExPack_Valheim on Windows and the install's own loader on macOS |
+| ValheimCLI | One `valheimCLI.dll` and its [capability manifest](../../docs/reference/game-preflight.md#valheimcli-capability-manifest) | `cli.core`, `cli.manifest` |
+| The mod under test | Parent and candidate builds, each with its source commit | `mod.arms` |
+| The mod's dependencies | Every DLL it needs: hard `[BepInDependency]` plugins and referenced libraries | `plugins` |
+| A test probe (optional) | A small plugin serving observations, such as ExampleMod.TestAdapter | `probe` |
 | The fixture | A directory holding exactly one world, and that world's UID | `fixture` |
-| Your character | A disposable **local** character, either already staged or registered in a disposable character store | `client.character`; optional `client.characterStore` (checked against this machine's detected Steam `userdata`) |
+| Your character | A disposable **local** character, staged or in a disposable character store | `client.character`; optional `client.characterStore` |
 
-Every DLL is pinned by SHA256; leave a `sha256` empty and the preflight tells you the file's hash to review and paste. The prepared game's own plugins, scripts, patchers and configs are never copied.
+Every DLL is pinned by SHA256. If you leave a `sha256` empty, the preflight prints that file's hash for you to review and paste. The tool never copies the prepared game's own plugins, scripts, patchers or configs.
 
 ## 1. Fill in regression.json
 
-Copy `regression.sample.json` somewhere outside the repository and replace every `<...>`. Relative paths are relative to the file. The owned profile is `vt-prep-regression-<name>-<run-id>/runtime` in the client environment's runtime folder. On Windows it contains hard links to the game's files and an independent loader; on macOS and Linux it contains only the loader and selected files and launches the source game. The shared stage journals it, and refuses a different run's existing folder. For a basic smoke, use the pinned, game-created Valheim 1.0.16 world and character:
+Copy `regression.sample.json` outside the repository and replace every `<...>`. Relative paths are relative to the file. You can give the arms any names; `parent` and `candidate` are the convention:
+
+```json
+"mod": {
+  "installAs": "ExampleMod.dll",
+  "arms": {
+    "parent": { "file": "<parent build>/ExampleMod.dll", "sha256": "<sha256>", "commit": "<parent commit>" },
+    "candidate": { "file": "<candidate build>/ExampleMod.dll", "sha256": "<sha256>", "commit": "<candidate commit>" }
+  }
+}
+```
+
+If two arms have the same SHA256, the tool refuses them. To run the same build twice on purpose, set `"repeatability": true`.
+
+### A world and a character for a basic smoke
+
+For a basic smoke, use the pinned world and character that Valheim 1.0.16 created:
 
 ```csharp
 var world = DefaultSmokeWorld.Prepare(Path.Combine(runRoot, "world-source"));
@@ -44,7 +60,9 @@ var character = DefaultSmokeCharacter.Ensure(Path.Combine(runRoot, "character-so
 // client.character = DefaultSmokeCharacter.Name; client.characterStore = character.Root
 ```
 
-Use a new `world-source` for each preparation. `Ensure` repairs a missing or stale character only in its own marked store, and refuses an unfamiliar file or personal character directory. The run stages that character only while its owned client is active, then removes its local file and backups. The fixture world is copied before the game edits it. A later game version needs a native load check; for a mod-specific world or character, supply your own registered fixture instead. The world source holds exactly one world, as the game saved it:
+Use a new `world-source` for each preparation. `Ensure` repairs a character only inside its own marked store. The packaged character serves one client at a time, because every copy shares its player ID.
+
+For a mod-specific world, supply your own fixture. It holds exactly one world, as the game saved it:
 
 ```text
 <fixture root>/
@@ -54,9 +72,43 @@ Use a new `world-source` for each preparation. `Ensure` repairs a missing or sta
     ...
 ```
 
-Read its UID from the world itself, never from its name: `WorldIdentity.Read(root).UidText`, or let the preflight tell you which UID the fixture holds. Name the arms however you like; `parent` and `candidate` are the convention. Two arms with the same SHA256 are refused unless you set `"repeatability": true` on purpose. Optional fields: `configs` (BepInEx config files by name; without `valheimCLI.valheimCLI.cfg` one is written with the client environment's port), `patchers`, `optionalReferences` (assembly names a staged DLL only uses when present), `gamePins` (pin the prepared game's build and BepInEx core), `client.startSeconds` and `client.joinSeconds`. `client.environment` sets non-secret variables on only the owned disposable game process, for a mod's documented switch; for example, `"environment": { "EXAMPLEMOD_DEFER_BAKE": "1" }`. Preflight rejects loader overrides, invalid names and multiline values. `logScan` can name an exact, known BepInEx error header with a written reason, for example `"logScan": { "unknown-error": { "expected": ["[Error  :   BepInEx] Unable to start Unity log writer"], "reason": "Known log-writer limitation on this test client" } }`. New or different errors still fail the run; see the [log scan contract](../../docs/packages/Valheim.Testing.Game.md#log-scan-at-teardown).
+Read the UID from the world itself, never from its name: `WorldIdentity.Read(root).UidText`. You can also let the preflight report it.
 
-For a custom hosted character, register a **game-created** local save once in a [`DisposableCharacterStore`](../../docs/packages/Valheim.Testing.Game.md#plan-rules-and-client-rounds). Set `client.character` to its registered name and `client.characterStore` to that store's full path; the character is checked against this machine's detected Steam `userdata`. Preflight checks the registration without touching `characters_local`. `run` refuses a name already in local or cloud saves, copies just that registered character before launch, and removes its file and game-made backups after the owned client stops, including on failure. The packaged default is for one client at a time: copies share its player ID.
+### A custom character
+
+1. Register a **game-created** local save once in a `DisposableCharacterStore` ([API reference](https://tvongaza.github.io/ValheimTesting/reference/)).
+2. Set `client.character` to its registered name.
+3. Set `client.characterStore` to the store's full path.
+
+`run` refuses a name that already exists in local or cloud saves. It copies the character in before launch. After the client stops, it removes the character's file and backups, even on failure.
+
+### Optional fields
+
+| Field | Does |
+|---|---|
+| `configs` | BepInEx config files by name; without `valheimCLI.valheimCLI.cfg`, one gets the environment's port |
+| `patchers` | Files staged into `BepInEx/patchers` |
+| `optionalReferences` | Assembly names a staged DLL uses only when present |
+| `gamePins` | Pins the prepared game's build and BepInEx core |
+| `client.startSeconds`, `client.joinSeconds` | Bound the client's launch to its menu (default 300, 10 to 1800) and each hosted start (default 180, 10 to 900) |
+| `client.environment` | Non-secret variables for the owned game process only |
+| `logScan` | Known BepInEx error headers to expect, each with a written reason |
+
+Set `client.environment` like this:
+
+```json
+"environment": { "EXAMPLEMOD_DEFER_BAKE": "1" }
+```
+
+The preflight rejects loader overrides, invalid names and multiline values in `client.environment`.
+
+Set `logScan` like this:
+
+```json
+"logScan": { "unknown-error": { "expected": ["[Error  :   BepInEx] Unable to start Unity log writer"], "reason": "Known log-writer limitation on this test client" } }
+```
+
+New or different errors still fail the run; see the [log scan](../../docs/reference/game-log-scan.md).
 
 ## 2. Preflight, without the game
 
@@ -64,16 +116,31 @@ For a custom hosted character, register a **game-created** local save once in a 
 dotnet run --project examples/TargetedRegression -c Release -- preflight /absolute/path/to/regression.json
 ```
 
-For each arm in turn it stages the owned profile and checks, before anything launches:
+The preflight prints each arm's commit, artifact name and hashes. It also prints the allowlist, with each plugin's MD5 and GUID. Review them before the run. It ends with:
 
-1. The fixture root holds one world with the file's UID. A world folder passed as the root, a `worlds_local` wrapper or several worlds are each named, with the tree above and the tree found.
-2. Every file is its pinned SHA256. The manifest records each arm under its own artifact label (`parent-ExampleMod.dll`, `candidate-ExampleMod.dll`), and only the chosen one is installed as `mod.installAs`.
-3. `BepInEx/plugins`, `patchers`, `config` and `scripts` are rebuilt from `regression.json` only: the default ValheimCLI plugin, mod-owned `plugins`, the probe and one arm.
-4. What each DLL **declares** decides, never its file name: every hard `[BepInDependency]` of every staged plugin is met by a staged `[BepInPlugin]` of that GUID and at least its minimum version; no staged plugin is `[BepInIncompatibility]` with another; every plugin loads in the client (`[BepInProcess]`); every referenced assembly is in the game, `BepInEx/core` or `regression.json`.
-5. The disposable character is either present already or registered for run-time staging. The toolkit's own [owned-run preflight](../../docs/packages/Valheim.Testing.Game.md#owned-run-preflight) passes on the staged install: install pins, Doorstop loader, every pinned plugin installed exactly once, the fixture's pinned files.
-6. The staged `valheimCLI.dll` matches `cli.manifest` by SHA256 and provides every built-in command the run uses: the hosted rounds' session commands and the scenario's `Capabilities` owned by ValheimCLI (`valheim.*`, `cli.*`). `regression.json` must name that manifest (`valheim-test start` writes it). A mismatched build, an old split (core and pack) manifest or a leftover pack DLL, or a plugin lacking a command is refused before the game starts. A probe's or the mod's own commands (any other owner) are checked live, before the first round.
+```text
+PREFLIGHT PASSED; nothing was launched. Review the arms' commits and hashes above before the run.
+```
 
-It prints each arm's commit, artifact name and hashes and the allowlist with each plugin's MD5 and GUID: review them before the run. Exit 0 passed, 3 refused (the message names the field and the fix), 2 usage.
+For each arm, the preflight stages the owned profile and checks:
+
+- The fixture root holds one world with the file's UID. If the layout is wrong, it shows the expected tree and the tree it found.
+- Every file matches its pinned SHA256.
+- The staged `BepInEx` folders hold only the default ValheimCLI plugin and what `regression.json` names.
+- Each plugin's declared metadata meets its dependencies, process and references. File names play no part.
+- The character is present or registered, and the [owned-run preflight](../../docs/reference/game-preflight.md) passes.
+- `valheimCLI.dll` matches `cli.manifest` and provides every built-in command the run uses. Commands owned by the probe or the mod are checked live, before the first round.
+
+For the full contract, see [Stage checks](../../docs/reference/game-run-inputs.md#stage-checks).
+
+The tool stages the profile at `vt-prep-regression-<name>-<run-id>/runtime` in the environment's runtime folder. On Windows, the profile holds hard links to the game's files and its own loader. On macOS, it holds the loader and selected files and launches the source game.
+
+| Exit code | Meaning |
+|---|---|
+| `0` | Passed |
+| `1` | `run` only: the scenario failed |
+| `2` | Usage error |
+| `3` | Refused; the message names the field and the fix |
 
 ## 3. Run each arm
 
@@ -82,21 +149,43 @@ dotnet run --project examples/TargetedRegression -c Release -- run /absolute/pat
 dotnet run --project examples/TargetedRegression -c Release -- run /absolute/path/to/regression.json candidate /absolute/path/to/new-evidence-candidate
 ```
 
-`run` stages the arm again and repeats every check, refuses any file that appeared in the staged folders since (a plugin outside the allowlist loads even when the test never calls it), then hands the plan to the hosted `ClientRounds`: it places the fixture, launches the owned client, requires the hosted-session capabilities and the scenario's `Capabilities` live, hosts the world with the character protected and runs `Scenario.Measure`. Every command is checked against strict pins: each staged plugin's GUID with its MD5 and the world's UID. No other plugin is pinned `absent`: the clean install loads nothing else, and strict pins refuse anything unlisted. The client is stopped and the world moved into the evidence in every outcome.
+Each command prints `PASS` or `FAIL` and fills its evidence directory.
 
-Each evidence directory holds `result.json`, `junit.xml`, `run-manifest.json` (the arm, every arm's commit and hash, the allowlist with SHA256 and MD5, the install pins, the world and capabilities; no machine path), the command trace `client-commands.jsonl`, the scenario's own JSON files and `host-world/`. `result.json` records the arm, the mod build and `disposableStageSeconds` in its provenance. Each arm gets a fresh verified profile; the example retires it before exiting. An interrupted run leaves a journal for `valheim-test env recover`.
+`run` stages the arm again and repeats every check. It also refuses any file that appeared in the staged folders since staging. Then it hands the plan to the hosted `ClientRounds` runner. The runner places the fixture, launches the client, checks capabilities live, hosts the world with the character protected, and runs `Scenario.Measure`.
+
+Strict pins check every command: each plugin's GUID and MD5, and the world's UID. Anything unlisted is refused. In every outcome, the client stops and the world moves into the evidence.
+
+| Evidence | Holds |
+|---|---|
+| `result.json` | The outcome; provenance with the arm, mod build and `disposableStageSeconds` |
+| `junit.xml` | The JUnit report |
+| `run-manifest.json` | Every arm's commit and hash, the allowlist, install pins, world and capabilities; no machine path |
+| `client-commands.jsonl` | The command trace |
+| `host-world/` | The hosted world after the run |
+
+The directory also holds the scenario's own JSON files. Each arm gets a fresh profile, and the example retires it before exiting. If a run is interrupted, it leaves a journal for `valheim-test env recover`.
 
 ## Review the result
 
-Compare the arms by their `result.json`, never by an exit code alone: the parent should fail at the step the change fixes, the candidate should pass every step, and `run-manifest.json` should differ only in the mod's hash. Logs, saves and command traces can hold account identifiers and machine paths; keep them private.
+Compare the arms by their `result.json`, not by exit code alone. The parent should fail at the step the change fixes, and the candidate should pass every step. The two `run-manifest.json` files should differ only in the mod's hash. Logs, saves and command traces can hold account identifiers and machine paths, so keep them private.
 
 ## Share the result
 
-From a checkout of this repository, make a public copy with the maintainer tool [tools/regression-bundle](../../tools/regression-bundle/README.md): it checks each arm's `result.json` against its `junit.xml`, command trace and `run-manifest.json`, then writes `Scenario.cs` and `Program.cs` exactly as they ran with a project pinned to the toolkit, a template of your `regression.json` with placeholders and a generated A/B table, and refuses machine paths, private names and unrelated plugin names. It publishes nothing; you review the directory before sharing it.
+To make a public copy, run [tools/regression-bundle](../../tools/regression-bundle/README.md) from a checkout of this repository. It checks each arm's `result.json` against its `junit.xml`, command trace and `run-manifest.json`. It then writes:
+
+- `Scenario.cs` and `Program.cs`, exactly as they ran
+- a project pinned to the toolkit
+- a `regression.json` template with placeholders
+- an A/B table
+
+The tool refuses machine paths, private names and unrelated plugin names. It publishes nothing; review the directory before you share it.
 
 ## Limits
 
-- One owned client hosting one world. A dedicated server and restarts of a server process are FullLifecycle's; a second client is the native acceptance suite's.
-- The default profile does not copy the game on macOS or Linux. On Windows preflight checks hard-link support before staging: a default runtime follows the source install's volume, while an explicit client-environment `runtime` must be on that NTFS volume. A library on exFAT, FAT32 or a network share must move to NTFS.
-- The optional registered-character path stages and removes one owned test character. Without it, stage your disposable local character yourself. The tool does not reserve a machine or publish anything.
-- The metadata checks read what BepInEx reads; a dependency a mod finds by reflection at run time, or a config value it needs, is caught only by the live run.
+- The example covers one owned client hosting one world. For dedicated servers and server restarts, use FullLifecycle. For a second client, see the [native acceptance suite](../../tests/Valheim.Testing.NativeAcceptance/README.md).
+- Linux hosts run the dedicated server only, with no game client.
+- On macOS, the profile does not copy the game.
+- On Windows, the preflight checks hard-link support. A default runtime follows the install's volume. An explicit client-environment `runtime` must be on that NTFS volume. A library on exFAT, FAT32 or a network share must move to NTFS.
+- If you don't use a registered character, stage your disposable local character yourself.
+- The tool does not reserve a machine or publish anything.
+- The metadata checks read what BepInEx reads. The live run is the only check for a dependency a mod finds by reflection, or a config value it needs.
