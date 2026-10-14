@@ -100,7 +100,7 @@ internal static class DesktopClientSession
                         try { process.Stop(TimeSpan.FromSeconds(15)); } finally { process.Dispose(); }
                         throw;
                     }
-                    return new LocalHostedClientProcess(process, host, plan.Install, tunnel, keptDirectory);
+                    return HostedClientProcess.Of(process, host, plan.Install, tunnel, keptDirectory, HostedRunHooks.Production);
                 },
                 () => new CliTransport(tunnel.Address, tunnel.LocalPort),
                 async (left, token) =>

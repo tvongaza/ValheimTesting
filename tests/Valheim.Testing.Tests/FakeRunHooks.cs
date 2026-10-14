@@ -27,6 +27,8 @@ internal sealed class FakeRunHooks : IHostedRunHooks
     public ShippedLoader.Rule? PinnedLoader { get; init; }
     /// <summary>The ValheimCLI set a standalone server's profile stages; by default the tests' own (<see cref="TestCliSet"/>), never this build's bundle.</summary>
     public Func<CliBundleSource?>? CliSet { get; init; }
+    /// <summary>The local lease-identity read of a fake process; by default its host identity, as one machine's rule would read it.</summary>
+    public Func<int, string, string>? LocalStartIdentity { get; init; }
 
     IGameHost IHostedRunHooks.CreateHost(ResolvedEnvironment environment, string name) => Host?.Invoke(name) ?? Real.CreateHost(environment, name);
     IGameTransport IHostedRunHooks.Connect(string address, int port) => Connect?.Invoke(port) ?? Real.Connect(address, port);
@@ -39,7 +41,8 @@ internal sealed class FakeRunHooks : IHostedRunHooks
         LocalMacLaunch != null ? LocalMacLaunch(plan, output, account, cancellation, processStarted) : Real.LaunchLocalMac(plan, output, account, cancellation, processStarted);
     ShippedLoader.Choice? IHostedRunHooks.PinnedLoader(string actor, string install, string platform) => PinnedLoader?.Invoke(actor, install, platform);
     CliBundleSource? IHostedRunHooks.CliSet() => CliSet != null ? CliSet() : TestCliSet.Source;
-    string IHostedRunHooks.LocalProcessStartFileTimeUtc(int pid, string hostStartIdentity) => hostStartIdentity;
+    string IHostedRunHooks.LocalProcessStartFileTimeUtc(int pid, string hostStartIdentity) =>
+        LocalStartIdentity != null ? LocalStartIdentity(pid, hostStartIdentity) : hostStartIdentity;
     RunCancellation IHostedRunHooks.Cancellation(out bool owned)
     {
         if (Cancellation == null) return Real.Cancellation(out owned);

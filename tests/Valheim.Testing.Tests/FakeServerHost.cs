@@ -159,10 +159,10 @@ internal sealed class FakeServerHost : IGameHost
         ("mac-desktop", [RemoteMacClientPreflight.Desktop]),
         ("mac-game", [RemoteMacClientPreflight.GameSlice]),
         ("mac-loader", [RemoteMacClientPreflight.LoaderSlice]),
-        ("client-start", [InteractiveScripts.MacStart]),
-        ("client-keep", [HostedClientScripts.BashKeep]),
+        ("client-start", [InteractiveScripts.MacStart, InteractiveScripts.WindowsStart]),
+        ("client-keep", [HostedClientScripts.BashKeep, HostedClientScripts.PowerShellKeep]),
         ("preloader", [HostedClientScripts.BashPreloader, HostedClientScripts.PowerShellPreloader]),
-        ("move-aside", [HostedClientScripts.BashMoveAside]),
+        ("move-aside", [HostedClientScripts.BashMoveAside, HostedClientScripts.PowerShellMoveAside]),
         ("preflight-read", [HostClientPreflight.BashRead, HostClientPreflight.PowerShellRead]),
         ("preflight-exists", [HostClientPreflight.BashExists, HostClientPreflight.PowerShellExists]),
         ("steam-user", [SteamSignedInUsers.PowerShell, SteamSignedInUsers.Bash]),
@@ -628,7 +628,8 @@ internal sealed class FakeServerHost : IGameHost
                     File.WriteAllText(log, "[Info   :valheimCLI] Command server listening on 127.0.0.1:5578\n");
                 }
                 lock (_sync) _processes[id] = ("555", ct => exit.Task.WaitAsync(ct), () => exit.TrySetResult(137));
-                return Ok($"VT-INTERACTIVE started {id} 555\n");
+                // A Windows start runs through a scheduled task, which it removes before it replies.
+                return Ok($"VT-INTERACTIVE started {id} 555\n" + (Windows ? "VT-TASK removed\n" : ""));
             }
             case "wait":
             {

@@ -39,6 +39,26 @@ internal interface IHostedRunHooks
     string LocalProcessStartFileTimeUtc(int pid, string hostStartIdentity);
 }
 
+/// <summary>The one read of an owned local process's command-lease identity, for both lease writers (server and client).</summary>
+internal static class LocalLeaseIdentity
+{
+    /// <summary>
+    /// <paramref name="hooks"/>' <see cref="IHostedRunHooks.LocalProcessStartFileTimeUtc"/>, or null after a warning when it cannot be
+    /// read: the lease is an optional diagnostic, so a failed read publishes no lease and never fails the game's start.
+    /// </summary>
+    internal static string? TryRead(IHostedRunHooks hooks, string role, int pid, string hostStartIdentity)
+    {
+        try { return hooks.LocalProcessStartFileTimeUtc(pid, hostStartIdentity); }
+        catch (Exception error) when (error is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException or
+            InvalidOperationException or OverflowException or System.ComponentModel.Win32Exception)
+        {
+            Console.Error.WriteLine($"Warning: the local identity of owned {role} process {pid} could not be read: {error.Message}; " +
+                $"no {role} command lease was published.");
+            return null;
+        }
+    }
+}
+
 /// <summary>The real hosted-run hooks: ssh and local hosts, CLI sockets, the pool's leases, this machine's session.</summary>
 internal sealed class HostedRunHooks : IHostedRunHooks
 {

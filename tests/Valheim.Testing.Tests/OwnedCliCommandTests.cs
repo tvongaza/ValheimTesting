@@ -359,6 +359,59 @@ public sealed class OwnedCliCommandTests
         Assert.Contains(message, error.ToString());
     }
 
+    // #819: a folder without the role's lease (a client on another machine, one still starting or stopped, a wrong folder) is
+    // refused with that reason, never a raw missing-file error, on every OS's lease reader.
+    [Theory]
+    [InlineData(OwnedClientCommandLease.ClientRole)]
+    [InlineData(OwnedClientCommandLease.ServerRole)]
+    public void AMissingLeaseIsRefusedWithItsReason(string role)
+    {
+        string root = Directory.CreateTempSubdirectory("owned-cli-no-lease-").FullName;
+        try
+        {
+            foreach (string evidence in new[] { root, Path.Combine(root, "absent-folder") })
+            {
+                using var output = new StringWriter(); using var error = new StringWriter();
+                Assert.Equal(3, OwnedCliCommand.Run(["--evidence", evidence, "--role", role, "--phase", "world", "--command", "cli_manifest"], output, error));
+                Assert.Empty(output.ToString());
+                Assert.Equal("REFUSED: " + OwnedCliCommand.MissingLease(role, evidence), error.ToString().TrimEnd());
+                Assert.Contains(OwnedClientCommandLease.LeaseFile(role), error.ToString());
+            }
+            Assert.Empty(Directory.GetFiles(root, "*", SearchOption.AllDirectories));
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    // After a leave the live client keeps its lease but has no world pins: the world phase refuses with exit 3, saying the
+    // client is not in a verified world, before it connects or opens a command record.
+    [Fact]
+    public void AWorldCommandAfterALeaveIsRefusedBeforeConnecting()
+    {
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        int port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        string evidence = Directory.CreateTempSubdirectory("owned-cli-left-").FullName;
+        try
+        {
+            var plan = new ClientRunPlan { Install = evidence, Port = port, Pins = new() { ["example.mod"] = new string('a', 32) } };
+            OwnedClientCommandLease.Write(evidence, Environment.ProcessId, OwnedClientCommandLease.LocalStartFileTimeUtc(Environment.ProcessId), plan);
+            OwnedClientCommandLease.WriteVerifiedWorld(evidence, plan, "4242");
+            OwnedClientCommandLease.LeaveWorld(evidence); // What the client's leave does.
+            using var output = new StringWriter(); using var error = new StringWriter();
+            Assert.Equal(3, OwnedCliCommand.Run(["--evidence", evidence, "--role", "client", "--phase", "world", "--command", "cli_manifest"], output, error));
+            Assert.Empty(output.ToString());
+            Assert.Contains("not in a verified world", error.ToString());
+            Assert.Contains(OwnedClientCommandLease.WorldPins, error.ToString());
+            Assert.False(listener.Pending());
+            Assert.Empty(Directory.GetFiles(evidence, "owned-cli-command-*.jsonl"));
+        }
+        finally
+        {
+            listener.Stop();
+            Directory.Delete(evidence, recursive: true);
+        }
+    }
+
     [Fact] public void PassthroughChecksTheExactProcessStartAndWritesPinnedPhases()
     {
         using var current = Process.GetCurrentProcess();
@@ -470,7 +523,7 @@ public sealed class OwnedCliCommandServerLeaseUnixTests
                     refusedOutput, refusedError);
                 Assert.Equal(3, refused);
                 Assert.Empty(refusedOutput.ToString());
-                Assert.Contains("owned server identity file", refusedError.ToString());
+                Assert.Contains("No owned server command lease", refusedError.ToString());
             }
 
             string evidence = Path.Combine(root, "live");
@@ -652,7 +705,7 @@ public sealed class OwnedCliCommandLinuxTests
             using var output = new StringWriter(); using var error = new StringWriter();
             string[] command = ["--evidence", evidence, "--role", "server", "--phase", "menu", "--command", "cli_manifest"];
             Assert.Equal(3, OwnedCliCommand.Run(command, output, error));
-            Assert.Contains("owned server identity file", error.ToString());
+            Assert.Contains("No owned server command lease", error.ToString());
 
             using var listener = new TcpListener(IPAddress.Loopback, 0);
             listener.Start();

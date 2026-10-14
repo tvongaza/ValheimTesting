@@ -51,13 +51,19 @@ internal sealed class ForegroundHold : IDisposable
         if (processes.Count == 0) throw new ArgumentException("A hold needs at least one owned process to watch.", nameof(processes));
         using var hold = Open(run, evidence, serverEvidence: serverEvidence);
         Console.WriteLine("HELD run " + run + "; finish from another shell with: " + FinishUsageForRun(run));
-        if (client) Console.WriteLine("Pinned client commands: valheim-test cli --evidence " + evidence + " --role client --phase world --command cli_screenshot");
+        if (ClientCommandHint(client, evidence) is { } clientHint) Console.WriteLine(clientHint);
         if (ServerCommandHint(processes.Any(process => process.Name == "server"), evidence, serverEvidence) is { } serverHint)
             Console.WriteLine(serverHint);
         Console.Out.Flush();
         try { await hold.WaitAsync(cancellation, processes).ConfigureAwait(false); }
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
     }
+
+    // Printed only where the held client's session published its lease: a client on another machine has none, so no command reaches it.
+    internal static string? ClientCommandHint(bool hasClient, string evidence) =>
+        hasClient && File.Exists(Path.Combine(evidence, OwnedClientCommandLease.FileName))
+            ? "Pinned client commands: valheim-test cli --evidence " + evidence + " --role client --phase world --command cli_screenshot"
+            : null;
 
     internal static string? ServerCommandHint(bool hasServer, string evidence, string? serverEvidence)
     {

@@ -34,6 +34,11 @@ public sealed class ClientSession : IDisposable, IWorldPins
     public int? ProcessId => _process?.Id;
     internal IOwnedProcess? OwnedProcess => _process;
     /// <summary>
+    /// The folder an owned client's evidence goes to, and where this session publishes its command lease and pins for
+    /// <c>valheim-test cli</c> (when its process is on this machine); null for an attached client.
+    /// </summary>
+    internal string? Output => _output;
+    /// <summary>
     /// The slice the owned client was launched as (<see cref="ClientRunPlan.Architecture"/>; x64 unless the plan asked for arm64),
     /// or null for an attached client, whose operator chose it.
     /// </summary>

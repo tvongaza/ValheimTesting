@@ -555,15 +555,7 @@ internal sealed class HostedServerRun : IServerPlacement
             return;
         }
 
-        string leaseIdentity;
-        try { leaseIdentity = _hooks.LocalProcessStartFileTimeUtc(pid, startIdentity); }
-        catch (Exception error) when (error is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException or
-            InvalidOperationException or OverflowException or System.ComponentModel.Win32Exception)
-        {
-            Console.Error.WriteLine($"Warning: the local identity of owned server process {pid} could not be read: {error.Message}; " +
-                "no server command lease was published.");
-            return;
-        }
+        if (LocalLeaseIdentity.TryRead(_hooks, "server", pid, startIdentity) is not { } leaseIdentity) return;
 
         ProbedProcess confirmed;
         try
@@ -809,6 +801,18 @@ internal sealed class ClientAccount(string client, SteamAccountHold hold, IGameH
 internal class HostedClientProcess(InteractiveClientProcess process, IGameHost host, string install, CliTunnel tunnel, string evidence,
     Action? afterStopped = null) : IOwnedProcess, IClientProcessIdentity
 {
+    /// <summary>
+    /// The one choice of a started hosted client's process: with <paramref name="local"/> (its process is on this machine) a
+    /// <see cref="LocalHostedClientProcess"/> carrying the local lease identity, so its <see cref="ClientSession"/> publishes the
+    /// command lease once the menu pins verify; otherwise, or when that identity cannot be read, one that publishes none. A launch
+    /// that exits before its menu fails startup, so a lease never names a PID reused in between.
+    /// </summary>
+    internal static HostedClientProcess Of(InteractiveClientProcess process, IGameHost host, string install, CliTunnel tunnel, string evidence,
+        IHostedRunHooks? local, Action? afterStopped = null) =>
+        local != null && LocalLeaseIdentity.TryRead(local, "client", process.Id, process.StartIdentity) is { } identity
+            ? new LocalHostedClientProcess(process, host, install, tunnel, evidence, identity, afterStopped)
+            : new HostedClientProcess(process, host, install, tunnel, evidence, afterStopped);
+
     private bool _kept;
     public int Id => process.Id;
     string IClientProcessIdentity.StartFileTimeUtc => process.StartIdentity;
@@ -849,10 +853,14 @@ internal class HostedClientProcess(InteractiveClientProcess process, IGameHost h
     }
 }
 
-// A desktop task is hosted through the same scripts as a remote client, but its process is on this machine.
-// The distinct identity type is the one rule ClientSession uses when deciding whether it may publish a local lease.
+// A client hosted through the same scripts as a remote client (a desktop task, or a campaign client on a `local` host) whose
+// process is on this machine (HostedClientProcess.Of). The distinct identity type is the one rule ClientSession uses when
+// deciding whether it may publish a local lease; its identity is the lease's local rule (LocalLeaseIdentity).
 internal sealed class LocalHostedClientProcess(InteractiveClientProcess process, IGameHost host, string install, CliTunnel tunnel, string evidence,
-    Action? afterStopped = null) : HostedClientProcess(process, host, install, tunnel, evidence, afterStopped), ILocalClientProcessIdentity;
+    string localStartFileTimeUtc, Action? afterStopped = null) : HostedClientProcess(process, host, install, tunnel, evidence, afterStopped), ILocalClientProcessIdentity
+{
+    string IClientProcessIdentity.StartFileTimeUtc => localStartFileTimeUtc;
+}
 
 // Scripts for a hosted client's logs. Values arrive as variables; each ends with its verdict.
 internal static class HostedClientScripts
