@@ -555,10 +555,6 @@ public static class HostedCampaignPreparation
                         sourceListings[item.Name] = await HostedRuntimeStage.InspectSourceAsync(host,
                             item.Name == "server" ? HostedRuntimeKind.Server : HostedRuntimeKind.Client,
                             item.Role.Install, loader, timeout, cancellation).ConfigureAwait(false);
-                        if (item.Input.SteamRuntimePackage != null && inputs.Profile.Hosts[group.Key].Kind == "ssh" &&
-                            inputs.Profile.Hosts[group.Key].Platform == "macos")
-                            await MacSteamRuntimeOnHost.VerifyAsync(host,
-                                MacSteamRuntimePackage.ReadRemote(item.Input.SteamRuntimePackage), timeout, cancellation).ConfigureAwait(false);
                         // Use the same slice check as one-shot start/server-load, with the loader the host
                         // inspection actually selected. Session check --hosts must refuse before any copy.
                         if (item.Name != "server" && inputs.Profile.Hosts[group.Key] is { Kind: "local", Platform: "macos" } && hostFactory == null)
@@ -1033,15 +1029,7 @@ public static class HostedCampaignPreparation
                         role.PreparedLoaderRoot = prepared.LoaderRoot;
                     }
                     if (steamRuntime != null)
-                    {
-                        role.PreparedSteamRuntimePackage = steamRuntime;
                         role.PreparedSteamRuntimeRoot = HostPath.Join(prepared.LoaderRoot, "steam-runtime");
-                        role.PreparedSteamRuntimeFiles = prepared.Loader.Files
-                            .Where(file => file.Key.StartsWith("steam-runtime/", StringComparison.Ordinal))
-                            .ToDictionary(file => file.Key["steam-runtime/".Length..], file => file.Value, StringComparer.Ordinal);
-                        if (role.PreparedSteamRuntimeFiles.Count != steamRuntime.Files.Count)
-                            throw new IOException("The signed Mac Steam runtime is incomplete in the prepared server profile.");
-                    }
                     await journal.AppendAsync(host, journalDirectory, name, JournalEntry.Of(JournalEntry.CopyDone,
                         ("runtime", runtime), ("files", listings[name].Files.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)),
                         ("runtimeKind", kind == HostedRuntimeKind.Server ? "server" : "client"),

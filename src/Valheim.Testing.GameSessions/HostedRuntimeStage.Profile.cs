@@ -173,8 +173,7 @@ internal static partial class HostedRuntimeStage
             if (kind != HostedRuntimeKind.Server || windows || host.Kind == GameHostKind.Container ||
                 host.Kind == GameHostKind.Local && !OperatingSystem.IsMacOS())
                 throw new InvalidDataException("A Mac Steam runtime package requires a Mac dedicated server profile on a local or SSH host.");
-            if (host.Kind == GameHostKind.Local) steamRuntimePackage.Validate();
-            else await MacSteamRuntimeOnHost.VerifyAsync(host, steamRuntimePackage, timeout, cancellation).ConfigureAwait(false);
+            await MacSteamRuntimeOnHost.VerifyAsync(host, steamRuntimePackage, timeout, cancellation).ConfigureAwait(false);
         }
         if (inspectedSource != null && (inspectedSource.HostName != host.Name || inspectedSource.Root != source))
             throw new ArgumentException("The inspected source belongs to a different host or install.", nameof(inspectedSource));
@@ -232,6 +231,7 @@ internal static partial class HostedRuntimeStage
                     if (!selected.TryAdd(name, Select(Path.Combine(steamRoot, relative), sha, name)))
                         throw new InvalidDataException("Steam runtime target collides with another staged file: " + name);
                 }
+                await MacSteamRuntimeOnHost.VerifyAsync(host, steamRuntimePackage, timeout, cancellation).ConfigureAwait(false);
             }
             shipped = true;
             await host.ShipFilesAsync(payload, staging, timeout, cancellation).ConfigureAwait(false);
@@ -285,6 +285,7 @@ internal static partial class HostedRuntimeStage
                     if (!selected.TryAdd(name, Select("remote SteamCMD source", sha, name)))
                         throw new InvalidDataException("Steam runtime target collides with another staged file: " + relative);
                 }
+                await MacSteamRuntimeOnHost.VerifyAsync(host, steamRuntimePackage, timeout, cancellation).ConfigureAwait(false);
             }
             var profile = await HostInstall.ListAsync(host, destination, timeout,
                 ProfileSourceCheck.StagingVerificationPaths(selected.Keys.Concat(sourceLoader)), cancellation).ConfigureAwait(false);
@@ -307,7 +308,8 @@ internal static partial class HostedRuntimeStage
                 throw new IOException($"The profile loader on {host.Name} is not the reviewed package's loader.");
             var preparedGame = windows ? WindowsProfileListing(game, profile, plan.Links) : game;
             var loader = windows ? preparedGame : profile;
-            sourceCheck.RecordPreparedProfile(preparedGame, loader);
+            sourceCheck.RecordPreparedProfile(preparedGame, loader,
+                selected.Keys.Where(path => path.StartsWith("steam-runtime/", StringComparison.Ordinal)));
             return new PreparedProfile(game, preparedGame, loader, pins, plan.LeftOut, sourceCheck);
         }
         catch (Exception original)

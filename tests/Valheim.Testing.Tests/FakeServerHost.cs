@@ -132,6 +132,8 @@ internal sealed class FakeServerHost : IGameHost
         ("apply-stage", [HostedRuntimeStage.WindowsApply, HostedRuntimeStage.BashApply]),
         ("profile-seed", [HostedRuntimeStage.WindowsProfileSeed, HostedRuntimeStage.BashProfileSeed]),
         ("profile-storage", [HostedRuntimeStage.WindowsProfileStorage]),
+        ("steam-runtime-verify", [MacSteamRuntimePackage.VerificationScript]),
+        ("steam-runtime-stage", [MacSteamRuntimeOnHost.Stage]),
         ("keep-logs", [RunRecovery.BashKeepLogs, RunRecovery.WindowsKeepLogs]),
         ("cleanup-stage", [HostedRuntimeStage.WindowsCleanup, HostedRuntimeStage.BashCleanup]),
         ("character-install", [HostedCharacterStage.WindowsInstall, HostedCharacterStage.BashInstall]),
@@ -260,6 +262,47 @@ internal sealed class FakeServerHost : IGameHost
             case "mac-game": return Ok("VT-MAC-GAME " + MacSlices + "\n");
             case "mac-loader": return Ok("VT-MAC-DOORSTOPS libdoorstop.dylib|" + MacSlices + ";\n");
             case "mac-bundle": return Ok(MacBundleInspect + "\n");
+            case "steam-runtime-verify":
+            {
+                string source = Local(v["source"]);
+                string manifest = Path.Combine(source, "package", "steam_cmd_osx.manifest");
+                if (!Directory.Exists(source)) return new HostResult(HostOutcome.Exited, 4, "VT-STEAM-RUNTIME source\n", "", TimeSpan.Zero, false);
+                if (!File.Exists(manifest)) return new HostResult(HostOutcome.Exited, 4, "VT-STEAM-RUNTIME manifest\n", "", TimeSpan.Zero, false);
+                if (!FileHash.Sha256(manifest).Equals(v["manifestSha"], StringComparison.OrdinalIgnoreCase))
+                    return new HostResult(HostOutcome.Exited, 4, "VT-STEAM-RUNTIME manifest-changed\n", "", TimeSpan.Zero, false);
+                var build = Regex.Match(File.ReadAllText(manifest), "\"version\"\\s+\"(?<version>[0-9]+)\"", RegexOptions.CultureInvariant);
+                if (!build.Success || build.Groups["version"].Value != v["expectedVersion"])
+                    return new HostResult(HostOutcome.Exited, 4, "VT-STEAM-RUNTIME version-changed\n", "", TimeSpan.Zero, false);
+                var reply = new StringBuilder();
+                foreach (string line in v["files"].Split('\n', StringSplitOptions.RemoveEmptyEntries))
+                {
+                    string[] pair = line.Split(' ', 2);
+                    string relative = Encoding.UTF8.GetString(Convert.FromBase64String(pair[1]));
+                    string file = Path.Combine(source, relative);
+                    if (!File.Exists(file)) return new HostResult(HostOutcome.Exited, 4, $"VT-STEAM-RUNTIME missing {relative}\n", "", TimeSpan.Zero, false);
+                    if (!FileHash.Sha256(file).Equals(pair[0], StringComparison.OrdinalIgnoreCase))
+                        return new HostResult(HostOutcome.Exited, 4, $"VT-STEAM-RUNTIME changed {relative}\n", "", TimeSpan.Zero, false);
+                    string listing = relative + ":\n";
+                    reply.Append("VT-STEAM-OTOOL ").Append(pair[1]).Append(' ')
+                        .Append(Convert.ToBase64String(Encoding.UTF8.GetBytes(listing))).Append('\n');
+                }
+                return Ok(reply.Append("VT-STEAM-VERIFIED\n").ToString());
+            }
+            case "steam-runtime-stage":
+            {
+                string source = Local(v["source"]), target = Path.Combine(Local(v["runtime"]), "steam-runtime");
+                if (!Directory.Exists(Local(v["runtime"])) || Directory.Exists(target))
+                    return new HostResult(HostOutcome.Exited, 4, "VT-STEAM-RUNTIME exists\n", "", TimeSpan.Zero, false);
+                Directory.CreateDirectory(target);
+                foreach (string line in v["files"].Split('\n', StringSplitOptions.RemoveEmptyEntries))
+                {
+                    string relative = Encoding.UTF8.GetString(Convert.FromBase64String(line.Split(' ', 2)[1]));
+                    string output = Path.Combine(target, relative);
+                    Directory.CreateDirectory(Path.GetDirectoryName(output)!);
+                    File.Copy(Path.Combine(source, relative), output);
+                }
+                return Ok("VT-STEAM-STAGED\n");
+            }
             case "game-process": return Ok(GameActive ? $"VT-GAME busy {GameProcessIds}\n".Replace(" \n", "\n") : "VT-GAME idle\n");
             case "server-logon": return Ok("VT-LOGON " + ServerTaskLogon + "\n");
             case "preflight-exists":

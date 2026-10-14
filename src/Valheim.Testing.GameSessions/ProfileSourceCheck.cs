@@ -13,6 +13,7 @@ internal sealed class ProfileSourceCheck
 
     private readonly IReadOnlyDictionary<string, string> _beforeBoot;
     private readonly IReadOnlyDictionary<string, string> _linkedRootFiles;
+    private IReadOnlyDictionary<string, string> _stagedBeforeBoot = new Dictionary<string, string>();
     private HostListing? _preparedGame, _preparedLoader;
 
     private ProfileSourceCheck(HostListing source, IReadOnlyDictionary<string, string> beforeBoot,
@@ -22,6 +23,12 @@ internal sealed class ProfileSourceCheck
     internal HostListing Source { get; }
     internal IReadOnlyDictionary<string, string> BeforeBoot => _beforeBoot;
     internal IReadOnlyDictionary<string, string> LinkedRootFiles => _linkedRootFiles;
+    internal IReadOnlyDictionary<string, string> StagedBeforeBoot => _stagedBeforeBoot;
+
+    // steam-runtime/ is on DYLD_LIBRARY_PATH, so the whole folder is compared before boot: an extra file there could load.
+    internal const string SteamRuntimeFolder = "steam-runtime";
+    internal bool StagesSteamRuntime => _stagedBeforeBoot.Keys.Any(key => key.StartsWith(SteamRuntimeFolder + "/", StringComparison.Ordinal));
+    internal bool InStagedFolder(string key) => StagesSteamRuntime && key.StartsWith(SteamRuntimeFolder + "/", StringComparison.Ordinal);
     internal HostListing PreparedGame => _preparedGame ?? throw new InvalidOperationException("The source-check owner has no prepared game listing.");
     internal HostListing PreparedLoader => _preparedLoader ?? throw new InvalidOperationException("The source-check owner has no prepared loader listing.");
     internal bool HashAfterRun => HashAfterRunOverride.Value ?? Environment.GetEnvironmentVariable(HashAfterRunVariable) == "1";
@@ -49,10 +56,16 @@ internal sealed class ProfileSourceCheck
         CancellationToken cancellation = default) => HostInstall.ListProfileSourceAsync(host, root, timeout, cancellation);
 
     /// <summary>Retains the preparation listings which a prepared launch reuses instead of listing either source-backed root again.</summary>
-    internal void RecordPreparedProfile(HostListing game, HostListing loader)
+    internal void RecordPreparedProfile(HostListing game, HostListing loader, IEnumerable<string> stagedBeforeBoot)
     {
         _preparedGame = game;
         _preparedLoader = loader;
+        var expected = new Dictionary<string, string>(loader.Names);
+        foreach (string path in stagedBeforeBoot.Distinct(loader.Names))
+            if (!loader.Files.TryGetValue(path, out string? hash))
+                throw new InvalidDataException($"The prepared profile listing lacks its staged before-boot file: {path}.");
+            else expected.Add(path, hash);
+        _stagedBeforeBoot = expected;
     }
 
     /// <summary>A scoped staging listing; an empty selection means there is nothing to verify, never the whole directory.</summary>
@@ -72,6 +85,15 @@ internal sealed class ProfileSourceCheck
     /// <summary>The before-boot row: game/loader pin paths plus root files linked into a Windows profile.</summary>
     internal string[] ProfileBeforeBootPaths(bool includePlugins) =>
         InstallPins.PinPaths.Concat(_linkedRootFiles.Keys.Select(HostInstall.LiteralPathPattern))
+        .Concat(_stagedBeforeBoot.Keys.Select(HostInstall.LiteralPathPattern))
+        .Concat(StagesSteamRuntime ? [SteamRuntimeFolder] : [])
+        .Concat(includePlugins ? ["BepInEx/plugins", "BepInEx/scripts"] : [])
+        .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+
+    /// <summary>The owned loader-profile side of the before-boot row, including signed staged outputs.</summary>
+    internal string[] LoaderBeforeBootPaths(bool includePlugins) =>
+        InstallPins.PinPaths.Concat(_stagedBeforeBoot.Keys.Select(HostInstall.LiteralPathPattern))
+        .Concat(StagesSteamRuntime ? [SteamRuntimeFolder] : [])
         .Concat(includePlugins ? ["BepInEx/plugins", "BepInEx/scripts"] : [])
         .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
 

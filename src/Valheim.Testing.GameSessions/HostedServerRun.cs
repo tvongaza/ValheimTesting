@@ -424,24 +424,6 @@ internal sealed class HostedServerRun : IServerPlacement
 
     ServerBoot IServerPlacement.Start(int n, GameLaunch launch, string output, TimeSpan quit, CancellationToken cancellation)
     {
-        if (Role.PreparedSteamRuntimeRoot is { } steam && Role.PreparedSteamRuntimeFiles is { } files)
-        {
-            if (RemoteMac)
-            {
-                MacSteamRuntimeOnHost.VerifyAsync(Host, Role.PreparedSteamRuntimePackage
-                    ?? throw new InvalidDataException("The remote Mac Steam runtime has no source contract."),
-                    HostedTimeouts.Quick, cancellation).GetAwaiter().GetResult();
-                var observed = HostInstall.ListAsync(Host, steam, HostedTimeouts.Quick, cancellation: cancellation)
-                    .GetAwaiter().GetResult();
-                HostInstall.RequireSame(files, observed, "signed Mac Steam runtime before launch");
-            }
-            else foreach (var (relative, expectedHash) in files)
-            {
-                string path = Path.Combine(steam, relative);
-                if (!File.Exists(path) || !FileHash.Sha256(path).Equals(expectedHash, StringComparison.OrdinalIgnoreCase))
-                    throw new IOException("The pinned Mac Steam runtime changed before server launch: " + relative);
-            }
-        }
         if (_sourceCheck != null && _preparedPins != null)
         {
             HostInstall.CheckProfilePinsAsync(Host, _preparedPins, GameDirectory, LoaderDirectory, _sourceCheck,

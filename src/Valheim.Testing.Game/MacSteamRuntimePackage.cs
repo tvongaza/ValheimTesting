@@ -44,11 +44,11 @@ internal sealed class MacSteamRuntimePackage
 
     public void Write(string path)
     {
-        Validate();
+        RequireManifest();
         File.WriteAllText(path, JsonSerializer.Serialize(this, Json) + "\n");
     }
 
-    /// <summary>Read the manifest and refuse any changed file or newly required native dependency.</summary>
+    /// <summary>Read the manifest. Profile preparation verifies its source immediately before and after staging.</summary>
     public static MacSteamRuntimePackage Read(string path)
     {
         var package = JsonSerializer.Deserialize<MacSteamRuntimePackage>(File.ReadAllText(path), Json)
@@ -56,33 +56,38 @@ internal sealed class MacSteamRuntimePackage
         if (package.Root == null) throw new InvalidDataException("The Mac Steam runtime package has no source root.");
         if (!Path.IsPathFullyQualified(package.Root))
             package.Root = Path.GetFullPath(package.Root, Path.GetDirectoryName(Path.GetFullPath(path))!);
-        package.Validate();
+        package.RequireManifest();
         return package;
     }
 
     /// <summary>
     /// Read a manifest copied to the campaign runner while its source root remains on a remote Mac. The host-side stage
-    /// validates every source byte and Mach-O slice before it changes the disposable profile.
+    /// validates every source byte and Mach-O slice before and after it changes the disposable profile.
     /// </summary>
     internal static MacSteamRuntimePackage ReadRemote(string path)
     {
         var package = JsonSerializer.Deserialize<MacSteamRuntimePackage>(File.ReadAllText(path), Json)
             ?? throw new InvalidDataException("The Mac Steam runtime manifest is empty.");
-        if (package.Name != "SteamCMD" || string.IsNullOrWhiteSpace(package.Version) ||
-            package.Version.Any(c => !char.IsAsciiDigit(c)) || package.ProfileFormat != SignedProfileFormat ||
-            package.Root is not { Length: > 1 } root || !root.StartsWith('/') || root.Any(char.IsControl) ||
+        package.RequireManifest();
+        return package;
+    }
+
+    private void RequireManifest()
+    {
+        if (Name != "SteamCMD" || string.IsNullOrWhiteSpace(Version) ||
+            Version.Any(c => !char.IsAsciiDigit(c)) || ProfileFormat != SignedProfileFormat ||
+            Root is not { Length: > 1 } root || !root.StartsWith('/') || root.Any(char.IsControl) ||
             root.Split('/').Any(part => part is "." or "..") ||
-            package.SourceManifestSha256 is not { Length: 64 } manifestHash || !manifestHash.All(Uri.IsHexDigit) ||
-            package.Files is not { Count: > 0 })
-            throw new InvalidDataException("The remote Mac Steam runtime manifest has invalid source identity or paths.");
-        foreach (var (relative, hash) in package.Files)
+            SourceManifestSha256 is not { Length: 64 } manifestHash || !manifestHash.All(Uri.IsHexDigit) ||
+            Files is not { Count: > 0 })
+            throw new InvalidDataException("The Mac Steam runtime manifest has invalid source identity or paths.");
+        foreach (var (relative, hash) in Files)
             if (string.IsNullOrWhiteSpace(relative) || relative.StartsWith('/') || relative.Contains('\\') ||
                 relative.Split('/').Any(part => part is "" or "." or "..") || relative.Any(char.IsControl) ||
                 hash is not { Length: 64 } || !hash.All(Uri.IsHexDigit))
-                throw new InvalidDataException("The remote Mac Steam runtime manifest has an unsafe or unpinned file: " + relative);
-        if (!package.Files.ContainsKey("steamclient.dylib") || !package.Files.ContainsKey("crashhandler.dylib"))
-            throw new InvalidDataException("The remote Mac Steam runtime manifest lacks its required entry libraries.");
-        return package;
+                throw new InvalidDataException("The Mac Steam runtime manifest has an unsafe or unpinned file: " + relative);
+        if (!Files.ContainsKey("steamclient.dylib") || !Files.ContainsKey("crashhandler.dylib"))
+            throw new InvalidDataException("The Mac Steam runtime manifest lacks its required entry libraries.");
     }
 
     /// <summary>Keep the reviewed manifest in a run's evidence. A remote source was checked on its Mac host already.</summary>
@@ -98,35 +103,9 @@ internal sealed class MacSteamRuntimePackage
     public void Validate()
     {
         RequireMac();
-        if (string.IsNullOrWhiteSpace(Name) || string.IsNullOrWhiteSpace(Version) ||
-            Name.Any(char.IsControl) || Version.Any(char.IsControl))
-            throw new InvalidDataException("Name the Mac Steam runtime and its SteamCMD build.");
-        if (string.IsNullOrWhiteSpace(Root) || !Path.IsPathFullyQualified(Root) || !Directory.Exists(Root))
-            throw new DirectoryNotFoundException("Mac Steam runtime root is missing: " + Root);
-        if ((File.GetAttributes(Root) & FileAttributes.ReparsePoint) != 0)
-            throw new InvalidDataException("The SteamCMD source root is linked; choose its real directory.");
-        var (version, manifestSha) = SteamCmdManifest(Root);
-        if (Name != "SteamCMD" || Version != version ||
-            !string.Equals(SourceManifestSha256, manifestSha, StringComparison.OrdinalIgnoreCase))
-            throw new InvalidDataException("The SteamCMD source manifest changed; recapture the Mac Steam runtime package.");
-        if (ProfileFormat != SignedProfileFormat)
-            throw new InvalidDataException("The Mac Steam runtime profile format changed; recapture its package.");
-        if (Files == null || Files.Count == 0)
-            throw new InvalidDataException("The Mac Steam runtime package lists no files.");
-        foreach (var (relative, sha) in Files)
-        {
-            string path = SafeFile(Root, relative);
-            if (sha.Length != 64 || !sha.All(Uri.IsHexDigit) ||
-                !FileHash.Sha256(path).Equals(sha, StringComparison.OrdinalIgnoreCase))
-                throw new InvalidDataException("Mac Steam runtime file changed: " + relative + "; recapture its SteamCMD build.");
-            string archs = Tool("/usr/bin/lipo", ["-archs", path]);
-            if (!archs.Split(' ', StringSplitOptions.RemoveEmptyEntries).Contains("arm64"))
-                throw new InvalidDataException("Mac Steam runtime file lacks arm64: " + relative);
-        }
-        var closure = DependencyClosure(Root);
-        if (!Files.Keys.ToHashSet(StringComparer.Ordinal).SetEquals(closure))
-            throw new InvalidDataException("Mac Steam runtime dependencies changed: " +
-                string.Join(", ", closure.Except(Files.Keys, StringComparer.Ordinal).Concat(Files.Keys.Except(closure, StringComparer.Ordinal))));
+        RequireManifest();
+        string output = Tool("/bin/bash", ["-c", VerificationScript], VerificationVariables());
+        RequireVerificationReply(output, "this Mac");
     }
 
     /// <summary>
@@ -136,7 +115,6 @@ internal sealed class MacSteamRuntimePackage
     /// </summary>
     internal IReadOnlyDictionary<string, string> StageSignedFiles(string profileRoot)
     {
-        Validate();
         var staged = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (string relative in Files.Keys.Order(StringComparer.Ordinal))
         {
@@ -150,8 +128,71 @@ internal sealed class MacSteamRuntimePackage
             Tool("/usr/bin/codesign", ["--verify", target]);
             staged.Add(relative, FileHash.Sha256(target));
         }
-        Validate();
         return staged;
+    }
+
+    internal IReadOnlyDictionary<string, string> VerificationVariables() => new Dictionary<string, string>
+    {
+        ["source"] = Root,
+        ["expectedVersion"] = Version,
+        ["manifestSha"] = SourceManifestSha256.ToLowerInvariant(),
+        ["files"] = string.Join('\n', Files.OrderBy(file => file.Key, StringComparer.Ordinal)
+            .Select(file => file.Value.ToLowerInvariant() + " " + Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(file.Key)))),
+    };
+
+    /// <summary>The one pins, arm64-slice and otool-closure implementation, executed on either a local or SSH Mac.</summary>
+    internal static readonly string VerificationScript = """
+        set -eu
+        # macOS's own tools by absolute path (Homebrew's GNU ones may come first on PATH); a trailing slash would hide a linked root.
+        source=${source%/}
+        [ "$(uname -s)" = Darwin ] || { echo 'VT-STEAM-RUNTIME unsupported'; exit 4; }
+        [ -d "$source" ] && [ ! -L "$source" ] || { echo 'VT-STEAM-RUNTIME source'; exit 4; }
+        manifest="$source/package/steam_cmd_osx.manifest"
+        [ -f "$manifest" ] && [ ! -L "$manifest" ] || { echo 'VT-STEAM-RUNTIME manifest'; exit 4; }
+        actual=$(/usr/bin/shasum -a 256 "$manifest" | /usr/bin/awk '{print $1}')
+        [ "$actual" = "$manifestSha" ] || { echo 'VT-STEAM-RUNTIME manifest-changed'; exit 4; }
+        version=$(/usr/bin/awk '$1 == "\"version\"" && $2 ~ /^"[0-9]+"$/ { gsub(/"/, "", $2); print $2; exit }' "$manifest")
+        [ "$version" = "$expectedVersion" ] || { echo 'VT-STEAM-RUNTIME version-changed'; exit 4; }
+        while read -r expected encoded; do
+          [ -n "$expected" ] || continue
+          relative=$(printf '%s' "$encoded" | /usr/bin/base64 -D)
+          part="$source"
+          IFS=/ read -ra components <<< "$relative"
+          for component in "${components[@]}"; do
+            part="$part/$component"
+            [ ! -L "$part" ] || { echo 'VT-STEAM-RUNTIME linked'; exit 4; }
+          done
+          [ -f "$part" ] || { echo "VT-STEAM-RUNTIME missing $relative"; exit 4; }
+          actual=$(/usr/bin/shasum -a 256 "$part" | /usr/bin/awk '{print $1}')
+          [ "$actual" = "$expected" ] || { echo "VT-STEAM-RUNTIME changed $relative"; exit 4; }
+          archs=$(/usr/bin/lipo -archs "$part")
+          case " $archs " in *' arm64 '*) ;; *) echo "VT-STEAM-RUNTIME architecture $relative"; exit 4 ;; esac
+          dependencies=$(/usr/bin/otool -L "$part")
+          printf 'VT-STEAM-OTOOL %s %s\n' "$encoded" "$(printf '%s' "$dependencies" | /usr/bin/base64 | /usr/bin/tr -d '\n')"
+        done <<< "$files"
+        echo 'VT-STEAM-VERIFIED'
+        """.ReplaceLineEndings("\n");
+
+    internal void RequireVerificationReply(string stdout, string host)
+    {
+        if (stdout.Split('\n').All(line => line.TrimEnd('\r') != "VT-STEAM-VERIFIED"))
+            throw new InvalidDataException($"The SteamCMD dependency closure on {host} did not report VT-STEAM-VERIFIED.");
+        var listings = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (string line in stdout.Split('\n').Where(line => line.StartsWith("VT-STEAM-OTOOL ", StringComparison.Ordinal)))
+        {
+            string[] pair = line.TrimEnd('\r').Split(' ', 3);
+            if (pair.Length != 3) throw new InvalidDataException($"The SteamCMD dependency reply from {host} is incomplete.");
+            string relative, output;
+            try
+            {
+                relative = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(pair[1]));
+                output = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(pair[2]));
+            }
+            catch (FormatException error) { throw new InvalidDataException($"The SteamCMD dependency reply from {host} is malformed.", error); }
+            if (!listings.TryAdd(relative, output))
+                throw new InvalidDataException($"The SteamCMD dependency reply from {host} repeats {relative}.");
+        }
+        RequireRemoteClosure(listings);
     }
 
     private static IReadOnlyList<string> DependencyClosure(string root)
@@ -237,10 +278,12 @@ internal sealed class MacSteamRuntimePackage
         return path;
     }
 
-    private static string Tool(string command, IReadOnlyList<string> arguments)
+    private static string Tool(string command, IReadOnlyList<string> arguments,
+        IReadOnlyDictionary<string, string>? environment = null)
     {
         var info = new ProcessStartInfo(command) { RedirectStandardOutput = true, RedirectStandardError = true };
         foreach (string argument in arguments) info.ArgumentList.Add(argument);
+        foreach (var (name, value) in environment ?? new Dictionary<string, string>()) info.Environment[name] = value;
         using var process = Process.Start(info) ?? throw new IOException("Could not run " + command);
         var outputTask = process.StandardOutput.ReadToEndAsync();
         var errorTask = process.StandardError.ReadToEndAsync();
@@ -251,7 +294,8 @@ internal sealed class MacSteamRuntimePackage
         }
         string output = outputTask.GetAwaiter().GetResult();
         string error = errorTask.GetAwaiter().GetResult();
-        if (process.ExitCode != 0) throw new InvalidDataException($"Mac Steam runtime inspection failed: {command}: {error.Trim()}");
+        if (process.ExitCode != 0) throw new InvalidDataException($"Mac Steam runtime inspection failed: {command}: " +
+            string.Join("; ", new[] { output.Trim(), error.Trim() }.Where(text => text.Length != 0)));
         return output.Trim();
     }
 
