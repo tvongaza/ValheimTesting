@@ -110,6 +110,11 @@ internal sealed class FakeServerHost : IGameHost
         var exit = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
         lock (_sync) _processes[pid] = (start, ct => exit.Task.WaitAsync(ct), () => exit.TrySetResult(137));
     }
+    /// <summary>Whether a process this host started still runs.</summary>
+    public bool IsRunning(int pid)
+    {
+        lock (_sync) return _processes.TryGetValue(pid, out var process) && !process.Exit(CancellationToken.None).IsCompleted;
+    }
     public IReadOnlyList<string> Scripts { get { lock (_sync) return Runs.Select(run => run.Script).ToList(); } }
 
     public string Local(string hostPath) => Path.Combine([_mirror, .. hostPath.Replace(':', '/').Split(['/', '\\'], StringSplitOptions.RemoveEmptyEntries)]);
@@ -169,6 +174,8 @@ internal sealed class FakeServerHost : IGameHost
         ("launch-gone", [RunRecovery.BashLaunchGone, RunRecovery.WindowsLaunchGone]),
         ("pid-file", [RunJournalStatus.BashPidFiles, RunJournalStatus.WindowsPidFiles]),
         ("process-probe", [HostProcessProbe.Unix, HostProcessProbe.Windows]),
+        ("launcher-inspect", [HostServerLauncher.UnixInspect, HostServerLauncher.WindowsInspect]),
+        ("launcher-retire", [HostServerLauncher.UnixRetire, HostServerLauncher.WindowsRetire]),
         ("mac-bundle", [MacAppBundle.Bash]),
         ("machine-name", [RunJournalStatus.WindowsMachineName]),
         ("lock", [HostScripts.Lock(HostShellKind.Bash), HostScripts.Lock(HostShellKind.PowerShell)]),
@@ -487,10 +494,16 @@ internal sealed class FakeServerHost : IGameHost
             {
                 var text = new StringBuilder();
                 var dirs = v["dirs"].Split('\n');
+                var owners = v.GetValueOrDefault("owners", "").Split('\n');
                 for (int i = 0; i < dirs.Length; i++)
                 {
                     string file = Path.Combine(Local(dirs[i]), "pid");
                     text.Append(File.Exists(file) ? $"VT-PIDFILE {i} file {Convert.ToBase64String(File.ReadAllBytes(file))}\n" : $"VT-PIDFILE {i} missing\n");
+                    string owner = i < owners.Length ? owners[i] : "";
+                    string ownership = owner.Length == 0 || owner == "-" ? "" : Path.Combine(Local(dirs[i]), owner);
+                    text.Append(ownership.Length != 0 && File.Exists(ownership)
+                        ? $"VT-OWNERFILE {i} file {Convert.ToBase64String(File.ReadAllBytes(ownership))}\n"
+                        : $"VT-OWNERFILE {i} missing\n");
                 }
                 return Ok(text.Append("VT-PIDFILE-END\n").ToString());
             }
@@ -509,6 +522,17 @@ internal sealed class FakeServerHost : IGameHost
                 }
                 AfterProbe?.Invoke();
                 return Ok(text.Append("VT-PROC-END\n").ToString());
+            }
+            case "launcher-inspect":
+            case "launcher-retire":
+            {
+                int pid = int.Parse(v["launcherPid"], System.Globalization.CultureInfo.InvariantCulture);
+                (string Start, Func<CancellationToken, Task<int>> Exit, Action Stop) process;
+                bool known; lock (_sync) known = _processes.TryGetValue(pid, out process);
+                if (!known || process.Exit(CancellationToken.None).IsCompleted) return Ok("VT-LAUNCHER gone\n");
+                if (process.Start != v["launcherStart"]) return Ok("VT-LAUNCHER reused\n");
+                if (name == "launcher-retire") { process.Stop(); return Ok("VT-LAUNCHER stopped\n"); }
+                return Ok("VT-LAUNCHER owned\n");
             }
             // As LeaseScripts do for list and release: an account is held by its holder until released with its own lease id.
             case "lease":

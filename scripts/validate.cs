@@ -234,6 +234,12 @@ string Solution(string name, IEnumerable<string> projects)
 // sequence would name tests of an earlier run.
 void Test(string project, params string[] extra)
 {
+    // The assembly-guard test launches this deliberately failing child with --no-build. Build it here, outside the
+    // parent's bin/Release tree, so the test never mutates or rebuilds its own loaded assembly (#800).
+    if (Path.GetFileName(project) == "Valheim.Testing.Tests.csproj")
+        Run("dotnet", "build", Path.Combine(root, "tests", "Valheim.Testing.StandInProcessLeakProbe",
+                "Valheim.Testing.StandInProcessLeakProbe.csproj"),
+            "-c", "Release", "-m:1");
     string output = Path.Combine(results, Path.GetFileNameWithoutExtension(project));
     var arguments = new List<string> { "test", project, "-c", "Release", "-m:1", "--blame-hang-timeout", "5m",
         "--blame-hang-dump-type", "none", "--results-directory", output };

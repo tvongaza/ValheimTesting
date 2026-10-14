@@ -196,9 +196,11 @@ internal static class RunJournalStatus
         var pidReads = await Task.WhenAll(pending.Where(run => !(ended.TryGetValue(run.Key, out var end) && end.Cleaned)).SelectMany(run => run.Value)
             .Where(item => item.Kind == "launch" && item.What.Length != 0).GroupBy(item => item.Host, StringComparer.Ordinal).Select(async group =>
             {
-                var directories = group.Select(item => item.What).Distinct(StringComparer.Ordinal).ToList();
+                var launches = group.GroupBy(item => item.What, StringComparer.Ordinal).Select(items => items.First()).ToList();
+                var directories = launches.Select(item => item.What).ToList();
+                var owners = launches.Select(item => item.Fields.GetValueOrDefault("launcherOwnershipFile") ?? "").ToList();
                 IReadOnlyList<PidFile> files;
-                try { files = await ReadPidFilesAsync(group.First().Connection, directories, timeout, cancellation).ConfigureAwait(false); }
+                try { files = await ReadPidFilesAsync(group.First().Connection, directories, timeout, cancellation, owners).ConfigureAwait(false); }
                 catch (Exception error) when (error is HostOperationException or TimeoutException or IOException or InvalidOperationException)
                 {
                     files = directories.Select(_ => new PidFile(PidFileState.Unreadable, 0, null, error.Message)).ToList();
@@ -218,7 +220,15 @@ internal static class RunJournalStatus
             .Concat(pending.Values.SelectMany(list => list).Where(item => item.Kind == "launch")
                 .Select(item => (item.Host, item.Connection, File: pidFiles.GetValueOrDefault((item.Host, item.What))))
                 .Where(launch => launch.File is { State: PidFileState.Found })
-                .Select(launch => (launch.Host, launch.Connection, Pid: launch.File!.Pid, Start: launch.File.StartIdentity ?? "")));
+                .Select(launch => (launch.Host, launch.Connection, Pid: launch.File!.Pid, Start: launch.File.StartIdentity ?? "")))
+            .Concat(pending.Values.SelectMany(list => list).Where(item => item.Kind == "launch")
+                .Select(item => (item.Host, item.Connection, File: pidFiles.GetValueOrDefault((item.Host, item.What))))
+                .Where(launch => launch.File?.Launcher is not null)
+                .SelectMany(launch => new[]
+                {
+                    (launch.Host, launch.Connection, Pid: launch.File!.Launcher!.LauncherPid, Start: launch.File.Launcher.LauncherStartIdentity),
+                    (launch.Host, launch.Connection, Pid: launch.File.Launcher.GamePid ?? 0, Start: launch.File.Launcher.GameStartIdentity ?? ""),
+                }));
         foreach (var group in asked.GroupBy(process => process.Host, StringComparer.Ordinal))
         {
             var processes = group.Select(process => (process.Pid, process.Start))
@@ -297,7 +307,7 @@ internal static class RunJournalStatus
         {
             case "launch":
                 // A launch the run itself saw fail and cleaned up after is over; one an interrupted run left may have started a game.
-                return endedClean ? null : JudgeLaunch(item, judged, pidFiles, probed, probeFailed);
+                return endedClean ? null : await JudgeLaunchAsync(item, judged, pidFiles, probed, probeFailed, timeout, cancellation).ConfigureAwait(false);
             case "process":
             {
                 if (probeFailed.TryGetValue(item.Host, out string? why)) return judged with { Status = "cannot be checked: " + why, Unrecoverable = true };
@@ -391,18 +401,74 @@ internal static class RunJournalStatus
     }
 
     // A launch whose process was never journalled (#257): its pid file, which the launcher writes as the game starts, says which
-    // process it started. Proven gone when no process has that ID and start identity now (an ID another process reused counts as
+    // process it started. A server launch with no pid file (its controller was killed before the launcher published it, #800) is
+    // named by the launcher's ownership record instead, written before the game was spawned: recoverable as its launcher only
+    // while that launcher (or the game it recorded, on its command line) still runs with the identity recorded. Proven gone when no process has that ID and start identity now (an ID another process reused counts as
     // gone, and is never stopped); adopted as the run's process, which env recover stops by identity, only when that process
     // runs the command line the launch journalled. Anything else (no pid file, an unreadable one, a pid file without a start
     // identity naming a running process, a launch journalled without its command line, another command line) stays unrecoverable.
-    private static JournalItem? JudgeLaunch(Pending item, JournalItem judged, Dictionary<(string Host, string Directory), PidFile> pidFiles,
-        Dictionary<(string Host, int Pid, string Start), ProbedProcess> probed, Dictionary<string, string> probeFailed)
+    private static async Task<JournalItem?> JudgeLaunchAsync(Pending item, JournalItem judged,
+        Dictionary<(string Host, string Directory), PidFile> pidFiles,
+        Dictionary<(string Host, int Pid, string Start), ProbedProcess> probed, Dictionary<string, string> probeFailed,
+        TimeSpan timeout, CancellationToken cancellation)
     {
         string where = $"its pid file in {item.What}";
         if (!pidFiles.TryGetValue((item.Host, item.What), out var file) || file.State == PidFileState.Unreadable)
             return judged with { Status = $"launch started before its process was journalled, and {where} cannot be read: {file?.Detail ?? "no directory was journalled"}", Unrecoverable = true };
         if (file.State == PidFileState.Missing)
-            return judged with { Status = $"launch started before its process was journalled, and {where} does not exist, so a process it may have started cannot be named", Unrecoverable = true };
+        {
+            string ownerName = item.Fields.GetValueOrDefault("launcherOwnershipFile") ?? "";
+            if (!HostServerLaunchOwnership.ValidFileName(ownerName))
+                return judged with { Status = $"launch started before its process was journalled, and {where} does not exist, so a process it may have started cannot be named", Unrecoverable = true };
+            if (file.LauncherState == PidFileState.Missing)
+                return judged with { Status = $"launch started before its process was journalled, and neither {where} nor its launcher ownership file {ownerName} exists", Unrecoverable = true };
+            if (file.LauncherState != PidFileState.Found || file.Launcher == null)
+                return judged with { Status = $"launch started before its process was journalled, and its launcher ownership file {ownerName} cannot be used: {file.LauncherDetail}", Unrecoverable = true };
+
+            var owner = file.Launcher;
+            string expectedTask = item.Fields.GetValueOrDefault("launcherTask") ?? "";
+            bool windows = owner.Platform == ClientPlatform.Windows;
+            if ((windows && owner.TaskName != expectedTask) || (!windows && (expectedTask.Length != 0 || owner.TaskName.Length != 0)))
+                return judged with { Status = $"the launcher ownership file {ownerName} names another scheduled task", Unrecoverable = true };
+            string record = $"the launcher ownership file {ownerName}";
+            if (probeFailed.TryGetValue(item.Host, out string? ownerWhy))
+                return judged with { Status = $"{record} cannot be checked: {ownerWhy}", Unrecoverable = true };
+            if (!probed.TryGetValue((item.Host, owner.LauncherPid, owner.LauncherStartIdentity), out var launcher) || launcher.State == ProbedState.Unreadable)
+                return judged with { Status = $"{record} names a launcher process that cannot be read", Unrecoverable = true };
+            if (launcher.State == ProbedState.Same)
+            {
+                // The same ID and start time: also still the session/group leader (Unix) or in the session (Windows) it recorded.
+                HostServerLauncherState state;
+                try { state = await HostServerLauncher.InspectAsync(item.Connection, owner, item.What, timeout, cancellation).ConfigureAwait(false); }
+                catch (Exception error) when (error is HostOperationException or TimeoutException or IOException or InvalidOperationException)
+                { return judged with { Status = $"{record} cannot be checked: {error.Message}", Unrecoverable = true }; }
+                if (state != HostServerLauncherState.Owned)
+                    return judged with { Status = $"{record} names a running launcher whose process group or session is not the one it recorded", Unrecoverable = true };
+            }
+
+            ProbedProcess? game = null;
+            string commandLine = item.Fields.GetValueOrDefault("expectedCommandLineSha256") ?? "";
+            if (owner.GamePid is { } gamePid && owner.GameStartIdentity is { } gameStart)
+            {
+                if (!probed.TryGetValue((item.Host, gamePid, gameStart), out game) || game.State == ProbedState.Unreadable)
+                    return judged with { Status = $"{record} names game process {gamePid}, which cannot be read", Unrecoverable = true };
+                if (game.State == ProbedState.Same && (commandLine.Length == 0 ||
+                    !string.Equals(game.CommandLineSha256, commandLine, StringComparison.OrdinalIgnoreCase)))
+                    return judged with { Status = $"{record} names game process {gamePid} (started {gameStart}), which runs another command line than the launch's", Unrecoverable = true };
+            }
+            bool launcherRuns = launcher.State == ProbedState.Same, gameRuns = game?.State == ProbedState.Same;
+            if (!launcherRuns && !gameRuns)
+                // Gone, unless it went before recording whether it spawned the game: then a game may run that nothing names.
+                return owner.GamePid != null ? null : judged with { Status = $"{record} names a launcher that is gone without recording whether it started the game", Unrecoverable = true };
+            return judged with
+            {
+                Kind = "launcher", What = $"{owner.LauncherPid} (started {owner.LauncherStartIdentity})",
+                Fields = owner.Fields(item.What, ownerName, commandLine, item.Fields.GetValueOrDefault("quitSeconds") ?? "0"),
+                Status = launcherRuns
+                    ? $"its pid file was never written; its launcher still runs as recorded in {ownerName}" + (gameRuns ? $", with game process {owner.GamePid}" : "")
+                    : $"its pid file was never written; its launcher ended, but game process {owner.GamePid} it recorded in {ownerName} still runs with the launch's command line",
+            };
+        }
         if (file.State == PidFileState.Malformed)
             return judged with { Status = $"launch started before its process was journalled, and {where} names no process ID and start identity ({file.Detail})", Unrecoverable = true };
         string named = file.StartIdentity == null ? $"process {file.Pid}" : $"process {file.Pid} (started {file.StartIdentity})";
@@ -435,13 +501,23 @@ internal static class RunJournalStatus
     internal enum PidFileState { Found, Missing, Unreadable, Malformed }
 
     /// <summary>A launch's pid file as its host read it: the process ID and, where the launcher records it (Windows), the start identity.</summary>
-    internal sealed record PidFile(PidFileState State, int Pid, string? StartIdentity, string? Detail);
+    internal sealed record PidFile(PidFileState State, int Pid, string? StartIdentity, string? Detail)
+    {
+        public PidFileState LauncherState { get; init; } = PidFileState.Missing;
+        public HostServerLauncherRecord? Launcher { get; init; }
+        public string? LauncherDetail { get; init; }
+    }
 
     /// <summary>Reads <c>&lt;directory&gt;/pid</c> for each directory on <paramref name="host"/>, in order. Changes nothing.</summary>
-    internal static async Task<IReadOnlyList<PidFile>> ReadPidFilesAsync(IGameHost host, IReadOnlyList<string> directories, TimeSpan timeout, CancellationToken cancellation)
+    internal static async Task<IReadOnlyList<PidFile>> ReadPidFilesAsync(IGameHost host, IReadOnlyList<string> directories, TimeSpan timeout,
+        CancellationToken cancellation, IReadOnlyList<string>? ownershipFiles = null)
     {
+        if (ownershipFiles != null && ownershipFiles.Count != directories.Count)
+            throw new ArgumentException("Name one launcher ownership file per launch directory.", nameof(ownershipFiles));
+        var owners = (ownershipFiles ?? Enumerable.Repeat("", directories.Count).ToList()).Select(name =>
+            name.Length == 0 || HostServerLaunchOwnership.ValidFileName(name) ? name : "-").ToList();
         var result = (await host.RunAsync(host.Shell.Kind == HostShellKind.PowerShell ? WindowsPidFiles : BashPidFiles,
-            new Dictionary<string, string> { ["dirs"] = string.Join('\n', directories) }, timeout, cancellation).ConfigureAwait(false))
+            new Dictionary<string, string> { ["dirs"] = string.Join('\n', directories), ["owners"] = string.Join('\n', owners) }, timeout, cancellation).ConfigureAwait(false))
             .EnsureSuccess($"Reading launch pid files on {host.Name}");
         if (InteractiveClient.Line(result.Stdout, "VT-PIDFILE-END") == null)
             throw new HostOperationException($"The pid file check on {host.Name} did not finish", result);
@@ -459,7 +535,27 @@ internal static class RunJournalStatus
                 _ => new(PidFileState.Unreadable, 0, null, "the host could not read it"),
             };
         }
-        return found.Select(file => file ?? new PidFile(PidFileState.Unreadable, 0, null, "the host's reply did not name it")).ToList();
+        var launcherFiles = Enumerable.Repeat<(PidFileState State, HostServerLauncherRecord? Owner, string? Detail)?>(null, directories.Count).ToArray();
+        foreach (string line in result.Stdout.Split('\n'))
+        {
+            // VT-OWNERFILE <index> missing|unreadable|file <base64>
+            var parts = line.Trim().Split(' ');
+            if (parts.Length < 3 || parts[0] != "VT-OWNERFILE" || !int.TryParse(parts[1], NumberStyles.None,
+                CultureInfo.InvariantCulture, out int index) || index < 0 || index >= directories.Count) continue;
+            launcherFiles[index] = parts[2] switch
+            {
+                "missing" => (PidFileState.Missing, null, null),
+                "file" => ParseLauncher(parts.Length == 4 ? parts[3] : ""),
+                _ => (PidFileState.Unreadable, null, "the host could not read it"),
+            };
+        }
+        for (int i = 0; i < found.Length; i++)
+        {
+            found[i] ??= new PidFile(PidFileState.Unreadable, 0, null, "the host's reply did not name it");
+            var owner = launcherFiles[i] ?? (PidFileState.Missing, null, (string?)null);
+            found[i] = found[i]! with { LauncherState = owner.State, Launcher = owner.Owner, LauncherDetail = owner.Detail };
+        }
+        return found.Select(file => file!).ToList();
 
         static PidFile Parse(string encoded)
         {
@@ -472,16 +568,31 @@ internal static class RunJournalStatus
                 return new(PidFileState.Found, pid, words.Length == 2 ? words[1] : null, null);
             return new(PidFileState.Malformed, 0, null, text.Length == 0 ? "it is empty" : $"it holds '{(text.Length > 40 ? text[..40] + "..." : text)}'");
         }
+        static (PidFileState State, HostServerLauncherRecord? Owner, string? Detail) ParseLauncher(string encoded)
+        {
+            string text;
+            try { text = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(encoded)).Trim(); }
+            catch (FormatException) { return (PidFileState.Unreadable, null, "the host's reply was not base64"); }
+            try { return (PidFileState.Found, HostServerLaunchOwnership.Parse(text), null); }
+            catch (InvalidDataException error)
+            {
+                return (PidFileState.Malformed, null, error.Message + (text.Length == 0 ? "; it is empty" : $"; it holds '{(text.Length > 80 ? text[..80] + "..." : text)}'"));
+            }
+        }
     }
 
-    // Variables: dirs (one launch or boot directory per line). One line per directory, in order: VT-PIDFILE <index> missing,
-    // unreadable, or file <base64 of its first 200 bytes>; then VT-PIDFILE-END. Reads only.
+    // Variables: dirs and owners (one launch directory and optional safe ownership-file leaf per line). Reads only.
     internal static readonly string BashPidFiles = """
         i=0
         while IFS= read -r dir; do
+          owner=$(printf '%s\n' "$owners" | sed -n "$((i + 1))p")
           if [ ! -e "$dir/pid" ]; then echo "VT-PIDFILE $i missing"
           elif [ ! -f "$dir/pid" ] || [ ! -r "$dir/pid" ]; then echo "VT-PIDFILE $i unreadable"
           else echo "VT-PIDFILE $i file $(head -c 200 -- "$dir/pid" | base64 | tr -d '\n')"; fi
+          if [ -z "$owner" ]; then echo "VT-OWNERFILE $i missing"
+          elif [ "$owner" = - ] || [ ! -e "$dir/$owner" ]; then echo "VT-OWNERFILE $i missing"
+          elif [ ! -f "$dir/$owner" ] || [ ! -r "$dir/$owner" ]; then echo "VT-OWNERFILE $i unreadable"
+          else echo "VT-OWNERFILE $i file $(head -c 400 -- "$dir/$owner" | base64 | tr -d '\n')"; fi
           i=$((i + 1))
         done <<< "$dirs"
         echo VT-PIDFILE-END
@@ -489,6 +600,7 @@ internal static class RunJournalStatus
     // Shared for writing and deleting, so a launcher moving its file into place is never refused by this read.
     internal static readonly string WindowsPidFiles = """
         $i = 0
+        $ownerNames = @($owners -split "`n")
         foreach ($dir in ($dirs -split "`n")) {
             $file = Join-Path $dir 'pid'
             if (-not [IO.File]::Exists($file)) { 'VT-PIDFILE ' + $i + ' missing' }
@@ -498,6 +610,16 @@ internal static class RunJournalStatus
                     try { $bytes = New-Object byte[] 200; $read = $stream.Read($bytes, 0, 200) } finally { $stream.Dispose() }
                     'VT-PIDFILE ' + $i + ' file ' + [Convert]::ToBase64String($bytes, 0, $read)
                 } catch { 'VT-PIDFILE ' + $i + ' unreadable' }
+            }
+            $owner = if ($i -lt $ownerNames.Count) { $ownerNames[$i] } else { '' }
+            $ownership = if ($owner) { Join-Path $dir $owner } else { '' }
+            if (-not $owner -or $owner -eq '-' -or -not [IO.File]::Exists($ownership)) { 'VT-OWNERFILE ' + $i + ' missing' }
+            else {
+                try {
+                    $stream = [IO.File]::Open($ownership, 'Open', 'Read', 'ReadWrite, Delete')
+                    try { $bytes = New-Object byte[] 400; $read = $stream.Read($bytes, 0, 400) } finally { $stream.Dispose() }
+                    'VT-OWNERFILE ' + $i + ' file ' + [Convert]::ToBase64String($bytes, 0, $read)
+                } catch { 'VT-OWNERFILE ' + $i + ' unreadable' }
             }
             $i++
         }

@@ -81,6 +81,16 @@ public sealed class HostServerTests : IDisposable
         Assert.Empty(host.Runs);
     }
 
+    [Fact] public async Task AWindowsStartLongerThanTheLaunchersHandoffWaitIsRefused()
+    {
+        // The Windows launcher keeps its game 4 minutes awaiting the handoff ack: a start allowed longer is refused before any script.
+        var host = new QueueHost(HostShell.Pwsh);
+        var launch = GameLaunch.ForServer(@"C:\runs\r\runtime", [], hostPlatform: ServerPlatform.Windows);
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => HostServer.StartAsync(host, launch, @"C:\runs\r\boot-1",
+            HostServer.WindowsHandoffStartLimit + TimeSpan.FromSeconds(1)));
+        Assert.Empty(host.Runs);
+    }
+
     [Fact] public async Task WindowsServerLaunchUsesHeadlessTaskAndStopsOnlyTheOwnedIdentity()
     {
         var host = new QueueHost(HostShell.Pwsh);
@@ -171,6 +181,19 @@ public sealed class HostServerTests : IDisposable
         Assert.Contains("the task ended without the launcher starting the server (task result ", HostServerScripts.WindowsStart);
     }
 
+    // #800: the launcher ownership record as each launcher writes it. A Windows session-0 (S4U) task's launcher has session 0.
+    [Fact] public void ALauncherOwnershipRecordParsesAsTheLaunchersWriteIt()
+    {
+        string task = "VT-Server-" + new string('a', 32);
+        Assert.Equal(new HostServerLauncherRecord(ClientPlatform.Windows, 4242, "134", 0, 0, task, 77, "135"),
+            HostServerLaunchOwnership.Parse($"windows {task} 4242 134 0 77 135"));
+        Assert.Equal(new HostServerLauncherRecord(ClientPlatform.Linux, 51, "9051", 51, 51, "", null, null),
+            HostServerLaunchOwnership.Parse("unix 51 9051 51 51\n"));
+        Assert.Throws<InvalidDataException>(() => HostServerLaunchOwnership.Parse($"windows {task} 0 134 0"));
+        Assert.Throws<InvalidDataException>(() => HostServerLaunchOwnership.Parse("windows VT-Server-x 4242 134 1"));
+        Assert.Throws<InvalidDataException>(() => HostServerLaunchOwnership.Parse("unix 51 9051 51"));
+    }
+
     [Fact] public async Task WindowsServerRefusesAReplyLostDuringLaunchAsUnknown()
     {
         var host = new QueueHost(HostShell.Pwsh);
@@ -206,34 +229,34 @@ public sealed class HostServerTests : IDisposable
 
         // 1. This process's own logon (S4U when elevated, else interactive), through StartAsync.
         string boot = Path.Combine(root, "boot 1");
-        await using var server = await StandInServer.StartAsync(host, launch, boot, TimeSpan.FromSeconds(75),
-            nameof(WindowsServerTaskStartsTheLauncherFromAPathWithSpacesAndStopsByIdentity));
-        var process = server.Process;
-        try
+        int processId = 0;
+        await StandInServer.RunAsync(host, launch, boot, TimeSpan.FromSeconds(75),
+            nameof(WindowsServerTaskStartsTheLauncherFromAPathWithSpacesAndStopsByIdentity), async process =>
         {
-            Assert.Matches("^(s4u|interactive)$", process.TaskLogon);
-            Assert.False(process.HasExited);
-            using var child = System.Diagnostics.Process.GetProcessById(process.Id);
-            Assert.False(child.HasExited);
-            Assert.True(File.Exists(Path.Combine(boot, "launcher.started")), "the launcher records that the task reached it");
-            // #257: the command line the run journals before the start is the one pwsh's Process.Start gave the
-            // server, and the boot's pid file names it, through the real pid-file read: a run killed in between can prove it its own.
-            var probed = (await HostProcessProbe.ProbeAsync(host, [(process.Id, process.StartIdentity)], TimeSpan.FromSeconds(30)))[(process.Id, process.StartIdentity)];
-            Assert.Equal(ProbedState.Same, probed.State);
-            Assert.Equal(launch.CommandLineSha256(), probed.CommandLineSha256);
-            var pidFile = Assert.Single(await RunJournalStatus.ReadPidFilesAsync(host, [boot], TimeSpan.FromSeconds(30), default));
-            Assert.Equal((RunJournalStatus.PidFileState.Found, process.Id, process.StartIdentity), (pidFile.State, pidFile.Pid, pidFile.StartIdentity));
-            Assert.Equal(RunJournalStatus.PidFileState.Missing, Assert.Single(await RunJournalStatus.ReadPidFilesAsync(host, [Path.Combine(root, "no boot")], TimeSpan.FromSeconds(30), default)).State);
-            Assert.False(File.Exists(Path.Combine(boot, "spec.txt")));
-            // A wrong start identity must not kill a live process with this PID.
-            string foreignBoot = Path.Combine(root, "foreign boot");
-            Directory.CreateDirectory(foreignBoot);
-            var foreign = new HostServerProcess(host, process.Id, "0", foreignBoot, runtime, [], null);
-            Assert.Equal(HostServerStop.AlreadyGone, await foreign.StopAsync(TimeSpan.FromSeconds(1)));
-            Assert.False(child.HasExited);
-        }
-        finally { await process.StopAsync(TimeSpan.FromSeconds(15)); }
-        Assert.DoesNotContain(System.Diagnostics.Process.GetProcesses(), other => other.Id == process.Id);
+            processId = process.Id;
+            try
+            {
+                Assert.Matches("^(s4u|interactive)$", process.TaskLogon);
+                Assert.False(process.HasExited);
+                using var child = System.Diagnostics.Process.GetProcessById(process.Id);
+                Assert.False(child.HasExited);
+                Assert.True(File.Exists(Path.Combine(boot, "launcher.started")), "the launcher records that the task reached it");
+                var probed = (await HostProcessProbe.ProbeAsync(host, [(process.Id, process.StartIdentity)], TimeSpan.FromSeconds(30)))[(process.Id, process.StartIdentity)];
+                Assert.Equal(ProbedState.Same, probed.State);
+                Assert.Equal(launch.CommandLineSha256(), probed.CommandLineSha256);
+                var pidFile = Assert.Single(await RunJournalStatus.ReadPidFilesAsync(host, [boot], TimeSpan.FromSeconds(30), default));
+                Assert.Equal((RunJournalStatus.PidFileState.Found, process.Id, process.StartIdentity), (pidFile.State, pidFile.Pid, pidFile.StartIdentity));
+                Assert.Equal(RunJournalStatus.PidFileState.Missing, Assert.Single(await RunJournalStatus.ReadPidFilesAsync(host, [Path.Combine(root, "no boot")], TimeSpan.FromSeconds(30), default)).State);
+                Assert.False(File.Exists(Path.Combine(boot, "spec.txt")));
+                string foreignBoot = Path.Combine(root, "foreign boot");
+                Directory.CreateDirectory(foreignBoot);
+                var foreign = new HostServerProcess(host, process.Id, "0", foreignBoot, runtime, [], null);
+                Assert.Equal(HostServerStop.AlreadyGone, await foreign.StopAsync(TimeSpan.FromSeconds(1)));
+                Assert.False(child.HasExited);
+            }
+            finally { await process.StopAsync(TimeSpan.FromSeconds(15)); }
+        });
+        Assert.DoesNotContain(System.Diagnostics.Process.GetProcesses(), other => other.Id == processId);
 
         // 2. The interactive-token task, as a non-elevated desktop user gets it, forced through the logon seams. Only a process
         // in a desktop session can register one that runs; windows-latest's runner is in one and must take this path.
@@ -242,18 +265,18 @@ public sealed class HostServerTests : IDisposable
             Assert.True(session != 0, $"This runner was expected to run in a desktop session (it runs in session {session}).");
         if (session == 0) return;
         string interactiveBoot = Path.Combine(root, "boot 2");
-        await using var interactiveServer = await StandInServer.StartAsync(host, launch, interactiveBoot, TimeSpan.FromSeconds(75),
-            nameof(WindowsServerTaskStartsTheLauncherFromAPathWithSpacesAndStopsByIdentity), logs: null, evidence: null,
-            logonSeams: new Dictionary<string, string> { ["elevated"] = "false", ["session"] = session.ToString(CultureInfo.InvariantCulture), ["desktops"] = "1" });
-        var interactive = interactiveServer.Process;
-        try
+        await StandInServer.RunAsync(host, launch, interactiveBoot, TimeSpan.FromSeconds(75),
+            nameof(WindowsServerTaskStartsTheLauncherFromAPathWithSpacesAndStopsByIdentity), async interactive =>
         {
-            Assert.Equal("interactive", interactive.TaskLogon);
-            using var child = System.Diagnostics.Process.GetProcessById(interactive.Id);
-            Assert.Equal(session, child.SessionId); // the task started it in this desktop session
-            Assert.Contains("session " + session, File.ReadAllText(Path.Combine(interactiveBoot, "launcher.started")));
-        }
-        finally { Assert.Equal(HostServerStop.Stopped, await interactive.StopAsync(TimeSpan.FromSeconds(15))); }
+            try
+            {
+                Assert.Equal("interactive", interactive.TaskLogon);
+                using var child = System.Diagnostics.Process.GetProcessById(interactive.Id);
+                Assert.Equal(session, child.SessionId);
+                Assert.Contains("session " + session, File.ReadAllText(Path.Combine(interactiveBoot, "launcher.started")));
+            }
+            finally { Assert.Equal(HostServerStop.Stopped, await interactive.StopAsync(TimeSpan.FromSeconds(15))); }
+        }, logonSeams: new Dictionary<string, string> { ["elevated"] = "false", ["session"] = session.ToString(CultureInfo.InvariantCulture), ["desktops"] = "1" });
     }
 
     [Fact] public async Task WindowsHostRetiresOnlyThisRunsRuntime()
@@ -307,6 +330,8 @@ public sealed class HostServerTests : IDisposable
         Assert.Equal("/srv/rt", run.Variables["runtime"]); Assert.Equal("/srv/runs/boot-1", run.Variables["dir"]);
         Assert.Equal(launch.Spec(), run.Variables["spec"]); Assert.Equal("BepInEx/LogOutput.log", run.Variables["logs"]);
         Assert.Equal("50", run.Variables["seconds"]);
+        Assert.Contains("kill -KILL -- \"-$launcher\"", HostServerScripts.Start);
+        Assert.Contains("wait \"$launcher\"", HostServerScripts.Start);
         Assert.False(process.HasExited);
     }
 

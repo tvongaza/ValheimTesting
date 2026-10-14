@@ -42,7 +42,7 @@ internal static partial class HostServerScripts
         cd -- "$workdir"
         /usr/bin/perl -MPOSIX -e '
           use strict; use warnings;
-          my ($directory, $identify, @command) = @ARGV;
+          my ($directory, $owner, $identify, @command) = @ARGV;
           pipe(my $reader, my $writer) or die "pipe: $!";
           my $supervisor = fork(); die "fork: $!" unless defined $supervisor;
           if ($supervisor) {
@@ -63,6 +63,18 @@ internal static partial class HostServerScripts
           $SIG{HUP} = "IGNORE";
           open STDOUT, ">", "$directory/stdout.log" or die "stdout: $!";
           open STDERR, ">", "$directory/stderr.log" or die "stderr: $!";
+          sub identity {
+            my ($pid) = @_;
+            open(my $read, "-|", "/bin/bash", "-c", "$identify\nvt_mac_started \"\$1\"", "vt", $pid) or die "identity: $!";
+            my $value = <$read>; close $read;
+            $value = "" unless defined $value; chomp $value;
+            return $value;
+          }
+          my $launcher_identity = identity($$);
+          die "launcher identity" unless $launcher_identity =~ /^\d+$/;
+          open my $owned, ">", "$directory/$owner.tmp" or die "owner: $!";
+          print $owned "unix $$ $launcher_identity $$ $$\n"; close $owned;
+          rename "$directory/$owner.tmp", "$directory/$owner" or die "owner rename: $!";
           my $game = fork(); die "game fork: $!" unless defined $game;
           if (!$game) {
             close $writer;
@@ -73,14 +85,14 @@ internal static partial class HostServerScripts
           # that already exited too (a zombie until the waitpid below), so a game that dies at once still reports its exit code.
           my $identity = "";
           for (1..50) {
-            open(my $read, "-|", "/bin/bash", "-c", "$identify\nvt_mac_started \"\$1\"", "vt", $game) or die "identity: $!";
-            $identity = <$read>; close $read;
-            $identity = "" unless defined $identity;
-            chomp $identity;
+            $identity = identity($game);
             last if $identity =~ /^\d+$/;
             select undef, undef, undef, 0.1;
           }
           if ($identity !~ /^\d+$/) { print $writer "VT-SERVER failed no process identity\n"; close $writer; exit 3; }
+          open $owned, ">", "$directory/$owner.tmp" or die "owner: $!";
+          print $owned "unix $$ $launcher_identity $$ $$ $game $identity\n"; close $owned;
+          rename "$directory/$owner.tmp", "$directory/$owner" or die "owner rename: $!";
           open my $pid, ">", "$directory/pid.tmp" or die "pid: $!";
           print $pid "$game $identity\n"; close $pid;
           rename "$directory/pid.tmp", "$directory/pid" or die "pid rename: $!";
@@ -94,7 +106,7 @@ internal static partial class HostServerScripts
           print $exit "$code\n"; close $exit;
           rename "$directory/exit.tmp", "$directory/exit" or die "exit rename: $!";
           exit 0;
-        ' "$dir" "$(declare -f vt_mac_started)" /usr/bin/env ${unsets[@]+"${unsets[@]}"} ${sets[@]+"${sets[@]}"} \
+        ' "$dir" "$owner" "$(declare -f vt_mac_started)" /usr/bin/env ${unsets[@]+"${unsets[@]}"} ${sets[@]+"${sets[@]}"} \
           /usr/bin/arch ${archOptions[@]+"${archOptions[@]}"} "$runtime/$exe" ${args[@]+"${args[@]}"}
         """).ReplaceLineEndings("\n");
 
