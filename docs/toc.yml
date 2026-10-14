@@ -58,10 +58,14 @@
     href: reference/fixture-authoring.md
   - name: Game - actors and pins
     href: reference/game-actors-and-pins.md
-  - name: Game - waiting and owned processes
+  - name: Game - waiting
     href: reference/game-waiting.md
+  - name: Game - this machine's inventory
+    href: reference/game-inventory.md
   - name: Game - launching servers and clients
     href: reference/game-launch.md
+  - name: Game - owned server session
+    href: reference/game-server-session.md
   - name: Game - clients in system tests
     href: reference/game-client-session.md
   - name: Game - owned-run preflight

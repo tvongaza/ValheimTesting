@@ -65,7 +65,7 @@ The [dependency resolver](../reference/game-run-inputs.md#resolve-mod-dependenci
 
 | Option | Taken by | Does |
 |---|---|---|
-| `--inventory FILE` | all four | Uses a file's environments instead of [this machine](../reference/game-launch.md#this-machine-with-no-file) |
+| `--inventory FILE` | all four | Uses a file's environments instead of [this machine](../reference/game-inventory.md#this-machine-with-no-file) |
 | `--game DIR` | start, build | The client install to use |
 | `--client-env NAME` | all four | The client environment to use from the inventory |
 | `--server DIR` | server-load, server-load-ab, build | The dedicated-server install to use |
@@ -246,7 +246,7 @@ It checks the exact process, the port's owner and the strict pins, records the c
 | `env teardown --copy PATH [--inventory FILE]` | Removes one copy made before runs journalled their copies |
 | `env teardown --run ID --machine-gone [--inventory FILE]` | Releases the Steam leases of a run whose machine is gone for good |
 
-`env preflight` checks this machine only ([its refusals](../reference/game-launch.md#env-list-and-env-preflight)). `env status` prints each run that left something with its state:
+`env preflight` checks this machine only ([its refusals](../reference/game-inventory.md#env-list-and-env-preflight)). `env status` prints each run that left something with its state:
 
 | State | Means |
 |---|---|

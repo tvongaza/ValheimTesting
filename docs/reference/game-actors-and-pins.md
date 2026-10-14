@@ -1,6 +1,6 @@
 # Actors and pins
 
-How a test talks to a game process through `GameActor`, what the strict pins are, and how each pin is computed and enforced. Waits, startup and stopping are on [Waiting and owned processes](game-waiting.md); the install checks before a launch are on [Owned-run preflight](game-preflight.md).
+How a test talks to a game process through `GameActor`, what the strict pins are, and how each pin is computed and enforced. Waits and startup are on [Waiting](game-waiting.md), stopping on [Owned server session](game-server-session.md); the install checks before a launch are on [Owned-run preflight](game-preflight.md).
 
 ## Actors, fixtures and reports
 
