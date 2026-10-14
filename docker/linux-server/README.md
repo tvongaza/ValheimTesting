@@ -68,7 +68,7 @@ The smoke writes its logs and report to `~/out`.
 
 Use a fresh container for every run, or give each run its own copy of the server directory. BepInEx writes its log and configuration into `/opt/valheim/server`. The smoke refuses a runtime that already has a BepInEx log.
 
-Your own runner is an ordinary .NET program. It builds the launch with `GameLaunch.ForServer` and owns the process through [`OwnedServerSession`](../../docs/reference/game-waiting.md#owned-server-session):
+Your own runner is an ordinary .NET program. It builds the launch with `GameLaunch.ForServer` and owns the process through [`OwnedServerSession`](../../docs/reference/game-server-session.md):
 
 ```csharp
 // runtime: a disposable copy of /opt/valheim/server with your plugins added; world: its -savedir.

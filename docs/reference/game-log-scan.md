@@ -93,5 +93,5 @@ No `accesstools-not-found`, `harmony-*`, missing-member or RPC line appears on e
 
 ## Limits
 
-- The scan sees what the game and its mods log while shutting down only after a clean stop, such as a mod calling UnpatchAll when the game closes. After a kill that part is never written; `serverStops` and `clientStop` in the report say which happened ([stopping owned processes](game-waiting.md#stopping-owned-processes)).
+- The scan sees what the game and its mods log while shutting down only after a clean stop, such as a mod calling UnpatchAll when the game closes. After a kill that part is never written; `serverStops` and `clientStop` in the report say which happened ([stopping owned processes](game-server-session.md#stopping-owned-processes)).
 - Even after a clean stop, BepInEx 5.4's disk log may lack the last lines: it flushes every 2 seconds and is not flushed again when the game quits. Unity's own log (`-logFile`) keeps every quit line, but plugins' lines do not go there. A test adapter closes the gap with the [quit-log flush](../packages/Valheim.Testing.Adapter.md#the-quit-log-flush). Without it, a quit-time line the scan counts is evidence, and a missing one is not proof that nothing was logged.
