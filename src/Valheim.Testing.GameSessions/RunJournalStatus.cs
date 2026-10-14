@@ -493,7 +493,26 @@ internal static class RunJournalStatus
         if (probeFailed.TryGetValue(item.Host, out string? why)) return judged with { Status = $"{where} names {named}, which cannot be checked: {why}", Unrecoverable = true };
         if (!probed.TryGetValue((item.Host, file.Pid, file.StartIdentity ?? ""), out var process) || process.State == ProbedState.Unreadable)
             return judged with { Status = $"{where} names {named}, whose state cannot be read on {item.Host}", Unrecoverable = true };
-        if (process.State is ProbedState.Gone or ProbedState.Reused) return null;
+        // A Windows launcher keeps its start task until the controller acknowledges the pid file (#814), and outlives a game that
+        // exited or that its own stop ended: its ownership record, when it names the journalled task and this same game, is retired
+        // with the game, so a launch whose game is gone stays its launcher until that launcher and task are retired.
+        var windowsLauncher = file.Launcher is { Platform: ClientPlatform.Windows } recorded && recorded.TaskName == (item.Fields.GetValueOrDefault("launcherTask") ?? "") &&
+            recorded.GamePid == file.Pid && recorded.GameStartIdentity == file.StartIdentity ? recorded : null;
+        string ownership = item.Fields.GetValueOrDefault("launcherOwnershipFile") ?? "";
+        if (process.State is ProbedState.Gone or ProbedState.Reused)
+        {
+            if (windowsLauncher == null) return null;
+            if (!probed.TryGetValue((item.Host, windowsLauncher.LauncherPid, windowsLauncher.LauncherStartIdentity), out var left) || left.State == ProbedState.Unreadable)
+                return judged with { Status = $"{where} names {named}, which is gone; the launcher its ownership file {ownership} names cannot be read", Unrecoverable = true };
+            return judged with
+            {
+                Kind = "launcher", What = $"{windowsLauncher.LauncherPid} (started {windowsLauncher.LauncherStartIdentity})",
+                Fields = windowsLauncher.Fields(item.What, ownership, item.Fields.GetValueOrDefault("expectedCommandLineSha256") ?? "", item.Fields.GetValueOrDefault("quitSeconds") ?? "0"),
+                Status = left.State == ProbedState.Same
+                    ? $"{where} names {named}, which is gone; its launcher still runs and holds its start task {windowsLauncher.TaskName}"
+                    : $"{where} names {named}, which is gone; its launcher ended, and its start task {windowsLauncher.TaskName} may be left",
+            };
+        }
         if (process.State == ProbedState.Starting)
             return judged with { Status = $"{where} names {named}, whose launch wrapper still runs", Unrecoverable = true };
         if (file.StartIdentity == null)
@@ -509,6 +528,10 @@ internal static class RunJournalStatus
         {
             ["pid"] = file.Pid.ToString(CultureInfo.InvariantCulture), ["startIdentity"] = file.StartIdentity, ["commandLineSha256"] = expected, ["adoptedFrom"] = item.What,
         };
+        // The recovery retires that launcher and task once the game is stopped.
+        if (windowsLauncher != null)
+            foreach (var (name, value) in windowsLauncher.Fields(item.What, ownership, expected, item.Fields.GetValueOrDefault("quitSeconds") ?? "0"))
+                fields.TryAdd(name, value);
         return judged with
         {
             Kind = "process", What = $"{file.Pid} (started {file.StartIdentity})", Fields = fields,

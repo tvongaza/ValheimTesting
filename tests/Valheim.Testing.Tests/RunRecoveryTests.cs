@@ -83,6 +83,52 @@ public sealed class RunRecoveryTests : IDisposable
         Assert.True(_host.IsRunning(83) && _host.IsRunning(86), "a reused ID's process was stopped");
     }
 
+    // #814: a Windows server launch whose controller died after the pid file appeared is recovered through that pid file. Its
+    // launcher still holds the start task (it waits for the controller's acknowledgement), so once the game is stopped recovery
+    // retires the launcher and the exact task its ownership record names, through the launcher's one owner. A record that names
+    // another game than the pid file is not taken as the launch's launcher: its game is stopped, its launcher never touched.
+    [Fact]
+    public async Task APidFileRecoveryAlsoRetiresTheWindowsLauncherAndItsStartTask()
+    {
+        var win = new FakeServerHost("pc", Path.Combine(_root, "win"), windows: true);
+        var ownership = HostServerLaunchOwnership.Create(ClientPlatform.Windows);
+        string Launch(string run, string game, string record)
+        {
+            string boot = @"C:\vt\runs\" + run + @"\boot-1";
+            Line(win, run, "server", Gone, JournalEntry.ProcessIntended, ("bootDirectory", boot),
+                ("expectedCommandLineSha256", FakeServerHost.CommandLineSha256(game)), ("quitSeconds", "0"),
+                ("launcherOwnershipFile", ownership.FileName), ("launcherTask", ownership.TaskName));
+            PidFile(win, boot, $"{game} 90{game}");
+            File.WriteAllText(Path.Combine(win.Local(boot), ownership.FileName), record);
+            return boot;
+        }
+        win.Running(81, "9081");
+        win.Running(82, "9082");
+        string boot = Launch("run-pid-file", "82", $"windows {ownership.TaskName} 81 9081 1 82 9082");
+        win.Running(83, "9083");
+        win.Running(84, "9084");
+        Launch("run-other-game", "84", $"windows {ownership.TaskName} 83 9083 1 85 9085");
+        Task<RecoveryReport> Recover(string run) => RunRecovery.RecoverAsync(Hosts(), _ => win, run, false, TimeSpan.FromSeconds(5));
+
+        var report = await Recover("run-pid-file");
+
+        Assert.True(report.Recovered, string.Join("\n", report.Steps));
+        Assert.Contains(report.Steps, step => step.What == "process 82 (started 9082)" && step.Outcome == "stopped");
+        Assert.Contains(report.Steps, step => step.What == "launcher 81 (started 9081)" && !step.Failed &&
+            step.Outcome == $"stopped; its start task {ownership.TaskName} removed if it was left");
+        var retire = Assert.Single(win.Runs, call => call.Script == "launcher-retire");
+        Assert.Equal(("81", "9081", "1", ownership.TaskName, boot), (retire.Variables["launcherPid"], retire.Variables["launcherStart"],
+            retire.Variables["launcherSession"], retire.Variables["task"], retire.Variables["dir"]));
+        Assert.False(win.IsRunning(81) || win.IsRunning(82), "the game or its launcher was left running");
+        Assert.Equal(JournalRunState.Ended, Assert.Single((await RunJournalStatus.InspectAsync(Hosts(), _ => win, TimeSpan.FromSeconds(5))).Runs,
+            run => run.Run == "run-pid-file").State);
+
+        Assert.True((await Recover("run-other-game")).Recovered);
+        Assert.Single(win.Runs, call => call.Script == "launcher-retire");
+        Assert.True(win.IsRunning(83), "a launcher whose record names another game was stopped");
+        Assert.False(win.IsRunning(84));
+    }
+
     [Fact]
     public async Task RegressionCharacterIntentWithoutCompletionCannotDeleteASameNamedSave()
     {
