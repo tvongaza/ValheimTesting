@@ -177,7 +177,8 @@ internal sealed class FakeServerHost : IGameHost
         ("scheduled-task-retire", [WindowsScheduledTask.RetireScript]),
         ("lease", [LeaseScripts.Bash, LeaseScripts.PowerShell]),
         ("world-entries", [HostedWorldOnHost.WindowsEntries, HostedWorldOnHost.BashEntries]),
-        ("world-move", [HostedWorldOnHost.WindowsMoveOut, HostedWorldOnHost.BashMoveOut]));
+        ("world-move", [HostedWorldOnHost.WindowsMoveOut, HostedWorldOnHost.BashMoveOut]),
+        ("world-meta", [HostedWorldOnHost.WindowsMetadata, HostedWorldOnHost.BashMetadata]));
     private static Dictionary<string, string> Names(params (string Name, string[] Scripts)[] table)
     {
         var names = new Dictionary<string, string>(ReferenceEqualityComparer.Instance);
@@ -703,6 +704,21 @@ internal sealed class FakeServerHost : IGameHost
                 foreach (string entry in entries)
                     if (Directory.Exists(entry)) Directory.Move(entry, Path.Combine(to, Path.GetFileName(entry))); else File.Move(entry, Path.Combine(to, Path.GetFileName(entry)));
                 return Ok(string.Concat(entries.Select(entry => "VT-WORLD-MOVED " + Path.GetFileName(entry) + "\n")) + "VT-WORLD-MOVE done\n");
+            }
+            case "world-meta":
+            {
+                // As the host scripts: whether an entry MoveOut would move is there, and the world's metadata files, base64.
+                string worlds = Local(v["worlds"]), world = v["name"];
+                var comparison = Windows ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+                bool present = Directory.Exists(worlds) && Directory.EnumerateFileSystemEntries(worlds).Select(Path.GetFileName)
+                    .Any(leaf => leaf!.Equals(world, comparison) || leaf.StartsWith(world + ".", comparison) || leaf.StartsWith(world + "_backup", comparison));
+                var reply = new StringBuilder();
+                if (File.Exists(Path.Combine(worlds, world + ".fwl")))
+                    reply.Append("VT-WORLD-META " + world + ".fwl " + Convert.ToBase64String(File.ReadAllBytes(Path.Combine(worlds, world + ".fwl"))) + "\n");
+                if (Directory.Exists(Path.Combine(worlds, world)))
+                    foreach (string file in Directory.EnumerateFiles(Path.Combine(worlds, world)).Where(file => Regex.IsMatch(Path.GetFileName(file), @"^_main\.[0-9]+\.fwl2$")).Order(StringComparer.Ordinal))
+                        reply.Append("VT-WORLD-META " + world + "/" + Path.GetFileName(file) + " " + Convert.ToBase64String(File.ReadAllBytes(file)) + "\n");
+                return Ok(reply + "VT-WORLD-METAS " + (present ? "present" : "absent") + "\n");
             }
             case "client-keep":
             {

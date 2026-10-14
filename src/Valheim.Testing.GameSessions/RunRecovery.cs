@@ -402,13 +402,16 @@ internal static class RunRecovery
                     try
                     {
                         if (!copy.Fields.TryGetValue("stage", out string? stage)) throw new InvalidDataException("its journal names no staging directory");
-                        // A hosted world in a campaign client's own worlds (#258 step 8b): moved out into the run's folder there, never deleted.
+                        // A hosted world in a campaign client's own worlds (#258 step 8b; this machine's too, #807): moved out into the run's
+                        // folder there, never deleted, and only once the world there states the UID the run journalled placing.
                         if (copy.Fields.GetValueOrDefault("holds") == HostedWorldOnHost.Holds)
                         {
-                            string world = HostedWorldOnHost.RequireJournalled(copy.Fields, copy.What, runId);
+                            var (world, worldUid) = HostedWorldOnHost.RequireJournalled(copy.Fields, copy.What, runId);
                             string keepIn = copy.Fields["keepIn"];
-                            var moved = await HostedWorldOnHost.MoveOut(host, copy.Fields["parent"], world, keepIn, timeout, cancellation).ConfigureAwait(false);
-                            Step(group.Key, what, moved.Count == 0 ? "nothing left in the client's worlds" : $"moved out of the client's worlds into {keepIn} (the run's save, handed over): {string.Join(", ", moved)}");
+                            bool present = await HostedWorldOnHost.RequireOwnWorldAsync(host, copy.Fields["parent"], world, worldUid, timeout, cancellation).ConfigureAwait(false);
+                            IReadOnlyList<string> moved = present ? await HostedWorldOnHost.MoveOut(host, copy.Fields["parent"], world, keepIn, timeout, cancellation).ConfigureAwait(false) : [];
+                            Step(group.Key, what, moved.Count == 0 ? "nothing left in the client's worlds"
+                                : $"moved out of the client's worlds into {keepIn} (the run's save, world UID {worldUid} as journalled, handed over): {string.Join(", ", moved)}");
                             await Note(group.Key, JournalEntry.Of(JournalEntry.CopyRetired, ("runtime", copy.What), ("handedOver", "true"), ("keptIn", keepIn))).ConfigureAwait(false);
                             continue;
                         }
