@@ -78,7 +78,7 @@ Define `complete` in your adapter to include your mod's readiness. The session n
 
 The session owns only the processes it started. It owns no accounts, machine reservations or other processes.
 
-`DirectServerProcess(start, logPrefix, gameLogs)` writes `<logPrefix>.stdout.log` and `<logPrefix>.stderr.log`. When it stops, it copies each game log to `<logPrefix>.game-N.log`, or writes `<logPrefix>.game-N.log.absent` when the game made none. A server a session starts on a host keeps its logs in that boot's directory; a Windows server there starts from a short-lived scheduled task and keeps no stdout.
+`DirectServerProcess(start, logPrefix, gameLogs)` writes `<logPrefix>.stdout.log` and `<logPrefix>.stderr.log`. When it stops, it copies each game log to `<logPrefix>.game-N.log`, or writes `<logPrefix>.game-N.log.absent` when the game made none. A server a session starts on a host keeps its stdout and stderr in that boot's directory, including on Windows after its short-lived scheduled task exits.
 
 ## Stopping owned processes
 
@@ -112,4 +112,3 @@ boot-1 clean after 9.4 s (Ctrl+C, exit 0); boot-2 killed after 120.0 s (Ctrl+Bre
 
 - The session command is a read-only exception while the world loads. Your adapter must keep it read-only.
 - A stop proves only how the process ended. Whether the world saved is the game's shutdown evidence, which the [log scan](game-log-scan.md) reads.
-- A Windows server started on a host keeps no stdout log.
