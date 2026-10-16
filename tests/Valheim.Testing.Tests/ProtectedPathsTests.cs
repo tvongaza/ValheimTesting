@@ -58,6 +58,19 @@ public sealed class ProtectedPathsTests : IDisposable
     }
 
     [Fact]
+    public void ARootedWriteAllowsSystemAliasesAboveItsBoundaryButRefusesLinksWithinIt()
+    {
+        string real = Folder("real"), alias = Alias("system-alias", real);
+        string boundary = Path.Combine(alias, "trusted"); Directory.CreateDirectory(boundary);
+        ProtectedPaths.RequireUnlinkedPath(boundary, Path.Combine(boundary, "new", "recent"));
+        string escaped = Path.Combine(boundary, "escape"); DirectoryLinks.Create(escaped, Folder("external"));
+        Assert.Throws<IOException>(() => ProtectedPaths.RequireUnlinkedPath(boundary, Path.Combine(escaped, "recent")));
+        Assert.Throws<IOException>(() => ProtectedPaths.RequireUnlinkedPath(boundary, Path.Combine(_root, "foreign", "recent")));
+        string linkedRoot = Alias("linked-root", Path.Combine(real, "trusted"));
+        Assert.Throws<IOException>(() => ProtectedPaths.RequireUnlinkedPath(linkedRoot, Path.Combine(linkedRoot, "recent")));
+    }
+
+    [Fact]
     public void AnAliasOfTheRootOrOfTheOutputsParentIsTheSameFolder()
     {
         string real = Folder("protected");

@@ -242,6 +242,18 @@ public sealed class RunJournalStatusTests : IDisposable
         Assert.False(status.Clean); // the incomplete control still blocks preflight
     }
 
+    [Theory] [InlineData(JournalEntry.UserFilesCaptureIntended)] [InlineData(JournalEntry.UserFilesRestoreIntended)]
+    public async Task UnsettledUserFileIntentStaysVisibleUntilCompletionIsJournalled(string kind)
+    {
+        const string run = "run-user-intent", backup = "/runs/run-user-intent/user-files-run-user-intent-client";
+        Line(_host, run, "client", Gone, kind, ("saveRoot", "/user/save"), ("backup", backup), ("captureState", "intended"));
+        var pending = Run(await InspectAsync(), run);
+        Assert.Equal(JournalRunState.Recoverable, pending.State);
+        Assert.Equal("user-files", Assert.Single(pending.Items).Kind);
+        Line(_host, run, "client", Gone, JournalEntry.UserFilesRestored, ("backup", backup));
+        Assert.Empty(Run(await InspectAsync(), run).Items);
+    }
+
     [Theory] [InlineData("mac-server-lists", "server")] [InlineData("client-server-list", "client-1")]
     public async Task CapturedUserFilesStayVisibleUntilRestorationIsJournalled(string files, string label)
     {

@@ -213,9 +213,9 @@ internal sealed class HostedServerRun : IServerPlacement
             {
                 string backup = HostPath.Join(RunDirectory, UserSaveFiles.BackupName(RunId, "server"));
                 _macLists = await UserSaveFiles.CaptureAsync(UserSaveFiles.Kind.MacServerLists, WorldDirectory, backup,
-                    UserSaveFilesOnHost.Markers(Host, HostProfile), LocalMac ? null : UserSaveFilesOnHost.Remote(Host, HostedTimeouts.Quick)).ConfigureAwait(false);
-                await JournalAsync(Host, Role.Host, "server", _macLists.Captured(), cancellation).ConfigureAwait(false);
-                await _macLists.IsolateAsync().ConfigureAwait(false);
+                    UserSaveFilesOnHost.Markers(Host, HostProfile), LocalMac ? null : UserSaveFilesOnHost.Remote(Host, HostedTimeouts.Quick),
+                    entry => JournalAsync(Host, Role.Host, "server", entry, cancellation)).ConfigureAwait(false);
+                await _macLists.ProtectAsync(entry => JournalAsync(Host, Role.Host, "server", entry, CancellationToken.None)).ConfigureAwait(false);
             }).ConfigureAwait(false);
         // A supplied manifest remains an expected pin. A standalone strict run may omit it and bind the profile listing below.
         bool verified = plan.Runtime.Sha256.Count != 0;
@@ -750,10 +750,8 @@ internal sealed class HostedServerRun : IServerPlacement
             if (serverStopped || !launched && !_serverMayRun)
             {
                 int before = failures.Count;
-                await Try("restore the Mac server's user-level access lists", () => _macLists.RestoreAsync()).ConfigureAwait(false);
-                if (failures.Count == before)
-                    await NoteAsync(Host, Role.Host, "server", _macLists.Restored()).ConfigureAwait(false);
-                else serverStopped = false; // the lock and backup stay for env recover
+                await Try("restore the Mac server's user-level access lists", () => _macLists.RestoreAsync(entry => JournalAsync(Host, Role.Host, "server", entry, CancellationToken.None))).ConfigureAwait(false);
+                if (failures.Count != before) serverStopped = false; // the lock and backup stay for env recover
             }
             else
                 await Try("keep the Mac server's access lists for recovery", () => throw new IOException("The server may still run; its access-list backup remains journalled under the host lock.")).ConfigureAwait(false);

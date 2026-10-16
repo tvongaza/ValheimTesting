@@ -155,6 +155,8 @@ internal static class RunJournalStatus
                         case JournalEntry.CopyDone: Open("copy " + Field("runtime"), "copy", Field("runtime"), "copied, not retired"); break;
                         case JournalEntry.CopyKept: Open("copy " + Field("runtime"), "copy", Field("runtime"), "kept: " + Field("why"), kept: true); break;
                         case JournalEntry.CopyRetired: left.Remove("copy " + Field("runtime")); break;
+                        case JournalEntry.UserFilesCaptureIntended: Open("user-files " + Field("backup"), "user-files", Field("saveRoot"), "user-file capture intended; ownership may need settlement"); break;
+                        case JournalEntry.UserFilesRestoreIntended: Open("user-files " + Field("backup"), "user-files", Field("saveRoot"), "user-file restore intended; completion may need settlement"); break;
                         case JournalEntry.UserFilesCaptured: Open("user-files " + Field("backup"), "user-files", Field("saveRoot"), "the user's Valheim files moved aside, not restored"); break;
                         case JournalEntry.UserFilesRestored: left.Remove("user-files " + Field("backup")); break;
                         case JournalEntry.CharacterIntended:

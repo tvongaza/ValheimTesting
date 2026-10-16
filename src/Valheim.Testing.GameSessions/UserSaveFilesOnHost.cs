@@ -27,11 +27,11 @@ internal static class UserSaveFilesOnHost
     /// </summary>
     internal static UserSaveFilesGuard ForClient(IGameHost host, HostProfile profile, string runDirectory, string runId, string label,
         Func<JournalEntry, Task> journal, Func<JournalEntry, Task> note, TimeSpan timeout, CancellationToken cancellation) =>
-        new(async () =>
+        new(async captureJournal =>
         {
             string root = await HostedWorldOnHost.ClientSaveRootAsync(host, timeout, cancellation).ConfigureAwait(false);
             return await UserSaveFiles.CaptureAsync(UserSaveFiles.Kind.ClientServerList, root,
                 HostPath.Join(runDirectory, UserSaveFiles.BackupName(runId, label)), Markers(host, profile),
-                Remote(host, timeout)).ConfigureAwait(false);
+                Remote(host, timeout), captureJournal).ConfigureAwait(false);
         }, journal, note);
 }
