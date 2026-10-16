@@ -34,17 +34,26 @@ internal sealed class DetachedModSwap
         RequireRegular(input.BuildInputs, DetachedCommandQueue.MaxBytes);
         RequireRegular(input.Dependencies, DetachedCommandQueue.MaxBytes);
         string buildHash = FileHash.Sha256(input.BuildInputs), lockHash = FileHash.Sha256(input.Dependencies);
-        var proposed = NativeDependencyLock.ReadReady(input.Dependencies);
+        var proposed = ReadInput<NativeDependencyLock>(input.Dependencies);
+        if (proposed.Mods == null || proposed.Plugins == null || proposed.CliFiles == null || proposed.Gaps == null ||
+            proposed.OptionalReferences == null || proposed.OptionalCandidates == null || proposed.CliManifest == null ||
+            proposed.Gaps.Any(gap => gap == null) || proposed.OptionalReferences.Any(string.IsNullOrWhiteSpace))
+            throw new InvalidDataException("The swap dependency lock has missing collections or entries.");
+        var files = proposed.Mods.Concat(proposed.Plugins).Concat(proposed.CliFiles).ToArray();
+        if (files.Any(file => file == null || string.IsNullOrWhiteSpace(file.File) || file.Sha256 is not { Length: 64 } || !file.Sha256.All(Uri.IsHexDigit)))
+            throw new InvalidDataException("The swap dependency lock has an invalid file pin.");
+        if (files.Length > 256 || files.Select(file => Path.GetFullPath(file.File)).Distinct(StringComparer.OrdinalIgnoreCase).Count() != files.Length)
+            throw new InvalidDataException("The swap dependency lock has duplicate or excessive files.");
         _original.RequireSameFixedInputs(proposed);
         if (proposed.Mods.Count == 0 || Path.GetFullPath(proposed.Mods[0].File) != input.Mod ||
             !proposed.Mods[0].Sha256.Equals(input.Sha256, StringComparison.OrdinalIgnoreCase))
             throw new InvalidDataException("The swap lock must select the requested pinned DLL first.");
-        var files = proposed.Mods.Concat(proposed.Plugins).Concat(proposed.CliFiles).ToArray();
-        if (files.Length > 256 || files.Select(file => Path.GetFullPath(file.File)).Distinct(StringComparer.OrdinalIgnoreCase).Count() != files.Length)
-            throw new InvalidDataException("The swap dependency lock has duplicate or excessive files.");
         foreach (var file in files) RequireRegular(file.File, MaximumBytes);
         if (files.Sum(file => new FileInfo(file.File).Length) > MaximumBytes)
             throw new InvalidDataException("The selected swap files exceed their total size limit.");
+        foreach (string directory in proposed.Mods.Concat(proposed.CliFiles).Select(file => Path.GetDirectoryName(file.File)!).Distinct(StringComparer.OrdinalIgnoreCase))
+            BoundedManifest(directory);
+        proposed.RequireReady(input.Dependencies);
         var originalMod = _original.Mods[0];
         RequireHash(originalMod.File, originalMod.Sha256);
         var oldMetadata = PluginMetadata.Read(originalMod.File);
@@ -53,19 +62,23 @@ internal sealed class DetachedModSwap
             throw new InvalidDataException("A detached swap must preserve the original single plugin GUID.");
         string guid = oldMetadata.Plugins[0].Guid;
         string game = _server.CheckpointGameDirectory, core = Path.Combine(_server.CheckpointLoaderDirectory, "BepInEx", "core");
-        var suppliedBuild = JsonSerializer.Deserialize<ModBuild.BuildRecord>(File.ReadAllText(input.BuildInputs),
-            new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? throw new InvalidDataException("Missing build inputs.");
-        var buildFiles = (suppliedBuild.Sources ?? []).Concat(suppliedBuild.Publicized ?? []).Concat(suppliedBuild.Dependencies ?? []).ToArray();
+        var suppliedBuild = ReadInput<ModBuild.BuildRecord>(input.BuildInputs);
+        if (suppliedBuild.Sources == null || suppliedBuild.Publicized == null || suppliedBuild.Dependencies == null ||
+            string.IsNullOrWhiteSpace(suppliedBuild.Mod) || string.IsNullOrWhiteSpace(suppliedBuild.Game))
+            throw new InvalidDataException("Build inputs have missing collections or paths.");
+        var buildFiles = suppliedBuild.Sources.Concat(suppliedBuild.Publicized).Concat(suppliedBuild.Dependencies).ToArray();
+        if (buildFiles.Any(file => file == null || string.IsNullOrWhiteSpace(file.File) || file.Sha256 is not { Length: 64 } || !file.Sha256.All(Uri.IsHexDigit)))
+            throw new InvalidDataException("Build inputs have an invalid file pin.");
         if (buildFiles.Length > 256 || buildFiles.Select(file => Path.GetFullPath(file.File)).Distinct(StringComparer.OrdinalIgnoreCase).Count() != buildFiles.Length)
             throw new InvalidDataException("Build inputs have duplicate or excessive files.");
         foreach (var file in buildFiles) RequireRegular(file.File, MaximumBytes);
-        var build = ModBuild.Verify(input.BuildInputs, game, input.Mod);
+        if (!Path.IsPathFullyQualified(suppliedBuild.Game)) throw new InvalidDataException("Build inputs require an absolute compile game path.");
+        BoundedManifest(Path.GetDirectoryName(InstallPins.GameAssembly(suppliedBuild.Game))!);
+        var build = ModBuild.Verify(suppliedBuild, game, input.Mod, input.BuildInputs);
         ModBuild.RequireLoaderMatches(build, core);
         ModBuild.RequireResolvedDependencies(build, proposed);
         // Resolve again from the proposed exact dependency choices, so a lock with omitted new hard dependencies cannot pass.
-        // Bound and reject links in all directories the resolver scans before handing them to it.
-        foreach (string directory in proposed.Mods.Select(file => Path.GetDirectoryName(file.File)!).Distinct(StringComparer.OrdinalIgnoreCase))
-            BoundedManifest(directory);
+        // Every recursively scanned mod and CLI directory was bounded and checked for links before RequireReady.
         string manifest = Path.Combine(_evidence, "detached-swap-" + operation + ".cli.json");
         // The caller's intent is already durable. This is private evidence, never a runtime or dependency change.
         DetachedCommandQueue.WriteNew(manifest, proposed.CliManifest);
@@ -99,6 +112,16 @@ internal sealed class DetachedModSwap
                 guid, oldMd5, newMd5, () => { Verify(); admission(); }, cancellation);
             Verify(); _verifyActivated = Verify;
         };
+    }
+
+    private static T ReadInput<T>(string path)
+    {
+        RequireRegular(path, DetachedCommandQueue.MaxBytes);
+        using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+        if (file.Length > DetachedCommandQueue.MaxBytes) throw new InvalidDataException("Swap input manifest exceeds its size limit.");
+        return JsonSerializer.Deserialize<T>(file, new JsonSerializerOptions { PropertyNameCaseInsensitive = true,
+            UnmappedMemberHandling = System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow })
+            ?? throw new InvalidDataException("Missing swap input manifest.");
     }
 
     internal static void Validate(Input input)

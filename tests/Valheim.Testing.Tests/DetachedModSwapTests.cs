@@ -97,6 +97,18 @@ public sealed class DetachedModSwapTests : IDisposable
         var next = Resolve(candidate);
         if (fault == "dependency") next.Gaps.Clear(); // A forged ready lock must still fail the independent closure resolution.
         if (fault == "duplicate") next.Mods.Add(next.Mods[0]);
+        if (fault == "oversize")
+        {
+            string huge = Write("huge/Library.dll", "");
+            using (var stream = new FileStream(huge, FileMode.Open, FileAccess.Write)) stream.SetLength(DetachedModSwap.MaximumBytes + 1);
+            var pin = new NativeDependencyFile(huge, new string('a', 64), "bounded before hash");
+            initial.Plugins.Add(pin); next.Plugins.Add(pin);
+        }
+        if (fault == "cli-link")
+        {
+            string sibling = Path.Combine(_root, "sibling"); Directory.CreateDirectory(sibling);
+            Directory.CreateSymbolicLink(Path.Combine(Path.GetDirectoryName(cli)!, "linked"), sibling);
+        }
         string dependencies = Path.Combine(_root, "lock.json"); next.Write(dependencies);
         string publicized = Write("references/assembly_valheim_publicized.dll", "publicized");
         ModBuild.FilePin Pin(string file) => new(file, FileHash.Sha256(file));
@@ -116,6 +128,30 @@ public sealed class DetachedModSwapTests : IDisposable
         var (swap, input) = Prepare(fault);
         Assert.ThrowsAny<Exception>(() => swap.Prepare(input, Guid.NewGuid().ToString("N"), () => { }, default));
         Assert.Empty(Directory.GetFiles(Path.Combine(_root, "evidence"), "detached-swap-*.json").Where(file => !file.EndsWith(".cli.json", StringComparison.Ordinal)));
+    }
+
+    [Theory]
+    [InlineData("oversize", "too large")][InlineData("cli-link", "contains a link")]
+    public void LimitsAndCliParentLinksAreRejectedBeforeHashingOrRecursiveResolution(string fault, string message)
+    {
+        var (swap, input) = Prepare(fault);
+        var error = Assert.Throws<InvalidDataException>(() => swap.Prepare(input, Guid.NewGuid().ToString("N"), () => { }, default));
+        Assert.Contains(message, error.Message);
+    }
+
+    [Theory]
+    [InlineData("gaps")][InlineData("mods")][InlineData("cliManifest")][InlineData("mod-entry")][InlineData("Sources")][InlineData("build-entry")]
+    public void MalformedManifestCollectionsAndEntriesRefuseWithoutEndingTheSupervisor(string field)
+    {
+        var (swap, input) = Prepare();
+        bool build = field is "Sources" or "build-entry";
+        string path = build ? input.BuildInputs : input.Dependencies;
+        var json = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(path))!;
+        if (field == "mod-entry") json["mods"]![0] = null;
+        else if (field == "build-entry") json["Sources"]![0] = null;
+        else json[field] = null;
+        File.WriteAllText(path, json.ToJsonString());
+        Assert.Throws<InvalidDataException>(() => swap.Prepare(input, Guid.NewGuid().ToString("N"), () => { }, default));
     }
 
     [Fact]
