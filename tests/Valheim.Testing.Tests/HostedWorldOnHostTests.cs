@@ -67,7 +67,7 @@ public sealed class HostedWorldOnHostTests : IDisposable
         Assert.Equal("pc", placed.Host);
         Assert.True(File.Exists(_host.Local(Worlds + "/Campaign/_main.0.fwl2")));
         Assert.False(File.Exists(_host.Local(Worlds + "/SOURCE.txt"))); // the ship's record stays in the stage
-        Assert.Equal(new[] { JournalEntry.CopyIntended, JournalEntry.CopyDone }, _journal.Select(entry => entry.Kind));
+        Assert.Equal(new[] { JournalEntry.CopyIntended, JournalEntry.CopyIntended, JournalEntry.CopyDone }, _journal.Select(entry => entry.Kind));
         Assert.Equal(Worlds + "/Campaign", _journal[0].Fields["runtime"]);
         Assert.Equal("4242", _journal[0].Fields["worldUid"]); // what env recover proves the world there by (#807)
         placed.Collect();

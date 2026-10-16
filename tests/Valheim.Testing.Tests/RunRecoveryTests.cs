@@ -1175,6 +1175,7 @@ public sealed class RunRecoveryTests : IDisposable
         Line(_host, run, "server", Gone, JournalEntry.CopyIntended, ("runtime", collected), ("stage", ""), ("parent", "/srv/runs/" + run), ("retention", "after-fetch"));
         Line(_host, run, "server", Gone, JournalEntry.CopyIntended, ("runtime", worlds + "/Campaign"), ("stage", ""),
             ("parent", worlds), ("holds", HostedWorldOnHost.Holds), ("world", "Campaign"), ("worldUid", "4242"), ("keepIn", collected));
+        Line(_host, run, "server", Gone, JournalEntry.CopyDone, ("runtime", worlds + "/Campaign"), ("verified", "true"));
         var result = await RecoverAsync(run, teardown: true);
         Assert.True(result.Clean, string.Join("\n", result.Steps));
         Assert.Empty(Directory.EnumerateFileSystemEntries(_host.Local(worlds)));
@@ -1317,6 +1318,24 @@ public sealed class RunRecoveryTests : IDisposable
             Assert.True(Directory.Exists(_host.Local(parent + "/Other")));
             Assert.DoesNotContain(_host.Runs, call => call.Script == "world-move" && call.Variables["name"] == "Other");
         }
+    }
+
+    [Fact]
+    public async Task RecoveryOfAnIntentOnlySameUidWorldPreservesTheForeignWorldAndStaysPending()
+    {
+        const string run = "run-intent-only", worlds = "/home/p/worlds_local", keep = "/srv/runs/run-intent-only/host-world";
+        ChunkedWorld(worlds, "Campaign", 4242);
+        Line(_host, run, "host", Gone, JournalEntry.CopyIntended, ("runtime", worlds + "/Campaign"), ("stage", ""),
+            ("parent", worlds), ("holds", HostedWorldOnHost.Holds), ("world", "Campaign"), ("worldUid", "4242"), ("keepIn", keep));
+        for (int attempt = 0; attempt < 2; attempt++)
+        {
+            var report = await RecoverAsync(run);
+            Assert.False(report.Recovered);
+            Assert.Contains("never confirmed", Assert.Single(report.Steps, step => step.What == "copy " + worlds + "/Campaign").Outcome);
+            Assert.Equal("chunk", File.ReadAllText(_host.Local(worlds + "/Campaign/0_0.chunk")));
+            Assert.Equal(JournalRunState.Recoverable, Assert.Single((await StatusAsync()).Runs).State);
+        }
+        Assert.DoesNotContain(_host.Runs, call => call.Script == "world-move");
     }
 
     // #807: the name is not the proof. A world in the client's worlds under the journalled name that states another world UID (one

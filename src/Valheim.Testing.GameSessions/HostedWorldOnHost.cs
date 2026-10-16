@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json;
 using Valheim.Testing.Game;
 
 namespace Valheim.Testing.GameSessions;
@@ -12,8 +13,8 @@ namespace Valheim.Testing.GameSessions;
 /// which the refusal, the move-out and recovery's presence check share (<see cref="BashNamed"/>, <see cref="WindowsNamed"/>); the
 /// placement refuses when one exists, so a user's world is never overwritten or used. The placement is journalled on the host before the ship (a
 /// <see cref="JournalEntry.CopyIntended"/> that <c>holds</c> <c>hosted-world</c>), so <c>env recover</c> moves a world a killed run
-/// left behind out of the user's worlds in the same way (<see cref="RunRecovery"/>), once the world there states the journalled
-/// world UID (<see cref="RequireOwnWorldAsync"/>).
+/// left behind out of the user's worlds in the same way (<see cref="RunRecovery"/>), only after a transfer was confirmed and
+/// the world there states the journalled world UID (<see cref="RequireOwnWorldAsync"/>). Intent alone is never ownership.
 /// </summary>
 internal static class HostedWorldOnHost
 {
@@ -112,7 +113,13 @@ internal static class HostedWorldOnHost
             // Each placement its own folder (#829 review): another hosted run into the same output, in the same run, takes the next
             // free root (<output>, then <output>/placement-2 and so on), so <root>/<runId>/host-world is never one an earlier run made.
             string root = output;
-            for (int n = 2; Path.Exists(Path.Combine(root, journal.RunId)); n++) root = Path.Combine(output, $"placement-{n}");
+            for (int n = 2; ; n++)
+            {
+                var reservation = ReserveStorage(host, "", Path.Combine(root, journal.RunId), CancellationToken.None);
+                if (reservation.Failed && reservation.ExitCode == 4) { root = Path.Combine(output, $"placement-{n}"); continue; }
+                RequireReservation(reservation, host.Name);
+                break;
+            }
             return ForClient(host, host.Name, worlds, root, journal.RunId,
                 (entry, _) => { journal.AppendLocal(actor, entry); return Task.CompletedTask; },
                 _ => Task.CompletedTask); // No lock: the caller owns this machine's client, as it owns the client it opens.
@@ -148,13 +155,14 @@ internal static class HostedWorldOnHost
         var existing = Entries(site, name, cancellation);
         if (existing.Count != 0)
             throw new InvalidOperationException($"The client's worlds on {site.HostName} already hold {string.Join(", ", existing)} in {site.WorldsDirectory}: a fixture world is never copied over a world. Remove or rename that one yourself, or rename the fixture world.");
+        Reserve(site, cancellation);
         var copy = WorldFixture.Copy(plan.World.Source, output, plan.World.Sha256);
         copy.Preserve = true;
         try
         {
             // Journalled before the ship: no journal line, no world in the user's worlds.
             site.Journal(JournalEntry.Of(JournalEntry.CopyIntended, ("runtime", world), ("stage", ""), ("parent", site.WorldsDirectory), ("holds", Holds),
-                ("world", name), ("worldUid", plan.WorldUid), ("keepIn", site.KeepIn)), cancellation).GetAwaiter().GetResult();
+                ("world", name), ("worldUid", plan.WorldUid), ("keepIn", site.KeepIn), ("placementState", "intended")), cancellation).GetAwaiter().GetResult();
             if (site.RetireRunCopies != null)
             {
                 string parent = HostedRuntimeStage.RequirePrepared(site.Host, site.Stage, site.RetireRunCopies);
@@ -169,29 +177,122 @@ internal static class HostedWorldOnHost
             var listing = HostInstall.ListAsync(site.Host, site.Stage, HostedTimeouts.Long, null, cancellation).GetAwaiter().GetResult();
             HostInstall.RequireSame(copy.SourceHashes, listing, "hosted world", ["SOURCE.txt", WorldFixture.ProvenanceFile]);
             var expected = copy.SourceHashes.Keys.Select(path => path.Split('/', '\\')[0]).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList();
+            IReadOnlyList<string> proven = [];
             try
             {
-                var moved = MoveOut(site.Host, site.Stage, name, site.WorldsDirectory, HostedTimeouts.Long, cancellation).GetAwaiter().GetResult();
-                if (!moved.Order(StringComparer.Ordinal).SequenceEqual(expected, StringComparer.Ordinal))
-                    throw new IOException($"Moving the hosted world into the client's worlds on {site.HostName} moved {string.Join(", ", moved)}, not {string.Join(", ", expected)}.");
+                // Intent/attempt is never ownership, even when a foreign world has the fixture's UID or identical bytes.
+                site.Journal(JournalEntry.Of(JournalEntry.CopyIntended, ("runtime", world), ("placementState", "attempted")), cancellation).GetAwaiter().GetResult();
+                var result = site.Host.RunAsync(site.Host.Shell.Kind == HostShellKind.PowerShell ? WindowsPlace : BashPlace,
+                    new Dictionary<string, string> { ["worlds"] = site.Stage, ["name"] = name, ["to"] = site.WorldsDirectory },
+                    HostedTimeouts.Long, cancellation).GetAwaiter().GetResult();
+                // Only an exited script's well-formed receipts prove individual transfers. A lost reply can still mean a
+                // running mutation: leave the pending journal and all files for inspection, never guess from UID or hashes.
+                if (result.Outcome == HostOutcome.Exited) proven = ProvenTransfers(result, expected);
+                result.EnsureSuccess($"Placing the hosted world on {site.HostName}");
+                site.Journal(JournalEntry.Of(JournalEntry.CopyDone, ("runtime", world), ("files", listing.Files.Count.ToString(CultureInfo.InvariantCulture)),
+                    ("verified", "true"), ("placementState", "transferred")), cancellation).GetAwaiter().GetResult();
             }
-            catch (Exception error) when (error is not OperationCanceledException)
+            catch
             {
-                // Whatever reached the user's worlds goes out again into the run's folder, as at the end of a run; the failure is the one reported.
-                try
+                if (proven.Count != 0)
                 {
-                    MoveOut(site.Host, site.WorldsDirectory, name, site.KeepIn, HostedTimeouts.Long, CancellationToken.None).GetAwaiter().GetResult();
-                    site.Journal(JournalEntry.Of(JournalEntry.CopyRetired, ("runtime", world), ("handedOver", "true"), ("keptIn", site.KeepIn)), CancellationToken.None).GetAwaiter().GetResult();
+                    try
+                    {
+                        // Preserve the proof in the same journal if cleanup itself fails or this process dies.
+                        site.Journal(JournalEntry.Of(JournalEntry.CopyIntended, ("runtime", world), ("placementState", "partial"),
+                            ("transferredEntries", JsonSerializer.Serialize(proven))), CancellationToken.None).GetAwaiter().GetResult();
+                        // The same owner retires only the entries this transfer proved. Foreign siblings remain untouched.
+                        MoveOut(site.Host, site.WorldsDirectory, name, site.KeepIn, HostedTimeouts.Long, CancellationToken.None, proven).GetAwaiter().GetResult();
+                        site.Journal(JournalEntry.Of(JournalEntry.CopyRetired, ("runtime", world), ("handedOver", "true"), ("keptIn", site.KeepIn)), CancellationToken.None).GetAwaiter().GetResult();
+                    }
+                    catch (Exception cleanup)
+                    {
+                        Console.Error.WriteLine($"Warning: hosted-world rollback on {site.HostName} is incomplete; keep the pending placement and inspect it before env recover ({cleanup.GetType().Name}).");
+                    }
                 }
-                catch (Exception cleanup) { Console.Error.WriteLine($"Warning: the hosted world may be left in {site.WorldsDirectory} on {site.HostName}: {cleanup.Message}; env recover --run moves it out."); }
+                else Console.Error.WriteLine($"Warning: hosted-world transfer on {site.HostName} was not proven; the pending placement requires inspection before env recover.");
                 throw;
             }
-            site.Journal(JournalEntry.Of(JournalEntry.CopyDone, ("runtime", world), ("files", listing.Files.Count.ToString(CultureInfo.InvariantCulture)), ("verified", "true")),
-                cancellation).GetAwaiter().GetResult();
             return HostedWorld.OnHost(name, plan.WorldUid, site.WorldsDirectory, copy.DirectoryPath, output, site.HostName, target => Collect(site, name, target));
         }
         finally { copy.Dispose(); } // kept (Preserve) as input evidence; nothing uses it after placement
     }
+
+    private static IReadOnlyList<string> ProvenTransfers(HostResult result, IReadOnlyList<string> expected)
+    {
+        var moved = result.Stdout.Split('\n').Select(line => line.TrimEnd('\r'))
+            .Where(line => line.StartsWith("VT-WORLD-MOVED ", StringComparison.Ordinal)).Select(line => line["VT-WORLD-MOVED ".Length..]).ToList();
+        if ((result.Succeeded && (InteractiveClient.Line(result.Stdout, "VT-WORLD-MOVE ") != "done" ||
+                !moved.Order(StringComparer.Ordinal).SequenceEqual(expected, StringComparer.Ordinal))) ||
+            result.Stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries).Any(line =>
+                !line.StartsWith("VT-WORLD-MOVED ", StringComparison.Ordinal) && !line.StartsWith("VT-WORLD-EXISTS ", StringComparison.Ordinal) && line.TrimEnd('\r') != "VT-WORLD-MOVE done") ||
+            moved.Distinct(StringComparer.Ordinal).Count() != moved.Count || moved.Any(leaf => !expected.Contains(leaf, StringComparer.Ordinal)))
+            throw new HostOperationException("Malformed hosted-world transfer receipt; preserve the pending placement for inspection", result);
+        return moved;
+    }
+
+    private static void Reserve(Site site, CancellationToken cancellation) =>
+        RequireReservation(ReserveStorage(site.Host, site.Stage, site.KeepIn, cancellation), site.HostName);
+
+    private static HostResult ReserveStorage(IGameHost host, string stage, string keep, CancellationToken cancellation) =>
+        host.RunAsync(host.Shell.Kind == HostShellKind.PowerShell ? WindowsReserve : BashReserve,
+            new Dictionary<string, string> { ["stage"] = stage, ["keep"] = keep }, HostedTimeouts.Quick, cancellation).GetAwaiter().GetResult();
+
+    private static void RequireReservation(HostResult result, string host)
+    {
+        result.EnsureSuccess($"Reserving hosted-world storage on {host}; each placement needs new staging and collection directories");
+        if (InteractiveClient.Line(result.Stdout, "VT-WORLD-RESERVED ") != "done")
+            throw new HostOperationException("Hosted-world storage reservation was not confirmed", result);
+    }
+
+    // Recovery shares this owner's placement decision. A UID describes a world; it never proves a transfer occurred.
+    internal static async Task<IReadOnlyList<string>> RecoverAsync(IGameHost host, IReadOnlyDictionary<string, string> fields,
+        string runtime, string runId, TimeSpan timeout, CancellationToken cancellation)
+    {
+        var (name, uid) = RequireJournalled(fields, runtime, runId);
+        if (fields.GetValueOrDefault("placementState") == "partial")
+        {
+            var selected = JsonSerializer.Deserialize<string[]>(fields.GetValueOrDefault("transferredEntries") ?? "[]") ?? [];
+            if (selected.Length == 0 || selected.Distinct(StringComparer.Ordinal).Count() != selected.Length ||
+                selected.Any(leaf => leaf.Length == 0 || leaf.IndexOfAny(['/', '\\', '\n', '\r']) >= 0 || !HostedWorld.IsNamedFor(leaf, name)))
+                throw new InvalidDataException("the partial placement has no valid transfer receipts; preserve the pending placement for inspection");
+            return await MoveOut(host, fields["parent"], name, fields["keepIn"], timeout, cancellation, selected).ConfigureAwait(false);
+        }
+        bool present = await RequireOwnWorldAsync(host, fields["parent"], name, uid, timeout, cancellation).ConfigureAwait(false);
+        if (!present) return [];
+        if (fields.GetValueOrDefault("verified") != "true" ||
+            (fields.TryGetValue("placementState", out string? state) && state != "transferred"))
+            throw new InvalidDataException("the hosted-world transfer was never confirmed; a same-named save may be personal even with the fixture UID. Inspect it and the pending journal, move foreign files aside for safekeeping, then retry env recover");
+        return await MoveOut(host, fields["parent"], name, fields["keepIn"], timeout, cancellation).ConfigureAwait(false);
+    }
+
+    // Reserve the existing collection directory atomically; shipping still gets a new, absent stage directory. Refusal is
+    // permanent for this site, so repeated callers cannot share its storage even when the first shipment has not started.
+    internal static readonly string BashReserve = """
+        set -eu
+        [ ! -e "$stage" ] && [ ! -L "$stage" ] || exit 4
+        mkdir -p -- "${keep%/*}"
+        if ! mkdir -- "$keep"; then
+            if [ -e "$keep" ] || [ -L "$keep" ]; then exit 4; fi
+            exit 5
+        fi
+        echo 'VT-WORLD-RESERVED done'
+        """;
+    internal static readonly string WindowsReserve = """
+        $ErrorActionPreference = 'Stop'
+        if ($stage -and (Test-Path -LiteralPath $stage)) { exit 4 }
+        $parent = [IO.Path]::GetDirectoryName($keep)
+        [void][IO.Directory]::CreateDirectory($parent)
+        $candidate = Join-Path $parent ('.placement-' + [Guid]::NewGuid().ToString('N'))
+        [void][IO.Directory]::CreateDirectory($candidate)
+        try { [IO.Directory]::Move($candidate, $keep) }
+        catch {
+            [IO.Directory]::Delete($candidate)
+            if (Test-Path -LiteralPath $keep) { exit 4 }
+            throw
+        }
+        'VT-WORLD-RESERVED done'
+        """;
 
     // Moves every entry named for the world out of the user's worlds into the run's directory on the host (the run's save, handed
     // over there), then fetches that into the evidence. Returns where the evidence is.
@@ -224,10 +325,10 @@ internal static class HostedWorldOnHost
     }
 
     /// <summary>Moves every entry named for <paramref name="name"/> in <paramref name="worlds"/> into <paramref name="keepIn"/> (created); returns the moved entries.</summary>
-    internal static async Task<IReadOnlyList<string>> MoveOut(IGameHost host, string worlds, string name, string keepIn, TimeSpan timeout, CancellationToken cancellation)
+    internal static async Task<IReadOnlyList<string>> MoveOut(IGameHost host, string worlds, string name, string keepIn, TimeSpan timeout, CancellationToken cancellation, IReadOnlyList<string>? selected = null)
     {
         var result = (await host.RunAsync(host.Shell.Kind == HostShellKind.PowerShell ? WindowsMoveOut : BashMoveOut,
-            new Dictionary<string, string> { ["worlds"] = worlds, ["name"] = name, ["to"] = keepIn }, timeout, cancellation).ConfigureAwait(false))
+            new Dictionary<string, string> { ["worlds"] = worlds, ["name"] = name, ["to"] = keepIn, ["selected"] = selected == null ? "" : string.Join("\n", selected) }, timeout, cancellation).ConfigureAwait(false))
             .EnsureSuccess($"Moving the hosted world out of the client's worlds on {host.Name}");
         if (InteractiveClient.Line(result.Stdout, "VT-WORLD-MOVE") == null) throw new HostOperationException($"Unexpected reply while moving the hosted world on {host.Name}", result);
         return result.Stdout.Split('\n').Select(line => line.TrimEnd('\r')).Where(line => line.StartsWith("VT-WORLD-MOVED ", StringComparison.Ordinal))
@@ -297,7 +398,8 @@ internal static class HostedWorldOnHost
     // The one rule of what is named for a world on a host (HostedWorld.IsNamedFor): <name>, <name>.* and the game's <name>_backup*,
     // in any case. A hosting client runs on Windows or macOS, whose folders ignore case, so the game takes campaign.fwl for
     // Campaign.fwl: the refusal must see it, and a move-out may take it, because the refusal proved nothing named for the world was
-    // there before the placement. Lower-casing is culture-free (C locale, invariant culture). Each script below uses it.
+    // there before the placement. Failed placement rollback uses individual transfer receipts instead. Lower-casing is culture-free
+    // (C locale, invariant culture). Each script below uses it.
     internal const string WindowsNamed = """
         $lower = $name.ToLowerInvariant()
         function Test-VtNamed([string]$leaf) {
@@ -398,6 +500,7 @@ internal static class HostedWorldOnHost
             foreach ($entry in @([IO.Directory]::EnumerateFileSystemEntries($worlds))) {
                 $leaf = [IO.Path]::GetFileName($entry)
                 if (-not (Test-VtNamed $leaf)) { continue }
+                if ($selected -and $leaf -cnotin @($selected.Split("`n"))) { continue }
                 $dest = Join-Path $to $leaf
                 if ([IO.File]::Exists($dest) -or [IO.Directory]::Exists($dest)) { 'VT-WORLD-EXISTS ' + $leaf; exit 4 }
                 $moves += ,@($entry, $dest, $leaf)
@@ -423,6 +526,13 @@ internal static class HostedWorldOnHost
                 [ -e "$entry" ] || [ -L "$entry" ] || continue
                 leaf=${entry##*/}
                 vt_named "$leaf" || continue
+                if [ -n "${selected-}" ]; then
+                    found=false
+                    while IFS= read -r choice; do [ "$choice" != "$leaf" ] || found=true; done <<EOF
+        $selected
+        EOF
+                    [ "$found" = true ] || continue
+                fi
                 if [ -e "$to/$leaf" ] || [ -L "$to/$leaf" ]; then printf 'VT-WORLD-EXISTS %s\n' "$leaf"; exit 4; fi
                 moves="$moves$leaf
         "
@@ -436,4 +546,19 @@ internal static class HostedWorldOnHost
         done
         echo 'VT-WORLD-MOVE done'
         """;
+    internal static readonly string WindowsPlace = WindowsMoveOut.Replace("[void][IO.Directory]::CreateDirectory($to)", """
+        [void][IO.Directory]::CreateDirectory($to)
+        foreach ($existing in [IO.Directory]::EnumerateFileSystemEntries($to)) {
+            if (Test-VtNamed ([IO.Path]::GetFileName($existing))) { 'VT-WORLD-EXISTS ' + [IO.Path]::GetFileName($existing); exit 4 }
+        }
+        """);
+    internal static readonly string BashPlace = BashMoveOut.Replace("mkdir -p -- \"$to\"", """
+        mkdir -p -- "$to"
+        for existing in "$to"/* "$to"/.[!.]*; do
+            [ -e "$existing" ] || [ -L "$existing" ] || continue
+            leaf=${existing##*/}
+            if vt_named "$leaf"; then printf 'VT-WORLD-EXISTS %s\n' "$leaf"; exit 4; fi
+        done
+        """);
+
 }

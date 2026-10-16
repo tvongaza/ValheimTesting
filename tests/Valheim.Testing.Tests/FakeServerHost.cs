@@ -189,7 +189,8 @@ internal sealed class FakeServerHost : IGameHost
         ("scheduled-task-retire", [WindowsScheduledTask.RetireScript]),
         ("lease", [LeaseScripts.Bash, LeaseScripts.PowerShell]),
         ("world-entries", [HostedWorldOnHost.WindowsEntries, HostedWorldOnHost.BashEntries]),
-        ("world-move", [HostedWorldOnHost.WindowsMoveOut, HostedWorldOnHost.BashMoveOut]),
+        ("world-move", [HostedWorldOnHost.WindowsMoveOut, HostedWorldOnHost.BashMoveOut, HostedWorldOnHost.WindowsPlace, HostedWorldOnHost.BashPlace]),
+        ("world-reserve", [HostedWorldOnHost.WindowsReserve, HostedWorldOnHost.BashReserve]),
         ("world-meta", [HostedWorldOnHost.WindowsMetadata, HostedWorldOnHost.BashMetadata]));
     private static Dictionary<string, string> Names(params (string Name, string[] Scripts)[] table)
     {
@@ -726,6 +727,13 @@ internal sealed class FakeServerHost : IGameHost
                 if (Directory.Exists(Local(v["keep"]))) Directory.Delete(Local(v["keep"]), recursive: true);
                 return Ok("VT-DROPPED\n");
             case "preloader": return Ok(PreloaderReply);
+            case "world-reserve":
+            {
+                string keep = Local(v["keep"]), stage = Local(v["stage"]);
+                if (Path.Exists(keep) || Path.Exists(stage)) return new HostResult(HostOutcome.Exited, 4, "", "", TimeSpan.Zero, false);
+                Directory.CreateDirectory(keep);
+                return Ok("VT-WORLD-RESERVED done\n");
+            }
             case "world-entries":
             case "world-move":
             {
@@ -738,6 +746,11 @@ internal sealed class FakeServerHost : IGameHost
                 if (name == "world-entries") return Ok(string.Concat(entries.Select(entry => "VT-WORLD-ENTRY " + Path.GetFileName(entry) + "\n")) + "VT-WORLD-ENTRIES done\n");
                 string to = Local(v["to"]);
                 Directory.CreateDirectory(to);
+                if ((script == HostedWorldOnHost.WindowsPlace || script == HostedWorldOnHost.BashPlace) &&
+                    Directory.EnumerateFileSystemEntries(to).Any(entry => Named(Path.GetFileName(entry))))
+                    return new HostResult(HostOutcome.Exited, 4, "VT-WORLD-EXISTS foreign\n", "", TimeSpan.Zero, false);
+                if (v.GetValueOrDefault("selected") is { Length: > 0 } selected)
+                    entries = entries.Where(entry => selected.Split('\n').Contains(Path.GetFileName(entry), StringComparer.Ordinal)).ToList();
                 if (entries.FirstOrDefault(entry => Path.Exists(Path.Combine(to, Path.GetFileName(entry)))) is { } clash)
                     return new HostResult(HostOutcome.Exited, 4, "VT-WORLD-EXISTS " + Path.GetFileName(clash) + "\n", "", TimeSpan.FromMilliseconds(3), false);
                 foreach (string entry in entries)
