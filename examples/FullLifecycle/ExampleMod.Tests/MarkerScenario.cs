@@ -41,13 +41,25 @@ public static class MarkerScenario
     };
 
     /// <summary>Runs the scenario on the session's server and its one client.</summary>
-    public static void Run(GameSession session, MarkerPlan plan) =>
-        Run(plan, session.Server!.Game, session.Server!, () => session.OpenClient(plan.Client!), session.Report, session.Output, session.Cancellation);
+    public static void Run(GameSession session, MarkerPlan plan)
+    {
+        IGameHost? reviewHost = plan.ReviewStill == null ? null : session.CampaignClients.Count == 0
+            ? new LocalGameHost("review-client", HostShell.ThisMachine) : session.ClientHost("client");
+        Run(plan, session.Server!.Game, session.Server!, () => session.OpenClient(plan.Client!), session.Report,
+            session.Output, session.Cancellation, reviewHost);
+    }
 
     public static void Run(MarkerPlan plan, GameActor server, IOwnedServer ownedServer, Func<ClientSession> openClient,
-        ScenarioReport report, string output, CancellationToken cancellation = default)
+        ScenarioReport report, string output, CancellationToken cancellation = default, IGameHost? reviewHost = null)
     {
         var client = plan.Client ?? throw new ArgumentException("The scenario needs the plan's client section.");
+        ReviewCapturePlan? still = plan.ReviewStill?.For(plan, output);
+        if (still != null)
+        {
+            if (reviewHost == null) throw new ArgumentException("A review still needs the client's IGameHost.");
+            ReviewCapture.Validate(still, reviewHost.Shell.Kind);
+            report.Provenance["humanReview"] = "one still; visual verdict not asserted";
+        }
         report.Step("no marker at either site before the mod acts", () => { RequireServerMarkers(server, plan.DrySite, 0); RequireServerMarkers(server, plan.WetSite, 0); });
         report.Step("the mod marks the dry site", () => server.Execute(Mark(plan.DrySite)).RequireLine("OK: marked ", "ExampleMod did not mark the dry site"));
         report.Step("the mod refuses the wet site", () => server.Execute(Mark(plan.WetSite)).RequireLine("REFUSED: ", "ExampleMod did not refuse the wet site"));
@@ -61,7 +73,14 @@ public static class MarkerScenario
             Arrival = new HeightExpectation(plan.Arrival.X, plan.Arrival.Z, plan.Arrival.Ground),
             ArriveStep = "arrive beside the marker", Cancellation = cancellation,
         }.Run(server, openClient,
-            measure: round => round.Step("the client sees the marker at the dry site", () => RequireClientMarkers(round.Client, plan.DrySite, 1)),
+            measure: round =>
+            {
+                round.Step("the client sees the marker at the dry site", () => RequireClientMarkers(round.Client, plan.DrySite, 1));
+                if (round.Index == 0 && still != null)
+                    round.Step("capture marker for human review", () => report.Attach(ReviewCapture.Capture(
+                        round.Server, round.Client, reviewHost!, still, TimeSpan.FromSeconds(client.ArrivalSeconds),
+                        TimeSpan.FromSeconds(30), cancellation).Evidence));
+            },
             afterRestart: round => round.Step("the server still has one marker at the dry site, none at the wet site",
                 () => { RequireServerMarkers(round.Server, plan.DrySite, 1); RequireServerMarkers(round.Server, plan.WetSite, 0); }));
     }

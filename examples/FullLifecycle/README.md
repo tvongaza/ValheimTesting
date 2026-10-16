@@ -48,10 +48,25 @@ dotnet build examples/FullLifecycle/ExampleMod.TestAdapter/ExampleMod.TestAdapte
 
 # The native session: check its environment without launching anything, then run the native test.
 valheim-test session check examples/FullLifecycle/ExampleMod.Tests/session.json --hosts
-dotnet test examples/FullLifecycle/ExampleMod.Tests/ExampleMod.Tests.csproj -c Release --filter "Category=Native"
+dotnet test examples/FullLifecycle/ExampleMod.Tests/ExampleMod.Tests.csproj -c Release --filter "FullyQualifiedName~DrySiteSessionTests"
 ```
 
 The native test passes only when the run passed, after the [log scan](../../docs/reference/game-log-scan.md) of every server boot and client. Each run writes a new evidence directory under `session-runs/` in the test output ([what it holds](../../docs/guides/test-save-restart-rejoin.md#check-the-result)).
+
+To include one optional screenshot after the first joined-client marker check, add `reviewStill` to the private plan:
+
+```json
+"reviewStill": {
+  "hostDirectory": "C:\\pcstage\\example-review-unique-run",
+  "gameBuild": "1.0.17",
+  "weather": "Clear",
+  "timeOfDay": 0.45,
+  "cameraDistance": 24,
+  "cameraHeight": 12
+}
+```
+
+Set `hostDirectory` to a fresh, private, absolute path without spaces **on the client host** (a Unix path for a Mac/Linux client). Use a new path for each run and review the fetched `review-marker/example-marker.png` yourself. Its JSON sidecar is attached to `result.json` with `visualVerdict: "not asserted"`; the test checks capture and restoration, not whether the picture looks good. Omit `reviewStill` for the usual faster run. The scenario passes the campaign client's own `IGameHost` when that client is remote.
 
 ## The native session
 
@@ -69,6 +84,19 @@ public sealed class DrySiteSessionTests(ExampleSession fixture) : IClassFixture<
 ```
 
 The server is always owned and runs from a [disposable profile](../../docs/reference/sessions-profiles.md). The client is `owned`, launched from a profile and stopped at the end, or `attach`, which you launch yourself and the run never stops.
+
+### One client hosts the world locally
+
+[`HostedMarkerScenario`](ExampleMod.Tests/HostedMarkerScenario.cs) uses the same mod rule with one client acting as both server and player. Its `HostedRunOptions<HostedMarkerPlan>` passes the hosting client to `PinnedServerRun`; the toolkit's local `HostingClientActor` places the fixture through `HostedWorldOnHost.ThisMachine`, journals it, saves, leaves, rehosts and cleans it up. The scenario asserts the marker before and after rehosting.
+
+Copy [`sample-hosted-plan.json`](ExampleMod.Tests/sample-hosted-plan.json) to the ignored `ExampleMod.Tests/hosted-dry-site-lifecycle.plan.json`, replace its pins and fixture paths, then run:
+
+```sh
+dotnet test examples/FullLifecycle/ExampleMod.Tests/ExampleMod.Tests.csproj -c Release \
+  --filter "FullyQualifiedName~HostedMarkerSessionTests"
+```
+
+This explicit native test prepares the toolkit's clean `vtseedclean` character, refuses a same-named local or Cloud character, and retires its copy after a passing run has stopped its owned client. On a failed run it keeps the staged save and its registered source: verify the client is stopped before removing them. Use one client at a time with this seed. The run output is `session-runs/hosted-<id>/`, including the collected `host-world`; verify `valheim-test env status` is empty afterwards and the user's `worlds_local` matches its before-run snapshot. Without the private hosted plan, the test is skipped; the default no-game validation excludes it.
 
 ## Limits
 

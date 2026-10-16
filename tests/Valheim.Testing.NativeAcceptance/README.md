@@ -32,7 +32,7 @@ With `"scenario": "dry-site-server"` ([DrySiteServerScenario](DrySiteServerScena
 Nobody needs to prepare a fixture for it by hand:
 
 ```sh
-dotnet run --project tests/Valheim.Testing.NativeAcceptance -c Release -- prepare-server <server-runtime> <new-output-directory>
+dotnet run --project tests/Valheim.Testing.NativeAcceptance -c Release -- prepare-server --game-port <fresh-port> <server-runtime> <new-output-directory>
 dotnet run --project tests/Valheim.Testing.NativeAcceptance -c Release -- run <that-directory>/plan.json <another-new-output-directory>
 ```
 

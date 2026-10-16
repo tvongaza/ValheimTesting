@@ -12,7 +12,7 @@ namespace Valheim.Testing.NativeAcceptance;
 
 /// <summary>
 /// Prepares a <c>dry-site-server</c> plan on a world the game creates now, so the server scenario can run where nobody
-/// prepared a fixture by hand, such as a scheduled CI job: <c>prepare-server &lt;server-runtime&gt; &lt;new-output-directory&gt;</c>.
+/// prepared a fixture by hand, such as a scheduled CI job: <c>prepare-server [--game-port PORT] &lt;server-runtime&gt; &lt;new-output-directory&gt;</c>.
 /// <list type="number">
 /// <item>Pins the runtime by the SHA256 of every file, its game build, loader and patchers (<c>InstallPins</c>), and each required
 /// plugin in its <c>BepInEx/plugins</c> by the MD5 of their files: the default ValheimCLI plugin, the mod and its adapter.</item>
@@ -52,14 +52,14 @@ public static class ServerFixture
 
     public static async Task<int> RunAsync(string[] args)
     {
-        if (args.Length != 3 || args[0] != Mode)
+        if (!TryArguments(args, out int gamePort, out string? runtimeInput, out string? outputInput))
         {
-            Console.Error.WriteLine($"Usage: Valheim.Testing.NativeAcceptance {Mode} <server-runtime> <new-output-directory>");
+            Console.Error.WriteLine($"Usage: Valheim.Testing.NativeAcceptance {Mode} [--game-port 1024..65533] <server-runtime> <new-output-directory>");
             return 2;
         }
         var report = new ScenarioReport("acceptancemod-server-fixture");
         report.Provenance["mode"] = Mode;
-        string runtime = Path.GetFullPath(args[1]), output = Path.GetFullPath(args[2]);
+        string runtime = Path.GetFullPath(runtimeInput!), output = Path.GetFullPath(outputInput!);
         bool ownOutput = false;
         try
         {
@@ -82,7 +82,7 @@ public static class ServerFixture
 
             // A throwaway password for a server that is never listed (-public 0) and whose port nothing publishes.
             string password = Convert.ToHexString(RandomNumberGenerator.GetBytes(8)).ToLowerInvariant();
-            string[] arguments = ["-batchmode", "-nographics", "-name", WorldName, "-port", "2456", "-world", WorldName, "-password", password,
+            string[] arguments = ["-batchmode", "-nographics", "-name", WorldName, "-port", gamePort.ToString(CultureInfo.InvariantCulture), "-world", WorldName, "-password", password,
                 "-public", "0", "-savedir", "{world}", "-logFile", "{runtime}/toolkit-unity.log"];
             // The world folder the game creates its world in: empty but for a note, as a strictly pinned world fixture is never empty.
             string newWorld = Path.Combine(output, "new-world");
@@ -160,6 +160,20 @@ public static class ServerFixture
         }
         Console.WriteLine(report.Passed ? "PREPARED (a new world and its dry-site-server plan; not an acceptance test)" : "FAIL");
         return report.Passed ? 0 : 1;
+    }
+
+    /// <summary>Read a fresh game port before any runtime or output path is touched.</summary>
+    public static bool TryArguments(string[] args, out int gamePort, out string? runtime, out string? output)
+    {
+        gamePort = 2456; runtime = null; output = null;
+        if (args is [Mode, var source, var destination]) { runtime = source; output = destination; return true; }
+        if (args is [Mode, "--game-port", var text, var sourceWithPort, var destinationWithPort] &&
+            int.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out int parsed) &&
+            parsed is >= 1024 and <= 65533 && parsed != CliPort)
+        {
+            gamePort = parsed; runtime = sourceWithPort; output = destinationWithPort; return true;
+        }
+        return false;
     }
 
     /// <summary>The MD5 of each of <see cref="Plugins"/> under the runtime's <c>BepInEx/plugins</c>; refuses a missing, duplicate or extra plugin file.</summary>

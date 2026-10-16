@@ -61,6 +61,17 @@ public sealed class ServerOnlyTests : IDisposable
     [Fact] public void TheServerScenarioRefusesALifecyclePlan() =>
         Assert.Throws<ArgumentException>(() => DrySiteServerScenario.Run(_world.Plan(), _world.Server(), _world.Restart, new ScenarioReport("x")));
 
+    [Fact] public void PreparationAcceptsAFreshGamePortBeforeAnyOutputIsMade()
+    {
+        Assert.True(ServerFixture.TryArguments([ServerFixture.Mode, "--game-port", "2488", "runtime", "output"],
+            out int port, out string? runtime, out string? output));
+        Assert.Equal(2488, port);
+        Assert.Equal("runtime", runtime);
+        Assert.Equal("output", output);
+        Assert.False(ServerFixture.TryArguments([ServerFixture.Mode, "--game-port", "5577", "runtime", "output"], out _, out _, out _));
+        Assert.False(ServerFixture.TryArguments([ServerFixture.Mode, "--game-port", "65535", "runtime", "output"], out _, out _, out _));
+    }
+
     // The plan file, as prepare-server writes it; the pinned sources need not exist to validate a plan.
     private string PlanFile(string scenario, bool client = false, bool arrival = false)
     {

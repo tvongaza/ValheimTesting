@@ -1,0 +1,31 @@
+{
+  "scenario": "hosted-dry-site-lifecycle",
+  "client": {
+    "mode": "owned",
+    "install": "<full path of the client install>",
+    "launchArguments": ["-screen-fullscreen", "0", "-screen-width", "1280", "-screen-height", "720"],
+    "port": 5556,
+    "pins": {
+      "valheimCLI.valheimCLI": "<md5 of valheimCLI.dll>",
+      "example.examplemod": "<md5 of ExampleMod.dll>",
+      "example.examplemod.testadapter": "<md5 of ExampleMod.TestAdapter.dll>"
+    },
+    "installPins": {
+      "game": "<InstallPins.Of(install).Game>",
+      "loader": "<InstallPins.Of(install).Loader>",
+      "patchers": "<InstallPins.Of(install).Patchers>"
+    },
+    "character": "vtseedclean",
+    "hostWorld": {
+      "world": {
+        "source": "<full path of a disposable fixture world>",
+        "sha256": { "HostFixture.fwl": "<sha256>", "HostFixture.db": "<sha256>" }
+      },
+      "worldUid": "<the fixture world's UID>",
+      "saveSeconds": 120
+    }
+  },
+  "drySite": { "x": 120, "z": -380, "ground": 45.2 },
+  "arrival": { "x": 125, "z": -380, "ground": 45.1 },
+  "wetSite": { "x": 900, "z": 150, "ground": 18.4 }
+}
