@@ -199,11 +199,14 @@ internal static class HostedWorldOnHost
                     try
                     {
                         // Preserve the proof in the same journal if cleanup itself fails or this process dies.
-                        site.Journal(JournalEntry.Of(JournalEntry.CopyIntended, ("runtime", world), ("placementState", "partial"),
+                        site.Journal(JournalEntry.Of(JournalEntry.CopyIntended, ("runtime", world),
+                            ("placementState", proven.Count == expected.Count ? "partial" : "uncertain"),
                             ("transferredEntries", JsonSerializer.Serialize(proven))), CancellationToken.None).GetAwaiter().GetResult();
                         // The same owner retires only the entries this transfer proved. Foreign siblings remain untouched.
                         MoveOut(site.Host, site.WorldsDirectory, name, site.KeepIn, HostedTimeouts.Long, CancellationToken.None, proven).GetAwaiter().GetResult();
-                        site.Journal(JournalEntry.Of(JournalEntry.CopyRetired, ("runtime", world), ("handedOver", "true"), ("keptIn", site.KeepIn)), CancellationToken.None).GetAwaiter().GetResult();
+                        if (proven.Count == expected.Count)
+                            site.Journal(JournalEntry.Of(JournalEntry.CopyRetired, ("runtime", world), ("handedOver", "true"), ("keptIn", site.KeepIn)), CancellationToken.None).GetAwaiter().GetResult();
+                        else Console.Error.WriteLine($"Warning: only the confirmed hosted-world entries on {site.HostName} were rolled back; the remaining transfer is uncertain and its placement stays pending for inspection.");
                     }
                     catch (Exception cleanup)
                     {
@@ -251,7 +254,7 @@ internal static class HostedWorldOnHost
     {
         var (name, uid) = RequireJournalled(fields, runtime, runId);
         string? placement = fields.GetValueOrDefault("placementState");
-        if (placement == "attempted")
+        if (placement is "attempted" or "uncertain")
             throw new InvalidDataException("the hosted-world transfer was never confirmed and its host script may still run; preserve the pending placement even if no world is present. Inspect the host and settle the interrupted transfer before retrying env recover");
         if (placement == "partial")
         {

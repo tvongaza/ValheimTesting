@@ -238,6 +238,51 @@ public sealed class HostedWorldPlacementSafetyTests : IDisposable
     }
 
     [Fact]
+    public async Task ASecondPublishedEntryWithoutAReceiptCannotBeRetiredAfterRollingBackTheFirst()
+    {
+        var (plan, site, host, journal) = Setup();
+        host.TransformScript = (script, variables) => variables?.GetValueOrDefault("worlds") != site.Stage ? script :
+            host.Shell.Kind == HostShellKind.Bash
+                ? "receipt_count=0\n" + script.Replace("printf 'VT-WORLD-MOVED %s\\n' \"$leaf\"",
+                    "receipt_count=$((receipt_count + 1))\n[ \"$receipt_count\" -ne 2 ] || exit 9\nprintf 'VT-WORLD-MOVED %s\\n' \"$leaf\"")
+                : "$receiptCount = 0\n" + script.Replace("'VT-WORLD-MOVED ' + $move[2]", "$receiptCount++; if ($receiptCount -eq 2) { exit 9 }\n'VT-WORLD-MOVED ' + $move[2]");
+        Assert.ThrowsAny<Exception>(() => site.Place(plan, Path.Combine(_root, "output"), default));
+        Assert.Equal("uncertain", Fields(journal)["placementState"]);
+        Assert.Single(Directory.EnumerateFileSystemEntries(site.KeepIn));
+        string remaining = Assert.Single(Directory.EnumerateFileSystemEntries(site.WorldsDirectory));
+        byte[] bytes = File.ReadAllBytes(remaining);
+        Assert.DoesNotContain(journal, entry => entry.Kind == JournalEntry.CopyRetired);
+        for (int attempt = 0; attempt < 2; attempt++)
+        {
+            await Assert.ThrowsAsync<InvalidDataException>(() => HostedWorldOnHost.RecoverAsync(host, Fields(journal),
+                Path.Combine(site.WorldsDirectory, "Campaign"), "run-1", TimeSpan.FromSeconds(30), default));
+            Assert.Equal(bytes, File.ReadAllBytes(remaining));
+        }
+        // Receipt names being absent is still insufficient: the unproved command's other effects are uncertain.
+        File.Delete(remaining);
+        await Assert.ThrowsAsync<InvalidDataException>(() => HostedWorldOnHost.RecoverAsync(host, Fields(journal),
+            Path.Combine(site.WorldsDirectory, "Campaign"), "run-1", TimeSpan.FromSeconds(30), default));
+    }
+
+    [OsFact("windows")]
+    public async Task WindowsCrossVolumeSecondSourceDeleteFailureLeavesTheUnprovedPublicationPending()
+    {
+        var (plan, site, host, journal) = Setup();
+        host.TransformScript = (script, variables) => variables?.GetValueOrDefault("worlds") != site.Stage ? script :
+            "$deletionCount = 0\n" + script.Replace("[IO.Path]::GetPathRoot($entry) -ne [IO.Path]::GetPathRoot($dest)", "$true")
+                .Replace("Remove-VtTree $entry $worlds", "$deletionCount++; if ($deletionCount -eq 2) { throw 'source-delete failed' }\nRemove-VtTree $entry $worlds");
+        Assert.ThrowsAny<Exception>(() => site.Place(plan, Path.Combine(_root, "output"), default));
+        Assert.Equal("uncertain", Fields(journal)["placementState"]);
+        Assert.Single(Directory.EnumerateFileSystemEntries(site.KeepIn));
+        Assert.Single(Directory.EnumerateFileSystemEntries(site.WorldsDirectory));
+        Assert.Single(Directory.EnumerateFileSystemEntries(site.Stage).Where(path => HostedWorld.IsNamedFor(Path.GetFileName(path), "Campaign")));
+        Assert.DoesNotContain(journal, entry => entry.Kind == JournalEntry.CopyRetired);
+        await Assert.ThrowsAsync<InvalidDataException>(() => HostedWorldOnHost.RecoverAsync(host, Fields(journal),
+            Path.Combine(site.WorldsDirectory, "Campaign"), "run-1", TimeSpan.FromSeconds(30), default));
+        Assert.Empty(Directory.EnumerateDirectories(site.WorldsDirectory, ".vt-world-copy-*"));
+    }
+
+    [Fact]
     public void PartialTransferRollsBackItsReceiptAndPreservesAForeignSibling()
     {
         var (plan, site, host, journal) = Setup();
@@ -255,8 +300,8 @@ public sealed class HostedWorldPlacementSafetyTests : IDisposable
         Assert.ThrowsAny<Exception>(() => site.Place(plan, Path.Combine(_root, "output"), default));
         Assert.Equal("foreign", File.ReadAllText(Path.Combine(site.WorldsDirectory, "Campaign_backup_foreign.db")));
         Assert.Single(Directory.EnumerateFileSystemEntries(site.KeepIn));
-        Assert.Contains(journal, entry => entry.Fields.GetValueOrDefault("placementState") == "partial");
-        Assert.Equal(JournalEntry.CopyRetired, journal[^1].Kind);
+        Assert.Contains(journal, entry => entry.Fields.GetValueOrDefault("placementState") == "uncertain");
+        Assert.DoesNotContain(journal, entry => entry.Kind == JournalEntry.CopyRetired);
     }
 
     [Theory]
