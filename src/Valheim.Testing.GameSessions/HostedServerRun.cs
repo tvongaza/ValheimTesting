@@ -229,6 +229,7 @@ internal sealed class HostedServerRun : IServerPlacement
                 _runtime = owner.PreparedGame;
                 if (verified) HostInstall.RequireSame(plan.Runtime.Sha256, _runtime, "prepared runtime");
                 _loader = owner.PreparedLoader;
+                _preparedPluginFiles = ProfilePluginFiles(_loader);
                 plan.RequireStagedPlugins();
                 return Task.CompletedTask;
             }).ConfigureAwait(false);
@@ -437,6 +438,27 @@ internal sealed class HostedServerRun : IServerPlacement
         WorldFixture.Verify(original, hashes);
         JournalAsync(Host, Role.Host, "server", WorldCopyDone(listing), cancellation).GetAwaiter().GetResult();
         _world = WorldCopy.Verified;
+    }
+
+    void IServerPlacement.SwapCheckpointPlugin(string operation, string source, string oldSha256, string newSha256,
+        Action admission, CancellationToken cancellation)
+    {
+        RequireCheckpointOwnership();
+        if (!Guid.TryParseExact(operation, "N", out _) || _sourceCheck == null || _preparedPins == null || _preparedPluginFiles == null)
+            throw new InvalidOperationException("A stopped swap requires its prepared profile checks.");
+        HostInstall.CheckProfilePinsAsync(Host, _preparedPins, GameDirectory, LoaderDirectory, _sourceCheck,
+            "stopped profile before swap", HostedTimeouts.Long, cancellation, _preparedPluginFiles).GetAwaiter().GetResult();
+        var matches = _preparedPluginFiles.Where(file => file.Value == oldSha256).ToArray();
+        if (matches.Length != 1) throw new InvalidDataException("The swap must identify exactly one staged plugin.");
+        string relative = matches[0].Key;
+        StoppedPluginSwap.Apply(LoaderDirectory, relative, source, oldSha256, newSha256, operation,
+            () => { RequireCheckpointOwnership(); admission(); }, entry =>
+                JournalAsync(Host, Role.Host, "server", entry, cancellation).GetAwaiter().GetResult(), cancellation);
+        _sourceCheck.ReplacePreparedPlugin(relative, oldSha256, newSha256);
+        _loader = _sourceCheck.PreparedLoader; _runtime = _sourceCheck.PreparedGame;
+        _preparedPluginFiles = new Dictionary<string, string>(_preparedPluginFiles, _loader.Names) { [relative] = newSha256 };
+        JournalAsync(Host, Role.Host, "server", JournalEntry.Of("checkpoint-plugin-swap-completed",
+            ("operation", operation), ("source", source), ("target", Path.Combine(LoaderDirectory, relative)), ("after", newSha256)), cancellation).GetAwaiter().GetResult();
     }
 
     private void RequireCheckpointOwnership()

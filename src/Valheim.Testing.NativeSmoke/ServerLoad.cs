@@ -336,7 +336,7 @@ internal static class ServerLoad
                     Scenario = serverScenario == null
                         ? (session, plan) => Scenario(session, clientPlan, clock, parsed.Switches.Contains("--hold"), worldUid,
                             bakeDestination != null, parsed.Options.GetValueOrDefault("--before-save-command"), parsed.Options.GetValueOrDefault("--before-save-line"),
-                            parsed.Options.GetValueOrDefault("--assert-command"), parsed.Options.GetValueOrDefault("--assert-line"))
+                            parsed.Options.GetValueOrDefault("--assert-command"), parsed.Options.GetValueOrDefault("--assert-line"), dependencies)
                         : async (session, plan) =>
                         {
                             await Scenario(session, null, clock, false, worldUid, false, null, null, null, null).ConfigureAwait(false);
@@ -380,7 +380,7 @@ internal static class ServerLoad
 
     // Loaded with the packaged world, joinable, and (with a client) a clean client reading that world.
     private static Task Scenario(GameSession session, ClientRunPlan? client, Stopwatch clock, bool hold, string worldUid, bool bake,
-        string? beforeSaveCommand, string? beforeSaveLine, string? assertCommand, string? assertLine)
+        string? beforeSaveCommand, string? beforeSaveLine, string? assertCommand, string? assertLine, NativeDependencyLock? dependencies = null)
     {
         var server = session.Server!;
         session.Report.Step("selected server mods loaded and world identity matches", () =>
@@ -428,7 +428,7 @@ internal static class ServerLoad
             session.Report.Step("keep the owned server running until finish", () =>
                 ForegroundHold.HoldAsync(session.Report.Provenance["runId"], session.Output, session.Cancellation,
                     [("server", server.CurrentProcess ?? throw new InvalidOperationException("The owned server process is missing."))], client: false,
-                    serverEvidence: session.Output, checkpoints: DetachedSession.ConfiguredRun != null ? DetachedCheckpoints.For(session, worldUid) : null)
+                    serverEvidence: session.Output, checkpoints: DetachedSession.ConfiguredRun != null ? DetachedCheckpoints.For(session, worldUid, dependencies ?? throw new InvalidOperationException("No detached dependency lock.")) : null)
                     .GetAwaiter().GetResult());
         if (bake)
             session.Report.Step("confirm an advancing save before exporting the fixture", () =>

@@ -181,7 +181,8 @@ public sealed class OwnedServerSession : IOwnedServer, IDisposable
 {
     private readonly Func<string, CancellationToken, IOwnedProcess> _launch;
     private readonly Func<IGameTransport> _connect;
-    private readonly string _saveRoot, _expectations, _sessionCapability, _extension;
+    private readonly string _saveRoot, _sessionCapability, _extension;
+    private string _expectations;
     private readonly TimeSpan _startup, _command, _poll;
     private readonly CancellationToken _cancellation;
     private IOwnedProcess? _process;
@@ -431,6 +432,16 @@ public sealed class OwnedServerSession : IOwnedServer, IDisposable
 
     internal void WaitUntilJoinableCheckpoint(GameActor server, CancellationToken cancellation) =>
         WaitUntilJoinable(server, _sessionCapability, _startup, cancellation);
+
+    // The actor authorizes one explicit expected build transition only after its exact clean checkpoint stop.
+    internal void ReplaceStoppedPluginExpectation(string guid, string expectedMd5, string replacementMd5)
+    {
+        if (_process != null || _actor != null || Stops.LastOrDefault() is not { Outcome: StopOutcome.Clean, ExitCode: null or 0 })
+            throw new InvalidOperationException("A plugin expectation transition requires a clean stopped owned server.");
+        string expected = StrictExpectations.WithPlugin(_expectations, guid, expectedMd5);
+        if (!expected.Split(' ').Order(StringComparer.Ordinal).SequenceEqual(_expectations.Split(' ').Order(StringComparer.Ordinal))) throw new InvalidOperationException("The previous plugin expectation does not match this owned session.");
+        _expectations = StrictExpectations.WithPlugin(_expectations, guid, replacementMd5);
+    }
 
     public GameActor Restart()
     {
