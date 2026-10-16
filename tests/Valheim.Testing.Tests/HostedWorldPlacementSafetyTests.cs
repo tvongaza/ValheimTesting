@@ -188,13 +188,7 @@ public sealed class HostedWorldPlacementSafetyTests : IDisposable
             string variant = "cross-" + chunked + "-" + fault;
             var (plan, site, host, journal) = Setup(variant);
             string leaf = chunked ? "Campaign" : "Campaign.fwl";
-            if (!chunked)
-            {
-                string fixture = Directory.CreateDirectory(Path.Combine(_root, variant, "single-file")).FullName;
-                File.Copy(Path.Combine(plan.World.Source, "Campaign.fwl"), Path.Combine(fixture, leaf));
-                plan = new HostWorldPlan { World = new() { Source = fixture, Sha256 = new(WorldFixture.Manifest(fixture)) }, WorldUid = "4242" };
-            }
-            else
+            if (chunked)
             {
                 string fixture = Path.Combine(_root, variant, "chunked");
                 Directory.CreateDirectory(Path.Combine(fixture, leaf));
@@ -210,7 +204,8 @@ public sealed class HostedWorldPlacementSafetyTests : IDisposable
                     script = script.Replace("Copy-Item -LiteralPath $entry -Destination $copy -Recurse", "Copy-Item -LiteralPath $entry -Destination $copy -Recurse\n" +
                         (chunked ? "[void][IO.Directory]::CreateDirectory($dest); [IO.File]::WriteAllText((Join-Path $dest 'personal-save'), 'personal')" :
                             "if ($move[2] -ceq 'Campaign.fwl') { [IO.File]::WriteAllText($dest, 'personal') }"));
-                if (fault == "delete") script = script.Replace("Remove-VtTree $entry $worlds", "throw 'source-delete failed'");
+                if (fault == "delete") script = script.Replace("Remove-VtTree $entry $worlds",
+                    $"if ($move[2] -ceq '{leaf}') {{ throw 'source-delete failed' }}\nRemove-VtTree $entry $worlds");
                 return script;
             };
             string output = Path.Combine(_root, variant, "output");
