@@ -321,7 +321,14 @@ internal static partial class HostServerChecks
             string gap = Path.Combine(boot, ownership.FileName + ".controller-gap");
             var deadline = DateTime.UtcNow.AddSeconds(60);
             while (!File.Exists(gap) && !start.IsCompleted && DateTime.UtcNow < deadline) await Task.Delay(50);
-            string Detail(string name) => File.Exists(Path.Combine(boot, name)) ? File.ReadAllText(Path.Combine(boot, name)) : "<missing>";
+            string Detail(string name)
+            {
+                string path = Path.Combine(boot, name);
+                if (!File.Exists(path)) return "<missing>";
+                using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                using var reader = new StreamReader(stream);
+                return reader.ReadToEnd();
+            }
             string completed = start.IsCompleted ? " The start completed: " + await Record.ExceptionAsync(() => start) : "";
             Assert.True(File.Exists(gap), "The real launcher did not reach the test's before-pid gap." + completed +
                 " stderr: " + Detail("stderr.log") + " launcher error: " + Detail("launcher-error.txt") + " owner: " + Detail(ownership.FileName));
