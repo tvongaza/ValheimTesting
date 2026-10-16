@@ -923,8 +923,8 @@ public sealed class HostedRuntimeStageTests : IDisposable
     [Fact]
     public async Task TheRealProfileSeedKeepsItsOwnFileErrorInsteadOfBecomingAHardLinkDiagnosis()
     {
-        string source = Directory.CreateDirectory(Path.Combine(_root, "seed-source")).FullName;
-        string runtime = Path.Combine(_root, "seed-runtime");
+        string source = Directory.CreateDirectory(Path.Combine(_root, "seed source install " + new string('s', 64))).FullName;
+        string runtime = Path.Combine(_root, "seed runtime folder " + new string('r', 64));
         const string missing = "missing-game-file.dll";
         string encoded = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(missing));
         var variables = new Dictionary<string, string>
