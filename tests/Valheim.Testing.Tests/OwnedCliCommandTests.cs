@@ -15,11 +15,13 @@ public sealed class OwnedCliCommandTests
         if (!OperatingSystem.IsWindows() && !OperatingSystem.IsMacOS() && !OperatingSystem.IsLinux()) return;
         using var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();
+        using var shutdown = new CancellationTokenSource();
         int port = ((IPEndPoint)listener.LocalEndpoint).Port;
         var commands = new List<string>();
         Task serve = Task.Run(async () =>
         {
-            using var socket = await listener.AcceptTcpClientAsync();
+            using var socket = await AcceptUnlessClosingAsync(listener, shutdown.Token);
+            if (socket is null) return;
             using var stream = socket.GetStream();
             using var reader = new StreamReader(stream, new UTF8Encoding(false));
             using var writer = new StreamWriter(stream, new UTF8Encoding(false)) { AutoFlush = true, NewLine = "\n" };
@@ -85,11 +87,33 @@ public sealed class OwnedCliCommandTests
         }
         finally
         {
+            shutdown.Cancel();
             listener.Stop();
-            try { await serve.WaitAsync(TimeSpan.FromSeconds(5)); }
-            catch (SocketException) when (commands.Count == 0) { }
+            await serve.WaitAsync(TimeSpan.FromSeconds(5));
             Directory.Delete(evidence, recursive: true);
         }
+    }
+
+    // When an earlier assertion fails before the only expected connection, teardown can stop the listener before its
+    // queued accept begins. Windows then throws InvalidOperationException ("Not listening") rather than SocketException;
+    // neither should replace the original test failure. A spontaneous listener failure still propagates.
+    private static async Task<TcpClient?> AcceptUnlessClosingAsync(TcpListener listener, CancellationToken shutdown)
+    {
+        try { return await listener.AcceptTcpClientAsync(shutdown); }
+        catch (OperationCanceledException) when (shutdown.IsCancellationRequested) { return null; }
+        catch (InvalidOperationException) when (shutdown.IsCancellationRequested) { return null; }
+        catch (SocketException) when (shutdown.IsCancellationRequested) { return null; }
+    }
+
+    [Fact]
+    public async Task AStoppedListenerAfterCancellationDoesNotTurnTeardownIntoATestFailure()
+    {
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        using var shutdown = new CancellationTokenSource();
+        listener.Stop(); // Deterministic version of teardown winning the race with a queued accept.
+        shutdown.Cancel();
+        Assert.Null(await AcceptUnlessClosingAsync(listener, shutdown.Token));
     }
 
     // The reader's identity refusal against a LIVE process: a server lease naming the stand-in's PID and port but another

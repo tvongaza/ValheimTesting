@@ -251,7 +251,7 @@ public sealed class WindowsSshQuitSignal { }
 public sealed class WindowsSshQuitSignalTests
 {
     // Not over SSH, the runner sends Ctrl+C. The variables are cleared because a runner that is itself started over SSH (as
-    // on a test station) would otherwise send Ctrl+Break, which ping -t answers with statistics and keeps running.
+    // on a test station) would otherwise send Ctrl+Break. Wait for the child to install its handler before requesting quit.
     [Fact] public void AWindowsConsoleProcessQuitsOnCtrlCToItsOwnConsole()
     {
         if (!OperatingSystem.IsWindows()) return;
@@ -261,13 +261,23 @@ public sealed class WindowsSshQuitSignalTests
         Environment.SetEnvironmentVariable("SSH_CLIENT", null);
         try
         {
-            // ping -t runs until Ctrl+C. Its own windowless console, as GameLaunch.ToStartInfo gives the dedicated server, so the Ctrl+C
-            // reaches only it and the helper, never this test's console.
-            using var owned = new DirectServerProcess(new ProcessStartInfo("ping", "-t 127.0.0.1") { CreateNoWindow = true }, Path.Combine(dir.Path, "owned"));
-            var stop = owned.StopCleanly(TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(5));
-            Assert.Equal(StopOutcome.Clean, stop.Outcome);
-            Assert.Equal("Ctrl+C", stop.Request);
-            Assert.Contains("Ping statistics", File.ReadAllText(Path.Combine(dir.Path, "owned.stdout.log")));
+            string marker = Path.Combine(dir.Path, "control-event.txt");
+            var start = new ProcessStartInfo("dotnet") { CreateNoWindow = true };
+            start.ArgumentList.Add(typeof(Valheim.Testing.ProcessSignalProbe.Marker).Assembly.Location);
+            start.ArgumentList.Add(marker);
+            using var owned = new DirectServerProcess(start, Path.Combine(dir.Path, "owned"));
+            try
+            {
+                var ready = Stopwatch.StartNew();
+                while (!File.Exists(marker + ".ready") && ready.Elapsed < TimeSpan.FromSeconds(10)) Thread.Sleep(25);
+                Assert.True(File.Exists(marker + ".ready"), "the probe did not install its console handler");
+
+                var stop = owned.StopCleanly(TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(5));
+                Assert.Equal(StopOutcome.Clean, stop.Outcome);
+                Assert.Equal("Ctrl+C", stop.Request);
+                Assert.Equal("ControlC", File.ReadAllText(marker));
+            }
+            finally { if (!owned.HasExited) owned.Stop(TimeSpan.FromSeconds(5)); }
         }
         finally
         {
