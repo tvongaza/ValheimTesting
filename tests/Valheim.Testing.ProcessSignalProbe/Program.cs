@@ -61,6 +61,24 @@ internal static class Program
             File.WriteAllText(cancellationMarker, signalled ? "cancelled" : "timed-out");
             return;
         }
+        if (args is ["stdio-gate", var outputMarker])
+        {
+            File.WriteAllText(outputMarker + ".ready", Environment.ProcessId.ToString());
+            using var released = new ManualResetEventSlim();
+            using var watcher = new FileSystemWatcher(Path.GetDirectoryName(outputMarker)!, Path.GetFileName(outputMarker) + ".release")
+            { EnableRaisingEvents = false };
+            watcher.Created += (_, _) => released.Set();
+            watcher.EnableRaisingEvents = true;
+            // The test releases this gate only after the scheduled-task launcher has exited.
+            if (!File.Exists(outputMarker + ".release") && !released.Wait(TimeSpan.FromSeconds(30)))
+                throw new TimeoutException("The stdio test gate was not released.");
+            Console.Out.WriteLine("VT-STDOUT after launcher exit");
+            Console.Error.WriteLine("VT-STDERR after launcher exit");
+            Console.Out.Flush();
+            Console.Error.Flush();
+            Thread.Sleep(TimeSpan.FromMinutes(2));
+            return;
+        }
         if (args is ["process-tree", var treeMarker])
         {
             // A process that starts a child, as a build starts compiler processes. Ready means the child is running.

@@ -256,6 +256,10 @@ public sealed class HostServerTests : IDisposable
             }
             finally { await process.StopAsync(TimeSpan.FromSeconds(15)); }
         });
+        // ping may buffer stdout when redirected to a file and is force-stopped above. The dedicated
+        // stdio test below uses a probe that flushes after the launcher exits to prove capture.
+        Assert.True(File.Exists(Path.Combine(boot, "stdout.log")));
+        Assert.True(File.Exists(Path.Combine(boot, "stderr.log")));
         Assert.DoesNotContain(System.Diagnostics.Process.GetProcesses(), other => other.Id == processId);
 
         // 2. The interactive-token task, as a non-elevated desktop user gets it, forced through the logon seams. Only a process
@@ -277,6 +281,67 @@ public sealed class HostServerTests : IDisposable
             }
             finally { Assert.Equal(HostServerStop.Stopped, await interactive.StopAsync(TimeSpan.FromSeconds(15))); }
         }, logonSeams: new Dictionary<string, string> { ["elevated"] = "false", ["session"] = session.ToString(CultureInfo.InvariantCulture), ["desktops"] = "1" });
+        Assert.True(File.Exists(Path.Combine(interactiveBoot, "stdout.log")));
+        Assert.True(File.Exists(Path.Combine(interactiveBoot, "stderr.log")));
+    }
+
+    [Fact] public async Task WindowsServerWritesBothStreamsAfterItsScheduledTaskLauncherExits()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var host = new LocalGameHost("windows-stdio-check", HostShell.Pwsh);
+        try { await HostServer.RequireTaskLogonAsync(host, TimeSpan.FromSeconds(30)); }
+        catch (InvalidOperationException) when (Environment.GetEnvironmentVariable("VALHEIM_TESTING_WINDOWS_DESKTOP") != "1") { return; }
+
+        string runtime = Path.Combine(_root, "stdio runtime [literal]");
+        Directory.CreateDirectory(runtime);
+        string probe = Path.Combine(AppContext.BaseDirectory, "Valheim.Testing.ProcessSignalProbe.exe");
+        Assert.True(File.Exists(probe), "The Windows test build must include the ProcessSignalProbe apphost.");
+        File.Copy(probe, Path.Combine(runtime, GameLaunch.ServerWindowsExecutable));
+        foreach (string file in Directory.EnumerateFiles(AppContext.BaseDirectory, "Valheim.Testing.ProcessSignalProbe.*")
+            .Concat(Directory.EnumerateFiles(AppContext.BaseDirectory, "Valheim.Testing*.dll")))
+            File.Copy(file, Path.Combine(runtime, Path.GetFileName(file)), overwrite: true);
+        foreach (string file in GameLaunch.ForServer(runtime, [], hostPlatform: ServerPlatform.Windows).RequiredFiles.Skip(1))
+        {
+            string path = Path.Combine(runtime, file.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, "test-only placeholder");
+        }
+
+        var sessions = new List<IReadOnlyDictionary<string, string>?> { null };
+        int session = System.Diagnostics.Process.GetCurrentProcess().SessionId;
+        if (session != 0) sessions.Add(new Dictionary<string, string>
+        { ["elevated"] = "false", ["session"] = session.ToString(CultureInfo.InvariantCulture), ["desktops"] = "1" });
+        for (int index = 0; index < sessions.Count; index++)
+        {
+            string marker = Path.Combine(_root, "stdio " + index), boot = Path.Combine(_root, "stdio boot [literal] " + index);
+            string evidence = Path.Combine(_root, "stdio evidence " + index);
+            var launch = GameLaunch.ForServer(runtime, ["stdio-gate", marker], hostPlatform: ServerPlatform.Windows);
+            await StandInServer.RunAsync(host, launch, boot, TimeSpan.FromSeconds(75),
+                nameof(WindowsServerWritesBothStreamsAfterItsScheduledTaskLauncherExits), async process =>
+            {
+                try
+                {
+                    Assert.True(SpinWait.SpinUntil(() => File.Exists(marker + ".ready"), TimeSpan.FromSeconds(10)));
+                    string ownerName = File.ReadAllText(Path.Combine(boot, "launcher-owner-name")).Trim();
+                    var owner = HostServerLaunchOwnership.Parse(File.ReadAllText(Path.Combine(boot, ownerName)));
+                    Assert.Equal(HostServerLauncherState.Gone,
+                        await HostServerLauncher.InspectAsync(host, owner, boot, TimeSpan.FromSeconds(15), CancellationToken.None));
+                    Assert.Equal(process.Id, owner.GamePid);
+                    Assert.Equal(process.StartIdentity, owner.GameStartIdentity);
+                    File.WriteAllText(marker + ".release", "go");
+                    (await host.WaitForLogAsync(Path.Combine(boot, "stdout.log"), 0,
+                        new System.Text.RegularExpressions.Regex("VT-STDOUT after launcher exit"), null, TimeSpan.FromSeconds(15))).EnsureMatched();
+                    (await host.WaitForLogAsync(Path.Combine(boot, "stderr.log"), 0,
+                        new System.Text.RegularExpressions.Regex("VT-STDERR after launcher exit"), null, TimeSpan.FromSeconds(15))).EnsureMatched();
+                }
+                finally { await process.StopAsync(TimeSpan.FromSeconds(15)); }
+            }, evidence: evidence, logonSeams: sessions[index]);
+            Assert.Contains("VT-STDOUT after launcher exit", File.ReadAllText(Path.Combine(evidence, "stdout.log")));
+            Assert.Contains("VT-STDERR after launcher exit", File.ReadAllText(Path.Combine(evidence, "stderr.log")));
+            string moved = Path.Combine(_root, "moved stdout " + index);
+            File.Move(Path.Combine(boot, "stdout.log"), moved);
+            Assert.True(File.Exists(moved));
+        }
     }
 
     [Fact] public async Task WindowsHostRetiresOnlyThisRunsRuntime()

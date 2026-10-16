@@ -601,8 +601,8 @@ internal sealed class FakeServerHost : IGameHost
                 var process = (FakeOwnedProcess)_server!.Launch(token);
                 string boot = Local(v["dir"]);
                 Directory.CreateDirectory(boot);
-                // Linux's recorder and macOS's supervisor keep the server's stdout; a Windows server's start task does not (#836).
-                if (!Windows) File.WriteAllText(Path.Combine(boot, "stdout.log"), "server stdout\n");
+                File.WriteAllText(Path.Combine(boot, "stdout.log"), "server stdout\n");
+                File.WriteAllText(Path.Combine(boot, "stderr.log"), "");
                 // Profile launches keep loader output under the owned profile, not the game's install.
                 _runtime = v["logroot"];
                 string log = Path.Combine(Local(v["logroot"]), "BepInEx", "LogOutput.log");

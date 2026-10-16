@@ -459,10 +459,10 @@ internal sealed class HostedServerRun : IServerPlacement
             _serverMayRun = true;
             throw;
         }
-        // What the stop keeps and fetches into boot-N/. Linux's recorder and macOS's supervisor keep the server's stdout; a Windows
-        // server starts from a short-lived task that does not, so a Windows boot lists no stdout a scan would always find missing.
+        // The server writes into boot-N/ on every platform, including Windows after the short-lived launch task exits.
         var logs = new List<RunLog> { new($"boot-{n} BepInEx log", Path.Combine(local, "game-0.log"), Required: true), new($"boot-{n} Unity log", Path.Combine(local, "game-1.log")) };
-        if (launch.Platform != ClientPlatform.Windows) logs.Add(new($"boot-{n} stdout", Path.Combine(local, "stdout.log")));
+        logs.Add(new($"boot-{n} stdout", Path.Combine(local, "stdout.log")));
+        logs.Add(new($"boot-{n} stderr", Path.Combine(local, "stderr.log")));
         return new ServerBoot(process, logs,
             new()
             {

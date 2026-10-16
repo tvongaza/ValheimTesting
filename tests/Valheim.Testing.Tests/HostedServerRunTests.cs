@@ -386,10 +386,12 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.Contains("fetch", host.Scripts);
         Assert.False(Directory.Exists(host.Local(windowsRuns + @"\run-test\runtime")));
         Assert.Contains("fake boot", File.ReadAllText(Path.Combine(Output, "boot-1", "game-0.log")));
-        // A Windows server's start task keeps no stdout, so the scan does not list one it would always find missing.
         var roles = Result().GetProperty("Logs").EnumerateArray().Select(log => log.GetProperty("Role").GetString()).ToList();
         Assert.Contains("boot-1 Unity log", roles);
-        Assert.DoesNotContain("boot-1 stdout", roles);
+        Assert.Contains("boot-1 stdout", roles);
+        Assert.Contains("boot-1 stderr", roles);
+        Assert.Equal("server stdout\n", File.ReadAllText(Path.Combine(Output, "boot-1", "stdout.log")));
+        Assert.True(File.Exists(Path.Combine(Output, "boot-1", "stderr.log")));
         var prebootProfile = Assert.Single(host.Runs, run => run.Script == "list" &&
             run.Variables["root"] == windowsRuns + @"\run-test\runtime" &&
             run.Variables["dirs"].Split('\n').Contains("UnityPlayer.dll"));

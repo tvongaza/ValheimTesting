@@ -6,8 +6,8 @@ namespace Valheim.Testing.GameSessions;
 /// <summary>
 /// Starts an owned dedicated server on a Linux/bash, macOS/bash or Windows/pwsh host and returns it identified by
 /// process ID and start time, the identity an owned session checks against its adapter's reported process ID. Linux uses
-/// a <c>setsid</c> recorder, macOS a detached supervisor, and both keep stdout and stderr in the boot directory. Windows
-/// uses a short-lived headless task to start the server independently of SSH, then removes that task.
+/// a <c>setsid</c> recorder, macOS a detached supervisor, and Windows a short-lived headless task independent of SSH.
+/// Each keeps the server's stdout and stderr in the boot directory.
 /// </summary>
 public static class HostServer
 {
@@ -507,6 +507,114 @@ internal static partial class HostServerScripts
     // with spaces, as a user's profile has, is then only ever the quoted -File path.
     public static readonly string WindowsLauncher = """
         $ErrorActionPreference = 'Stop'
+        Add-Type -TypeDefinition @'
+        using System;
+        using System.ComponentModel;
+        using System.Diagnostics;
+        using System.Runtime.InteropServices;
+        using System.Text;
+
+        public static class VtLiteralServerProcess
+        {
+            [StructLayout(LayoutKind.Sequential)]
+            private struct SecurityAttributes
+            {
+                public int Length;
+                public IntPtr Descriptor;
+                [MarshalAs(UnmanagedType.Bool)] public bool Inherit;
+            }
+
+            [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+            private struct StartupInfo
+            {
+                public int Size;
+                public string Reserved;
+                public string Desktop;
+                public string Title;
+                public int X, Y, Width, Height, XCountChars, YCountChars, FillAttribute, Flags;
+                public short ShowWindow, Reserved2;
+                public IntPtr Reserved2Pointer, StandardInput, StandardOutput, StandardError;
+            }
+
+            [StructLayout(LayoutKind.Sequential)]
+            private struct ProcessInformation
+            {
+                public IntPtr Process, Thread;
+                public int ProcessId, ThreadId;
+            }
+
+            [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true, EntryPoint = "CreateFileW")]
+            private static extern IntPtr CreateFile(string path, uint access, uint share, ref SecurityAttributes attributes,
+                uint creation, uint flags, IntPtr template);
+
+            [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true, EntryPoint = "CreateProcessW")]
+            [return: MarshalAs(UnmanagedType.Bool)]
+            private static extern bool CreateProcess(string application, StringBuilder commandLine, IntPtr processAttributes,
+                IntPtr threadAttributes, [MarshalAs(UnmanagedType.Bool)] bool inheritHandles, uint creationFlags,
+                IntPtr environment, string workingDirectory, ref StartupInfo startup, out ProcessInformation process);
+
+            [DllImport("kernel32.dll", SetLastError = true)]
+            [return: MarshalAs(UnmanagedType.Bool)]
+            private static extern bool CloseHandle(IntPtr handle);
+
+            [DllImport("kernel32.dll", SetLastError = true)]
+            private static extern uint ResumeThread(IntPtr thread);
+
+            [DllImport("kernel32.dll", SetLastError = true)]
+            [return: MarshalAs(UnmanagedType.Bool)]
+            private static extern bool TerminateProcess(IntPtr process, uint exitCode);
+
+            private static IntPtr Open(string path, uint access, uint creation)
+            {
+                var attributes = new SecurityAttributes { Length = Marshal.SizeOf<SecurityAttributes>(), Inherit = true };
+                var handle = CreateFile(path, access, 1, ref attributes, creation, 0x80, IntPtr.Zero);
+                if (handle == new IntPtr(-1)) throw new Win32Exception(Marshal.GetLastWin32Error(), "Opening server standard stream " + path);
+                return handle;
+            }
+
+            public static Process Start(string executable, string arguments, string workingDirectory, string stdout, string stderr)
+            {
+                IntPtr input = IntPtr.Zero, output = IntPtr.Zero, error = IntPtr.Zero;
+                try
+                {
+                    input = Open("NUL", 0x80000000, 3);
+                    output = Open(stdout, 0x40000000, 2);
+                    error = Open(stderr, 0x40000000, 2);
+                    var startup = new StartupInfo {
+                        Size = Marshal.SizeOf<StartupInfo>(), Flags = 0x100 | 0x1, ShowWindow = 0,
+                        StandardInput = input, StandardOutput = output, StandardError = error
+                    };
+                    var command = new StringBuilder("\"" + executable + "\"" + (string.IsNullOrEmpty(arguments) ? "" : " " + arguments));
+                    // A suspended child cannot exit and have its PID reused before the managed owner acquires a handle.
+                    if (!CreateProcess(executable, command, IntPtr.Zero, IntPtr.Zero, true, 0x14,
+                            IntPtr.Zero, workingDirectory, ref startup, out var process))
+                        throw new Win32Exception(Marshal.GetLastWin32Error(), "Starting the dedicated server");
+                    Process managed = null;
+                    try
+                    {
+                        managed = Process.GetProcessById(process.ProcessId);
+                        var ownedHandle = managed.Handle;
+                        if (ResumeThread(process.Thread) == uint.MaxValue)
+                            throw new Win32Exception(Marshal.GetLastWin32Error(), "Resuming the dedicated server");
+                        return managed;
+                    }
+                    catch
+                    {
+                        TerminateProcess(process.Process, 1);
+                        managed?.Dispose();
+                        throw;
+                    }
+                    finally { CloseHandle(process.Thread); CloseHandle(process.Process); }
+                }
+                finally
+                {
+                    if (error != IntPtr.Zero) CloseHandle(error);
+                    if (output != IntPtr.Zero) CloseHandle(output);
+                    if (input != IntPtr.Zero) CloseHandle(input);
+                }
+            }
+        }
+        '@
         $dir = $PSScriptRoot
         $utf8 = New-Object Text.UTF8Encoding $false
         $game = $null
@@ -526,8 +634,6 @@ internal static partial class HostServerScripts
             Write-VtOwner $null
             [IO.File]::WriteAllText((Join-Path $dir 'launcher.started'), [string]$PID + ' session ' + $self.SessionId, $utf8)
             $start = New-Object Diagnostics.ProcessStartInfo
-            $start.UseShellExecute = $false
-            $start.CreateNoWindow = $false
             foreach ($line in [IO.File]::ReadAllLines((Join-Path $dir 'spec.txt'), $utf8)) {
                 if (-not $line) { continue }
                 $kind, $value = $line.Split([char[]]@(' '), 2)
@@ -535,14 +641,22 @@ internal static partial class HostServerScripts
                 if ($kind -ceq 'exe') { $start.FileName = $text }
                 elseif ($kind -ceq 'dir') { $start.WorkingDirectory = $text }
                 elseif ($kind -ceq 'args') { $start.Arguments = $text }
-                elseif ($kind -ceq 'env') { $at = $text.IndexOf('='); $start.Environment[$text.Substring(0, $at)] = $text.Substring($at + 1) }
+                elseif ($kind -ceq 'env') {
+                    $at = $text.IndexOf('=')
+                    [Environment]::SetEnvironmentVariable($text.Substring(0, $at), $text.Substring($at + 1), 'Process')
+                }
             }
             [IO.File]::Delete((Join-Path $dir 'spec.txt'))
-            foreach ($key in @($start.Environment.Keys)) { if ($key -like 'DOORSTOP_*') { [void]$start.Environment.Remove($key) } }
+            foreach ($key in @([Environment]::GetEnvironmentVariables('Process').Keys)) {
+                if ($key -like 'DOORSTOP_*') { [Environment]::SetEnvironmentVariable($key, $null, 'Process') }
+            }
             # After the ownership record above: a controller that gave up either finds that record, and kills this launcher's
             # tree, or marked the start abandoned before it looked, which this sees.
             if ([IO.File]::Exists((Join-Path $dir 'handoff.abandon'))) { throw 'The controller gave up on the start before the server was started.' }
-            $game = [Diagnostics.Process]::Start($start)
+            # Literal CreateProcess paths accept bracketed folder names. Inherited file handles let the short-lived task
+            # exit without truncating output or blocking the game when its pipe buffer fills.
+            $game = [VtLiteralServerProcess]::Start($start.FileName, $start.Arguments, $start.WorkingDirectory,
+                (Join-Path $dir 'stdout.log'), (Join-Path $dir 'stderr.log'))
             # The owner update precedes the ordinary pid publication, so recovery still has an exact game identity in that gap.
             Write-VtOwner $game
             $temporary = Join-Path $dir 'pid.tmp'

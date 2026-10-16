@@ -46,7 +46,7 @@ Each owned process's logs are copied into its evidence when it stops:
 | Client started directly | `client-boot.game-0.log` | `client-boot.game-1.log` |
 | Windows client started through its desktop task | `desktop-client/game-0.log` | `desktop-client/game-1.log` |
 
-A Linux or macOS server boot also keeps the process output (`boot-N/stdout.log`, or `boot-N/game.stdout.log` on this Mac); a Windows server boot has none. A client started directly keeps `client-boot.stdout.log` and `client-boot.stderr.log`. An owned client writes Unity's log to `toolkit-unity.log` in the run's launch folder, never to your `Player.log`.
+Every hosted server boot keeps the process output in `boot-N/stdout.log` and `boot-N/stderr.log` (`boot-N/game.stdout.log` on this Mac). A client started directly keeps `client-boot.stdout.log` and `client-boot.stderr.log`. An owned client writes Unity's log to `toolkit-unity.log` in the run's launch folder, never to your `Player.log`.
 
 ### Diagnose an owned game that does not reach its menu or world
 

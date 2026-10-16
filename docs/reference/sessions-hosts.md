@@ -85,7 +85,7 @@ The tunnel refuses a local port already in use. It also refuses a host whose ssh
 |---|---|---|
 | Linux | In its own session (`setsid`) under a small recorder | Kept in the boot directory |
 | macOS | Under a detached supervisor | Kept in the boot directory |
-| Windows | From a short-lived scheduled task, independent of the asking session | Not recorded |
+| Windows | From a short-lived scheduled task, independent of the asking session | Kept in the boot directory after the task exits |
 
 On Windows the task's logon depends on the asking session:
 
@@ -131,4 +131,3 @@ In a campaign you never call this yourself: `session.OpenClient` starts the clie
 - `GameLaunch.ToStartInfo` and `ClientSession.Launch` start processes on this machine only.
 - A server in a container has not run a Valheim server natively this way.
 - A remote Mac client is checked natively only with the runner on the same Mac.
-- A Windows server's stdout and stderr are not recorded, so its log scan lists no stdout.
