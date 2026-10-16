@@ -9,10 +9,11 @@ public sealed partial class HostedServerRunTests
 {
     private const string AccountReleaseStep = "release client player's Steam account lease";
 
-    private void AssertAccountReleased(ObservedLeaseHost host, string? evidenceDirectory = null)
+    private JsonElement AssertAccountRelease(ObservedLeaseHost host, bool expectedPassed = true, string? evidenceDirectory = null)
     {
-        var release = Step(AccountReleaseStep);
-        if (release.GetProperty("Passed").GetBoolean()) return;
+        var release = Result().GetProperty("Steps").EnumerateArray().SingleOrDefault(step => step.GetProperty("Name").GetString() == AccountReleaseStep);
+        bool missing = release.ValueKind == JsonValueKind.Undefined;
+        if (!missing && release.GetProperty("Passed").GetBoolean() == expectedPassed) return release;
         // Outside _root: Dispose removes the fixture even when an assertion fails. Retain only the report and the fake
         // account's claim/receipt, never the prepared profile, install or unrelated machine's journal.
         string retained = evidenceDirectory ?? Path.Combine(Path.GetTempPath(), "vt-steam-release-failure-" + Guid.NewGuid().ToString("N"));
@@ -32,12 +33,41 @@ public sealed partial class HostedServerRunTests
                 foreach (string file in Directory.GetFiles(account, "claim-*"))
                     Capture(Path.GetFileName(file), () => File.Copy(file, Path.Combine(retained, Path.GetFileName(file))));
         });
-        Assert.Fail(SanitizeLeaseDiagnostic(release.GetProperty("Error").GetString() ?? "The release step has no error.") +
+        Assert.Fail(SanitizeLeaseDiagnostic(missing ? "The client Steam account lease release step is missing; inspect the retained runner report." :
+            release.GetProperty("Error").GetString() ?? "The release step has no error.") +
             (captureErrors.Count == 0 ? "" : " Retention incomplete (" + string.Join(", ", captureErrors.Distinct()) + ").") +
             " Retained report, host result and claim/receipt: " + retained);
+        return release;
     }
 
     private string SanitizeLeaseDiagnostic(string text) => SanitizeLeaseDiagnostic(text, _root, Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void AMissingAccountReleaseStepRetainsTheRunnerReportBeforeFixtureCleanup(bool expectedPassed)
+    {
+        Directory.CreateDirectory(Output);
+        File.WriteAllText(Path.Combine(Output, "result.json"), JsonSerializer.Serialize(new
+        {
+            Steps = new[] { new { Name = "runner failed", Passed = false, Error = "controlled earlier failure in " + _root } },
+        }));
+        string account = Path.Combine(Leases, LeaseBox.Pool, LeaseBox.Account);
+        Directory.CreateDirectory(account);
+        File.WriteAllText(Path.Combine(account, "claim-000000001"), "synthetic claim for missing-step retention");
+        var error = Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => AssertAccountRelease(new ObservedLeaseHost(Leases), expectedPassed));
+        string retained = error.Message.Split("Retained report, host result and claim/receipt: ", StringSplitOptions.None)[1];
+        try
+        {
+            Directory.Delete(_root, recursive: true);
+            Assert.Contains("release step is missing", error.Message);
+            Assert.Contains("runner failed", File.ReadAllText(Path.Combine(retained, "result.json")));
+            Assert.DoesNotContain(_root, File.ReadAllText(Path.Combine(retained, "result.json")));
+            Assert.True(File.Exists(Path.Combine(retained, "claim-000000001")));
+            Assert.True(File.Exists(Path.Combine(retained, "release-host.json")));
+        }
+        finally { Directory.Delete(retained, recursive: true); }
+    }
 
     private static string SanitizeLeaseDiagnostic(string text, string root, string home)
     {
@@ -100,13 +130,13 @@ public sealed partial class HostedServerRunTests
             using var obstructed = new TempDirectory();
             string blocked = Path.Combine(obstructed.Path, "blocked");
             File.WriteAllText(blocked, "not a directory");
-            var retention = Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => AssertAccountReleased(leaseHost, blocked));
+            var retention = Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => AssertAccountRelease(leaseHost, evidenceDirectory: blocked));
             Assert.Contains("is not proven", retention.Message);
             Assert.Contains("Retention incomplete (create evidence directory: IOException", retention.Message);
             Assert.Contains(blocked, retention.Message);
             Assert.DoesNotContain(_root, retention.Message);
 
-            var error = Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => AssertAccountReleased(leaseHost));
+            var error = Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => AssertAccountRelease(leaseHost));
             string retained = error.Message.Split("Retained report, host result and claim/receipt: ", StringSplitOptions.None)[1];
             try
             {
@@ -144,7 +174,7 @@ public sealed partial class HostedServerRunTests
         string claim = Assert.Single(Directory.GetFiles(Path.Combine(Leases, LeaseBox.Pool, LeaseBox.Account), "claim-*"));
         using (new FileStream(claim, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
         {
-            var retention = Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => AssertAccountReleased(leaseHost));
+            var retention = Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => AssertAccountRelease(leaseHost));
             string retained = retention.Message.Split("Retained report, host result and claim/receipt: ", StringSplitOptions.None)[1];
             try
             {
@@ -186,7 +216,7 @@ public sealed partial class HostedServerRunTests
                 using (context.OpenClient(PreparedClient(run.Client))) { }
                 return Task.CompletedTask;
             }, run.Client, SignedInClientTransport(), leaseHost.Host));
-            fixture.AssertAccountReleased(leaseHost);
+            fixture.AssertAccountRelease(leaseHost);
             Assert.Equal(SteamAccountState.Free, (await LeaseBox.StatusAsync(fixture.PoolFile)).State);
             Assert.Equal(1, leaseHost.Releases);
         }

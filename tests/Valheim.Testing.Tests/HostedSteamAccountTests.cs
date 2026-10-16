@@ -146,16 +146,17 @@ public sealed partial class HostedServerRunTests
         LeaseBox.WritePool(_root, Leases);
         if (Directory.Exists(Path.Combine(LeaseBox.Journal, RunId))) Directory.Delete(Path.Combine(LeaseBox.Journal, RunId), recursive: true);
         var run = WithClient(Accounts());
-        Assert.Equal(3, await PinnedServerRun.MainAsync(TestEnvironment.Read(run.Profile), ["run", run.Plan, Output], Options(run.Host, run.Server, context =>
+        var leaseHost = new ObservedLeaseHost(Leases);
+        int code = await PinnedServerRun.MainAsync(TestEnvironment.Read(run.Profile), ["run", run.Plan, Output], Options(run.Host, run.Server, context =>
         {
             var session = context.OpenClient(PreparedClient(run.Client));
             run.Client.Failures["mac-client-stop"] = new HostResult(HostOutcome.Unknown, null, "", "", TimeSpan.FromSeconds(45), true);
             session.Dispose();
             return Task.CompletedTask;
-        }, run.Client, new ScriptedTransport(), LeaseBox.Host())));
+        }, run.Client, new ScriptedTransport(), leaseHost.Host));
         // The client may still run on the account: the lease is kept, to end on its own, and the teardown says so.
-        var release = Step("release client player's Steam account lease");
-        Assert.False(release.GetProperty("Passed").GetBoolean());
+        var release = AssertAccountRelease(leaseHost, expectedPassed: false);
+        Assert.Equal(3, code);
         Assert.Contains("Kept the lease on Steam account vt_client_one", release.GetProperty("Error").GetString());
         var status = await LeaseBox.StatusAsync(PoolFile);
         Assert.Equal((SteamAccountState.Held, "toolkit-smoke run-test client player"), (status.State, status.Holder));
@@ -183,7 +184,7 @@ public sealed partial class HostedServerRunTests
             using (context.OpenClient(PreparedClient(run.Client))) { }
             return Task.CompletedTask;
         }, run.Client, SignedInClientTransport(), leaseHost.Host));
-        AssertAccountReleased(leaseHost);
+        AssertAccountRelease(leaseHost);
         var check = Step("client player's host is signed in to Steam account vt_client_one (signed-in check)");
         Assert.Equal("steam-user", run.Client.Runs.First(entry => !entry.Script.StartsWith("mac-", StringComparison.Ordinal)).Script); // Before anything but the Mac console and slice checks.
         if (refusal == null)
