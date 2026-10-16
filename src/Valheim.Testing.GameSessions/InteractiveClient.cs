@@ -723,11 +723,13 @@ internal static partial class InteractiveScripts
         try { $process = [Diagnostics.Process]::GetProcessById([int]$game) } catch { }
         if ($null -eq $process) { 'VT-WAIT exited ?'; exit 0 }
         $same = $false
-        try { $same = [string]$process.StartTime.ToFileTimeUtc() -ceq $start } catch { }
+        # Retain the handle before checking identity and waiting. GetProcessById alone does not retain it,
+        # and PowerShell can otherwise return null ExitCode even after WaitForExit succeeds.
+        try { $null = $process.Handle; $same = [string]$process.StartTime.ToFileTimeUtc() -ceq $start } catch { }
         if (-not $same) { 'VT-WAIT exited ?'; exit 0 }
         if (-not $process.WaitForExit([int]$seconds * 1000)) { 'VT-WAIT running'; exit 0 }
         $code = '?'
-        try { $code = [string]$process.ExitCode } catch { }
+        try { $observed = $process.ExitCode; if ($null -ne $observed) { $code = [string]$observed } } catch { }
         'VT-WAIT exited ' + $code
         """.ReplaceLineEndings("\n");
 

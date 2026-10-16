@@ -9,7 +9,7 @@ using Valheim.Testing.GameSessions;
 internal static class DetachedSession
 {
     internal const string Usage = "valheim-test detach server-load --server DIR --mod DLL --server-only --output NEW_DIR [assertion and timing options] | " +
-        "valheim-test detach status | valheim-test detach finish --run ID";
+        "valheim-test detach status [--evidence DIR] | valheim-test detach save|stop|restart --evidence DIR | valheim-test detach finish --run ID";
     private const string ReadyVariable = "VALHEIM_TEST_DETACH_READY";
     private const string RunVariable = "VALHEIM_TEST_DETACH_RUN";
     private const string ControlVariable = "VALHEIM_TEST_DETACH_CONTROL";
@@ -45,6 +45,24 @@ internal static class DetachedSession
         if (args is ["status"])
             return (await EnvironmentRuns.WriteRunStatusReportAsync(null, output).ConfigureAwait(false)).NothingToRecover ? 0 : 3;
         if (args is ["finish", "--run", var finishRun]) return await FinishAsync(finishRun, output, error).ConfigureAwait(false);
+        if (args is [var operation, "--evidence", var evidence] && operation is "save" or "stop" or "restart" or "status")
+        {
+            try
+            {
+                if (operation == "status")
+                {
+                    var route = DetachedCommandQueue.CurrentRoute(Path.GetFullPath(evidence));
+                    await RequireCommandOwnerAsync(route).ConfigureAwait(false);
+                    var status = DetachedCommandQueue.Read<DetachedCommandQueue.Status>(Path.Combine(evidence, DetachedCommandQueue.StateFile));
+                    output.WriteLine($"DETACHED {route.Run} boot {route.Boot}: {status.State}");
+                    return status.State == "unknown" ? 3 : 0;
+                }
+                return DetachedCommandQueue.SubmitCheckpoint(evidence, operation, output, error);
+            }
+            catch (Exception failure) when (failure is ArgumentException or IOException or InvalidDataException or InvalidOperationException or
+                UnauthorizedAccessException or JsonException or HostOperationException)
+            { error.WriteLine("REFUSED: " + failure.Message); return 3; }
+        }
         if (args is not ["server-load", .. var serverArgs])
         { error.WriteLine("Usage: " + Usage); return 2; }
         if (!TryServerArgs(serverArgs, out string selectedOutput, out string reason))
@@ -70,12 +88,13 @@ internal static class DetachedSession
                 taskUser = registration.PrincipalUserId;
             }
 
+            RequireInputSeparation(serverArgs, RunsRoot, selectedOutput);
             Directory.CreateDirectory(RunsRoot);
             using var runScope = RunJournal.UseRun(run);
             string control = JournalOwnedDirectory.Create(RunsRoot, Actor, "detached control and startup logs", _ => { },
                 ("keepIn", RecoveryLogs(run)), ("keepFiles", "stdout.log\nstderr.log"));
             string tool = seams?.StageTool?.Invoke(RunsRoot) ?? StageTool(RunsRoot);
-            string[] stagedArgs = StageModsOwned(serverArgs, RunsRoot);
+            string[] stagedArgs = StageInputsOwned(serverArgs, RunsRoot, control);
             string label = WindowsScheduledTask.Prefix + run;
             var launch = new Launch(run, label, selectedOutput, Path.Combine(control, "ready.json"),
                 Path.Combine(control, "stdout.log"), Path.Combine(control, "stderr.log"), control, tool, Path.Combine(control, "launcher.ps1"), taskExecutable, taskUser);
@@ -145,28 +164,71 @@ internal static class DetachedSession
         for (int i = 0; i < args.Length; i++)
         {
             if (args[i] is "--config" or "--plugin-file" or "--plugin-dir" or "--search-root" or "--adapter" or
-                "--cli-manifest" or "--cli-files" or "--loader-package" or "--world-fixture" or "--inventory")
+                "--cli-manifest" or "--cli-files" or "--loader-package" or "--inventory")
             { error = "detached server input staging currently supports --mod, --server and --output only; use foreground --hold for " + args[i] + "."; return false; }
-            if (args[i] is not ("--output" or "--server" or "--mod")) continue;
+            if (args[i] is not ("--output" or "--server" or "--mod" or "--world-fixture")) continue;
             if (++i >= args.Length || !Path.IsPathFullyQualified(args[i]))
             { error = args[i - 1] + " needs an absolute path in a detached run."; return false; }
             if (args[i - 1] == "--output") output = Path.GetFullPath(args[i]);
         }
+        if (args.Count(arg => arg == "--world-fixture") > 1)
+        { error = "Give at most one --world-fixture."; return false; }
         if (output.Length == 0 || Directory.Exists(output) || File.Exists(output))
         { error = "--output must name a new absolute directory."; return false; }
         return true;
     }
 
-    private static string[] StageModsOwned(string[] args, string parent) => CopyMods(args, source =>
+    internal sealed record StagedInput(string Source, string Staged, IReadOnlyDictionary<string, string> Hashes);
+    internal static string[] StageInputsOwned(string[] args, string parent, string control)
     {
-        string payload = "";
-        JournalOwnedDirectory.Create(parent, Actor, "detached mod input", owned =>
+        int output = Array.IndexOf(args, "--output");
+        RequireInputSeparation(args, parent, control, output >= 0 ? args[output + 1] : parent);
+        var inputs = new List<StagedInput>();
+        string Stage(string source, string purpose, long maximum)
         {
-            payload = Path.Combine(owned, "payload"); Directory.CreateDirectory(payload);
-            CopyDirectory(source, payload, 10000, 512L << 20, "A detached mod directory is too large to stage");
-        });
-        return payload;
-    });
+            var hashes = WorldFixture.Manifest(source);
+            string payload = "";
+            JournalOwnedDirectory.Create(parent, Actor, purpose, owned =>
+            {
+                payload = Path.Combine(owned, "payload"); Directory.CreateDirectory(payload);
+                CopyDirectory(source, payload, 10000, maximum, "A detached input directory is too large to stage");
+                WorldFixture.Verify(payload, hashes);
+                WorldFixture.Verify(source, hashes);
+            });
+            inputs.Add(new(source, payload, hashes));
+            return payload;
+        }
+        string[] staged = CopyMods(args, source => Stage(source, "detached mod input", 512L << 20));
+        int fixture = Array.IndexOf(staged, "--world-fixture");
+        if (fixture >= 0) staged[fixture + 1] = Stage(args[fixture + 1], "detached world input", 4L << 30);
+        DetachedCommandQueue.WriteNew(Path.Combine(control, "input-manifests.json"), inputs, bounded: false);
+        return staged;
+    }
+
+    internal static void RequireInputSeparation(string[] args, params string[] destinations)
+    {
+        for (int i = 0; i < args.Length - 1; i++)
+        {
+            if (args[i] is not ("--mod" or "--world-fixture")) continue;
+            string source = args[i] == "--mod" ? Path.GetDirectoryName(args[++i])! : args[++i];
+            foreach (string destination in destinations)
+                if (ProtectedPaths.Contains(source, destination))
+                    throw new InvalidOperationException("Detached output and staging must be outside each original input directory: " + source);
+        }
+    }
+
+    internal static void VerifyStagedInputs(string? control = null)
+    {
+        control ??= ConfiguredControlDirectory ?? throw new InvalidOperationException("Missing detached input control directory.");
+        var inputs = JsonSerializer.Deserialize<StagedInput[]>(File.ReadAllText(Path.Combine(control, "input-manifests.json")))
+            ?? throw new InvalidDataException("Missing detached input manifests.");
+        if (inputs.Length == 0) throw new InvalidDataException("No pinned detached inputs.");
+        foreach (var input in inputs)
+        {
+            WorldFixture.Verify(input.Source, input.Hashes);
+            WorldFixture.Verify(input.Staged, input.Hashes);
+        }
+    }
 
     private static string[] CopyMods(string[] args, Func<string, string> stage)
     {

@@ -370,7 +370,7 @@ public sealed class SessionControl(GameActor actor)
             var data = actor.Invoke(capability, timeout.TotalSeconds.ToString(CultureInfo.InvariantCulture));
             RequireResult(data, "session-save");
             uint before = data.GetProperty("before").GetUInt32(), after = data.GetProperty("after").GetUInt32();
-            if (data.GetProperty("worldUid").GetString() != worldUid || !data.GetProperty("saved").GetBoolean() || before == after)
+            if (data.GetProperty("worldUid").GetString() != worldUid || !data.GetProperty("saved").GetBoolean() || after <= before)
                 throw new InvalidOperationException("The game did not confirm a completed save for this world.");
             return after;
         }

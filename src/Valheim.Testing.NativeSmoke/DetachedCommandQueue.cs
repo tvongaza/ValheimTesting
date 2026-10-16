@@ -10,10 +10,17 @@ internal sealed class DetachedCommandQueue : IDisposable
 {
     internal const string RouteFile = "detached-command-route.json";
     internal const int Capacity = 64, MaxBytes = 65536;
-    internal sealed record Route(string Run, string Control, string Evidence, int Pid, string Started, OwnedClientCommandLease Server);
-    internal sealed record Request(string Id, Route Route, DateTime ExpiresUtc, string Command, string Pins, int TimeoutSeconds);
+    internal sealed record Route(string Run, string Control, string Evidence, int Pid, string Started, OwnedClientCommandLease Server)
+    { public int Boot { get; init; } = 1; public int CompletionSeconds { get; init; } = 1050; }
+    internal sealed record Status(Route Route, string State);
+    internal const string StateFile = "detached-state.json";
+    internal sealed record Request(string Id, Route Route, DateTime ExpiresUtc, string Command, string Pins, int TimeoutSeconds)
+    { public string Operation { get; init; } = "command"; }
     internal sealed record Reply(string Id, string Outcome, string[] Output, string Message, string Evidence);
-    private readonly Route _route;
+    private Route _route;
+    private readonly DetachedCheckpoints? _checkpoints;
+    private readonly Action _checkpointProof;
+    private bool _unknown;
     private readonly Action<JournalEntry> _journal;
     private readonly Func<Request, Action, Reply> _execute;
     private readonly HashSet<string> _ids = new(StringComparer.Ordinal);
@@ -22,32 +29,72 @@ internal sealed class DetachedCommandQueue : IDisposable
     private string FinishFile => Path.Combine(_route.Control, _route.Run + ".finish");
     private string ClosedFile => Path.Combine(_route.Control, "commands-closed.json");
 
-    internal DetachedCommandQueue(Route route, Action<JournalEntry> journal, Func<Request, Action, Reply>? execute = null)
-    { _route = route; _journal = journal; _execute = execute ?? Execute; }
+    internal DetachedCommandQueue(Route route, Action<JournalEntry> journal, Func<Request, Action, Reply>? execute = null,
+        DetachedCheckpoints? checkpoints = null, Action? checkpointProof = null)
+    {
+        _route = route; _journal = journal; _execute = execute ?? Execute; _checkpoints = checkpoints; _checkpointProof = checkpointProof ?? ProveServer;
+        if (checkpoints != null) checkpoints.Changed = state =>
+        {
+            _journal(JournalEntry.Of("detached-checkpoint-state", ("state", state), ("boot", _route.Boot.ToString(System.Globalization.CultureInfo.InvariantCulture))));
+            PublishState();
+        };
+    }
 
-    internal static DetachedCommandQueue Open(string run, string evidence, IOwnedProcess server)
+    private string State => _unknown ? "unknown" : _checkpoints?.State ?? "running";
+    private void PublishState() => Replace(Path.Combine(_route.Evidence, StateFile), new Status(_route, State));
+    internal static Route CurrentRoute(string evidence)
+    {
+        var initial = Read<Route>(Path.Combine(evidence, RouteFile));
+        if (!File.Exists(Path.Combine(evidence, StateFile))) return initial;
+        var current = Read<Status>(Path.Combine(evidence, StateFile));
+        if (current.Route with { Server = initial.Server, Boot = initial.Boot } != initial || current.Route.Boot < initial.Boot)
+            throw new InvalidDataException("The detached state belongs to another supervisor.");
+        return current.Route;
+    }
+
+    internal static DetachedCommandQueue Open(string run, string evidence, IOwnedProcess server, DetachedCheckpoints? checkpoints = null)
     {
         string control = DetachedSession.ConfiguredControlDirectory ?? throw new InvalidOperationException("Missing detached control directory.");
+        var lease = ServerLease(evidence, server);
+        using var self = Process.GetCurrentProcess();
+        var route = new Route(run, control, Path.GetFullPath(evidence), self.Id, OwnedClientCommandLease.LocalStartFileTimeUtc(self), lease) { CompletionSeconds = checkpoints?.CompletionSeconds ?? 1050 };
+        DetachedSession.RequireCommandOwnerAsync(route).GetAwaiter().GetResult();
+        var queue = new DetachedCommandQueue(route, entry => new RunJournal(run).AppendLocal("detached", entry), checkpoints: checkpoints);
+        WriteNew(Path.Combine(evidence, RouteFile), route);
+        queue.PublishState();
+        return queue;
+    }
+
+    internal static OwnedClientCommandLease ServerLease(string evidence, IOwnedProcess server)
+    {
         var lease = Read<OwnedClientCommandLease>(Path.Combine(evidence, OwnedClientCommandLease.ServerFileName));
         string started = server switch
         {
             HostServerProcess hosted => hosted.StartIdentity,
             ILocalClientProcessIdentity local => local.StartFileTimeUtc,
-            _ => throw new InvalidOperationException("Detached commands require the owned server's exact local boot identity."),
+            _ => throw new InvalidOperationException("Detached commands require the exact local boot identity."),
         };
         if (lease.Role != "server" || lease.Pid != server.Id || lease.StartFileTimeUtc != started || server.HasExited)
             throw new InvalidOperationException("The detached server lease does not name the owned boot.");
-        using var self = Process.GetCurrentProcess();
-        var route = new Route(run, control, Path.GetFullPath(evidence), self.Id, OwnedClientCommandLease.LocalStartFileTimeUtc(self), lease);
+        return lease;
+    }
+
+    internal static int SubmitCheckpoint(string evidence, string operation, TextWriter output, TextWriter error)
+    {
+        evidence = Path.GetFullPath(evidence);
+        var route = CurrentRoute(evidence);
+        if (route.Evidence != evidence) throw new InvalidDataException("Checkpoint evidence names another run.");
         DetachedSession.RequireCommandOwnerAsync(route).GetAwaiter().GetResult();
-        var queue = new DetachedCommandQueue(route, entry => new RunJournal(run).AppendLocal("detached", entry));
-        WriteNew(Path.Combine(evidence, RouteFile), route);
-        return queue;
+        var request = new Request(Guid.NewGuid().ToString("N"), route, DateTime.UtcNow.AddSeconds(60), operation,
+            "checkpoint", 5) { Operation = operation };
+        Validate(request);
+        int slot = Publish(route, request);
+        return WaitForReply(route, request, slot, output, error);
     }
 
     internal static int Submit(string evidence, Dictionary<string, string> values, TextWriter output, TextWriter error)
     {
-        var route = Read<Route>(Path.Combine(evidence, RouteFile));
+        var route = CurrentRoute(evidence);
         if (route.Evidence != evidence || !Path.IsPathFullyQualified(route.Control) || !RunJournal.SafeName(route.Run) ||
             values.GetValueOrDefault("--role", "server") != "server")
             throw new InvalidDataException("Detached commands require this run's server evidence.");
@@ -69,7 +116,7 @@ internal sealed class DetachedCommandQueue : IDisposable
         try
         {
             output.WriteLine("Detached operation: " + request.Id);
-            while (elapsed.Elapsed < TimeSpan.FromSeconds(65))
+            while (elapsed.Elapsed < TimeSpan.FromSeconds(request.Operation == "command" ? 65 : route.CompletionSeconds))
             {
                 string result = Slot(route, slot, "reply");
                 if (File.Exists(result))
@@ -116,11 +163,16 @@ internal sealed class DetachedCommandQueue : IDisposable
             while (!File.Exists(FinishFile))
             {
                 cancellation.ThrowIfCancellationRequested();
+                _checkpoints?.CheckRunning();
                 ProcessPending(cancellation);
                 await Task.Delay(50, cancellation).ConfigureAwait(false);
             }
+            // Finish is not a successful hold if this boot already exited before teardown began.
+            // Intentionally stopped checkpoints have no running boot to observe.
+            _checkpoints?.CheckRunning();
         }
         finally { Close(); }
+        if (_unknown) throw new InvalidOperationException("The detached run has an unknown operation; inspect its checkpoint evidence.");
     }
 
     internal void ProcessPending(CancellationToken cancellation = default)
@@ -143,8 +195,19 @@ internal sealed class DetachedCommandQueue : IDisposable
             // Only this supervisor writes operation entries, preserving LastNamedRunner. Failure to journal intent aborts
             // admission and the hold before any transport dispatch. Outcome journal failure likewise stops subsequent work.
             _journal(Entry("detached-command-intended", request, refusal ?? request.Command));
-            reply = refusal != null ? new(request.Id, "refused", [], refusal, "") :
-                _execute(request, () => RequireAdmission(request, cancellation));
+            reply = refusal != null ? new(request.Id, "refused", [], refusal, "") : request.Operation == "command"
+                ? _execute(request, () => RequireAdmission(request, cancellation))
+                : _checkpoints!.Execute(request, () => RequireAdmission(request, cancellation), _checkpointProof, lease =>
+                {
+                    if (lease == _route.Server) throw new InvalidOperationException("Restart returned the old boot identity.");
+                    _route = _route with { Server = lease, Boot = checked(_route.Boot + 1) };
+                });
+            if (reply.Outcome == "unknown")
+            {
+                _unknown = true;
+                if (_checkpoints != null && _checkpoints.State != "unknown") _checkpoints.Unknown();
+                PublishState();
+            }
             _journal(Entry("detached-command-" + reply.Outcome, request, reply.Message[..Math.Min(reply.Message.Length, 4096)]));
             string evidence = Path.Combine(_route.Evidence, "detached-command-" + slot.ToString("D2", System.Globalization.CultureInfo.InvariantCulture) + ".json");
             WriteNew(evidence, reply, bounded: false); // Complete private result; large output must not end the held server.
@@ -160,6 +223,9 @@ internal sealed class DetachedCommandQueue : IDisposable
     {
         cancellation.ThrowIfCancellationRequested();
         if (_closed || File.Exists(FinishFile) || File.Exists(ClosedFile)) throw new InvalidOperationException("Detached command admission is closed.");
+        if (_unknown) throw new InvalidOperationException("An earlier operation has an unknown outcome; finish or recover before another mutation.");
+        if (request.Operation != "command" && _checkpoints == null) throw new InvalidOperationException("This hold has no checkpoint lifecycle.");
+        if (request.Operation == "command" && State != "running") throw new InvalidOperationException("Server commands require the running state.");
         if (request.Route != _route) throw new InvalidOperationException("The request does not name this supervisor and server boot.");
         if (request.ExpiresUtc <= DateTime.UtcNow) throw new InvalidOperationException("The operation expired before dispatch.");
         if (!ForegroundHold.ExactOwner(_route.Pid, _route.Started)) throw new InvalidOperationException("The exact supervisor is gone.");
@@ -167,7 +233,8 @@ internal sealed class DetachedCommandQueue : IDisposable
 
     internal static void Validate(Request request)
     {
-        if (!Guid.TryParseExact(request.Id, "N", out _) || request.Command.Length is < 1 or > 4096 ||
+        if (request.Route.CompletionSeconds is < 1 or > 18000 || request.Operation is not ("command" or "save" or "stop" or "restart") ||
+            !Guid.TryParseExact(request.Id, "N", out _) || request.Command.Length is < 1 or > 4096 ||
             request.Command.IndexOfAny(['\r', '\n', '\0']) >= 0 || request.Pins.Length is < 1 or > 32768 ||
             request.TimeoutSeconds is < 1 or > 15 || request.ExpiresUtc.Kind != DateTimeKind.Utc || request.ExpiresUtc > DateTime.UtcNow.AddSeconds(61))
             throw new InvalidDataException("Invalid or unbounded detached command request.");
@@ -185,11 +252,7 @@ internal sealed class DetachedCommandQueue : IDisposable
             void Proof()
             {
                 admission();
-                var current = Read<OwnedClientCommandLease>(Path.Combine(_route.Evidence, OwnedClientCommandLease.ServerFileName));
-                if (current != _route.Server) throw new InvalidOperationException("The owned server boot lease changed.");
-                using var process = Process.GetProcessById(current.Pid);
-                if (!OwnedCliCommand.IsExactProcess(process, current)) throw new InvalidOperationException("The exact owned server is gone or its PID was reused.");
-                OwnedCliCommand.RequirePortOwner(current.Port, current.Pid, "server");
+                ProveServer();
             }
             Proof();
             using var recording = new RecordingTransport(new CliTransport("127.0.0.1", _route.Server.Port), log);
@@ -206,6 +269,15 @@ internal sealed class DetachedCommandQueue : IDisposable
         catch (Exception failure) when (failure is IOException or InvalidDataException or InvalidOperationException or ArgumentException or
             TimeoutException or UnauthorizedAccessException or System.ComponentModel.Win32Exception or JsonException or OperationCanceledException)
         { return new(request.Id, dispatched ? "unknown" : "refused", [], failure.Message, log); }
+    }
+
+    private void ProveServer()
+    {
+        var current = Read<OwnedClientCommandLease>(Path.Combine(_route.Evidence, OwnedClientCommandLease.ServerFileName));
+        if (current != _route.Server) throw new InvalidOperationException("The owned server boot lease changed.");
+        using var process = Process.GetProcessById(current.Pid);
+        if (!OwnedCliCommand.IsExactProcess(process, current)) throw new InvalidOperationException("The exact owned server is gone or its PID was reused.");
+        OwnedCliCommand.RequirePortOwner(current.Port, current.Pid, "server");
     }
 
     private sealed class GuardedTransport(IGameTransport inner, Action proof, Action dispatched) : IGameTransport
@@ -246,6 +318,18 @@ internal sealed class DetachedCommandQueue : IDisposable
         if (file.Length > MaxBytes) throw new InvalidDataException("Detached control record exceeds its size limit.");
         return JsonSerializer.Deserialize<T>(file) ?? throw new InvalidDataException("Empty detached control record.");
     }
+    private static void Replace<T>(string path, T value)
+    {
+        string temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        try
+        {
+            using (var file = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            { JsonSerializer.Serialize(file, value); file.Flush(flushToDisk: true); }
+            File.Move(temporary, path, overwrite: true);
+        }
+        finally { File.Delete(temporary); }
+    }
+
     internal static void WriteNew<T>(string path, T value, bool bounded = true)
     {
         byte[] bytes = JsonSerializer.SerializeToUtf8Bytes(value);

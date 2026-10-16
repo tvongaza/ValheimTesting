@@ -12,6 +12,7 @@ public class SessionControlTests
         public string World = "7";
         public bool Ready = true, FailTransition, AdvanceSave = true, Devcommands;
         public string? DevcommandsReply;
+        public uint SaveAfter = 9;
         public CommandResult Execute(string command, TimeSpan timeout)
         {
             Commands.Add(command);
@@ -27,7 +28,7 @@ public class SessionControlTests
             if (FailTransition && action is "join" or "leave") return new() { Ok = false, ErrorCode = "lost", Message = "reply lost" };
             object data = action switch {
                 "state" => new { source = "session-state", complete = true, phase = Ready ? "world-present" : "loading", worldUid = World, worldPresent = true, worldReady = Ready, server = true, dedicated = true, localPlayer = false, playerReady = false, saving = false, loadError = false, connectionStatus = "None" },
-                "save" => new { source = "session-save", complete = true, worldUid = World, saved = true, before = 8u, after = AdvanceSave ? 9u : 8u, milliseconds = 10 },
+                "save" => new { source = "session-save", complete = true, worldUid = World, saved = true, before = 8u, after = AdvanceSave ? SaveAfter : 8u, milliseconds = 10 },
                 _ => new { source = "session-" + action, complete = true, action }
             };
             return new() { Ok = true, Output = ["EXTENSION_RESULT " + JsonSerializer.Serialize(new { schemaVersion = 1, ok = true, extension = "valheim.session", instance = "a", data })] };
@@ -41,6 +42,12 @@ public class SessionControlTests
         Assert.Equal(9u, session.Save("7", TimeSpan.FromSeconds(10)));
         Assert.Single(fake.Commands.Where(x => x.StartsWith("cli_extension valheim.session/save")));
         fake.AdvanceSave = false; Assert.Throws<InvalidOperationException>(() => session.Save("7", TimeSpan.FromSeconds(10)));
+    }
+    [Fact] public void ARegressingCompletedSaveNumberIsNotAConfirmedSave()
+    {
+        var fake = new Fake { SaveAfter = 7 }; using var actor = fake.Actor();
+        Assert.Throws<InvalidOperationException>(() => new SessionControl(actor).Save("7", TimeSpan.FromSeconds(10)));
+        Assert.Single(fake.Commands.Where(x => x.StartsWith("cli_extension valheim.session/save")));
     }
     [Fact] public void WrongWorldRefusesBeforeMutation()
     {

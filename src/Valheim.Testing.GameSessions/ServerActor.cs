@@ -27,16 +27,18 @@ public sealed class ServerActor : IOwnedServer, IDisposable
     private readonly CancellationToken _cancellation;
     private readonly List<RunLog> _logs = [];
     private GameActor? _game;
+    internal (string Path, IReadOnlyDictionary<string, string> Hashes)? OriginalFixture { get; }
 
     // The one owned-server wiring: every boot's launch, logs, process record and recorded connection.
-    internal ServerActor(IServerPlacement placement, ServerRunPlan plan, string output, string sessionCapability, string sessionTokenVariable, CancellationToken cancellation)
+    internal ServerActor(IServerPlacement placement, ServerRunPlan plan, string output, string sessionCapability, string sessionTokenVariable, CancellationToken cancellation, string? checkpointFixture = null)
     {
         ArgumentNullException.ThrowIfNull(placement); ArgumentNullException.ThrowIfNull(plan);
         ArgumentException.ThrowIfNullOrEmpty(output); ArgumentException.ThrowIfNullOrEmpty(sessionTokenVariable);
+        if (checkpointFixture != null) OriginalFixture = (checkpointFixture, WorldFixture.Manifest(checkpointFixture));
         string runtime = RuntimeDirectory = placement.RuntimeDirectory, world = WorldDirectory = placement.WorldDirectory;
         Host = placement.Host; _plan = plan; _placement = placement; _output = output; _cancellation = cancellation;
         int boot = 0, connection = 0;
-        _session = new OwnedServerSession(token =>
+        _session = new OwnedServerSession((token, launchCancellation) =>
         {
             // The launch adds SteamAppId and the Doorstop loader variables BepInEx needs; a Unix profile starts in its owned loader root.
             var environment = plan.Environment.ToDictionary(entry => entry.Key, entry => plan.Expand(entry.Value, runtime, world));
@@ -44,7 +46,7 @@ public sealed class ServerActor : IOwnedServer, IDisposable
             var launch = GameLaunch.ForServerWithLoader(placement.GameDirectory, placement.LoaderDirectory,
                 plan.LaunchArguments(runtime, world), environment, placement.Platform, placement.MacSteamRuntimeDirectory);
             int n = ++boot;
-            var started = placement.Start(n, launch, output, TimeSpan.FromSeconds(plan.QuitSeconds), cancellation);
+            var started = placement.Start(n, launch, output, TimeSpan.FromSeconds(plan.QuitSeconds), launchCancellation);
             // What the stop keeps: BepInEx's log, Unity's log when the plan passes -logFile {runtime}/toolkit-unity.log, and the
             // process output (Unity's log on Linux without -logFile).
             // Registered at once, so a boot that fails from here is still scanned.
@@ -107,6 +109,69 @@ public sealed class ServerActor : IOwnedServer, IDisposable
     /// <summary>How each boot ended, in boot order, restarts included.</summary>
     public IReadOnlyList<ProcessStop> Stops => _session?.Stops ?? [];
     internal IOwnedProcess? CurrentProcess => _session?.CurrentProcess;
+
+    // Intermediate checkpoint operations retain the placement, its host lock, profile and original fixture. Only the
+    // encompassing run disposes that ownership. A forced or pre-existing exit is never a clean checkpoint.
+    internal void StopCheckpoint()
+    {
+        if (_session?.CurrentProcess is not { HasExited: false })
+            throw new InvalidOperationException("A checkpoint requires the current live owned server.");
+        _game = null;
+        _session.Stop();
+        if (_session.Stops[^1] is not { Outcome: StopOutcome.Clean, ExitCode: null or 0 })
+            throw new InvalidOperationException("The checkpoint server did not stop cleanly: " + _session.Stops[^1]);
+        if (_output != null) OwnedClientCommandLease.RetireServer(_output);
+    }
+
+    internal void ArchiveCheckpoint(string archive, CancellationToken cancellation)
+    {
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(_cancellation, cancellation);
+        cancellation = linked.Token;
+        RequireStoppedCheckpoint();
+        (_placement ?? throw new InvalidOperationException("No checkpoint placement.")).ArchiveCheckpoint(archive, cancellation);
+        var logs = Logs;
+        if (logs.Any(log => log.Required && !File.Exists(log.Path)))
+            throw new InvalidDataException("A required stopped boot log is missing.");
+        var hashes = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var log in logs.Where(log => File.Exists(log.Path)))
+        {
+            cancellation.ThrowIfCancellationRequested();
+            string relative = Path.GetRelativePath(_output!, log.Path);
+            if (relative.StartsWith("..", StringComparison.Ordinal) || Path.IsPathRooted(relative))
+                throw new InvalidOperationException("A checkpoint log is outside its owned evidence.");
+            string destination = Path.Combine(archive, "logs", relative);
+            Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+            string hash = FileHash.Sha256(log.Path);
+            File.Copy(log.Path, destination);
+            if (FileHash.Sha256(destination) != hash || FileHash.Sha256(log.Path) != hash)
+                throw new IOException("A stopped checkpoint log changed during its copy.");
+            hashes.Add(relative, hash);
+        }
+        if (hashes.Count == 0) throw new InvalidDataException("A checkpoint has no stopped boot logs.");
+        File.WriteAllText(Path.Combine(archive, "logs.sha256.json"), JsonSerializer.Serialize(hashes));
+    }
+
+    internal void RestoreCheckpoint(string original, IReadOnlyDictionary<string, string> hashes, string archive, CancellationToken cancellation)
+    {
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(_cancellation, cancellation);
+        RequireStoppedCheckpoint();
+        (_placement ?? throw new InvalidOperationException("No checkpoint placement.")).RestoreCheckpoint(original, hashes, archive, linked.Token);
+    }
+
+    internal void StartCheckpoint(CancellationToken cancellation)
+    {
+        RequireStoppedCheckpoint();
+        _game = _session!.StartAsync(cancellation).GetAwaiter().GetResult();
+        // The new actor has already verified its own session token, strict pins and test access.
+        _session.WaitUntilJoinableCheckpoint(_game, cancellation);
+        PublishCommandCapability();
+    }
+
+    private void RequireStoppedCheckpoint()
+    {
+        if (_session == null || _session.CurrentProcess != null || _session.Stops.LastOrDefault() is not { Outcome: StopOutcome.Clean, ExitCode: null or 0 })
+            throw new InvalidOperationException("The owned server must have a proven clean checkpoint stop.");
+    }
     /// <summary>
     /// The current boot's live BepInEx log, for a scenario's in-run log reads: on this machine only (null when the server runs
     /// on another host, where <see cref="Lobby"/> reads its log there).
@@ -209,6 +274,9 @@ public sealed class ServerActor : IOwnedServer, IDisposable
 /// <summary>Where an owned server's boots run: what differs between this machine and a host of the environment.</summary>
 internal interface IServerPlacement
 {
+    void ArchiveCheckpoint(string archive, CancellationToken cancellation) => throw new NotSupportedException("This placement has no detached checkpoints.");
+    void RestoreCheckpoint(string original, IReadOnlyDictionary<string, string> hashes, string archive, CancellationToken cancellation) =>
+        throw new NotSupportedException("This placement has no detached checkpoints.");
     string RuntimeDirectory { get; }
     string GameDirectory => RuntimeDirectory;
     string LoaderDirectory => RuntimeDirectory;
