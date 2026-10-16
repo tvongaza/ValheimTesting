@@ -67,14 +67,16 @@ public sealed class HostedWorldPlacementSafetyTests : IDisposable
         return fields;
     }
 
-    private (HostWorldPlan Plan, HostedWorldOnHost.Site Site, ForwardingWorldHost Host, List<JournalEntry> Journal) Setup()
+    private (HostWorldPlan Plan, HostedWorldOnHost.Site Site, ForwardingWorldHost Host, List<JournalEntry> Journal) Setup(string suffix = "")
     {
-        string fixture = FakeInstalls.World(Path.Combine(_root, "fixture"));
+        string root = Path.Combine(_root, suffix);
+        Directory.CreateDirectory(root);
+        string fixture = FakeInstalls.World(Path.Combine(root, "fixture"));
         var plan = new HostWorldPlan { World = new() { Source = fixture, Sha256 = new(WorldFixture.Manifest(fixture)) }, WorldUid = "4242" };
         var journal = new List<JournalEntry>();
         var host = new ForwardingWorldHost(new LocalGameHost("local", HostShell.ThisMachine));
-        var site = new HostedWorldOnHost.Site(host, host.Name, Path.Combine(_root, "worlds_local"),
-            Path.Combine(_root, "runs", "run-1", "host-world-stage"), Path.Combine(_root, "runs", "run-1", "host-world"),
+        var site = new HostedWorldOnHost.Site(host, host.Name, Path.Combine(root, "worlds_local"),
+            Path.Combine(root, "runs", "run-1", "host-world-stage"), Path.Combine(root, "runs", "run-1", "host-world"),
             (entry, _) => { journal.Add(entry); return Task.CompletedTask; }, _ => Task.CompletedTask);
         return (plan, site, host, journal);
     }
@@ -100,6 +102,139 @@ public sealed class HostedWorldPlacementSafetyTests : IDisposable
         for (int attempt = 0; attempt < 2; attempt++)
             Assert.Contains("never confirmed", Assert.Throws<InvalidDataException>(() => HostedWorldOnHost.RecoverAsync(host, Fields(journal),
                 Path.Combine(site.WorldsDirectory, "Campaign"), "run-1", TimeSpan.FromSeconds(30), default).GetAwaiter().GetResult()).Message);
+    }
+
+    [Fact]
+    public async Task AnUnknownTransferCannotBeRetiredWhileItsDelayedMutationHasNotAppearedYet()
+    {
+        var (plan, site, host, journal) = Setup();
+        string? delayed = null;
+        IReadOnlyDictionary<string, string>? delayedVariables = null;
+        host.InsteadOfRun = (script, variables) =>
+        {
+            if (variables?.GetValueOrDefault("worlds") != site.Stage) return null;
+            delayed = script; delayedVariables = variables;
+            return new HostResult(HostOutcome.Unknown, null, "", "", TimeSpan.Zero, false);
+        };
+        Assert.Throws<HostOperationException>(() => site.Place(plan, Path.Combine(_root, "output"), default));
+        Assert.Empty(Directory.EnumerateFileSystemEntries(site.WorldsDirectory));
+        var fields = Fields(journal);
+        Assert.Contains("may still run", (await Assert.ThrowsAsync<InvalidDataException>(() => HostedWorldOnHost.RecoverAsync(host, fields,
+            Path.Combine(site.WorldsDirectory, "Campaign"), "run-1", TimeSpan.FromSeconds(30), default))).Message);
+        Assert.DoesNotContain(journal, entry => entry.Kind == JournalEntry.CopyRetired);
+        // The interrupted host command finishes after recovery looked: the journal must still describe this uncertain effect.
+        Assert.NotNull(delayed);
+        (await new LocalGameHost("delayed", HostShell.ThisMachine).RunAsync(delayed, delayedVariables, TimeSpan.FromSeconds(30))).EnsureSuccess("delayed transfer");
+        Assert.True(File.Exists(Path.Combine(site.WorldsDirectory, "Campaign.fwl")));
+        await Assert.ThrowsAsync<InvalidDataException>(() => HostedWorldOnHost.RecoverAsync(host, fields,
+            Path.Combine(site.WorldsDirectory, "Campaign"), "run-1", TimeSpan.FromSeconds(30), default));
+    }
+
+    [Theory]
+    [InlineData(4242)]
+    [InlineData(9999)]
+    public async Task PartialRecoveryNeverMovesAReplacementAtAnOldReceiptName(long uid)
+    {
+        var (plan, site, host, journal) = Setup();
+        site = site with { Journal = (entry, _) =>
+        {
+            if (entry.Fields.GetValueOrDefault("verified") == "true") throw new IOException("completion journal failed");
+            journal.Add(entry); return Task.CompletedTask;
+        } };
+        host.BeforeRun = (_, variables) =>
+        {
+            if (variables?.GetValueOrDefault("worlds") == site.WorldsDirectory && variables.ContainsKey("to"))
+                throw new IOException("rollback interrupted");
+        };
+        Assert.Throws<IOException>(() => site.Place(plan, Path.Combine(_root, "output"), default));
+        Assert.Equal("partial", Fields(journal)["placementState"]);
+        byte[] personal = File.ReadAllBytes(Path.Combine(FakeInstalls.World(Path.Combine(_root, "personal"), uid: uid, seed: "Personal"), "Campaign.fwl"));
+        File.WriteAllBytes(Path.Combine(site.WorldsDirectory, "Campaign.fwl"), personal);
+        host.BeforeRun = null;
+        for (int attempt = 0; attempt < 2; attempt++)
+        {
+            Assert.Contains("historical receipts", (await Assert.ThrowsAsync<InvalidDataException>(() => HostedWorldOnHost.RecoverAsync(host, Fields(journal),
+                Path.Combine(site.WorldsDirectory, "Campaign"), "run-1", TimeSpan.FromSeconds(30), default))).Message);
+            Assert.Equal(personal, File.ReadAllBytes(Path.Combine(site.WorldsDirectory, "Campaign.fwl")));
+            Assert.Empty(Directory.EnumerateFileSystemEntries(site.KeepIn));
+        }
+    }
+
+    [Fact]
+    public void ADirectoryArrivingImmediatelyBeforeTheMoveCannotReceiveANestedFixtureOrBecomeOwned()
+    {
+        var (_, site, host, journal) = Setup();
+        string fixture = Path.Combine(_root, "chunked-fixture");
+        Directory.CreateDirectory(Path.Combine(fixture, "Campaign"));
+        File.Copy(Path.Combine(_root, "fixture", "Campaign.fwl"), Path.Combine(fixture, "Campaign", "_main.0.fwl2"));
+        var plan = new HostWorldPlan { World = new() { Source = fixture, Sha256 = new(WorldFixture.Manifest(fixture)) }, WorldUid = "4242" };
+        host.TransformScript = (script, variables) => variables?.GetValueOrDefault("worlds") != site.Stage ? script :
+            host.Shell.Kind == HostShellKind.Bash
+                ? script.Replace("mv -n -- \"$worlds/$leaf\" \"$to/\"", "mkdir -- \"$to/$leaf\"\nprintf personal > \"$to/$leaf/personal-save\"\nmv -n -- \"$worlds/$leaf\" \"$to/\"")
+                : script.Replace("$entry = $move[0]; $dest = $move[1]", "$entry = $move[0]; $dest = $move[1]\n[void][IO.Directory]::CreateDirectory($dest)\n[IO.File]::WriteAllText((Join-Path $dest 'personal-save'), 'personal')");
+        Assert.ThrowsAny<Exception>(() => site.Place(plan, Path.Combine(_root, "output"), default));
+        Assert.Equal("personal", File.ReadAllText(Path.Combine(site.WorldsDirectory, "Campaign", "personal-save")));
+        Assert.False(Directory.Exists(Path.Combine(site.WorldsDirectory, "Campaign", "Campaign")));
+        Assert.True(File.Exists(Path.Combine(site.Stage, "Campaign", "_main.0.fwl2")));
+        Assert.DoesNotContain(journal, entry => entry.Kind == JournalEntry.CopyRetired || entry.Fields.GetValueOrDefault("verified") == "true");
+    }
+
+    [OsFact("windows")]
+    public async Task WindowsCrossVolumePublicationRefusesLateFilesAndDirectoriesAndPreservesUncertainDeletion()
+    {
+        foreach (bool chunked in new[] { false, true })
+        foreach (string fault in new[] { "none", "collision", "delete" })
+        {
+            string variant = "cross-" + chunked + "-" + fault;
+            var (plan, site, host, journal) = Setup(variant);
+            string leaf = chunked ? "Campaign" : "Campaign.fwl";
+            if (!chunked)
+            {
+                string fixture = Directory.CreateDirectory(Path.Combine(_root, variant, "single-file")).FullName;
+                File.Copy(Path.Combine(plan.World.Source, "Campaign.fwl"), Path.Combine(fixture, leaf));
+                plan = new HostWorldPlan { World = new() { Source = fixture, Sha256 = new(WorldFixture.Manifest(fixture)) }, WorldUid = "4242" };
+            }
+            else
+            {
+                string fixture = Path.Combine(_root, variant, "chunked");
+                Directory.CreateDirectory(Path.Combine(fixture, leaf));
+                File.Copy(Path.Combine(plan.World.Source, "Campaign.fwl"), Path.Combine(fixture, leaf, "_main.0.fwl2"));
+                plan = new HostWorldPlan { World = new() { Source = fixture, Sha256 = new(WorldFixture.Manifest(fixture)) }, WorldUid = "4242" };
+            }
+            host.TransformScript = (script, variables) =>
+            {
+                if (variables?.GetValueOrDefault("worlds") != site.Stage) return script;
+                // Exercise the actual cross-volume branch on CI's one volume, then inject at the final no-replace rename.
+                script = script.Replace("[IO.Path]::GetPathRoot($entry) -ne [IO.Path]::GetPathRoot($dest)", "$true");
+                if (fault == "collision")
+                    script = script.Replace("Copy-Item -LiteralPath $entry -Destination $copy -Recurse", "Copy-Item -LiteralPath $entry -Destination $copy -Recurse\n" +
+                        (chunked ? "[void][IO.Directory]::CreateDirectory($dest); [IO.File]::WriteAllText((Join-Path $dest 'personal-save'), 'personal')" :
+                            "if ($move[2] -ceq 'Campaign.fwl') { [IO.File]::WriteAllText($dest, 'personal') }"));
+                if (fault == "delete") script = script.Replace("Remove-VtTree $entry $worlds", "throw 'source-delete failed'");
+                return script;
+            };
+            string output = Path.Combine(_root, variant, "output");
+            if (fault == "none")
+            {
+                var placed = site.Place(plan, output, default);
+                Assert.True(Path.Exists(Path.Combine(site.WorldsDirectory, leaf)));
+                Assert.False(Path.Exists(Path.Combine(site.Stage, leaf)));
+                placed.Collect();
+            }
+            else
+            {
+                Assert.ThrowsAny<Exception>(() => site.Place(plan, output, default));
+                Assert.True(Path.Exists(Path.Combine(site.Stage, leaf)));
+                if (fault == "collision")
+                    Assert.Equal("personal", File.ReadAllText(chunked ? Path.Combine(site.WorldsDirectory, leaf, "personal-save") : Path.Combine(site.WorldsDirectory, leaf)));
+                else
+                    Assert.True(Path.Exists(Path.Combine(site.WorldsDirectory, leaf)));
+                await Assert.ThrowsAsync<InvalidDataException>(() => HostedWorldOnHost.RecoverAsync(host, Fields(journal),
+                    Path.Combine(site.WorldsDirectory, "Campaign"), "run-1", TimeSpan.FromSeconds(30), default));
+                Assert.DoesNotContain(journal, entry => entry.Kind == JournalEntry.CopyRetired || entry.Fields.GetValueOrDefault("verified") == "true");
+            }
+            Assert.Empty(Directory.EnumerateDirectories(site.WorldsDirectory, ".vt-world-copy-*"));
+        }
     }
 
     [Fact]
@@ -210,6 +345,7 @@ public sealed class HostedWorldPlacementSafetyTests : IDisposable
 
 internal sealed class ForwardingWorldHost(IGameHost inner) : IGameHost
 {
+    public Func<string, IReadOnlyDictionary<string, string>?, HostResult?>? InsteadOfRun { get; set; }
     public Func<string, IReadOnlyDictionary<string, string>?, string>? TransformScript { get; set; }
     public Action<string, IReadOnlyDictionary<string, string>?>? BeforeRun { get; set; }
     public Func<string, IReadOnlyDictionary<string, string>?, HostResult, HostResult>? AfterRun { get; set; }
@@ -219,7 +355,7 @@ internal sealed class ForwardingWorldHost(IGameHost inner) : IGameHost
     public async Task<HostResult> RunAsync(string script, IReadOnlyDictionary<string, string>? variables, TimeSpan timeout, CancellationToken cancellation = default)
     {
         BeforeRun?.Invoke(script, variables);
-        var result = await inner.RunAsync(TransformScript?.Invoke(script, variables) ?? script, variables, timeout, cancellation);
+        var result = InsteadOfRun?.Invoke(script, variables) ?? await inner.RunAsync(TransformScript?.Invoke(script, variables) ?? script, variables, timeout, cancellation);
         return AfterRun?.Invoke(script, variables, result) ?? result;
     }
     public Task<HostLock> AcquireLockAsync(string path, string owner, TimeSpan timeout, CancellationToken cancellation = default) => inner.AcquireLockAsync(path, owner, timeout, cancellation);

@@ -152,7 +152,7 @@ internal static class HostedWorldOnHost
         string name = HostedWorld.NameOf(plan.World.Sha256.Keys);
         string world = HostPath.Join(site.WorldsDirectory, name);
         site.Hold(cancellation).GetAwaiter().GetResult();
-        var existing = Entries(site, name, cancellation);
+        var existing = Entries(site.Host, site.WorldsDirectory, name, cancellation);
         if (existing.Count != 0)
             throw new InvalidOperationException($"The client's worlds on {site.HostName} already hold {string.Join(", ", existing)} in {site.WorldsDirectory}: a fixture world is never copied over a world. Remove or rename that one yourself, or rename the fixture world.");
         Reserve(site, cancellation);
@@ -250,13 +250,21 @@ internal static class HostedWorldOnHost
         string runtime, string runId, TimeSpan timeout, CancellationToken cancellation)
     {
         var (name, uid) = RequireJournalled(fields, runtime, runId);
-        if (fields.GetValueOrDefault("placementState") == "partial")
+        string? placement = fields.GetValueOrDefault("placementState");
+        if (placement == "attempted")
+            throw new InvalidDataException("the hosted-world transfer was never confirmed and its host script may still run; preserve the pending placement even if no world is present. Inspect the host and settle the interrupted transfer before retrying env recover");
+        if (placement == "partial")
         {
             var selected = JsonSerializer.Deserialize<string[]>(fields.GetValueOrDefault("transferredEntries") ?? "[]") ?? [];
             if (selected.Length == 0 || selected.Distinct(StringComparer.Ordinal).Count() != selected.Length ||
                 selected.Any(leaf => leaf.Length == 0 || leaf.IndexOfAny(['/', '\\', '\n', '\r']) >= 0 || !HostedWorld.IsNamedFor(leaf, name)))
                 throw new InvalidDataException("the partial placement has no valid transfer receipts; preserve the pending placement for inspection");
-            return await MoveOut(host, fields["parent"], name, fields["keepIn"], timeout, cancellation, selected).ConfigureAwait(false);
+            // An old receipt proves the earlier move, not ownership of a file later written at that path. Partial setup
+            // never launched the game, so there is no game-modified-save path to preserve here. Only settle missing entries.
+            var remaining = Entries(host, fields["parent"], name, cancellation);
+            if (remaining.Any(leaf => selected.Contains(leaf, StringComparer.OrdinalIgnoreCase)))
+                throw new InvalidDataException("the partial hosted-world transfer still has entries in the client's worlds; its historical receipts cannot prove those files are still the run's. Preserve the pending placement and inspect them before retrying env recover");
+            return [];
         }
         bool present = await RequireOwnWorldAsync(host, fields["parent"], name, uid, timeout, cancellation).ConfigureAwait(false);
         if (!present) return [];
@@ -314,12 +322,12 @@ internal static class HostedWorldOnHost
         return target;
     }
 
-    private static List<string> Entries(Site site, string name, CancellationToken cancellation)
+    private static List<string> Entries(IGameHost host, string worlds, string name, CancellationToken cancellation)
     {
-        var result = site.Host.RunAsync(site.Host.Shell.Kind == HostShellKind.PowerShell ? WindowsEntries : BashEntries,
-            new Dictionary<string, string> { ["worlds"] = site.WorldsDirectory, ["name"] = name }, HostedTimeouts.Quick, cancellation).GetAwaiter().GetResult()
-            .EnsureSuccess($"Listing the client's worlds on {site.HostName}");
-        if (InteractiveClient.Line(result.Stdout, "VT-WORLD-ENTRIES") == null) throw new HostOperationException($"Unexpected reply while listing the client's worlds on {site.HostName}", result);
+        var result = host.RunAsync(host.Shell.Kind == HostShellKind.PowerShell ? WindowsEntries : BashEntries,
+            new Dictionary<string, string> { ["worlds"] = worlds, ["name"] = name }, HostedTimeouts.Quick, cancellation).GetAwaiter().GetResult()
+            .EnsureSuccess($"Listing the client's worlds on {host.Name}");
+        if (InteractiveClient.Line(result.Stdout, "VT-WORLD-ENTRIES ") != "done") throw new HostOperationException($"Unexpected reply while listing the client's worlds on {host.Name}", result);
         return result.Stdout.Split('\n').Select(line => line.TrimEnd('\r')).Where(line => line.StartsWith("VT-WORLD-ENTRY ", StringComparison.Ordinal))
             .Select(line => line["VT-WORLD-ENTRY ".Length..]).ToList();
     }
@@ -509,8 +517,30 @@ internal static class HostedWorldOnHost
         foreach ($move in $moves) {
             $entry = $move[0]; $dest = $move[1]
             if ([IO.Path]::GetPathRoot($entry) -ne [IO.Path]::GetPathRoot($dest)) {
-                Copy-Item -LiteralPath $entry -Destination $dest -Recurse
-                Remove-VtTree $entry $worlds
+                # Build a complete copy on the destination volume, then publish at the exact path with no replacement.
+                # CreateDirectoryW's true result proves this temporary directory is new; CreateDirectory alone is idempotent.
+                if (-not ('VtHostedWorldCopy' -as [type])) {
+                    Add-Type -TypeDefinition @'
+        using System;
+        using System.Runtime.InteropServices;
+        public static class VtHostedWorldCopy {
+            [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+            [return: MarshalAs(UnmanagedType.Bool)]
+            public static extern bool CreateDirectory(string path, IntPtr attributes);
+        }
+        '@
+                }
+                $temporary = Join-Path $to ('.vt-world-copy-' + [Guid]::NewGuid().ToString('N'))
+                if (-not [VtHostedWorldCopy]::CreateDirectory($temporary, [IntPtr]::Zero)) {
+                    throw [ComponentModel.Win32Exception]::new([Runtime.InteropServices.Marshal]::GetLastWin32Error())
+                }
+                try {
+                    $copy = Join-Path $temporary 'entry'
+                    Copy-Item -LiteralPath $entry -Destination $copy -Recurse
+                    if ([IO.Directory]::Exists($copy)) { [IO.Directory]::Move($copy, $dest) }
+                    else { [IO.File]::Move($copy, $dest) }
+                    Remove-VtTree $entry $worlds
+                } finally { Remove-VtTree $temporary $to }
             }
             elseif ([IO.Directory]::Exists($entry)) { [IO.Directory]::Move($entry, $dest) }
             else { [IO.File]::Move($entry, $dest) }
@@ -540,7 +570,8 @@ internal static class HostedWorldOnHost
         fi
         printf '%s' "$moves" | while IFS= read -r leaf; do
             [ -n "$leaf" ] || continue
-            mv -n -- "$worlds/$leaf" "$to/$leaf"
+            # The destination is the parent, never an explicit child path that mv could treat as a newly arrived directory.
+            mv -n -- "$worlds/$leaf" "$to/"
             if [ -e "$worlds/$leaf" ] || [ -L "$worlds/$leaf" ]; then printf 'VT-WORLD-EXISTS %s\n' "$leaf"; exit 4; fi
             printf 'VT-WORLD-MOVED %s\n' "$leaf"
         done
