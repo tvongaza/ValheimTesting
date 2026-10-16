@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Diagnostics;
 using Valheim.Testing.GameSessions;
 using Valheim.Testing.Game;
+using Valheim.Testing.Game.Fakes;
 using Xunit;
 
 public sealed class DetachedCheckpointTests : IDisposable
@@ -175,6 +176,36 @@ public sealed class DetachedCheckpointTests : IDisposable
         Assert.Equal(point is "first-verify" or "first-proof" ? "refused" : "unknown", reply.Outcome);
         Assert.Equal(saved ? 1 : 0, _effects.Count(effect => effect == "save"));
         Assert.DoesNotContain("stop", _effects); Assert.DoesNotContain("archive", _effects);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task FinishCannotHideAnUnexpectedExitButAcceptsAnIntentionallyStoppedCheckpoint(bool stopped)
+    {
+        var route = Route();
+        using var process = new FakeOwnedProcess();
+        using var watcher = new DetachedCheckpoints.BootExitWatch();
+        watcher.Attach(process);
+        var lifecycle = Lifecycle(route, monitor: watcher.Check, onEffect: effect => { if (effect == "stop") process.Exit(0); });
+        using var queue = Queue(route, lifecycle);
+        if (stopped)
+        {
+            int stop = DetachedCommandQueue.Publish(route, Request(route, "stop"));
+            queue.ProcessPending();
+            Assert.Equal("completed", Read(route, stop).Outcome);
+            watcher.Settle();
+        }
+        else process.Exit(17);
+        File.WriteAllText(Path.Combine(route.Control, route.Run + ".finish"), "finish");
+        if (stopped) await queue.WaitAsync(CancellationToken.None);
+        else
+        {
+            var failure = await Assert.ThrowsAsync<InvalidOperationException>(() => queue.WaitAsync(CancellationToken.None));
+            Assert.Contains("code 17", failure.Message);
+        }
+        Assert.Equal(stopped ? "stopped" : "unknown", lifecycle.State);
+        Assert.True(File.Exists(Path.Combine(route.Control, "commands-closed.json")));
     }
 
     [Fact]

@@ -167,6 +167,9 @@ internal sealed class DetachedCommandQueue : IDisposable
                 ProcessPending(cancellation);
                 await Task.Delay(50, cancellation).ConfigureAwait(false);
             }
+            // Finish is not a successful hold if this boot already exited before teardown began.
+            // Intentionally stopped checkpoints have no running boot to observe.
+            _checkpoints?.CheckRunning();
         }
         finally { Close(); }
         if (_unknown) throw new InvalidOperationException("The detached run has an unknown operation; inspect its checkpoint evidence.");
