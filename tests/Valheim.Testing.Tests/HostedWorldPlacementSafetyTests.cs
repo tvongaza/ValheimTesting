@@ -18,6 +18,7 @@ public sealed class HostedWorldPlacementSafetyTests : IDisposable
         => LateCollision(new LocalGameHost("local", HostShell.ThisMachine), foreign, uid);
 
     [SshTheory]
+    [Trait("Category", "GameHosts")]
     [InlineData("Campaign.fwl", 9999)]
     [InlineData("campaign.fwl", 4242)]
     [InlineData("Campaign/_main.0.fwl2", 4242)]
