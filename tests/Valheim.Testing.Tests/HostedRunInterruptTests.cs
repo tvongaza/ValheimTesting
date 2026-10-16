@@ -69,8 +69,7 @@ public sealed partial class HostedServerRunTests
     }
 
     // Gap 3: a standalone run's server profile (#730) and world copy on the server host are each journalled before their scripts
-    // run, done once made and verified, then retired (the profile) or handed over as the run's evidence (the world, which stays
-    // beside the boot logs); env status then finds nothing of the run left. A profile or copy the journal cannot name is never made.
+    // run, done once made and verified, then retired (the world and boot logs only after verified fetch); env status then finds nothing of the run left. A profile or copy the journal cannot name is never made.
     [Fact] public async Task AStandaloneRunJournalsItsProfileAndWorldBeforeTheirScriptsAndMakesNothingItCannotJournal()
     {
         var server = NewServer(); var host = NewHost(server);
@@ -79,14 +78,16 @@ public sealed partial class HostedServerRunTests
         string runtime = RunDirectory + "/runtime", world = RunDirectory + "/world";
         var journal = await RunJournalOnHost.ReadAsync(host, "/var/tmp/vt/journal", RunId, TimeSpan.FromSeconds(5));
         Assert.Equal([(JournalEntry.CopyIntended, runtime), (JournalEntry.CopyDone, runtime), (JournalEntry.CopyIntended, world), (JournalEntry.CopyDone, world),
-            (JournalEntry.CopyRetired, runtime), (JournalEntry.CopyRetired, world)], Copies(journal));
-        Assert.Equal("true", journal.Last(record => record.Entry.Kind == JournalEntry.CopyRetired).Entry.Fields["handedOver"]);
+            (JournalEntry.CopyIntended, RunDirectory + "/boot-1"), (JournalEntry.CopyRetired, runtime),
+            (JournalEntry.CopyDone, world), (JournalEntry.CopyRetired, world),
+            (JournalEntry.CopyDone, RunDirectory + "/boot-1"), (JournalEntry.CopyRetired, RunDirectory + "/boot-1")], Copies(journal));
+        Assert.DoesNotContain(journal, record => record.Entry.Fields.ContainsKey("handedOver"));
         Assert.All(journal.Where(record => record.Entry.Kind.StartsWith("copy-", StringComparison.Ordinal)), record => Assert.Equal("server", record.Actor));
         var scripts = host.Runs.ToList();
         // The profile's staging folder is its first write, the world's ship the world's.
         Assert.True(CopyJournalIndex(host, JournalEntry.CopyIntended, runtime) is >= 0 and var intended && intended < scripts.FindIndex(run => run.Script == "ship"));
         Assert.True(CopyJournalIndex(host, JournalEntry.CopyIntended, world) is >= 0 and var shipped && shipped < scripts.FindIndex(run => run.Script == "ship" && run.Variables["dest"] == world));
-        Assert.True(Directory.Exists(host.Local(world))); // the run's evidence, as before
+        Assert.False(Directory.Exists(host.Local(world))); // the verified fetch is the run's evidence
         var status = Assert.Single((await RunJournalStatus.InspectAsync(LinuxBox(), _ => host, TimeSpan.FromSeconds(5))).Runs);
         Assert.Equal(JournalRunState.Ended, status.State);
         Assert.Empty(status.Items);

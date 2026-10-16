@@ -759,7 +759,7 @@ public sealed partial class HostedServerRunTests : IDisposable
 
         // A cleanup the host could not finish fails the Cleanup step: the run fails (exit 1), its scenario still passed, and
         // the host's lock is released.
-        Directory.Delete(Output, true); Directory.Delete(host.Local(RunDirectory), true);
+        Directory.Delete(Output, true); if (Directory.Exists(host.Local(RunDirectory))) Directory.Delete(host.Local(RunDirectory), true);
         host.Failures["retire"] = new HostResult(HostOutcome.Exited, 3, "", "rm: cannot remove", TimeSpan.Zero, false);
         Assert.Equal(1, await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["run", plan, Output], Options(host, server)));
         Assert.StartsWith("cleanup failed", Result().GetProperty("Provenance").GetProperty("runtimeCopy").GetString());
@@ -771,7 +771,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         host.Failures.Remove("retire");
 
         // Kept on request: no retire script, and the report names the copy.
-        Directory.Delete(Output, true); Directory.Delete(host.Local(RunDirectory), true);
+        Directory.Delete(Output, true); if (Directory.Exists(host.Local(RunDirectory))) Directory.Delete(host.Local(RunDirectory), true);
         RunRetirement.KeepOverride.Value = true; // VALHEIM_TESTING_KEEP_RUNTIME=1, in this test's flow only
         try { Assert.Equal(0, await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["run", plan, Output], Options(host, server))); }
         finally { RunRetirement.KeepOverride.Value = null; }
@@ -819,7 +819,8 @@ public sealed partial class HostedServerRunTests : IDisposable
                 "server runtime has the plan's server executable", "server runtime is the pinned game build, loader and patchers",
                 "CLI port is free on the server host", "open the loopback CLI tunnel to the server host", "start and verify owned dedicated fixture", "stop only owned server",
                 "fetch the server host's world copy", "verify server's source install after the run (size and modified time)",
-                "remove the server host's runtime copy, keeping what the run changed", "close the CLI tunnel", "release the server host's lock", "scan run logs" }, StepNames());
+                "remove the server host's runtime copy, keeping what the run changed", "remove the fetched world copy on the server host",
+                "remove the fetched boot files on the server host", "remove the fetched boot files on the server host", "close the CLI tunnel", "release the server host's lock", "scan run logs" }, StepNames());
 
         // #730: nothing of the install is copied. Its profile is staged in this run's own directory (the loader seeded from the install,
         // never its game files on Linux), and journalled before it is made and once made; the world copy is shipped beside it.
@@ -866,7 +867,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.True(File.Exists(Path.Combine(Output, "host-world", "worlds_local", "Test.db")));
         // #194: the host's runtime copy went at teardown, under the lock; what the run changed in it came back.
         Assert.False(Directory.Exists(host.Local(RunDirectory + "/runtime")));
-        Assert.True(Directory.Exists(host.Local(RunDirectory + "/world"))); Assert.True(Directory.Exists(host.Local(RunDirectory + "/boot-1")));
+        Assert.False(Directory.Exists(host.Local(RunDirectory))); // fetched world and every boot retired under the same lock
         Assert.True(File.Exists(Path.Combine(Output, "runtime-changes", "changes.json")));
         Assert.StartsWith("removed linux-box:" + RunDirectory + "/runtime", Result().GetProperty("Provenance").GetProperty("runtimeCopy").GetString());
         int retire = host.Runs.FindIndex(run => run.Script == "retire");
@@ -938,7 +939,7 @@ public sealed partial class HostedServerRunTests : IDisposable
 
         // Steam writes more there between runs: the install still matches the plan, which never counts logs/.
         File.WriteAllText(Path.Combine(logs, "stats_log.txt"), "Steam's own, from today");
-        Directory.Delete(host.Local(RunDirectory), true); // the same fixed run id again
+        if (Directory.Exists(host.Local(RunDirectory))) Directory.Delete(host.Local(RunDirectory), true); // the same fixed run id again
         string again = Path.Combine(_root, "again");
         Assert.Equal(0, await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["run", plan, again], Options(host, server)));
     }
@@ -1514,7 +1515,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.DoesNotContain(clientHost.Runs, run => run.Script == "client-start");
 
         Directory.Delete(Output, recursive: true);
-        Directory.Delete(host.Local(RunDirectory), recursive: true);
+        if (Directory.Exists(host.Local(RunDirectory))) Directory.Delete(host.Local(RunDirectory), recursive: true);
         var inPlace = PreparedClient(clientHost);
         Assert.Equal(0, await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["run", plan, Output], Options(host, server, run =>
         {

@@ -126,7 +126,8 @@ public sealed class HostedRunOptions<TPlan> where TPlan : class
 /// checks on the profile,
 /// checks the CLI port on the host, reaches ValheimCLI only through a loopback tunnel (<see cref="IGameHost.OpenCliTunnelAsync"/>),
 /// starts each boot with <see cref="HostServer"/> and waits for its listening line in the host's log, and at teardown stops only
-/// the process it started, fetches each boot's logs (<c>boot-N/</c>) and the world copy (<c>host-world/</c>), removes the profile,
+/// the process it started, fetches each boot's logs (<c>boot-N/</c>) and the world copy (<c>host-world/</c>), removes their host
+/// directories only after a verified fetch is journalled, removes the profile,
 /// closes the tunnel and releases the lock. Clients open on this machine; remote clients and several actors are a campaign's
 /// (<see cref="RunCampaignAsync{TPlan}"/>), where <see cref="GameSession.OpenClient"/> starts each in its host's
 /// desktop session on its leased, observed Steam identity.

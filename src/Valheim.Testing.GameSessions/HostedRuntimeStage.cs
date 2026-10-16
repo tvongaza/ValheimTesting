@@ -277,7 +277,7 @@ internal static partial class HostedRuntimeStage
 
     /// <summary>
     /// Refuses anything but a toolkit-created <c>&lt;runs&gt;/vt-prep-*/runtime</c>, or, with <paramref name="runId"/>, that
-    /// standalone hosted run's own <c>&lt;runs&gt;/&lt;runId&gt;/runtime</c> or <c>&lt;runs&gt;/&lt;runId&gt;/world</c>
+    /// standalone hosted run's own <c>&lt;runs&gt;/&lt;runId&gt;/runtime</c>, <c>&lt;runs&gt;/&lt;runId&gt;/world</c> or numbered <c>boot-N</c>
     /// (<see cref="HostedServerRun"/>); returns the copy's parent.
     /// </summary>
     internal static string RequirePrepared(IGameHost host, string destination, string? runId = null)
@@ -288,9 +288,11 @@ internal static partial class HostedRuntimeStage
         if (destination.EndsWith(separator + "runtime", StringComparison.OrdinalIgnoreCase) && parentName.StartsWith("vt-prep-", StringComparison.Ordinal))
             return parent;
         if (runId != null && RunJournal.SafeName(runId) && parentName == runId &&
-            (destination.EndsWith(separator + "runtime", StringComparison.OrdinalIgnoreCase) || destination.EndsWith(separator + "world", StringComparison.OrdinalIgnoreCase)))
+            (destination.EndsWith(separator + "runtime", StringComparison.OrdinalIgnoreCase) || destination.EndsWith(separator + "world", StringComparison.OrdinalIgnoreCase) ||
+             destination.EndsWith(separator + "host-world", StringComparison.OrdinalIgnoreCase) || destination.EndsWith(separator + "world-stage", StringComparison.OrdinalIgnoreCase) ||
+             System.Text.RegularExpressions.Regex.IsMatch(destination[(at + 1)..], @"^boot-[1-9][0-9]*$", System.Text.RegularExpressions.RegexOptions.CultureInvariant)))
             return parent;
-        throw new ArgumentException("Only a toolkit-created vt-prep runtime, or a hosted run's own runtime or world copy, can be retired.", nameof(destination));
+        throw new ArgumentException("Only a toolkit-created vt-prep runtime, or a hosted run's own runtime, world copy or numbered boot directory, can be retired.", nameof(destination));
     }
 
     /// <summary>Whether a relative path can be staged into a runtime (letters, digits, '.', '_', '-' and spaces, '/' between parts).</summary>

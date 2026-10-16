@@ -807,12 +807,13 @@ public sealed class NativeDependencyResolverTests : IDisposable
         Assert.Equal(preparationClaim, journal.First(record => record.Entry.Kind == JournalEntry.LockReleased).Entry.Fields["claimant"]);
         Assert.Equal([JournalEntry.CopyIntended, JournalEntry.CopyDone, JournalEntry.CopyRetired],
             journal.Where(record => record.Actor == "server").Select(record => record.Entry.Kind));
-        // The server run's world copy on the host is journalled too, before its ship, and handed over as the run's evidence (under
+        // The server run's world copy on the host is journalled too, before its ship, and retired after its verified fetch (under
         // the hooks' fixed run id here; a real campaign's server run has the campaign's).
         var serverRun = await RunJournalOnHost.ReadAsync(host, @"C:\locks\journal", "run-test", TimeSpan.FromSeconds(5));
+        Assert.Equal([JournalEntry.CopyIntended, JournalEntry.CopyDone, JournalEntry.CopyDone, JournalEntry.CopyRetired],
+            serverRun.Where(record => record.Entry.Kind.StartsWith("copy-", StringComparison.Ordinal) && record.Entry.Fields["runtime"].EndsWith(@"\world")).Select(record => record.Entry.Kind));
         Assert.Equal([JournalEntry.CopyIntended, JournalEntry.CopyDone, JournalEntry.CopyRetired],
-            serverRun.Where(record => record.Entry.Kind.StartsWith("copy-", StringComparison.Ordinal)).Select(record => record.Entry.Kind));
-        Assert.All(serverRun.Where(record => record.Entry.Kind.StartsWith("copy-", StringComparison.Ordinal)), record => Assert.Equal(@"C:\runs\run-test\world", record.Entry.Fields["runtime"]));
+            serverRun.Where(record => record.Entry.Kind.StartsWith("copy-", StringComparison.Ordinal) && record.Entry.Fields["runtime"].EndsWith(@"\boot-1")).Select(record => record.Entry.Kind));
         Assert.Contains($"vt-prep-{runId}-server", journal.First(record => record.Entry.Kind == JournalEntry.CopyIntended).Entry.Fields["runtime"]);
         var ended = Assert.Single(journal, record => record.Entry.Kind == JournalEntry.RunEnded);
         Assert.Equal(("passed", "true"), (ended.Entry.Fields["state"], ended.Entry.Fields["cleanupVerified"]));
@@ -821,7 +822,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         // A server that may still run (its start reply was lost) keeps the prepared install it may run from, named, and the
         // host's lock; the one retire owner removes nothing it cannot prove unused.
         host.Failures["start"] = FakeServerHost.TransportFailure;
-        Directory.Delete(host.Local(@"C:\runs\run-test"), true); // the fixed run id's world and boot evidence from the run above
+        if (Directory.Exists(host.Local(@"C:\runs\run-test"))) Directory.Delete(host.Local(@"C:\runs\run-test"), true); // the fixed run id's world and boot evidence from the run above
         string unknownOutput = Path.Combine(_rig.Root, "run-campaign-unknown");
         Assert.Equal(3, await PinnedServerRun.RunCampaignAsync(manifest, Plan("example.server", "secret"), NoClients, unknownOutput, options));
         host.Failures.Remove("start");
@@ -844,7 +845,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         Assert.Equal(HostLockState.Released, (await host.ReleaseLockAsync(@"C:\locks\campaign.lock", keptClaim, TimeSpan.FromSeconds(5))).State);
 
         // A host retire that fails keeps the install and what it kept beside it (not fetched yet): nothing else removes it.
-        Directory.Delete(host.Local(@"C:\runs\run-test"), true);
+        if (Directory.Exists(host.Local(@"C:\runs\run-test"))) Directory.Delete(host.Local(@"C:\runs\run-test"), true);
         host.Failures["retire"] = new HostResult(HostOutcome.Exited, 3, "", "Remove-Item: access denied", TimeSpan.Zero, false);
         string failedOutput = Path.Combine(_rig.Root, "run-campaign-retire-failed");
         Assert.Equal(1, await PinnedServerRun.RunCampaignAsync(manifest, Plan("example.server", "secret"), NoClients, failedOutput, options));

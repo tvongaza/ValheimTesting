@@ -43,6 +43,13 @@ internal sealed class HostedServerRun : IServerPlacement
     // The reviewed loader package a standalone run's inventory recipe names (EnvironmentRuns.PlaceServer), else null: the pinned one.
     private readonly string? _loaderPackage;
     private WorldCopy _world;
+    private readonly List<BootEvidence> _boots = [];
+    private sealed class BootEvidence(string directory, string output)
+    {
+        internal string Directory { get; } = directory;
+        internal string Output { get; } = output;
+        internal HostServerProcess? Process { get; set; }
+    }
     // The current boot's launch-recorded identity and its start probe, kept until startup verification has passed: only
     // then is it published as the local server command lease (IServerPlacement.PublishCommandLease).
     private (int Pid, string StartIdentity, ProbedProcess? Found)? _leaseCandidate;
@@ -89,7 +96,7 @@ internal sealed class HostedServerRun : IServerPlacement
     public string RunId { get; }
     /// <summary>
     /// This run's directory on the server host: <c>runtime</c> (a standalone run's profile, with <c>staging</c> while it is
-    /// staged), <c>world</c> and <c>boot-N</c>. The world and boot logs stay (both are fetched too); the profile goes at teardown
+    /// staged), <c>world</c> and <c>boot-N</c>. The world and boot logs go after their verified fetch; the profile goes at teardown
     /// once the server has stopped (<see cref="TeardownAsync"/>).
     /// </summary>
     public string RunDirectory { get; }
@@ -363,7 +370,8 @@ internal sealed class HostedServerRun : IServerPlacement
             var site = new HostedWorldOnHost.Site(Host, Role.Host, HostPath.Join(WorldDirectory, "worlds_local"),
                 HostPath.Join(RunDirectory, "world-stage"), HostPath.Join(RunDirectory, "host-world"),
                 (entry, token) => JournalAsync(Host, Role.Host, "server", entry, token),
-                _ => _lock != null ? Task.CompletedTask : throw new InvalidOperationException("Take the Mac server host's lock before placing its world."));
+                _ => _lock != null ? Task.CompletedTask : throw new InvalidOperationException("Take the Mac server host's lock before placing its world."))
+                { RetireRunCopies = RunId };
             _macWorld = HostedWorldOnHost.Place(site, fixture, Path.Combine(output, "mac-world-input"), cancellation);
             return Task.CompletedTask;
         }) : report.StepAsync(StepPhase.Setup, "ship and verify the world copy on the server host", async () =>
@@ -384,7 +392,7 @@ internal sealed class HostedServerRun : IServerPlacement
     // A copy in this run's own directory, journalled with what it holds: env recover removes it by these fields (no staging; its
     // parent is the run directory). Done only once verified, so a done copy is a whole one.
     private JournalEntry WorldCopyIntended() =>
-        JournalEntry.Of(JournalEntry.CopyIntended, ("runtime", WorldDirectory), ("stage", ""), ("parent", RunDirectory), ("holds", "world"));
+        JournalEntry.Of(JournalEntry.CopyIntended, ("runtime", WorldDirectory), ("stage", ""), ("parent", RunDirectory), ("holds", "world"), ("retention", "after-fetch"));
     private JournalEntry WorldCopyDone(HostListing listing) =>
         JournalEntry.Of(JournalEntry.CopyDone, ("runtime", WorldDirectory), ("files", listing.Files.Count.ToString(CultureInfo.InvariantCulture)), ("verified", "true"));
 
@@ -438,6 +446,11 @@ internal sealed class HostedServerRun : IServerPlacement
         _leaseCandidate = null;
         RetireServerCommandLease(output);
         string local = Path.Combine(output, "boot-" + n), bootDirectory = HostPath.Join(RunDirectory, "boot-" + n);
+        // The placement owns every boot directory before the launcher can create it. A cut or failed fetch stays visible.
+        JournalAsync(Host, Role.Host, "server", JournalEntry.Of(JournalEntry.CopyIntended, ("runtime", bootDirectory),
+            ("stage", ""), ("parent", RunDirectory), ("holds", "server-boot"), ("retention", "after-fetch")), cancellation).GetAwaiter().GetResult();
+        var evidence = new BootEvidence(bootDirectory, local);
+        _boots.Add(evidence);
         // The stop's quit budget, journalled so env recover gives the server the same time to save (#665).
         string quitSeconds = WaitText.WholeSeconds(quit);
         if (LocalMac) return StartLocalMac(launch, output, local, bootDirectory, quitSeconds, cancellation);
@@ -459,6 +472,7 @@ internal sealed class HostedServerRun : IServerPlacement
             _serverMayRun = true;
             throw;
         }
+        evidence.Process = process;
         // The server writes into boot-N/ on every platform, including Windows after the short-lived launch task exits.
         var logs = new List<RunLog> { new($"boot-{n} BepInEx log", Path.Combine(local, "game-0.log"), Required: true), new($"boot-{n} Unity log", Path.Combine(local, "game-1.log")) };
         logs.Add(new($"boot-{n} stdout", Path.Combine(local, "stdout.log")));
@@ -729,9 +743,33 @@ internal sealed class HostedServerRun : IServerPlacement
             else if (launched && !worldFetched)
                 await NoteAsync(Host, Role.Host, "server", JournalEntry.Of(JournalEntry.CopyKept, ("runtime", WorldDirectory), ("why", "its fetch failed, so it is the run's only copy of the world"))).ConfigureAwait(false);
             else
-                // The world copy stays on the host beside the boot logs, as the run's evidence (fetched too when its server ran; one that
-                // differs from the fixture shows how): handed over, no longer the run's to remove.
-                await NoteAsync(Host, Role.Host, "server", JournalEntry.Of(JournalEntry.CopyRetired, ("runtime", WorldDirectory), ("handedOver", "true"))).ConfigureAwait(false);
+                await Try("remove the fetched world copy on the server host", () => RetireEvidenceAsync(WorldDirectory, worldFetched, cleanup)).ConfigureAwait(false);
+        }
+        foreach (var boot in _boots)
+        {
+            if (cleanup.IsCancellationRequested) break; // its intended entry remains open
+            bool fetched = boot.Process?.EvidenceFetched == true;
+            if (LocalMac && serverStopped)
+            {
+                // The direct Mac process writes its current logs into output already. Preserve the host's pid and previous
+                // logs beside them, through the same verified fetch, before removing its separate boot directory.
+                int before = failures.Count;
+                await Try("fetch the Mac server's boot files", () => Host.FetchDirectoryAsync(boot.Directory,
+                    Path.Combine(boot.Output, "host-files"), HostedTimeouts.Long, cleanup)).ConfigureAwait(false);
+                fetched = failures.Count == before;
+            }
+            if (!serverStopped || !fetched)
+                await NoteAsync(Host, Role.Host, "server", JournalEntry.Of(JournalEntry.CopyKept, ("runtime", boot.Directory),
+                    ("why", !serverStopped ? "its server may still run" : "its fetch was not proven, so its boot evidence stays"))).ConfigureAwait(false);
+            else
+                await Try("remove the fetched boot files on the server host", async () =>
+                {
+                    // ProcessStarted is best-effort. Settle the launch durably after the exact stop before removing its pid/owner
+                    // files, or a crash before RunEnded could leave an unresolvable ProcessIntended with no ownership files.
+                    await JournalAsync(Host, Role.Host, "server", JournalEntry.Of(JournalEntry.LaunchSettled,
+                        ("actor", "server"), ("directory", boot.Directory)), cleanup).ConfigureAwait(false);
+                    await RetireEvidenceAsync(boot.Directory, true, cleanup).ConfigureAwait(false);
+                }).ConfigureAwait(false);
         }
         if (_tunnel != null) await Try("close the CLI tunnel", () => { _tunnel.Dispose(); return Task.CompletedTask; }).ConfigureAwait(false);
         await _clientActors.ReleaseAccountsAsync(Try).ConfigureAwait(false);
@@ -754,6 +792,16 @@ internal sealed class HostedServerRun : IServerPlacement
                 : throw new HostLockException(new HostLockResult(HostLockState.Unknown, _lock.Owner,
                     $"Kept {_lock.Path} on {Host.Name}: the owned server or a Mac GUI client agent there may still run. Use env recover after it has stopped."))).ConfigureAwait(false);
         return failures;
+    }
+
+    // The fetch receipt must be durable before deletion: if deletion or its acknowledgement fails, recovery can finish it.
+    // A journal failure prevents deletion, unlike the best-effort note after the effect. The host lock is still held here.
+    private async Task RetireEvidenceAsync(string directory, bool fetched, CancellationToken cleanup)
+    {
+        await JournalAsync(Host, Role.Host, "server", JournalEntry.Of(JournalEntry.CopyDone, ("runtime", directory),
+            ("fetched", fetched ? "true" : "false")), cleanup).ConfigureAwait(false);
+        await HostedRuntimeStage.RetireAsync(Host, directory, "", HostedTimeouts.Quick, cleanup, RunId).ConfigureAwait(false);
+        await NoteAsync(Host, Role.Host, "server", JournalEntry.Of(JournalEntry.CopyRetired, ("runtime", directory))).ConfigureAwait(false);
     }
 
     // The started game's command line should be the one its launch journalled: where it is not, a run interrupted before its

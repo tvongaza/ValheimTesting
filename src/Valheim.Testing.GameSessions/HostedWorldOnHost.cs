@@ -65,6 +65,8 @@ internal static class HostedWorldOnHost
     internal sealed record Site(IGameHost Host, string HostName, string WorldsDirectory, string Stage, string KeepIn,
         Func<JournalEntry, CancellationToken, Task> Journal, Func<CancellationToken, Task> Hold) : IHostedWorldSite
     {
+        // Server runs own their staging/collected directories until verified fetch; client evidence policy is unchanged.
+        internal string? RetireRunCopies { get; init; }
         public HostedWorld Place(HostWorldPlan plan, string output, CancellationToken cancellation) =>
             HostedWorldOnHost.Place(this, plan, output, cancellation);
     }
@@ -153,6 +155,15 @@ internal static class HostedWorldOnHost
             // Journalled before the ship: no journal line, no world in the user's worlds.
             site.Journal(JournalEntry.Of(JournalEntry.CopyIntended, ("runtime", world), ("stage", ""), ("parent", site.WorldsDirectory), ("holds", Holds),
                 ("world", name), ("worldUid", plan.WorldUid), ("keepIn", site.KeepIn)), cancellation).GetAwaiter().GetResult();
+            if (site.RetireRunCopies != null)
+            {
+                string parent = HostedRuntimeStage.RequirePrepared(site.Host, site.Stage, site.RetireRunCopies);
+                HostedRuntimeStage.RequirePrepared(site.Host, site.KeepIn, site.RetireRunCopies);
+                site.Journal(JournalEntry.Of(JournalEntry.CopyIntended, ("runtime", site.Stage), ("stage", ""),
+                    ("parent", parent), ("holds", "server-world-stage")), cancellation).GetAwaiter().GetResult();
+                site.Journal(JournalEntry.Of(JournalEntry.CopyIntended, ("runtime", site.KeepIn), ("stage", ""),
+                    ("parent", parent), ("holds", "world"), ("retention", "after-fetch")), cancellation).GetAwaiter().GetResult();
+            }
             // Shipped into the run's stage first (with the ship's own SOURCE.txt, which never reaches the user's worlds), verified there.
             site.Host.ShipFilesAsync(copy.DirectoryPath, site.Stage, HostedTimeouts.Long, cancellation).GetAwaiter().GetResult();
             var listing = HostInstall.ListAsync(site.Host, site.Stage, HostedTimeouts.Long, null, cancellation).GetAwaiter().GetResult();
@@ -179,7 +190,7 @@ internal static class HostedWorldOnHost
                 cancellation).GetAwaiter().GetResult();
             return HostedWorld.OnHost(name, plan.WorldUid, site.WorldsDirectory, copy.DirectoryPath, output, site.HostName, target => Collect(site, name, target));
         }
-        finally { copy.Dispose(); } // kept (Preserve) as evidence; nothing uses it after placement
+        finally { copy.Dispose(); } // kept (Preserve) as input evidence; nothing uses it after placement
     }
 
     // Moves every entry named for the world out of the user's worlds into the run's directory on the host (the run's save, handed
@@ -190,6 +201,15 @@ internal static class HostedWorldOnHost
         MoveOut(site.Host, site.WorldsDirectory, name, site.KeepIn, HostedTimeouts.Long, CancellationToken.None).GetAwaiter().GetResult();
         site.Journal(JournalEntry.Of(JournalEntry.CopyRetired, ("runtime", world), ("handedOver", "true"), ("keptIn", site.KeepIn)), CancellationToken.None).GetAwaiter().GetResult();
         site.Host.FetchDirectoryAsync(site.KeepIn, target, HostedTimeouts.Long).GetAwaiter().GetResult();
+        if (site.RetireRunCopies != null)
+        {
+            site.Journal(JournalEntry.Of(JournalEntry.CopyDone, ("runtime", site.KeepIn), ("fetched", "true")), CancellationToken.None).GetAwaiter().GetResult();
+            // The stage holds only the input fixture and shipment metadata, never a game save.
+            HostedRuntimeStage.RetireAsync(site.Host, site.Stage, "", HostedTimeouts.Quick, runId: site.RetireRunCopies).GetAwaiter().GetResult();
+            site.Journal(JournalEntry.Of(JournalEntry.CopyRetired, ("runtime", site.Stage)), CancellationToken.None).GetAwaiter().GetResult();
+            HostedRuntimeStage.RetireAsync(site.Host, site.KeepIn, "", HostedTimeouts.Quick, runId: site.RetireRunCopies).GetAwaiter().GetResult();
+            site.Journal(JournalEntry.Of(JournalEntry.CopyRetired, ("runtime", site.KeepIn)), CancellationToken.None).GetAwaiter().GetResult();
+        }
         return target;
     }
 
