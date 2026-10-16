@@ -1,4 +1,6 @@
 using System.Text.Json;
+using System.Diagnostics;
+using Valheim.Testing.GameSessions;
 using Valheim.Testing.Game;
 using Xunit;
 
@@ -18,11 +20,13 @@ public sealed class DetachedCheckpointTests : IDisposable
         DetachedCommandQueue.WriteNew(Path.Combine(evidence, DetachedCommandQueue.RouteFile), route);
         return route;
     }
-    private DetachedCheckpoints Lifecycle(DetachedCommandQueue.Route route, string? failure = null)
+    private DetachedCheckpoints Lifecycle(DetachedCommandQueue.Route route, string? failure = null,
+        CancellationToken cancellation = default, Action<string>? onEffect = null, Action? monitor = null)
     {
         void Effect(string name)
         {
             _effects.Add(name);
+            onEffect?.Invoke(name);
             if (failure == name) throw new IOException("lost " + name);
             if (failure == "cancel-" + name) throw new OperationCanceledException();
         }
@@ -36,7 +40,7 @@ public sealed class DetachedCheckpointTests : IDisposable
                     File.WriteAllText(Path.Combine(folder, "file"), kind == "world" ? "changed world" : "stopped boot log");
                     File.WriteAllText(Path.Combine(archive, kind + ".sha256.json"), JsonSerializer.Serialize(WorldFixture.Manifest(folder)));
                 }
-            }, (_, _) => Effect("restore"), _ => { Effect("start"); return route.Server with { Pid = 101, StartFileTimeUtc = "next-boot" }; }, () => Effect("monitor")));
+            }, (_, _) => Effect("restore"), _ => { Effect("start"); return route.Server with { Pid = 101, StartFileTimeUtc = "next-boot" }; }, monitor ?? (() => Effect("monitor"))), cancellation);
     }
     private static DetachedCommandQueue.Request Request(DetachedCommandQueue.Route route, string operation) =>
         new(Guid.NewGuid().ToString("N"), route, DateTime.UtcNow.AddSeconds(60), operation, "pins", 1) { Operation = operation };
@@ -144,6 +148,66 @@ public sealed class DetachedCheckpointTests : IDisposable
         Assert.Equal("refused", Read(route, save).Outcome);
         Assert.Equal(["verify"], _effects);
         Assert.Equal("running", lifecycle.State);
+    }
+
+    [Theory]
+    [InlineData("first-verify", false)]
+    [InlineData("first-proof", false)]
+    [InlineData("saving", false)]
+    [InlineData("second-verify", true)]
+    [InlineData("second-proof", true)]
+    [InlineData("stopping", true)]
+    public void CancellationDuringChecksOrPublicationNeverDispatchesTheNextMutation(string point, bool saved)
+    {
+        var route = Route();
+        using var cancellation = new CancellationTokenSource();
+        int verifies = 0, proofs = 0;
+        var lifecycle = Lifecycle(route, cancellation: cancellation.Token, onEffect: effect =>
+        {
+            if (effect == "verify" && ++verifies == (point == "first-verify" ? 1 : point == "second-verify" ? 2 : -1))
+                cancellation.Cancel();
+        });
+        lifecycle.Changed = state => { if (state == point) cancellation.Cancel(); };
+        var reply = lifecycle.Execute(Request(route, "stop"), () => { }, () =>
+        {
+            if (++proofs == (point == "first-proof" ? 1 : point == "second-proof" ? 2 : -1)) cancellation.Cancel();
+        }, _ => throw new InvalidOperationException("Unexpected boot"));
+        Assert.Equal(point is "first-verify" or "first-proof" ? "refused" : "unknown", reply.Outcome);
+        Assert.Equal(saved ? 1 : 0, _effects.Count(effect => effect == "save"));
+        Assert.DoesNotContain("stop", _effects); Assert.DoesNotContain("archive", _effects);
+    }
+
+    [Fact]
+    public async Task IdleQueueDetectsRealHostExitAndASettledWatcherCanObserveTheNextBoot()
+    {
+        if (OperatingSystem.IsWindows()) return; // Windows task startup is covered by the existing host integration lane.
+        var host = new LocalGameHost("checkpoint-exit", HostShell.Bash);
+        var launch = OperatingSystem.IsMacOS()
+            ? (await MacServerStandIn.PrepareAsync(host, _root, TimeSpan.FromSeconds(30))).Launch
+            : LauncherTimeoutStandIn.Unix(_root);
+        using var watcher = new DetachedCheckpoints.BootExitWatch();
+        for (int boot = 1; boot <= 2; boot++)
+        {
+            string bootRoot = Path.Combine(_root, "boot-" + boot);
+            await StandInServer.RunAsync(host, launch, bootRoot, TimeSpan.FromSeconds(30),
+                nameof(IdleQueueDetectsRealHostExitAndASettledWatcherCanObserveTheNextBoot), async process =>
+            {
+                watcher.Attach(process);
+                Assert.False(process.HasExited);
+                string control = Directory.CreateDirectory(Path.Combine(_root, "queue-" + boot)).FullName;
+                var route = new DetachedCommandQueue.Route("run-watch-" + boot, control, control, Environment.ProcessId,
+                    OwnedClientCommandLease.LocalStartFileTimeUtc(Environment.ProcessId), new(process.Id, process.StartIdentity, 5577, "owned") { Role = "server" });
+                using var queue = Queue(route, Lifecycle(route, monitor: watcher.Check));
+                using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+                Task held = queue.WaitAsync(deadline.Token);
+                using (var exact = Process.GetProcessById(process.Id)) { exact.Kill(); await exact.WaitForExitAsync(deadline.Token); }
+                var failure = await Assert.ThrowsAsync<InvalidOperationException>(() => held);
+                Assert.Contains("exited outside a checkpoint", failure.Message);
+                Assert.True(File.Exists(Path.Combine(control, "commands-closed.json")));
+                Assert.Equal("unknown", DetachedCommandQueue.Read<DetachedCommandQueue.Status>(Path.Combine(control, DetachedCommandQueue.StateFile)).State);
+                watcher.Settle();
+            }, logs: []);
+        }
     }
 
     public void Dispose() => Directory.Delete(_root, true);

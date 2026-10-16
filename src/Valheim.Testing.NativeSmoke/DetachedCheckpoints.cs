@@ -4,13 +4,14 @@ using Valheim.Testing.Game;
 using Valheim.Testing.GameSessions;
 
 // The supervisor's operations over the existing ServerActor. This owns no process, lock or fixture copy of its own.
-internal sealed class DetachedCheckpoints
+internal sealed class DetachedCheckpoints : IDisposable
 {
     internal sealed record Operations(Action VerifyInputs, Func<uint> Save, Action Stop, Action<string, CancellationToken> Archive,
         Action<string, CancellationToken> Restore, Func<CancellationToken, OwnedClientCommandLease> Start, Action CheckRunning);
     private readonly Operations _operations;
     private readonly string _evidence;
     private string? _archive;
+    private BootExitWatch? _watch;
     private readonly CancellationToken _cancellation;
     private readonly TimeSpan _deadline;
     internal int CompletionSeconds { get; }
@@ -30,25 +31,30 @@ internal sealed class DetachedCheckpoints
         WorldFixture.Verify(original, hashes);
         if (hashes.Count == 0) throw new InvalidDataException("The original detached fixture is empty.");
         DetachedCommandQueue.WriteNew(Path.Combine(session.Output, "detached-original-fixture.json"), new { original, hashes }, bounded: false);
+        var watch = new BootExitWatch();
+        watch.Attach(server.CurrentProcess ?? throw new InvalidOperationException("No owned server process."));
         return new(session.Output, new(
             () => { session.Cancellation.ThrowIfCancellationRequested(); DetachedSession.VerifyStagedInputs(); WorldFixture.Verify(original, hashes); },
             () => new SessionControl(server.Game).Save(worldUid, TimeSpan.FromSeconds(90)),
-            server.StopCheckpoint, server.ArchiveCheckpoint,
+            () => { server.StopCheckpoint(); watch.Settle(); }, server.ArchiveCheckpoint,
             (archive, token) => server.RestoreCheckpoint(original, hashes, archive, token),
             token =>
             {
                 server.StartCheckpoint(token);
-                return DetachedCommandQueue.ServerLease(session.Output, server.CurrentProcess ?? throw new InvalidOperationException("Restart has no owned process."));
+                var process = server.CurrentProcess ?? throw new InvalidOperationException("Restart has no owned process.");
+                watch.Attach(process);
+                return DetachedCommandQueue.ServerLease(session.Output, process);
             },
-            () =>
-            {
-                if (server.CurrentProcess is not { HasExited: false })
-                    throw new InvalidOperationException("Held server exited outside a checkpoint; finish or recover the run.");
-            }), session.Cancellation, deadlineSeconds: Math.Max(900, 2 * (server.Plan?.StartupSeconds ?? 300) + 300),
-            settleSeconds: Math.Max(120, (server.Plan?.QuitSeconds ?? 20) + 375));
+            watch.Check), session.Cancellation, deadlineSeconds: Math.Max(900, 2 * (server.Plan?.StartupSeconds ?? 300) + 300),
+            settleSeconds: Math.Max(120, (server.Plan?.QuitSeconds ?? 20) + 375)) { _watch = watch };
     }
 
-    internal void CheckRunning() { if (State == "running") _operations.CheckRunning(); }
+    internal void CheckRunning()
+    {
+        if (State != "running") return;
+        try { _operations.CheckRunning(); }
+        catch { Unknown(); throw; }
+    }
     internal void Unknown() => Transition("unknown");
     private void Transition(string state) { State = state; Changed?.Invoke(state); }
 
@@ -58,7 +64,12 @@ internal sealed class DetachedCheckpoints
         bool changed = false;
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(_cancellation);
         deadline.CancelAfter(_deadline);
-        void Verify() { deadline.Token.ThrowIfCancellationRequested(); _operations.VerifyInputs(); }
+        void Verify()
+        {
+            deadline.Token.ThrowIfCancellationRequested();
+            _operations.VerifyInputs();
+            deadline.Token.ThrowIfCancellationRequested();
+        }
         try
         {
             admission();
@@ -69,8 +80,10 @@ internal sealed class DetachedCheckpoints
             {
                 if (_archive == null) throw new InvalidOperationException("No verified clean-stop archive exists.");
                 VerifyArchive(_archive);
+                deadline.Token.ThrowIfCancellationRequested();
                 changed = true;
                 Transition("starting");
+                deadline.Token.ThrowIfCancellationRequested();
                 _operations.Restore(_archive, deadline.Token);
                 Verify();
                 var lease = _operations.Start(deadline.Token); // New strict pins and world readiness, never the previous actor/capability.
@@ -80,8 +93,10 @@ internal sealed class DetachedCheckpoints
                 return new(request.Id, "completed", ["RESTARTED original fixture"], "", _archive);
             }
             proof(); // exact PID/start, port owner and boot lease before the first game mutation
+            deadline.Token.ThrowIfCancellationRequested();
             changed = true;
             Transition("saving");
+            deadline.Token.ThrowIfCancellationRequested();
             uint save = _operations.Save(); // SessionControl requires complete, advancing save in the pinned world.
             Verify();
             if (request.Operation == "save")
@@ -90,7 +105,9 @@ internal sealed class DetachedCheckpoints
                 return new(request.Id, "completed", ["SAVED " + save.ToString(CultureInfo.InvariantCulture)], "", "");
             }
             proof();
+            deadline.Token.ThrowIfCancellationRequested();
             Transition("stopping");
+            deadline.Token.ThrowIfCancellationRequested();
             _operations.Stop();
             string archive = Path.Combine(_evidence, "checkpoints", request.Id);
             Directory.CreateDirectory(archive);
@@ -109,6 +126,37 @@ internal sealed class DetachedCheckpoints
             if (changed) Unknown();
             return new(request.Id, changed ? "unknown" : "refused", [], failure.Message, _archive ?? "");
         }
+    }
+
+    public void Dispose() => _watch?.Dispose();
+
+    // One live waiter per boot, using the owned process's existing identity-aware host observation.
+    // Intermediate stops settle it; restart installs a fresh waiter without creating another process owner.
+    internal sealed class BootExitWatch : IDisposable
+    {
+        private CancellationTokenSource? _waiting;
+        private Task<int>? _exit;
+        internal void Attach(IOwnedProcess process)
+        {
+            if (_exit != null) throw new InvalidOperationException("The previous boot waiter has not settled.");
+            _waiting = new CancellationTokenSource();
+            _exit = process.WaitForExitAsync(_waiting.Token);
+        }
+        internal void Check()
+        {
+            if (_exit == null) throw new InvalidOperationException("No live boot waiter.");
+            if (_exit.IsCompleted)
+                throw new InvalidOperationException("Held server exited outside a checkpoint with code " + _exit.GetAwaiter().GetResult() + ".");
+        }
+        internal void Settle()
+        {
+            if (_waiting == null) return;
+            _waiting.Cancel();
+            try { _exit!.GetAwaiter().GetResult(); }
+            catch (OperationCanceledException) when (_waiting.IsCancellationRequested) { }
+            finally { _waiting.Dispose(); _waiting = null; _exit = null; }
+        }
+        public void Dispose() => Settle();
     }
 
     internal static void VerifyArchive(string archive)

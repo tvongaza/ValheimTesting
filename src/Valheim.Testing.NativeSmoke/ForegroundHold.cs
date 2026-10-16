@@ -52,6 +52,7 @@ internal sealed class ForegroundHold : IDisposable
         if (processes.Count == 0) throw new ArgumentException("A hold needs at least one owned process to watch.", nameof(processes));
         // Publish the route before signalling readiness. Only this loop executes detached commands; finish and cancellation
         // close admission and await its current dispatch before the caller can tear down the server.
+        using var checkpointLifetime = checkpoints;
         using var commands = DetachedSession.ConfiguredRun == run
             ? DetachedCommandQueue.Open(run, serverEvidence ?? evidence, processes.Single(process => process.Name == "server").Process, checkpoints)
             : null;

@@ -88,6 +88,7 @@ internal static class DetachedSession
                 taskUser = registration.PrincipalUserId;
             }
 
+            RequireInputSeparation(serverArgs, RunsRoot, selectedOutput);
             Directory.CreateDirectory(RunsRoot);
             using var runScope = RunJournal.UseRun(run);
             string control = JournalOwnedDirectory.Create(RunsRoot, Actor, "detached control and startup logs", _ => { },
@@ -180,6 +181,8 @@ internal static class DetachedSession
     internal sealed record StagedInput(string Source, string Staged, IReadOnlyDictionary<string, string> Hashes);
     internal static string[] StageInputsOwned(string[] args, string parent, string control)
     {
+        int output = Array.IndexOf(args, "--output");
+        RequireInputSeparation(args, parent, control, output >= 0 ? args[output + 1] : parent);
         var inputs = new List<StagedInput>();
         string Stage(string source, string purpose, long maximum)
         {
@@ -200,6 +203,18 @@ internal static class DetachedSession
         if (fixture >= 0) staged[fixture + 1] = Stage(args[fixture + 1], "detached world input", 4L << 30);
         DetachedCommandQueue.WriteNew(Path.Combine(control, "input-manifests.json"), inputs, bounded: false);
         return staged;
+    }
+
+    internal static void RequireInputSeparation(string[] args, params string[] destinations)
+    {
+        for (int i = 0; i < args.Length - 1; i++)
+        {
+            if (args[i] is not ("--mod" or "--world-fixture")) continue;
+            string source = args[i] == "--mod" ? Path.GetDirectoryName(args[++i])! : args[++i];
+            foreach (string destination in destinations)
+                if (ProtectedPaths.Contains(source, destination))
+                    throw new InvalidOperationException("Detached output and staging must be outside each original input directory: " + source);
+        }
     }
 
     internal static void VerifyStagedInputs(string? control = null)
