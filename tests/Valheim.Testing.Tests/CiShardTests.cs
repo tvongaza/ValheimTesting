@@ -102,11 +102,7 @@ public sealed class CiShardTests
             Assert.Contains(DirectTestCommands, pattern => DirectTestCommandMatches(example, pattern).Any());
         const string nativeChecks = ".github/scripts/native-server-checks.sh";
         const string nativeReason = "live-game native acceptance needs its authorized disposable server fixture, so validate.cs's no-game limits do not own it";
-        const string macosSampler = ".github/scripts/macos-sampler.sh";
-        const string macosSamplerLine = "grep -E 'Runner\\.(Worker|Listener)|testhost|validate\\.cs|dotnet test'";
-        const string macosSamplerReason = "the macOS diagnostic sampler only searches the process list for test commands; it does not start one";
         bool foundNativeException = false;
-        bool foundMacosSamplerException = false;
         foreach (string file in automation)
         {
             string relative = Path.GetRelativePath(root, file).Replace('\\', '/');
@@ -119,16 +115,10 @@ public sealed class CiShardTests
                         foundNativeException = true;
                         continue; // Named exception: nativeReason above; this is the live-game suite, outside the no-game limits.
                     }
-                    if (relative == macosSampler && match.Value.Contains(macosSamplerLine, StringComparison.Ordinal))
-                    {
-                        foundMacosSamplerException = true;
-                        continue; // Named exception: macosSamplerReason above; grep observes processes and runs no tests.
-                    }
                     Assert.Fail($"{relative} test command bypasses validate.cs: {match.Value.Trim()}");
                 }
         }
         Assert.True(foundNativeException, $"The named exception disappeared; remove it or retain its reason: {nativeReason}");
-        Assert.True(foundMacosSamplerException, $"The named exception disappeared; remove it or retain its reason: {macosSamplerReason}");
 
         string directScriptPattern = "\\b(?:Run|Execute)\\s*\\([^\\r\\n]*\"dotnet\"\\s*,\\s*\"test\"";
         Assert.Matches(directScriptPattern, "Run(environment, directory, \"dotnet\", \"test\", project)");
