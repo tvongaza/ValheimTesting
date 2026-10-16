@@ -246,7 +246,7 @@ public sealed class LocalHostPreflightTests : IDisposable
         {
             Interlocked.Increment(ref Calls);
             return Task.FromResult(kind == "local"
-                ? new ProcessExit(ProcessEnd.NotStarted, -1, "", "could not start pwsh: The system cannot find the file specified.", TimeSpan.Zero)
+                ? ProcessRunner.NotStarted(new System.Diagnostics.ProcessStartInfo("pwsh"), new System.ComponentModel.Win32Exception(2, "The system cannot find the file specified."), TimeSpan.Zero, windows: true)
                 : new ProcessExit(ProcessEnd.Exited, 9009 & 0xFF, "", "'pwsh' is not recognized as an internal or external command,\r\noperable program or batch file.\r\n", TimeSpan.Zero));
         }
         public IStartedProcess Start(string executable, IReadOnlyList<string> arguments) => throw new NotSupportedException();

@@ -7,7 +7,34 @@ namespace Valheim.Testing.GameSessions;
 
 internal enum ProcessEnd { Exited, TimedOut, Stopped, NotStarted }
 /// <summary>How a local process ended. <see cref="ExitCode"/> is meaningful only for <see cref="ProcessEnd.Exited"/>; for <see cref="ProcessEnd.NotStarted"/> <see cref="Stderr"/> says why.</summary>
-internal sealed record ProcessExit(ProcessEnd End, int ExitCode, string Stdout, string Stderr, TimeSpan Elapsed);
+internal sealed record ProcessExit(ProcessEnd End, int ExitCode, string Stdout, string Stderr, TimeSpan Elapsed)
+{
+    public ProcessStartFailure? StartFailure { get; init; }
+}
+
+internal enum ProcessStartFailureKind { ExecutableNotFound, ExecutableInaccessible, InvalidWorkingDirectory, Other }
+
+// Keep the native facts separate from the interpretation. In particular, ERROR_CANT_ACCESS_FILE (1920) is not a missing
+// executable, and Unix ENOENT can mean an absent script interpreter or working directory rather than an absent command.
+internal sealed record ProcessStartFailure(string Executable, string WorkingDirectory, string ExceptionType, string Message,
+    int NativeErrorCode, int HResult, ProcessStartFailureKind Kind)
+{
+    public static ProcessStartFailure Capture(ProcessStartInfo start, Win32Exception error, bool windows) => new(
+        start.FileName, string.IsNullOrEmpty(start.WorkingDirectory) ? Environment.CurrentDirectory : start.WorkingDirectory,
+        error.GetType().FullName!, error.Message, error.NativeErrorCode, error.HResult,
+        (windows, error.NativeErrorCode) switch
+        {
+            (true, 2) => ProcessStartFailureKind.ExecutableNotFound, // ERROR_FILE_NOT_FOUND
+            (true, 5 or 32 or 1920) or (false, 13) => ProcessStartFailureKind.ExecutableInaccessible,
+            (true, 267) => ProcessStartFailureKind.InvalidWorkingDirectory, // ERROR_DIRECTORY
+            _ => ProcessStartFailureKind.Other,
+        });
+
+    // Arguments and input can contain secrets, so only the executable and effective working directory are recorded here.
+    public string Describe() => $"could not start {Executable}: {Message}\n" +
+        $"process start: executable='{Executable}'; working directory='{WorkingDirectory}'; kind={Kind}; " +
+        $"exception={ExceptionType}; native error={NativeErrorCode}; HRESULT=0x{HResult:X8}";
+}
 
 /// <summary>
 /// One local process run: <see cref="Input"/> then <see cref="Upload"/> on stdin, which is then closed. Stdout goes raw to
@@ -66,8 +93,8 @@ internal static class ProcessRunner
         start.UseShellExecute = false; start.RedirectStandardInput = true; start.RedirectStandardOutput = true; start.RedirectStandardError = true;
         var clock = Stopwatch.StartNew();
         Process process;
-        try { process = Process.Start(start) ?? throw new Win32Exception("Process.Start returned no process."); }
-        catch (Win32Exception error) { return new ProcessExit(ProcessEnd.NotStarted, -1, "", $"could not start {start.FileName}: {error.Message}", clock.Elapsed); }
+        try { process = Process.Start(start) ?? throw new Win32Exception(0, "Process.Start returned no process."); }
+        catch (Win32Exception error) { return NotStarted(start, error, clock.Elapsed, OperatingSystem.IsWindows()); }
         using (process)
         {
             var stop = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -104,6 +131,12 @@ internal static class ProcessRunner
             string stderr; lock (errors) stderr = Encoding.UTF8.GetString(errors.ToArray());
             return new ProcessExit(end, end == ProcessEnd.Exited ? process.ExitCode : -1, stdout, stderr, clock.Elapsed);
         }
+    }
+
+    internal static ProcessExit NotStarted(ProcessStartInfo start, Win32Exception error, TimeSpan elapsed, bool windows)
+    {
+        var failure = ProcessStartFailure.Capture(start, error, windows);
+        return new ProcessExit(ProcessEnd.NotStarted, -1, "", failure.Describe(), elapsed) { StartFailure = failure };
     }
 
     // Readers still running when a bounded wait gives up keep writing; everything they share is locked.

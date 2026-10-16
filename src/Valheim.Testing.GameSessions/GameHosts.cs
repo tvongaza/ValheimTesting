@@ -20,8 +20,11 @@ public sealed class LocalGameHost : ScriptedGameHost
     public override GameHostKind Kind => GameHostKind.Local;
     internal override (string Executable, IReadOnlyList<string> Arguments) WrapperCommand() => (Shell.Executable, WrapperArguments(Shell));
     internal override bool IsTransportFailure(ProcessExit exit) => false;
-    // The shell is the process started here: one that cannot be started is not there.
-    internal override bool ShellNotFound(ProcessExit exit) => exit.End == ProcessEnd.NotStarted;
+    // A failure to launch can also mean access denial, an invalid cwd or resource pressure. Only the native missing-file
+    // classification for this shell justifies install advice; an injected/legacy result without that evidence does not.
+    internal override bool ShellNotFound(ProcessExit exit) => exit.End == ProcessEnd.NotStarted &&
+        exit.StartFailure is { Kind: ProcessStartFailureKind.ExecutableNotFound } failure &&
+        string.Equals(failure.Executable, Shell.Executable, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>The host's loopback is this machine's: nothing is started and the endpoint is the ValheimCLI port itself.</summary>
     public override Task<CliTunnel> OpenCliTunnelAsync(int hostPort, TimeSpan readyTimeout, int localPort = 0, CancellationToken cancellation = default)
