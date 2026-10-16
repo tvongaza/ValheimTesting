@@ -155,6 +155,21 @@ public sealed class DetachedModSwapTests : IDisposable
     }
 
     [Fact]
+    public void EquivalentAbsolutePathSpellingsSelectTheSamePinnedMod()
+    {
+        var (swap, input) = Prepare();
+        string canonical = Path.GetFullPath(input.Mod);
+        var spellings = new List<string> { canonical };
+        if (OperatingSystem.IsWindows())
+        {
+            spellings.Add(canonical.Replace('\\', '/'));
+            spellings.Add(canonical.ToUpperInvariant());
+        }
+        foreach (string spelling in spellings)
+            Assert.NotNull(swap.Prepare(input with { Mod = spelling }, Guid.NewGuid().ToString("N"), () => { }, default));
+    }
+
+    [Fact]
     public void SourceDriftAfterValidationIsRefusedBeforeTheStoppedActorIsTouched()
     {
         var (swap, input) = Prepare();
@@ -179,6 +194,7 @@ public sealed class DetachedModSwapTests : IDisposable
         Assert.Throws<InvalidOperationException>(() => session.ReplaceStoppedPluginExpectation("example.mod", newHash, oldHash));
         session.ReplaceStoppedPluginExpectation("example.mod", oldHash, newHash);
         session.Start();
+        session.Stop(); // Closes the recording writer before Windows can open it for reading.
         string text = File.ReadAllText(recording + "2.jsonl");
         Assert.Contains("example.mod=" + newHash, text); Assert.Contains("other.mod=" + other, text); Assert.Contains("worlduid=1", text);
     }

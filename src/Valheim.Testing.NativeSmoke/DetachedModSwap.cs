@@ -45,7 +45,8 @@ internal sealed class DetachedModSwap
         if (files.Length > 256 || files.Select(file => Path.GetFullPath(file.File)).Distinct(StringComparer.OrdinalIgnoreCase).Count() != files.Length)
             throw new InvalidDataException("The swap dependency lock has duplicate or excessive files.");
         _original.RequireSameFixedInputs(proposed);
-        if (proposed.Mods.Count == 0 || Path.GetFullPath(proposed.Mods[0].File) != input.Mod ||
+        if (proposed.Mods.Count == 0 || !Path.GetFullPath(proposed.Mods[0].File).Equals(Path.GetFullPath(input.Mod),
+                OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal) ||
             !proposed.Mods[0].Sha256.Equals(input.Sha256, StringComparison.OrdinalIgnoreCase))
             throw new InvalidDataException("The swap lock must select the requested pinned DLL first.");
         foreach (var file in files) RequireRegular(file.File, MaximumBytes);
