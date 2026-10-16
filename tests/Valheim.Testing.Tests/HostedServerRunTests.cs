@@ -718,16 +718,16 @@ public sealed partial class HostedServerRunTests : IDisposable
 
     private static PinnedServerRunOptions<ServerRunPlan> Options(FakeServerHost host, FakeOwnedServer? server, Func<TestRun<ServerRunPlan>, Task>? scenario = null,
         FakeServerHost? clientHost = null, IGameTransport? clientTransport = null, IGameHost? leaseHost = null, string name = "toolkit-smoke",
-        RunCancellation? cancellation = null, IReadOnlyList<string>? requiredPlugins = null) => new()
+        RunCancellation? cancellation = null, IReadOnlyList<string>? requiredPlugins = null, bool checkpointFixture = false, Func<IGameTransport>? connect = null) => new()
     {
-        Name = name,
+        Name = name, CheckpointFixture = checkpointFixture,
         ReadPlan = path => { var plan = ServerRunPlan.Read<ServerRunPlan>(path); plan.ValidateServerPlan(requiredPlugins ?? [], "TEST_SESSION_TOKEN"); return plan; },
         Mod = new("test.mod/session", "TEST_SESSION_TOKEN"),
         Scenario = TestRun.Scenario(scenario ?? (_ => Task.CompletedTask)),
         Hooks = new FakeRunHooks
         {
             Host = hostName => hostName == "linux-box" ? host : hostName == LeaseBox.Name && leaseHost != null ? leaseHost : clientHost ?? throw new InvalidOperationException("No fake host " + hostName),
-            Connect = port => port == 15578 ? clientTransport! : server!.Connect(),
+            Connect = port => port == 15578 ? clientTransport! : connect?.Invoke() ?? server!.Connect(),
             StateWaits = false, RunId = RunId, Cancellation = cancellation,
         },
     };

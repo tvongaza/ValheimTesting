@@ -15,6 +15,27 @@ public sealed class DetachedSessionTests : IDisposable
     private readonly string _root = Directory.CreateTempSubdirectory("vt-detached-").FullName;
     public void Dispose() => Directory.Delete(_root, recursive: true);
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ExplicitFixtureIsPinnedBeforeStartupAndSourceOrStagedDriftIsRefused(bool stagedDrift)
+    {
+        using var machine = new FakeDataRoot(Path.Combine(_root, "fixture-data"));
+        string mod = Directory.CreateDirectory(Path.Combine(_root, "mod-source")).FullName;
+        string fixture = Directory.CreateDirectory(Path.Combine(_root, "world-source")).FullName;
+        string control = Directory.CreateDirectory(Path.Combine(_root, "control-input")).FullName;
+        File.WriteAllText(Path.Combine(mod, "Mod.dll"), "pinned mod");
+        File.WriteAllText(Path.Combine(fixture, "World.db"), "original fixture");
+        string[] args = ["--mod", Path.Combine(mod, "Mod.dll"), "--world-fixture", fixture];
+        using var run = RunJournal.UseRun("run-stage-fixture");
+        var staged = DetachedSession.StageInputsOwned(args, Path.Combine(_root, "inputs"), control);
+        Assert.NotEqual(fixture, staged[3]);
+        DetachedSession.VerifyStagedInputs(control);
+        File.WriteAllText(Path.Combine(stagedDrift ? staged[3] : fixture, "World.db"), "changed");
+        Assert.Throws<InvalidOperationException>(() => DetachedSession.VerifyStagedInputs(control));
+        Assert.Equal("pinned mod", File.ReadAllText(staged[1]));
+    }
+
     [Fact]
     public void ServerOnlyDetachRequiresExplicitAbsoluteInputsBeforeLaunch()
     {
@@ -190,6 +211,11 @@ public sealed class DetachedSessionTests : IDisposable
                 }), System.Text.Encoding.UTF8.GetBytes("fake dedicated executable"));
                 string adapter = rig.Write("adapter/NativeSmoke.SessionAdapter.dll",
                     RegressionRig.Assembly("NativeSmoke.SessionAdapter", new RegressionRig.Plugin(SmokeSessionContract.SessionAdapterPluginGuid)));
+                DetachedCommandQueue.WriteNew(Path.Combine(control, "input-manifests.json"), new[]
+                {
+                    new DetachedSession.StagedInput(Path.GetDirectoryName(rig.Parent)!, Path.GetDirectoryName(rig.Parent)!,
+                        WorldFixture.Manifest(Path.GetDirectoryName(rig.Parent)!)),
+                });
                 bool inspected = false;
                 int exit = await ServerLoad.RunAsync([
                     "--server", rig.Game, "--mod", rig.Parent,

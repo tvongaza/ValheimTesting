@@ -179,7 +179,7 @@ public interface IOwnedServer
 
 public sealed class OwnedServerSession : IOwnedServer, IDisposable
 {
-    private readonly Func<string, IOwnedProcess> _launch;
+    private readonly Func<string, CancellationToken, IOwnedProcess> _launch;
     private readonly Func<IGameTransport> _connect;
     private readonly string _saveRoot, _expectations, _sessionCapability, _extension;
     private readonly TimeSpan _startup, _command, _poll;
@@ -198,6 +198,10 @@ public sealed class OwnedServerSession : IOwnedServer, IDisposable
     /// <summary>Events startup waits on; null keeps bounded connection retries. The process exit is watched either way.</summary>
     public StartupEvents? Events { get; init; }
     public OwnedServerSession(Func<string, IOwnedProcess> launch, Func<IGameTransport> connect,
+        string saveRoot, string expectations, string sessionCapability, TimeSpan startup, TimeSpan command, TimeSpan? poll = null, CancellationToken cancellation = default)
+        : this((token, _) => launch(token), connect, saveRoot, expectations, sessionCapability, startup, command, poll, cancellation) { }
+
+    internal OwnedServerSession(Func<string, CancellationToken, IOwnedProcess> launch, Func<IGameTransport> connect,
         string saveRoot, string expectations, string sessionCapability, TimeSpan startup, TimeSpan command, TimeSpan? poll = null, CancellationToken cancellation = default)
     {
         var parts = sessionCapability.Split('/');
@@ -227,17 +231,20 @@ public sealed class OwnedServerSession : IOwnedServer, IDisposable
     /// time left (at most the command timeout). Then, with <see cref="EnsureTestAccess"/>, the boot's test access is established
     /// (two console mutations, each issued once, under the command timeout); its failure fails the start.
     /// </summary>
-    public async Task<GameActor> StartAsync()
+    public Task<GameActor> StartAsync() => StartAsync(_cancellation);
+    internal async Task<GameActor> StartAsync(CancellationToken cancellation)
     {
-        _cancellation.ThrowIfCancellationRequested();
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(_cancellation, cancellation);
+        cancellation = linked.Token;
+        cancellation.ThrowIfCancellationRequested();
         if (_process != null) throw new InvalidOperationException("Stop the previous owned process before starting another.");
         var events = Events;
         string token = Guid.NewGuid().ToString("N");
         // Opened before launch: a previous boot's lines in the same log can never satisfy this one.
         using var log = events?.CliLog is { } cliLog ? new LogWait(cliLog) : null;
-        var process = _process = _launch(token); StartedProcesses.Add(process.Id);
+        var process = _process = _launch(token, cancellation); StartedProcesses.Add(process.Id);
         var clock = Stopwatch.StartNew();
-        using var stop = CancellationTokenSource.CreateLinkedTokenSource(_cancellation);
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
         var exited = process.WaitForExitAsync(stop.Token);
         TimeSpan Left(string stage)
         {
@@ -275,7 +282,7 @@ public sealed class OwnedServerSession : IOwnedServer, IDisposable
                 if (late.IsCompletedSuccessfully) (late.Result as IDisposable)?.Dispose(); else _ = late.Exception;
                 afterAbandoned?.Invoke();
             }, TaskScheduler.Default);
-            _cancellation.ThrowIfCancellationRequested();
+            cancellation.ThrowIfCancellationRequested();
             if (end == RaceEnd.Exited) throw await Exited(stage).ConfigureAwait(false);
             throw new WaitTimeoutException(stage + " within the startup deadline", clock.Elapsed, lastSeen ?? log?.Refresh());
         }
@@ -346,7 +353,7 @@ public sealed class OwnedServerSession : IOwnedServer, IDisposable
                         return null;
                     }
                     finally { transport?.Dispose(); }
-                }, (GameActor? actor) => actor != null, Left(stage), _poll > TimeSpan.Zero ? _poll : TimeSpan.FromTicks(1), _cancellation, null, _ => last,
+                }, (GameActor? actor) => actor != null, Left(stage), _poll > TimeSpan.Zero ? _poll : TimeSpan.FromTicks(1), cancellation, null, _ => last,
                 ExitRace.Pause(exited)).ConfigureAwait(false);
             _actor = started.Value!;
         }
@@ -421,6 +428,9 @@ public sealed class OwnedServerSession : IOwnedServer, IDisposable
     /// within its startup deadline (<see cref="WaitUntilJoinable(GameActor, string, TimeSpan, CancellationToken)"/>).
     /// </summary>
     public void WaitUntilJoinable(GameActor server) => WaitUntilJoinable(server, _sessionCapability, _startup, _cancellation);
+
+    internal void WaitUntilJoinableCheckpoint(GameActor server, CancellationToken cancellation) =>
+        WaitUntilJoinable(server, _sessionCapability, _startup, cancellation);
 
     public GameActor Restart()
     {

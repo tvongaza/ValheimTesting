@@ -76,6 +76,7 @@ internal static class ServerLoad
             // Otherwise the still-live starter looks like another process's live run and the supervisor refuses itself. It holds the
             // run's control lock until it ends (#811).
             using var supervisor = DetachedSession.ConfiguredRun is { } detachedRun ? DetachedSession.AdoptRun(detachedRun) : null;
+            if (supervisor != null) DetachedSession.VerifyStagedInputs();
             output = Output(parsed!);
             if (parsed.Options.TryGetValue("--adapter", out string? adapterFile) && !File.Exists(Path.GetFullPath(adapterFile)))
                 throw new FileNotFoundException("A selected file is missing: " + Path.GetFullPath(adapterFile), Path.GetFullPath(adapterFile));
@@ -318,6 +319,7 @@ internal static class ServerLoad
                 {
                     Name = "native-smoke-server-load",
                     RunId = DetachedSession.ConfiguredRun,
+                    CheckpointFixture = DetachedSession.ConfiguredRun != null,
                     CleanupBudget = bakeDestination == null ? null : TimeSpan.FromMinutes(10),
                     ReadPlan = _ => throw new InvalidOperationException("The one-off's plan is in memory."),
                     Mod = new(parsed.Options.GetValueOrDefault("--session-capability") ?? SmokeSessionContract.SessionCapability,
@@ -426,7 +428,7 @@ internal static class ServerLoad
             session.Report.Step("keep the owned server running until finish", () =>
                 ForegroundHold.HoldAsync(session.Report.Provenance["runId"], session.Output, session.Cancellation,
                     [("server", server.CurrentProcess ?? throw new InvalidOperationException("The owned server process is missing."))], client: false,
-                    serverEvidence: session.Output)
+                    serverEvidence: session.Output, checkpoints: DetachedSession.ConfiguredRun != null ? DetachedCheckpoints.For(session, worldUid) : null)
                     .GetAwaiter().GetResult());
         if (bake)
             session.Report.Step("confirm an advancing save before exporting the fixture", () =>

@@ -396,6 +396,55 @@ internal sealed class HostedServerRun : IServerPlacement
     private JournalEntry WorldCopyDone(HostListing listing) =>
         JournalEntry.Of(JournalEntry.CopyDone, ("runtime", WorldDirectory), ("files", listing.Files.Count.ToString(CultureInfo.InvariantCulture)), ("verified", "true"));
 
+    // The caller is this placement's ServerActor after its exact clean stop. Intermediate checkpoints never release
+    // the lock/profile or hand the live world over; final retirement stays in TeardownAsync.
+    void IServerPlacement.ArchiveCheckpoint(string archive, CancellationToken cancellation)
+    {
+        RequireCheckpointOwnership();
+        var before = HostInstall.ListAsync(Host, WorldDirectory, HostedTimeouts.Long, null, cancellation).GetAwaiter().GetResult();
+        string destination = Path.Combine(archive, "world");
+        Host.FetchDirectoryAsync(WorldDirectory, destination, HostedTimeouts.Long, cancellation).GetAwaiter().GetResult();
+        var localHashes = before.Files.ToDictionary(pair => pair.Key.Replace('/', Path.DirectorySeparatorChar), pair => pair.Value, StringComparer.Ordinal);
+        WorldFixture.Verify(destination, localHashes);
+        var after = HostInstall.ListAsync(Host, WorldDirectory, HostedTimeouts.Long, null, cancellation).GetAwaiter().GetResult();
+        HostInstall.RequireSame(before.Files, after, "stopped checkpoint world");
+        File.WriteAllText(Path.Combine(archive, "world.sha256.json"), JsonSerializer.Serialize(localHashes));
+        JournalAsync(Host, Role.Host, "server", JournalEntry.Of("checkpoint-world-archived",
+            ("runtime", WorldDirectory), ("archive", destination)), cancellation).GetAwaiter().GetResult();
+    }
+
+    void IServerPlacement.RestoreCheckpoint(string original, IReadOnlyDictionary<string, string> hashes, string archive, CancellationToken cancellation)
+    {
+        RequireCheckpointOwnership();
+        WorldFixture.Verify(original, hashes);
+        var archived = JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(Path.Combine(archive, "world.sha256.json")))
+            ?? throw new InvalidDataException("The checkpoint world has no archive manifest.");
+        WorldFixture.Verify(Path.Combine(archive, "world"), archived);
+        var stopped = HostInstall.ListAsync(Host, WorldDirectory, HostedTimeouts.Long, null, cancellation).GetAwaiter().GetResult();
+        HostInstall.RequireSame(archived, stopped, "stopped world before restore");
+        JournalAsync(Host, Role.Host, "server", JournalEntry.Of("checkpoint-world-restore-intended",
+            ("runtime", WorldDirectory), ("source", original)), cancellation).GetAwaiter().GetResult();
+        // The common protected-path remover is the only remover; a failed remove/ship remains recoverable in this run.
+        HostedRuntimeStage.RetireAsync(Host, WorldDirectory, "", HostedTimeouts.Long, cancellation, RunId).GetAwaiter().GetResult();
+        JournalAsync(Host, Role.Host, "server", JournalEntry.Of(JournalEntry.CopyRetired, ("runtime", WorldDirectory)), cancellation).GetAwaiter().GetResult();
+        _world = WorldCopy.None;
+        JournalAsync(Host, Role.Host, "server", WorldCopyIntended(), cancellation).GetAwaiter().GetResult();
+        _world = WorldCopy.Intended;
+        Host.ShipFilesAsync(original, WorldDirectory, HostedTimeouts.Long, cancellation).GetAwaiter().GetResult();
+        _world = WorldCopy.Shipped;
+        var listing = HostInstall.ListAsync(Host, WorldDirectory, HostedTimeouts.Long, null, cancellation).GetAwaiter().GetResult();
+        HostInstall.RequireSame(hashes, listing, "restored original fixture", ["SOURCE.txt"]);
+        WorldFixture.Verify(original, hashes);
+        JournalAsync(Host, Role.Host, "server", WorldCopyDone(listing), cancellation).GetAwaiter().GetResult();
+        _world = WorldCopy.Verified;
+    }
+
+    private void RequireCheckpointOwnership()
+    {
+        if (HostProfile is not { Kind: "local", Platform: "windows" } || _lock == null || _serverMayRun || _world != WorldCopy.Verified)
+            throw new InvalidOperationException("Detached checkpoints require this run's locked, verified local Windows server placement.");
+    }
+
     private static InstallPins RequiredRuntimePins(ServerRunPlan plan) => plan.RuntimePins ??
         throw new InvalidOperationException("The standalone profile was not bound to its observed runtime pins.");
 

@@ -271,7 +271,12 @@ valheim-test session check SESSION [--hosts] [--json]
 ```powershell
 valheim-test detach server-load --server 'C:\Games\Valheim dedicated server' --mod 'C:\Mods\MyMod.dll' --server-only --output 'C:\ValheimTesting\runs\inspection-1'
 valheim-test detach status
-valheim-test cli --evidence 'C:\ValheimTesting\runs\inspection-1' --role server --phase world --command cli_manifest
+$evidence = 'C:\ValheimTesting\runs\inspection-1\evidence' # use the printed evidence path
+valheim-test cli --evidence $evidence --role server --phase world --command cli_manifest
+valheim-test detach save --evidence $evidence
+valheim-test detach stop --evidence $evidence
+valheim-test detach status --evidence $evidence
+valheim-test detach restart --evidence $evidence
 valheim-test detach finish --run ID
 ```
 
@@ -279,7 +284,13 @@ Experimental, Windows only. `detach server-load` starts a server-only held run u
 
 Use the evidence directory printed by the held server for later `cli` calls. Detached evidence routes them through the original supervisor: the caller proves its journalled identity, and the supervisor checks the exact server boot, listener owner and strict pins before dispatch. The supervisor alone appends command intent and outcome to the run journal. `finish` closes command admission, waits for the current operation to settle, and refuses work still queued before teardown.
 
-Each run accepts at most 64 write-once command requests. A request expires after 60 seconds; each game call keeps the existing `--timeout-seconds 1..15` bound. Private evidence records each operation ID and its `completed`, `refused` or `unknown` outcome. A lost reply or interrupted dispatch is `unknown`: never repeat that mutation; inspect the evidence and use read-only observations to establish the state. The route stays in evidence after finish, so a later call refuses instead of contacting a leftover server directly. This slice is server-only; restart, build swap and detached macOS ownership remain separate work.
+Each supervisor lifetime accepts at most 64 write-once requests, commands and checkpoints together. Restart never recreates the queue or reuses slots. A request expires if it has not started within 60 seconds; each game call keeps the existing `--timeout-seconds 1..15` bound. Private evidence records each operation ID and its `completed`, `refused` or `unknown` outcome. A lost reply or interrupted dispatch is `unknown`: never repeat that mutation; inspect the evidence and use read-only observations to establish the state. The route stays in evidence after finish, so a later call refuses instead of contacting a leftover server directly. An unknown operation blocks all later game commands and checkpoints; use status and evidence, then finish or exact recovery. This remains Windows server-only; build swap, detached clients and detached macOS ownership are separate work.
+
+`save` requires the pinned world's completed-save result with an advancing save number. `stop` first confirms a fresh save, asks only the exact owned process to quit, then archives and hashes its world and stopped boot logs. A forced kill or prior exit fails the clean checkpoint. In `stopped`, the supervisor retains the host lock, profile and original fixture; ordinary game commands are refused. `restart` verifies the archive and source hashes, restores the immutable original fixture (discarding the current round only after its verified archive), and boots through the same owner. It verifies the new session identity, strict pins, test access and world readiness before publishing the next boot. Requests naming the previous boot are refused even if they were queued before restart. Final `finish` uses the normal verified-fetch retirement and releases the run's ownership.
+
+Use an absolute `--world-fixture DIR` on `detach server-load` to select a fixture. Before Task Scheduler starts the supervisor, the starter stages that directory and the selected mod inputs and records both source and staged SHA-256 manifests. The supervisor rechecks them before startup and checkpoints. Keep those inputs unchanged for the run's lifetime. Without this option, the packaged smoke fixture remains the original. Each new boot uses the same pinned build; no mod-build replacement is performed.
+
+`detach status --evidence DIR` reports the current boot and `running`, `saving`, `stopping`, `stopped`, `starting` or `unknown` state. Checkpoints have a cancellation deadline of at least 15 minutes, extended to cover two configured startup waits plus five minutes. The caller's wait also covers a save or stop already in progress and the stop's bounded log fetch, plus a transport margin. These completion waits are separate from the 60-second admission expiry. A missing reply is never permission to retry. Private `checkpoints/` archives, manifests and per-operation records remain in the evidence output.
 
 ## steam-runtime capture
 

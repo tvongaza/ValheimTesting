@@ -47,13 +47,13 @@ internal sealed class ForegroundHold : IDisposable
     }
 
     internal static async Task HoldAsync(string run, string evidence, CancellationToken cancellation,
-        IReadOnlyList<(string Name, IOwnedProcess Process)> processes, bool client = true, string? serverEvidence = null)
+        IReadOnlyList<(string Name, IOwnedProcess Process)> processes, bool client = true, string? serverEvidence = null, DetachedCheckpoints? checkpoints = null)
     {
         if (processes.Count == 0) throw new ArgumentException("A hold needs at least one owned process to watch.", nameof(processes));
         // Publish the route before signalling readiness. Only this loop executes detached commands; finish and cancellation
         // close admission and await its current dispatch before the caller can tear down the server.
         using var commands = DetachedSession.ConfiguredRun == run
-            ? DetachedCommandQueue.Open(run, serverEvidence ?? evidence, processes.Single(process => process.Name == "server").Process)
+            ? DetachedCommandQueue.Open(run, serverEvidence ?? evidence, processes.Single(process => process.Name == "server").Process, checkpoints)
             : null;
         using var hold = Open(run, evidence, serverEvidence: serverEvidence);
         hold._commands = commands;
@@ -62,8 +62,12 @@ internal sealed class ForegroundHold : IDisposable
         if (ServerCommandHint(processes.Any(process => process.Name == "server"), evidence, serverEvidence) is { } serverHint)
             Console.WriteLine(serverHint);
         Console.Out.Flush();
-        try { await hold.WaitAsync(cancellation, processes).ConfigureAwait(false); }
-        catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
+        try
+        {
+            if (checkpoints != null) await commands!.WaitAsync(cancellation).ConfigureAwait(false);
+            else await hold.WaitAsync(cancellation, processes).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested && checkpoints == null) { }
     }
 
     // Printed only where the held client's session published its lease: a client on another machine has none, so no command reaches it.

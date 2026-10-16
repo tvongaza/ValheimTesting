@@ -47,6 +47,8 @@ public sealed class PinnedServerRunOptions<TPlan> where TPlan : ServerRunPlan
             _cleanupBudget = value;
         }
     }
+    // Detached checkpoints pin the already-owned immutable fixture before the first boot.
+    internal bool CheckpointFixture { get; init; }
     /// <summary>Test seam: the owned server's session (scripted) instead of launching the server from its profile.</summary>
     internal Func<TPlan, OwnedServerSession>? SessionOverride { get; init; }
     /// <summary>What a run on other hosts reaches outside this process (<see cref="IHostedRunHooks"/>); tests pass fakes.</summary>
@@ -815,7 +817,7 @@ public static class PinnedServerRun
             IReadOnlyList<string> campaignClients = hostedRun.Profile.Clients.Keys.Order(StringComparer.Ordinal).ToList();
             game = new GameSession(report, output, plan.Pins.GetValueOrDefault("worlduid"),
                 token => options.SessionOverride is { } scripted ? new ServerActor(scripted(plan), runtimeDirectory, worldDirectory, hostedRun.Host, plan, token)
-                    : new ServerActor(hostedRun, plan, output, options.Mod.SessionCapability, options.Mod.SessionTokenVariable, token),
+                    : new ServerActor(hostedRun, plan, output, options.Mod.SessionCapability, options.Mod.SessionTokenVariable, token, options.CheckpointFixture ? world!.DirectoryPath : null),
                 [], cancellation.Token)
             {
                 CampaignClients = campaignClients,
