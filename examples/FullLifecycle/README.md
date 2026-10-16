@@ -10,7 +10,7 @@ This example takes the mod from [ModWithTests](../ModWithTests/README.md) and te
 |---|---|---|---|
 | Unit / synthetic | [ModWithTests/MyMod.Tests](../ModWithTests/README.md) | The real decision on declared terrain, with game doubles | .NET 10 SDK |
 | Controlled integration | [ExampleMod.Tests](ExampleMod.Tests/) (`MarkerScenarioTests`) | The real scenario and client lifecycle code against scripted game replies: lost replies, save failure, a marker the client cannot see, the declared patch, cleanup | .NET 10 SDK |
-| Native system | [ExampleMod.Tests](ExampleMod.Tests/) (`ExampleSession`) with [ExampleMod](ExampleMod/) and [ExampleMod.TestAdapter](ExampleMod.TestAdapter/) | A disposable server copy and a real client: the mod's Harmony patch applied, join, strict pins, protect and place the player, exercise the feature, measure, confirmed save, restart, rejoin, measure again, stop what it started, report | A game install, Steam, a machine you may use |
+| Native system | [ExampleMod.Tests](ExampleMod.Tests/) (`ExampleSession`) with [ExampleMod](ExampleMod/) and [ExampleMod.TestAdapter](ExampleMod.TestAdapter/) | Disposable server and client profiles: check the mod's Harmony patch, join, enforce pins, protect and place the player, measure, save, restart, rejoin, measure again, stop owned processes, and report | A game install, Steam, a machine you may use |
 
 `dotnet run scripts/validate.cs` runs the scripted tests on every platform. The mod and the adapter build only where you have a game install. Set `ValheimPath` (or `VALHEIM_PATH`) to the game folder, and [tools/game-references](../../tools/game-references/README.md) supplies the references or names what is missing. Outside this repository, build the test project from the published package with `-p:GameSessionsPackageVersion=<version>` ([package table](../../docs/package-versions.md)).
 
@@ -66,7 +66,7 @@ To include one optional screenshot after the first joined-client marker check, a
 }
 ```
 
-Set `hostDirectory` to a fresh, private, absolute path without spaces **on the client host** (a Unix path for a Mac/Linux client). Use a new path for each run and review the fetched `review-marker/example-marker.png` yourself. Its JSON sidecar is attached to `result.json` with `visualVerdict: "not asserted"`; the test checks capture and restoration, not whether the picture looks good. Omit `reviewStill` for the usual faster run. The scenario passes the campaign client's own `IGameHost` when that client is remote.
+Set `hostDirectory` to a fresh, private, absolute path without spaces **on the client host** (a Unix path for a Mac/Linux client). Use a new path for each run and review the fetched `review-marker/example-marker.png` yourself. Set `cameraAzimuthDegrees`, `cameraDistance` and `cameraHeight` in the plan if foliage blocks the view; a successful capture does not prove the marker is visible. Its JSON sidecar is attached to `result.json` with `visualVerdict: "not asserted"`; the test checks capture and restoration, not whether the picture looks good. Omit `reviewStill` for the usual faster run. The scenario passes the campaign client's own `IGameHost` when that client is remote.
 
 ## The native session
 
@@ -88,6 +88,8 @@ The server is always owned and runs from a [disposable profile](../../docs/refer
 ### One client hosts the world locally
 
 [`HostedMarkerScenario`](ExampleMod.Tests/HostedMarkerScenario.cs) uses the same mod rule with one client acting as both server and player. Its `HostedRunOptions<HostedMarkerPlan>` passes the hosting client to `PinnedServerRun`; the toolkit's local `HostingClientActor` places the fixture through `HostedWorldOnHost.ThisMachine`, journals it, saves, leaves, rehosts and cleans it up. The scenario asserts the marker before and after rehosting.
+
+From a source checkout, run `dotnet run scripts/bootstrap-cli.cs` before building the test project so its pinned ValheimCLI and BepInExPack are embedded. The local-host profile stages plugins already present in the plan's `client.install`; a pin verifies a DLL but does not install it. Put the built `ExampleMod.dll` and `ExampleMod.TestAdapter.dll` under that install's `BepInEx/plugins` first. Use a disposable modded source install if your Steam install has unrelated plugins or you do not want to modify it. Launch this test from an interactive desktop terminal on Windows; an SSH/session-0 `dotnet test` cannot open a client.
 
 Copy [`sample-hosted-plan.json`](ExampleMod.Tests/sample-hosted-plan.json) to the ignored `ExampleMod.Tests/hosted-dry-site-lifecycle.plan.json`, replace its pins and fixture paths, then run:
 
