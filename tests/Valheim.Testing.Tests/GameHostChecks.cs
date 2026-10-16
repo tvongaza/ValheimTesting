@@ -71,6 +71,36 @@ internal static class GameHostChecks
         Assert.True(fine.Succeeded, fine.Describe());
     }
 
+    // #871: display formatting can wrap a path or inject ANSI escapes. ErrorRecord.ToString also keeps a command's
+    // ErrorDetails when it deliberately differs from the exception; Exception.Message alone would lose that diagnosis.
+    public static async Task RunKeepsCompleteErrorText(IGameHost host)
+    {
+        string message = "Could not create a hard link in runtime folder C:/station scratch/" + new string('r', 90) +
+            "/runtime éß from the install's volume containing C:/source install/" + new string('s', 90) +
+            "/missing game file.dll\nsecond line with ‘details’";
+        foreach (bool details in host.Shell.Kind == HostShellKind.PowerShell ? new[] { false, true } : new[] { false })
+        {
+            string script = host.Shell.Kind == HostShellKind.Bash
+                ? "echo 'before error'; printf '%s\\n' \"$message\" >&2; exit 1"
+                : "[Console]::Out.WriteLine('before error'); " + (details
+                    ? " $record = [Management.Automation.ErrorRecord]::new([InvalidOperationException]::new('exception fallback'), 'vt-test', [Management.Automation.ErrorCategory]::NotSpecified, $null); " +
+                        "$record.ErrorDetails = [Management.Automation.ErrorDetails]::new($message); throw $record"
+                    : "throw $message");
+            var result = await host.RunAsync(script, new Dictionary<string, string> { ["message"] = message }, Generous);
+            Assert.Equal(HostOutcome.Exited, result.Outcome);
+            Assert.Equal(1, result.ExitCode);
+            Assert.True(result.Failed, result.Describe());
+            Assert.Equal("before error\n", result.Stdout);
+            Assert.Equal(message + "\n", result.Stderr);
+            Assert.DoesNotContain("[vt-exit]", result.Describe());
+            Assert.DoesNotContain("VT-PROFILE-SEEDED", result.Stdout);
+        }
+        var next = await host.RunAsync(host.Shell.Kind == HostShellKind.Bash ? "echo 'after error'" : "'after error'", null, Generous);
+        Assert.True(next.Succeeded, next.Describe());
+        Assert.Equal("after error\n", next.Stdout);
+        Assert.Equal("", next.Stderr);
+    }
+
     public static async Task ATimeoutIsUnknown(IGameHost host)
     {
         var clock = Stopwatch.StartNew();
@@ -225,6 +255,7 @@ public class LocalGameHostShellTests
     private static string Parent => Path.GetTempPath();
 
     [Theory, MemberData(nameof(Shells))] public Task RunPassesValuesLiterallyAndReportsTheExitCode(string shell) => GameHostChecks.RunPassesValuesLiterallyAndReportsTheExitCode(Host(shell));
+    [Theory, MemberData(nameof(Shells))] public Task RunKeepsCompleteErrorText(string shell) => GameHostChecks.RunKeepsCompleteErrorText(Host(shell));
     [Theory, MemberData(nameof(Shells))] public Task ATimeoutIsUnknown(string shell) => GameHostChecks.ATimeoutIsUnknown(Host(shell));
     [Theory, MemberData(nameof(Shells))] public Task TwoRunsNeverShareTheLock(string shell) => GameHostChecks.TwoRunsNeverShareTheLock(Host(shell), Parent);
     [Theory, MemberData(nameof(Shells))] public Task ShippedFilesComeBackAsEvidence(string shell) => GameHostChecks.ShippedFilesComeBackAsEvidence(Host(shell), Parent);
@@ -269,6 +300,7 @@ public class SshGameHostIntegrationTests
     private static string Parent => Path.GetTempPath();
 
     [SshTheory, MemberData(nameof(Shells))] public Task RunPassesValuesLiterallyAndReportsTheExitCode(string shell) => GameHostChecks.RunPassesValuesLiterallyAndReportsTheExitCode(Host(shell));
+    [SshTheory, MemberData(nameof(Shells))] public Task RunKeepsCompleteErrorText(string shell) => GameHostChecks.RunKeepsCompleteErrorText(Host(shell));
     [SshTheory, MemberData(nameof(Shells))] public Task ATimeoutIsUnknown(string shell) => GameHostChecks.ATimeoutIsUnknown(Host(shell));
     [SshTheory, MemberData(nameof(Shells))] public Task TwoRunsNeverShareTheLock(string shell) => GameHostChecks.TwoRunsNeverShareTheLock(Host(shell), Parent);
     [SshTheory, MemberData(nameof(Shells))] public Task ShippedFilesComeBackAsEvidence(string shell) => GameHostChecks.ShippedFilesComeBackAsEvidence(Host(shell), Parent);

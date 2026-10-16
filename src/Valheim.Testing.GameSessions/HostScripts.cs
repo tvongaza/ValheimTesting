@@ -71,7 +71,7 @@ internal static class HostScripts
             & $vtScript | Out-String -Stream | ForEach-Object { [Console]::Out.WriteLine($_) }
             $vtCode = $LASTEXITCODE
         } catch {
-            $vtErr.WriteLine(($_ | Out-String).Trim())
+            $vtErr.WriteLine($_.ToString())
         } finally {
             [Environment]::SetEnvironmentVariable('VT_SECRETS', $null)
             Remove-VtTemp
