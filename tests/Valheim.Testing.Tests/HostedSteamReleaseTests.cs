@@ -9,27 +9,63 @@ public sealed partial class HostedServerRunTests
 {
     private const string AccountReleaseStep = "release client player's Steam account lease";
 
-    private void AssertAccountReleased(ObservedLeaseHost host)
+    private void AssertAccountReleased(ObservedLeaseHost host, string? evidenceDirectory = null)
     {
         var release = Step(AccountReleaseStep);
         if (release.GetProperty("Passed").GetBoolean()) return;
         // Outside _root: Dispose removes the fixture even when an assertion fails. Retain only the report and the fake
         // account's claim/receipt, never the prepared profile, install or unrelated machine's journal.
-        string retained = Directory.CreateTempSubdirectory("vt-steam-release-failure-").FullName;
-        File.WriteAllText(Path.Combine(retained, "result.json"), SanitizeLeaseDiagnostic(File.ReadAllText(Path.Combine(Output, "result.json"))));
-        File.WriteAllText(Path.Combine(retained, "release-host.json"), SanitizeLeaseDiagnostic(JsonSerializer.Serialize(host.ReleaseResult)));
-        string account = Path.Combine(Leases, LeaseBox.Pool, LeaseBox.Account);
-        if (Directory.Exists(account))
-            foreach (string file in Directory.GetFiles(account, "claim-*"))
-                File.Copy(file, Path.Combine(retained, Path.GetFileName(file)));
+        string retained = evidenceDirectory ?? Path.Combine(Path.GetTempPath(), "vt-steam-release-failure-" + Guid.NewGuid().ToString("N"));
+        var captureErrors = new List<string>();
+        void Capture(string what, Action save)
+        {
+            try { save(); }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException) { captureErrors.Add(what + ": " + error.GetType().Name); }
+        }
+        Capture("create evidence directory", () => Directory.CreateDirectory(retained));
+        Capture("result.json", () => File.WriteAllText(Path.Combine(retained, "result.json"), SanitizeLeaseDiagnostic(File.ReadAllText(Path.Combine(Output, "result.json")))));
+        Capture("release-host.json", () => File.WriteAllText(Path.Combine(retained, "release-host.json"), SanitizeLeaseDiagnostic(JsonSerializer.Serialize(host.ReleaseResult))));
+        Capture("list claims", () =>
+        {
+            string account = Path.Combine(Leases, LeaseBox.Pool, LeaseBox.Account);
+            if (Directory.Exists(account))
+                foreach (string file in Directory.GetFiles(account, "claim-*"))
+                    Capture(Path.GetFileName(file), () => File.Copy(file, Path.Combine(retained, Path.GetFileName(file))));
+        });
         Assert.Fail(SanitizeLeaseDiagnostic(release.GetProperty("Error").GetString() ?? "The release step has no error.") +
+            (captureErrors.Count == 0 ? "" : " Retention incomplete (" + string.Join(", ", captureErrors.Distinct()) + ").") +
             " Retained report, host result and claim/receipt: " + retained);
     }
 
-    private string SanitizeLeaseDiagnostic(string text) => text.Replace(LeaseBox.SteamId, "<fake-steam-id>", StringComparison.Ordinal)
-        .Replace(LeaseBox.OtherSteamId, "<fake-steam-id>", StringComparison.Ordinal).Replace(_root, "<fixture>", StringComparison.Ordinal)
-        .Replace(_root.Replace("\\", "\\\\", StringComparison.Ordinal), "<fixture>", StringComparison.Ordinal)
-        .Replace(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "<home>", StringComparison.Ordinal);
+    private string SanitizeLeaseDiagnostic(string text) => SanitizeLeaseDiagnostic(text, _root, Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
+
+    private static string SanitizeLeaseDiagnostic(string text, string root, string home)
+    {
+        static string ReplacePath(string value, string path, string replacement) => path.Length == 0 ? value :
+            value.Replace(JsonEncodedText.Encode(path).ToString(), replacement, StringComparison.Ordinal).Replace(path, replacement, StringComparison.Ordinal);
+        text = text.Replace(LeaseBox.SteamId, "<fake-steam-id>", StringComparison.Ordinal)
+            .Replace(LeaseBox.OtherSteamId, "<fake-steam-id>", StringComparison.Ordinal);
+        return ReplacePath(ReplacePath(text, root, "<fixture>"), home, "<home>");
+    }
+
+    [Fact]
+    public void LeaseDiagnosticsRemoveWindowsHomePathsFromReportsAndProcessResults()
+    {
+        const string home = @"C:\Users\diagnostic-tester", root = home + @"\AppData\Local\Temp\hosted-run-fixture";
+        string error = "release failed at " + home + @"\outside-fixture; claim " + root + @"\leases\claim-000000001";
+        foreach (string json in new[] { JsonSerializer.Serialize(new { Error = error }),
+            JsonSerializer.Serialize(new ProcessExit(ProcessEnd.Exited, 3, "", error, TimeSpan.Zero)) })
+        {
+            string sanitized = SanitizeLeaseDiagnostic(json, root, home);
+            using var parsed = JsonDocument.Parse(sanitized); // Replacement keeps retained reports/results valid JSON.
+            Assert.DoesNotContain(home, sanitized);
+            Assert.DoesNotContain(JsonEncodedText.Encode(home).ToString(), sanitized);
+            Assert.DoesNotContain("diagnostic-tester", sanitized);
+            Assert.Contains("<home>", sanitized);
+            Assert.Contains("<fixture>", sanitized);
+        }
+        Assert.Equal(@"release failed at <home>\outside-fixture; claim <fixture>\leases\claim-000000001", SanitizeLeaseDiagnostic(error, root, home));
+    }
 
     [Theory]
     [InlineData("blocked receipt", false, SteamAccountState.Held)]
@@ -59,6 +95,17 @@ public sealed partial class HostedServerRunTests
         Assert.DoesNotContain(run.Client.Runs, entry => entry.Script == "client-start");
         if (fault == "blocked receipt")
         {
+            // Retention itself may fail (for example a full or inaccessible evidence directory). It must not replace the
+            // original release error with an I/O exception. A file where the directory belongs forces that path on all OSes.
+            using var obstructed = new TempDirectory();
+            string blocked = Path.Combine(obstructed.Path, "blocked");
+            File.WriteAllText(blocked, "not a directory");
+            var retention = Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => AssertAccountReleased(leaseHost, blocked));
+            Assert.Contains("is not proven", retention.Message);
+            Assert.Contains("Retention incomplete (create evidence directory: IOException", retention.Message);
+            Assert.Contains(blocked, retention.Message);
+            Assert.DoesNotContain(_root, retention.Message);
+
             var error = Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => AssertAccountReleased(leaseHost));
             string retained = error.Message.Split("Retained report, host result and claim/receipt: ", StringSplitOptions.None)[1];
             try
@@ -94,6 +141,21 @@ public sealed partial class HostedServerRunTests
         Assert.Contains("had already ended (gone)", release.GetProperty("Error").GetString());
         Assert.Equal(SteamAccountState.Held, (await LeaseBox.StatusAsync(PoolFile)).State);
         Assert.Equal(1, leaseHost.Releases);
+        string claim = Assert.Single(Directory.GetFiles(Path.Combine(Leases, LeaseBox.Pool, LeaseBox.Account), "claim-*"));
+        using (new FileStream(claim, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+        {
+            var retention = Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => AssertAccountReleased(leaseHost));
+            string retained = retention.Message.Split("Retained report, host result and claim/receipt: ", StringSplitOptions.None)[1];
+            try
+            {
+                Assert.Contains("had already ended (gone)", retention.Message);
+                Assert.Contains("Retention incomplete (" + Path.GetFileName(claim) + ": IOException)", retention.Message);
+                Assert.True(File.Exists(Path.Combine(retained, "result.json")));
+                Assert.True(File.Exists(Path.Combine(retained, "release-host.json")));
+                Assert.False(File.Exists(Path.Combine(retained, Path.GetFileName(claim))));
+            }
+            finally { Directory.Delete(retained, recursive: true); }
+        }
     }
 
     [Theory]
@@ -167,8 +229,10 @@ internal sealed class ObservedLeaseHost : IProcessLauncher
         if (!lease || !script.Contains(action, StringComparison.Ordinal)) return await SystemProcessLauncher.Instance.RunAsync(call, cancellation);
         Releases++;
         if (_beforeRelease != null) await _beforeRelease();
-        string claim = Directory.GetFiles(Path.Combine(_leases, LeaseBox.Pool, LeaseBox.Account), "claim-*")
-            .Single(file => Regex.IsMatch(Path.GetFileName(file), @"^claim-[0-9]{9}$"));
+        string? claim = _fault is "blocked receipt" or "held claim"
+            ? Directory.GetFiles(Path.Combine(_leases, LeaseBox.Pool, LeaseBox.Account), "claim-*")
+                .Single(file => Regex.IsMatch(Path.GetFileName(file), @"^claim-[0-9]{9}$"))
+            : null;
         if (_fault == "blocked receipt")
         {
             // Bash's -e treats a directory as an existing receipt; obstruct the path after load so this exercises the
@@ -182,7 +246,7 @@ internal sealed class ObservedLeaseHost : IProcessLauncher
             }
             else Directory.CreateDirectory(claim + ".released");
         }
-        using var held = _fault == "held claim" ? new FileStream(claim, FileMode.Open, FileAccess.ReadWrite, FileShare.None) : null;
+        using var held = _fault == "held claim" ? new FileStream(claim!, FileMode.Open, FileAccess.ReadWrite, FileShare.None) : null;
         try
         {
             var result = await SystemProcessLauncher.Instance.RunAsync(call, cancellation);
