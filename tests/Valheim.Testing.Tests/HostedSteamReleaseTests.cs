@@ -154,6 +154,45 @@ public sealed partial class HostedServerRunTests
     }
 
     [Fact]
+    public async Task AReleaseProcessThatCannotStartRetainsItsNativeFailureAndLeavesTheAccountHeld()
+    {
+        LeaseBox.WritePool(_root, Leases);
+        var run = WithClient(Accounts(check: true));
+        run.Client.SteamUserReply = "VT-STEAMUSER unreadable controlled refusal\n";
+        var leaseHost = new ObservedLeaseHost(Leases, "not started");
+        await PinnedServerRun.MainAsync(TestEnvironment.Read(run.Profile), ["run", run.Plan, Output], Options(run.Host, run.Server, context =>
+        {
+            using (context.OpenClient(PreparedClient(run.Client))) { }
+            return Task.CompletedTask;
+        }, run.Client, SignedInClientTransport(), leaseHost.Host));
+        var release = Step(AccountReleaseStep);
+        Assert.False(release.GetProperty("Passed").GetBoolean());
+        Assert.Equal(1, leaseHost.Releases);
+        Assert.Equal(ProcessEnd.NotStarted, leaseHost.ReleaseResult!.End);
+        Assert.Equal(1920, leaseHost.ReleaseResult.StartFailure!.NativeErrorCode);
+        Assert.Contains("native error=1920", release.GetProperty("Error").GetString());
+        Assert.DoesNotContain("winget", release.GetProperty("Error").GetString());
+        Assert.Equal(SteamAccountState.Held, (await LeaseBox.StatusAsync(PoolFile)).State);
+        var error = Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => AssertAccountRelease(leaseHost));
+        string retained = error.Message.Split("Retained report, host result and claim/receipt: ", StringSplitOptions.None)[1];
+        try
+        {
+            Directory.Delete(_root, recursive: true);
+            using var process = JsonDocument.Parse(File.ReadAllText(Path.Combine(retained, "release-host.json")));
+            var failure = process.RootElement.GetProperty("StartFailure");
+            Assert.Equal(1920, failure.GetProperty("NativeErrorCode").GetInt32());
+            Assert.Equal(leaseHost.ReleaseResult.StartFailure.HResult, failure.GetProperty("HResult").GetInt32());
+            Assert.Equal("controlled file cannot be accessed", failure.GetProperty("Message").GetString());
+            Assert.Equal(LeaseBox.Shell, failure.GetProperty("Executable").GetString());
+            Assert.Contains("native error=1920", File.ReadAllText(Path.Combine(retained, "result.json")));
+            Assert.DoesNotContain("winget", File.ReadAllText(Path.Combine(retained, "result.json")));
+            Assert.Single(Directory.GetFiles(retained, "claim-?????????"));
+            Assert.Empty(Directory.GetFiles(retained, "*.released"));
+        }
+        finally { Directory.Delete(retained, recursive: true); }
+    }
+
+    [Fact]
     public async Task AClaimHeldOpenOnWindowsIsNotMistakenForAProvenRelease()
     {
         if (!OperatingSystem.IsWindows()) return; // FileShare.None is a Windows read refusal; the Windows lane runs this control.
@@ -259,6 +298,13 @@ internal sealed class ObservedLeaseHost : IProcessLauncher
         if (!lease || !script.Contains(action, StringComparison.Ordinal)) return await SystemProcessLauncher.Instance.RunAsync(call, cancellation);
         Releases++;
         if (_beforeRelease != null) await _beforeRelease();
+        if (_fault == "not started")
+        {
+            // Inject only at release, beneath the real LocalGameHost. Acquisition and journal forwarding remain real.
+            ReleaseResult = ProcessRunner.NotStarted(new System.Diagnostics.ProcessStartInfo(call.Executable),
+                new System.ComponentModel.Win32Exception(1920, "controlled file cannot be accessed"), TimeSpan.Zero, windows: true);
+            return ReleaseResult;
+        }
         string? claim = _fault is "blocked receipt" or "held claim"
             ? Directory.GetFiles(Path.Combine(_leases, LeaseBox.Pool, LeaseBox.Account), "claim-*")
                 .Single(file => Regex.IsMatch(Path.GetFileName(file), @"^claim-[0-9]{9}$"))
