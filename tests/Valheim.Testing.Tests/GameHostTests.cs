@@ -73,7 +73,7 @@ public class GameHostTests
     public async Task AWindowsHostWithoutPwshIsRefusedWithTheInstallCommand(string kind, string said)
     {
         var fake = new FakeLauncher().Reply(_ => kind == "local"
-            ? new ProcessExit(ProcessEnd.NotStarted, -1, "", said, TimeSpan.FromMilliseconds(5))
+            ? ProcessRunner.NotStarted(new System.Diagnostics.ProcessStartInfo("pwsh"), new System.ComponentModel.Win32Exception(2, said), TimeSpan.FromMilliseconds(5), windows: true)
             : FakeLauncher.Exit(9009 & 0xFF, "", said));
         var result = await Host(kind, fake, HostShell.Pwsh).RunAsync("exit 0", null, Timeout);
         Assert.Equal(HostOutcome.TransportFailed, result.Outcome);
