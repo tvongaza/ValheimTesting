@@ -37,6 +37,9 @@ internal static class OwnedCliCommand
         try
         {
             string evidence = Path.GetFullPath(values["--evidence"]);
+            // A detached route remains as evidence after finish. Never fall back to a direct connection if its owner is gone.
+            if (File.Exists(Path.Combine(evidence, DetachedCommandQueue.RouteFile)))
+                return DetachedCommandQueue.Submit(evidence, values, output, error);
             string role = values.TryGetValue("--role", out string? chosen) ? chosen : DefaultRole(evidence);
             string leaseFile = Path.Combine(evidence, OwnedClientCommandLease.LeaseFile(role));
             string leaseJson;

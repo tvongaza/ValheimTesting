@@ -271,10 +271,15 @@ valheim-test session check SESSION [--hosts] [--json]
 ```powershell
 valheim-test detach server-load --server 'C:\Games\Valheim dedicated server' --mod 'C:\Mods\MyMod.dll' --server-only --output 'C:\ValheimTesting\runs\inspection-1'
 valheim-test detach status
+valheim-test cli --evidence 'C:\ValheimTesting\runs\inspection-1' --role server --phase world --command cli_manifest
 valheim-test detach finish --run ID
 ```
 
 Experimental, Windows only. `detach server-load` starts a server-only held run under Task Scheduler and returns once it is held; it needs a signed-in desktop session and absolute paths. `detach status` exits 0 when nothing is left to recover, a live run included. Recover an interrupted start with `env recover --run ID` on the same machine.
+
+Use the evidence directory printed by the held server for later `cli` calls. Detached evidence routes them through the original supervisor: the caller proves its journalled identity, and the supervisor checks the exact server boot, listener owner and strict pins before dispatch. The supervisor alone appends command intent and outcome to the run journal. `finish` closes command admission, waits for the current operation to settle, and refuses work still queued before teardown.
+
+Each run accepts at most 64 write-once command requests. A request expires after 60 seconds; each game call keeps the existing `--timeout-seconds 1..15` bound. Private evidence records each operation ID and its `completed`, `refused` or `unknown` outcome. A lost reply or interrupted dispatch is `unknown`: never repeat that mutation; inspect the evidence and use read-only observations to establish the state. The route stays in evidence after finish, so a later call refuses instead of contacting a leftover server directly. This slice is server-only; restart, build swap and detached macOS ownership remain separate work.
 
 ## steam-runtime capture
 

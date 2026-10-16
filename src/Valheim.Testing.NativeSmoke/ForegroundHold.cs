@@ -14,6 +14,7 @@ internal sealed class ForegroundHold : IDisposable
     private readonly string _request;
     private readonly Marker _identity;
     private bool _disposed;
+    private DetachedCommandQueue? _commands;
 
     private ForegroundHold(string marker, string request, Marker identity)
     { _marker = marker; _request = request; _identity = identity; }
@@ -49,7 +50,13 @@ internal sealed class ForegroundHold : IDisposable
         IReadOnlyList<(string Name, IOwnedProcess Process)> processes, bool client = true, string? serverEvidence = null)
     {
         if (processes.Count == 0) throw new ArgumentException("A hold needs at least one owned process to watch.", nameof(processes));
+        // Publish the route before signalling readiness. Only this loop executes detached commands; finish and cancellation
+        // close admission and await its current dispatch before the caller can tear down the server.
+        using var commands = DetachedSession.ConfiguredRun == run
+            ? DetachedCommandQueue.Open(run, serverEvidence ?? evidence, processes.Single(process => process.Name == "server").Process)
+            : null;
         using var hold = Open(run, evidence, serverEvidence: serverEvidence);
+        hold._commands = commands;
         Console.WriteLine("HELD run " + run + "; finish from another shell with: " + FinishUsageForRun(run));
         if (ClientCommandHint(client, evidence) is { } clientHint) Console.WriteLine(clientHint);
         if (ServerCommandHint(processes.Any(process => process.Name == "server"), evidence, serverEvidence) is { } serverHint)
@@ -122,6 +129,11 @@ internal sealed class ForegroundHold : IDisposable
 
     private async Task WaitForFinishAsync(CancellationToken cancellation)
     {
+        if (_commands != null)
+        {
+            await _commands.WaitAsync(cancellation).ConfigureAwait(false);
+            return;
+        }
         using var watcher = new FileSystemWatcher(Path.GetDirectoryName(_request)!)
         { NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite, EnableRaisingEvents = true };
         TaskCompletionSource requested = new(TaskCreationOptions.RunContinuationsAsynchronously);
