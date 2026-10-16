@@ -163,6 +163,8 @@ public sealed class HostServerProcess : IOwnedProcess, IAsyncDisposable
     internal string LogRoot { get; }
     /// <summary>Where stopping fetches the boot directory, or null.</summary>
     public string? EvidenceDirectory { get; }
+    // Published only after the hash-checked fetch completed; a destination directory alone proves nothing.
+    internal bool EvidenceFetched { get; private set; }
     /// <summary>How long fetching the evidence may take.</summary>
     public TimeSpan EvidenceTimeout { get; init; } = TimeSpan.FromMinutes(5);
     /// <summary>True once a wait or a stop saw the process gone. Not a live check: use <see cref="WaitForExitAsync"/> for that.</summary>
@@ -223,7 +225,11 @@ public sealed class HostServerProcess : IOwnedProcess, IAsyncDisposable
                     new Dictionary<string, string> { ["runtime"] = LogRoot, ["dir"] = BootDirectory, ["logs"] = string.Join('\n', _logs) },
                     TimeSpan.FromSeconds(60), cancellation).ConfigureAwait(false)).EnsureSuccess($"Keeping the logs of server process {Id} on {HostName}");
                 if (InteractiveClient.Line(kept.Stdout, "VT-KEPT") == null) throw new HostOperationException($"Unexpected reply while keeping the logs of server process {Id} on {HostName}", kept);
-                if (EvidenceDirectory != null) await _host.FetchDirectoryAsync(BootDirectory, EvidenceDirectory, EvidenceTimeout, cancellation).ConfigureAwait(false);
+                if (EvidenceDirectory != null)
+                {
+                    await _host.FetchDirectoryAsync(BootDirectory, EvidenceDirectory, EvidenceTimeout, cancellation).ConfigureAwait(false);
+                    EvidenceFetched = true;
+                }
                 _kept = true;
             }
             return outcome;

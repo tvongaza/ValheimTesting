@@ -1164,6 +1164,86 @@ public sealed class RunRecoveryTests : IDisposable
         Assert.Equal(JournalRunState.Ended, Assert.Single((await StatusAsync()).Runs).State);
     }
 
+    [Fact]
+    public async Task MacServerRecoveryMovesTheUserWorldBeforeRetiringItsCollectedDirectory()
+    {
+        const string run = "run-mac-evidence", worlds = "/home/p/worlds_local", collected = "/srv/runs/run-mac-evidence/host-world";
+        string fixture = FakeInstalls.World(Path.Combine(_root, "fixture"));
+        Directory.CreateDirectory(_host.Local(worlds));
+        File.Copy(Path.Combine(fixture, "Campaign.fwl"), _host.Local(worlds + "/Campaign.fwl"));
+        // Deliberately put the collected copy first in the journal: recovery must still move the user's placement first.
+        Line(_host, run, "server", Gone, JournalEntry.CopyIntended, ("runtime", collected), ("stage", ""), ("parent", "/srv/runs/" + run), ("retention", "after-fetch"));
+        Line(_host, run, "server", Gone, JournalEntry.CopyIntended, ("runtime", worlds + "/Campaign"), ("stage", ""),
+            ("parent", worlds), ("holds", HostedWorldOnHost.Holds), ("world", "Campaign"), ("worldUid", "4242"), ("keepIn", collected));
+        var result = await RecoverAsync(run, teardown: true);
+        Assert.True(result.Clean, string.Join("\n", result.Steps));
+        Assert.Empty(Directory.EnumerateFileSystemEntries(_host.Local(worlds)));
+        Assert.False(Directory.Exists(_host.Local(collected)));
+        Assert.True(_host.Runs.FindIndex(item => item.Script == "world-move") < _host.Runs.FindIndex(item => item.Script == "cleanup-stage"));
+    }
+
+    [Fact]
+    public async Task TeardownKeepsBootOwnershipFilesWhenLaunchSettlementCannotBeJournalled()
+    {
+        const string run = "run-unsettled", boot = "/srv/runs/run-unsettled/boot-1";
+        Line(_host, run, "server", Gone, JournalEntry.ProcessIntended, ("bootDirectory", boot), ("expectedCommandLineSha256", FakeServerHost.CommandLineSha256("41")));
+        PidFile(_host, boot, "41 9041"); // the exact process is already gone
+        Line(_host, run, "server", Gone, JournalEntry.CopyIntended, ("runtime", boot), ("stage", ""), ("parent", "/srv/runs/" + run), ("retention", "after-fetch"));
+        _host.JournalFailsFor = JournalEntry.LaunchSettled;
+        var failed = await RecoverAsync(run, teardown: true);
+        Assert.False(failed.Recovered);
+        Assert.True(File.Exists(_host.Local(boot + "/pid")));
+        Assert.DoesNotContain(_host.Runs, item => item.Script == "cleanup-stage");
+        _host.JournalFailsFor = null;
+        var recovered = await RecoverAsync(run, teardown: true);
+        Assert.True(recovered.Clean, string.Join("\n", recovered.Steps));
+        Assert.False(Directory.Exists(_host.Local(boot)));
+    }
+
+    [Fact]
+    public async Task ASettledLaunchWithDeletedBootFilesNeedsNeitherPidNorRunEnded()
+    {
+        const string run = "run-settled", boot = "/srv/runs/run-settled/boot-1";
+        Line(_host, run, "server", Gone, JournalEntry.ProcessIntended, ("bootDirectory", boot), ("expectedCommandLineSha256", FakeServerHost.CommandLineSha256("41")));
+        Line(_host, run, "server", Gone, JournalEntry.CopyIntended, ("runtime", boot), ("stage", ""), ("parent", "/srv/runs/" + run), ("retention", "after-fetch"));
+        Line(_host, run, "server", Gone, JournalEntry.LaunchSettled, ("actor", "server"), ("directory", boot));
+        Line(_host, run, "server", Gone, JournalEntry.CopyDone, ("runtime", boot), ("fetched", "true"));
+        // The remover completed, then the runner died before CopyRetired and RunEnded; no ownership file remains.
+        Assert.False(Directory.Exists(_host.Local(boot)));
+        var result = await RecoverAsync(run);
+        Assert.True(result.Clean, string.Join("\n", result.Steps));
+    }
+
+    [Theory]
+    [InlineData("world", false)]
+    [InlineData("world", true)]
+    [InlineData("boot-1", false)]
+    [InlineData("boot-1", true)]
+    [InlineData("host-world", false)]
+    [InlineData("host-world", true)]
+    public async Task InterruptedServerEvidenceStaysUntilFetchIsProvenOrTeardownRequested(string name, bool fetched)
+    {
+        const string run = "run-evidence";
+        string directory = "/srv/runs/" + run + "/" + name;
+        Directory.CreateDirectory(_host.Local(directory));
+        File.WriteAllText(Path.Combine(_host.Local(directory), "evidence.txt"), "the only copy unless fetched");
+        Line(_host, run, "server", Gone, JournalEntry.CopyIntended, ("runtime", directory), ("stage", ""),
+            ("parent", "/srv/runs/" + run), ("holds", name == "world" ? "world" : "server-boot"), ("retention", "after-fetch"));
+        if (fetched) Line(_host, run, "server", Gone, JournalEntry.CopyDone, ("runtime", directory), ("fetched", "true"));
+        var recovered = await RecoverAsync(run);
+        Assert.True(recovered.Recovered, string.Join("\n", recovered.Steps));
+        Assert.Equal(!fetched, Directory.Exists(_host.Local(directory)));
+        if (!fetched)
+        {
+            Assert.Equal(JournalRunState.Kept, recovered.After);
+            Assert.True(Assert.Single(recovered.Remaining).Kept);
+            var torn = await RecoverAsync(run, teardown: true);
+            Assert.True(torn.Clean, string.Join("\n", torn.Steps));
+            Assert.False(Directory.Exists(_host.Local(directory)));
+        }
+        else Assert.True(recovered.Clean);
+    }
+
     // #257: a standalone hosted run's own copies, in its run directory: the runtime copy goes (its logs kept first), a world copy
     // verified and journalled done is the run's save and is handed over where it is, and a world ship that never finished goes.
     [Fact] public async Task RecoverRemovesAHostedRunsOwnRuntimeCopyAndPartialWorldAndHandsOverItsVerifiedWorld()

@@ -11,6 +11,31 @@ public sealed class HostedWorldOnHostShellTests : IDisposable
     private string To => Path.Combine(_root, "runs", "run-1", "host-world");
     public void Dispose() => Directory.Delete(_root, recursive: true);
 
+    [Theory, MemberData(nameof(LocalGameHostShellTests.Shells), MemberType = typeof(LocalGameHostShellTests))]
+    public void ServerWorldCopiesAreRetiredOnlyAfterVerifiedFetchUnderRealHostScripts(string shell)
+    {
+        var host = Host(shell);
+        string fixture = FakeInstalls.World(Path.Combine(_root, "fixture"));
+        var plan = new HostWorldPlan { World = new() { Source = fixture, Sha256 = new(WorldFixture.Manifest(fixture)) }, WorldUid = "4242" };
+        var journal = new List<JournalEntry>();
+        var site = new HostedWorldOnHost.Site(host, host.Name, Worlds, Path.Combine(_root, "runs", "run-1", "world-stage"), To,
+            (entry, _) => { journal.Add(entry); return Task.CompletedTask; }, _ => Task.CompletedTask) { RetireRunCopies = "run-1" };
+        Directory.CreateDirectory(Worlds);
+        File.WriteAllText(Path.Combine(Worlds, "Unrelated.fwl"), "the user's world");
+        string output = Path.Combine(_root, "output");
+        var placed = site.Place(plan, output, default);
+        Assert.True(Directory.Exists(site.Stage));
+        placed.Collect();
+        Assert.False(Directory.Exists(site.Stage));
+        Assert.False(Directory.Exists(To));
+        Assert.True(File.Exists(Path.Combine(placed.CollectedTo!, "Campaign.fwl")));
+        Assert.Equal("the user's world", File.ReadAllText(Path.Combine(Worlds, "Unrelated.fwl")));
+        Assert.Equal([JournalEntry.CopyIntended, JournalEntry.CopyDone, JournalEntry.CopyRetired],
+            journal.Where(entry => entry.Fields.GetValueOrDefault("runtime") == To).Select(entry => entry.Kind));
+
+
+    }
+
     // A user's worlds_local: the world's own entries as the game writes them (its chunked folder and a backup), one in another case,
     // and the user's other worlds, one of them <name>_mine (a world of its own name, which the game never writes for Campaign).
     private static readonly string[] Named = ["Campaign", "Campaign_backup_auto-20261006.db", "campaign.fwl"];

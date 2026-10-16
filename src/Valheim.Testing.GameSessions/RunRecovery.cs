@@ -152,9 +152,11 @@ internal static class RunRecovery
         bool Failed(string host) => steps.Any(step => step.Host == host && step.Failed);
         async Task Note(string name, JournalEntry entry)
         {
-            // After the effect: a lost line only makes a later recovery find nothing to do.
+            // Most notes follow an effect. Launch settlement also authorizes deleting its ownership files, so losing that
+            // line must keep the host's copies: a later status still needs the pid/launcher record to resolve the launch.
             try { await journal.AppendAsync(connections[name], RunJournal.DirectoryFor(hosts[name]), Actor, entry, timeout, cancellation).ConfigureAwait(false); }
-            catch (Exception error) when (error is not OperationCanceledException) { Step(name, "journal " + entry.Kind, "could not be journalled: " + error.Message); }
+            catch (Exception error) when (error is not OperationCanceledException)
+            { Step(name, "journal " + entry.Kind, "could not be journalled: " + error.Message, failed: entry.Kind == JournalEntry.LaunchSettled); }
         }
         IEnumerable<JournalItem> Of(string kind) => items.Where(item => item.Kind == kind);
         async Task RetireMacClientAgent(string hostName, string? directory)
@@ -385,7 +387,9 @@ internal static class RunRecovery
             var host = connections[group.Key];
             var lists = group.Where(item => item.Kind == "user-files").ToList();
             var characters = group.Where(item => item.Kind == "character").ToList();
-            var copies = group.Where(item => item.Kind == "copy").ToList();
+            // Move a journalled fixture out of user saves before handling its collected directory on the same host.
+            var copies = group.Where(item => item.Kind == "copy")
+                .OrderBy(item => item.Fields.GetValueOrDefault("holds") == HostedWorldOnHost.Holds ? 0 : 1).ToList();
             if (Failed(group.Key))
             {
                 // A copy a process may still run from, and a character it may still use, stay.
@@ -489,6 +493,24 @@ internal static class RunRecovery
                             Step(group.Key, what, moved.Count == 0 ? "nothing left in the client's worlds"
                                 : $"moved out of the client's worlds into {keepIn} (the run's save, world UID {worldUid} as journalled, handed over): {string.Join(", ", moved)}");
                             await Note(group.Key, JournalEntry.Of(JournalEntry.CopyRetired, ("runtime", copy.What), ("handedOver", "true"), ("keptIn", keepIn))).ConfigureAwait(false);
+                            continue;
+                        }
+                        // New server evidence remains owned until its verified fetch is durable. Recovery cannot invent a
+                        // missing fetch receipt: keep the only copy visible, unless teardown explicitly asks to remove it.
+                        if (copy.Fields.GetValueOrDefault("retention") == "after-fetch")
+                        {
+                            HostedRuntimeStage.RequirePrepared(host, copy.What, runId);
+                            if (Failed(group.Key)) throw new IOException("an earlier recovery step on this host failed; its evidence stays");
+                            if (!teardown && copy.Fields.GetValueOrDefault("fetched") != "true")
+                            {
+                                const string why = "its fetch was not proven; its server evidence stays";
+                                await Note(group.Key, JournalEntry.Of(JournalEntry.CopyKept, ("runtime", copy.What), ("why", why))).ConfigureAwait(false);
+                                Step(group.Key, what, "kept: " + why);
+                                continue;
+                            }
+                            await HostedRuntimeStage.RetireAsync(host, copy.What, stage, timeout, cancellation, runId).ConfigureAwait(false);
+                            await Note(group.Key, JournalEntry.Of(JournalEntry.CopyRetired, ("runtime", copy.What))).ConfigureAwait(false);
+                            Step(group.Key, what, "removed (server evidence fetched or teardown requested)");
                             continue;
                         }
                         // A hosted run's world copy (HostedServerRun journals what each of its copies holds) has no game logs.

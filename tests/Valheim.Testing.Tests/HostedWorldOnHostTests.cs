@@ -25,6 +25,27 @@ public sealed class HostedWorldOnHostTests : IDisposable
         (entry, _) => { lock (_journal) _journal.Add(entry); return Task.CompletedTask; }, _ => { _held++; return Task.CompletedTask; });
     private int _held;
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ServerCollectionKeepsItsOnlyHostCopyWhenFetchOrReceiptFails(bool journalFails)
+    {
+        string output = Path.Combine(_root, "out");
+        var site = Site() with { Stage = "/runs/run-1/world-stage", RetireRunCopies = "run-1",
+            Journal = (entry, _) =>
+            {
+                if (journalFails && entry.Fields.GetValueOrDefault("fetched") == "true") throw new IOException("journal full");
+                _journal.Add(entry); return Task.CompletedTask;
+            } };
+        var placed = site.Place(Plan(), output, default);
+        if (!journalFails) _host.AfterFetch = _ => throw new IOException("fetch interrupted");
+        Assert.Throws<IOException>(() => placed.Collect());
+        Assert.True(File.Exists(_host.Local(site.KeepIn + "/Campaign/_main.0.fwl2")));
+        Assert.True(Directory.Exists(_host.Local(site.Stage)));
+        Assert.Empty(Directory.EnumerateFileSystemEntries(_host.Local(Worlds)));
+        Assert.DoesNotContain(_journal, entry => entry.Kind == JournalEntry.CopyRetired && entry.Fields["runtime"] == site.KeepIn);
+    }
+
     [Theory] [InlineData("Campaign")] [InlineData("campaign.fwl")] [InlineData("Campaign_backup_auto-1.db")]
     public void AWorldAlreadyNamedLikeTheFixtureIsNeverOverwrittenAndNothingIsShipped(string existing)
     {

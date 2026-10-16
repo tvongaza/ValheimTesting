@@ -16,6 +16,27 @@ public sealed class HostedRuntimeStageTests : IDisposable
     public void Dispose() { try { Directory.Delete(_root, recursive: true); } catch (IOException) { } }
 
     [Theory]
+    [InlineData("boot-1", true)]
+    [InlineData("boot-21", true)]
+    [InlineData("boot-0", false)]
+    [InlineData("boot-01", false)]
+    [InlineData("boot-1/other", false)]
+    [InlineData("boot-1/../../elsewhere", false)]
+    [InlineData("boot-1.old", false)]
+    public void RetirementAcceptsOnlyANumberedBootDirectlyUnderItsOwnRun(string name, bool allowed)
+    {
+        foreach (bool windows in new[] { false, true })
+        {
+            var host = new FakeServerHost("test", _root, windows: windows);
+            string parent = windows ? @"C:\runs\run-evidence" : "/runs/run-evidence";
+            string directory = parent + (windows ? @"\" : "/") + name;
+            if (allowed) Assert.Equal(parent, HostedRuntimeStage.RequirePrepared(host, directory, "run-evidence"));
+            else Assert.Throws<ArgumentException>(() => HostedRuntimeStage.RequirePrepared(host, directory, "run-evidence"));
+            Assert.Throws<ArgumentException>(() => HostedRuntimeStage.RequirePrepared(host, directory, "someone-else"));
+        }
+    }
+
+    [Theory]
     [InlineData("valheim_server", "", true, "VT-GAME idle")]
     [InlineData("valheim_server", "/owned", false, "VT-GAME unknown")]
     [InlineData("/other/valheim_server.x86_64", "/owned", true, "VT-GAME idle")]

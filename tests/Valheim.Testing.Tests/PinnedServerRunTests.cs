@@ -120,12 +120,12 @@ public sealed class PinnedServerRunTests : IDisposable
                 "ship and verify the world copy on the server host", "server runtime has the plan's server executable",
                 "server runtime is the pinned game build, loader and patchers", "prepared only; no game launched",
                 "verify server's source install after the run (size and modified time)",
-                "remove the server host's runtime copy, keeping what the run changed", "release the server host's lock" ],
+                "remove the server host's runtime copy, keeping what the run changed", "remove the fetched world copy on the server host", "release the server host's lock" ],
             result.GetProperty("Steps").EnumerateArray().Select(s => s.GetProperty("Name").GetString()));
         // Validate prepares and cleans up; it runs no scenario, so the scenario state is not reported as passed.
         Assert.Equal((true, true, false, true), (result.GetProperty("PreflightPassed").GetBoolean(), result.GetProperty("RuntimeReady").GetBoolean(),
             result.GetProperty("ScenarioPassed").GetBoolean(), result.GetProperty("CleanupVerified").GetBoolean()));
-        Assert.Equal([ "Preflight", .. storage.Select(_ => "Preflight"), .. task.Select(_ => "Setup"), "Setup", "Setup", "Setup", "Setup", "Setup", "Setup", "Setup", "Cleanup", "Cleanup", "Cleanup" ],
+        Assert.Equal([ "Preflight", .. storage.Select(_ => "Preflight"), .. task.Select(_ => "Setup"), "Setup", "Setup", "Setup", "Setup", "Setup", "Setup", "Setup", "Cleanup", "Cleanup", "Cleanup", "Cleanup" ],
             result.GetProperty("Steps").EnumerateArray().Select(s => s.GetProperty("Phase").GetString()));
         var provenance = result.GetProperty("Provenance");
         Assert.Equal(("this machine", EnvironmentInventory.LocalHost, EnvironmentInventory.LocalHost + ":" + LocalServerMachine.Install),
