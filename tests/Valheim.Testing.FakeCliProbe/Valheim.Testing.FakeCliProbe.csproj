@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <DefineConstants>$(DefineConstants);FAKE_CLI_PROBE</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/Valheim.Testing.Game/Valheim.Testing.Game.csproj" />
+    <!-- Compile the same fake the suite uses, without its xUnit tests. There is one protocol owner. -->
+    <Compile Include="../Valheim.Testing.Tests/StateWaitTests.cs" Link="StateWaitTests.cs" />
+  </ItemGroup>
+</Project>
