@@ -80,6 +80,32 @@ public sealed class MarkerScenarioTests : IDisposable
         Assert.Contains("dry site", Assert.Throws<ArgumentException>(plan.CheckSites).Message);
     }
 
+    [Fact] public void AnOptionalReviewStillRequiresItsClientHostBeforeTheModActs()
+    {
+        var plan = _world.Plan();
+        plan.ReviewStill = new ReviewStillSettings { HostDirectory = OperatingSystem.IsWindows() ? @"C:\review-example" : "/review-example", GameBuild = "1.0.17" };
+        plan.ReviewStill.Validate();
+        var report = new ScenarioReport("examplemod-system-test");
+        Assert.Contains("client's IGameHost", Assert.Throws<ArgumentException>(() => MarkerScenario.Run(
+            plan, _world.Server(), _world, () => throw new InvalidOperationException("the client must not open"),
+            report, _output)).Message);
+        Assert.Equal(0, _world.MarkCommands);
+        Assert.Empty(report.Steps);
+    }
+
+    [Fact] public void TheHostedSampleKeepsTheArrivalBesideItsMarker()
+    {
+        // The sample has placeholders for private install hashes, so check only its public site contract here.
+        var plan = JsonSerializer.Deserialize<HostedMarkerPlan>(File.ReadAllText(
+            Path.Combine(AppContext.BaseDirectory, "sample-hosted-plan.json")),
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true })!;
+        MarkerPlan.CheckSites(plan.DrySite, plan.WetSite, plan.Arrival);
+        plan.Arrival.X = plan.DrySite.X;
+        plan.Arrival.Z = plan.DrySite.Z;
+        Assert.Contains("beside the marker", Assert.Throws<ArgumentException>(() => MarkerPlan.CheckSites(
+            plan.DrySite, plan.WetSite, plan.Arrival)).Message);
+    }
+
     // The sample a mod author starts from is this plan's shape (unknown fields are refused when read) and its sites agree with the rule.
     [Fact] public void TheSamplePlanIsAMarkerPlanWithConsistentSites()
     {

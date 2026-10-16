@@ -29,6 +29,8 @@ public sealed class MarkerPlan : ServerRunPlan
     public Site Arrival { get; set; } = new();
     /// <summary>The client that joins and looks: a client without the mod, which must still see the marker.</summary>
     public ClientRunPlan? Client { get; set; }
+    /// <summary>Optional human-review still on the first joined round. Omit to keep normal runs fast and small.</summary>
+    public ReviewStillSettings? ReviewStill { get; set; }
     public string WorldUid => Pins["worlduid"];
 
     /// <summary>The plan's rules, on a read plan or on a session's plan once bound to its prepared actors.</summary>
@@ -39,6 +41,7 @@ public sealed class MarkerPlan : ServerRunPlan
         var client = plan.Client ?? throw new ArgumentException("The scenario looks from a client: add the client section.");
         client.Validate(ModPlugin); // The claim is what a client without the mod sees.
         plan.CheckSites();
+        plan.ReviewStill?.Validate();
         return plan;
     }
 
@@ -46,17 +49,45 @@ public sealed class MarkerPlan : ServerRunPlan
     /// The sites' own rules. The plan must agree with itself before any game starts: a "dry" site declared under the rule's
     /// threshold would make a correct mod fail, and the reverse would let a broken one pass.
     /// </summary>
-    public void CheckSites()
+    public void CheckSites() => CheckSites(DrySite, WetSite, Arrival);
+
+    /// <summary>The same site contract for dedicated and local-host runs.</summary>
+    public static void CheckSites(Site drySite, Site wetSite, Site arrival)
     {
-        DrySite.Validate("dry site"); WetSite.Validate("wet site"); Arrival.Validate("arrival point");
-        if (DrySite.Ground < WaterLevel + Clearance) throw new ArgumentException($"The dry site's declared ground {DrySite.Ground} m is below {WaterLevel + Clearance} m.");
-        if (WetSite.Ground >= WaterLevel + Clearance) throw new ArgumentException($"The wet site's declared ground {WetSite.Ground} m is not below {WaterLevel + Clearance} m.");
-        if (MathF.Abs(DrySite.X - WetSite.X) < 50 && MathF.Abs(DrySite.Z - WetSite.Z) < 50)
+        drySite.Validate("dry site"); wetSite.Validate("wet site"); arrival.Validate("arrival point");
+        if (drySite.Ground < WaterLevel + Clearance) throw new ArgumentException($"The dry site's declared ground {drySite.Ground} m is below {WaterLevel + Clearance} m.");
+        if (wetSite.Ground >= WaterLevel + Clearance) throw new ArgumentException($"The wet site's declared ground {wetSite.Ground} m is not below {WaterLevel + Clearance} m.");
+        if (MathF.Abs(drySite.X - wetSite.X) < 50 && MathF.Abs(drySite.Z - wetSite.Z) < 50)
             throw new ArgumentException("Keep the sites at least 50 m apart so one site's marker can never be counted at the other.");
-        float fromMarker = MathF.Sqrt(MathF.Pow(Arrival.X - DrySite.X, 2) + MathF.Pow(Arrival.Z - DrySite.Z, 2));
+        float fromMarker = MathF.Sqrt(MathF.Pow(arrival.X - drySite.X, 2) + MathF.Pow(arrival.Z - drySite.Z, 2));
         if (fromMarker is < 3 or > 20) throw new ArgumentException("Put the arrival point 3 to 20 m from the dry site: beside the marker, not on it.");
-        if (Arrival.Ground < WaterLevel + Clearance) throw new ArgumentException("The arrival point must be dry ground; a swimming player is not supported.");
+        if (arrival.Ground < WaterLevel + Clearance) throw new ArgumentException("The arrival point must be dry ground; a swimming player is not supported.");
     }
+}
+
+/// <summary>One optional screenshot, with a private, empty directory on the client's host. The image is evidence, not a visual assertion.</summary>
+public sealed class ReviewStillSettings
+{
+    /// <summary>Absolute no-space path on the client host, unique to this run; no personal screenshot directory.</summary>
+    public string HostDirectory { get; set; } = "";
+    /// <summary>The exact game build shown in the image sidecar.</summary>
+    public string GameBuild { get; set; } = "";
+    public string Weather { get; set; } = "Clear";
+    public float TimeOfDay { get; set; } = 0.45f;
+    public float CameraDistance { get; set; } = 24f;
+    public float CameraHeight { get; set; } = 12f;
+    public float CameraAzimuthDegrees { get; set; } = 225f;
+
+    public void Validate()
+    {
+        if (string.IsNullOrWhiteSpace(HostDirectory) || string.IsNullOrWhiteSpace(GameBuild))
+            throw new ArgumentException("A review still needs a private no-space hostDirectory and the exact gameBuild.");
+    }
+
+    public ReviewCapturePlan For(MarkerPlan plan, string output) => new("example-marker",
+        new HeightExpectation(plan.Arrival.X, plan.Arrival.Z, plan.Arrival.Ground), Weather, TimeOfDay,
+        CameraDistance, CameraHeight, HostDirectory, Path.Combine(output, "review-marker"), plan.WorldUid,
+        GameBuild, plan.Client!.Pins, CameraAzimuthDegrees: CameraAzimuthDegrees);
 }
 
 public sealed class Site
