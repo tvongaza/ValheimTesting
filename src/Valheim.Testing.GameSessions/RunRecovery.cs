@@ -486,12 +486,10 @@ internal static class RunRecovery
                         // folder there, never deleted, and only once the world there states the UID the run journalled placing.
                         if (copy.Fields.GetValueOrDefault("holds") == HostedWorldOnHost.Holds)
                         {
-                            var (world, worldUid) = HostedWorldOnHost.RequireJournalled(copy.Fields, copy.What, runId);
                             string keepIn = copy.Fields["keepIn"];
-                            bool present = await HostedWorldOnHost.RequireOwnWorldAsync(host, copy.Fields["parent"], world, worldUid, timeout, cancellation).ConfigureAwait(false);
-                            IReadOnlyList<string> moved = present ? await HostedWorldOnHost.MoveOut(host, copy.Fields["parent"], world, keepIn, timeout, cancellation).ConfigureAwait(false) : [];
+                            var moved = await HostedWorldOnHost.RecoverAsync(host, copy.Fields, copy.What, runId, timeout, cancellation).ConfigureAwait(false);
                             Step(group.Key, what, moved.Count == 0 ? "nothing left in the client's worlds"
-                                : $"moved out of the client's worlds into {keepIn} (the run's save, world UID {worldUid} as journalled, handed over): {string.Join(", ", moved)}");
+                                : $"moved out of the client's worlds into {keepIn} (the run's confirmed placement, world UID {copy.Fields["worldUid"]} as journalled, handed over): {string.Join(", ", moved)}");
                             await Note(group.Key, JournalEntry.Of(JournalEntry.CopyRetired, ("runtime", copy.What), ("handedOver", "true"), ("keptIn", keepIn))).ConfigureAwait(false);
                             continue;
                         }

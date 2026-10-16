@@ -1655,7 +1655,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         Assert.True(File.Exists(Path.Combine(evidence, "Campaign_backup_auto-20261006.db")));
         var journal = await RunJournalOnHost.ReadAsync(pc, RunJournal.DirectoryFor(EnvironmentInventory.Read(inventory).Hosts["pc"]), "run-hosted", TimeSpan.FromSeconds(5));
         var worldEntries = journal.Where(record => record.Entry.Fields.GetValueOrDefault("runtime") == worlds + "/Campaign").Select(record => record.Entry.Kind).ToList();
-        Assert.Equal(new[] { JournalEntry.CopyIntended, JournalEntry.CopyDone, JournalEntry.CopyRetired }, worldEntries);
+        Assert.Equal(new[] { JournalEntry.CopyIntended, JournalEntry.CopyIntended, JournalEntry.CopyDone, JournalEntry.CopyRetired }, worldEntries);
         // Teardown: the peer first, then the host leaves and stops, then its world; both peer and host were stopped on their hosts.
         var cleanup = steps.Select(step => step.Name).SkipWhile(name => !name.StartsWith("stop only the owned client peer", StringComparison.Ordinal)).ToList();
         Assert.Equal(new[] { "stop only the owned client peer", "the host leaves its world to its menu", "stop only the owned hosting client host",
