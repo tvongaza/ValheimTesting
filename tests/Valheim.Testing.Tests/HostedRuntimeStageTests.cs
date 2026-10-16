@@ -90,7 +90,7 @@ public sealed class HostedRuntimeStageTests : IDisposable
     [Fact] public async Task WindowsProcessCheckRunsAndFindsAnIdleHostIdle()
     {
         if (!OperatingSystem.IsWindows()) return;
-        if (System.Diagnostics.Process.GetProcessesByName("valheim").Length + System.Diagnostics.Process.GetProcessesByName("valheim_server").Length != 0) return; // a station with a game up
+        if (SkipForPersonalWindowsGame()) return;
         var host = new LocalGameHost("windows-process", HostShell.Pwsh);
         await HostedRuntimeStage.RequireStoppedAsync(host, TimeSpan.FromSeconds(60), default, runtimes: [Path.Combine(_root, "runtime")], clientSession: true);
         await HostedRuntimeStage.RequireStoppedAsync(host, TimeSpan.FromSeconds(60), default, runtimes: [Path.Combine(_root, "a"), Path.Combine(_root, "b c")], clientSession: false);
@@ -111,12 +111,15 @@ public sealed class HostedRuntimeStageTests : IDisposable
     [Fact] public async Task WindowsProcessCheckFindsAGameRunningFromAnyOfTheNamedRuntimes()
     {
         if (!OperatingSystem.IsWindows()) return;
-        if (Process.GetProcessesByName("valheim").Length + Process.GetProcessesByName("valheim_server").Length != 0) return; // a station with a game up
+        if (SkipForPersonalWindowsGame()) return;
         string first = Path.Combine(_root, "a"), second = Path.Combine(_root, "b c");
         Directory.CreateDirectory(first); Directory.CreateDirectory(second);
         string standIn = Path.Combine(second, "valheim_server.exe");
         File.Copy(Path.Combine(Environment.SystemDirectory, "ping.exe"), standIn);
         var host = new LocalGameHost("windows-process", HostShell.Pwsh);
+        // Controlled overlap: first prove the host idle, then introduce a same-named process before the next real
+        // inventory read. That later read must report the new process as a conflict, not reuse the earlier answer.
+        await HostedRuntimeStage.RequireStoppedAsync(host, TimeSpan.FromSeconds(60), default, runtimes: [first, second], clientSession: false);
         using var running = Process.Start(new ProcessStartInfo(standIn, "-n 120 127.0.0.1") { CreateNoWindow = true, UseShellExecute = false, RedirectStandardOutput = true })!;
         try
         {
@@ -126,6 +129,21 @@ public sealed class HostedRuntimeStageTests : IDisposable
             await HostedRuntimeStage.RequireStoppedAsync(host, TimeSpan.FromSeconds(60), default, runtimes: [first], clientSession: false);
         }
         finally { running.Kill(); running.WaitForExit(10_000); }
+    }
+
+    // Local native work may coexist with someone's game, but a hosted CI job must not silently skip the real
+    // idle/conflict controls. The non-parallel collection above excludes this assembly's stand-in game launches.
+    private static bool SkipForPersonalWindowsGame()
+    {
+        Process[] processes = [.. Process.GetProcessesByName("valheim"), .. Process.GetProcessesByName("valheim_server")];
+        try
+        {
+            if (processes.Length == 0) return false;
+            Assert.False(string.Equals(Environment.GetEnvironmentVariable("GITHUB_ACTIONS"), "true", StringComparison.OrdinalIgnoreCase),
+                "The Windows CI process-inventory control found a Valheim-named process before it began; it must not be skipped.");
+            return true;
+        }
+        finally { foreach (Process process in processes) process.Dispose(); }
     }
 
     // Executes the actual bash profile seed, shipment, listing and apply scripts on macOS. A fake host cannot catch BSD-tool
