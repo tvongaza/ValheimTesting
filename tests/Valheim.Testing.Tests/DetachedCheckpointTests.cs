@@ -184,7 +184,9 @@ public sealed class DetachedCheckpointTests : IDisposable
     public async Task FinishCannotHideAnUnexpectedExitButAcceptsAnIntentionallyStoppedCheckpoint(bool stopped)
     {
         var route = Route();
-        using var process = new FakeOwnedProcess();
+        // Attach to an already-completed exit task: Exit after Attach can leave WaitAsync
+        // continuation scheduling in flight and would not deterministically exercise the finish race.
+        using var process = stopped ? new FakeOwnedProcess() : FakeOwnedProcess.Exited(17);
         using var watcher = new DetachedCheckpoints.BootExitWatch();
         watcher.Attach(process);
         var lifecycle = Lifecycle(route, monitor: watcher.Check, onEffect: effect => { if (effect == "stop") process.Exit(0); });
@@ -196,7 +198,6 @@ public sealed class DetachedCheckpointTests : IDisposable
             Assert.Equal("completed", Read(route, stop).Outcome);
             watcher.Settle();
         }
-        else process.Exit(17);
         File.WriteAllText(Path.Combine(route.Control, route.Run + ".finish"), "finish");
         if (stopped) await queue.WaitAsync(CancellationToken.None);
         else
