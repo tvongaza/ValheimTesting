@@ -220,6 +220,56 @@ public class InteractiveClientTests
         finally { if (!child.HasExited) child.Kill(); await child.WaitForExitAsync(); }
     }
 
+    // #508: Windows GetProcessById + WaitForExit can yield a null ExitCode unless the handle was retained.
+    // The stand-in exits only after the real wait script has reached its wait, so this cannot pass via "already gone".
+    [Theory]
+    [InlineData(0)]
+    [InlineData(17)]
+    public async Task AWindowsWaitRetainsTheHandleAndReportsTheCompletedExit(int exitCode)
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        string root = Directory.CreateTempSubdirectory("windows-exit-wait-").FullName;
+        using var child = Process.Start(new ProcessStartInfo("pwsh")
+        {
+            ArgumentList = { "-NoProfile", "-NonInteractive", "-EncodedCommand",
+                Convert.ToBase64String(System.Text.Encoding.Unicode.GetBytes(
+                    "[Console]::ReadLine() | Out-Null; exit " + exitCode)) },
+            UseShellExecute = false, RedirectStandardInput = true,
+        })!;
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        Task<HostResult>? waiting = null;
+        try
+        {
+            string ready = Path.Combine(root, "waiting");
+            var host = new LocalGameHost("windows-exit-wait", HostShell.Pwsh);
+            string script = InteractiveScripts.WindowsWait.Replace("if (-not $process.WaitForExit",
+                "[IO.File]::WriteAllText($ready, 'waiting')\nif (-not $process.WaitForExit", StringComparison.Ordinal);
+            waiting = host.RunAsync(script, new Dictionary<string, string>
+            {
+                ["game"] = child.Id.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                ["start"] = child.StartTime.ToFileTimeUtc().ToString(System.Globalization.CultureInfo.InvariantCulture),
+                ["seconds"] = "15", ["ready"] = ready,
+            }, TimeSpan.FromSeconds(25), cancellation.Token);
+            while (!File.Exists(ready))
+            {
+                Assert.False(waiting.IsCompleted, "Waiter ended before observing the live child.");
+                await Task.Delay(25, cancellation.Token);
+            }
+            await child.StandardInput.WriteLineAsync("exit");
+            await child.StandardInput.FlushAsync();
+            var result = (await waiting).EnsureSuccess("wait for controlled Windows process");
+            Assert.Equal("exited " + exitCode, InteractiveClient.Line(result.Stdout, "VT-WAIT "));
+        }
+        finally
+        {
+            if (!child.HasExited) child.Kill();
+            await child.WaitForExitAsync();
+            cancellation.Cancel();
+            if (waiting != null) await waiting;
+            Directory.Delete(root, true);
+        }
+    }
+
     [Fact] public void MacGuiScriptsParseAndThePlistEscapesItsRunDirectory()
     {
         string plist = InteractiveScripts.MacPlist("org.valheimtesting.client." + new string('a', 32), "/Users/test/A&B <run>");
