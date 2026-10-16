@@ -1118,8 +1118,8 @@ public sealed class RunRecoveryTests : IDisposable
         Assert.Equal(restored ? JournalRunState.Ended : JournalRunState.Recoverable, Assert.Single((await StatusAsync()).Runs).State);
     }
 
-    [Theory] [InlineData(false)] [InlineData(true)]
-    public async Task CaptureIntentWithNoCapturedReplyIsVisibleAndRecoverableWithoutPersonalFileMutations(bool acquired)
+    [Theory] [InlineData(false, false)] [InlineData(true, false)] [InlineData(false, true)] [InlineData(true, true)]
+    public async Task CaptureIntentWithNoCapturedReplyIsVisibleAndRecoverableWithoutPersonalFileMutations(bool acquired, bool deleted)
     {
         const string run = "run-capture-intent";
         string root = "/Users/tester/" + HostedWorld.MacSaveRelative;
@@ -1134,13 +1134,13 @@ public sealed class RunRecoveryTests : IDisposable
                 if (!acquired || entry.Kind == JournalEntry.UserFilesCaptured) throw new IOException("lost journal reply");
                 return Task.CompletedTask;
             }));
-        File.WriteAllText(recent, "newer personal file");
+        if (deleted) File.Delete(recent); else File.WriteAllText(recent, "newer personal file");
         var pending = Assert.Single((await StatusAsync()).Runs);
         Assert.Equal(JournalRunState.Recoverable, pending.State);
         Assert.Contains("capture intended", Assert.Single(pending.Items).Status);
         var report = await RecoverAsync(run);
         Assert.True(report.Recovered, string.Join("\n", report.Steps));
-        Assert.Equal("newer personal file", File.ReadAllText(recent));
+        if (deleted) Assert.False(File.Exists(recent)); else Assert.Equal("newer personal file", File.ReadAllText(recent));
         Assert.Equal(JournalRunState.Ended, Assert.Single((await StatusAsync()).Runs).State);
     }
 

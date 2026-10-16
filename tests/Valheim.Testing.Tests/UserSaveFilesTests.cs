@@ -254,6 +254,110 @@ public sealed class UserSaveFilesTests : IDisposable
         Assert.Equal("new personal", File.ReadAllText(Recent));
     }
 
+    [Theory] [InlineData(false, false)] [InlineData(true, false)] [InlineData(false, true)] [InlineData(true, true)]
+    public async Task AConcurrentEditBetweenFilesIsPreservedByRestoreAndUndo(bool shell, bool undo)
+    {
+        var runner = Shell(shell);
+        var remote = runner == null ? null : new UserSaveFiles.Remote(runner.PowerShell, (script, variables) => runner.Run(
+            script.Replace("# file-restored", runner.PowerShell
+                ? "if ($name -eq 'adminlist.txt') { [IO.File]::WriteAllText((Join-VtPath $saveRoot 'permittedlist.txt'), 'new personal second') }"
+                : "if [ \"$name\" = adminlist.txt ]; then printf '%s' 'new personal second' > \"$saveRoot/permittedlist.txt\"; fi"), variables));
+        Write(Save, "adminlist.txt", "original first"); Write(Save, "permittedlist.txt", "original second");
+        var files = await UserSaveFiles.CaptureAsync(UserSaveFiles.Kind.MacServerLists, Save, BackupFor("between"), Markers, remote);
+        await files.IsolateAsync();
+        if (!undo)
+        {
+            Write(Save, "adminlist.txt", "run first"); Write(Save, "permittedlist.txt", "run second");
+            // An interrupted previous attempt already kept this version; the newer edit must not be lost behind it.
+            Write(Path.Combine(files.Backup, "after"), "permittedlist.txt", "run second");
+        }
+        await files.PrepareRestoreAsync(undo);
+        files.AfterRestoredFileForTest = name => { if (name == "adminlist.txt") Write(Save, "permittedlist.txt", "new personal second"); };
+        await Assert.ThrowsAnyAsync<Exception>(undo ? files.UndoIsolateAsync : files.RestoreAsync);
+        Assert.Equal("original first", File.ReadAllText(At(Save, "adminlist.txt")));
+        Assert.Equal("new personal second", File.ReadAllText(At(Save, "permittedlist.txt")));
+        Assert.True(File.Exists(files.Marker)); Assert.False(File.Exists(files.Receipt));
+        if (!undo) Assert.Equal("run second", File.ReadAllText(At(Path.Combine(files.Backup, "after"), "permittedlist.txt")));
+    }
+
+    [Theory] [InlineData(false, false)] [InlineData(true, false)] [InlineData(false, true)] [InlineData(true, true)]
+    public async Task AReplacedSaveRootOrNestedDirectoryCannotRedirectRestoration(bool shell, bool root)
+    {
+        Write(Save, "serverlist_local/recent", "original personal");
+        var files = await UserSaveFiles.CaptureAsync(UserSaveFiles.Kind.ClientServerList, Save, BackupFor("escape"), Markers, Shell(shell));
+        await files.IsolateAsync();
+        string external = Path.Combine(_root, "external");
+        Write(external, root ? "serverlist_local/recent" : "recent", "external personal file");
+        string replaced = root ? Save : At(Save, "serverlist_local");
+        if (Directory.Exists(replaced)) Directory.Move(replaced, replaced + ".held");
+        else Directory.CreateDirectory(Path.GetDirectoryName(replaced)!);
+        DirectoryLinks.Create(replaced, external); // A junction on Windows CI, a symlink on Unix.
+        try
+        {
+            byte[] owner = File.ReadAllBytes(files.Marker);
+            await Assert.ThrowsAnyAsync<Exception>(files.RestoreAsync);
+            Assert.Equal("external personal file", File.ReadAllText(At(external, root ? "serverlist_local/recent" : "recent")));
+            Assert.Equal(owner, File.ReadAllBytes(files.Marker));
+            Assert.False(Directory.Exists(Path.Combine(files.Backup, "after")));
+        }
+        finally { DirectoryLinks.Remove(replaced); }
+    }
+
+    [Theory] [InlineData(false)] [InlineData(true)]
+    public async Task AnUnisolatedCaptureCannotUndoTheUsersLaterDeletion(bool shell)
+    {
+        var remote = Shell(shell);
+        Write(Save, "serverlist_local/recent", "personal before capture");
+        JournalEntry? intent = null;
+        await Assert.ThrowsAsync<IOException>(() => UserSaveFiles.CaptureAsync(UserSaveFiles.Kind.ClientServerList, Save, BackupFor("unisolated"), Markers, remote, entry =>
+        {
+            if (entry.Kind == JournalEntry.UserFilesCaptureIntended) { intent = entry; return Task.CompletedTask; }
+            throw new IOException("no captured acknowledgement; no isolation could start");
+        }));
+        File.Delete(Recent);
+        var recovered = UserSaveFiles.FromJournal(intent!.Fields, Run, Save, remote);
+        await recovered.RestoreAsync();
+        Assert.False(File.Exists(Recent));
+        Assert.True(File.Exists(recovered.Receipt)); Assert.False(File.Exists(recovered.Marker));
+        Assert.Equal("personal before capture", File.ReadAllText(At(recovered.Backup, "serverlist_local/recent")));
+    }
+
+    [Theory]
+    [InlineData(false, "backup")] [InlineData(true, "backup")]
+    [InlineData(false, "backup-nested")] [InlineData(true, "backup-nested")]
+    [InlineData(false, "after")] [InlineData(true, "after")]
+    [InlineData(false, "markers")] [InlineData(true, "markers")]
+    public async Task LinkedBackupEvidenceOrMarkerAncestorsCannotRedirectRecovery(bool shell, string target)
+    {
+        Write(Save, "serverlist_local/recent", "original personal");
+        var files = await UserSaveFiles.CaptureAsync(UserSaveFiles.Kind.ClientServerList, Save, BackupFor("linked-ancestors"), Markers, Shell(shell));
+        await files.IsolateAsync(); Write(Save, "serverlist_local/recent", "run recent");
+        byte[] owner = File.ReadAllBytes(files.Marker);
+        string external = Path.Combine(_root, "external"); Write(external, "keep", "untouched");
+        string replaced = target switch
+        {
+            "backup" => files.Backup,
+            "backup-nested" => At(files.Backup, "serverlist_local"),
+            "after" => Path.Combine(files.Backup, "after"),
+            _ => Markers,
+        };
+        if (target == "backup") Write(external, "serverlist_local/recent", "original personal");
+        if (target == "backup-nested") Write(external, "recent", "original personal");
+        if (target == "markers") File.WriteAllBytes(Path.Combine(external, Path.GetFileName(files.Marker)), owner);
+        string[] before = Directory.GetFiles(external, "*", SearchOption.AllDirectories).Order().ToArray();
+        if (Directory.Exists(replaced)) Directory.Move(replaced, replaced + ".held");
+        DirectoryLinks.Create(replaced, external);
+        try
+        {
+            await Assert.ThrowsAnyAsync<Exception>(files.RestoreAsync);
+            Assert.Equal("run recent", File.ReadAllText(Recent));
+            Assert.Equal("untouched", File.ReadAllText(Path.Combine(external, "keep")));
+            Assert.Equal(before, Directory.GetFiles(external, "*", SearchOption.AllDirectories).Order());
+            Assert.Equal(owner, File.ReadAllBytes(files.Marker));
+        }
+        finally { DirectoryLinks.Remove(replaced); }
+    }
+
     [Fact] public void AChangedFileRefusesIsolationAndAChangedBackupRefusesRestore()
     {
         string recent = At(Save, "serverlist_local/recent");

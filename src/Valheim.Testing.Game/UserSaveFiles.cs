@@ -69,6 +69,7 @@ internal sealed class UserSaveFiles
     private string Identity => _identity ?? FileHash.Sha256(Encoding.UTF8.GetBytes(KindName(FileKind) + "\n" + SaveRoot + "\n" + Backup));
     internal string Receipt => Marker + "." + Identity + ".completed";
     private bool _captureIntended;
+    internal Action<string>? AfterRestoredFileForTest { get; set; }
     private sealed record Owner(string Phase, string[] Hashes, string[] Observed, string[] Final);
 
     internal static async Task<UserSaveFiles> CaptureAsync(Kind kind, string saveRoot, string backup, string markers, Remote? remote = null,
@@ -95,26 +96,28 @@ internal sealed class UserSaveFiles
 
     private void CaptureLocal()
     {
-        RequireFileOrNothing(Marker, "the user-file owner marker");
+        RequireOwnerPath(Marker, "the user-file owner marker");
         if (File.Exists(Marker)) throw Refusal("Another capture holds these files", Marker);
-        RequireFileOrNothing(Receipt, "the completed user-file receipt");
+        RequireOwnerPath(Receipt, "the completed user-file receipt");
         if (File.Exists(Receipt)) throw Refusal("This capture identity already completed; use a new run/label backup", Receipt);
         if (Directory.Exists(Backup) || File.Exists(Backup)) throw new IOException($"The user-file backup {Backup} exists; refusing to overwrite it.");
+        ProtectedPaths.RequireUnlinkedPath(Backup, Backup);
         Directory.CreateDirectory(Backup);
         _hashes = FileNames.Select(name =>
         {
             string source = Local(SaveRoot, name), target = Local(Backup, name);
-            string hash = Hash(source);
+            string hash = Hash(SaveRoot, name);
             if (hash != "-")
             {
+                ProtectedPaths.RequireUnlinkedPath(Backup, target);
                 Directory.CreateDirectory(Path.GetDirectoryName(target)!);
                 File.Copy(source, target, overwrite: false);
-                if (Hash(target) != hash) throw new IOException($"The user's {name} changed while it was copied.");
+                if (Hash(Backup, name) != hash) throw new IOException($"The user's {name} changed while it was copied.");
             }
             return hash;
         }).ToArray();
         WriteOwner(new("captured", _hashes, [], []), acquire: true);
-        var current = FileNames.Select(name => Hash(Local(SaveRoot, name))).ToArray();
+        var current = FileNames.Select(name => Hash(SaveRoot, name)).ToArray();
         if (!current.SequenceEqual(_hashes))
         {
             // A different owner may have completed while we copied. This capture moved nothing.
@@ -196,7 +199,7 @@ internal sealed class UserSaveFiles
         var owner = ReadOwner(Marker);
         if (owner.Phase != "captured") throw Refusal("Isolation was already started or completed", Marker);
         for (int i = 0; i < FileNames.Count; i++)
-            if (Hash(Local(SaveRoot, FileNames[i])) != _hashes[i]) throw new IOException($"The user's {FileNames[i]} changed during preparation; nothing was started.");
+            if (Hash(SaveRoot, FileNames[i]) != _hashes[i]) throw new IOException($"The user's {FileNames[i]} changed during preparation; nothing was started.");
         WriteOwner(owner with { Phase = "isolating" });
         for (int i = 0; i < FileNames.Count; i++)
             if (_hashes[i] != "-") File.Delete(Local(SaveRoot, FileNames[i]));
@@ -227,7 +230,7 @@ internal sealed class UserSaveFiles
 
     private bool Settled()
     {
-        RequireFileOrNothing(Receipt, "the completed user-file receipt");
+        RequireOwnerPath(Receipt, "the completed user-file receipt");
         if (!File.Exists(Receipt)) return false;
         var done = ReadOwner(Receipt);
         if (done.Phase is not ("completed-restore" or "completed-undo")) throw Refusal("Invalid completion receipt", Receipt);
@@ -237,7 +240,7 @@ internal sealed class UserSaveFiles
     private Owner? Active()
     {
         if (Settled()) return null;
-        RequireFileOrNothing(Marker, "the user-file owner marker");
+        RequireOwnerPath(Marker, "the user-file owner marker");
         // Capture intent alone cannot have moved personal files. A different identity belongs to another capture.
         if (_captureIntended && (!File.Exists(Marker) || File.ReadLines(Marker).Skip(1).FirstOrDefault() != Identity)) return null;
         return ReadOwner(Marker);
@@ -249,9 +252,10 @@ internal sealed class UserSaveFiles
         if (owner == null || owner.Phase.StartsWith("completed-", StringComparison.Ordinal)) return;
         if (owner.Phase is "restore" or "undo") return; // Preserve the first plan, including its operation.
         if (owner.Phase is not ("captured" or "isolating" or "isolated")) throw Refusal("Unknown user-file owner phase", Marker);
-        undo = undo || owner.Phase is "captured" or "isolating";
-        string[] observed = FileNames.Select(name => Hash(Local(SaveRoot, name))).ToArray();
-        string[] final = observed.Select((hash, i) => undo && hash != "-" ? hash : _hashes[i]).ToArray();
+        bool untouched = owner.Phase == "captured";
+        undo = undo || untouched || owner.Phase == "isolating";
+        string[] observed = FileNames.Select(name => Hash(SaveRoot, name)).ToArray();
+        string[] final = observed.Select((hash, i) => untouched || undo && hash != "-" ? hash : _hashes[i]).ToArray();
         ValidateFiles(new(undo ? "undo" : "restore", _hashes, observed, final));
         WriteOwner(new(undo ? "undo" : "restore", _hashes, observed, final));
     }
@@ -266,7 +270,7 @@ internal sealed class UserSaveFiles
             ValidateFiles(owner); // Check every file before changing any.
             for (int i = 0; i < FileNames.Count; i++)
             {
-                string name = FileNames[i], original = Local(SaveRoot, name), current = Hash(original), final = owner.Final[i];
+                string name = FileNames[i], original = Local(SaveRoot, name), current = ValidateFile(owner, i), final = owner.Final[i];
                 if (current == final) continue;
                 if (current != "-")
                 {
@@ -274,12 +278,15 @@ internal sealed class UserSaveFiles
                     Directory.CreateDirectory(Path.GetDirectoryName(after)!);
                     if (!File.Exists(after)) File.Copy(original, after, overwrite: false);
                 }
+                current = ValidateFile(owner, i); // Evidence copying may have let another writer change this file.
+                if (current == final) continue;
                 if (final == "-") File.Delete(original);
                 else
                 {
                     Directory.CreateDirectory(Path.GetDirectoryName(original)!);
-                    File.Copy(Local(Backup, name), original, overwrite: true);
+                    File.Copy(Local(Backup, name), original, overwrite: owner.Phase != "undo");
                 }
+                AfterRestoredFileForTest?.Invoke(name);
             }
             owner = owner with { Phase = "completed-" + owner.Phase };
             WriteOwner(owner);
@@ -290,20 +297,23 @@ internal sealed class UserSaveFiles
 
     private void ValidateFiles(Owner owner)
     {
-        for (int i = 0; i < FileNames.Count; i++)
-        {
-            string name = FileNames[i], current = Hash(Local(SaveRoot, name));
-            if (current != owner.Observed[i] && current != owner.Final[i])
-                throw Refusal($"The user's {name} changed after restore was planned; current bytes were preserved", Marker);
-            string before = Hash(Local(Backup, name)), after = Hash(Local(Path.Combine(Backup, "after"), name));
-            if (_hashes[i] != "-" && before != _hashes[i]) throw Refusal($"The backup of {name} is missing or changed", Marker);
-            if (after != "-" && after != owner.Observed[i]) throw Refusal($"The kept run version of {name} changed", Marker);
-        }
+        for (int i = 0; i < FileNames.Count; i++) ValidateFile(owner, i);
+    }
+
+    private string ValidateFile(Owner owner, int i)
+    {
+        string name = FileNames[i], current = Hash(SaveRoot, name);
+        if (current != owner.Observed[i] && current != owner.Final[i])
+            throw Refusal($"The user's {name} changed after restore was planned; current bytes were preserved", Marker);
+        string before = Hash(Backup, name), after = Hash(Backup, "after/" + name);
+        if (_hashes[i] != "-" && before != _hashes[i]) throw Refusal($"The backup of {name} is missing or changed", Marker);
+        if (after != "-" && after != owner.Observed[i]) throw Refusal($"The kept run version of {name} changed", Marker);
+        return current;
     }
 
     private Owner ReadOwner(string path)
     {
-        RequireFileOrNothing(path, "the user-file ownership record");
+        RequireOwnerPath(path, "the user-file ownership record");
         if (!File.Exists(path)) throw Refusal("User-file ownership cannot be proved (marker missing)", path);
         string[] lines = File.ReadAllText(path).Split('\n');
         if (lines.Length != 7 || lines[0] != Version || lines[1] != Identity)
@@ -319,6 +329,7 @@ internal sealed class UserSaveFiles
 
     private void WriteOwner(Owner owner, bool acquire = false)
     {
+        RequireOwnerPath(Marker, "the user-file owner marker");
         Directory.CreateDirectory(Path.GetDirectoryName(Marker)!);
         string temporary = Marker + "." + Guid.NewGuid().ToString("N") + ".tmp";
         try
@@ -337,8 +348,16 @@ internal sealed class UserSaveFiles
     private IOException Refusal(string reason, string path) => new($"{reason}. Backup: {Backup}; marker: {path}. " +
         "Keep these files and run env status / env recover for this run. If ownership cannot be proved, inspect this folder/kind and restore manually; other folders and kinds are unaffected.");
 
-    private static string Hash(string path)
+    private void RequireOwnerPath(string path, string what)
     {
+        ProtectedPaths.RequireUnlinkedPath(Path.GetDirectoryName(Marker)!, path);
+        RequireFileOrNothing(path, what);
+    }
+
+    private static string Hash(string root, string name)
+    {
+        string path = Local(root, name);
+        ProtectedPaths.RequireUnlinkedPath(root, path);
         RequireFileOrNothing(path, "the user file");
         return File.Exists(path) ? FileHash.Sha256(path) : "-";
     }
@@ -399,12 +418,12 @@ internal sealed class UserSaveFiles
 
     // The host implementations of this owner: the same fixed file names, record and transition checks.
     // Variables are transport only; restore plans are persisted in the owner record, never recomputed on retry.
-    internal static readonly string BashScript = """
+    internal static readonly string BashScript = ProtectedPaths.BashUnlinked + """
         set -eu
         sha() { shasum -a 256 "$1" | awk '{print $1}'; }
-        plain() { [ ! -L "$1" ] && [ ! -d "$1" ]; }
+        plain() { vt_unlinked "${2:-$(dirname -- "$marker")}" "$1" && [ ! -L "$1" ] && [ ! -d "$1" ]; }
         refuse() { printf 'VT-USER-FILES-REFUSED %s; backup %s; marker %s. Keep these files; use env status / env recover for this run, or inspect and restore this folder/kind manually.\n' "$1" "$backup" "$marker" >&2; exit 4; }
-        hash() { plain "$1" || refuse 'linked or non-file path'; if [ -f "$1" ]; then sha "$1"; else printf '%s\n' -; fi; }
+        hash() { plain "$1" "$2" || refuse 'linked or non-file path'; if [ -f "$1" ]; then sha "$1"; else printf '%s\n' -; fi; }
         receipt="$marker.$identity.completed"
         names=(); expected=(); observed=(); final=()
         while read -r value name; do [ -n "$name" ] || continue; names+=("$name"); expected+=("$value"); done <<< "$files"
@@ -431,6 +450,7 @@ internal sealed class UserSaveFiles
           esac
         }
         write_owner() {
+          plain "$marker" || refuse 'linked owner path'
           mkdir -p -- "$(dirname -- "$marker")"
           temporary=$(mktemp "$marker.XXXXXXXX")
           ( IFS=,; printf '%s\n' VT-USER-FILES-1 "$identity" "$phase" "${expected[*]}" "${observed[*]-}" "${final[*]-}" ) > "$temporary"
@@ -456,16 +476,16 @@ internal sealed class UserSaveFiles
           if [ "$intended" = true ] && { [ ! -e "$marker" ] || [ "$(sed -n '2p' "$marker")" != "$identity" ]; }; then return 1; fi
           read_owner "$marker"
         }
+        validate_file() {
+          name=${names[$1]}; current=$(hash "$saveRoot/$name" "$saveRoot")
+          [ "$current" = "${observed[$1]}" ] || [ "$current" = "${final[$1]}" ] || refuse 'personal file changed after restore intent; current bytes preserved'
+          before=$(hash "$backup/$name" "$backup"); after=$(hash "$backup/after/$name" "$backup")
+          [ "${expected[$1]}" = - ] || [ "$before" = "${expected[$1]}" ] || refuse 'backup missing or changed'
+          [ "$after" = - ] || [ "$after" = "${observed[$1]}" ] || refuse 'kept run version changed'
+        }
         validate_files() {
           i=0
-          while [ "$i" -lt "$count" ]; do
-            name=${names[$i]}; current=$(hash "$saveRoot/$name")
-            [ "$current" = "${observed[$i]}" ] || [ "$current" = "${final[$i]}" ] || refuse 'personal file changed after restore intent; current bytes preserved'
-            before=$(hash "$backup/$name"); after=$(hash "$backup/after/$name")
-            [ "${expected[$i]}" = - ] || [ "$before" = "${expected[$i]}" ] || refuse 'backup missing or changed'
-            [ "$after" = - ] || [ "$after" = "${observed[$i]}" ] || refuse 'kept run version changed'
-            i=$((i+1))
-          done
+          while [ "$i" -lt "$count" ]; do validate_file "$i"; i=$((i+1)); done
         }
         case "$mode" in
           capture)
@@ -473,13 +493,15 @@ internal sealed class UserSaveFiles
             [ ! -e "$marker" ] || refuse 'another capture holds these files'
             plain "$receipt" && [ ! -e "$receipt" ] || refuse 'capture identity already completed; use a new run/label backup'
             [ ! -e "$backup" ] && [ ! -L "$backup" ] || refuse 'backup already exists'
+            vt_unlinked "$backup" "$backup" || refuse 'linked backup root'
             mkdir -p -- "$backup"
             i=0
             while [ "$i" -lt "$count" ]; do
-              name=${names[$i]}; original="$saveRoot/$name"; value=$(hash "$original")
+              name=${names[$i]}; original="$saveRoot/$name"; value=$(hash "$original" "$saveRoot")
               if [ "$value" != - ]; then
+                vt_unlinked "$backup" "$backup/$name" || refuse 'linked backup ancestor'
                 mkdir -p -- "$(dirname -- "$backup/$name")"; cp -- "$original" "$backup/$name"
-                [ "$(hash "$backup/$name")" = "$value" ] || refuse 'file changed during capture'
+                [ "$(hash "$backup/$name" "$backup")" = "$value" ] || refuse 'file changed during capture'
               fi
               expected[$i]=$value
               printf 'VT-USER-FILE %s %s\n' "$name" "$value"
@@ -488,7 +510,7 @@ internal sealed class UserSaveFiles
             phase=captured; write_owner acquire
             changed=false; i=0
             while [ "$i" -lt "$count" ]; do
-              observed[$i]=$(hash "$saveRoot/${names[$i]}"); final[$i]=${observed[$i]}
+              observed[$i]=$(hash "$saveRoot/${names[$i]}" "$saveRoot"); final[$i]=${observed[$i]}
               [ "${observed[$i]}" = "${expected[$i]}" ] || changed=true
               i=$((i+1))
             done
@@ -497,7 +519,7 @@ internal sealed class UserSaveFiles
             read_owner "$marker"
             [ "$phase" = captured ] || refuse 'isolation cannot replay this phase'
             i=0
-            while [ "$i" -lt "$count" ]; do [ "$(hash "$saveRoot/${names[$i]}")" = "${expected[$i]}" ] || refuse 'file changed during preparation'; i=$((i+1)); done
+            while [ "$i" -lt "$count" ]; do [ "$(hash "$saveRoot/${names[$i]}" "$saveRoot")" = "${expected[$i]}" ] || refuse 'file changed during preparation'; i=$((i+1)); done
             phase=isolating; write_owner replace
             i=0
             while [ "$i" -lt "$count" ]; do [ "${expected[$i]}" = - ] || rm -- "$saveRoot/${names[$i]}"; i=$((i+1)); done
@@ -506,11 +528,12 @@ internal sealed class UserSaveFiles
           plan-restore|plan-undo)
             if active; then
               if [ "$phase" = captured ] || [ "$phase" = isolating ] || [ "$phase" = isolated ]; then
+                untouched=false; [ "$phase" != captured ] || untouched=true
                 undo=false; if [ "$mode" = plan-undo ] || [ "$phase" != isolated ]; then undo=true; fi
                 i=0
                 while [ "$i" -lt "$count" ]; do
-                  observed[$i]=$(hash "$saveRoot/${names[$i]}"); final[$i]=${expected[$i]}
-                  if [ "$undo" = true ] && [ "${observed[$i]}" != - ]; then final[$i]=${observed[$i]}; fi
+                  observed[$i]=$(hash "$saveRoot/${names[$i]}" "$saveRoot"); final[$i]=${expected[$i]}
+                  if [ "$untouched" = true ] || { [ "$undo" = true ] && [ "${observed[$i]}" != - ]; }; then final[$i]=${observed[$i]}; fi
                   i=$((i+1))
                 done
                 if [ "$undo" = true ]; then phase=undo; else phase=restore; fi
@@ -525,14 +548,23 @@ internal sealed class UserSaveFiles
                   validate_files
                   i=0
                   while [ "$i" -lt "$count" ]; do
-                    name=${names[$i]}; original="$saveRoot/$name"; current=$(hash "$original"); target=${final[$i]}
+                    validate_file "$i"
+                    original="$saveRoot/$name"; target=${final[$i]}
                     if [ "$current" != "$target" ]; then
                       if [ "$current" != - ]; then
                         after="$backup/after/$name"; mkdir -p -- "$(dirname -- "$after")"
                         [ -f "$after" ] || cp -- "$original" "$after"
                       fi
-                      if [ "$target" = - ]; then rm -- "$original"
-                      else mkdir -p -- "$(dirname -- "$original")"; cp -- "$backup/$name" "$original"; fi
+                      validate_file "$i"
+                      if [ "$current" != "$target" ]; then
+                        if [ "$target" = - ]; then rm -- "$original"
+                        else
+                          mkdir -p -- "$(dirname -- "$original")"
+                          if [ "$phase" = undo ]; then ( set -C; cat -- "$backup/$name" > "$original" ) || refuse 'file appeared during undo'
+                          else cp -- "$backup/$name" "$original"; fi
+                        fi
+                        # file-restored
+                      fi
                     fi
                     i=$((i+1))
                   done
@@ -550,16 +582,17 @@ internal sealed class UserSaveFiles
         esac
         """.ReplaceLineEndings("\n");
 
-    internal static readonly string PowerShellScript = """
+    internal static readonly string PowerShellScript = ProtectedPaths.PowerShellUnlinked + """
         $ErrorActionPreference = 'Stop'
         function Stop-Vt([string]$reason) { throw ($reason + '; backup ' + $backup + '; marker ' + $marker + '. Keep these files; use env status / env recover for this run, or inspect and restore this folder/kind manually.') }
-        function Test-VtPlain([string]$path) {
+        function Test-VtPlain([string]$path, [string]$root = ([IO.Path]::GetDirectoryName($marker))) {
+            if (-not (Test-VtUnlinked $root $path)) { return $false }
             $item = Get-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
             if ($null -eq $item) { return $true }
             return -not $item.PSIsContainer -and (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -eq 0)
         }
-        function Get-VtSha([string]$path) {
-            if (-not (Test-VtPlain $path)) { Stop-Vt 'linked or non-file path' }
+        function Get-VtSha([string]$path, [string]$root) {
+            if (-not (Test-VtPlain $path $root)) { Stop-Vt 'linked or non-file path' }
             if ([IO.File]::Exists($path)) { return (Get-FileHash -Algorithm SHA256 -LiteralPath $path).Hash.ToLowerInvariant() }
             return '-'
         }
@@ -581,6 +614,7 @@ internal sealed class UserSaveFiles
             return [pscustomobject]@{ Phase = $lines[2]; Hashes = $expected; Observed = $observed; Final = $final }
         }
         function Write-VtOwner($owner, [bool]$acquire) {
+            if (-not (Test-VtPlain $marker)) { Stop-Vt 'linked owner path' }
             [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($marker))
             $temporary = $marker + '.' + [guid]::NewGuid().ToString('N') + '.tmp'
             try {
@@ -602,34 +636,38 @@ internal sealed class UserSaveFiles
             if ($intended -eq 'true' -and (-not [IO.File]::Exists($marker) -or [IO.File]::ReadAllLines($marker)[1] -cne $identity)) { return $null }
             return Read-VtOwner $marker
         }
+        function Get-VtValidatedCurrent($owner, [int]$i) {
+            $name = $entries[$i]; $current = Get-VtSha (Join-VtPath $saveRoot $name) $saveRoot
+            if ($current -cne $owner.Observed[$i] -and $current -cne $owner.Final[$i]) { Stop-Vt 'personal file changed after restore intent; current bytes preserved' }
+            $before = Get-VtSha (Join-VtPath $backup $name) $backup; $after = Get-VtSha (Join-VtPath (Join-VtPath $backup 'after') $name) $backup
+            if ($owner.Hashes[$i] -cne '-' -and $before -cne $owner.Hashes[$i]) { Stop-Vt 'backup missing or changed' }
+            if ($after -cne '-' -and $after -cne $owner.Observed[$i]) { Stop-Vt 'kept run version changed' }
+            return $current
+        }
         function Test-VtFiles($owner) {
-            for ($i = 0; $i -lt $entries.Count; $i++) {
-                $name = $entries[$i]; $current = Get-VtSha (Join-VtPath $saveRoot $name)
-                if ($current -cne $owner.Observed[$i] -and $current -cne $owner.Final[$i]) { Stop-Vt 'personal file changed after restore intent; current bytes preserved' }
-                $before = Get-VtSha (Join-VtPath $backup $name); $after = Get-VtSha (Join-VtPath (Join-VtPath $backup 'after') $name)
-                if ($owner.Hashes[$i] -cne '-' -and $before -cne $owner.Hashes[$i]) { Stop-Vt 'backup missing or changed' }
-                if ($after -cne '-' -and $after -cne $owner.Observed[$i]) { Stop-Vt 'kept run version changed' }
-            }
+            for ($i = 0; $i -lt $entries.Count; $i++) { $null = Get-VtValidatedCurrent $owner $i }
         }
         switch ($mode) {
             'capture' {
                 if (-not (Test-VtPlain $marker) -or [IO.File]::Exists($marker)) { Stop-Vt 'another capture or linked marker holds these files' }
                 if (-not (Test-VtPlain $receipt) -or [IO.File]::Exists($receipt)) { Stop-Vt 'capture identity already completed; use a new run/label backup' }
-                if (-not (Test-VtPlain $backup) -or [IO.File]::Exists($backup) -or [IO.Directory]::Exists($backup)) { Stop-Vt 'backup already exists' }
+                if (-not (Test-VtPlain $backup $backup) -or [IO.File]::Exists($backup) -or [IO.Directory]::Exists($backup)) { Stop-Vt 'backup already exists' }
                 [void][IO.Directory]::CreateDirectory($backup)
                 $expected = @()
                 foreach ($name in $entries) {
-                    $original = Join-VtPath $saveRoot $name; $value = Get-VtSha $original
+                    $original = Join-VtPath $saveRoot $name; $value = Get-VtSha $original $saveRoot
                     if ($value -cne '-') {
-                        $copy = Join-VtPath $backup $name; [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($copy))
+                        $copy = Join-VtPath $backup $name
+                        if (-not (Test-VtUnlinked $backup $copy)) { Stop-Vt 'linked backup ancestor' }
+                        [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($copy))
                         [IO.File]::Copy($original, $copy, $false)
-                        if ((Get-VtSha $copy) -cne $value) { Stop-Vt 'file changed during capture' }
+                        if ((Get-VtSha $copy $backup) -cne $value) { Stop-Vt 'file changed during capture' }
                     }
                     $expected += $value; 'VT-USER-FILE ' + $name + ' ' + $value
                 }
                 $owner = [pscustomobject]@{ Phase = 'captured'; Hashes = $expected; Observed = @(); Final = @() }
                 Write-VtOwner $owner $true
-                $current = @($entries | ForEach-Object { Get-VtSha (Join-VtPath $saveRoot $_) })
+                $current = @($entries | ForEach-Object { Get-VtSha (Join-VtPath $saveRoot $_) $saveRoot })
                 if (($current -join ',') -cne ($expected -join ',')) {
                     $owner.Phase = 'completed-undo'; $owner.Observed = $current; $owner.Final = $current; Write-VtOwner $owner $false
                     [IO.File]::Move($marker, $receipt); Stop-Vt 'personal files changed before ownership; capture cancelled without mutations'
@@ -638,7 +676,7 @@ internal sealed class UserSaveFiles
             'isolate' {
                 $owner = Read-VtOwner $marker
                 if ($owner.Phase -cne 'captured') { Stop-Vt 'isolation cannot replay this phase' }
-                for ($i = 0; $i -lt $entries.Count; $i++) { if ((Get-VtSha (Join-VtPath $saveRoot $entries[$i])) -cne $owner.Hashes[$i]) { Stop-Vt 'file changed during preparation' } }
+                for ($i = 0; $i -lt $entries.Count; $i++) { if ((Get-VtSha (Join-VtPath $saveRoot $entries[$i]) $saveRoot) -cne $owner.Hashes[$i]) { Stop-Vt 'file changed during preparation' } }
                 $owner.Phase = 'isolating'; Write-VtOwner $owner $false
                 for ($i = 0; $i -lt $entries.Count; $i++) { if ($owner.Hashes[$i] -cne '-') { [IO.File]::Delete((Join-VtPath $saveRoot $entries[$i])) } }
                 $owner.Phase = 'isolated'; Write-VtOwner $owner $false
@@ -647,11 +685,12 @@ internal sealed class UserSaveFiles
             { $_ -eq 'plan-restore' -or $_ -eq 'plan-undo' } {
                 $owner = Get-VtActive
                 if ($null -ne $owner -and $owner.Phase -cmatch '^(captured|isolating|isolated)$') {
+                    $untouched = $owner.Phase -ceq 'captured'
                     $undo = $mode -eq 'plan-undo' -or $owner.Phase -cne 'isolated'
                     $observed = @(); $final = @()
                     for ($i = 0; $i -lt $entries.Count; $i++) {
-                        $value = Get-VtSha (Join-VtPath $saveRoot $entries[$i]); $observed += $value
-                        if ($undo -and $value -cne '-') { $final += $value } else { $final += $owner.Hashes[$i] }
+                        $value = Get-VtSha (Join-VtPath $saveRoot $entries[$i]) $saveRoot; $observed += $value
+                        if ($untouched -or ($undo -and $value -cne '-')) { $final += $value } else { $final += $owner.Hashes[$i] }
                     }
                     $owner.Observed = $observed; $owner.Final = $final; $owner.Phase = if ($undo) { 'undo' } else { 'restore' }
                     Test-VtFiles $owner; Write-VtOwner $owner $false
@@ -664,14 +703,17 @@ internal sealed class UserSaveFiles
                     if ($owner.Phase -ceq 'restore' -or $owner.Phase -ceq 'undo') {
                         Test-VtFiles $owner
                         for ($i = 0; $i -lt $entries.Count; $i++) {
-                            $name = $entries[$i]; $original = Join-VtPath $saveRoot $name; $current = Get-VtSha $original; $target = $owner.Final[$i]
+                            $name = $entries[$i]; $original = Join-VtPath $saveRoot $name; $current = Get-VtValidatedCurrent $owner $i; $target = $owner.Final[$i]
                             if ($current -ceq $target) { continue }
                             if ($current -cne '-') {
                                 $after = Join-VtPath (Join-VtPath $backup 'after') $name; [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($after))
                                 if (-not [IO.File]::Exists($after)) { [IO.File]::Copy($original, $after, $false) }
                             }
+                            $current = Get-VtValidatedCurrent $owner $i
+                            if ($current -ceq $target) { continue }
                             if ($target -ceq '-') { [IO.File]::Delete($original) }
-                            else { [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($original)); [IO.File]::Copy((Join-VtPath $backup $name), $original, $true) }
+                            else { [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($original)); [IO.File]::Copy((Join-VtPath $backup $name), $original, ($owner.Phase -cne 'undo')) }
+                            # file-restored
                         }
                         $owner.Phase = 'completed-' + $owner.Phase; Write-VtOwner $owner $false
                     } elseif ($owner.Phase -cnotmatch '^completed-(restore|undo)$') { Stop-Vt 'restore intent missing' }

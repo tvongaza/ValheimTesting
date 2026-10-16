@@ -59,6 +59,61 @@ internal static class ProtectedPaths
         return current;
     }
 
+    /// <summary>
+    /// Proves a write stays under its trusted lexical root without traversing a link/junction in that root or below it.
+    /// Ancestors above the boundary may include ordinary system aliases such as macOS /var -> /private/var.
+    /// </summary>
+    internal static void RequireUnlinkedPath(string root, string path)
+    {
+        root = Path.GetFullPath(root);
+        string relative = Path.GetRelativePath(root, Path.GetFullPath(path));
+        if (Path.IsPathRooted(relative) || Parts(relative).Any(part => part == ".."))
+            throw new IOException($"The path {path} is outside its trusted root {root}.");
+        string current = root;
+        FileHash.RefuseLink(current);
+        foreach (string part in Parts(relative).Where(part => part != "."))
+        {
+            current = Path.Combine(current, part);
+            FileHash.RefuseLink(current);
+        }
+    }
+
+    // Host counterparts of RequireUnlinkedPath. These fragments own the same rooted ancestry rule.
+    internal static readonly string BashUnlinked = """
+        vt_unlinked() {
+            local root=${1%/} path=$2 relative current part
+            case "$path" in "$root"|"$root"/*) ;; *) return 1 ;; esac
+            [ ! -L "$root" ] || return 1
+            relative=${path#"$root"}; relative=${relative#/}; current=$root
+            while [ -n "$relative" ]; do
+                part=${relative%%/*}
+                case "$part" in .|..) return 1 ;; esac
+                current="$current/$part"; [ ! -L "$current" ] || return 1
+                [ "$relative" != "$part" ] || break
+                relative=${relative#*/}
+            done
+        }
+
+        """.ReplaceLineEndings("\n");
+
+    internal static readonly string PowerShellUnlinked = """
+        function Test-VtUnlinked([string]$root, [string]$path) {
+            $current = [IO.Path]::GetFullPath($root)
+            $relative = [IO.Path]::GetRelativePath($current, [IO.Path]::GetFullPath($path))
+            $parts = @($relative -split '[\\/]')
+            if ([IO.Path]::IsPathRooted($relative) -or $parts -contains '..') { return $false }
+            foreach ($part in @('') + $parts) {
+                if ($part -and $part -ne '.') { $current = [IO.Path]::Combine($current, $part) }
+                try { $attributes = [IO.File]::GetAttributes($current) }
+                catch [IO.FileNotFoundException] { continue }
+                catch [IO.DirectoryNotFoundException] { continue }
+                if ($attributes -band [IO.FileAttributes]::ReparsePoint) { return $false }
+            }
+            return $true
+        }
+
+        """.ReplaceLineEndings("\n");
+
     private static string[] Parts(string relative) =>
         relative.Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar], StringSplitOptions.RemoveEmptyEntries);
 
