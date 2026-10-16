@@ -117,6 +117,13 @@ public class StateWaitTests
         Assert.True(server.Completed.IsCompletedSuccessfully);
         server.Dispose();
     }
+    [Fact] public void TheFakeStopsBeforeItsServingThreadEntersAccept()
+    {
+        // Dispose stops the listener before releasing this gate: force the startup/shutdown race on every run.
+        using var server = new FakeCliServer(StateWait.Loading, pauseBeforeAccept: true);
+        server.Dispose();
+        Assert.True(server.Completed.IsCompletedSuccessfully);
+    }
     [Fact] public void TheFakeStopsWhileReadingAnOpenConnection()
     {
         var server = new FakeCliServer(StateWait.Loading);
@@ -139,6 +146,7 @@ public class StateWaitTests
 internal sealed class FakeCliServer : IDisposable
 {
     private readonly TcpListener _listener = new(IPAddress.Loopback, 0);
+    private readonly Socket _acceptSocket;
     private readonly object _write = new();
     private readonly ConcurrentQueue<string> _received = new();
     private readonly TaskCompletionSource _subscribed = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -147,8 +155,11 @@ internal sealed class FakeCliServer : IDisposable
     private readonly ManualResetEventSlim _ready = new();
     private readonly TaskCompletionSource _completed = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly Thread _serve;
+    private readonly ManualResetEventSlim? _acceptGate;
+    private readonly object _dispose = new();
+    private bool _disposed;
     private int _closed;
-    private TcpClient? _client;
+    private Socket? _client;
     private StreamWriter? _writer;
     public string State { get; }
     /// <summary>A push written just ahead of each STATE answer, as when the state changes while the question is in flight.</summary>
@@ -159,10 +170,15 @@ internal sealed class FakeCliServer : IDisposable
     public Task Answered => _answered.Task;
     public Task Completed => _completed.Task;
     public string[] Received => _received.ToArray();
-    public FakeCliServer(string state)
+    public FakeCliServer(string state, bool pauseBeforeAccept = false)
     {
         State = state;
+        // Test-only scheduling seam: Dispose releases it only after stopping the listener.
+        _acceptGate = pauseBeforeAccept ? new ManualResetEventSlim() : null;
         _listener.Start();
+        // Keep the actual listening socket: TcpListener.Stop clears its internal socket field, so calling
+        // AcceptTcpClient concurrently with Stop can race even before it reaches the socket operation.
+        _acceptSocket = _listener.Server;
         // The synchronous client handshake must not need a free thread-pool worker. The entire loop stays on this
         // thread: starting an async Serve with LongRunning would move its continuations back onto the pool.
         _serve = new Thread(Serve) { IsBackground = true, Name = nameof(FakeCliServer) };
@@ -184,8 +200,10 @@ internal sealed class FakeCliServer : IDisposable
         try
         {
             _ready.Set();
-            using var client = _listener.AcceptTcpClient();
-            var stream = client.GetStream();
+            if (_acceptGate != null && !_acceptGate.Wait(LifecycleBound))
+                throw new TimeoutException("Fake CLI accept gate was not released.");
+            using var client = _acceptSocket.Accept();
+            using var stream = new NetworkStream(client, ownsSocket: false); // client owns the accepted socket
             using var reader = new StreamReader(stream, new UTF8Encoding(false));
             lock (_write)
             {
@@ -223,11 +241,18 @@ internal sealed class FakeCliServer : IDisposable
     public void Drop() { Interlocked.Exchange(ref _closed, 1); lock (_write) _client?.Close(); }
     public void Dispose()
     {
-        Interlocked.Exchange(ref _closed, 1);
-        _listener.Stop();
-        lock (_write) _client?.Dispose();
-        if (!_serve.Join(LifecycleBound)) throw new TimeoutException("Fake CLI serving thread did not stop.");
-        _ready.Dispose();
-        _completed.Task.GetAwaiter().GetResult();
+        lock (_dispose)
+        {
+            if (_disposed) return;
+            Interlocked.Exchange(ref _closed, 1);
+            _listener.Stop();
+            _acceptGate?.Set();
+            lock (_write) _client?.Dispose();
+            if (!_serve.Join(LifecycleBound)) throw new TimeoutException("Fake CLI serving thread did not stop.");
+            _ready.Dispose();
+            _acceptGate?.Dispose();
+            _disposed = true;
+            _completed.Task.GetAwaiter().GetResult();
+        }
     }
 }

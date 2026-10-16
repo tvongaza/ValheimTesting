@@ -1,5 +1,14 @@
 using Valheim.Testing.Game;
 
+if (args is ["dispose-before-accept"])
+{
+    using var server = new FakeCliServer(StateWait.Loading, pauseBeforeAccept: true);
+    server.Dispose();
+    Require(server.Completed.IsCompletedSuccessfully, "serving did not complete after Stop-before-Accept");
+    Console.WriteLine("PASS: disposal stopped the listener before Accept");
+    return;
+}
+
 // Global thread-pool settings belong only to this child process, never to the xUnit host.
 ThreadPool.GetMinThreads(out int minimum, out int minimumIo);
 ThreadPool.GetMaxThreads(out int maximum, out int maximumIo);
