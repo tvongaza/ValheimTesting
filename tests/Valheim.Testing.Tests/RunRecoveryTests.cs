@@ -1098,13 +1098,14 @@ public sealed class RunRecoveryTests : IDisposable
     {
         const string run = "run-recent";
         string root = "/Users/tester/" + HostedWorld.MacSaveRelative, backup = "/srv/runs/" + run + "/" + UserSaveFiles.BackupName(backupRun, "client-1");
-        string recent = _host.Local(root + "/serverlist_local/recent"), saved = _host.Local(backup + "/serverlist_local/recent");
-        Directory.CreateDirectory(Path.GetDirectoryName(saved)!); File.WriteAllText(saved, "the user's servers\n");
-        Directory.CreateDirectory(Path.GetDirectoryName(recent)!); File.WriteAllText(recent, "127.0.0.1:2456\n");
-        string marker = "/var/tmp/vt/user-files/" + UserSaveFiles.MarkerName(UserSaveFiles.Kind.ClientServerList, root, windows: false);
-        Directory.CreateDirectory(Path.GetDirectoryName(_host.Local(marker))!); File.WriteAllText(_host.Local(marker), backup + "\n");
-        Line(_host, run, "player", Gone, JournalEntry.UserFilesCaptured, ("files", "client-server-list"), ("saveRoot", root), ("backup", backup),
-            ("marker", marker), ("hashes", FileHash.Sha256(saved) + ",-"));
+        string recent = _host.Local(root + "/serverlist_local/recent");
+        Directory.CreateDirectory(Path.GetDirectoryName(recent)!); File.WriteAllText(recent, "the user's servers\n");
+        string markers = "/var/tmp/vt/user-files";
+        var files = await UserSaveFiles.CaptureAsync(UserSaveFiles.Kind.ClientServerList, root, backup, markers,
+            UserSaveFilesOnHost.Remote(_host, TimeSpan.FromSeconds(60)));
+        await files.IsolateAsync(); File.WriteAllText(recent, "127.0.0.1:2456\n");
+        string marker = files.Marker;
+        Line(_host, run, "player", Gone, JournalEntry.UserFilesCaptured, files.Captured().Fields.Select(pair => (pair.Key, pair.Value)).ToArray());
 
         var report = await RecoverAsync(run);
 
@@ -1115,6 +1116,111 @@ public sealed class RunRecoveryTests : IDisposable
         var step = Assert.Single(report.Steps, step => step.What == "client recent-servers list");
         Assert.Equal(restored, step.Outcome.StartsWith("restored", StringComparison.Ordinal));
         Assert.Equal(restored ? JournalRunState.Ended : JournalRunState.Recoverable, Assert.Single((await StatusAsync()).Runs).State);
+    }
+
+    [Theory] [InlineData(false)] [InlineData(true)]
+    public async Task CaptureIntentWithNoCapturedReplyIsVisibleAndRecoverableWithoutPersonalFileMutations(bool acquired)
+    {
+        const string run = "run-capture-intent";
+        string root = "/Users/tester/" + HostedWorld.MacSaveRelative;
+        string backup = "/srv/runs/" + run + "/" + UserSaveFiles.BackupName(run, "client-1");
+        string recent = _host.Local(root + "/serverlist_local/recent");
+        Directory.CreateDirectory(Path.GetDirectoryName(recent)!); File.WriteAllText(recent, "personal before");
+        await Assert.ThrowsAsync<IOException>(() => UserSaveFiles.CaptureAsync(UserSaveFiles.Kind.ClientServerList, root, backup, "/var/tmp/vt/user-files",
+            UserSaveFilesOnHost.Remote(_host, TimeSpan.FromSeconds(60)), entry =>
+            {
+                if (entry.Kind == JournalEntry.UserFilesCaptureIntended)
+                    Line(_host, run, "player", Gone, entry.Kind, entry.Fields.Select(pair => (pair.Key, pair.Value)).ToArray());
+                if (!acquired || entry.Kind == JournalEntry.UserFilesCaptured) throw new IOException("lost journal reply");
+                return Task.CompletedTask;
+            }));
+        File.WriteAllText(recent, "newer personal file");
+        var pending = Assert.Single((await StatusAsync()).Runs);
+        Assert.Equal(JournalRunState.Recoverable, pending.State);
+        Assert.Contains("capture intended", Assert.Single(pending.Items).Status);
+        var report = await RecoverAsync(run);
+        Assert.True(report.Recovered, string.Join("\n", report.Steps));
+        Assert.Equal("newer personal file", File.ReadAllText(recent));
+        Assert.Equal(JournalRunState.Ended, Assert.Single((await StatusAsync()).Runs).State);
+    }
+
+    [Fact] public async Task RecoveryAfterCompletedRestoreOnlySettlesJournalAndLeavesAnotherCapturesMarker()
+    {
+        const string run = "run-completed-recent";
+        string root = "/Users/tester/" + HostedWorld.MacSaveRelative;
+        string recent = _host.Local(root + "/serverlist_local/recent");
+        Directory.CreateDirectory(Path.GetDirectoryName(recent)!); File.WriteAllText(recent, "personal before");
+        var remote = UserSaveFilesOnHost.Remote(_host, TimeSpan.FromSeconds(60));
+        var files = await UserSaveFiles.CaptureAsync(UserSaveFiles.Kind.ClientServerList, root,
+            "/srv/runs/" + run + "/" + UserSaveFiles.BackupName(run, "client-1"), "/var/tmp/vt/user-files", remote);
+        Line(_host, run, "player", Gone, JournalEntry.UserFilesCaptured, files.Captured().Fields.Select(pair => (pair.Key, pair.Value)).ToArray());
+        await files.IsolateAsync(); await files.RestoreAsync();
+        File.WriteAllText(recent, "newer personal file");
+        var next = await UserSaveFiles.CaptureAsync(UserSaveFiles.Kind.ClientServerList, root,
+            "/srv/runs/run-next/" + UserSaveFiles.BackupName("run-next", "client-1"), "/var/tmp/vt/user-files", remote);
+        byte[] marker = File.ReadAllBytes(_host.Local(next.Marker));
+        var report = await RecoverAsync(run);
+        Assert.True(report.Recovered, string.Join("\n", report.Steps));
+        Assert.Equal("newer personal file", File.ReadAllText(recent));
+        Assert.Equal(marker, File.ReadAllBytes(_host.Local(next.Marker)));
+        Assert.Equal(JournalRunState.Ended, Assert.Single((await StatusAsync()).Runs).State);
+        await next.UndoIsolateAsync();
+    }
+
+    [Fact] public async Task RecoveryIntentAppendFailureNeverStartsUserFileMutation()
+    {
+        const string run = "run-restore-intent-failed";
+        string root = "/Users/tester/" + HostedWorld.MacSaveRelative;
+        string recent = _host.Local(root + "/serverlist_local/recent");
+        Directory.CreateDirectory(Path.GetDirectoryName(recent)!); File.WriteAllText(recent, "personal before");
+        var files = await UserSaveFiles.CaptureAsync(UserSaveFiles.Kind.ClientServerList, root,
+            "/srv/runs/" + run + "/" + UserSaveFiles.BackupName(run, "client-1"), "/var/tmp/vt/user-files",
+            UserSaveFilesOnHost.Remote(_host, TimeSpan.FromSeconds(60)));
+        Line(_host, run, "player", Gone, JournalEntry.UserFilesCaptured, files.Captured().Fields.Select(pair => (pair.Key, pair.Value)).ToArray());
+        await files.IsolateAsync(); File.WriteAllText(recent, "run file");
+        _host.JournalFailsFor = JournalEntry.UserFilesRestoreIntended;
+        var report = await RecoverAsync(run);
+        Assert.False(report.Recovered);
+        Assert.Equal("run file", File.ReadAllText(recent));
+        Assert.False(Directory.Exists(_host.Local(files.Backup + "/after")));
+        Assert.DoesNotContain(_host.Runs, step => step.Script == "user-files" && step.Variables["mode"] == "restore");
+        Assert.Equal(JournalRunState.Recoverable, Assert.Single((await StatusAsync()).Runs).State);
+        _host.JournalFailsFor = null;
+        Assert.True((await RecoverAsync(run)).Recovered);
+        Assert.Equal("personal before", File.ReadAllText(recent));
+    }
+
+    [Fact] public async Task ADuplicateRestoreIntentAfterDurableCompletionWithLostReplyRemainsRecoverable()
+    {
+        const string run = "run-duplicate-intent";
+        string root = "/Users/tester/" + HostedWorld.MacSaveRelative;
+        string recent = _host.Local(root + "/serverlist_local/recent");
+        Directory.CreateDirectory(Path.GetDirectoryName(recent)!); File.WriteAllText(recent, "personal before");
+        var files = await UserSaveFiles.CaptureAsync(UserSaveFiles.Kind.ClientServerList, root,
+            "/srv/runs/" + run + "/" + UserSaveFiles.BackupName(run, "client-1"), "/var/tmp/vt/user-files",
+            UserSaveFilesOnHost.Remote(_host, TimeSpan.FromSeconds(60)));
+        void Append(JournalEntry entry) => Line(_host, run, "player", Gone, entry.Kind, entry.Fields.Select(pair => (pair.Key, pair.Value)).ToArray());
+        Append(files.Captured()); await files.IsolateAsync();
+        await Assert.ThrowsAsync<IOException>(() => files.RestoreAsync(entry =>
+        {
+            Append(entry); // Completion is durable, but the caller receives no acknowledgement.
+            if (entry.Kind == JournalEntry.UserFilesRestored) throw new IOException("lost completion acknowledgement");
+            return Task.CompletedTask;
+        }));
+        Assert.Empty(Assert.Single((await StatusAsync()).Runs).Items);
+        File.WriteAllText(recent, "new personal after completion");
+        await Assert.ThrowsAsync<IOException>(() => files.RestoreAsync(entry =>
+        {
+            Assert.Equal(JournalEntry.UserFilesRestoreIntended, entry.Kind);
+            Append(entry); throw new IOException("stop after duplicate intent");
+        }));
+        var pending = Assert.Single(Assert.Single((await StatusAsync()).Runs).Items);
+        Assert.Equal(2, pending.Fields["hashes"].Split(',').Length);
+        var report = await RecoverAsync(run);
+        Assert.True(report.Recovered, string.Join("\n", report.Steps));
+        Assert.Equal("new personal after completion", File.ReadAllText(recent));
+        Assert.False(Directory.Exists(_host.Local(files.Backup + "/after")));
+        Assert.Empty(Assert.Single((await StatusAsync()).Runs).Items);
     }
 
     // #412: the game's logs inside a copy are what explains why the run was interrupted. Recover keeps them in the run's

@@ -1424,6 +1424,53 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.Equal("pins observed, not reviewed", provenance.GetProperty("pins").GetString());
     }
 
+    [Fact] public async Task AHostedClientsFailedRestoreIntentAppendCannotChangeItsRecentFiles()
+    {
+        var server = NewServer(); var host = NewHost(server);
+        var clientHost = new FakeServerHost("mac-gpu", Path.Combine(_root, "gpu"), tunnelPort: 15578);
+        FakeInstalls.MacClient(clientHost.Local("/Users/tester/valheim"));
+        string recent = clientHost.Local("/Users/tester/" + HostedWorld.MacSaveRelative + "/serverlist_local/recent");
+        Directory.CreateDirectory(Path.GetDirectoryName(recent)!); File.WriteAllText(recent, "personal before");
+        var (plan, profile) = Write(host, withClient: true);
+        int code = await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["run", plan, Output], Options(host, server, run =>
+        {
+            using var session = run.OpenClient(PreparedClient(clientHost));
+            clientHost.JournalFailsFor = JournalEntry.UserFilesRestoreIntended;
+            return Task.CompletedTask;
+        }, clientHost, new ScriptedTransport()));
+        Assert.Equal(1, code);
+        Assert.Equal("127.0.0.1:2456 joined by client 77\n", File.ReadAllText(recent));
+        Assert.Equal("personal before", File.ReadAllText(clientHost.Local("/Users/tester/runs/" + RunId + "/" +
+            UserSaveFiles.BackupName(RunId, "client-1") + "/serverlist_local/recent")));
+        Assert.DoesNotContain(clientHost.Runs, step => step.Script == "user-files" && step.Variables["mode"] == "restore");
+        var journal = await RunJournalOnHost.ReadAsync(clientHost, "/Users/tester/journal", RunId, TimeSpan.FromSeconds(5));
+        Assert.DoesNotContain(journal, record => record.Entry.Kind == JournalEntry.UserFilesRestored);
+    }
+
+    [Fact] public async Task AMacServersFailedRestoreIntentAppendCannotChangeItsAccessLists()
+    {
+        var host = NewHost(); var (planPath, profilePath) = Write(host);
+        var plan = ServerRunPlan.Read<ServerRunPlan>(planPath);
+        plan.Executable = GameLaunch.ServerMacExecutable; plan.Runtime.Sha256.Clear();
+        var profile = TestEnvironment.Read(profilePath); profile.Hosts[profile.Server!.Host].Platform = "macos";
+        string root = "/Users/tester/" + HostedWorld.MacSaveRelative;
+        string admin = host.Local(root + "/adminlist.txt");
+        Directory.CreateDirectory(Path.GetDirectoryName(admin)!); File.WriteAllText(admin, "personal admins");
+        var hosted = HostedServerRun.Create(profile, plan, "test", new FakeRunHooks { Host = _ => host, RunId = RunId }, prepared: true);
+        var report = new ScenarioReport("mac-access-lists");
+        // Deliberately stop preparation after capture/isolation: this fixture has no prepared source-check owner.
+        await Assert.ThrowsAnyAsync<Exception>(() => hosted.LockAndPrepareRuntimeAsync(report, plan, CancellationToken.None));
+        Assert.False(File.Exists(admin));
+        File.WriteAllText(admin, "run admins"); host.JournalFailsFor = JournalEntry.UserFilesRestoreIntended;
+        var failures = await hosted.TeardownAsync(report, Output, launched: false, serverStopped: true);
+        Assert.NotEmpty(failures);
+        Assert.Equal("run admins", File.ReadAllText(admin));
+        Assert.DoesNotContain(host.Runs, step => step.Script == "user-files" && step.Variables["mode"] == "restore");
+        var journal = await RunJournalOnHost.ReadAsync(host, RunJournal.DirectoryFor(profile.Hosts[profile.Server.Host]), RunId, TimeSpan.FromSeconds(5));
+        Assert.Contains(journal, record => record.Entry.Kind == JournalEntry.UserFilesCaptured);
+        Assert.DoesNotContain(journal, record => record.Entry.Kind == JournalEntry.UserFilesRestored);
+    }
+
     [Fact] public async Task AProfileClientStartsInItsHostsDesktopSessionAndStopsOnlyThatClient()
     {
         var server = NewServer(); var host = NewHost(server);
@@ -1462,8 +1509,8 @@ public sealed partial class HostedServerRunTests : IDisposable
         var clientJournal = await RunJournalOnHost.ReadAsync(clientHost, "/Users/tester/journal", RunId, TimeSpan.FromSeconds(5));
         // A Mac client's GUI agent is journalled around its process: intended before the start, retired once the client is stopped.
         // The host user's recent-servers list is captured before the start and restored once the client stopped (#822).
-        Assert.Equal([JournalEntry.UserFilesCaptured, JournalEntry.ProcessIntended, JournalEntry.MacAgentIntended, JournalEntry.ProcessStarted,
-            JournalEntry.MacAgentRetired, JournalEntry.UserFilesRestored],
+        Assert.Equal([JournalEntry.UserFilesCaptureIntended, JournalEntry.UserFilesCaptured, JournalEntry.ProcessIntended, JournalEntry.MacAgentIntended, JournalEntry.ProcessStarted,
+            JournalEntry.MacAgentRetired, JournalEntry.UserFilesRestoreIntended, JournalEntry.UserFilesRestored],
             clientJournal.Where(record => record.Actor == "player").Select(record => record.Entry.Kind));
         Assert.Equal("77", clientJournal.Single(record => record.Entry.Kind == JournalEntry.ProcessStarted).Entry.Fields["pid"]);
         Assert.Equal(FakeServerHost.CommandLineSha256("77"), clientJournal.Single(record => record.Entry.Kind == JournalEntry.ProcessStarted).Entry.Fields["commandLineSha256"]);

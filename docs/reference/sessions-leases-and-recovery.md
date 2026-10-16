@@ -55,7 +55,11 @@ The game writes some files into the user's own data folder whatever the launch a
 
 Before an owned process starts, the run backs those files up into `user-files-<run>-<label>` in the evidence, journals the backup and moves the files aside. Once the process is proven stopped, the user's versions go back, and the run's versions stay in the backup's `after` folder. After an unproven stop, `env recover` restores them from the journal.
 
-One run at a time captures a folder's files. A second run's capture refuses, changing nothing, until the first one's restore or recovery.
+One run at a time captures a folder's files. A second run's capture refuses, changing nothing, until the first one's restore or recovery. Capture intent is journalled before acquiring the folder/kind owner marker, so a stopped capture remains visible in `env status` and can be settled by `env recover` even if its capture reply was lost.
+
+Restoration first records the files it observed and the intended result in the versioned owner marker, then journals restore intent before changing any user file. An interrupted restore accepts only those observed bytes or the captured final bytes. Newer personal files cause a refusal before further writes. Completion renames the marker into a capture-specific receipt in the same marker directory. A retry with that receipt settles the journal without reading or changing personal files or another run's marker. Its name combines the stable folder/kind marker and SHA-256 of the kind, exact save root and unique run/label backup path; recoveries reuse that identity. Terminal receipts are small retained proofs. Archive or remove a run's receipts only after confirming its restored journal entry and completed run; a stale caller without its receipt then refuses before writes.
+
+Old plain-path markers have no trustworthy restore phase and are refused for that folder and file kind. Keep the marker and backup, inspect the stopped run and the user's current files, and restore manually if ownership cannot be established; deleting an old marker does not prove its backup is safe to replay.
 
 ## The run journal
 

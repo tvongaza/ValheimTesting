@@ -307,7 +307,7 @@ internal sealed class CampaignClients
                 account?.Hold,
                 // The host user's recent-servers list, kept as found (#822): backed up in the run's folder there, journalled on the host.
                 saveFiles: UserSaveFilesOnHost.ForClient(host, hostProfile, runDirectory, RunId, "client-" + n,
-                    entry => JournalAsync(host, role.Host, name, entry, cancellation), entry => NoteAsync(host, role.Host, name, entry),
+                    entry => JournalAsync(host, role.Host, name, entry, cancellation), entry => JournalAsync(host, role.Host, name, entry, CancellationToken.None),
                     HostedTimeouts.Quick, cancellation));
             if (account != null) account.Session = session;
             return session;

@@ -423,9 +423,8 @@ internal static class RunRecovery
                             ? UserSaveFiles.FromJournal(item.Fields, runId, HostedWorld.DefaultSaveDirectory(GameLaunch.CurrentClientHost))
                             : UserSaveFiles.FromJournal(item.Fields, runId, await HostedWorldOnHost.ClientSaveRootAsync(host, timeout, cancellation).ConfigureAwait(false),
                                 UserSaveFilesOnHost.Remote(host, timeout));
-                        await files.RestoreAsync().ConfigureAwait(false);
+                        await files.RestoreAsync(entry => journal.AppendAsync(host, RunJournal.DirectoryFor(hosts[group.Key]), Actor, entry, timeout, cancellation)).ConfigureAwait(false);
                         Step(group.Key, what, "restored; versions written during the run kept in its backup");
-                        await Note(group.Key, files.Restored()).ConfigureAwait(false);
                     }
                     catch (Exception error) when (error is not OperationCanceledException)
                     { Step(group.Key, what, "not restored: " + error.Message, failed: true); }
