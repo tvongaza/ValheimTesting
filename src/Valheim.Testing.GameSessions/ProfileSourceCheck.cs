@@ -68,6 +68,21 @@ internal sealed class ProfileSourceCheck
         _stagedBeforeBoot = expected;
     }
 
+    // Called only by the clean-stopped placement after its atomic replacement and byte verification.
+    internal void ReplacePreparedPlugin(string relative, string before, string after)
+    {
+        HostListing Replace(HostListing listing)
+        {
+            if (!listing.Files.TryGetValue(relative, out var hash) || hash != before)
+                throw new InvalidOperationException("The prepared plugin hash differs from the stopped swap input.");
+            var files = new Dictionary<string, string>(listing.Files, listing.Names) { [relative] = after };
+            return new HostListing(listing.HostName, listing.Shell, listing.Root, files, listing.Executables, listing.States);
+        }
+        var loader = Replace(PreparedLoader);
+        var game = PreparedGame.Root == PreparedLoader.Root ? Replace(PreparedGame) : PreparedGame;
+        _preparedLoader = loader; _preparedGame = game;
+    }
+
     /// <summary>A scoped staging listing; an empty selection means there is nothing to verify, never the whole directory.</summary>
     internal static async Task<HostListing?> ListSelectedAsync(IGameHost host, string root, IEnumerable<string> selected,
         TimeSpan timeout, CancellationToken cancellation = default)

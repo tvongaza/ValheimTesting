@@ -149,13 +149,19 @@ public sealed class NativeDependencyLock
     {
         var plan = JsonSerializer.Deserialize<NativeDependencyLock>(File.ReadAllText(path), Json)
             ?? throw new InvalidDataException($"The native dependency lock {path} is empty.");
-        if (!plan.Ready) throw new InvalidDataException($"The native dependency lock {path} still has {plan.Gaps.Count} unresolved choice(s): {string.Join("; ", plan.Gaps.Select(gap => gap.Name))}.");
-        plan.CliManifest.RequireValid($"in the dependency lock {path}");
-        foreach (var file in plan.Mods.Concat(plan.Plugins).Concat(plan.CliFiles))
+        plan.RequireReady(path);
+        return plan;
+    }
+
+    // A bounded caller can validate paths and sizes on one parsed lock before any hashes are read.
+    internal void RequireReady(string path)
+    {
+        if (!Ready) throw new InvalidDataException($"The native dependency lock {path} still has {Gaps.Count} unresolved choice(s): {string.Join("; ", Gaps.Select(gap => gap.Name))}.");
+        CliManifest.RequireValid($"in the dependency lock {path}");
+        foreach (var file in Mods.Concat(Plugins).Concat(CliFiles))
             if (!File.Exists(file.File) || !FileHash.Sha256(file.File).Equals(file.Sha256, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidDataException($"The pinned file {file.File} ({file.Reason}) is missing or changed; resolve from explicit roots again.");
-        plan.RequireExactCliSet();
-        return plan;
+        RequireExactCliSet();
     }
 
     /// <summary>The lock contains exactly the pinned default ValheimCLI plugin described by its manifest.</summary>

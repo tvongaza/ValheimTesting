@@ -158,6 +158,21 @@ public sealed class ServerActor : IOwnedServer, IDisposable
         (_placement ?? throw new InvalidOperationException("No checkpoint placement.")).RestoreCheckpoint(original, hashes, archive, linked.Token);
     }
 
+    internal string CheckpointGameDirectory => _placement?.GameDirectory ?? throw new InvalidOperationException("No checkpoint placement.");
+    internal string CheckpointLoaderDirectory => _placement?.LoaderDirectory ?? throw new InvalidOperationException("No checkpoint placement.");
+
+    internal void SwapCheckpointPlugin(string operation, string source, string oldSha256, string newSha256,
+        string guid, string oldMd5, string newMd5, Action admission, CancellationToken cancellation)
+    {
+        RequireStoppedCheckpoint();
+        if (_plan == null || !_plan.Pins.TryGetValue(guid, out var pin) || pin != oldMd5)
+            throw new InvalidOperationException("The stopped plugin does not match the actor's original pin.");
+        (_placement ?? throw new InvalidOperationException("No checkpoint placement.")).SwapCheckpointPlugin(
+            operation, source, oldSha256, newSha256, admission, cancellation);
+        _session!.ReplaceStoppedPluginExpectation(guid, oldMd5, newMd5);
+        _plan.Pins[guid] = newMd5;
+    }
+
     internal void StartCheckpoint(CancellationToken cancellation)
     {
         RequireStoppedCheckpoint();
@@ -274,6 +289,8 @@ public sealed class ServerActor : IOwnedServer, IDisposable
 /// <summary>Where an owned server's boots run: what differs between this machine and a host of the environment.</summary>
 internal interface IServerPlacement
 {
+    void SwapCheckpointPlugin(string operation, string source, string oldSha256, string newSha256, Action admission, CancellationToken cancellation) =>
+        throw new NotSupportedException("This placement has no detached build swap.");
     void ArchiveCheckpoint(string archive, CancellationToken cancellation) => throw new NotSupportedException("This placement has no detached checkpoints.");
     void RestoreCheckpoint(string original, IReadOnlyDictionary<string, string> hashes, string archive, CancellationToken cancellation) =>
         throw new NotSupportedException("This placement has no detached checkpoints.");

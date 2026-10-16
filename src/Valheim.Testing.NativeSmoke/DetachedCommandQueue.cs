@@ -15,7 +15,7 @@ internal sealed class DetachedCommandQueue : IDisposable
     internal sealed record Status(Route Route, string State);
     internal const string StateFile = "detached-state.json";
     internal sealed record Request(string Id, Route Route, DateTime ExpiresUtc, string Command, string Pins, int TimeoutSeconds)
-    { public string Operation { get; init; } = "command"; }
+    { public string Operation { get; init; } = "command"; public DetachedModSwap.Input? Swap { get; init; } }
     internal sealed record Reply(string Id, string Outcome, string[] Output, string Message, string Evidence);
     private Route _route;
     private readonly DetachedCheckpoints? _checkpoints;
@@ -79,14 +79,14 @@ internal sealed class DetachedCommandQueue : IDisposable
         return lease;
     }
 
-    internal static int SubmitCheckpoint(string evidence, string operation, TextWriter output, TextWriter error)
+    internal static int SubmitCheckpoint(string evidence, string operation, TextWriter output, TextWriter error, DetachedModSwap.Input? swap = null)
     {
         evidence = Path.GetFullPath(evidence);
         var route = CurrentRoute(evidence);
         if (route.Evidence != evidence) throw new InvalidDataException("Checkpoint evidence names another run.");
         DetachedSession.RequireCommandOwnerAsync(route).GetAwaiter().GetResult();
         var request = new Request(Guid.NewGuid().ToString("N"), route, DateTime.UtcNow.AddSeconds(60), operation,
-            "checkpoint", 5) { Operation = operation };
+            "checkpoint", 5) { Operation = operation, Swap = swap };
         Validate(request);
         int slot = Publish(route, request);
         return WaitForReply(route, request, slot, output, error);
@@ -233,11 +233,13 @@ internal sealed class DetachedCommandQueue : IDisposable
 
     internal static void Validate(Request request)
     {
-        if (request.Route.CompletionSeconds is < 1 or > 18000 || request.Operation is not ("command" or "save" or "stop" or "restart") ||
+        if (request.Route.CompletionSeconds is < 1 or > 18000 || request.Operation is not ("command" or "save" or "stop" or "restart" or "swap") ||
             !Guid.TryParseExact(request.Id, "N", out _) || request.Command.Length is < 1 or > 4096 ||
             request.Command.IndexOfAny(['\r', '\n', '\0']) >= 0 || request.Pins.Length is < 1 or > 32768 ||
             request.TimeoutSeconds is < 1 or > 15 || request.ExpiresUtc.Kind != DateTimeKind.Utc || request.ExpiresUtc > DateTime.UtcNow.AddSeconds(61))
             throw new InvalidDataException("Invalid or unbounded detached command request.");
+        if (request.Operation == "swap") DetachedModSwap.Validate(request.Swap!);
+        else if (request.Swap != null) throw new InvalidDataException("Swap inputs belong only to a swap operation.");
         // Screenshots belong to the client workflow; this slice is a single server command, never an asynchronous follow-up.
         if (OwnedCliCommand.ScreenshotSupersize(request.Command) != null)
             throw new InvalidOperationException("Detached server commands do not capture client screenshots.");

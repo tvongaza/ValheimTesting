@@ -171,6 +171,11 @@ internal static partial class ModBuild
     {
         var record = JsonSerializer.Deserialize<BuildRecord>(File.ReadAllText(file), Json)
             ?? throw new InvalidDataException("Empty build-inputs manifest: " + file);
+        return Verify(record, selectedGame, selectedMod, file);
+    }
+
+    internal static BuildRecord Verify(BuildRecord record, string selectedGame, string selectedMod, string file)
+    {
         if (string.IsNullOrWhiteSpace(record.Game) || string.IsNullOrWhiteSpace(record.Mod) ||
             string.IsNullOrWhiteSpace(record.GameSha256) || record.Sources is not { Count: > 0 } ||
             record.Publicized is not { Count: > 0 } || record.Dependencies == null)

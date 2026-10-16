@@ -9,7 +9,8 @@ using Valheim.Testing.GameSessions;
 internal static class DetachedSession
 {
     internal const string Usage = "valheim-test detach server-load --server DIR --mod DLL --server-only --output NEW_DIR [assertion and timing options] | " +
-        "valheim-test detach status [--evidence DIR] | valheim-test detach save|stop|restart --evidence DIR | valheim-test detach finish --run ID";
+        "valheim-test detach status [--evidence DIR] | valheim-test detach save|stop|restart --evidence DIR | valheim-test detach finish --run ID | " +
+        "valheim-test detach swap --evidence DIR --mod DLL --sha256 HASH --build-inputs FILE --dependencies FILE";
     private const string ReadyVariable = "VALHEIM_TEST_DETACH_READY";
     private const string RunVariable = "VALHEIM_TEST_DETACH_RUN";
     private const string ControlVariable = "VALHEIM_TEST_DETACH_CONTROL";
@@ -45,6 +46,14 @@ internal static class DetachedSession
         if (args is ["status"])
             return (await EnvironmentRuns.WriteRunStatusReportAsync(null, output).ConfigureAwait(false)).NothingToRecover ? 0 : 3;
         if (args is ["finish", "--run", var finishRun]) return await FinishAsync(finishRun, output, error).ConfigureAwait(false);
+        if (args is ["swap", "--evidence", var swapEvidence, "--mod", var mod, "--sha256", var sha256,
+            "--build-inputs", var buildInputs, "--dependencies", var dependencies])
+        {
+            try { return DetachedCommandQueue.SubmitCheckpoint(swapEvidence, "swap", output, error, new(mod, sha256, buildInputs, dependencies)); }
+            catch (Exception failure) when (failure is ArgumentException or IOException or InvalidDataException or InvalidOperationException or
+                UnauthorizedAccessException or JsonException or HostOperationException)
+            { error.WriteLine("REFUSED: " + failure.Message); return 3; }
+        }
         if (args is [var operation, "--evidence", var evidence] && operation is "save" or "stop" or "restart" or "status")
         {
             try

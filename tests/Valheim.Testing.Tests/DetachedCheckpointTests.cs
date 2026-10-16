@@ -22,7 +22,7 @@ public sealed class DetachedCheckpointTests : IDisposable
         return route;
     }
     private DetachedCheckpoints Lifecycle(DetachedCommandQueue.Route route, string? failure = null,
-        CancellationToken cancellation = default, Action<string>? onEffect = null, Action? monitor = null)
+        CancellationToken cancellation = default, Action<string>? onEffect = null, Action? monitor = null, Func<DetachedModSwap.Input, string, Action, CancellationToken, Action>? swap = null)
     {
         void Effect(string name)
         {
@@ -41,7 +41,7 @@ public sealed class DetachedCheckpointTests : IDisposable
                     File.WriteAllText(Path.Combine(folder, "file"), kind == "world" ? "changed world" : "stopped boot log");
                     File.WriteAllText(Path.Combine(archive, kind + ".sha256.json"), JsonSerializer.Serialize(WorldFixture.Manifest(folder)));
                 }
-            }, (_, _) => Effect("restore"), _ => { Effect("start"); return route.Server with { Pid = 101, StartFileTimeUtc = "next-boot" }; }, monitor ?? (() => Effect("monitor"))), cancellation);
+            }, (_, _) => Effect("restore"), _ => { Effect("start"); return route.Server with { Pid = 101, StartFileTimeUtc = "next-boot" }; }, monitor ?? (() => Effect("monitor")), swap), cancellation);
     }
     private static DetachedCommandQueue.Request Request(DetachedCommandQueue.Route route, string operation) =>
         new(Guid.NewGuid().ToString("N"), route, DateTime.UtcNow.AddSeconds(60), operation, "pins", 1) { Operation = operation };
@@ -52,6 +52,44 @@ public sealed class DetachedCheckpointTests : IDisposable
         {
             admit(); _effects.Add("command"); return new(request.Id, "completed", [], "", "");
         }, lifecycle, () => _effects.Add("proof"));
+
+    [Theory]
+    [InlineData("success")][InlineData("validation")][InlineData("activation")][InlineData("journal")][InlineData("finish")][InlineData("cancel")]
+    public void SwapUsesTheStoppedQueueAndNeverReplaysAnUncertainActivation(string failure)
+    {
+        var route = Route(); using var cancellation = new CancellationTokenSource(); int activations = 0;
+        var lifecycle = Lifecycle(route, cancellation: cancellation.Token, swap: (_, _, admit, _) =>
+        {
+            if (failure == "validation") throw new InvalidDataException("wrong build");
+            return () => { admit(); activations++; if (failure == "activation") throw new IOException("activation outcome lost"); };
+        });
+        using var queue = new DetachedCommandQueue(route, entry =>
+        {
+            _journal.Add(entry);
+            if (entry.Kind != "detached-checkpoint-state" || entry.Fields["state"] != "swapping") return;
+            if (failure == "journal") throw new IOException("journal unavailable");
+            if (failure == "finish") File.WriteAllText(Path.Combine(route.Control, route.Run + ".finish"), "finish");
+            if (failure == "cancel") cancellation.Cancel();
+        }, checkpoints: lifecycle, checkpointProof: () => { });
+        var input = new DetachedModSwap.Input(Path.Combine(_root, "Mod.dll"), new string('a', 64), Path.Combine(_root, "build.json"), Path.Combine(_root, "lock.json"));
+        int running = DetachedCommandQueue.Publish(route, Request(route, "swap") with { Swap = input }); queue.ProcessPending();
+        Assert.Equal("refused", Read(route, running).Outcome); Assert.Equal(0, activations);
+        DetachedCommandQueue.Publish(route, Request(route, "stop")); queue.ProcessPending();
+        int slot = DetachedCommandQueue.Publish(route, Request(route, "swap") with { Swap = input }); queue.ProcessPending(); queue.ProcessPending();
+        Assert.Equal(failure == "success" ? "completed" : failure == "validation" ? "refused" : "unknown", Read(route, slot).Outcome);
+        Assert.Equal(failure is "success" or "activation" ? 1 : 0, activations);
+        if (failure == "success")
+        {
+            Assert.Equal("stopped", lifecycle.State); Assert.Equal(1, DetachedCommandQueue.CurrentRoute(route.Evidence).Boot);
+            int second = DetachedCommandQueue.Publish(route, Request(route, "swap") with { Swap = input }); queue.ProcessPending();
+            Assert.Equal("refused", Read(route, second).Outcome); Assert.Equal(1, activations);
+        }
+        if (failure == "activation")
+        {
+            int restart = DetachedCommandQueue.Publish(route, Request(route, "restart")); queue.ProcessPending();
+            Assert.Equal("refused", Read(route, restart).Outcome);
+        }
+    }
 
     [Fact]
     public void StopArchivesBeforeRestartAndOneQueueRejectsEveryOldBootRequest()

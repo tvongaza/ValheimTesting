@@ -7,10 +7,12 @@ using Valheim.Testing.GameSessions;
 internal sealed class DetachedCheckpoints : IDisposable
 {
     internal sealed record Operations(Action VerifyInputs, Func<uint> Save, Action Stop, Action<string, CancellationToken> Archive,
-        Action<string, CancellationToken> Restore, Func<CancellationToken, OwnedClientCommandLease> Start, Action CheckRunning);
+        Action<string, CancellationToken> Restore, Func<CancellationToken, OwnedClientCommandLease> Start, Action CheckRunning,
+        Func<DetachedModSwap.Input, string, Action, CancellationToken, Action>? PrepareSwap = null);
     private readonly Operations _operations;
     private readonly string _evidence;
     private string? _archive;
+    private bool _swapped;
     private BootExitWatch? _watch;
     private readonly CancellationToken _cancellation;
     private readonly TimeSpan _deadline;
@@ -24,17 +26,18 @@ internal sealed class DetachedCheckpoints : IDisposable
         _deadline = TimeSpan.FromSeconds(deadlineSeconds); CompletionSeconds = checked(deadlineSeconds + settleSeconds + 30);
     }
 
-    internal static DetachedCheckpoints For(GameSession session, string worldUid)
+    internal static DetachedCheckpoints For(GameSession session, string worldUid, NativeDependencyLock dependencies)
     {
         var server = session.Server ?? throw new InvalidOperationException("Detached checkpoints require the owned server.");
         var (original, hashes) = server.OriginalFixture ?? throw new InvalidOperationException("No original fixture was pinned before startup.");
         WorldFixture.Verify(original, hashes);
         if (hashes.Count == 0) throw new InvalidDataException("The original detached fixture is empty.");
         DetachedCommandQueue.WriteNew(Path.Combine(session.Output, "detached-original-fixture.json"), new { original, hashes }, bounded: false);
+        var swap = new DetachedModSwap(server, dependencies, session.Output);
         var watch = new BootExitWatch();
         watch.Attach(server.CurrentProcess ?? throw new InvalidOperationException("No owned server process."));
         return new(session.Output, new(
-            () => { session.Cancellation.ThrowIfCancellationRequested(); DetachedSession.VerifyStagedInputs(); WorldFixture.Verify(original, hashes); },
+            () => { session.Cancellation.ThrowIfCancellationRequested(); DetachedSession.VerifyStagedInputs(); WorldFixture.Verify(original, hashes); swap.VerifyActivated(); },
             () => new SessionControl(server.Game).Save(worldUid, TimeSpan.FromSeconds(90)),
             () => { server.StopCheckpoint(); watch.Settle(); }, server.ArchiveCheckpoint,
             (archive, token) => server.RestoreCheckpoint(original, hashes, archive, token),
@@ -45,7 +48,7 @@ internal sealed class DetachedCheckpoints : IDisposable
                 watch.Attach(process);
                 return DetachedCommandQueue.ServerLease(session.Output, process);
             },
-            watch.Check), session.Cancellation, deadlineSeconds: Math.Max(900, 2 * (server.Plan?.StartupSeconds ?? 300) + 300),
+            watch.Check, swap.Prepare), session.Cancellation, deadlineSeconds: Math.Max(900, 2 * (server.Plan?.StartupSeconds ?? 300) + 300),
             settleSeconds: Math.Max(120, (server.Plan?.QuitSeconds ?? 20) + 375)) { _watch = watch };
     }
 
@@ -73,9 +76,22 @@ internal sealed class DetachedCheckpoints : IDisposable
         try
         {
             admission();
-            if (request.Operation == "restart" ? State != "stopped" : State != "running")
+            if (request.Operation is "restart" or "swap" ? State != "stopped" : State != "running")
                 throw new InvalidOperationException("Checkpoint " + request.Operation + " is not allowed while " + State + ".");
             Verify();
+            if (request.Operation == "swap")
+            {
+                if (_swapped) throw new InvalidOperationException("This detached run has already used its one build swap.");
+                if (_operations.PrepareSwap == null || request.Swap == null) throw new InvalidOperationException("No pinned build swap inputs.");
+                var activate = _operations.PrepareSwap(request.Swap, request.Id, admission, deadline.Token);
+                admission(); deadline.Token.ThrowIfCancellationRequested();
+                changed = true; _swapped = true;
+                Transition("swapping");
+                admission(); deadline.Token.ThrowIfCancellationRequested();
+                activate();
+                Verify(); Transition("stopped");
+                return new(request.Id, "completed", ["SWAPPED pinned build; server remains stopped"], "", _evidence);
+            }
             if (request.Operation == "restart")
             {
                 if (_archive == null) throw new InvalidOperationException("No verified clean-stop archive exists.");
@@ -121,7 +137,7 @@ internal sealed class DetachedCheckpoints : IDisposable
         }
         catch (Exception failure) when (failure is IOException or InvalidDataException or InvalidOperationException or
             ArgumentException or TimeoutException or UnauthorizedAccessException or JsonException or OperationCanceledException or
-            HostOperationException or System.ComponentModel.Win32Exception)
+            HostOperationException or System.ComponentModel.Win32Exception or BadImageFormatException)
         {
             if (changed) Unknown();
             return new(request.Id, changed ? "unknown" : "refused", [], failure.Message, _archive ?? "");
