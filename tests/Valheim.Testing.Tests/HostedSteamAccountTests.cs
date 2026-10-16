@@ -177,11 +177,13 @@ public sealed partial class HostedServerRunTests
         LeaseBox.WritePool(_root, Leases);
         var run = WithClient(Accounts(check: true));
         run.Client.SteamUserReply = reply + "\n";
+        var leaseHost = new ObservedLeaseHost(Leases);
         int code = await PinnedServerRun.MainAsync(TestEnvironment.Read(run.Profile), ["run", run.Plan, Output], Options(run.Host, run.Server, context =>
         {
             using (context.OpenClient(PreparedClient(run.Client))) { }
             return Task.CompletedTask;
-        }, run.Client, SignedInClientTransport(), LeaseBox.Host()));
+        }, run.Client, SignedInClientTransport(), leaseHost.Host));
+        AssertAccountReleased(leaseHost);
         var check = Step("client player's host is signed in to Steam account vt_client_one (signed-in check)");
         Assert.Equal("steam-user", run.Client.Runs.First(entry => !entry.Script.StartsWith("mac-", StringComparison.Ordinal)).Script); // Before anything but the Mac console and slice checks.
         if (refusal == null)
@@ -197,7 +199,6 @@ public sealed partial class HostedServerRunTests
             Assert.DoesNotContain(run.Client.Runs, entry => entry.Script is "client-start" or "move-aside");
         }
         Assert.DoesNotContain("7656119", File.ReadAllText(Path.Combine(Output, "result.json")));
-        Assert.True(Step("release client player's Steam account lease").GetProperty("Passed").GetBoolean());
         Assert.Equal(SteamAccountState.Free, (await LeaseBox.StatusAsync(PoolFile)).State);
     }
 
