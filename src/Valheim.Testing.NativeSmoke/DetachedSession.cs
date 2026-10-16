@@ -360,6 +360,16 @@ internal static class DetachedSession
 
     private sealed record Owner(WindowsScheduledTask Task, string Control, string Output, JournalRunner Runner);
 
+    // The evidence pointer is routing information, never a second ownership authority. Prove it against the existing journal.
+    internal static async Task RequireCommandOwnerAsync(DetachedCommandQueue.Route route)
+    {
+        var owner = await ReadOwnerAsync(route.Run).ConfigureAwait(false);
+        if (owner.Control != route.Control || !owner.Runner.OnThisMachine || owner.Runner.Pid != route.Pid ||
+            owner.Runner.StartedUtc.ToFileTimeUtc().ToString(System.Globalization.CultureInfo.InvariantCulture) != route.Started ||
+            !ForegroundHold.ExactOwner(route.Pid, route.Started))
+            throw new InvalidOperationException("The exact journalled detached supervisor is gone or changed; no command was sent.");
+    }
+
     // The run's last journalled detached owner, retired or not: a repeated finish reads the same owner and reports the run's end.
     private static async Task<Owner> ReadOwnerAsync(string run)
     {
