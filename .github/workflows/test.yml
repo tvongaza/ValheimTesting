@@ -71,9 +71,6 @@ jobs:
         run: test ! -e .packages/Valheim.Testing.Cli.0.1.0-preview.0.nupkg
       - name: Seed stale publish files for the packaging regression
         run: dotnet run scripts/tool-pack.cs -- seed
-      # #736 investigation, macOS only: a sample of the machine every minute (see the action).
-      - uses: ./.github/actions/macos-diagnostics-start
-        if: runner.os == 'macOS'
       # CI runs the two slower, local-shell integration classes in a separate three-OS job. Plain local validate still runs
       # them. Normal runs take 3-6 minutes. validate.cs gives every test command a 5-minute soft limit (a warning) and a 10-minute
       # hard limit (failed, naming the tests in flight; #719). A stopped host can add about 0.7 minutes for its blame flush and
@@ -84,14 +81,6 @@ jobs:
       # retains its full non-shell validation. A pull request runs this OS's share of the toolkit tests (VT_SPLIT_ARGUMENT).
       - run: dotnet run scripts/validate.cs -- ${{ matrix.os != 'ubuntu-latest' && '--ci-build-only' || '--skip-ci-shell' }} ${{ env.VT_SPLIT_ARGUMENT }}
         timeout-minutes: 15
-        env:
-          # #736: macOS only; one line a minute in the job log, which reaches GitHub while the job runs.
-          VT_VALIDATE_HEARTBEAT_SECONDS: ${{ runner.os == 'macOS' && '60' || '' }}
-      # #736: always on macOS (see the action).
-      - uses: ./.github/actions/macos-diagnostics-finish
-        if: always() && runner.os == 'macOS'
-        with:
-          name: macos-diagnostics
       - name: Keep the validation transcript
         if: failure() || cancelled()
         uses: actions/upload-artifact@v7
@@ -168,9 +157,6 @@ jobs:
           key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', 'scripts/*.cs', 'scripts/Shared/*.cs', 'cli-dependency.json', 'NuGet.Config', '.config/dotnet-tools.json') }}
           restore-keys: nuget-${{ runner.os }}-
       - run: dotnet run scripts/bootstrap-cli.cs
-      # #736 investigation, macOS only (see the action).
-      - uses: ./.github/actions/macos-diagnostics-start
-        if: runner.os == 'macOS'
       - name: Run toolkit shard
         # One test command: its 10-minute hard limit (validate.cs, #719) plus the data-root guard and the transcript.
         timeout-minutes: 12
@@ -178,8 +164,6 @@ jobs:
         env:
           # A manual dispatch keeps each shard's TRX timings, to refresh ci-test-timings.json (the union is the whole suite).
           VT_CI_PROFILE: ${{ github.event_name == 'workflow_dispatch' && '1' || '' }}
-          # #736: macOS only; one line a minute in the job log, which reaches GitHub while the job runs.
-          VT_VALIDATE_HEARTBEAT_SECONDS: ${{ runner.os == 'macOS' && '60' || '' }}
       - name: Keep the shard's test timings for CI profiling
         if: github.event_name == 'workflow_dispatch' && always()
         uses: actions/upload-artifact@v7
@@ -188,10 +172,6 @@ jobs:
           path: artifacts/validate/Valheim.Testing.Tests/timings.trx
           if-no-files-found: ignore
           retention-days: 2
-      - uses: ./.github/actions/macos-diagnostics-finish
-        if: always() && runner.os == 'macOS'
-        with:
-          name: macos-diagnostics-toolkit-${{ matrix.shard }}
       - name: Keep shard evidence on failure
         if: failure() || cancelled()
         uses: actions/upload-artifact@v7

@@ -29,9 +29,6 @@
 // A RunTestsOnBothFrameworks hard limit during the net48 xunit console leg cannot name tests: xunit.console.exe is not a testhost
 // on Windows or under Mono, so there is no blame collector to flush.
 //
-// VT_VALIDATE_HEARTBEAT_SECONDS=N (the macOS CI job sets 60; #736 investigation) adds a "heartbeat:" line every N seconds that names the
-// running command and the machine's processes, free disk and, on macOS, free memory level.
-//
 // --split is the OS-aware split of a pull request's tests (#735), decided in CiSplitFilter and nowhere else. A test class carries at
 // most one [Trait("Os", ...)]: "neutral" runs on Linux only, "windows" on Windows, "unix" on Linux and macOS, "macos" on macOS; a
 // class without one is OS-sensitive and runs on every OS. Without --split (pushes to main, manual dispatches, local validation)
@@ -69,23 +66,12 @@ string transcript = Path.Combine(results, "validate.log");
 File.WriteAllText(transcript, "");
 var started = Stopwatch.StartNew();
 var noteLock = new object();
-string running = "";
 string dataRoot = DataRoot();
 var dataBefore = Snapshot(dataRoot);
 var softLimit = TimeSpan.FromSeconds(LimitSeconds("VT_VALIDATE_SOFT_LIMIT_SECONDS", 5 * 60));
 var hardLimit = TimeSpan.FromSeconds(LimitSeconds("VT_VALIDATE_HARD_LIMIT_SECONDS", 10 * 60));
 const int hardLimitGracePeriodSeconds = 30;
 if (hardLimit <= softLimit) throw new InvalidOperationException("The hard limit of a test command must be longer than its soft limit.");
-// #736 investigation, remove it when that issue closes: the macOS CI job runs with VT_VALIDATE_HEARTBEAT_SECONDS=60. One line each
-// period names the running command and the machine's state; it reaches GitHub in the job log while the job runs, so the last line
-// before a lost runner says which command was running and whether the machine was short of memory, disk or processes. Lines that
-// stop while the step is still running mean the whole machine stopped, not a test.
-double heartbeatSeconds = Environment.GetEnvironmentVariable("VT_VALIDATE_HEARTBEAT_SECONDS") is { Length: > 0 }
-    ? Math.Min(LimitSeconds("VT_VALIDATE_HEARTBEAT_SECONDS", 60), 3600) : 0;
-using var heartbeat = heartbeatSeconds > 0
-    ? new System.Threading.Timer(_ => Heartbeat(), null, TimeSpan.FromSeconds(heartbeatSeconds), TimeSpan.FromSeconds(heartbeatSeconds))
-    : null;
-
 if (splitFilter != null) Note($"OS-aware split (#735): classified test commands here select {splitFilter}; repository validation's other test projects run whole");
 
 if (testProject)
@@ -311,7 +297,6 @@ void Execute(string file, string[] arguments, string? testResults, string? noTes
 {
     string command = file + " " + string.Join(' ', arguments);
     Note("start: " + command);
-    running = command;
     var info = new ProcessStartInfo(file) { UseShellExecute = false, WorkingDirectory = workingDirectory };
     foreach (string argument in arguments) info.ArgumentList.Add(argument);
     using Process process = Process.Start(info) ?? throw new InvalidOperationException("Could not start " + file);
@@ -375,7 +360,6 @@ void Execute(string file, string[] arguments, string? testResults, string? noTes
         throw new InvalidOperationException("Validation command failed with exit code " + process.ExitCode);
     }
     Note($"done in {Elapsed(clock.Elapsed)}: {command}");
-    running = "";
     DataRootUnchanged(command);
 }
 
@@ -462,7 +446,6 @@ string Capture(string file, params string[] arguments)
 {
     string command = file + " " + string.Join(' ', arguments);
     Note("start: " + command);
-    running = command;
     var info = new ProcessStartInfo(file) { UseShellExecute = false, WorkingDirectory = root, RedirectStandardOutput = true };
     foreach (string argument in arguments) info.ArgumentList.Add(argument);
     using Process process = Process.Start(info) ?? throw new InvalidOperationException("Could not start " + file);
@@ -473,7 +456,6 @@ string Capture(string file, params string[] arguments)
         Note($"FAILED ({process.ExitCode}): {command}");
         throw new InvalidOperationException("Validation command failed with exit code " + process.ExitCode);
     }
-    running = "";
     DataRootUnchanged(command);
     return output;
 }
@@ -535,42 +517,6 @@ void Note(string text)
         Console.Out.WriteLine(line);
         Console.Out.Flush();
         File.AppendAllText(transcript, line + Environment.NewLine);
-    }
-}
-
-// A timer thread must not end the process: a failing line is dropped.
-void Heartbeat()
-{
-    string command = running; // Read once: the main thread writes it.
-    try { Note($"heartbeat: {(command.Length == 0 ? "between commands" : "running " + command)}; {MachineSummary()}"); }
-    catch (Exception) { /* The next period tries again. */ }
-}
-
-// The heartbeat's view of the machine: processes, free space on the drive holding the checkout and, on macOS, the free memory level
-// the system reports (kern.memorystatus_level, a percentage). Never throws and never waits long: a failing or stalled probe is a
-// word in the line.
-string MachineSummary()
-{
-    string text = "processes " + Try(() =>
-    {
-        var all = Process.GetProcesses();
-        foreach (var one in all) one.Dispose();
-        return all.Length.ToString();
-    });
-    text += "; disk free " + Try(() => (new DriveInfo(Path.GetPathRoot(root)!).AvailableFreeSpace / (1L << 30)).ToString() + " GiB");
-    if (OperatingSystem.IsMacOS())
-        text += "; free memory " + Try(() =>
-        {
-            using var probe = Process.Start(new ProcessStartInfo("sysctl", ["-n", "kern.memorystatus_level"]) { RedirectStandardOutput = true, UseShellExecute = false })!;
-            var level = probe.StandardOutput.ReadToEndAsync();
-            if (level.Wait(10_000)) return level.Result.Trim() + "%";
-            try { probe.Kill(); } catch (InvalidOperationException) { /* It ended meanwhile. */ }
-            return "unknown (sysctl did not answer in 10 s)";
-        });
-    return text;
-    static string Try(Func<string> read)
-    {
-        try { return read(); } catch (Exception ex) { return "unknown (" + ex.GetType().Name + ")"; }
     }
 }
 
