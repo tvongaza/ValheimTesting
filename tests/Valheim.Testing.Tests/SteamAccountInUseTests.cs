@@ -166,7 +166,7 @@ public sealed class SteamAccountInUseTests : IDisposable
 
     private static EnvironmentRecipe Recipe(string name, string host, string kind, int port) => new()
     {
-        Name = name, Host = host, Roles = [kind], Install = @"C:\game", Runtime = @"C:\runs",
+        Name = name, Host = host, Roles = [kind], Install = @"C:\game", Runtime = kind == "server" ? @"C:\runs" : @"C:\client-runs", // a client environment has its own runtime (#791)
         CliPort = port, LocalCliPort = port + 1000, GamePort = kind == "server" ? 2456 : 0,
     };
 

@@ -410,7 +410,8 @@ internal sealed class FakeServerHost : IGameHost
             case "cleanup-stage":
                 foreach (string path in new[] { v["runtime"], v["stage"] }.Where(path => path.Length != 0))
                     if (Directory.Exists(Local(path))) Directory.Delete(Local(path), recursive: true);
-                if (v.TryGetValue("parent", out string? parent) && Directory.Exists(Local(parent)) && !Directory.EnumerateFileSystemEntries(Local(parent)).Any())
+                if (v.GetValueOrDefault("keepparent", "").Length == 0 && v.TryGetValue("parent", out string? parent) && Directory.Exists(Local(parent)) &&
+                    !Directory.EnumerateFileSystemEntries(Local(parent)).Any())
                     Directory.Delete(Local(parent));
                 return Ok("VT-STAGE-CLEANED\n");
             // As the real scripts do (HostedCharacterStageShellTests runs them): the rule arrives as variables.
@@ -729,8 +730,8 @@ internal sealed class FakeServerHost : IGameHost
             case "preloader": return Ok(PreloaderReply);
             case "world-reserve":
             {
-                string keep = Local(v["keep"]), stage = Local(v["stage"]);
-                if (Path.Exists(keep) || Path.Exists(stage)) return new HostResult(HostOutcome.Exited, 4, "", "", TimeSpan.Zero, false);
+                string keep = Local(v["keep"]);
+                if (Path.Exists(keep) || v["stage"].Length != 0 && Path.Exists(Local(v["stage"]))) return new HostResult(HostOutcome.Exited, 4, "", "", TimeSpan.Zero, false);
                 Directory.CreateDirectory(keep);
                 return Ok("VT-WORLD-RESERVED done\n");
             }

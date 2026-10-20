@@ -123,6 +123,7 @@ A `Valheim.Testing*` assembly is `released` when the release workflow built it, 
 | `boot-N/`, `connection-N.jsonl` | Each boot's logs and commands |
 | The world copy | The run's save |
 | `runtime-changes/` | Every file the run added or changed in the profile, with `changes.json` |
+| `host-runs/<host>/<runtime folder>/` | What was left in the run's folder on each host, such as a client's launch folders and user-file backup, fetched before the folder was removed |
 
 The profile goes once its server has stopped, on a pass, a failure or `validate`. `runtime-changes/` keeps at most 64 MB per file and 256 MB in all after a pass, and 1 GB and 2 GB after a failure. A larger file is listed with its size and SHA-256. `runtimeCopy` says what was removed and kept, and `outputBytes` gives the output's size.
 
@@ -138,7 +139,7 @@ An environment fits when its `cliPort` is the plan's `port` and its `gamePort` m
 2. checks the supplied pins against the host's install, then stages the profile in `<runtime>/<runId>/runtime`;
 3. ships the verified world copy to `<runtime>/<runId>/world` and verifies it there;
 4. opens a loopback tunnel to ValheimCLI and starts each boot in `<runtime>/<runId>/boot-N` with `HostServer.StartAsync`;
-5. stops only the process it started, by process ID and start time, and fetches `boot-N/` and `host-world/`; after each verified fetch, records its receipt in the journal and removes the corresponding host directory under the host lock. A failed fetch or receipt keeps the directory visible to `env status`; recovery keeps evidence without a proven fetch, and explicit `env teardown --run ID` removes it;
+5. stops only the process it started, by process ID and start time, and fetches `boot-N/` and `host-world/`; after each verified fetch, records its receipt in the journal and removes the corresponding host directory under the host lock. A failed fetch or receipt keeps the directory visible to `env status`; recovery keeps evidence without a proven fetch, and explicit `env teardown --run ID` removes it. Last, whatever is left in `<runtime>/<runId>` is fetched into `host-runs/<host>/` in the output and the folder is removed, under the same rules. A client's `<runtime>/<runId>` on its host goes the same way;
 6. compares the source install with its listing from preparation. A changed, missing or added file fails the run and is never repaired.
 
 Set `VALHEIM_TESTING_SOURCE_HASH_AFTER_RUN=1` to compare content hashes instead of sizes and times. [Game hosts](sessions-hosts.md) describes each host kind, and [run on another machine](../guides/run-on-another-machine.md) walks through it.
@@ -155,4 +156,4 @@ A crossplay server on Linux needs `libpulse0` and `libpulse-mainloop-glib0`, whi
 - A standalone `--inventory` run refuses a remote Mac host. An SSH Mac server runs in a [campaign](sessions-campaigns.md#a-mac-dedicated-server).
 - Remote clients and several actors are a [campaign](sessions-campaigns.md).
 - A lost reply during a start or stop leaves the outcome unknown and keeps the host's lock.
-- The rest of the run directory on a host is never deleted.
+- A run directory stays on its host, listed by `env status`, while its server may still run, when its fetch failed, or with `VALHEIM_TESTING_KEEP_RUNTIME=1`.

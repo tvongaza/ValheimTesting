@@ -29,7 +29,7 @@ Save this beside your tests as `environments.json`, outside the repository. The 
             "lock": "C:\\ValheimTesting\\lock" }
   },
   "environments": [
-    { "name": "pc-server", "host": "pc", "roles": ["server"], "install": "C:\\vt\\install", "runtime": "C:\\vt\\runs",
+    { "name": "pc-server", "host": "pc", "roles": ["server"], "install": "C:\\vt\\install", "runtime": "C:\\vt\\runs\\pc-server",
       "cliPort": 5577, "gamePort": 2466 }
   ]
 }

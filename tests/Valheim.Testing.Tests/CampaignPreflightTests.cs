@@ -23,7 +23,7 @@ public sealed class CampaignPreflightTests : IDisposable
         environments = new object[]
         {
             new { name = "pc-server", host = "pc", roles = new[] { "server" }, install = @"C:\game", runtime = @"C:\runs", cliPort = 5577, localCliPort = 6577, gamePort = 2456 },
-            new { name = "pc-client", host = valid ? "pc" : "unlisted", roles = new[] { "client" }, install = @"C:\client", runtime = @"C:\runs", cliPort = 5578, localCliPort = 6578 },
+            new { name = "pc-client", host = valid ? "pc" : "unlisted", roles = new[] { "client" }, install = @"C:\client", runtime = @"C:\client-runs", cliPort = 5578, localCliPort = 6578 },
         },
         leaseHost = "pc",
         leaseDirectory = @"C:\leases",

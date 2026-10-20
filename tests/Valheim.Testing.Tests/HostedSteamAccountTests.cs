@@ -47,8 +47,9 @@ public sealed partial class HostedServerRunTests
                 "CLI port is free on the server host", "open the loopback CLI tunnel to the server host", "start and verify owned dedicated fixture", "stop only owned server",
                 "fetch the server host's world copy", "verify server's source install after the run (size and modified time)",
                 "remove the server host's runtime copy, keeping what the run changed", "remove the fetched world copy on the server host",
-            "remove the fetched boot files on the server host", "close the CLI tunnel",
+            "remove the fetched boot files on the server host", "fetch and remove the server host's run folder", "close the CLI tunnel",
                 "verify player's source install after the run (not applicable: runs in place)",
+                "fetch and remove client host mac-gpu's run folder",
                 "release client host mac-gpu's lock", "release the server host's lock", "scan run logs" }, StepNamesIn(plainOutput));
         var plainProvenance = ResultIn(plainOutput).GetProperty("Provenance").EnumerateObject().Select(entry => entry.Name).ToList();
         Assert.DoesNotContain(plainProvenance, name => name.StartsWith("steamAccount", StringComparison.Ordinal));

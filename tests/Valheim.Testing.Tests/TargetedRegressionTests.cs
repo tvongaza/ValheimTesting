@@ -738,6 +738,21 @@ public sealed class TargetedRegressionTests : IDisposable
         Assert.Equal(JournalRunState.Ended, Status(nextRun).State);
     }
 
+    // #791: a passing start leaves nothing in the client environment's runtime folder (its disposable profile retired, its hosted
+    // world collected into the evidence), and env status lists nothing of it.
+    [ClientHostFact] public void APassingStartLeavesNoFolderInTheClientsRuntime()
+    {
+        using var data = new FakeClientDataDirectory(_rig.Save);
+        Directory.CreateDirectory(Worlds);
+        var (report, output, runId) = Start(() => new LocalFakeOwnedProcess(60));
+        Assert.True(report.Passed, string.Join("; ", report.Steps.Where(step => !step.Passed).Select(step => step.Name + ": " + step.Error)));
+        Assert.True(File.Exists(Path.Combine(output, "host-world", FixtureWorld, "_main.1.fwl2")));
+        Assert.Empty(Directory.Exists(_rig.Runtime) ? Directory.EnumerateFileSystemEntries(_rig.Runtime) : []);
+        var status = Status(runId);
+        Assert.Equal(JournalRunState.Ended, status.State);
+        Assert.Empty(status.Items);
+    }
+
     // #820: a start refused before launch because the client's worlds already hold the fixture world's name copied the fixture
     // first and left that copy journalled, so the run stayed recoverable and blocked the next one. The refusal now comes before
     // any copy: the user's world is untouched, no fixture copy exists, and the run ends with nothing left.
