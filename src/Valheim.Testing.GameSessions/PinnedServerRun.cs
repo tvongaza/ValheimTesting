@@ -516,6 +516,7 @@ public static class PinnedServerRun
                 foreach (var failure in await new RunRetirement(report, full).CampaignAsync(prepared, actors?.LockedHosts ?? [], cleanup,
                     actors?.PendingMacAgentHosts).ConfigureAwait(false))
                 { Console.Error.WriteLine("Teardown: " + failure.Message); Classify(failure); }
+            if (actors != null) await actors.RetireRunFoldersAsync(full, Try, cleanup).ConfigureAwait(false);
             if (actors != null) await actors.ReleaseLocksAsync(Try).ConfigureAwait(false);
             if (game != null && named != null)
             {

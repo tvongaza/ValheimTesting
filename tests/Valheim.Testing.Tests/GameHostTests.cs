@@ -529,6 +529,11 @@ public class ResolvedEnvironmentTests
     [InlineData("\"host\": \"linux-box\"", "\"host\": \"nowhere\"", "not listed")]
     [InlineData("\"host\": \"linux-box\", \"install\": \"/opt/valheim/server\", \"runtime\": \"/srv/valheim-testing/runs\", \"cliPort\": 5577",
                 "\"host\": \"windows-pc\", \"install\": \"C:/server\", \"runtime\": \"C:/vt/server\", \"cliPort\": 5578", "same ValheimCLI port 5578 on host 'windows-pc'")]
+    // #791: each role's run folder is <runtime>/<runId>; a server and a client sharing one runtime on a host would meet in it
+    // (a Windows host compares the folder as Windows does: any case, either separator, a trailing one).
+    [InlineData("\"host\": \"linux-box\", \"install\": \"/opt/valheim/server\", \"runtime\": \"/srv/valheim-testing/runs\"",
+                "\"host\": \"windows-pc\", \"install\": \"C:/server\", \"runtime\": \"d:\\\\valheimtesting\\\\RUNS\\\\\"",
+                "server and client player use the same runtime d:\\valheimtesting\\RUNS\\ on host 'windows-pc'")]
     [InlineData("\"lock\": \"/var/tmp/valheim-testing.lock\"", "\"lock\": \"var/tmp/lock\"", "lock must be an absolute path")]
     [InlineData("\"lock\": \"C:\\\\ValheimTesting\\\\lock\"", "\"lock\": \"/ValheimTesting/lock\"", "lock must be an absolute path")]
     [InlineData("\"destination\": \"tester@linux-box.example\", ", "", "needs a destination")]

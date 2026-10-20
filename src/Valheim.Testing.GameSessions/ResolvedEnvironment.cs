@@ -49,6 +49,12 @@ internal sealed class ResolvedEnvironment
         // One Valheim client per machine: Steam runs one copy of the game per signed-in session.
         foreach (var shared in Clients.GroupBy(client => client.Value.Host).Where(group => group.Count() > 1))
             errors.Add($"Clients {string.Join(", ", shared.Select(client => client.Key))} share host '{shared.Key}'; a host runs one game client.");
+        // Each role keeps its run's folder at <runtime>/<runId> (RunFolder): two roles on one host with one runtime would meet in it.
+        foreach (var shared in roles.Where(role => !string.IsNullOrEmpty(role.Value.Runtime) && Hosts.ContainsKey(role.Value.Host ?? ""))
+                     .GroupBy(role => (role.Value.Host, Runtime: SameRuntime(role.Value.Runtime, Hosts[role.Value.Host!].Platform == "windows")))
+                     .Where(group => group.Count() > 1))
+            errors.Add($"{string.Join(" and ", shared.Select(role => role.Role))} use the same runtime {shared.First().Value.Runtime} on host '{shared.Key.Host}'; " +
+                "give each environment on a host its own runtime folder (by default <runs>/<environment name>), so each role's run folder is its own.");
         foreach (var shared in roles.GroupBy(role => (role.Value.Host, role.Value.CliPort)).Where(group => group.Count() > 1))
             errors.Add($"{string.Join(" and ", shared.Select(role => role.Role))} use the same ValheimCLI port {shared.Key.CliPort} on host '{shared.Key.Host}'.");
         // The ports each role is reached on here: a local host's and a (host-network) container's CLI port is this machine's
@@ -65,6 +71,10 @@ internal sealed class ResolvedEnvironment
         if (Server?.SteamAccount != null) errors.Add("The server's steamAccount: a dedicated server needs no Steam account; only clients name one.");
         if (errors.Count != 0) throw new ArgumentException("Invalid environment: " + string.Join(" ", errors));
     }
+
+    // A runtime folder as its host compares it: Windows ignores case and either separator; a trailing separator names the same folder.
+    private static string SameRuntime(string runtime, bool windows) =>
+        windows ? runtime.Replace('/', '\\').TrimEnd('\\').ToUpperInvariant() : runtime.TrimEnd('/');
 
     /// <summary>The named host, ready to use. A local host must describe this machine's platform.</summary>
     public IGameHost CreateHost(string name)

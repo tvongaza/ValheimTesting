@@ -250,12 +250,15 @@ internal static partial class HostedRuntimeStage
 
     // For a toolkit-created copy (RequirePrepared) and its own staging folder (RequireStaging), whether the caller still holds it in memory or
     // a recovery read it from a journal. The caller must hold the host lock and must have stopped all game processes first.
+    // A run's own folder (RunFolder) leaves its parent: the runtime root that holds run folders is the environment's, never a run's.
     internal static async Task RetireAsync(IGameHost host, string destination, string staging, TimeSpan timeout, CancellationToken cancellation = default, string? runId = null)
     {
         string parent = RequirePrepared(host, destination, runId);
         if (staging.Length != 0) RequireStaging(host, parent, staging);
+        bool keepParent = runId != null && Leaf(destination) == runId;
         var result = await host.RunAsync(host.Shell.Kind == HostShellKind.PowerShell ? WindowsCleanup : BashCleanup,
-            new Dictionary<string, string> { ["runtime"] = destination, ["stage"] = staging, ["parent"] = parent }, timeout, cancellation).ConfigureAwait(false);
+            new Dictionary<string, string> { ["runtime"] = destination, ["stage"] = staging, ["parent"] = parent, ["keepparent"] = keepParent ? "1" : "" },
+            timeout, cancellation).ConfigureAwait(false);
         result.EnsureSuccess($"Retiring prepared runtime on {host.Name}");
         if (InteractiveClient.Line(result.Stdout, "VT-STAGE-CLEANED") == null)
             throw new HostOperationException($"Unexpected cleanup reply from {host.Name}", result);
@@ -277,23 +280,30 @@ internal static partial class HostedRuntimeStage
 
     /// <summary>
     /// Refuses anything but a toolkit-created <c>&lt;runs&gt;/vt-prep-*/runtime</c>, or, with <paramref name="runId"/>, that
-    /// standalone hosted run's own <c>&lt;runs&gt;/&lt;runId&gt;/runtime</c>, <c>&lt;runs&gt;/&lt;runId&gt;/world</c> or numbered <c>boot-N</c>
-    /// (<see cref="HostedServerRun"/>); returns the copy's parent.
+    /// run's own folder <c>&lt;runs&gt;/&lt;runId&gt;</c> (<see cref="RunFolder"/>) or, inside it, its <c>runtime</c>, <c>world</c>,
+    /// world stage or collected <c>host-world</c>, or numbered <c>boot-N</c> (<see cref="HostedServerRun"/>, a campaign client's hosted
+    /// world); returns the copy's parent.
     /// </summary>
     internal static string RequirePrepared(IGameHost host, string destination, string? runId = null)
     {
         int at = destination.LastIndexOfAny(['/', '\\']);
         string parent = at > 0 ? destination[..at] : "";
-        string separator = host.Shell.Kind == HostShellKind.PowerShell ? @"\" : "/", parentName = parent.Replace('\\', '/').Split('/').Last();
+        string separator = host.Shell.Kind == HostShellKind.PowerShell ? @"\" : "/", parentName = Leaf(parent);
         if (destination.EndsWith(separator + "runtime", StringComparison.OrdinalIgnoreCase) && parentName.StartsWith("vt-prep-", StringComparison.Ordinal))
+            return parent;
+        if (runId != null && RunJournal.SafeName(runId) && parent.Length != 0 && Leaf(parent).Length != 0 && Leaf(destination) == runId &&
+            destination.EndsWith(separator + runId, StringComparison.Ordinal))
             return parent;
         if (runId != null && RunJournal.SafeName(runId) && parentName == runId &&
             (destination.EndsWith(separator + "runtime", StringComparison.OrdinalIgnoreCase) || destination.EndsWith(separator + "world", StringComparison.OrdinalIgnoreCase) ||
              destination.EndsWith(separator + "host-world", StringComparison.OrdinalIgnoreCase) || destination.EndsWith(separator + "world-stage", StringComparison.OrdinalIgnoreCase) ||
+             destination.EndsWith(separator + "host-world-stage", StringComparison.OrdinalIgnoreCase) ||
              System.Text.RegularExpressions.Regex.IsMatch(destination[(at + 1)..], @"^boot-[1-9][0-9]*$", System.Text.RegularExpressions.RegexOptions.CultureInvariant)))
             return parent;
-        throw new ArgumentException("Only a toolkit-created vt-prep runtime, or a hosted run's own runtime, world copy or numbered boot directory, can be retired.", nameof(destination));
+        throw new ArgumentException("Only a toolkit-created vt-prep runtime, or a run's own folder or the runtime, world copy or numbered boot directory in it, can be retired.", nameof(destination));
     }
+
+    private static string Leaf(string path) => path.Replace('\\', '/').Split('/').Last();
 
     /// <summary>Whether a relative path can be staged into a runtime (letters, digits, '.', '_', '-' and spaces, '/' between parts).</summary>
     internal static bool IsStageable(string relativePath) =>
@@ -425,7 +435,7 @@ internal static partial class HostedRuntimeStage
         foreach ($path in @($runtime, $stage)) {
             if ($path) { Remove-VtTree $path $parent }
         }
-        if ($parent -and [IO.Directory]::Exists($parent) -and [IO.Directory]::GetFileSystemEntries($parent).Length -eq 0) {
+        if (-not $keepparent -and $parent -and [IO.Directory]::Exists($parent) -and [IO.Directory]::GetFileSystemEntries($parent).Length -eq 0) {
             [IO.Directory]::Delete($parent)
         }
         'VT-STAGE-CLEANED'
@@ -440,7 +450,7 @@ internal static partial class HostedRuntimeStage
         for path in "$runtime" "$stage"; do
           if [ -n "$path" ]; then vt_remove "$path" "$parent" || { echo "vt: could not remove $path" >&2; exit 3; }; fi
         done
-        if [ -d "$parent" ]; then rmdir "$parent" 2>/dev/null || true; fi
+        if [ -z "${keepparent:-}" ] && [ -d "$parent" ]; then rmdir "$parent" 2>/dev/null || true; fi
         echo 'VT-STAGE-CLEANED'
         """.ReplaceLineEndings("\n");
 }

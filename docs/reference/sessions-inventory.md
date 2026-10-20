@@ -52,7 +52,7 @@ A lock is per host, so two containers on one machine are two hosts. A `local` ho
 | `host` | A host from `hosts` |
 | `roles` | `["server"]` or `["client"]` |
 | `install` | The game install on the host, absolute; only read |
-| `runtime` | Where the host keeps [disposable profiles](sessions-profiles.md) |
+| `runtime` | Where the host keeps [disposable profiles](sessions-profiles.md) and each run's folder; two environments a run uses on one host need different ones |
 | `cliPort` | ValheimCLI's port on the host |
 | `localCliPort` | An `ssh` environment's tunnel port on this machine; 0 picks a free one |
 | `gamePort` | A server environment's game port |

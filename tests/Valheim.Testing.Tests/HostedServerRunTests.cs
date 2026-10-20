@@ -820,7 +820,8 @@ public sealed partial class HostedServerRunTests : IDisposable
                 "CLI port is free on the server host", "open the loopback CLI tunnel to the server host", "start and verify owned dedicated fixture", "stop only owned server",
                 "fetch the server host's world copy", "verify server's source install after the run (size and modified time)",
                 "remove the server host's runtime copy, keeping what the run changed", "remove the fetched world copy on the server host",
-                "remove the fetched boot files on the server host", "remove the fetched boot files on the server host", "close the CLI tunnel", "release the server host's lock", "scan run logs" }, StepNames());
+                "remove the fetched boot files on the server host", "remove the fetched boot files on the server host", "fetch and remove the server host's run folder",
+                "close the CLI tunnel", "release the server host's lock", "scan run logs" }, StepNames());
 
         // #730: nothing of the install is copied. Its profile is staged in this run's own directory (the loader seeded from the install,
         // never its game files on Linux), and journalled before it is made and once made; the world copy is shipped beside it.
@@ -1070,7 +1071,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         var stage = Step(StageStep);
         Assert.False(stage.GetProperty("Passed").GetBoolean());
         Assert.Contains(manifestFollows ? "loader" : "different hash: BepInEx/core/BepInEx.dll", stage.GetProperty("Error").GetString());
-        Assert.DoesNotContain(host.Runs, run => run.Script is "profile-seed" or "apply-stage" or "ship" or "start" or "tunnel");
+        Assert.DoesNotContain(host.Runs, run => run.Script is "profile-seed" or "apply-stage" or "ship" or "start" or "tunnel" or "world-reserve");
         Assert.Equal(-1, JournalIndex(host, JournalEntry.CopyIntended));
         Assert.Equal(host.Claims, host.Releases);
     }
@@ -1496,10 +1497,12 @@ public sealed partial class HostedServerRunTests : IDisposable
         }, clientHost, clientTransport));
         Assert.Equal(0, code);
         Assert.Equal(77, pid);
-        // The user's list is as the run found it; the client's version is kept in the run's folder on its host.
+        // The user's list is as the run found it; the client's version was kept in the run's folder on its host, which is fetched
+        // into the output whole and then removed (#791).
         Assert.Equal("the user's servers\n", File.ReadAllText(recent));
-        Assert.Equal("127.0.0.1:2456 joined by client 77\n", File.ReadAllText(clientHost.Local("/Users/tester/runs/" + RunId + "/" +
-            UserSaveFiles.BackupName(RunId, "client-1") + "/after/serverlist_local/recent")));
+        Assert.Equal("127.0.0.1:2456 joined by client 77\n", File.ReadAllText(Path.Combine(Output, RunFolder.OutputFolder, "mac-gpu", "runs",
+            UserSaveFiles.BackupName(RunId, "client-1"), "after", "serverlist_local", "recent")));
+        Assert.False(Directory.Exists(clientHost.Local("/Users/tester/runs/" + RunId)));
         // The launch used the profile's install and a launch directory in this run's directory on the client's host.
         var start = Assert.Single(clientHost.Runs, run => run.Script == "client-start");
         Assert.Equal("/Users/tester/valheim", start.Variables["install"]);
@@ -1509,9 +1512,12 @@ public sealed partial class HostedServerRunTests : IDisposable
         var clientJournal = await RunJournalOnHost.ReadAsync(clientHost, "/Users/tester/journal", RunId, TimeSpan.FromSeconds(5));
         // A Mac client's GUI agent is journalled around its process: intended before the start, retired once the client is stopped.
         // The host user's recent-servers list is captured before the start and restored once the client stopped (#822).
-        Assert.Equal([JournalEntry.UserFilesCaptureIntended, JournalEntry.UserFilesCaptured, JournalEntry.ProcessIntended, JournalEntry.MacAgentIntended, JournalEntry.ProcessStarted,
-            JournalEntry.MacAgentRetired, JournalEntry.UserFilesRestoreIntended, JournalEntry.UserFilesRestored],
+        // The client's run folder there is journalled before its first write, and fetched and removed once the rest is settled (#791).
+        Assert.Equal([JournalEntry.CopyIntended, JournalEntry.UserFilesCaptureIntended, JournalEntry.UserFilesCaptured, JournalEntry.ProcessIntended, JournalEntry.MacAgentIntended,
+            JournalEntry.ProcessStarted, JournalEntry.MacAgentRetired, JournalEntry.UserFilesRestoreIntended, JournalEntry.UserFilesRestored, JournalEntry.CopyDone, JournalEntry.CopyRetired],
             clientJournal.Where(record => record.Actor == "player").Select(record => record.Entry.Kind));
+        Assert.All(clientJournal.Where(record => record.Actor == "player" && record.Entry.Kind.StartsWith("copy-", StringComparison.Ordinal)),
+            record => Assert.Equal("/Users/tester/runs/" + RunId, record.Entry.Fields["runtime"]));
         Assert.Equal("77", clientJournal.Single(record => record.Entry.Kind == JournalEntry.ProcessStarted).Entry.Fields["pid"]);
         Assert.Equal(FakeServerHost.CommandLineSha256("77"), clientJournal.Single(record => record.Entry.Kind == JournalEntry.ProcessStarted).Entry.Fields["commandLineSha256"]);
         // The run ends in every journal it wrote (#667): the client host's too, not only the server's.

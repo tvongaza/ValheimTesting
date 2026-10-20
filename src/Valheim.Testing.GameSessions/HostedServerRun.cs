@@ -69,12 +69,17 @@ internal sealed class HostedServerRun : IServerPlacement
         RuntimeDirectory = preparedRuntime ?? HostPath.Join(RunDirectory, "runtime");
         StagingDirectory = HostPath.Join(RunDirectory, "staging");
         WorldDirectory = LocalMac ? HostedWorld.DefaultSaveDirectory(ClientPlatform.MacOS) : HostPath.Join(RunDirectory, "world");
-        _clientActors = new CampaignClients(profile, runId, _owner, hooks, (role.Host, host), JournalAsync, sourceChecks);
+        var runFolders = new RunFolder.Claims();
+        _runFolder = new RunFolder(host, role.Host, RunJournal.DirectoryFor(hostProfile), role.Runtime, runId,
+            (entry, token) => JournalAsync(Host, Role.Host, "server", entry, token), runFolders);
+        _clientActors = new CampaignClients(profile, runId, _owner, hooks, (role.Host, host), JournalAsync, sourceChecks, runFolders);
         if (sourceChecks?.TryGetValue("server", out var check) == true) _sourceCheck = check;
     }
 
     // The run's journal on each host it touches (RunJournal): a process and an exact lock claimant are journalled before their effects.
     private readonly RunJournal _journal;
+    // RunDirectory, made once the lock is held and removed whole at teardown after its fetch (#791).
+    private readonly RunFolder _runFolder;
     private Task JournalAsync(IGameHost host, string hostName, string actor, JournalEntry entry, CancellationToken cancellation) =>
         _journal.AppendAsync(host, RunJournal.DirectoryFor(Profile.Hosts[hostName]), actor, entry, HostedTimeouts.Quick, cancellation);
     // After its effect a lost line is a warning: the effect happened, and the entry before it already names where to look.
@@ -97,7 +102,7 @@ internal sealed class HostedServerRun : IServerPlacement
     /// <summary>
     /// This run's directory on the server host: <c>runtime</c> (a standalone run's profile, with <c>staging</c> while it is
     /// staged), <c>world</c> and <c>boot-N</c>. The world and boot logs go after their verified fetch; the profile goes at teardown
-    /// once the server has stopped (<see cref="TeardownAsync"/>).
+    /// once the server has stopped, and then what is left of the directory, once fetched (<see cref="RunFolder"/>, <see cref="TeardownAsync"/>).
     /// </summary>
     public string RunDirectory { get; }
     /// <summary>The server's profile on the host: its loader root, where BepInEx writes, and the folder retired at teardown.</summary>
@@ -211,6 +216,7 @@ internal sealed class HostedServerRun : IServerPlacement
         if (MacServer)
             await report.StepAsync(StepPhase.Setup, "preserve the Mac server's user-level access lists", async () =>
             {
+                await _runFolder.MakeAsync(cancellation).ConfigureAwait(false); // the backup goes in it
                 string backup = HostPath.Join(RunDirectory, UserSaveFiles.BackupName(RunId, "server"));
                 _macLists = await UserSaveFiles.CaptureAsync(UserSaveFiles.Kind.MacServerLists, WorldDirectory, backup,
                     UserSaveFilesOnHost.Markers(Host, HostProfile), LocalMac ? null : UserSaveFilesOnHost.Remote(Host, HostedTimeouts.Quick),
@@ -290,6 +296,7 @@ internal sealed class HostedServerRun : IServerPlacement
         if (_sourceCliPins.Count != 0)
             report.Provenance["sourceValheimCliPins"] = string.Join(" ", _sourceCliPins.Select(pin => pin.Key + "=" + pin.Value));
         // Journalled before the profile: an interrupted preparation leaves a record of every path it may own.
+        await _runFolder.MakeAsync(cancellation).ConfigureAwait(false);
         await JournalAsync(Host, Role.Host, "server", JournalEntry.Of(JournalEntry.CopyIntended, ("runtime", RuntimeDirectory), ("stage", StagingDirectory),
             ("parent", RunDirectory), ("runtimeKind", "server"), ("launchRoot", Role.Install)), cancellation).ConfigureAwait(false);
         _runtimeIntended = true;
@@ -355,8 +362,9 @@ internal sealed class HostedServerRun : IServerPlacement
 
     /// <summary>Ships the verified local world copy to the host and verifies every file there.</summary>
     public Task ShipWorldAsync(ScenarioReport report, string localWorld, string output, CancellationToken cancellation) =>
-        MacServer ? report.StepAsync(StepPhase.Setup, "place the pinned world in the Mac's default worlds", () =>
+        MacServer ? report.StepAsync(StepPhase.Setup, "place the pinned world in the Mac's default worlds", async () =>
         {
+            await _runFolder.MakeAsync(cancellation).ConfigureAwait(false); // the world's stage and collection go in it
             // A campaign's prepared server save root contains worlds_local; HostedWorldOnHost takes the
             // contents of that folder, with the named world at its root.
             string sourceWorlds = Directory.Exists(Path.Combine(localWorld, "worlds_local"))
@@ -374,9 +382,9 @@ internal sealed class HostedServerRun : IServerPlacement
                 _ => _lock != null ? Task.CompletedTask : throw new InvalidOperationException("Take the Mac server host's lock before placing its world."))
                 { RetireRunCopies = RunId };
             _macWorld = HostedWorldOnHost.Place(site, fixture, Path.Combine(output, "mac-world-input"), cancellation);
-            return Task.CompletedTask;
         }) : report.StepAsync(StepPhase.Setup, "ship and verify the world copy on the server host", async () =>
         {
+            await _runFolder.MakeAsync(cancellation).ConfigureAwait(false);
             var manifest = WorldFixture.Manifest(localWorld);
             // Journalled before the ship, like the profile: no journal line, no world copy on the host.
             await JournalAsync(Host, Role.Host, "server", WorldCopyIntended(), cancellation).ConfigureAwait(false);
@@ -518,6 +526,7 @@ internal sealed class HostedServerRun : IServerPlacement
         RetireServerCommandLease(output);
         string local = Path.Combine(output, "boot-" + n), bootDirectory = HostPath.Join(RunDirectory, "boot-" + n);
         // The placement owns every boot directory before the launcher can create it. A cut or failed fetch stays visible.
+        _runFolder.MakeAsync(cancellation).GetAwaiter().GetResult();
         JournalAsync(Host, Role.Host, "server", JournalEntry.Of(JournalEntry.CopyIntended, ("runtime", bootDirectory),
             ("stage", ""), ("parent", RunDirectory), ("holds", "server-boot"), ("retention", "after-fetch")), cancellation).GetAwaiter().GetResult();
         var evidence = new BootEvidence(bootDirectory, local);
@@ -712,8 +721,9 @@ internal sealed class HostedServerRun : IServerPlacement
     /// <summary>
     /// After the owned server stopped: fetches the host's world copy, retires the server's profile (<see cref="RunRetirement"/>,
     /// keeping what the run changed in it; a standalone profile whose staging failed part-way goes whole),
-    /// closes the tunnel, releases the clients' accounts, retires <paramref name="prepared"/>'s characters and installs under
-    /// the locks this run holds, and releases the locks, each as its own step. With <paramref name="serverStopped"/> false
+    /// fetches and removes the run's folder on the server host and each client host (<see cref="RunFolder"/>), closes the tunnel,
+    /// releases the clients' accounts, retires <paramref name="prepared"/>'s characters and installs under the locks this run
+    /// holds, and releases the locks, each as its own step. With <paramref name="serverStopped"/> false
     /// the server host's lock and runtime are kept, because the server may still run there. Returns the failures; it never throws.
     /// </summary>
     public async Task<IReadOnlyList<Exception>> TeardownAsync(ScenarioReport report, string output, bool launched, bool serverStopped,
@@ -840,6 +850,11 @@ internal sealed class HostedServerRun : IServerPlacement
                     await RetireEvidenceAsync(boot.Directory, true, cleanup).ConfigureAwait(false);
                 }).ConfigureAwait(false);
         }
+        // What is left in the run's folder on the server host goes whole once fetched; it stays, journalled, while the server may
+        // still run, on request, or while anything the run journalled in it is not settled (a copy kept above).
+        if (_runFolder.Made && !cleanup.IsCancellationRequested)
+            await Try("fetch and remove the server host's run folder", () => _runFolder.SettleAsync(_runFolder.LocalDirectory(output),
+                !serverStopped ? "its server may still run" : RunRetirement.KeepRequested ? RunRetirement.KeptOnRequest : null, cleanup)).ConfigureAwait(false);
         if (_tunnel != null) await Try("close the CLI tunnel", () => { _tunnel.Dispose(); return Task.CompletedTask; }).ConfigureAwait(false);
         await _clientActors.ReleaseAccountsAsync(Try).ConfigureAwait(false);
         await _clientActors.RecordInPlaceSourceVerdictsAsync(report, Try).ConfigureAwait(false);
@@ -854,6 +869,7 @@ internal sealed class HostedServerRun : IServerPlacement
                 _clientActors.PendingMacAgentHosts).ConfigureAwait(false))
             { failures.Add(failure); Console.Error.WriteLine("Teardown: " + failure.Message); }
         }
+        await _clientActors.RetireRunFoldersAsync(output, Try, cleanup).ConfigureAwait(false);
         await _clientActors.ReleaseLocksAsync(Try).ConfigureAwait(false);
         if (_lock != null)
             await Try("release the server host's lock", () => serverStopped && !_clientActors.HasPendingMacAgent(Role.Host)

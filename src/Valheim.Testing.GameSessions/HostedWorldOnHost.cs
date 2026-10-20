@@ -66,7 +66,8 @@ internal static class HostedWorldOnHost
     internal sealed record Site(IGameHost Host, string HostName, string WorldsDirectory, string Stage, string KeepIn,
         Func<JournalEntry, CancellationToken, Task> Journal, Func<CancellationToken, Task> Hold) : IHostedWorldSite
     {
-        // Server runs own their staging/collected directories until verified fetch; client evidence policy is unchanged.
+        // A run that owns its run folder on the host (a dedicated server's, a campaign client's: RunFolder) owns the staging and
+        // collected directories in it until their verified fetch, then removes them. Null for a site in an output on this machine.
         internal string? RetireRunCopies { get; init; }
         public HostedWorld Place(HostWorldPlan plan, string output, CancellationToken cancellation) =>
             HostedWorldOnHost.Place(this, plan, output, cancellation);
@@ -82,7 +83,7 @@ internal static class HostedWorldOnHost
         IGameHost clientHost, Func<JournalEntry, CancellationToken, Task> journal, Func<CancellationToken, Task> hold)
     {
         var role = environment.Clients[client];
-        return ForClient(clientHost, role.Host, WorldsBeside(character.CharactersLocalDirectory), role.Runtime, runId, journal, hold);
+        return ForClient(clientHost, role.Host, WorldsBeside(character.CharactersLocalDirectory), role.Runtime, runId, journal, hold) with { RetireRunCopies = runId };
     }
 
     /// <summary>
@@ -168,7 +169,7 @@ internal static class HostedWorldOnHost
                 string parent = HostedRuntimeStage.RequirePrepared(site.Host, site.Stage, site.RetireRunCopies);
                 HostedRuntimeStage.RequirePrepared(site.Host, site.KeepIn, site.RetireRunCopies);
                 site.Journal(JournalEntry.Of(JournalEntry.CopyIntended, ("runtime", site.Stage), ("stage", ""),
-                    ("parent", parent), ("holds", "server-world-stage")), cancellation).GetAwaiter().GetResult();
+                    ("parent", parent), ("holds", "world-stage")), cancellation).GetAwaiter().GetResult();
                 site.Journal(JournalEntry.Of(JournalEntry.CopyIntended, ("runtime", site.KeepIn), ("stage", ""),
                     ("parent", parent), ("holds", "world"), ("retention", "after-fetch")), cancellation).GetAwaiter().GetResult();
             }
@@ -241,11 +242,22 @@ internal static class HostedWorldOnHost
         host.RunAsync(host.Shell.Kind == HostShellKind.PowerShell ? WindowsReserve : BashReserve,
             new Dictionary<string, string> { ["stage"] = stage, ["keep"] = keep }, HostedTimeouts.Quick, cancellation).GetAwaiter().GetResult();
 
-    private static void RequireReservation(HostResult result, string host)
+    private static void RequireReservation(HostResult result, string host, string what = "hosted-world storage", string why = "each placement needs new staging and collection directories")
     {
-        result.EnsureSuccess($"Reserving hosted-world storage on {host}; each placement needs new staging and collection directories");
+        result.EnsureSuccess($"Reserving {what} on {host}; {why}");
         if (InteractiveClient.Line(result.Stdout, "VT-WORLD-RESERVED ") != "done")
-            throw new HostOperationException("Hosted-world storage reservation was not confirmed", result);
+            throw new HostOperationException($"The reservation of {what} on {host} was not confirmed", result);
+    }
+
+    /// <summary>
+    /// Makes <paramref name="directory"/> on <paramref name="host"/> with the same atomic reservation a placement's collection
+    /// directory gets, refusing one that already exists: a folder only the caller made (a run's own folder, <see cref="RunFolder"/>).
+    /// </summary>
+    internal static async Task ReserveNewAsync(IGameHost host, string directory, TimeSpan timeout, CancellationToken cancellation)
+    {
+        var result = await host.RunAsync(host.Shell.Kind == HostShellKind.PowerShell ? WindowsReserve : BashReserve,
+            new Dictionary<string, string> { ["stage"] = "", ["keep"] = directory }, timeout, cancellation).ConfigureAwait(false);
+        RequireReservation(result, host.Name, directory, "a run makes its own folder, and never reuses one that already exists");
     }
 
     // Recovery shares this owner's placement decision. A UID describes a world; it never proves a transfer occurred.

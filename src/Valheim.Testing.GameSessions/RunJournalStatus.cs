@@ -128,7 +128,7 @@ internal static class RunJournalStatus
         var hostStatus = reads.Select(entry => entry.Status).ToList();
         var read = reads.Where(entry => entry.Read != null).Select(entry => entry.Read!.Value).ToList();
 
-        // What each run left, host by host, from its own entries in the order written.
+        // What each run left, host by host, from its own entries in the order written (Replay).
         var pending = new Dictionary<string, List<Pending>>(StringComparer.Ordinal);
         var ended = new Dictionary<string, (string State, bool Cleaned)>(StringComparer.Ordinal);
         var recovered = new Dictionary<string, bool>(StringComparer.Ordinal);
@@ -136,77 +136,19 @@ internal static class RunJournalStatus
         foreach (var (hostName, connection, records) in read)
             foreach (var run in records.GroupBy(record => record.Run, StringComparer.Ordinal))
             {
-                var left = new Dictionary<string, Pending>(StringComparer.Ordinal);
-                foreach (var record in run.OrderBy(record => record.Utc))
+                var left = Replay(hostName, connection, run, record =>
                 {
                     var fields = record.Entry.Fields;
                     string Field(string key) => fields.TryGetValue(key, out string? value) ? value : "";
-                    void Open(string key, string kind, string what, string status, bool kept = false)
-                    {
-                        // Later entries add to what earlier ones journalled (copy-done names no staging; copy-intended does).
-                        var merged = new Dictionary<string, string>(StringComparer.Ordinal);
-                        if (left.TryGetValue(key, out var was)) foreach (var (name, value) in was.Fields) merged[name] = value;
-                        foreach (var (name, value) in fields) merged[name] = value;
-                        left[key] = new(kind, hostName, connection, record.Actor, what, status, kept, was?.SinceUtc ?? record.Utc, merged);
-                    }
                     switch (record.Entry.Kind)
                     {
-                        case JournalEntry.CopyIntended: Open("copy " + Field("runtime"), "copy", Field("runtime"), "copy started, never finished"); break;
-                        case JournalEntry.CopyDone: Open("copy " + Field("runtime"), "copy", Field("runtime"), "copied, not retired"); break;
-                        case JournalEntry.CopyKept: Open("copy " + Field("runtime"), "copy", Field("runtime"), "kept: " + Field("why"), kept: true); break;
-                        case JournalEntry.CopyRetired: left.Remove("copy " + Field("runtime")); break;
-                        case JournalEntry.UserFilesCaptureIntended: Open("user-files " + Field("backup"), "user-files", Field("saveRoot"), "user-file capture intended; ownership may need settlement"); break;
-                        case JournalEntry.UserFilesRestoreIntended: Open("user-files " + Field("backup"), "user-files", Field("saveRoot"), "user-file restore intended; completion may need settlement"); break;
-                        case JournalEntry.UserFilesCaptured: Open("user-files " + Field("backup"), "user-files", Field("saveRoot"), "the user's Valheim files moved aside, not restored"); break;
-                        case JournalEntry.UserFilesRestored: left.Remove("user-files " + Field("backup")); break;
-                        case JournalEntry.CharacterIntended:
-                            Open($"character {Field("fileName")}", "character", $"{Field("fileName")} in {Field("characters")}", "staging started, never finished"); break;
-                        case JournalEntry.CharacterDone:
-                            if (left.TryGetValue($"character {Field("fileName")}", out var staged))
-                            {
-                                var characterFields = staged.Fields.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
-                                foreach (var (name, value) in fields) characterFields[name] = value;
-                                characterFields["staged"] = "true";
-                                left[$"character {Field("fileName")}"] = staged with { Status = "staged, not retired", Fields = characterFields };
-                            }
-                            break;
-                        case JournalEntry.CharacterRetired: left.Remove($"character {Field("fileName")}"); break;
-                        case JournalEntry.ProcessIntended:
-                        {
-                            string directory = Field("bootDirectory") is { Length: > 0 } boot ? boot : Field("launchDirectory");
-                            Open($"launch {record.Actor} {directory}", "launch", directory, "launch started before its process was journalled; see its pid file");
-                            break;
-                        }
-                        case JournalEntry.ProcessStarted:
-                        {
-                            string directory = Field("bootDirectory") is { Length: > 0 } boot ? boot : Field("launchDirectory");
-                            left.Remove($"launch {record.Actor} {directory}");
-                            Open($"process {Field("pid")} {Field("startIdentity")}", "process", $"{Field("pid")} (started {Field("startIdentity")})", "");
-                            break;
-                        }
-                        case JournalEntry.ProcessStopped: left.Remove($"process {Field("pid")} {Field("startIdentity")}"); break;
-                        case JournalEntry.MacAgentIntended: Open("mac-agent " + Field("launchDirectory"), "mac-agent", Field("launchDirectory"), "GUI agent may still be loaded"); break;
-                        case JournalEntry.MacAgentRetired: left.Remove("mac-agent " + Field("launchDirectory")); break;
-                        case JournalEntry.ScheduledTaskIntended:
-                            Open("scheduled-task " + Field("task"), "scheduled-task", Field("task"), "registration intended; task state not checked yet"); break;
-                        case JournalEntry.ScheduledTaskStarted:
-                            Open("scheduled-task " + Field("task"), "scheduled-task", Field("task"), "registered, not retired"); break;
-                        case JournalEntry.ScheduledTaskRetired: left.Remove("scheduled-task " + Field("task")); break;
-                        case JournalEntry.LaunchSettled: left.Remove($"launch {Field("actor")} {Field("directory")}"); break;
-                        case JournalEntry.LaunchAbandoned: left.Remove($"launch {Field("actor")} {Field("directory")}"); break;
-                        case JournalEntry.LeaseHeld: Open($"lease {Field("account")} {Field("owner")}", "lease", $"Steam account {Field("account")} ({Field("pool")})", "held"); break;
-                        case JournalEntry.LeaseKept: Open($"lease {Field("account")} {Field("owner")}", "lease", $"Steam account {Field("account")} ({Field("pool")})", "kept: its client may still run", kept: true); break;
-                        case JournalEntry.LeaseReleased: left.Remove($"lease {Field("account")} {Field("owner")}"); break;
-                        case JournalEntry.LockIntended: Open($"lock {Field("lock")} {Field("claimant")}", "lock", Field("lock"), "claim intended; state not checked yet"); break;
-                        case JournalEntry.LockHeld: Open($"lock {Field("lock")} {Field("claimant")}", "lock", Field("lock"), "held"); break;
-                        case JournalEntry.LockReleased: left.Remove($"lock {Field("lock")} {Field("claimant")}"); break;
                         case JournalEntry.RunEnded: ended[run.Key] = (Field("state"), Field("cleanupVerified") == "true"); break;
                         case JournalEntry.RunRecovered: recovered[run.Key] = Field("complete") == "true"; break;
                         case JournalEntry.CleanupAbandoned: abandoned[run.Key] = Field("reason"); break;
                     }
-                }
+                });
                 if (!pending.TryGetValue(run.Key, out var list)) pending[run.Key] = list = [];
-                list.AddRange(left.Values);
+                list.AddRange(left);
             }
 
         // A launch left open (its process never journalled) by a run that did not end cleaned up: its pid file, read on its host,
@@ -312,6 +254,89 @@ internal static class RunJournalStatus
             .SelectMany(root => { try { return OwnedCopies.Find(root); } catch (Exception error) when (error is IOException or UnauthorizedAccessException) { return []; } })
             .Where(copy => !journalled.Contains(Path.TrimEndingDirectorySeparator(copy.Path))).DistinctBy(copy => copy.Path, comparison).ToList();
         return new(hostStatus, runs.OrderBy(run => run.FirstUtc).ToList()) { Unjournalled = unjournalled };
+    }
+
+    /// <summary>
+    /// What one run journalled on one host and never journalled as gone, replayed from its entries in the order written: each
+    /// copy, user-file capture, character, launch, process, Mac agent, scheduled task, Steam lease and host lock. The one replay
+    /// of a run's journal: <c>env status</c> judges these items, and a run's own teardown reads them before it removes its folder
+    /// on that host (<see cref="RunFolder"/>).
+    /// </summary>
+    internal static IReadOnlyList<JournalItem> Left(string hostName, IEnumerable<JournalRecord> run) =>
+        Replay(hostName, null!, run, null).Select(item => new JournalItem(item.Kind, item.Host, item.Actor, item.What, item.Status, item.SinceUtc)
+            { Fields = item.Fields, Kept = item.Kept }).ToList();
+
+    // runLevel sees every other entry: the run's end, its recovery, its abandoned cleanup.
+    private static IReadOnlyCollection<Pending> Replay(string hostName, IGameHost connection, IEnumerable<JournalRecord> run, Action<JournalRecord>? runLevel)
+    {
+        var left = new Dictionary<string, Pending>(StringComparer.Ordinal);
+        foreach (var record in run.OrderBy(record => record.Utc))
+        {
+            var fields = record.Entry.Fields;
+            string Field(string key) => fields.TryGetValue(key, out string? value) ? value : "";
+            void Open(string key, string kind, string what, string status, bool kept = false)
+            {
+                // Later entries add to what earlier ones journalled (copy-done names no staging; copy-intended does).
+                var merged = new Dictionary<string, string>(StringComparer.Ordinal);
+                if (left.TryGetValue(key, out var was)) foreach (var (name, value) in was.Fields) merged[name] = value;
+                foreach (var (name, value) in fields) merged[name] = value;
+                left[key] = new(kind, hostName, connection, record.Actor, what, status, kept, was?.SinceUtc ?? record.Utc, merged);
+            }
+            switch (record.Entry.Kind)
+            {
+                case JournalEntry.CopyIntended: Open("copy " + Field("runtime"), "copy", Field("runtime"), "copy started, never finished"); break;
+                case JournalEntry.CopyDone: Open("copy " + Field("runtime"), "copy", Field("runtime"), "copied, not retired"); break;
+                case JournalEntry.CopyKept: Open("copy " + Field("runtime"), "copy", Field("runtime"), "kept: " + Field("why"), kept: true); break;
+                case JournalEntry.CopyRetired: left.Remove("copy " + Field("runtime")); break;
+                case JournalEntry.UserFilesCaptureIntended: Open("user-files " + Field("backup"), "user-files", Field("saveRoot"), "user-file capture intended; ownership may need settlement"); break;
+                case JournalEntry.UserFilesRestoreIntended: Open("user-files " + Field("backup"), "user-files", Field("saveRoot"), "user-file restore intended; completion may need settlement"); break;
+                case JournalEntry.UserFilesCaptured: Open("user-files " + Field("backup"), "user-files", Field("saveRoot"), "the user's Valheim files moved aside, not restored"); break;
+                case JournalEntry.UserFilesRestored: left.Remove("user-files " + Field("backup")); break;
+                case JournalEntry.CharacterIntended:
+                    Open($"character {Field("fileName")}", "character", $"{Field("fileName")} in {Field("characters")}", "staging started, never finished"); break;
+                case JournalEntry.CharacterDone:
+                    if (left.TryGetValue($"character {Field("fileName")}", out var staged))
+                    {
+                        var characterFields = staged.Fields.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
+                        foreach (var (name, value) in fields) characterFields[name] = value;
+                        characterFields["staged"] = "true";
+                        left[$"character {Field("fileName")}"] = staged with { Status = "staged, not retired", Fields = characterFields };
+                    }
+                    break;
+                case JournalEntry.CharacterRetired: left.Remove($"character {Field("fileName")}"); break;
+                case JournalEntry.ProcessIntended:
+                {
+                    string directory = Field("bootDirectory") is { Length: > 0 } boot ? boot : Field("launchDirectory");
+                    Open($"launch {record.Actor} {directory}", "launch", directory, "launch started before its process was journalled; see its pid file");
+                    break;
+                }
+                case JournalEntry.ProcessStarted:
+                {
+                    string directory = Field("bootDirectory") is { Length: > 0 } boot ? boot : Field("launchDirectory");
+                    left.Remove($"launch {record.Actor} {directory}");
+                    Open($"process {Field("pid")} {Field("startIdentity")}", "process", $"{Field("pid")} (started {Field("startIdentity")})", "");
+                    break;
+                }
+                case JournalEntry.ProcessStopped: left.Remove($"process {Field("pid")} {Field("startIdentity")}"); break;
+                case JournalEntry.MacAgentIntended: Open("mac-agent " + Field("launchDirectory"), "mac-agent", Field("launchDirectory"), "GUI agent may still be loaded"); break;
+                case JournalEntry.MacAgentRetired: left.Remove("mac-agent " + Field("launchDirectory")); break;
+                case JournalEntry.ScheduledTaskIntended:
+                    Open("scheduled-task " + Field("task"), "scheduled-task", Field("task"), "registration intended; task state not checked yet"); break;
+                case JournalEntry.ScheduledTaskStarted:
+                    Open("scheduled-task " + Field("task"), "scheduled-task", Field("task"), "registered, not retired"); break;
+                case JournalEntry.ScheduledTaskRetired: left.Remove("scheduled-task " + Field("task")); break;
+                case JournalEntry.LaunchSettled: left.Remove($"launch {Field("actor")} {Field("directory")}"); break;
+                case JournalEntry.LaunchAbandoned: left.Remove($"launch {Field("actor")} {Field("directory")}"); break;
+                case JournalEntry.LeaseHeld: Open($"lease {Field("account")} {Field("owner")}", "lease", $"Steam account {Field("account")} ({Field("pool")})", "held"); break;
+                case JournalEntry.LeaseKept: Open($"lease {Field("account")} {Field("owner")}", "lease", $"Steam account {Field("account")} ({Field("pool")})", "kept: its client may still run", kept: true); break;
+                case JournalEntry.LeaseReleased: left.Remove($"lease {Field("account")} {Field("owner")}"); break;
+                case JournalEntry.LockIntended: Open($"lock {Field("lock")} {Field("claimant")}", "lock", Field("lock"), "claim intended; state not checked yet"); break;
+                case JournalEntry.LockHeld: Open($"lock {Field("lock")} {Field("claimant")}", "lock", Field("lock"), "held"); break;
+                case JournalEntry.LockReleased: left.Remove($"lock {Field("lock")} {Field("claimant")}"); break;
+                default: runLevel?.Invoke(record); break;
+            }
+        }
+        return left.Values;
     }
 
     private sealed record Pending(string Kind, string Host, IGameHost Connection, string Actor, string What, string Status, bool Kept, DateTime SinceUtc,

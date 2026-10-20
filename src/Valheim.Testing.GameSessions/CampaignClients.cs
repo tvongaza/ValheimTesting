@@ -21,6 +21,11 @@ internal sealed class CampaignClients
     private readonly RunJournal _runJournal;
     private readonly List<(string Host, JournaledHostLock Lock)> _clientLocks = [];
     private readonly List<(string Host, IOwnedProcess Process)> _localMacProcesses = [];
+    // Every client process started through a host's scripts, by host: a run folder stays while one may still run.
+    private readonly List<(string Host, IOwnedProcess Process)> _hostedProcesses = [];
+    // Each client role's run folder (<runtime>/<runId>), by host and path: made before the first write in it, removed whole at teardown.
+    private readonly Dictionary<(string Host, string Path), RunFolder> _runFolders = [];
+    private readonly RunFolder.Claims _runFolderClaims;
     private readonly Dictionary<string, string> _pendingMacAgents = new(StringComparer.Ordinal);
     private readonly List<ClientAccount> _accounts = [];
     private readonly (string Name, IGameHost Host)? _serverHost;
@@ -32,10 +37,12 @@ internal sealed class CampaignClients
 
     /// <param name="serverHost">The dedicated server's host, whose lock its run holds and whose connection is reused; null without one.</param>
     /// <param name="journal">Appends an entry to a host's journal for an actor (the owner's run journal); throws when it cannot.</param>
+    /// <param name="runFolders">The run's folders so far, shared with its dedicated server (<see cref="RunFolder.Claims"/>); a new set when null.</param>
     internal CampaignClients(ResolvedEnvironment profile, string runId, string owner, IHostedRunHooks hooks, (string Name, IGameHost Host)? serverHost,
         Func<IGameHost, string, string, JournalEntry, CancellationToken, Task> journal,
-        IReadOnlyDictionary<string, ProfileSourceCheck>? sourceChecks = null)
+        IReadOnlyDictionary<string, ProfileSourceCheck>? sourceChecks = null, RunFolder.Claims? runFolders = null)
     {
+        _runFolderClaims = runFolders ?? new RunFolder.Claims();
         Profile = profile; RunId = runId; _owner = owner; _hooks = hooks; _serverHost = serverHost; _journal = journal;
         _runJournal = new RunJournal(runId);
         _sourceChecks = sourceChecks?.ToDictionary(item => item.Key, item => item.Value, StringComparer.Ordinal)
@@ -182,6 +189,7 @@ internal sealed class CampaignClients
         await HostInstall.RequirePortFreeAsync(host, role.CliPort, HostedTimeouts.Quick, cancellation).ConfigureAwait(false);
         // The first write under the run directory: it must lie outside the install, decided on the host with links resolved there.
         await HostInstall.RequireApartAsync(host, role.Install, [runDirectory], "the install", HostedTimeouts.Quick, cancellation).ConfigureAwait(false);
+        await RunFolderOf(role, host, name).MakeAsync(cancellation).ConfigureAwait(false);
         // BepInEx rewrites its log at each start; an earlier one moves aside so the wait from offset 0 sees this start's lines only.
         var moved = (await host.RunAsync(HostedClientScripts.MoveAside(host.Shell.Kind), new Dictionary<string, string>
             { ["log"] = log, ["to"] = HostPath.Join(runDirectory, $"client-{n}.previous-LogOutput.log") }, HostedTimeouts.Quick, cancellation).ConfigureAwait(false))
@@ -267,6 +275,7 @@ internal sealed class CampaignClients
                     var process = HostedClientProcess.Of(client, host, loaderRoot, launch.UnityLog!, tunnel, local,
                         hostProfile.Kind == "local" ? _hooks : null, macAgentRetired);
                     if (account != null) account.Process = process; // Its lease is released only once this process is gone.
+                    lock (_clientState) _hostedProcesses.Add((role.Host, process));
                     return process;
                 },
                 () => _hooks.Connect(tunnel.Address, tunnel.LocalPort),
@@ -373,6 +382,43 @@ internal sealed class CampaignClients
         var host = ClientHost(role);
         await LockHostAsync(role.Host, host, Profile.Hosts[role.Host], cancellation).ConfigureAwait(false);
         await HostedRuntimeStage.RequireStoppedAsync(host, HostedTimeouts.Quick, cancellation, clientSession: true).ConfigureAwait(false);
+        // The world is shipped through and collected into the client's run folder there.
+        await RunFolderOf(role, host, client).MakeAsync(cancellation).ConfigureAwait(false);
+    }
+
+    // The client role's run folder on its host, one per host and path (two roles may share a runtime folder).
+    private RunFolder RunFolderOf(GameRole role, IGameHost host, string client)
+    {
+        string path = HostPath.Join(role.Runtime, RunId);
+        lock (_clientState)
+        {
+            if (!_runFolders.TryGetValue((role.Host, path), out var folder))
+                _runFolders[(role.Host, path)] = folder = new RunFolder(host, role.Host, RunJournal.DirectoryFor(Profile.Hosts[role.Host]), role.Runtime, RunId,
+                    (entry, token) => JournalAsync(host, role.Host, client, entry, token), _runFolderClaims);
+            return folder;
+        }
+    }
+
+    /// <summary>
+    /// Teardown, once the clients are stopped or named and before their hosts' locks are released: each client run folder this
+    /// run made is fetched into <c>host-runs</c> in <paramref name="output"/> and removed (<see cref="RunFolder"/>), each as its own
+    /// step. One a client launched from may still use, or kept on request, stays, journalled.
+    /// </summary>
+    public async Task RetireRunFoldersAsync(string output, Func<string, Func<Task>, Task> step, CancellationToken cleanup)
+    {
+        List<RunFolder> folders;
+        lock (_clientState) folders = _runFolders.Values.Where(folder => folder.Made).ToList();
+        foreach (var folder in folders)
+        {
+            if (cleanup.IsCancellationRequested) break; // An abandoned cleanup leaves each folder open in the journal.
+            bool mayRun;
+            lock (_clientState)
+                mayRun = _hostedProcesses.Concat(_localMacProcesses).Any(item => item.Host == folder.HostName && !item.Process.HasExited) ||
+                    _pendingMacAgents.Values.Contains(folder.HostName, StringComparer.OrdinalIgnoreCase);
+            string? keep = mayRun ? "a client launched from it may still run" : RunRetirement.KeepRequested ? RunRetirement.KeptOnRequest : null;
+            await step($"fetch and remove client host {folder.HostName}'s run folder",
+                () => folder.SettleAsync(folder.LocalDirectory(output), keep, cleanup)).ConfigureAwait(false);
+        }
     }
 
     /// <summary>

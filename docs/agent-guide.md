@@ -99,7 +99,7 @@ Report:
 | Teardown | The `valheim-test env status` result, and anything recovered |
 | Next | One bounded next action, if any remains |
 
-Run evidence is private. Logs and plans may hold local paths, a server password and account identifiers, and a client's evidence holds a copy of the user's recent-servers list. Never publish game assemblies, decompiled game source, saves or credentials.
+Run evidence is private, and must stay so. Logs and plans may hold local paths, a server password and account identifiers. A client's evidence holds a copy of the user's recent-servers list, and a Mac server's `host-runs/` holds backups of its admin, permitted and banned lists, which name platform account IDs. Never publish game assemblies, decompiled game source, saves or credentials.
 
 ## Report a problem
 

@@ -1518,14 +1518,23 @@ public sealed class RunRecoveryTests : IDisposable
         var status = await RunJournalStatus.InspectAsync(hosts, _ => here, TimeSpan.FromSeconds(5));
         var left = Assert.Single(status.Runs);
         Assert.Equal(JournalRunState.Recoverable, left.State);
-        Assert.Equal(Worlds + "/Campaign", Assert.Single(left.Items, item => item.Kind == "copy").What);
+        // The world in the user's worlds, and the run folder's stage and collection the placement reserved for it.
+        Assert.Equal(new[] { Worlds + "/Campaign", "/runs/" + Run + "/host-world", "/runs/" + Run + "/host-world-stage" },
+            left.Items.Where(item => item.Kind == "copy").Select(item => item.What).Order(StringComparer.Ordinal));
 
         var recovered = await RunRecovery.RecoverAsync(hosts, _ => here, Run, teardown: false, TimeSpan.FromSeconds(5));
 
-        Assert.True(recovered.Clean, string.Join("\n", recovered.Steps));
         Assert.Contains("world UID 4242 as journalled", Assert.Single(recovered.Steps, step => step.What == "copy " + Worlds + "/Campaign").Outcome);
         Assert.Equal(new[] { "MyWorld.fwl" }, Directory.EnumerateFileSystemEntries(here.Local(Worlds)).Select(Path.GetFileName));
+        // The world moved out into the run's folder is the run's only copy of its save: never fetched, it is kept and listed (#791).
         Assert.Equal("saved by the game", File.ReadAllText(here.Local("/runs/" + Run + "/host-world/Campaign/0_0.chunk")));
+        Assert.False(recovered.Clean, string.Join("\n", recovered.Steps));
+        Assert.Contains("fetch was not proven", Assert.Single(recovered.Steps, step => step.What == "copy /runs/" + Run + "/host-world").Outcome);
+        Assert.False(Directory.Exists(here.Local("/runs/" + Run + "/host-world-stage")));
+        Assert.Equal(JournalRunState.Kept, Assert.Single((await RunJournalStatus.InspectAsync(hosts, _ => here, TimeSpan.FromSeconds(5))).Runs).State);
+        // env teardown removes it.
+        Assert.True((await RunRecovery.RecoverAsync(hosts, _ => here, Run, teardown: true, TimeSpan.FromSeconds(5))).Clean);
+        Assert.False(Directory.Exists(here.Local("/runs/" + Run + "/host-world")));
         Assert.All((await RunJournalStatus.InspectAsync(hosts, _ => here, TimeSpan.FromSeconds(5))).Runs, run => Assert.Equal(JournalRunState.Ended, run.State));
 
         // The next start places the same fixture: nothing named for it is left to refuse it.

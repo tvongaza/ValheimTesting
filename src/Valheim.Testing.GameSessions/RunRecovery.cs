@@ -388,8 +388,9 @@ internal static class RunRecovery
             var lists = group.Where(item => item.Kind == "user-files").ToList();
             var characters = group.Where(item => item.Kind == "character").ToList();
             // Move a journalled fixture out of user saves before handling its collected directory on the same host.
+            // A run's own folder goes last, once what is inside it was handled (RunFolder).
             var copies = group.Where(item => item.Kind == "copy")
-                .OrderBy(item => item.Fields.GetValueOrDefault("holds") == HostedWorldOnHost.Holds ? 0 : 1).ToList();
+                .OrderBy(item => item.Fields.GetValueOrDefault("holds") switch { HostedWorldOnHost.Holds => 0, RunFolder.Holds => 2, _ => 1 }).ToList();
             if (Failed(group.Key))
             {
                 // A copy a process may still run from, and a character it may still use, stay.
@@ -475,24 +476,65 @@ internal static class RunRecovery
                     }
                     catch (Exception error) when (error is not OperationCanceledException) { Step(group.Key, what, "not retired: " + error.Message, failed: true); }
                 }
+                // What this recovery left in place on the host (a copy kept or not removed, logs it kept): a run folder holding one stays.
+                var leftHere = new List<string>();
                 foreach (var copy in copies)
                 {
                     string what = $"copy {copy.What}";
                     try
                     {
                         if (!copy.Fields.TryGetValue("stage", out string? stage)) throw new InvalidDataException("its journal names no staging directory");
+                        // A run's own folder (RunFolder). Unlike the after-fetch copies inside it (below), it goes last and holds
+                        // whatever the run or this recovery left there: an unfetched one is removed when nothing is left in it (its
+                        // copies were each settled, or the run never wrote in it), where a world or boot copy is kept until its fetch.
+                        if (copy.Fields.GetValueOrDefault("holds") == RunFolder.Holds)
+                        {
+                            HostedRuntimeStage.RequirePrepared(host, copy.What, runId);
+                            var folder = new RunFolder(host, group.Key, RunJournal.DirectoryFor(hosts[group.Key]),
+                                copy.Fields.GetValueOrDefault("parent") ?? "", runId, (_, _) => Task.CompletedTask);
+                            if (folder.Path != copy.What) throw new InvalidDataException("its journalled parent is not the folder's own");
+                            // While what it holds is not settled it stays open in the journal, for a later recovery.
+                            string? openFor = Failed(group.Key) ? "an earlier recovery step on this host failed"
+                                : leftHere.FirstOrDefault(folder.Contains) is { } inside ? "this recovery left " + inside + " in it" : null;
+                            if (openFor != null)
+                            {
+                                Step(group.Key, what, "not removed: " + openFor);
+                                continue;
+                            }
+                            string removed = teardown ? "teardown requested" : "its fetch was journalled";
+                            if (!teardown && copy.Fields.GetValueOrDefault("fetched") != "true")
+                            {
+                                // Without a journalled fetch it may be the only copy of the run's evidence: kept, unless it holds nothing.
+                                HostListing? listing;
+                                try { listing = await HostInstall.ListAsync(host, copy.What, timeout, cancellation: cancellation).ConfigureAwait(false); }
+                                catch (DirectoryNotFoundException) { listing = null; }
+                                if (listing is { Files.Count: > 0 })
+                                {
+                                    const string why = "its fetch was not proven; it holds the run's evidence";
+                                    await Note(group.Key, JournalEntry.Of(JournalEntry.CopyKept, ("runtime", copy.What), ("why", why))).ConfigureAwait(false);
+                                    Step(group.Key, what, "kept: " + why);
+                                    continue;
+                                }
+                                removed = "nothing was left in it";
+                            }
+                            await HostedRuntimeStage.RetireAsync(host, copy.What, "", timeout, cancellation, runId).ConfigureAwait(false);
+                            await Note(group.Key, JournalEntry.Of(JournalEntry.CopyRetired, ("runtime", copy.What))).ConfigureAwait(false);
+                            Step(group.Key, what, $"removed ({removed})");
+                            continue;
+                        }
                         // A hosted world in a campaign client's own worlds (#258 step 8b; this machine's too, #807): moved out into the run's
                         // folder there, never deleted, and only once the world there states the UID the run journalled placing.
                         if (copy.Fields.GetValueOrDefault("holds") == HostedWorldOnHost.Holds)
                         {
                             string keepIn = copy.Fields["keepIn"];
                             var moved = await HostedWorldOnHost.RecoverAsync(host, copy.Fields, copy.What, runId, timeout, cancellation).ConfigureAwait(false);
+                            if (moved.Count != 0) leftHere.Add(keepIn);
                             Step(group.Key, what, moved.Count == 0 ? "nothing left in the client's worlds"
                                 : $"moved out of the client's worlds into {keepIn} (the run's confirmed placement, world UID {copy.Fields["worldUid"]} as journalled, handed over): {string.Join(", ", moved)}");
                             await Note(group.Key, JournalEntry.Of(JournalEntry.CopyRetired, ("runtime", copy.What), ("handedOver", "true"), ("keptIn", keepIn))).ConfigureAwait(false);
                             continue;
                         }
-                        // New server evidence remains owned until its verified fetch is durable. Recovery cannot invent a
+                        // Evidence in a run's folder (a server's, a campaign client's) remains owned until its verified fetch is durable. Recovery cannot invent a
                         // missing fetch receipt: keep the only copy visible, unless teardown explicitly asks to remove it.
                         if (copy.Fields.GetValueOrDefault("retention") == "after-fetch")
                         {
@@ -500,14 +542,15 @@ internal static class RunRecovery
                             if (Failed(group.Key)) throw new IOException("an earlier recovery step on this host failed; its evidence stays");
                             if (!teardown && copy.Fields.GetValueOrDefault("fetched") != "true")
                             {
-                                const string why = "its fetch was not proven; its server evidence stays";
+                                const string why = "its fetch was not proven; the run's evidence in it stays";
                                 await Note(group.Key, JournalEntry.Of(JournalEntry.CopyKept, ("runtime", copy.What), ("why", why))).ConfigureAwait(false);
                                 Step(group.Key, what, "kept: " + why);
+                                leftHere.Add(copy.What);
                                 continue;
                             }
                             await HostedRuntimeStage.RetireAsync(host, copy.What, stage, timeout, cancellation, runId).ConfigureAwait(false);
                             await Note(group.Key, JournalEntry.Of(JournalEntry.CopyRetired, ("runtime", copy.What))).ConfigureAwait(false);
-                            Step(group.Key, what, "removed (server evidence fetched or teardown requested)");
+                            Step(group.Key, what, "removed (its evidence fetched or teardown requested)");
                             continue;
                         }
                         // A hosted run's world copy (HostedServerRun journals what each of its copies holds) has no game logs.
@@ -518,6 +561,7 @@ internal static class RunRecovery
                             {
                                 // A hosted run's verified world copy is its save, evidence: handed over where it is, as a run that ends does.
                                 Step(group.Key, what, "kept as the run's save (handed over, in its run directory)");
+                                leftHere.Add(copy.What);
                                 await Note(group.Key, JournalEntry.Of(JournalEntry.CopyRetired, ("runtime", copy.What), ("handedOver", "true"))).ConfigureAwait(false);
                                 continue;
                             }
@@ -536,12 +580,17 @@ internal static class RunRecovery
                         {
                             throw new IOException($"its game logs could not be kept, so it stays ({error.Message}); recover again once they can be, or remove it by hand", error);
                         }
+                        if (logs.Kept.Count != 0) leftHere.Add(logs.Folder);
                         await HostedRuntimeStage.RetireAsync(host, copy.What, stage, timeout, runId: runId).ConfigureAwait(false);
                         Step(group.Key, what, logs.Describe());
                         await Note(group.Key, JournalEntry.Of(JournalEntry.CopyRetired,
                             [("runtime", copy.What), .. logs.Kept.Count == 0 ? Array.Empty<(string, string)>() : [("logsKeptIn", logs.Folder)]])).ConfigureAwait(false);
                     }
-                    catch (Exception error) when (error is not OperationCanceledException) { Step(group.Key, what, "not removed: " + error.Message, failed: true); }
+                    catch (Exception error) when (error is not OperationCanceledException)
+                    {
+                        Step(group.Key, what, "not removed: " + error.Message, failed: true);
+                        leftHere.Add(copy.What);
+                    }
                 }
             }
             catch (Exception error) when (error is not OperationCanceledException)

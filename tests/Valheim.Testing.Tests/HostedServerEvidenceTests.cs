@@ -55,10 +55,13 @@ public sealed partial class HostedServerRunTests
         Assert.True(Directory.Exists(host.Local(RunDirectory + "/world")));
         Assert.False(Directory.Exists(host.Local(RunDirectory + "/boot-1")));
         var status = Assert.Single((await RunJournalStatus.InspectAsync(LinuxBox(), _ => host, TimeSpan.FromSeconds(5))).Runs);
-        var kept = Assert.Single(status.Items, item => item.Kind == "copy");
+        var kept = Assert.Single(status.Items, item => item.Kind == "copy" && item.What != RunDirectory);
         Assert.Equal(RunDirectory + "/world", kept.What);
         Assert.True(kept.Kept);
         Assert.Contains("fetch failed", kept.Status);
+        // The run's folder that holds it stays too, open, until what it holds is settled (#791).
+        var folder = Assert.Single(status.Items, item => item.What == RunDirectory);
+        Assert.Equal((false, "copy started, never finished"), (folder.Kept, folder.Status));
     }
 
     [Fact]

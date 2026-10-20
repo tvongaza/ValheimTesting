@@ -116,7 +116,7 @@ The hosting client's world is placed in its host user's own `worlds_local` throu
 1. Refuses any entry already named for the world: `<name>`, `<name>.*` or `<name>_backup*`, in any case.
 2. Journals the placement, ships the verified fixture into `<runtime>/<runId>/host-world-stage`, and checks every file.
 3. Moves the world's entries into `worlds_local`.
-4. Once no client can host it, moves every entry named for the world, backups included, into `<runtime>/<runId>/host-world`, and fetches it into the evidence.
+4. Once no client can host it, moves every entry named for the world, backups included, into `<runtime>/<runId>/host-world`, fetches it into the evidence, and then removes the host's copy. The run's folder on that host goes at teardown, as every client's does.
 
 Nothing in the user's worlds is ever deleted. `hostWorldOn` in the provenance names the folder.
 

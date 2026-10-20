@@ -10,9 +10,13 @@ using Valheim.Testing.GameSessions;
 public sealed partial class HostedServerRunTests
 {
     private static Dictionary<string, HostProfile> LinuxBox() => new() { ["linux-box"] = new() { Kind = "ssh", Lock = "/var/tmp/vt/lock" } };
+    // The copies in the run's folder; the folder's own lines (RunFolder) are RunFolderCopies.
     private static IEnumerable<(string Kind, string Path)> Copies(IReadOnlyList<JournalRecord> journal) => journal
-        .Where(record => record.Entry.Kind.StartsWith("copy-", StringComparison.Ordinal))
+        .Where(record => record.Entry.Kind.StartsWith("copy-", StringComparison.Ordinal) && record.Entry.Fields["runtime"] != RunDirectory)
         .Select(record => (record.Entry.Kind, record.Entry.Fields["runtime"]));
+    private static IEnumerable<string> RunFolderCopies(IReadOnlyList<JournalRecord> journal) => journal
+        .Where(record => record.Entry.Kind.StartsWith("copy-", StringComparison.Ordinal) && record.Entry.Fields["runtime"] == RunDirectory)
+        .Select(record => record.Entry.Kind);
     // Where in a fake host's script log the journal append of that kind for that copy ran.
     private static int CopyJournalIndex(FakeServerHost host, string kind, string path) => host.Runs.ToList().FindIndex(run => run.Script == "journal" &&
         Encoding.UTF8.GetString(Convert.FromBase64String(run.Variables["line"])) is var line &&
@@ -81,6 +85,11 @@ public sealed partial class HostedServerRunTests
             (JournalEntry.CopyIntended, RunDirectory + "/boot-1"), (JournalEntry.CopyRetired, runtime),
             (JournalEntry.CopyDone, world), (JournalEntry.CopyRetired, world),
             (JournalEntry.CopyDone, RunDirectory + "/boot-1"), (JournalEntry.CopyRetired, RunDirectory + "/boot-1")], Copies(journal));
+        // The run's folder is journalled before its first copy, and fetched (here nothing was left in it) and removed last (#791).
+        Assert.Equal([JournalEntry.CopyIntended, JournalEntry.CopyDone, JournalEntry.CopyRetired], RunFolderCopies(journal));
+        Assert.True(CopyJournalIndex(host, JournalEntry.CopyIntended, RunDirectory) < CopyJournalIndex(host, JournalEntry.CopyIntended, runtime));
+        Assert.True(CopyJournalIndex(host, JournalEntry.CopyRetired, RunDirectory) > CopyJournalIndex(host, JournalEntry.CopyRetired, RunDirectory + "/boot-1"));
+        Assert.False(Directory.Exists(host.Local(RunDirectory)));
         Assert.DoesNotContain(journal, record => record.Entry.Fields.ContainsKey("handedOver"));
         Assert.All(journal.Where(record => record.Entry.Kind.StartsWith("copy-", StringComparison.Ordinal)), record => Assert.Equal("server", record.Actor));
         var scripts = host.Runs.ToList();
@@ -118,7 +127,7 @@ public sealed partial class HostedServerRunTests
         Assert.False(Directory.Exists(host.Local(runtime))); Assert.False(Directory.Exists(host.Local(staging)));
         var journal = await RunJournalOnHost.ReadAsync(host, "/var/tmp/vt/journal", RunId, TimeSpan.FromSeconds(5));
         Assert.Equal([(JournalEntry.CopyIntended, runtime), (JournalEntry.CopyRetired, runtime)], Copies(journal));
-        Assert.Equal("true", journal.Single(record => record.Entry.Kind == JournalEntry.CopyRetired).Entry.Fields["failed"]);
+        Assert.Equal("true", journal.Single(record => record.Entry.Kind == JournalEntry.CopyRetired && record.Entry.Fields["runtime"] == runtime).Entry.Fields["failed"]);
         Assert.Equal(JournalRunState.Ended, Assert.Single((await RunJournalStatus.InspectAsync(LinuxBox(), _ => host, TimeSpan.FromSeconds(5))).Runs).State);
         Assert.DoesNotContain("ship and verify the world copy on the server host", StepNames());
 
@@ -129,7 +138,7 @@ public sealed partial class HostedServerRunTests
         host1.BeforeScript = name => { if (name == "cleanup-stage" && ++cleanups == 1) host1.Failures["cleanup-stage"] = FakeServerHost.TransportFailure; else host1.Failures.Remove("cleanup-stage"); };
         var (plan1, profile1) = Write(host1);
         Assert.Equal(3, await PinnedServerRun.MainAsync(TestEnvironment.Read(profile1), ["run", plan1, Path.Combine(_root, "output-1")], Options(host1, server1)));
-        Assert.Equal(2, cleanups);
+        Assert.Equal(3, cleanups); // the stage's own, the teardown's, then the run's folder (#791)
         Assert.False(Directory.Exists(host1.Local(runtime))); Assert.False(Directory.Exists(host1.Local(staging)));
         Assert.Equal([(JournalEntry.CopyIntended, runtime), (JournalEntry.CopyRetired, runtime)],
             Copies(await RunJournalOnHost.ReadAsync(host1, "/var/tmp/vt/journal", RunId, TimeSpan.FromSeconds(5))));
@@ -145,13 +154,18 @@ public sealed partial class HostedServerRunTests
         Assert.True(Directory.Exists(host2.Local(runtime))); Assert.True(Directory.Exists(host2.Local(staging)));
         var before = Assert.Single((await RunJournalStatus.InspectAsync(LinuxBox(), _ => host2, TimeSpan.FromSeconds(5))).Runs);
         Assert.Equal(JournalRunState.Recoverable, before.State);
-        var left = Assert.Single(before.Items);
+        var left = Assert.Single(before.Items, item => item.What != RunDirectory);
         Assert.Equal(("copy", runtime, "copy started, never finished"), (left.Kind, left.What, left.Status));
+        // The run's folder stays open with it while the profile in it is not settled (#791).
+        Assert.Equal("copy started, never finished", Assert.Single(before.Items, item => item.What == RunDirectory).Status);
         var recovery = await RunRecovery.RecoverAsync(LinuxBox(), _ => host2, RunId, teardown: false, TimeSpan.FromSeconds(5));
         Assert.True(recovery.Recovered, string.Join("\n", recovery.Steps));
         Assert.False(Directory.Exists(host2.Local(runtime)));
         Assert.Contains(host2.Runs, run => run.Script == "cleanup-stage" && run.Variables["runtime"] == runtime && run.Variables["stage"] == staging);
         Assert.False(Directory.Exists(host2.Local(staging)));
+        // The run's folder, emptied by that removal, goes after it: nothing in it was left unfetched (#791).
+        Assert.Contains("nothing", Assert.Single(recovery.Steps, step => step.What == "copy " + RunDirectory).Outcome);
+        Assert.False(Directory.Exists(host2.Local(RunDirectory)));
         var after = Assert.Single((await RunJournalStatus.InspectAsync(LinuxBox(), _ => host2, TimeSpan.FromSeconds(5))).Runs);
         Assert.Equal(JournalRunState.Ended, after.State);
         Assert.Empty(after.Items);

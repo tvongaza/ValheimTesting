@@ -126,7 +126,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         // Each actor's environment on its own host; the clients' Steam identities are the ones signed in there.
         object Environment(string name, string host, string role, int port, string install = @"C:\game\source") => new
         {
-            name, host, roles = new[] { role }, install, runtime = @"C:\runs", cliPort = port, localCliPort = port + 1000, gamePort = role == "server" ? 2456 : 0,
+            name, host, roles = new[] { role }, install, runtime = role == "server" ? @"C:\runs" : @"C:\client-runs", cliPort = port, localCliPort = port + 1000, gamePort = role == "server" ? 2456 : 0,
         };
         object Inventory(params object[] environments) => new
         {
@@ -493,7 +493,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         }
         object Recipe(string name, string host, string role, string install, int port) => new
         {
-            name, host, roles = new[] { role }, install, runtime = @"C:\runs", cliPort = port, localCliPort = port + 1000, gamePort = role == "server" ? 2456 : 0,
+            name, host, roles = new[] { role }, install, runtime = role == "server" ? @"C:\runs" : @"C:\client-runs", cliPort = port, localCliPort = port + 1000, gamePort = role == "server" ? 2456 : 0,
         };
         string inventory = Path.Combine(_rig.Root, "six-inventory.json");
         File.WriteAllText(inventory, JsonSerializer.Serialize(new
@@ -938,7 +938,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         }
         object Environment(string name, string role, int port) => new
         {
-            name, host = name, roles = new[] { role }, install = @"C:\game\source", runtime = @"C:\runs", cliPort = port, localCliPort = port + 1000, gamePort = role == "server" ? 2456 : 0,
+            name, host = name, roles = new[] { role }, install = @"C:\game\source", runtime = role == "server" ? @"C:\runs" : @"C:\client-runs", cliPort = port, localCliPort = port + 1000, gamePort = role == "server" ? 2456 : 0,
         };
         string inventory = Path.Combine(_rig.Root, "cut-campaign-inventory.json");
         File.WriteAllText(inventory, JsonSerializer.Serialize(new
@@ -1649,7 +1649,8 @@ public sealed class NativeDependencyResolverTests : IDisposable
         Assert.Contains(placed, run => run.Script == "world-move" && run.Variables["to"] == On("pc", "/runs/run-hosted/host-world"));
         Assert.Equal(new[] { "MyWorld.fwl" }, Directory.EnumerateFileSystemEntries(pc.Local(worlds)).Select(Path.GetFileName));
         Assert.Equal("the user's world", File.ReadAllText(pc.Local(worlds + "/MyWorld.fwl")));
-        Assert.True(File.Exists(pc.Local(On("pc", "/runs/run-hosted/host-world/Campaign/_main.0.fwl2"))));
+        // Fetched into the evidence, the host's collected copy goes, and the run's folder there with it (#791).
+        Assert.False(Directory.Exists(pc.Local(On("pc", "/runs/run-hosted"))));
         string evidence = result.GetProperty("Provenance").GetProperty("hostWorldEvidence").GetString()!;
         Assert.True(File.Exists(Path.Combine(evidence, "Campaign", "_main.0.fwl2")));
         Assert.True(File.Exists(Path.Combine(evidence, "Campaign_backup_auto-20261006.db")));
