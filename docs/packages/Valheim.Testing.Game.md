@@ -18,8 +18,8 @@ The transport, [`Valheim.Testing.Cli`](Valheim.Testing.Cli.md), comes with this 
 Add the package to a separate system-test project, never to the mod. It targets net10.0.
 
 ```xml
-<PackageReference Include="Valheim.Testing.Game" Version="[0.1.0]" />
-<PackageReference Include="Valheim.Testing.GameSessions" Version="[0.1.0]" />
+<PackageReference Include="Valheim.Testing.Game" Version="[0.2.0]" />
+<PackageReference Include="Valheim.Testing.GameSessions" Version="[0.2.0]" />
 ```
 
 Brackets pin an exact version; the released versions are in the [package table](../package-versions.md).
@@ -56,7 +56,7 @@ example.mymod=absent
 
 ## A first native check
 
-Copy the [FullLifecycle example](../../examples/FullLifecycle/README.md)'s native session. Put its private `session.json` and plan beside the test project ([prepare the native session](../guides/test-save-restart-rejoin.md)), then run from a ValheimTesting checkout:
+Copy the [FullLifecycle example](../../examples/FullLifecycle/README.md)'s native session. Put its private `session.json` and plan beside the test project ([the session manifest](../reference/sessions-campaigns.md#the-session-manifest)), then run from a ValheimTesting checkout:
 
 ```sh
 valheim-test session check examples/FullLifecycle/ExampleMod.Tests/session.json --hosts

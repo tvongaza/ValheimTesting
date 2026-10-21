@@ -106,6 +106,30 @@ public sealed class DetachedSessionTests : IDisposable
         Assert.Contains(failure.Message, error.ToString());
     }
 
+    // #869: a world fixture that is not one complete world is refused before the run journals, stages or registers anything.
+    [Fact]
+    public async Task AnIncompleteWorldFixtureIsRefusedBeforeAnythingIsStaged()
+    {
+        string data = Path.Combine(_root, "incomplete-data");
+        string fixture = FakeInstalls.World(Path.Combine(_root, "incomplete-world"));
+        File.Delete(Path.Combine(fixture, "Campaign", "_main.1.db2"));
+        string mod = Path.Combine(Directory.CreateDirectory(Path.Combine(_root, "incomplete-mod")).FullName, "Mod.dll");
+        File.WriteAllText(mod, "mod");
+        using var machine = new FakeDataRoot(data);
+        using var output = new StringWriter(); using var error = new StringWriter();
+        bool desktop = false;
+
+        int exit = await DetachedSession.RunAsync(["server-load", "--server", Path.Combine(_root, "server"), "--mod", mod, "--server-only",
+            "--world-fixture", fixture, "--output", Path.Combine(_root, "incomplete-output")], output, error,
+            new DetachedSession.Seams(Windows: true, RequireDesktop: () => { desktop = true; return Task.CompletedTask; }));
+
+        Assert.Equal(3, exit);
+        Assert.Contains("Campaign/_main.1.db2", error.ToString());
+        Assert.Contains("Nothing was staged", error.ToString());
+        Assert.False(desktop);
+        Assert.False(Directory.Exists(data));
+    }
+
     [Fact]
     public async Task RegistrationTimeoutReportsTheJournalledRunAsRecoverable()
     {

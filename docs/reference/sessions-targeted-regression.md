@@ -25,7 +25,7 @@ From the client environment the regression takes: the game install, only read; t
 
 | Check | Refuses |
 |---|---|
-| Fixture layout (`FixtureLayout.Discover`) | A root that is the world folder itself, a `worlds_local` wrapper, several worlds or none; a world whose metadata holds another UID (`HostWorldPlan.Preflight`) |
+| Fixture layout (`FixtureLayout.Discover`) | A root that is the world folder itself, a `worlds_local` wrapper, several worlds or none; a world the game would not load as it is ([what a fixture holds](game-preflight.md#what-the-preflight-catches)); a world whose metadata holds another UID (`HostWorldPlan.Preflight`) |
 | Hashes | A file missing or not its pinned SHA256 (an empty `sha256` prints the hash to review); an arm whose file is another build than its commit's; two arms with one SHA256 unless `mod.repeatability` |
 | Clean install | An existing profile not prepared by this run. The stage prepares a fresh loader profile (the game is never copied) and rebuilds `BepInEx/plugins`, `patchers`, `config` and `scripts` from the allowlist; only the selected arm is installed |
 | Declared metadata (`PluginMetadata.Read`, no assembly loaded) | A hard `[BepInDependency]` no staged `[BepInPlugin]` declares, or one older than its minimum version; a staged `[BepInIncompatibility]`; a `[BepInProcess]` that excludes the client; a GUID declared twice; an assembly reference nothing provides, unless listed in `optionalReferences` |

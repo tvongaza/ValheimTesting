@@ -28,7 +28,7 @@ public sealed class HostedWorldOnHostShellTests : IDisposable
         placed.Collect();
         Assert.False(Directory.Exists(site.Stage));
         Assert.False(Directory.Exists(To));
-        Assert.True(File.Exists(Path.Combine(placed.CollectedTo!, "Campaign.fwl")));
+        Assert.True(File.Exists(Path.Combine(placed.CollectedTo!, "Campaign", "_main.1.fwl2")));
         Assert.Equal("the user's world", File.ReadAllText(Path.Combine(Worlds, "Unrelated.fwl")));
         Assert.Equal([JournalEntry.CopyIntended, JournalEntry.CopyDone, JournalEntry.CopyRetired],
             journal.Where(entry => entry.Fields.GetValueOrDefault("runtime") == To).Select(entry => entry.Kind));
@@ -85,31 +85,38 @@ public sealed class HostedWorldOnHostShellTests : IDisposable
         Assert.True(File.Exists(Path.Combine(Worlds, "campaign.fwl")));
     }
 
-    // #807: what env recover reads before it moves a journalled world: the UID every metadata file of Valheim 1.0's chunked folder
-    // states (or a flat <name>.fwl's). Another UID is refused; entries without readable metadata are refused; nothing there is
-    // reported as nothing. Only the world's own files are read: a <name>_mine.fwl of the user's says nothing.
+    // #807: what env recover reads before it moves a journalled world: the UID every metadata file of Valheim 1.0's world folder
+    // and of the game's backups of it states. Another UID is refused; entries without readable metadata (a pre-1.0 <name>.db, which a
+    // run never places) are refused; nothing there is reported as nothing. Only the world's own files are read: a <name>_mine of the
+    // user's says nothing.
     [Theory, MemberData(nameof(LocalGameHostShellTests.Shells), MemberType = typeof(LocalGameHostShellTests))]
     public async Task TheIdentityCheckReadsTheWorldUidFromTheChunkedFolder(string shell)
     {
         var host = Host(shell);
         Directory.CreateDirectory(Path.Combine(Worlds, "Campaign"));
-        string flat = FakeInstalls.World(Path.Combine(_root, "flat"));
-        File.Copy(Path.Combine(flat, "Campaign.fwl"), Path.Combine(Worlds, "Campaign", "_main.1.fwl2"));
-        File.Copy(Path.Combine(flat, "Campaign.fwl"), Path.Combine(Worlds, "Campaign", "_main.12.fwl2"));
+        File.WriteAllBytes(Path.Combine(Worlds, "Campaign", "_main.1.fwl2"), FakeInstalls.Metadata("Campaign", 4242));
+        File.WriteAllBytes(Path.Combine(Worlds, "Campaign", "_main.12.fwl2"), FakeInstalls.Metadata("Campaign", 4242));
         File.WriteAllText(Path.Combine(Worlds, "Campaign", "_main.1.db2"), "data");
         File.WriteAllText(Path.Combine(Worlds, "Campaign", "0_0.chunk"), "chunk");
-        File.Copy(Path.Combine(FakeInstalls.World(Path.Combine(_root, "mine"), uid: 9999), "Campaign.fwl"), Path.Combine(Worlds, "Campaign_mine.fwl"));
+        Directory.CreateDirectory(Path.Combine(Worlds, "Campaign_mine"));
+        File.WriteAllBytes(Path.Combine(Worlds, "Campaign_mine", "_main.1.fwl2"), FakeInstalls.Metadata("Campaign", 9999));
         Task<bool> Check(string name, string uid) => HostedWorldOnHost.RequireOwnWorldAsync(host, Worlds, name, uid, TimeSpan.FromSeconds(60), CancellationToken.None);
 
         Assert.True(await Check("Campaign", "4242"));
         Assert.Contains("UID 4242, not the fixture's 7", (await Assert.ThrowsAsync<InvalidDataException>(() => Check("Campaign", "7"))).Message);
         Assert.False(await Check("Absent", "4242"));
-        File.WriteAllText(Path.Combine(Worlds, "Partial.db"), "data");
+        Directory.CreateDirectory(Path.Combine(Worlds, "Partial"));
+        File.WriteAllText(Path.Combine(Worlds, "Partial", "_main.1.db2"), "data");
         Assert.Contains("holds no world metadata", (await Assert.ThrowsAsync<InvalidDataException>(() => Check("Partial", "4242"))).Message);
+        // #869: a pre-1.0 world a user put back under the name is a file no run places; the move-out would take it, so it is refused.
+        File.WriteAllText(Path.Combine(Worlds, "Campaign.fwl"), "the user's pre-1.0 world");
+        Assert.Contains("Campaign.fwl in", (await Assert.ThrowsAsync<InvalidDataException>(() => Check("Campaign", "4242"))).Message);
+        File.Delete(Path.Combine(Worlds, "Campaign.fwl"));
 
-        // #829: every entry a move-out would take is read, in any case, not only <name>.fwl and <name>/: another world's metadata
-        // under a backup name (in another case) is refused, so the world stays where it is.
-        File.Copy(Path.Combine(FakeInstalls.World(Path.Combine(_root, "other"), uid: 9999), "Campaign.fwl"), Path.Combine(Worlds, "CAMPAIGN_backup_auto-1.fwl"));
+        // #829: every entry a move-out would take is read, in any case, not only <name>/: another world's metadata in a backup
+        // folder (in another case) is refused, so the world stays where it is.
+        Directory.CreateDirectory(Path.Combine(Worlds, "CAMPAIGN_backup_auto-20261006-120000"));
+        File.WriteAllBytes(Path.Combine(Worlds, "CAMPAIGN_backup_auto-20261006-120000", "_main.0.fwl2"), FakeInstalls.Metadata("Campaign", 9999));
         Assert.Contains("UID 9999, not the fixture's 4242", (await Assert.ThrowsAsync<InvalidDataException>(() => Check("Campaign", "4242"))).Message);
     }
 }

@@ -9,8 +9,10 @@ sealed class Valheim.Testing.GameSessions.CampaignPreflightActor : System.IEquat
   method virtual System.Boolean Equals(System.Object obj)
   method virtual System.Int32 GetHashCode()
   method virtual System.String ToString()
+  property System.Nullable`1<System.UInt32> NetworkVersion { get; init; }
   property System.String CharactersDirectory { get; init; }
   property System.String Environment { get; init; }
+  property System.String GameVersion { get; init; }
   property System.String Host { get; init; }
   property System.String Kind { get; init; }
   property System.String Name { get; init; }

@@ -10,9 +10,7 @@ public sealed class ServerLoadPhasesTests : IDisposable
 
     private string Plan(bool keepFinal = true)
     {
-        string fixture = Path.Combine(_root, "source-fixture");
-        Directory.CreateDirectory(fixture);
-        File.WriteAllText(Path.Combine(fixture, "world.fwl"), "source world");
+        string fixture = FakeInstalls.World(Path.Combine(_root, "source-fixture"));
         string server = Path.Combine(_root, "server");
         Directory.CreateDirectory(Path.Combine(server, InstallPins.CoreDirectory)); // the core the mod resolves against
         File.WriteAllText(Path.Combine(server, "server-marker"), "source server");
@@ -62,7 +60,7 @@ public sealed class ServerLoadPhasesTests : IDisposable
             calls[1][Array.IndexOf(calls[1], "--world-fixture") + 1]);
         Assert.False(Directory.Exists(Path.Combine(output, "checkpoints", "01-first")));
         Assert.Equal(keepFinal, Directory.Exists(Path.Combine(output, "checkpoints", "02-second")));
-        Assert.Equal("source world", File.ReadAllText(Path.Combine(_root, "source-fixture", "world.fwl")));
+        Assert.Equal("fixture", File.ReadAllText(Path.Combine(_root, "source-fixture", "Campaign", "_main.1.db2")));
         Assert.True(File.Exists(Path.Combine(output, "phase-plan.json")));
     }
 
@@ -202,7 +200,7 @@ public sealed class ServerLoadPhasesTests : IDisposable
         Assert.Equal(1, result);
         Assert.Equal(1, calls);
         Assert.Contains("failed", File.ReadAllText(Path.Combine(output, "phase-state.json")));
-        Assert.True(File.Exists(Path.Combine(_root, "source-fixture", "world.fwl")));
+        Assert.True(File.Exists(Path.Combine(_root, "source-fixture", "Campaign", "_main.1.fwl2")));
     }
 
     [Fact]

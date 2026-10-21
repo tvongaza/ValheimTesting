@@ -589,7 +589,13 @@ public static class PinnedServerRun
             options.Mod.Validate(); // A declaration that cannot be checked is refused before anything is copied.
             if (Path.Exists(output)) throw new IOException("Use a new output directory; existing evidence is never overwritten.");
             var plan = readPlan(); plan.CheckLogScan(); plan.CheckCrossplay();
-            if (campaign == null) plan.CheckOutput(output); // A campaign's sources are its prepared copies, bound below.
+            bool newWorld = false; // a standalone world=any fixture without a world: the game makes one on first boot
+            if (campaign == null)
+            {
+                plan.CheckOutput(output); // A campaign's sources are its prepared copies, bound below.
+                // The fixture is one complete world before anything is placed, staged or copied (a campaign's was read at inspection).
+                report.Step(StepPhase.Preflight, "the world fixture is one complete world", () => newWorld = plan.PreflightWorld() == null);
+            }
             IReadOnlyDictionary<string, ClientRunPlan>? campaignPlans = campaign is { } declared ? declared.Clients(plan) : null;
             foreach (var client in campaignPlans?.Values ?? options.ClientPlans?.Invoke(plan) ?? [])
                 client.RequirePasswordSource();
@@ -667,6 +673,11 @@ public static class PinnedServerRun
             report.Provenance.TryAdd("runId", hosted.RunId); // a standalone run's; a campaign's is already there
             hosted.Record(report.Provenance);
             var platform = hosted.HostProfile.Platform switch { "windows" => ServerPlatform.Windows, "macos" => ServerPlatform.MacOS, _ => ServerPlatform.Linux };
+            // A macOS server ignores -savedir and loads from the user's default worlds, where only a placed fixture world is the run's.
+            if (newWorld && platform == ServerPlatform.MacOS)
+                report.Step(StepPhase.Preflight, "a macOS server runs an existing world fixture", () => throw new ArgumentException(
+                    "A macOS dedicated server ignores -savedir and would make its new world in the signed-in user's own worlds, outside the run. " +
+                    "Give it an existing world fixture (worlds_local/<name>/), or make the new world on a Windows or Linux server."));
             options.CheckPlan?.Invoke(plan);
             report.Provenance["planSha256"] = planHash();
             report.Provenance["scenario"] = plan.Scenario;
@@ -718,8 +729,7 @@ public static class PinnedServerRun
                 {
                     var pins = new Dictionary<string, string>(plan.Pins, StringComparer.Ordinal)
                     {
-                        ["worlduid"] = WorldIdentity.Read(Directory.Exists(Path.Combine(world.DirectoryPath, "worlds_local"))
-                            ? Path.Combine(world.DirectoryPath, "worlds_local") : world.DirectoryPath).UidText,
+                        ["worlduid"] = WorldIdentity.Read(Path.Combine(world.DirectoryPath, "worlds_local")).UidText,
                     };
                     plan.Pins = pins;
                 }
