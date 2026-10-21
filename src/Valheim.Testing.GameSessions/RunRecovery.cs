@@ -478,6 +478,14 @@ internal static class RunRecovery
                 }
                 // What this recovery left in place on the host (a copy kept or not removed, logs it kept): a run folder holding one stays.
                 var leftHere = new List<string>();
+                // What a source settlement moved out of an install and kept (ProfileSourceCheck): only teardown reaches it, and it goes whole.
+                async Task RemoveKeptMovedFilesAsync(string folder)
+                {
+                    HostedRuntimeStage.RequirePrepared(host, folder, runId);
+                    await HostedRuntimeStage.RetireAsync(host, folder, "", timeout, cancellation, runId).ConfigureAwait(false);
+                    await Note(group.Key, JournalEntry.Of(JournalEntry.CopyRetired, ("runtime", folder))).ConfigureAwait(false);
+                    Step(group.Key, "copy " + folder, "removed (teardown requested)");
+                }
                 foreach (var copy in copies)
                 {
                     string what = $"copy {copy.What}";
@@ -575,10 +583,7 @@ internal static class RunRecovery
                         // run kept it on purpose, so only teardown reaches it, and it goes whole.
                         if (copy.Fields.GetValueOrDefault("holds") == ProfileSourceCheck.AddedFolder)
                         {
-                            HostedRuntimeStage.RequirePrepared(host, copy.What, runId);
-                            await HostedRuntimeStage.RetireAsync(host, copy.What, "", timeout, cancellation, runId).ConfigureAwait(false);
-                            await Note(group.Key, JournalEntry.Of(JournalEntry.CopyRetired, ("runtime", copy.What))).ConfigureAwait(false);
-                            Step(group.Key, what, "removed (teardown requested)");
+                            await RemoveKeptMovedFilesAsync(copy.What).ConfigureAwait(false);
                             continue;
                         }
                         // The journalled stage is read from disk: it must be this copy's own before anything runs on the host, logs included.
@@ -596,15 +601,9 @@ internal static class RunRecovery
                             if (verdict.Added.Count != 0 || verdict.Verdict != SourceVerdictKind.Unchanged) leftHere.Add(recoveredIn);
                             Step(group.Key, $"source install of {verdict.Actor} ({verdict.Root})", verdict.Describe() +
                                 (verdict.Verdict == SourceVerdictKind.Unchanged ? "" : $"; evidence in {recoveredIn}"), failed: verdict.Fails);
-                            // A teardown removes what its own refused settlement journalled kept, in this pass: no second teardown.
-                            if (teardown)
-                                foreach (string folder in verdict.KeptFolders)
-                                {
-                                    await HostedRuntimeStage.RetireAsync(host, folder, "", timeout, cancellation, runId).ConfigureAwait(false);
-                                    await Note(group.Key, JournalEntry.Of(JournalEntry.CopyRetired, ("runtime", folder))).ConfigureAwait(false);
-                                    Step(group.Key, "copy " + folder, "removed (teardown requested)");
-                                }
                             verdict.RequireRetirable();
+                            // A teardown removes what its own refused settlement journalled kept, in this pass: no second teardown.
+                            if (teardown) foreach (string folder in verdict.KeptFolders) await RemoveKeptMovedFilesAsync(folder).ConfigureAwait(false);
                         }
                         // The game's logs go with the copy: kept first, so a copy whose logs could not be kept stays (#412).
                         RecoveredLogs logs;

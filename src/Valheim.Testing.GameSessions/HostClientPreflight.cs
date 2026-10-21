@@ -81,7 +81,11 @@ internal static class HostClientPreflight
         'VT-EXISTS done'
         """.ReplaceLineEndings("\n");
 
-    /// <summary>The bytes of the file at <paramref name="path"/> on the host, or null when it is missing; a file over <paramref name="limit"/> bytes is refused.</summary>
+    /// <summary>
+    /// The bytes of the file at <paramref name="path"/> on the host, or null when it is missing; a file over <paramref name="limit"/> bytes is
+    /// refused (an <see cref="IOException"/>), and one the host user cannot read is an <see cref="UnauthorizedAccessException"/>. A host that
+    /// does not answer is a <see cref="HostOperationException"/>: nothing is known about the file.
+    /// </summary>
     internal static async Task<byte[]?> Read(IGameHost host, string path, TimeSpan timeout, CancellationToken cancellation, long limit = 4 << 20)
     {
         var result = (await host.RunAsync(host.Shell.Kind == HostShellKind.PowerShell ? PowerShellRead : BashRead,
@@ -90,6 +94,7 @@ internal static class HostClientPreflight
         string line = result.Stdout.Trim();
         if (line == "VT-PREFLIGHT missing") return null;
         if (line == "VT-PREFLIGHT too-large") throw TooLarge(path, host.Name, limit);
+        if (line == "VT-PREFLIGHT unreadable") throw new UnauthorizedAccessException($"{path} on {host.Name} cannot be read by the host user.");
         if (!line.StartsWith("VT-PREFLIGHT ", StringComparison.Ordinal)) throw new HostOperationException($"Unexpected reply reading {path} on {host.Name}", result);
         try { return Convert.FromBase64String(line["VT-PREFLIGHT ".Length..]); }
         catch (FormatException) { throw new HostOperationException($"Malformed reply reading {path} on {host.Name}", result); }
@@ -101,6 +106,7 @@ internal static class HostClientPreflight
 
     internal static readonly string BashRead = """
         if [ ! -f "$path" ]; then echo 'VT-PREFLIGHT missing'; exit 0; fi
+        if [ ! -r "$path" ]; then echo 'VT-PREFLIGHT unreadable'; exit 0; fi
         size=$(wc -c < "$path") || exit 3
         if [ "$size" -gt "$limit" ]; then echo 'VT-PREFLIGHT too-large'; exit 0; fi
         printf 'VT-PREFLIGHT '; base64 < "$path" | tr -d '\n'; printf '\n'
@@ -109,6 +115,7 @@ internal static class HostClientPreflight
         if (-not [IO.File]::Exists($path)) { 'VT-PREFLIGHT missing'; exit 0 }
         $file = New-Object IO.FileInfo $path
         if ($file.Length -gt [long]$limit) { 'VT-PREFLIGHT too-large'; exit 0 }
-        'VT-PREFLIGHT ' + [Convert]::ToBase64String([IO.File]::ReadAllBytes($path))
+        try { $bytes = [IO.File]::ReadAllBytes($path) } catch [UnauthorizedAccessException] { 'VT-PREFLIGHT unreadable'; exit 0 }
+        'VT-PREFLIGHT ' + [Convert]::ToBase64String($bytes)
         """.ReplaceLineEndings("\n");
 }

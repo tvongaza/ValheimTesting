@@ -185,9 +185,13 @@ internal sealed class ProfileSourceCheck
     /// <item>No baseline journalled: null.</item>
     /// <item>A baseline, not settled: settled as the run would have (<see cref="SettleAsync"/>).</item>
     /// <item>Settled by the run and its baseline gone: null, or what it had moved but not kept, adopted.</item>
-    /// <item>Not settled and its baseline gone: <see cref="SourceVerdictKind.Unknown"/>, not compared; what was moved is kept.</item>
+    /// <item>Not settled and its baseline not found: while the install or the profile's folder does not answer (an offline NAS, an
+    /// unplugged volume), the copy stays open for the next <c>env recover</c>; otherwise, or under <paramref name="teardown"/>,
+    /// <see cref="SourceVerdictKind.Unknown"/>, not compared, and what was moved is kept.</item>
     /// <item>A baseline that does not match its journal: refused by <c>env recover</c>, nothing moved or removed; with
-    /// <paramref name="teardown"/>, <see cref="SourceVerdictKind.Unknown"/>, not compared; what was moved is kept.</item>
+    /// <paramref name="teardown"/>, <see cref="SourceVerdictKind.Unknown"/>, not compared; what was moved is kept. Under teardown a
+    /// baseline over the read limit or that the host user cannot read is the same; a host that does not answer keeps the copy.</item>
+    /// <item>A refused adoption of what was moved: a finished <see cref="SourceVerdictKind.Failed"/>, the folder journalled kept.</item>
     /// </list>
     /// </summary>
     internal static async Task<SourceVerdict?> RecoverAsync(IGameHost host, string runtime, string actor, IReadOnlyDictionary<string, string> fields,
@@ -204,9 +208,10 @@ internal sealed class ProfileSourceCheck
         PersistedBaseline? baseline = null;
         byte[]? bytes;
         try { bytes = await HostClientPreflight.Read(host, path, timeout, cancellation, BaselineLimit).ConfigureAwait(false); }
-        catch (Exception error) when (teardown && error is IOException or HostOperationException or FormatException)
+        catch (Exception error) when (teardown && error is IOException or UnauthorizedAccessException)
         {
-            // Over the read limit or unreadable: under env teardown a baseline it cannot read is one it cannot trust.
+            // Over the read limit or unreadable by the host user (never a host that does not answer): under env teardown a baseline it
+            // cannot read is one it cannot trust.
             bytes = [];
             mismatch = "cannot be read (" + error.Message + ")";
         }
@@ -224,6 +229,11 @@ internal sealed class ProfileSourceCheck
                 throw new InvalidDataException($"the source baseline {path} on {host.Name} {mismatch}, so it is refused and nothing was removed; " +
                     "check the install, then env teardown removes the profile without comparing it");
         }
+        // A linked profile lies on the install's volume: a baseline not found while that volume is offline is not a baseline that is gone.
+        if (bytes == null && !teardown && !fields.ContainsKey("sourceVerdict") &&
+            await UnreachableAsync(host, root, HostPath.Parent(runtime), timeout, cancellation).ConfigureAwait(false) is { } offline)
+            return SourceVerdict.NotCompared(actor, $"its source baseline {path} was not found, and {offline} on {host.Name} is not reachable") with
+            { Settled = false, Host = host.Name, Root = root, Profile = runtime, InRecovery = true };
         // No baseline to compare with: keep what was moved, and name the install as not compared (or, settled by the run, nothing is due).
         var unread = new ProfileSourceCheck(new HostListing(host.Name, host.Shell.Kind, root, new Dictionary<string, string>(), []),
             new Dictionary<string, string>(), new Dictionary<string, string>(), linked: false, id);
@@ -239,13 +249,11 @@ internal sealed class ProfileSourceCheck
             }
             catch (SourceRefusedException refused)
             {
-                // A refused adoption is a finished failure on either branch: the folder it could not adopt stays, journalled kept.
-                var (moved, folders) = await unread.MovedFilesAsync(host, where, timeout, cancellation).ConfigureAwait(false);
-                await JournalKeptAsync(folders, refused, journal).ConfigureAwait(false);
-                return new SourceVerdict(actor, host.Name, root, "", SourceVerdictKind.Failed, moved, [], [], [], [], [],
-                    (bytes == null ? $"its source baseline {path} is gone; " : mismatch != null ? $"its source baseline {path} {mismatch}; " : "") +
-                    refused.Message + ". Resolve it by hand; env teardown removes the moved files it kept")
-                { Profile = runtime, InRecovery = true, KeptFolders = folders };
+                // A refused adoption is a finished failure on either branch, through the one refusal bookkeeping.
+                var failed = new SourceVerdict(actor, host.Name, root, "", SourceVerdictKind.Failed, [], [], [], [], [], [],
+                    (bytes == null ? $"its source baseline {path} is gone; " : $"its source baseline {path} {mismatch}; ") +
+                    refused.Message + ". Resolve it by hand; env teardown removes the moved files it kept") { Profile = runtime, InRecovery = true };
+                return await unread.RefusedAsync(host, where, failed, refused, journal, null, journalled: false, timeout, cancellation).ConfigureAwait(false);
             }
             if (bytes == null && fields.ContainsKey("sourceVerdict"))
                 return kept.Count == 0 ? null : new SourceVerdict(actor, host.Name, root, "", SourceVerdictKind.Restored, kept, [], [], [], [], [],
@@ -279,9 +287,10 @@ internal sealed class ProfileSourceCheck
     /// In a run the moved files go to this profile's moved-files folder and are fetched into the run's evidence; in a recovery,
     /// after adopting what an interrupted run moved, straight into the profile's recovered folder. <c>source-changes.json</c> is
     /// written beside them, <see cref="JournalEntry.SourceSettled"/> is journalled once, and only then the baseline goes.
-    /// A refusal that cannot change (an install that is gone or now holds a link, a keep folder inside it, a recovered folder already
-    /// there) is a finished <see cref="SourceVerdictKind.Failed"/> naming it and the manual step: the profile retires, and moved files
-    /// stay journalled kept. Anything else that stops it may pass: the profile, its baseline and its moved files stay
+    /// A refusal that cannot change (an install that now holds a link, a keep folder inside it, a recovered folder already there; under
+    /// <c>env teardown</c>, an install that is not there) is a finished <see cref="SourceVerdictKind.Failed"/> naming it and the manual
+    /// step: the profile retires, and moved files stay journalled kept. Anything else that stops it may pass (an install that is not
+    /// reachable, a host that does not answer): the profile, its baseline and its moved files stay
     /// (<see cref="SourceVerdict.KeepsProfile"/>), journalled kept in a run, so a recovery settles them again. Repeating it finds the
     /// moved files gone and carries on. It never throws for what it finds on the host.
     /// </summary>
@@ -306,10 +315,6 @@ internal sealed class ProfileSourceCheck
         SourceVerdict verdict;
         string? evidence = null;
         bool journalled = false;
-        Task Settled(SourceVerdict final, params (string Key, string Value)[] more) => journal(JournalEntry.Of(JournalEntry.SourceSettled,
-            [("runtime", where.Runtime), ("sourceVerdict", final.Verdict.ToString()), ("added", final.Added.Count.ToString(CultureInfo.InvariantCulture)),
-             ("changed", final.Changed.Count.ToString(CultureInfo.InvariantCulture)), ("missing", final.Missing.Count.ToString(CultureInfo.InvariantCulture)),
-             ("notMoved", final.NotMoved.Count.ToString(CultureInfo.InvariantCulture)), .. more]));
         try
         {
             // Inside the try, so even a caller's mistake ends as a verdict that keeps the profile: never retired without one.
@@ -341,29 +346,20 @@ internal sealed class ProfileSourceCheck
             if (verdict.Verdict != SourceVerdictKind.Unchanged) await WriteReportAsync(host, where, evidence, verdict, timeout, cancellation).ConfigureAwait(false);
             cancellation.ThrowIfCancellationRequested();
             // Journalled before the baseline goes: without this line a recovery finds the baseline and settles again.
-            await Settled(verdict).ConfigureAwait(false);
+            await JournalSettledAsync(journal, where, verdict).ConfigureAwait(false);
             journalled = true;
             await DropAsync(host, where, !recovery && (evidence != null || kept.Count == 0), timeout, cancellation).ConfigureAwait(false);
         }
         catch (SourceRefusedException refused)
         {
-            // A refusal that cannot change is a finished failure, never a retry: the profile retires as usual. The moved files are
-            // named where they are now and their folder journalled kept for env teardown, before anything else; bookkeeping that
-            // does not finish keeps the profile instead, so no moved file is ever left unjournalled.
-            verdict = Verdict(SourceVerdictKind.Failed, refused.Message + ". Resolve it by hand; env teardown removes the moved files it kept");
+            // A refusal that cannot change is a finished failure, never a retry: the profile retires as usual. Bookkeeping that does
+            // not finish keeps the profile instead, so no moved file is ever left unjournalled.
             try
             {
-                var (moved, folders) = await MovedFilesAsync(host, where, timeout, cancellation).ConfigureAwait(false);
-                await JournalKeptAsync(folders, refused, journal).ConfigureAwait(false);
-                keptFolders.AddRange(folders);
-                kept = moved;
-                verdict = verdict with { Added = kept };
-                if (!journalled) await Settled(verdict, ("refused", refused.Message)).ConfigureAwait(false);
+                verdict = await RefusedAsync(host, where, Verdict(SourceVerdictKind.Failed, refused.Message + ". Resolve it by hand; env teardown removes the moved files it kept"),
+                    refused, journal, evidence, journalled, timeout, cancellation).ConfigureAwait(false);
             }
             catch (Exception lost) { return await UnfinishedAsync(lost).ConfigureAwait(false); }
-            // The report says what the settlement ended with, even when it was written before the refusal.
-            try { await WriteReportAsync(host, where, evidence, verdict, timeout, cancellation).ConfigureAwait(false); }
-            catch (Exception lost) { Console.Error.WriteLine($"Warning: could not rewrite the source-changes.json of {where.Actor} on {host.Name}: {lost.Message}"); }
         }
         catch (Exception error) { verdict = await UnfinishedAsync(error).ConfigureAwait(false); }
         return verdict;
@@ -386,12 +382,39 @@ internal sealed class ProfileSourceCheck
         }
     }
 
-    // Each folder of moved files that a refusal leaves where it is, journalled kept for env teardown.
-    private static async Task JournalKeptAsync(IEnumerable<string> folders, SourceRefusedException refused, Func<JournalEntry, Task> journal)
+    // The one bookkeeping of a refused settlement, in a run or a recovery: the moved files named where they are now, each folder of
+    // them outside the install journalled kept for env teardown, the settlement journalled once, then its report (best effort: the
+    // journal already holds what matters). Throws when the bookkeeping does not finish, so the caller keeps the profile.
+    private async Task<SourceVerdict> RefusedAsync(IGameHost host, SourceSettlement where, SourceVerdict verdict, SourceRefusedException refused,
+        Func<JournalEntry, Task> journal, string? evidence, bool journalled, TimeSpan timeout, CancellationToken cancellation)
     {
+        var (moved, folders) = await MovedFilesAsync(host, where, timeout, cancellation).ConfigureAwait(false);
         foreach (string folder in folders)
             await journal(JournalEntry.Of(JournalEntry.CopyKept, ("runtime", folder), ("stage", ""), ("parent", HostPath.Parent(folder)),
                 ("holds", AddedFolder), ("why", "its source settlement was refused: " + refused.Message))).ConfigureAwait(false);
+        verdict = verdict with { Added = moved, KeptFolders = folders };
+        if (!journalled) await JournalSettledAsync(journal, where, verdict, ("refused", refused.Message)).ConfigureAwait(false);
+        try { await WriteReportAsync(host, where, evidence, verdict, timeout, cancellation).ConfigureAwait(false); }
+        catch (Exception lost) { Console.Error.WriteLine($"Warning: could not write the source-changes.json of {where.Actor} on {host.Name}: {lost.Message}"); }
+        return verdict;
+    }
+
+    // The settlement's one journal line, before the baseline goes.
+    private static Task JournalSettledAsync(Func<JournalEntry, Task> journal, SourceSettlement where, SourceVerdict verdict,
+        params (string Key, string Value)[] more) => journal(JournalEntry.Of(JournalEntry.SourceSettled,
+        [("runtime", where.Runtime), ("sourceVerdict", verdict.Verdict.ToString()), ("added", verdict.Added.Count.ToString(CultureInfo.InvariantCulture)),
+         ("changed", verdict.Changed.Count.ToString(CultureInfo.InvariantCulture)), ("missing", verdict.Missing.Count.ToString(CultureInfo.InvariantCulture)),
+         ("notMoved", verdict.NotMoved.Count.ToString(CultureInfo.InvariantCulture)), .. more]));
+
+    // The first of the install and the profile's folder that does not answer on the host, or null when both do.
+    private static async Task<string?> UnreachableAsync(IGameHost host, string root, string parent, TimeSpan timeout, CancellationToken cancellation)
+    {
+        var result = (await host.RunAsync(host.Shell.Kind == HostShellKind.PowerShell ? SourceSettleScripts.PowerShellReachable : SourceSettleScripts.BashReachable,
+            new Dictionary<string, string> { ["root"] = root, ["parent"] = parent }, timeout, cancellation).ConfigureAwait(false))
+            .EnsureSuccess($"Checking {root} and {parent} on {host.Name}");
+        string verdict = InteractiveClient.Line(result.Stdout, "VT-REACHABLE ") ?? throw new HostOperationException($"No reachability verdict from {host.Name}", result);
+        return verdict == "yes" ? null : verdict.StartsWith("no ", StringComparison.Ordinal) ? verdict[3..]
+            : throw new HostOperationException($"Unexpected reachability verdict from {host.Name}", result);
     }
 
     // The install's listing. One that now holds a link is a state of the host, never a passing failure. One that is not there may be an
@@ -402,8 +425,7 @@ internal sealed class ProfileSourceCheck
         catch (DirectoryNotFoundException)
         {
             if (where.Teardown) throw new SourceRefusedException($"the source install {Source.Root} on {host.Name} is gone; restore it (or verify its files in Steam) before the next run");
-            throw new IOException($"the source install {Source.Root} on {host.Name} is not reachable; reconnect it (an offline NAS, an unplugged volume) and " +
-                "run env recover, or run env teardown to remove the profile without settling it");
+            throw new IOException($"the source install {Source.Root} on {host.Name} is not reachable");
         }
         catch (IOException links) when (links.Data.Contains(HostInstall.LinksFound))
         {

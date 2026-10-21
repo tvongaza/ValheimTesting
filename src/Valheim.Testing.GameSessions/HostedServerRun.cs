@@ -796,9 +796,9 @@ internal sealed class HostedServerRun : IServerPlacement
                     ? await _sourceCheck.SettleAsync(Host, SourceSettlement.Run("server", RuntimeDirectory, output),
                         entry => JournalAsync(Host, Role.Host, "server", entry, cleanup), HostedTimeouts.Long, cleanup).ConfigureAwait(false)
                     : SourceVerdict.Unknown("server", "the owned server was not proven stopped");
-                // An unknown verdict follows from the stop that was not proven, which is the run's unknown outcome already.
+                // A verdict of a stop that was not proven is the run's unknown outcome already; any other failing verdict is a failure.
                 try { verdict.Record(report); }
-                catch (IOException error) when (verdict.Verdict != SourceVerdictKind.Unknown) { failures.Add(error); Console.Error.WriteLine("Teardown: " + error.Message); }
+                catch (IOException error) when (serverStopped) { failures.Add(error); Console.Error.WriteLine("Teardown: " + error.Message); }
                 catch (IOException) { }
                 // A settlement that did not finish keeps the profile, journalled kept by the settlement, so the run folder stays too.
                 settled = verdict;

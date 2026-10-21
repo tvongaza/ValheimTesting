@@ -77,7 +77,8 @@ internal sealed record SourceVerdict(string Actor, string Host, string Root, str
     internal void RequireRetirable(Exception? cause = null)
     {
         if (KeepsProfile) throw new SourceProfileKeptException($"{Actor}'s profile {Profile} is kept: its source settlement did not finish ({Reason}). " +
-            (InRecovery ? "It stays open in the journal: the next env recover settles the install again and removes it."
+            "If the install or the profile's volume is not reachable (an offline NAS, an unplugged volume), reconnect it. " +
+            (InRecovery ? "The profile stays open in the journal: the next env recover settles the install again and removes it; env teardown removes it without waiting."
                 : "It is journalled kept: valheim-test env status names it, and env teardown settles the install again and removes it."), cause);
     }
 
@@ -283,6 +284,20 @@ internal static class SourceSettleScripts
             if ($removed) { 'VT-RMDIR ' + $line } else { 'VT-NOTMOVED ' + $line + ' not-empty' }
         }
         'VT-SETTLED'
+        """.ReplaceLineEndings("\n");
+
+    // Variables: root, parent. Whether both folders answer on the host: "VT-REACHABLE yes", or "VT-REACHABLE no <path>" for the first
+    // that does not (an offline NAS, an unplugged volume, a folder that is gone).
+    internal static readonly string BashReachable = """
+        for path in "$root" "$parent"; do
+            if [ ! -d "$path" ]; then printf 'VT-REACHABLE no %s\n' "$path"; exit 0; fi
+        done
+        echo 'VT-REACHABLE yes'
+        """.ReplaceLineEndings("\n");
+
+    internal static readonly string PowerShellReachable = """
+        foreach ($path in @($root, $parent)) { if (-not [IO.Directory]::Exists($path)) { 'VT-REACHABLE no ' + $path; exit 0 } }
+        'VT-REACHABLE yes'
         """.ReplaceLineEndings("\n");
 
     // Variables: path, content (base64). Writes the file whole (a temporary name, then a rename), replacing an earlier one.

@@ -394,6 +394,8 @@ public sealed class ProfileSourceCheckTests : IDisposable
         Write("game.bin", "game");
         Directory.CreateDirectory(Parent);
         var check = await PrepareAsync();
+        await PersistAsync(check);
+        var fields = _journal[0].Fields;
         string outside = _root + "-runs";
         DirectoryLinks.Create(Path.Combine(_root, "linked"), outside);
 
@@ -409,9 +411,10 @@ public sealed class ProfileSourceCheckTests : IDisposable
         Assert.Equal((SourceVerdictKind.Unknown, false), (unreachable.Verdict, unreachable.Settled));
         Assert.Contains("not reachable", unreachable.Reason);
         Assert.Throws<SourceProfileKeptException>(() => unreachable.RequireRetirable());
-        var gone = await check.SettleAsync(_host, SourceSettlement.Run("client", Runtime, Output + "-content") with { Teardown = true },
-            entry => { _journal.Add(entry); return Task.CompletedTask; }, TimeSpan.FromSeconds(60));
-        Assert.Equal((SourceVerdictKind.Failed, true), (gone.Verdict, gone.Settled));
+        var recovered = await RecoverAsync(fields);
+        Assert.Equal((SourceVerdictKind.Unknown, false), (recovered!.Verdict, recovered.Settled));
+        var gone = await RecoverAsync(fields, teardown: true);
+        Assert.Equal((SourceVerdictKind.Failed, true), (gone!.Verdict, gone.Settled));
         Assert.Contains("is gone", gone.Reason);
         gone.RequireRetirable();
         Directory.CreateDirectory(_root);
@@ -435,10 +438,10 @@ public sealed class ProfileSourceCheckTests : IDisposable
 
     // r4 item 3: under env teardown a baseline it cannot read (unreadable here; also one over the read limit) is not compared, and
     // the teardown ends; env recover still stops on it.
-    [UnixFact]
+    [UnixFact, System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public async Task AnUnreadableBaselineIsNotComparedByTeardown()
     {
-        if (OperatingSystem.IsWindows() || Environment.UserName == "root") return; // root reads a mode 000 file
+        if (Environment.UserName == "root") return; // root reads a mode 000 file
         Write("game.bin", "game");
         Directory.CreateDirectory(Parent);
         var check = await PrepareAsync();
@@ -447,7 +450,7 @@ public sealed class ProfileSourceCheckTests : IDisposable
         File.SetUnixFileMode(fields["baseline"], UnixFileMode.None);
         try
         {
-            await Assert.ThrowsAnyAsync<Exception>(() => RecoverAsync(fields));
+            await Assert.ThrowsAsync<UnauthorizedAccessException>(() => RecoverAsync(fields));
             var verdict = await RecoverAsync(fields, teardown: true);
             Assert.Equal(SourceVerdictKind.Unknown, verdict!.Verdict);
             Assert.Contains("cannot be read", verdict.Reason);

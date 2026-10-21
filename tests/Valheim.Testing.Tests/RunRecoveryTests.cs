@@ -476,6 +476,53 @@ public sealed class RunRecoveryTests : IDisposable
         Assert.Empty(Assert.Single((await StatusAsync()).Runs).Items);
     }
 
+    // #612 r6 item 1: a linked profile lies on the install's volume. With that volume offline the baseline is not found, which is not a
+    // baseline that is gone: env recover keeps the profile open, and env teardown finishes it, not compared.
+    [Fact]
+    public async Task AnOfflineInstallVolumeKeepsTheProfileUntilTeardown()
+    {
+        const string run = "run-offline", source = "/srv/game";
+        await KilledWithBaselineAsync(run, source);
+        Directory.Delete(_host.Local(source), recursive: true);
+        Directory.Delete(_host.Local(Prep), recursive: true); // the profile on the same volume
+
+        var recovered = await RecoverAsync(run);
+        var settled = Assert.Single(recovered.Steps, step => step.What.StartsWith("source install of server", StringComparison.Ordinal));
+        Assert.True(settled.Failed);
+        Assert.Contains("is not reachable", settled.Outcome);
+        Assert.Contains(Assert.Single((await StatusAsync()).Runs).Items, item => item.Kind == "copy" && item.What == Prep + "/runtime");
+
+        var teardown = await RecoverAsync(run, teardown: true);
+        Assert.Contains("was not compared", Assert.Single(teardown.Steps, step => step.What.StartsWith("source install of", StringComparison.Ordinal)).Outcome);
+        Assert.Empty(Assert.Single((await StatusAsync()).Runs).Items);
+    }
+
+    // #612 r6 item 2: under env teardown only a baseline the host says it cannot read is not compared; a host that does not answer
+    // the read keeps the profile open.
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ATeardownComparesNothingOnlyWhenTheHostSaysTheBaselineCannotBeRead(bool unreadable)
+    {
+        const string run = "run-unread", source = "/srv/game";
+        await KilledWithBaselineAsync(run, source);
+        if (unreadable) _host.UnreadableFiles.Add(Prep + "/" + ProfileSourceCheck.BaselineFile);
+        else _host.Failures["preflight-read"] = FakeServerHost.TransportFailure;
+
+        var teardown = await RecoverAsync(run, teardown: true);
+
+        if (unreadable)
+        {
+            Assert.Contains("cannot be read", Assert.Single(teardown.Steps, step => step.What.StartsWith("source install of", StringComparison.Ordinal)).Outcome);
+            Assert.Empty(Assert.Single((await StatusAsync()).Runs).Items);
+        }
+        else
+        {
+            Assert.True(Assert.Single(teardown.Steps, step => step.What == "copy " + Prep + "/runtime").Failed);
+            Assert.True(Directory.Exists(_host.Local(Prep + "/runtime")));
+        }
+    }
+
     // #612 r3: a moved-files folder the run kept on purpose has its own kept entry. The recovery finds it by that entry, never adopts
     // it, and env teardown removes it.
     [Fact]

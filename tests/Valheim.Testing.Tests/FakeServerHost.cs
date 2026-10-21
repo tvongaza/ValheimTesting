@@ -56,6 +56,8 @@ internal sealed class FakeServerHost : IGameHost
     /// <summary>The port check's whole reply when set; else free or busy by <see cref="PortBusy"/>.</summary>
     public string? PortReply { get; set; }
     public bool GameActive { get; set; }
+    /// <summary>Host paths the preflight read answers as unreadable by the host user.</summary>
+    public HashSet<string> UnreadableFiles { get; } = [];
     /// <summary>The conflicting processes' IDs the game-process check names when <see cref="GameActive"/> (comma separated), or none.</summary>
     public string GameProcessIds { get; set; } = "";
     /// <summary>The server ignores the clean stop's SIGINT, so it is killed after the wait.</summary>
@@ -194,6 +196,7 @@ internal sealed class FakeServerHost : IGameHost
         ("source-settle", [SourceSettleScripts.Bash, SourceSettleScripts.PowerShell]),
         ("source-write", [SourceSettleScripts.BashWrite, SourceSettleScripts.PowerShellWrite]),
         ("source-evidence", [SourceSettleScripts.BashEvidence, SourceSettleScripts.PowerShellEvidence]),
+        ("source-reachable", [SourceSettleScripts.BashReachable, SourceSettleScripts.PowerShellReachable]),
         ("machine-name", [RunJournalStatus.WindowsMachineName]),
         ("lock", [HostScripts.Lock(HostShellKind.Bash), HostScripts.Lock(HostShellKind.PowerShell)]),
         ("scheduled-task-register", [WindowsScheduledTask.RegisterScript]),
@@ -361,6 +364,7 @@ internal sealed class FakeServerHost : IGameHost
             {
                 string file = Local(v["path"]);
                 if (!File.Exists(file)) return Ok("VT-PREFLIGHT missing\n");
+                if (UnreadableFiles.Contains(v["path"])) return Ok("VT-PREFLIGHT unreadable\n");
                 var bytes = File.ReadAllBytes(file);
                 return Ok(bytes.Length > long.Parse(v["limit"], System.Globalization.CultureInfo.InvariantCulture) ? "VT-PREFLIGHT too-large\n" : "VT-PREFLIGHT " + Convert.ToBase64String(bytes) + "\n");
             }
@@ -386,6 +390,10 @@ internal sealed class FakeServerHost : IGameHost
                 }
                 return Ok(reply + "VT-SETTLED\n");
             }
+            case "source-reachable":
+                foreach (string path in new[] { v["root"], v["parent"] })
+                    if (!Directory.Exists(Local(path))) return Ok("VT-REACHABLE no " + path + "\n");
+                return Ok("VT-REACHABLE yes\n");
             case "source-write":
                 Directory.CreateDirectory(Path.GetDirectoryName(Local(v["path"]))!);
                 File.WriteAllBytes(Local(v["path"]), Convert.FromBase64String(v["content"]));
