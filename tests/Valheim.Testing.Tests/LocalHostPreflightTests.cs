@@ -33,8 +33,12 @@ public sealed class LocalHostPreflightTests : IDisposable
         var ports = new List<int>();
         var processKinds = new List<bool>();
         int steam = 0, desktop = 0, journal = 0;
+        var storage = new List<string>();
         var probes = new LocalHostPreflight.Probes(
             Processes: (_, client, _, _) => { processKinds.Add(client); return Task.CompletedTask; },
+            // Every linked profile's storage is asked once (the real probe is the storage owner's tests'): on this macOS host the
+            // server's, never the in-place client's.
+            ProfileStorage: (_, source, _, _, _, _) => { storage.Add(source); return Task.FromResult<string?>(null); },
             Port: (_, port, _, _) => { ports.Add(port); return Task.CompletedTask; },
             Lock: (_, _, _, _) => Task.FromResult(new HostLockResult(HostLockState.Free, null, "free")),
             MacDesktop: () => desktop++, SteamRunning: () => { steam++; return true; },
@@ -46,6 +50,7 @@ public sealed class LocalHostPreflightTests : IDisposable
             TimeSpan.FromSeconds(1), hostFactory: _ => host, probes: probes);
 
         Assert.Empty(problems);
+        Assert.Equal(Path.Combine(_root, "server"), Assert.Single(storage));
         Assert.Equal(withClient ? [5551, 5552] : [5551], ports);
         Assert.Equal([withClient], processKinds); // one process scan for the shared host
         Assert.Equal(withClient ? 1 : 0, steam);
@@ -62,6 +67,7 @@ public sealed class LocalHostPreflightTests : IDisposable
             Processes: (_, _, _, _) => throw new InvalidOperationException("client already active"),
             Port: (_, port, _, _) => port == 5552 ? throw new InvalidOperationException("port busy") : Task.CompletedTask,
             Lock: (_, _, _, _) => Task.FromResult(new HostLockResult(HostLockState.HeldByOther, "another", "held by another run")),
+            ProfileStorage: (_, _, _, _, _, _) => Task.FromResult<string?>(null),
             MacDesktop: () => throw new InvalidOperationException("screen locked"),
             SteamRunning: () => false,
             Journals: (_, _) => Task.FromResult<IReadOnlyList<CampaignPreflightProblem>>([new("here", "run journal", "run not recovered")]),
