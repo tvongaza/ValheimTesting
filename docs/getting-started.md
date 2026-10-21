@@ -1,123 +1,104 @@
 # Get started
 
-Add one unit test to your BepInEx mod and run it without Valheim. Unit tests need the .NET 10 SDK and nothing else, on any OS; Visual Studio 2026 with the **.NET desktop development** workload brings it. Native checks run on the Windows PC where Steam installed Valheim; [the last section](#what-a-native-check-needs) says what they need.
+Choose what you want to prove. This page walks through the fast logic test: the marker mod's real placement decision on supplied terrain, without Valheim.
+
+| You want to | Follow |
+|---|---|
+| Test your mod's gameplay in Valheim | [Your first gameplay assertion](tutorials/first-gameplay-assertion.md) |
+| Test a decision quickly, without the game | [The steps below](#steps) |
+| Keep a fixed bug from returning | [Run an A/B regression](guides/run-an-ab-regression.md) |
 
 ## Steps
 
 ### 1. Run the example
 
-Clone the repository and run the example project as it is:
+You need the .NET 10 SDK and NuGet.org access. Create a directory outside the ValheimTesting checkout. Download these three files from one repository revision and save them at the listed destinations:
+
+| Source | Destination | Purpose |
+|---|---|---|
+| [DrySiteRule.cs](../examples/ModWithTests/MyMod/DrySiteRule.cs) | `MyMod/DrySiteRule.cs` | The production placement decision |
+| [MyMod.Tests.csproj](../examples/ModWithTests/MyMod.Tests/MyMod.Tests.csproj) | `MyMod.Tests/MyMod.Tests.csproj` | Links the source and pins the doubles package |
+| [DrySiteTests.cs](../examples/ModWithTests/MyMod.Tests/DrySiteTests.cs) | `MyMod.Tests/DrySiteTests.cs` | Inputs, assertions and static-state restoration |
+
+From that new directory, run:
 
 ```sh
-git clone https://github.com/tvongaza/ValheimTesting.git
-cd ValheimTesting/examples/ModWithTests
 dotnet test MyMod.Tests/MyMod.Tests.csproj -c Release
 ```
 
-It passes with **5 passed, 0 failed** and exits 0. The example is a miniature mod: `MyMod/` holds one source file, and `MyMod.Tests/` links that file and tests it with `Valheim.Testing.Doubles`, which supplies the Unity, Valheim, BepInEx and Jotunn types the file uses.
+```text
+Passed!  - Failed:     0, Passed:     5, Skipped:     0, Total:     5, Duration: 21 ms - MyMod.Tests.dll (net10.0)
+```
+
+The project restores `Valheim.Testing.Doubles` from NuGet.org. It needs no toolkit checkout. The five tests cover wet ground, the allowed boundary, dry ground, horizontal coordinates and restoring the previous world after a failure.
 
 ### 2. Add the test project to your mod
 
-Copy [`MyMod.Tests/`](../examples/ModWithTests/MyMod.Tests/MyMod.Tests.csproj) next to your mod project. In its `.csproj`, change the `Compile Include` to one source file of your mod and keep the Doubles `PackageReference`:
+Keep `MyMod.Tests` beside your existing mod project. Change its `Compile Include` to one source file of your mod and retain the pinned test package:
 
 ```xml
 <Compile Include="../YourMod/YourRule.cs" Link="Mod/YourRule.cs" />
 <PackageReference Include="Valheim.Testing.Doubles" Version="[0.1.0]" PrivateAssets="all" />
 ```
 
-Reference no game assembly and no plugin project: the doubles have the game's type names. Keep Harmony patches and `Awake` out of the linked file.
+The test project compiles your production file against the doubles. Reference no game assembly or plugin project: those types would conflict. Keep Harmony patches and `Awake` outside the linked decision file.
 
 ### 3. Write the test
 
-Replace `DrySiteTests.cs` with a test of a small decision from your mod; in this excerpt, `DrySiteRule` stands for your type. `ValheimWorldScope` installs synthetic terrain and restores the previous world on disposal. This is the first of the example's tests:
+Edit `DrySiteTests.cs` to supply inputs and independent expectations for your decision. These lines from [the first test](../examples/ModWithTests/MyMod.Tests/DrySiteTests.cs) install synthetic terrain and call the real rule:
 
 ```csharp
-using MyMod;
-using UnityEngine;
-using Valheim.Testing;
-using Valheim.Testing.Doubles;
-using Xunit;
-
-// The game doubles use process-wide singletons, just as the game does.
-[assembly: CollectionBehavior(DisableTestParallelization = true)]
-
-public class DrySiteTests
-{
-    [Theory]
-    [InlineData(29f, false)]   // Under water.
-    [InlineData(31.5f, true)]  // Exactly the promised minimum clearance.
-    [InlineData(40f, true)]   // Safely above it.
-    public void RequiresGroundAtLeastClearanceAboveWater(float ground, bool expected)
-    {
-        using var world = new ValheimWorldScope().WithTerrain(new PlaneTerrain(ground));
-        Assert.Equal(expected, DrySiteRule.CanPlace(new Vector3(0, 100, 0), 30f, 1.5f));
-    }
-}
+using var world = new ValheimWorldScope().WithTerrain(new PlaneTerrain(ground));
+Assert.Equal(expected, DrySiteRule.CanPlace(new Vector3(0, 100, 0), 30f, 1.5f));
 ```
 
-From your mod checkout, run it:
+Keep `[assembly: CollectionBehavior(DisableTestParallelization = true)]`: the doubles use process-wide singletons.
+
+From your mod checkout, run:
 
 ```sh
 dotnet test MyMod.Tests/MyMod.Tests.csproj -c Release
 ```
 
-A passing run exits 0. A failed assertion returns nonzero. Visual Studio 2026, Rider and VS Code with C# Dev Kit discover the project with no extra setup. If the project also targets `net48`, Rider needs Mono on macOS and Linux; see [run tests in CI](guides/run-tests-in-ci.md).
-
-<!-- TODO(docs): capture output -->
+A passing run exits 0. A failed assertion returns nonzero. Your IDE discovers the same test project.
 
 ### 4. Run it in GitHub Actions
 
-Copy the example's [workflow](../examples/ModWithTests/.github/workflows/tests.yml) to `.github/workflows/tests.yml` in your repository and change the project path if yours differs. It installs the .NET 10 SDK and runs the same `dotnet test` on a hosted Ubuntu runner, with no game and no secrets. It runs on pushes to `main`, on pull requests and by hand ([run tests in CI](guides/run-tests-in-ci.md)).
+Copy the example's [workflow](../examples/ModWithTests/.github/workflows/tests.yml) into your mod's `.github/workflows/tests.yml` and change its project path. It runs the same command with no game or secrets. Follow [Run tests in CI](guides/run-tests-in-ci.md) for the complete setup.
 
 ## Check the result
 
-For a control, change `>=` to `>` in [DrySiteRule.cs](../examples/ModWithTests/MyMod/DrySiteRule.cs): the boundary case must fail. Restore the rule afterwards.
+Change `>=` to `>` in your copied `MyMod/DrySiteRule.cs`. Run the command again: the exact-boundary case must fail. Restore the rule afterwards.
 
-A passing test proves the mod's decision on declared inputs. It does not prove the real world is dry, that a collider exists, or that a client receives terrain. [Choose a test layer](guides/choose-a-test-layer.md) matches each behaviour to a layer.
+This checks the production decision on declared inputs. [Choose a test layer](guides/choose-a-test-layer.md) explains what needs native gameplay, persistence or client observations.
 
 ## Code without game types
 
-If the code under test uses no Unity or Valheim type, reference `Valheim.Testing` from your existing test project instead and pass an `ITerrain` into the real production method:
+If your code uses no Unity or Valheim type, reference `Valheim.Testing` from your existing test project and pass an `ITerrain` into production code:
 
 ```xml
 <PackageReference Include="Valheim.Testing" Version="[0.1.0]" />
 ```
 
-Every other package and version is in the [package table](package-versions.md).
+The [package table](package-versions.md) lists every other package and exact version.
 
 ## Problems
 
 | Problem | Cause | Fix |
 |---|---|---|
-| A package does not restore | The pin names an unpublished version | Pin an exact version from the [package table](package-versions.md) |
-| The compiler reports a missing game member | The doubles do not model it | Read the [doubles contract](packages/Valheim.Testing.Doubles.md); extend the partial type locally |
-| Duplicate or conflicting game types | The test project references Unity, Valheim or the plugin DLL | Link the source files instead; reference no game assembly |
-| Tests fail only when run together | The doubles are process-wide singletons | Keep `[assembly: CollectionBehavior(DisableTestParallelization = true)]` |
-| A mod or adapter build cannot find the game | Your Steam library is not in the default folder | Pass `-p:ValheimPath=<folder>`, or set `VALHEIM_PATH` before starting the IDE ([game references](../tools/game-references/README.md#use-them)) |
-| A test adapter build asks for `CliDll` | The adapter compiles against the exact ValheimCLI core it runs with | Pass `-p:CliDll=<path>`, or set `CliDll` before starting the IDE ([game references](../tools/game-references/README.md#use-them)) |
+| Package restore fails | The pin names an unpublished version | Use an exact [published pin](package-versions.md) |
+| A game member is missing | The doubles do not model it | Extend the partial type locally; read the [contract](packages/Valheim.Testing.Doubles.md) |
+| Game types conflict | The project references game assemblies or the plugin | Link production source only |
+| Tests interfere | The doubles share process-wide state | Keep the assembly's `DisableTestParallelization` setting |
 
 More in [Test logic that uses game types](guides/test-logic-that-uses-game-types.md).
 
 ## What a native check needs
 
-One Windows PC with Valheim and the free Valheim Dedicated Server tool from Steam, the Steam client running and signed in, and PowerShell 7 ([host shells](reference/platforms.md#host-shells)). A `--server-only` run does not need Steam. `valheim-test` stages a disposable profile with its pinned BepInEx loader and ValheimCLI for each install and leaves the install untouched. <!-- TODO(docs): verify after #711 -->
-
-```sh
-dotnet tool install Valheim.Testing.NativeSmoke --version 0.1.0 --global
-valheim-test env preflight
-valheim-test server-load --mod /path/to/ServerMod.dll
-```
-
-<!-- TODO(docs): capture output -->
-
-`env preflight` checks this machine before anything is copied: the run journal and host lock, game processes, ValheimCLI ports, the client desktop and whether Steam is running. `server-load` loads the mod on an owned dedicated server, joins one clean client, prints `SERVER_JOIN_PASS` and writes `result.json` and `junit.xml` under a new `valheim-test-runs/` directory in this machine's ValheimTesting data root. From a directory with exactly one mod project, you can omit `--mod`.
-
-Next: [Your first server load check](tutorials/first-server-load-check.md) walks through the first run; [one Windows PC](packages/Valheim.Testing.Game.md#on-one-windows-pc) describes the setup; read the [native-run checklist](guides/before-a-native-run.md) before you launch. Other hosts are in [platforms](reference/platforms.md).
+Follow [Your first gameplay assertion](tutorials/first-gameplay-assertion.md) for the native setup and tested command. For startup alone, use [Your first server load check](tutorials/first-server-load-check.md). See [Platforms](reference/platforms.md) for host requirements; read the [native-run checklist](guides/before-a-native-run.md) before launching.
 
 ## Related
 
-- [Choose a test layer](guides/choose-a-test-layer.md): which layer tests which behaviour
-- [Examples](../examples/README.md): from the first unit test to a native session test
-- [Packages](package-versions.md): every package, version and pin
-- [API reference](https://tvongaza.github.io/ValheimTesting/reference/): every public type
-
+- [Examples](../examples/README.md): unit, scripted integration and native checks.
+- [Package versions](package-versions.md): every package, exact pin and reference link.
+- [API reference](reference/index.md): the public types.

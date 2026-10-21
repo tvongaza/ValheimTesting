@@ -77,9 +77,10 @@ After: "A pull request changes code, tests and docs. Leave versions, pins, `tool
 ## Project decisions
 
 - **Simpler still.** Cut anything a newcomer doesn't need to finish the task. Prefer one more short example over one more paragraph. Code and examples are welcome; prose is the cost.
+- **Source owns code and output.** Reuse canonical example source. Keep landing-page excerpts short, label them as excerpts and link their complete source. Check each quoted line against that source. Quote a captured named result faithfully; the tutorial owns the workflow and capture instructions. Do not create another snippet or capture system.
 - **Keep entry pages short.** `docs/getting-started.md` names the one or two packages a reader needs first and links the full package table, which lives on `docs/package-versions.md`.
 - **The site publishes `docs/index.md`, `getting-started.md`, `package-versions.md` and every page in `guides/`, `concepts/`, `tutorials/`, `packages/` and `reference/`.** To publish a new page, put it in one of those folders and add it to `docs/toc.yml`; `dotnet run scripts/api-docs.cs` fails when a published page has no entry. `maintainers/` and the agent pages stay on GitHub. Write links as relative paths: the build keeps links to published pages and points every other link, such as `examples/` or `CONTRIBUTING.md`, at the same file in the build's source revision.
 - **No bylines** (`*Assistant-written (Claude).*` and similar) on any page.
-- **No inbound-link protection.** Nobody uses the docs yet. Move, merge, rename and delete pages freely, and fix every link in the same change.
+- **Preserve public entry points.** Keep published URLs and useful heading anchors. If content moves, leave a short pointer page or section at the old location. Update internal links directly; add no redirect framework.
 - **No dated validation records.** State a durable fact as behaviour on the page that needs it, for example: a mod that reads a private game member at run time needs `AllowUnsafeBlocks=true`, and `IgnoresAccessChecksTo` alone throws `FieldAccessException`. Don't add "a native campaign proved X" claims.
 - **ValheimCLI problems** go to the pinned ValheimCLI fork, or to this repository's issues with the `valheimcli` label. Toolkit bugs go to this repository's issues.
