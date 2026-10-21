@@ -95,6 +95,7 @@ internal static class HostClientPreflight
         if (line == "VT-PREFLIGHT missing") return null;
         if (line == "VT-PREFLIGHT too-large") throw TooLarge(path, host.Name, limit);
         if (line == "VT-PREFLIGHT unreadable") throw new UnauthorizedAccessException($"{path} on {host.Name} cannot be read by the host user.");
+        if (line == "VT-PREFLIGHT locked") throw new IOException($"{path} on {host.Name} is held open by another process, so it cannot be read.");
         if (!line.StartsWith("VT-PREFLIGHT ", StringComparison.Ordinal)) throw new HostOperationException($"Unexpected reply reading {path} on {host.Name}", result);
         try { return Convert.FromBase64String(line["VT-PREFLIGHT ".Length..]); }
         catch (FormatException) { throw new HostOperationException($"Malformed reply reading {path} on {host.Name}", result); }
@@ -112,10 +113,16 @@ internal static class HostClientPreflight
         printf 'VT-PREFLIGHT '; base64 < "$path" | tr -d '\n'; printf '\n'
         """.ReplaceLineEndings("\n");
     internal static readonly string PowerShellRead = """
+        # As the bash read: missing, then unreadable (or held open by another process), then too large.
         if (-not [IO.File]::Exists($path)) { 'VT-PREFLIGHT missing'; exit 0 }
+        try { $stream = [IO.File]::OpenRead($path); $stream.Dispose() }
+        catch [UnauthorizedAccessException] { 'VT-PREFLIGHT unreadable'; exit 0 }
+        catch [IO.IOException] { 'VT-PREFLIGHT locked'; exit 0 }
         $file = New-Object IO.FileInfo $path
         if ($file.Length -gt [long]$limit) { 'VT-PREFLIGHT too-large'; exit 0 }
-        try { $bytes = [IO.File]::ReadAllBytes($path) } catch [UnauthorizedAccessException] { 'VT-PREFLIGHT unreadable'; exit 0 }
+        try { $bytes = [IO.File]::ReadAllBytes($path) }
+        catch [UnauthorizedAccessException] { 'VT-PREFLIGHT unreadable'; exit 0 }
+        catch [IO.IOException] { 'VT-PREFLIGHT locked'; exit 0 }
         'VT-PREFLIGHT ' + [Convert]::ToBase64String($bytes)
         """.ReplaceLineEndings("\n");
 }

@@ -64,6 +64,8 @@ internal sealed record SourceVerdict(string Actor, string Host, string Root, str
     [JsonIgnore] internal string? Profile { get; init; }
     /// <summary>Whether a recovery settled it: its kept profile stays open in the journal for the next <c>env recover</c>, not journalled kept.</summary>
     [JsonIgnore] internal bool InRecovery { get; init; }
+    /// <summary>Whether it did not finish because the install or the profile's folder does not answer (offline, or gone).</summary>
+    [JsonIgnore] internal bool Unreachable { get; init; }
     /// <summary>The moved-files folders this settlement journalled kept, for a teardown to remove in the same pass.</summary>
     [JsonIgnore] internal IReadOnlyList<string> KeptFolders { get; init; } = [];
 
@@ -77,9 +79,9 @@ internal sealed record SourceVerdict(string Actor, string Host, string Root, str
     internal void RequireRetirable(Exception? cause = null)
     {
         if (KeepsProfile) throw new SourceProfileKeptException($"{Actor}'s profile {Profile} is kept: its source settlement did not finish ({Reason}). " +
-            "If the install or the profile's volume is not reachable (an offline NAS, an unplugged volume), reconnect it. " +
-            (InRecovery ? "The profile stays open in the journal: the next env recover settles the install again and removes it; env teardown removes it without waiting."
-                : "It is journalled kept: valheim-test env status names it, and env teardown settles the install again and removes it."), cause);
+            (Unreachable ? "The install or the profile's folder is not reachable, or gone: reconnect it (an offline NAS, an unplugged volume), or run env teardown. "
+                : InRecovery ? "Retry env recover, or run env teardown. " : "") +
+            (InRecovery ? "The profile stays open in the journal." : "It is journalled kept: valheim-test env status names it, and env teardown settles the install again and removes it."), cause);
     }
 
     /// <summary>The verdict for an actor that runs its install in place.</summary>
@@ -369,3 +371,6 @@ internal sealed class SourceProfileKeptException(string message, Exception? inne
 /// <see cref="SourceVerdictKind.Failed"/> naming it, never a retry.
 /// </summary>
 internal sealed class SourceRefusedException(string message) : IOException(message);
+
+/// <summary>The install a settlement lists does not answer on its host: an offline volume, or one that is gone. It may pass, so the profile stays.</summary>
+internal sealed class SourceUnreachableException(string message) : IOException(message);

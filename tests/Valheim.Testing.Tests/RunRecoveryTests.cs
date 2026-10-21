@@ -489,7 +489,8 @@ public sealed class RunRecoveryTests : IDisposable
         var recovered = await RecoverAsync(run);
         var settled = Assert.Single(recovered.Steps, step => step.What.StartsWith("source install of server", StringComparison.Ordinal));
         Assert.True(settled.Failed);
-        Assert.Contains("is not reachable", settled.Outcome);
+        Assert.Contains("is not reachable, or gone", settled.Outcome);
+        Assert.Contains("reconnect it", Assert.Single(recovered.Steps, step => step.What == "copy " + Prep + "/runtime").Outcome);
         Assert.Contains(Assert.Single((await StatusAsync()).Runs).Items, item => item.Kind == "copy" && item.What == Prep + "/runtime");
 
         var teardown = await RecoverAsync(run, teardown: true);
@@ -520,6 +521,8 @@ public sealed class RunRecoveryTests : IDisposable
         {
             Assert.True(Assert.Single(teardown.Steps, step => step.What == "copy " + Prep + "/runtime").Failed);
             Assert.True(Directory.Exists(_host.Local(Prep + "/runtime")));
+            Assert.DoesNotContain(teardown.Steps, step => step.What.StartsWith("source install of", StringComparison.Ordinal) &&
+                (step.Outcome.Contains("cannot be read", StringComparison.Ordinal) || step.Outcome.Contains("was not compared", StringComparison.Ordinal)));
         }
     }
 

@@ -500,11 +500,19 @@ public sealed class ProfileSourceCheckTests : IDisposable
         File.Delete(fields["baseline"]);
         string id = Path.GetFileName(fields["sourceAdded"])[(ProfileSourceCheck.AddedFolder.Length + 1)..];
         Directory.CreateDirectory(Path.Combine(Recovered, "source-changes-" + id, "added"));
+        string earlierReport = Path.Combine(Recovered, "source-changes-" + id, "source-changes.json");
+        File.WriteAllText(earlierReport, "an earlier recovery's report");
         Directory.CreateDirectory(check.MovedFilesFolder(Runtime));
         File.WriteAllText(Path.Combine(check.MovedFilesFolder(Runtime), "preloader_1.log"), "the game's");
 
         var verdict = await RecoverAsync(fields);
 
+        // r7 items 1 and 2: nothing was compared, so no settlement is journalled (a later recovery would read it as the run's) and the
+        // earlier recovery's report is not overwritten; a second recovery is refused the same way.
+        Assert.DoesNotContain(_journal, entry => entry.Kind == JournalEntry.SourceSettled);
+        Assert.Equal("an earlier recovery's report", File.ReadAllText(earlierReport));
+        Assert.Equal(SourceVerdictKind.Failed, (await RecoverAsync(fields))!.Verdict);
+        Assert.Equal("an earlier recovery's report", File.ReadAllText(earlierReport));
         // r4 item 2: a finished failure on either branch, never a Restored that did not happen; the folder stays, journalled kept.
         Assert.Equal((SourceVerdictKind.Failed, true), (verdict!.Verdict, verdict.Settled));
         Assert.Contains("already exists", verdict.Reason);
