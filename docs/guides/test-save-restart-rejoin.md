@@ -1,102 +1,113 @@
 # Test that a change survives a save, restart and rejoin
 
-Check that what your mod changes in a world is still there after a confirmed save, a server restart and a client rejoin, with a real dedicated server and a real client.
+Drive your mod once, observe its saved objects, then check them from a clean client before and after a confirmed save and server restart.
+
+Excerpt from the canonical [marker scenario](../../examples/FullLifecycle/ExampleMod.Tests/MarkerScenario.cs):
+
+```csharp
+report.Step("the mod marks the dry site", () => server.Execute(Mark(plan.DrySite)).RequireLine("OK: marked ", "ExampleMod did not mark the dry site"));
+report.Step("server: one marker at the dry site, none at the wet site", () => { RequireServerMarkers(server, plan.DrySite, 1); RequireServerMarkers(server, plan.WetSite, 0); });
+```
+
+The scenario also requires zero markers before acting, a wet-site refusal, and the marker on the client in both rounds. Captured result fields:
+
+```json
+{
+  "Name": "after-restart: the client sees the marker at the dry site",
+  "Passed": true
+}
+```
 
 ## When to use this
 
-Use it when your mod writes something into the world that players must keep: a placed object, a changed terrain, a stored value. The [FullLifecycle example](../../examples/FullLifecycle/README.md) is the runner to copy; it marks a site with a pole and checks the pole after a restart. To check only that a mod loads, use [check that a mod loads](check-a-mod-loads.md).
-
-You need a Windows or macOS PC with Valheim and the Valheim Dedicated Server installed through Steam, Steam signed in, and a desktop session.
+Use this for a placed object, terrain change or stored value that must survive a world save. For load checks, use [Check that a mod loads](check-a-mod-loads.md). See [Platforms](../reference/platforms.md) for host requirements and the [native-run checklist](before-a-native-run.md) before running.
 
 ## Steps
 
-### 1. Copy the example
+### 1. Prepare the mod and adapter
 
-Copy `examples/FullLifecycle/ExampleMod.Tests` beside your mod and rename it. Replace the mod's fields in `MarkerPlan.cs` and the steps in `MarkerScenario.cs`. Keep [GameSessionFixture.cs](../../examples/FullLifecycle/ExampleMod.Tests/GameSessionFixture.cs) and [ExampleSession.cs](../../examples/FullLifecycle/ExampleMod.Tests/ExampleSession.cs) as they are.
+Start with the independent mod folder from [Your first gameplay assertion](../tutorials/first-gameplay-assertion.md). Add the two-file [adapter map](../../examples/FullLifecycle/consumer/README.md#mod-and-adapter). The adapter supplies `examplemod.testing/session` with `EXAMPLEMOD_TEST_SESSION_TOKEN`; generic observations alone do not identify your owned session.
 
-### 2. Declare your mod
+From that independent folder:
 
-Declare the Harmony patches your mod must apply. The run fails at runtime-ready, by name, if one is missing:
-
-```csharp
-public static readonly DeclaredPatch[] Patches = [new("Terminal::InitTerminal", "postfix", "ExampleMod.Plugin+RegisterCommands::Postfix")];
+```sh
+valheim-test server-load --project MarkerMod/MarkerMod.csproj --adapter-project MarkerAdapter/MarkerAdapter.csproj --session-capability examplemod.testing/session --session-token-variable EXAMPLEMOD_TEST_SESSION_TOKEN --preflight-only
 ```
+
+Captured output prefix:
+
+```text
+PREFLIGHT PASSED: the derived campaign is
+```
+
+The printed directory holds `campaign.json`, `environments.json`, role dependency locks, fixture and character sources, `plan.json`, and `client-plan.json`. Nothing launches. Keep those files together; the server plan contains a private join password.
+
+### 2. Add the canonical assertions
+
+From the same independent folder:
+
+```sh
+valheim-test init server --output MarkerPersistence
+```
+
+The tool builds `MarkerPersistence/consumer/SmokeCheck.csproj` from published packages. Replace its entry and add the canonical plan/scenario using the three-file [native persistence map](../../examples/FullLifecycle/consumer/README.md#native-persistence-entry). Keep the generated project and NuGet configuration.
+
+The unchanged generated entry checks a load replay. The replacement delegates save/restart/rejoin to the canonical scenario and toolkit session lifecycle.
 
 ### 3. Write the rounds
 
-The rounds are `first` and `after-restart`. Between them the run saves with a confirmed save, the client leaves, and only the server restarts:
+Keep the canonical `first` and `after-restart` rounds for this example. They check the client before and after the confirmed save and server restart. Declare their fixture expectations in the plan.
 
-```csharp
-measure: round => round.Step("the client sees the marker at the dry site", () => RequireClientMarkers(round.Client, plan.DrySite, 1)),
-afterRestart: round => round.Step("the server still has one marker at the dry site, none at the wet site",
-    () => { RequireServerMarkers(round.Server, plan.DrySite, 1); RequireServerMarkers(round.Server, plan.WetSite, 0); }));
-```
+Beside the emitted `plan.json`, copy it to `marker-plan.json`. Preserve its inherited fields. Change `Scenario` to `dry-site-lifecycle` and add `DrySite`, `WetSite`, and `Arrival`.
 
-See the full call in [MarkerScenario.cs](../../examples/FullLifecycle/ExampleMod.Tests/MarkerScenario.cs). [Client rounds](../reference/game-client-rounds.md#client-rounds) lists what each round does. The session protects the joined player for you.
-
-### 4. Lock each role's files
-
-Write two dependency locks from a ValheimTesting checkout ([resolve dependencies](../reference/game-run-inputs.md#resolve-mod-dependencies)):
-
-| Lock | Selects |
-|---|---|
-| Server | Your mod, its test adapter, their dependencies and the default ValheimCLI |
-| Client | The default ValheimCLI only, so a client without your mod is what you test |
-
-### 5. Write the session and the plan
-
-Beside the test project, write two private files that `.gitignore` already lists:
-
-- `session.json`: the dedicated server, one client named `client`, the fixture world, and each role's lock. With no `inventory`, every actor runs on this machine. [Campaigns](../reference/sessions-campaigns.md#the-session-manifest) lists every field.
-- `dry-site-lifecycle.plan.json`: start from [sample-plan.json](../../examples/FullLifecycle/ExampleMod.Tests/sample-plan.json) and set your mod's fields. The run binds the installs, ports, runtime, world and pins from the prepared actors.
-
-Your mod's fields are your expectations. Pick them from the fixture, never from the mod. These values are illustrative:
+Read generator heights independently of your mod through [terrain observations and site search](../reference/game-observations.md). Keep the capture's world identity with the plan. These values describe default fixture UID `3010640879`, measured with published toolkit `0.1.0` on macOS:
 
 ```json
-"drySite": { "x": 120, "z": -380, "ground": 45.2 },
-"wetSite": { "x": 900, "z": 150, "ground": 18.4 },
-"arrival": { "x": 125, "z": -380, "ground": 45.0 },
+"DrySite": { "x": -32, "z": -32, "ground": 34.463486 },
+"WetSite": { "x": -32, "z": 32, "ground": 24.37543 },
+"Arrival": { "x": -27, "z": -27, "ground": 33.848846 }
 ```
 
-Set the variable the client's `passwordVariable` names, `EXAMPLEMOD_TEST_PASSWORD`, in the shell you run from.
+For another fixture, declare its measured expectations. `MarkerPlan.CheckSites` requires separated dry/wet sites and a dry arrival 3–20 metres from the marker. The native client still proves loaded-ground readiness and marker visibility.
 
-### 6. Check, then run
+### 4. Run the scenario
 
-From the repository root:
+From `MarkerPersistence/consumer`, with the printed campaign path and a new result directory:
 
 ```sh
-valheim-test session check examples/FullLifecycle/ExampleMod.Tests/session.json --hosts
-dotnet test examples/FullLifecycle/ExampleMod.Tests/ExampleMod.Tests.csproj -c Release --filter "Category=Native"
+dotnet run --project SmokeCheck.csproj -c Release -- RUN_OUTPUT/campaign.json NEW_RESULT_DIRECTORY
 ```
 
-`session check` changes nothing, apart from one trial hard link for a Linux or Mac server's profile, made and removed under its runtime root. The test passes only when the run passed. Without the two private files, the native test is skipped with the reason.
+Captured final line:
 
-<!-- TODO(docs): capture output of `valheim-test session check ... --hosts` -->
+```text
+PASS
+```
+
+The entry reads `marker-plan.json` and the emitted client plan beside the campaign. It retains that client's password-variable binding. The toolkit binds actor paths and pins, starts the dedicated server, then opens the clean client. On Windows, use an interactive desktop terminal for this direct consumer.
 
 ## Check the result
 
-Each run writes a new directory under `session-runs/` in the test output:
+Read `result.json` and `junit.xml` in the result directory. Require the initial zero-marker baseline, dry/wet server counts, both client observations, confirmed save, server restart, and successful cleanup. The restarted server must report the same world UID.
 
-| File | Holds |
-|---|---|
-| `result.json`, `junit.xml` | Every step with its phase and error ([phases and states](../reference/sessions-pinned-server-run.md#phases-and-states)) |
-| `boot-N/` | One folder of logs per server boot |
-| `connection-N.jsonl`, `client-commands.jsonl` | Every command sent |
-| `client-process.json` | The owned client |
+`boot-N/`, `connection-N.jsonl`, and `client-commands.jsonl` retain each boot and command. Finish with `valheim-test env status`; it must list nothing your run left.
 
 ## Problems
 
 | Symptom | Fix |
 |---|---|
-| The native test is skipped | Put `session.json` and `dry-site-lifecycle.plan.json` beside the test project |
-| `session check` refuses the plan's plugins | Add each plugin the plan pins to that role's lock |
-| The run fails at runtime-ready, naming a patch | The mod did not apply its declared patch: check the mod loads |
-| The client is refused for its password | Set the `passwordVariable` variable in the runner's environment |
-| `CleanupVerified` is false | Run `valheim-test env status` ([recovery](../reference/sessions-leases-and-recovery.md)) |
+| A declared patch is absent | Check the production mod's declared Harmony patch |
+| Client is missing | Keep the emitted `client-plan.json` beside the campaign |
+| Client sees no marker | Inspect arrival evidence and complete prefab observations |
+| Save is unconfirmed | Treat the run as failed; inspect the save trace |
+| Cleanup fails | Follow [recovery](../reference/sessions-leases-and-recovery.md) |
+
+## Limits
+
+One server and one clean client prove persistence and that client's observation. They do not prove simultaneous replication to two clients. Published `0.2` verification remains pending.
 
 ## Related
 
+- [Standalone lifecycle consumers and scripted controls](../../examples/FullLifecycle/consumer/README.md)
 - [FullLifecycle example](../../examples/FullLifecycle/README.md)
-- [Game sessions](../reference/sessions-game-session.md)
-- [Pinned server runner](../reference/sessions-pinned-server-run.md)
-- [Before a native run](before-a-native-run.md)
+- [Run a session with several clients](run-a-session-with-several-clients.md)

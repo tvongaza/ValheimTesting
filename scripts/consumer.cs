@@ -257,6 +257,8 @@ try
     }
     if (wrong > 0) return 1;
 
+    MarkerPersistence(Path.Combine(serverOutput, "consumer"), env);
+    FullLifecycle(config, env);
     TargetedRegression(config, cache, env);
     MarkerOneShot(config, cache, env);
     Console.WriteLine($"A fresh consumer restored, built and ran this checkout's packages from {(local ? "the local feed" : "NuGet.org")} only.");
@@ -455,4 +457,45 @@ static void CopyDirectory(string from, string to)
     foreach (string file in Directory.GetFiles(from)) File.Copy(file, Path.Combine(to, Path.GetFileName(file)));
     foreach (string dir in Directory.GetDirectories(from))
         if (Path.GetFileName(dir) is not ("bin" or "obj")) CopyDirectory(dir, Path.Combine(to, Path.GetFileName(dir)));
+}
+
+// Extend the installed tool's actual generated project; keep its package pins and feed intact.
+void MarkerPersistence(string directory, Dictionary<string, string> env)
+{
+    foreach (var (from, to) in new[]
+    {
+        ("examples/FullLifecycle/MarkerPersistence.cs", "Program.cs"),
+        ("examples/FullLifecycle/ExampleMod.Tests/MarkerPlan.cs", "MarkerPlan.cs"),
+        ("examples/FullLifecycle/ExampleMod.Tests/MarkerScenario.cs", "MarkerScenario.cs"),
+    }) File.Copy(Path.Combine(root, from), Path.Combine(directory, to), overwrite: true);
+    Run(env, directory, "dotnet", "build", "SmokeCheck.csproj", "-c", "Release");
+    Console.WriteLine("ok   The generated server consumer delegates to the canonical persistence scenario outside the checkout.");
+}
+
+// Copy the public package-only test map verbatim, substituting only the validation package identity/feed.
+void FullLifecycle(string config, Dictionary<string, string> env)
+{
+    string directory = Path.Combine(work, "lifecycle-tests");
+    Directory.CreateDirectory(directory);
+    foreach (string name in new[] { "GameSessionFixture.cs", "ExampleSession.cs", "MarkerPlan.cs", "MarkerScenario.cs",
+        "MarkerScenarioTests.cs", "TestWorld.cs", "HostedMarkerScenario.cs", "HostedMarkerSessionTests.cs", "sample-plan.json", "sample-hosted-plan.json" })
+        File.Copy(Path.Combine(root, "examples", "FullLifecycle", "ExampleMod.Tests", name), Path.Combine(directory, name));
+    string project = Path.Combine(directory, "LifecycleTests.csproj");
+    File.Copy(Path.Combine(root, "examples", "FullLifecycle", "consumer", "LifecycleTests", "LifecycleTests.csproj"), project);
+    File.Copy(Path.Combine(root, "examples", "TargetedRegression", "consumer", "NuGet.Config"), Path.Combine(directory, "NuGet.Config"));
+    var document = System.Xml.Linq.XDocument.Load(project);
+    document.Descendants("PackageReference").Single(reference =>
+        (string?)reference.Attribute("Include") == "Valheim.Testing.GameSessions").SetAttributeValue("Version", "[" + manifest["Valheim.Testing.GameSessions"] + "]");
+    document.Save(project);
+    Run(env, directory, "dotnet", "restore", project, "--configfile", config);
+    string results = Path.Combine(root, "artifacts", "validate", "consumer-lifecycle");
+    if (Directory.Exists(results)) Directory.Delete(results, recursive: true);
+    // A test project in the working directory takes precedence over a dotnet run file argument.
+    Run(env, work, "dotnet", "run", Path.Combine(root, "scripts", "validate.cs"), "--", "--test-project", root, project,
+        results, "Category!=Native");
+    var counters = System.Xml.Linq.XDocument.Load(Directory.GetFiles(Path.Combine(results, "LifecycleTests"), "*.trx").Single())
+        .Descendants().Single(element => element.Name.LocalName == "Counters");
+    if ((int?)counters.Attribute("executed") is not > 0)
+        throw new InvalidOperationException("The standalone lifecycle test map executed no tests.");
+    Console.WriteLine("ok   The canonical lifecycle scripted controls run from a package-only consumer outside the checkout.");
 }
