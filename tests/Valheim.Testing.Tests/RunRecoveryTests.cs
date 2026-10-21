@@ -1674,7 +1674,12 @@ public sealed class RunRecoveryTests : IDisposable
     // machine's worlds_local through the same journalled site as a remote client's, so env status lists the staged world, env
     // recover moves it (a chunked save folder the game rewrote, proven by its world UID) out into the run's folder, the user's own
     // world stays, nothing is left, and the next run's placement of the same fixture is not refused.
-    [Fact] public async Task RecoverRetiresTheWorldAKilledLocalHostingClientLeftSoTheNextStartPlacesIt()
+    // With oneTeardown (#881): the client's run folder is journalled too, and one env teardown finishes it, though it moved the world
+    // into that very folder first: the folder and the world in it go in the same pass.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RecoverRetiresTheWorldAKilledLocalHostingClientLeftSoTheNextStartPlacesIt(bool oneTeardown)
     {
         const string Data = "/Users/t/Library/Application Support/IronGate/Valheim", Worlds = Data + "/worlds_local", Run = "run-killed-hold";
         var here = new FakeServerHost("here", Path.Combine(_root, "here"), kind: GameHostKind.Local);
@@ -1713,6 +1718,18 @@ public sealed class RunRecoveryTests : IDisposable
         File.Copy(here.Local(Worlds + "/Campaign/_main.0.fwl2"), here.Local(Worlds + "/Campaign/_main.1.fwl2"));
         File.WriteAllText(here.Local(Worlds + "/Campaign/0_0.chunk"), "saved by the game");
 
+        if (oneTeardown)
+        {
+            Line(here, Run, "host", Gone, JournalEntry.CopyIntended, ("runtime", "/runs/" + Run), ("stage", ""), ("parent", "/runs"),
+                ("holds", RunFolder.Holds), ("retention", "after-fetch"));
+            var torn = await RunRecovery.RecoverAsync(hosts, _ => here, Run, teardown: true, TimeSpan.FromSeconds(5));
+            Assert.True(torn.Clean, string.Join("\n", torn.Steps.Select(step => $"{step.What}: {step.Outcome}")));
+            Assert.Contains("with the evidence this teardown kept in it", Assert.Single(torn.Steps, step => step.What == "copy /runs/" + Run).Outcome);
+            Assert.False(Directory.Exists(here.Local("/runs/" + Run)));
+            Assert.Equal(new[] { "MyWorld.fwl" }, Directory.EnumerateFileSystemEntries(here.Local(Worlds)).Select(Path.GetFileName));
+            Place("run-next").Collect();
+            return;
+        }
         var status = await RunJournalStatus.InspectAsync(hosts, _ => here, TimeSpan.FromSeconds(5));
         var left = Assert.Single(status.Runs);
         Assert.Equal(JournalRunState.Recoverable, left.State);
@@ -1800,6 +1817,87 @@ public sealed class RunRecoveryTests : IDisposable
         Assert.False(Directory.Exists(_host.Local("/srv/runs/server/run-kept"))); // Recover left the kept copy alone.
         Assert.True((await RecoverAsync("run-kept", teardown: true)).Recovered);
         Assert.Equal("kept run", File.ReadAllText(_host.Local("/srv/runs/server/run-kept/recovered-server/BepInEx/LogOutput.log")));
+    }
+
+    private const string KeptRun = "run-kept-folder", KeptRunFolder = "/srv/runs/server/" + KeptRun;
+
+    // A run kept on request: its server copy (with a log) and the run's own folder holding it, both journalled kept.
+    private void KeptRunWithAFolder()
+    {
+        Directory.CreateDirectory(Path.Combine(_host.Local(Prep + "/runtime"), "BepInEx"));
+        File.WriteAllText(Path.Combine(_host.Local(Prep + "/runtime"), "BepInEx", "LogOutput.log"), "the kept run's log");
+        Directory.CreateDirectory(_host.Local(KeptRunFolder + "/boot-1"));
+        File.WriteAllText(_host.Local(KeptRunFolder + "/boot-1/game.log"), "a boot's log");
+        Line(_host, KeptRun, "server", Gone, JournalEntry.CopyIntended, ("runtime", Prep + "/runtime"), ("stage", Prep + "/staging"), ("parent", Prep));
+        Line(_host, KeptRun, "server", Gone, JournalEntry.CopyDone, ("runtime", Prep + "/runtime"));
+        Line(_host, KeptRun, "server", Gone, JournalEntry.CopyKept, ("runtime", Prep + "/runtime"), ("why", "kept on request"));
+        Line(_host, KeptRun, "server", Gone, JournalEntry.CopyIntended, ("runtime", KeptRunFolder), ("stage", ""), ("parent", "/srv/runs/server"),
+            ("holds", RunFolder.Holds), ("retention", "after-fetch"));
+        Line(_host, KeptRun, "server", Gone, JournalEntry.CopyKept, ("runtime", KeptRunFolder), ("why", "kept on request"));
+        Line(_host, KeptRun, "run", Gone, JournalEntry.RunEnded, ("state", "passed"), ("cleanupVerified", "true"));
+    }
+
+    // #881: a kept run's one env teardown finishes it. It keeps the copy's game logs in the run's folder first (as it must where
+    // nothing else removes that folder), but the folder is the very thing it retires in the same pass: no second teardown, and
+    // nothing of the run is left under the runs folder. The folder's step names the evidence that went with it.
+    [Fact] public async Task ATeardownOfAKeptRunWithItsOwnFolderRemovesTheFolderAndTheLogsItKeptInIt()
+    {
+        KeptRunWithAFolder();
+
+        var torn = await RecoverAsync(KeptRun, teardown: true);
+
+        Assert.True(torn.Clean, string.Join("\n", torn.Steps.Select(step => $"{step.What}: {step.Outcome}")));
+        Assert.False(Directory.Exists(_host.Local(KeptRunFolder)));
+        Assert.False(Directory.Exists(_host.Local(Prep)));
+        Assert.Empty(Directory.EnumerateFileSystemEntries(_host.Local("/srv/runs/server")));
+        var folder = Assert.Single(torn.Steps, step => step.What == "copy " + KeptRunFolder);
+        Assert.False(folder.Failed);
+        Assert.Contains("recovered-server", folder.Outcome);
+        Assert.Contains("is removed in this teardown", Assert.Single(torn.Steps, step => step.What == "copy " + Prep + "/runtime").Outcome);
+        Assert.Contains("with the evidence this teardown kept in it", folder.Outcome);
+        Assert.Equal(JournalRunState.Ended, Assert.Single((await StatusAsync()).Runs).State);
+    }
+
+    // The same teardown with the source settlement's evidence (what the game added to the install, moved out into the run's folder).
+    [Fact] public async Task ATeardownOfAKeptRunRemovesTheSourceChangesItMovedIntoTheFolderItRetires()
+    {
+        const string source = "/srv/game";
+        var check = await KilledWithBaselineAsync(KeptRun, source);
+        Directory.CreateDirectory(_host.Local(KeptRunFolder));
+        Line(_host, KeptRun, "server", Gone, JournalEntry.CopyIntended, ("runtime", KeptRunFolder), ("stage", ""), ("parent", "/srv/runs/server"),
+            ("holds", RunFolder.Holds), ("retention", "after-fetch"));
+        Line(_host, KeptRun, "server", Gone, JournalEntry.CopyKept, ("runtime", KeptRunFolder), ("why", "kept on request"));
+        Line(_host, KeptRun, "server", Gone, JournalEntry.CopyKept, ("runtime", Prep + "/runtime"), ("why", "kept on request"));
+        Line(_host, KeptRun, "run", Gone, JournalEntry.RunEnded, ("state", "passed"), ("cleanupVerified", "true"));
+        File.WriteAllText(Path.Combine(_host.Local(source), "preloader_20261020.log"), "the game's preloader log");
+
+        var torn = await RecoverAsync(KeptRun, teardown: true);
+
+        Assert.True(torn.Clean, string.Join("\n", torn.Steps.Select(step => $"{step.What}: {step.Outcome}")));
+        Assert.Contains(torn.Steps, step => step.What.StartsWith("source install of server", StringComparison.Ordinal) && step.Outcome.Contains("preloader_20261020.log", StringComparison.Ordinal));
+        Assert.Equal(["valheim_server.x86_64"], Directory.EnumerateFileSystemEntries(_host.Local(source)).Select(Path.GetFileName));
+        Assert.Empty(Directory.EnumerateFileSystemEntries(_host.Local("/srv/runs/server")));
+        Assert.Contains("with the evidence this teardown kept in it", Assert.Single(torn.Steps, step => step.What == "copy " + KeptRunFolder).Outcome);
+    }
+
+    // A teardown whose removal of the copy fails leaves the run's folder open, and the logs it kept in it: nothing it could not
+    // remove is deleted with the folder, and the next teardown finishes the run.
+    [Fact] public async Task ATeardownKeepsTheRunFolderAndItsLogsWhileACopyCannotBeRemoved()
+    {
+        KeptRunWithAFolder();
+        _host.Failures["cleanup-stage"] = new HostResult(HostOutcome.Exited, 3, "", "rm: cannot remove: Device or resource busy", TimeSpan.Zero, false);
+
+        var torn = await RecoverAsync(KeptRun, teardown: true);
+
+        Assert.False(torn.Clean);
+        Assert.StartsWith("not removed", Assert.Single(torn.Steps, step => step.What == "copy " + Prep + "/runtime").Outcome);
+        Assert.Contains("not removed", Assert.Single(torn.Steps, step => step.What == "copy " + KeptRunFolder).Outcome);
+        Assert.Equal("the kept run's log", File.ReadAllText(_host.Local(KeptRunFolder + "/recovered-server/BepInEx/LogOutput.log")));
+
+        _host.Failures.Remove("cleanup-stage");
+        var again = await RecoverAsync(KeptRun, teardown: true);
+        Assert.True(again.Clean, string.Join("\n", again.Steps.Select(step => $"{step.What}: {step.Outcome}")));
+        Assert.Empty(Directory.EnumerateFileSystemEntries(_host.Local("/srv/runs/server")));
     }
 
     // The real scripts on this machine (PowerShell on Windows, bash elsewhere): a copy's logs written since it was made are kept
