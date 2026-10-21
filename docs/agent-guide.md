@@ -42,7 +42,7 @@ A mod uses the published NuGet packages and the `valheim-test` tool. You never c
    valheim-test server-load
    ```
 
-   The tool prints its output folder and `SERVER_JOIN_PASS` or `SERVER_LOAD_FAIL` ([what a native check needs](getting-started.md#what-a-native-check-needs)). Read `result.json` under the output's `evidence/` folder, and the [log scan](reference/game-log-scan.md) findings.
+   The tool prints its output folder and `SERVER_JOIN_PASS` or `SERVER_LOAD_FAIL` ([what the result means](tutorials/first-server-load-check.md)). Read `result.json` under the output's `evidence/` folder, and the [log scan](reference/game-log-scan.md) findings.
 5. Check what the run left:
 
    ```sh
