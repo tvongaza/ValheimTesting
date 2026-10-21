@@ -16,7 +16,9 @@ public sealed class TestWorld : IOwnedServer
     public const string WorldUid = "4242";
     private readonly List<(float X, float Z)> _markers = [], _saved = [];
     public int Restarts, MarkCommands;
-    public bool LoseMarkReply, ConfirmSaves = true, ClientSeesMarkers = true;
+    public bool LoseMarkReply, ConfirmSaves = true, ClientSeesMarkers = true, SecondClientSeesMarkers = true, SecondObservationComplete = true;
+    private readonly Dictionary<string, bool> _joined = new();
+    public ScriptedTransport? SecondClientTransport { get; private set; }
     public ScriptedTransport? ClientTransport { get; private set; }
 
     public MarkerPlan Plan() => new()
@@ -32,6 +34,19 @@ public sealed class TestWorld : IOwnedServer
             Pins = new() { ["valheimCLI.valheimCLI"] = new string('a', 32), [MarkerPlan.ModPlugin] = "absent" },
         },
     };
+
+    public MarkerPlan PairPlan()
+    {
+        var plan = Plan();
+        plan.Scenario = MarkerPlan.TwoClientScenarioName;
+        plan.SecondArrival = new() { X = 95, Z = -40, Ground = 42.2f };
+        plan.SecondClient = new()
+        {
+            Mode = "owned", Install = Path.GetFullPath("second-client-install"), Port = 5557, Join = plan.Client!.Join, Character = "SecondTester",
+            Pins = new() { ["valheimCLI.valheimCLI"] = new string('a', 32), [MarkerPlan.ModPlugin] = "absent" },
+        };
+        return plan;
+    }
 
     public GameActor Server() => new ScriptedTransport()
         .OnPrefix("examplemod_mark ", command =>
@@ -55,7 +70,11 @@ public sealed class TestWorld : IOwnedServer
             if (!ConfirmSaves) return ScriptedTransport.Failed("ERROR: save failed");
             _saved.Clear(); _saved.AddRange(_markers); return ScriptedTransport.Ok("OK: SAVE saveNumber=2");
         })
-        .On("cli_peers", _ => ScriptedTransport.Ok("OK: 1 peer(s)", "PEER 1 character position=0.0,40.00,0.0 zone=0,0"))
+        .On("cli_peers", _ =>
+        {
+            var peers = _joined.Where(pair => pair.Value).Select((pair, index) => $"PEER {index + 1} character {pair.Key} position=0.0,40.00,0.0 zone=0,0").ToArray();
+            return ScriptedTransport.Ok(["OK: " + peers.Length + " peer(s)", .. peers]);
+        })
         .OnPrefix("cli_teleport_peer ", _ => ScriptedTransport.Ok("OK: asked peer 1 to teleport"))
         .Extension("examplemod.testing", "session", _ => new { source = "owned-test-session", complete = true, acceptingConnections = true })
         .Actor("server", "cli_expect worlduid=" + WorldUid);
@@ -71,23 +90,25 @@ public sealed class TestWorld : IOwnedServer
         return Server();
     }
 
-    public ScriptedTransport Client(MarkerPlan plan)
+    public ScriptedTransport Client(MarkerPlan plan, bool second = false)
     {
         bool acknowledged = false, devcommands = false, joined = false;
-        var arrival = plan.Arrival;
+        var arrival = second ? plan.SecondArrival! : plan.Arrival;
+        string key = second ? MarkerPlan.SecondClientName : MarkerPlan.FirstClientName;
+        _joined[key] = false;
         object Support(float x, float y, float z) => new
         {
             source = "local-player-support", complete = true, x, y, z, speed = 0f,
             grounded = true, flying = false, attached = false, dead = false, teleporting = false, units = "metres",
         };
-        return ClientTransport = new ScriptedTransport()
+        var transport = new ScriptedTransport()
             .On("devcommands", _ => ScriptedTransport.Ok("Dev commands: " + (devcommands = !devcommands)))
             .On("cli_access", _ => ScriptedTransport.Ok("ACCESS " + JsonSerializer.Serialize(new { schemaVersion = 1, complete = true,
                 devcommands, cheatsAcknowledged = acknowledged, allowOnServerClients = true, server = false, dedicated = false,
                 joinedClient = joined, localPlayer = joined, profileAvailable = joined })))
             .On("cli_acknowledge_local_cheats", _ => { acknowledged = true; return ScriptedTransport.Ok("OK: localCharacterCheated=True"); })
-            .Extension("valheim.session", "join", _ => { joined = true; return new { source = "session-join", complete = true, action = "join" }; }, readOnly: false)
-            .Extension("valheim.session", "leave", _ => { joined = false; return new { source = "session-leave", complete = true, action = "leave" }; }, readOnly: false)
+            .Extension("valheim.session", "join", _ => { joined = _joined[key] = true; return new { source = "session-join", complete = true, action = "join" }; }, readOnly: false)
+            .Extension("valheim.session", "leave", _ => { joined = _joined[key] = false; return new { source = "session-leave", complete = true, action = "leave" }; }, readOnly: false)
             .Extension("valheim.session", "state", _ => new
             {
                 source = "session-state", complete = true, phase = joined ? "world-present" : "menu", worldUid = joined ? WorldUid : null, worldPresent = joined,
@@ -97,15 +118,22 @@ public sealed class TestWorld : IOwnedServer
             .On("cli_set_player_safety true", _ => ScriptedTransport.Ok("OK: playerSafety enabled=True god=True ghost=True debugMode=True cheats=True ghostReplicated=True"))
             .OnPrefix("cli_skip_intro", _ => ScriptedTransport.Ok("OK: skipped=False profileFirstSpawn=False position=0,40,0 ms=3"))
             .Extension("valheim.world", "player-support", _ => Support(0f, 40f, 0f))
+            .OnPrefix("cli_teleport ", _ => ScriptedTransport.Ok("OK: Teleported to test point"))
             .ArrivalSignals(() => Support(arrival.X, arrival.Ground, arrival.Z))
+            .Extension("valheim.world", "terrain", _ => new
+            {
+                source = "loaded-ground", complete = true, units = "metres", x = arrival.X, z = arrival.Z, height = arrival.Ground,
+            })
             .OnPrefix("cli_prefabs_at ", command =>
             {
                 var (x, z) = Coordinates(command, 1, 3);
-                var lines = (ClientSeesMarkers ? _markers.Where(m => Near(m, x, z)) : []).Select(m => string.Create(CultureInfo.InvariantCulture,
+                var lines = ((second ? SecondClientSeesMarkers : ClientSeesMarkers) ? _markers.Where(m => Near(m, x, z)) : []).Select(m => string.Create(CultureInfo.InvariantCulture,
                     $"PREFAB name={MarkerScenario.Marker} distance=0.20 pos={m.X:F3},42.250,{m.Z:F3} rot=0.000,0.000,0.000 zdo=1:2 owner=0")).ToList();
-                lines.Add($"OK: NEARBY_PREFABS radius=8.0 count={lines.Count}");
+                if (!second || SecondObservationComplete) lines.Add($"OK: NEARBY_PREFABS radius=8.0 count={lines.Count}");
                 return ScriptedTransport.Ok([.. lines]);
             });
+        if (second) SecondClientTransport = transport; else ClientTransport = transport;
+        return transport;
     }
 
     /// <summary>The adapter's census of ExampleMod's patch as a server with the mod reports it.</summary>

@@ -7,8 +7,9 @@ namespace ExampleMod.Tests;
 /// <summary>
 /// ExampleMod's native session for a test class: <c>session.json</c> beside the test project is the session manifest
 /// <c>valheim-test session check</c> reads (read in place, so its relative paths resolve from there), and
-/// <c>dry-site-lifecycle.plan.json</c> beside it is the scenario's plan template. The session has a dedicated server and one
-/// client, named <c>client</c>, the plan's client section. Without those two files the test is skipped with that reason
+/// <c>dry-site-lifecycle.plan.json</c> beside it is the scenario's plan template. That filename stays the same for either
+/// declared mode: one-client persistence or two-client visibility. The named clients are the plan's original client sections.
+/// Without those two files the test is skipped with that reason
 /// (<see cref="SessionFactAttribute"/>), so <c>dotnet test</c> stays offline by default. It carries the trait
 /// <c>Category=Native</c>, which this repository's validation leaves out, so validation never launches the game even where
 /// the files exist. Each run writes a new evidence directory under <c>session-runs/</c> in the test output.
@@ -36,11 +37,8 @@ public sealed class ExampleSession : GameSessionFixture<MarkerPlan>
         return PinnedServerRun.RunCampaignAsync(Manifest, plan, Clients, output, MarkerScenario.RunnerOptions(run));
     }
 
-    /// <summary>The session's one client, <c>client</c>: the plan's client section.</summary>
-    public static IReadOnlyDictionary<string, ClientRunPlan> Clients(MarkerPlan plan) => new Dictionary<string, ClientRunPlan>
-    {
-        ["client"] = plan.Client ?? throw new ArgumentException("The session's plan needs its client section."),
-    };
+    /// <summary>The declared client sections, named consistently with campaign binding and the scenario.</summary>
+    public static IReadOnlyDictionary<string, ClientRunPlan> Clients(MarkerPlan plan) => MarkerPlan.Clients(plan);
 }
 
 /// <summary>A test that needs the native session: skipped, with the reason, when <c>session.json</c> or the plan is absent.</summary>
@@ -54,5 +52,5 @@ public sealed class SessionFactAttribute : FactAttribute
 public sealed class DrySiteSessionTests(ExampleSession fixture) : IClassFixture<ExampleSession>
 {
     [SessionFact]
-    public Task TheMarkerSurvivesASaveAndARestart() => fixture.Test("dry-site lifecycle", () => Task.Run(() => MarkerScenario.Run(fixture.Session, fixture.Plan)));
+    public Task TheDeclaredMarkerScenarioPasses() => fixture.Test(fixture.Plan.Scenario, () => Task.Run(() => MarkerScenario.Run(fixture.Session, fixture.Plan)));
 }

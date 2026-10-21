@@ -25,6 +25,14 @@ Follow [Test that a change survives a save, restart and rejoin](../../../docs/gu
 
 Keep the generated `SmokeCheck.csproj` and `NuGet.Config`. The entry reads the emitted server plan with your feature expectations, uses the emitted client's password-variable binding, and delegates to `MarkerScenario`. `PinnedServerRun` prepares and retires the actors.
 
+## Two-client visibility
+
+Use the same three-file native map for `dry-site-two-clients`. Keep a prepared two-role campaign with stable role names `client` and `client-b`. Put B's client plan in `second-client-plan.json` beside `client-plan.json`. The entry reads both sections; campaign binding supplies their assigned paths, ports and character filenames.
+
+In `marker-plan.json`, set `Scenario` to `dry-site-two-clients` and add the independently measured `SecondArrival`. Both arrivals must be dry, 3–20 metres from the same marker and at least 3 metres apart. The one-client lifecycle mode refuses either second-client field; visibility requires both.
+
+The scenario opens both through `GameSession`, checks each client's complete marker census, then makes B leave and rejoin while A stays. It does not save or restart the server. See [the multi-client guide](../../../docs/guides/run-a-session-with-several-clients.md) for preparation limits and results.
+
 ## Scripted lifecycle tests
 
 For the same scenario's failure controls without a game, copy this complete map into `LifecycleTests`:
@@ -53,7 +61,7 @@ dotnet test LifecycleTests/LifecycleTests.csproj -c Release --filter "Category!=
 Captured result:
 
 ```text
-Passed!  - Failed:     0, Passed:    10, Skipped:     0, Total:    10, Duration: 180 ms - LifecycleTests.dll (net10.0)
+Passed!  - Failed:     0, Passed:    27, Skipped:     0, Total:    27, Duration: 180 ms - LifecycleTests.dll (net10.0)
 ```
 
-The ten scripted controls include a lost mutation reply, an unconfirmed save, a missing Harmony patch and a marker invisible to the client. They do not prove native save or replication behavior. The native xUnit entry uses the exact `FullyQualifiedName~DrySiteSessionTests` filter; `Category=Native` also selects the separate hosted test.
+The 27 scripted cases include a lost mutation reply, an unconfirmed save, a missing Harmony patch and a marker invisible to either client, an incomplete B observation and invalid two-client plans. They do not prove native save or replication behavior. The native xUnit entry uses the exact `FullyQualifiedName~DrySiteSessionTests` filter; `Category=Native` also selects the separate hosted test.

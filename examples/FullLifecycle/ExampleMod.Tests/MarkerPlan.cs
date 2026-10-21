@@ -11,6 +11,8 @@ namespace ExampleMod.Tests;
 public sealed class MarkerPlan : ServerRunPlan
 {
     public const string ScenarioName = "dry-site-lifecycle";
+    public const string TwoClientScenarioName = "dry-site-two-clients";
+    public const string FirstClientName = "client", SecondClientName = "client-b";
     public const string ModPlugin = "example.examplemod", AdapterPlugin = "example.examplemod.testadapter";
     public const string SessionTokenVariable = "EXAMPLEMOD_TEST_SESSION_TOKEN";
     /// <summary>ExampleMod as the runner sees it: its adapter's session, the default ValheimCLI plugin's Harmony capability, and the patch it declares.</summary>
@@ -29,6 +31,10 @@ public sealed class MarkerPlan : ServerRunPlan
     public Site Arrival { get; set; } = new();
     /// <summary>The client that joins and looks: a client without the mod, which must still see the marker.</summary>
     public ClientRunPlan? Client { get; set; }
+    /// <summary>Optional second clean client for simultaneous visibility and rejoin, with its own registered test character.</summary>
+    public ClientRunPlan? SecondClient { get; set; }
+    /// <summary>Measured dry arrival for the second client, separate from the first arrival.</summary>
+    public Site? SecondArrival { get; set; }
     /// <summary>Optional human-review still on the first joined round. Omit to keep normal runs fast and small.</summary>
     public ReviewStillSettings? ReviewStill { get; set; }
     public string WorldUid => Pins["worlduid"];
@@ -37,9 +43,11 @@ public sealed class MarkerPlan : ServerRunPlan
     public static MarkerPlan Validated(MarkerPlan plan)
     {
         plan.ValidateServerPlan([ModPlugin, AdapterPlugin, "valheimCLI.valheimCLI"], SessionTokenVariable);
-        plan.RequireScenario(ScenarioName);
+        plan.RequireScenario(plan.SecondClient == null ? ScenarioName : TwoClientScenarioName);
         var client = plan.Client ?? throw new ArgumentException("The scenario looks from a client: add the client section.");
         client.Validate(ModPlugin); // The claim is what a client without the mod sees.
+        plan.SecondClient?.Validate(ModPlugin);
+        _ = Clients(plan);
         plan.CheckSites();
         plan.ReviewStill?.Validate();
         return plan;
@@ -49,7 +57,40 @@ public sealed class MarkerPlan : ServerRunPlan
     /// The sites' own rules. The plan must agree with itself before any game starts: a "dry" site declared under the rule's
     /// threshold would make a correct mod fail, and the reverse would let a broken one pass.
     /// </summary>
-    public void CheckSites() => CheckSites(DrySite, WetSite, Arrival);
+    public void CheckSites()
+    {
+        RequireScenario(SecondClient == null ? ScenarioName : TwoClientScenarioName);
+        CheckSites(DrySite, WetSite, Arrival);
+        if ((SecondClient == null) != (SecondArrival == null))
+            throw new ArgumentException("Supply secondClient and secondArrival together.");
+        if (SecondClient == null) return;
+        CheckSites(DrySite, WetSite, SecondArrival!);
+        float apart = MathF.Sqrt(MathF.Pow(Arrival.X - SecondArrival!.X, 2) + MathF.Pow(Arrival.Z - SecondArrival.Z, 2));
+        if (apart < 3) throw new ArgumentException("Keep the two client arrivals at least 3 m apart.");
+        var first = Client ?? throw new ArgumentException("The session's plan needs its client section.");
+        first.Validate(ModPlugin);
+        SecondClient.Validate(ModPlugin);
+        if (!first.Owned || !SecondClient.Owned || first.HostWorld != null || SecondClient.HostWorld != null || first.Crossplay || SecondClient.Crossplay)
+            throw new ArgumentException("The two-client example uses two owned clients joining the dedicated server by address.");
+        if (!string.Equals(first.Join, SecondClient.Join, StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("Both clients must join the same dedicated server address.");
+        if (string.Equals(first.Character, SecondClient.Character, StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("Give the two clients distinct disposable character filenames.");
+        if (ReviewStill != null) throw new ArgumentException("Omit reviewStill for the two-client visibility scenario.");
+    }
+
+    /// <summary>The same named plan objects used by campaign binding, the scenario and the native test fixture.</summary>
+    public static IReadOnlyDictionary<string, ClientRunPlan> Clients(MarkerPlan plan)
+    {
+        var first = plan.Client ?? throw new ArgumentException("The session's plan needs its client section.");
+        var clients = new Dictionary<string, ClientRunPlan> { [FirstClientName] = first };
+        if (plan.SecondClient != null)
+        {
+            if (ReferenceEquals(first, plan.SecondClient)) throw new ArgumentException("The two named clients need separate plan objects.");
+            clients.Add(SecondClientName, plan.SecondClient);
+        }
+        return clients;
+    }
 
     /// <summary>The same site contract for dedicated and local-host runs.</summary>
     public static void CheckSites(Site drySite, Site wetSite, Site arrival)
