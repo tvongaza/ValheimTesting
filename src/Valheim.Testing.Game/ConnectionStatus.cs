@@ -90,15 +90,16 @@ internal sealed record JoinTarget(string Name, GameBuild? Build, Func<uint, Time
 /// </summary>
 internal static class JoinRefusalText
 {
-    /// <summary>The line Valheim's <c>ZNet.RPC_PeerInfo</c> logs when it refuses a peer's network version (1.0.17).</summary>
-    internal static readonly Regex IncompatibleVersion = new(
-        @"has incompatible version, mine:(?<mine>\S+) \(network version (?<mineNetwork>\d+)\)\s+remote (?<remote>\S+) \(network version (?<remoteNetwork>\d+|unknown)\)",
-        RegexOptions.CultureInvariant);
+    // The line Valheim's ZNet.RPC_PeerInfo logs when it refuses a peer's network version (1.0.17), with the peer's network version open.
+    private const string IncompatibleVersionLine =
+        @"has incompatible version, mine:(?<mine>\S+) \(network version (?<mineNetwork>\d+)\)\s+remote (?<remote>\S+) \(network version (?<remoteNetwork>{remote})\)";
+
+    /// <summary>The line Valheim's <c>ZNet.RPC_PeerInfo</c> logs when it refuses a peer's network version.</summary>
+    internal static readonly Regex IncompatibleVersion = new(IncompatibleVersionLine.Replace("{remote}", @"\d+|unknown", StringComparison.Ordinal), RegexOptions.CultureInvariant);
 
     /// <summary>The same line for a peer on <paramref name="network"/> only: another peer's refusal is never read as this client's.</summary>
-    internal static Regex IncompatibleVersionOf(uint network) => new(
-        @"has incompatible version, mine:\S+ \(network version \d+\)\s+remote \S+ \(network version " + network.ToString(CultureInfo.InvariantCulture) + @"\)",
-        RegexOptions.CultureInvariant);
+    internal static Regex IncompatibleVersionOf(uint network) =>
+        new(IncompatibleVersionLine.Replace("{remote}", network.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal), RegexOptions.CultureInvariant);
 
     /// <summary>
     /// "the game refused the join with ErrorVersion (3): …. Nothing was retried; the client is back at its menu." for a client of
@@ -130,8 +131,8 @@ internal static class JoinRefusalText
     {
         var line = targetLog == null ? null : IncompatibleVersion.Match(targetLog);
         string logged = line is not { Success: true } ? ""
-            : $" The log of {name} refused this client's {line.Groups["remote"].Value} (network version {line.Groups["remoteNetwork"].Value}) as itself " +
-              $"{line.Groups["mine"].Value} (network version {line.Groups["mineNetwork"].Value}).";
+            : $" {char.ToUpperInvariant(name[0])}{name[1..]}'s own log refused this client's {line.Groups["remote"].Value} (network version {line.Groups["remoteNetwork"].Value}) " +
+              $"as itself {line.Groups["mine"].Value} (network version {line.Groups["mineNetwork"].Value}).";
         if (client?.NetworkVersion is { } mine && target?.Build?.NetworkVersion is { } theirs)
             return mine != theirs
                 ? $"this client's install is {client} and {name}'s is {target.Build}; Valheim refuses a join across network versions. " +
@@ -139,7 +140,7 @@ internal static class JoinRefusalText
                 : $"both installs are on network version {mine} (read before staging), so Valheim's own version check passed; a mod's version " +
                   $"check refuses with the same status (for crossplay, so does mismatched lobby data), and {name}'s log names its reason." + logged;
         // The log is read only for this client's own network version, so a line found is this client's refusal.
-        if (line is { Success: true } && client?.NetworkVersion is { } own)
+        if (line is { Success: true } && client?.NetworkVersion is { } own && line.Groups["remoteNetwork"].Value == own.ToString(CultureInfo.InvariantCulture))
             return $"Valheim refused this client's network version {own}." + logged + " Update the older install (Steam, or SteamCMD for a dedicated server).";
         return "the network versions of this client and " + name + " were not both read before staging, so this is Valheim's network " +
             "version check or a mod's own; a game mismatch shows in " + name + "'s log as \"has incompatible version\".";

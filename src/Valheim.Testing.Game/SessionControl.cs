@@ -204,9 +204,16 @@ public sealed class SessionControl(GameActor actor)
             reason = ". " + Capitalized(JoinRefusalText.Explain(reading.Status, plan.PreparedBuild, plan.PreparedJoinTarget,
                 reading.Status == GameConnectionStatus.ErrorVersion ? TargetLog(plan.PreparedBuild, plan.PreparedJoinTarget, cancellation) : null));
         }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+        {
+            // The run is being cancelled: a cancellation, still carrying the refusal it interrupted.
+            var cancelled = new OperationCanceledException(error.Message.TrimEnd('.') + "; its connection status was not read: the run was cancelled", error, cancellation);
+            foreach (System.Collections.DictionaryEntry entry in error.Data) cancelled.Data[entry.Key] = entry.Value;
+            throw cancelled;
+        }
         catch (Exception failure)
         {
-            // Cancelled or not, the join itself was refused: that stays the failure, and the reason says why it is missing.
+            // The join itself was refused: that stays the failure, and the reason says why it is missing.
             reason = "; its connection status was not read: " + failure.Message;
         }
         var refused = new InvalidOperationException(error.Message.TrimEnd('.') + reason, error);
@@ -220,8 +227,9 @@ public sealed class SessionControl(GameActor actor)
     private static string? TargetLog(GameBuild? client, JoinTarget? target, CancellationToken cancellation)
     {
         if (target?.RefusalLine is not { } read || client?.NetworkVersion is not { } network) return null;
+        if (target.Build?.NetworkVersion == network) return null; // the same network version: the game logs no refusal of it
         try { return read(network, TimeSpan.FromSeconds(5), cancellation); }
-        catch (Exception) { return null; }
+        catch (Exception error) when (error is not OperationCanceledException || !cancellation.IsCancellationRequested) { return null; }
     }
 
     private static string Capitalized(string text) => text.Length == 0 ? text : char.ToUpperInvariant(text[0]) + text[1..];

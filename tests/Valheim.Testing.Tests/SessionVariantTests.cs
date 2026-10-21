@@ -262,7 +262,7 @@ public sealed class SessionVariantTests : IDisposable
         Assert.Equal(41u, soughtNetwork); // only this client's network version is looked for in the server's log
         Assert.Equal("valheim.session/join failed: join_failed: The game refused the session transition. The game refused the join with ErrorVersion (3): " +
             "this client's install is Valheim 1.0.20 (network version 41) and server's is Valheim 1.0.17 (network version 40); Valheim refuses a join across " +
-            "network versions. Update the older install (Steam, or SteamCMD for a dedicated server). The log of server refused this client's 1.0.20 (network version 41) " +
+            "network versions. Update the older install (Steam, or SteamCMD for a dedicated server). Server's own log refused this client's 1.0.20 (network version 41) " +
             "as itself 1.0.17 (network version 40). Nothing was retried; the client is back at its menu.", error.Message);
         Assert.DoesNotContain("76561190000000000", error.Message); // the peer's endpoint can be a Steam ID
         Assert.Equal("ErrorVersion", error.Data["connection.status"]);
@@ -276,7 +276,9 @@ public sealed class SessionVariantTests : IDisposable
     {
         var transport = Client("ErrorVersion");
         using var actor = transport.Actor("client", Menu);
-        var error = Assert.Throws<InvalidOperationException>(() => new SessionControl(actor).JoinWorld(RefusedPlan(V17, V17 with { GameVersion = "1.0.18" }), "7"));
+        int logReads = 0;
+        var error = Assert.Throws<InvalidOperationException>(() => new SessionControl(actor).JoinWorld(RefusedPlan(V17, V17 with { GameVersion = "1.0.18" }, (_, _, _) => { logReads++; return null; }), "7"));
+        Assert.Equal(0, logReads); // on one network version the game logs no refusal to read
         Assert.Contains("both installs are on network version 40 (read before staging), so Valheim's own version check passed; a mod's version check", error.Message);
         Assert.DoesNotContain("Update the older install", error.Message);
     }
@@ -288,7 +290,7 @@ public sealed class SessionVariantTests : IDisposable
         var error = Assert.Throws<InvalidOperationException>(() => new SessionControl(actor).JoinWorld(RefusedPlan(null, V17), "7"));
         Assert.Contains("the network versions of this client and server were not both read before staging, so this is Valheim's network version check or a mod's own", error.Message);
         // The server's own refusal of this client's network version proves a game mismatch when the server's install was not read.
-        Assert.StartsWith("Valheim refused this client's network version 41. The log of server refused this client's 1.0.20",
+        Assert.StartsWith("Valheim refused this client's network version 41. Server's own log refused this client's 1.0.20",
             JoinRefusalText.Explain(GameConnectionStatus.ErrorVersion, V20, new JoinTarget("server", null), ServerLog).Split(": ", 2)[1]);
         // Without this client's version no log line is attributed to it.
         Assert.StartsWith("the network versions of this client and server were not both read",
@@ -320,6 +322,18 @@ public sealed class SessionVariantTests : IDisposable
         Assert.Equal(1, transport.Count("cli_extension valheim.session/join"));
     }
 
+    [Fact] public void ARunCancelledWhileTheReasonIsReadIsACancellationCarryingTheRefusal()
+    {
+        var transport = Client("ErrorVersion");
+        using var actor = transport.Actor("client", Menu);
+        using var cancel = new CancellationTokenSource();
+        var plan = RefusedPlan(V20, V17, (_, _, _) => { cancel.Cancel(); cancel.Token.ThrowIfCancellationRequested(); return null; });
+        var error = Assert.ThrowsAny<OperationCanceledException>(() => new SessionControl(actor).JoinWorld(plan, "7", cancellation: cancel.Token));
+        Assert.EndsWith("; its connection status was not read: the run was cancelled", error.Message);
+        Assert.Equal("join_failed", Assert.IsType<InvalidOperationException>(error.InnerException).Data["extension.code"]);
+        Assert.Equal(1, transport.Count("cli_extension valheim.session/join"));
+    }
+
     [Fact] public void AJoinThatEndsAnyOtherWayIsNotReadAsARefusal()
     {
         var transport = Client("None", refusalCode: "transition_timeout");
@@ -340,9 +354,10 @@ public sealed class SessionVariantTests : IDisposable
         Assert.Equal(ServerLog, ServerActor.LastRefusal(log, JoinRefusalText.IncompatibleVersionOf(41), CancellationToken.None));
         Assert.Null(ServerActor.LastRefusal(log, JoinRefusalText.IncompatibleVersionOf(42), CancellationToken.None));
         Assert.Null(ServerActor.LastRefusal(log + ".missing", JoinRefusalText.IncompatibleVersionOf(41), CancellationToken.None));
-        // A long log is read from its last RefusalLogTail bytes only: a refusal before them is not this join's.
-        using (var writer = File.AppendText(log)) writer.Write(new string('x', (int)ServerActor.RefusalLogTail) + "\n");
-        Assert.Null(ServerActor.LastRefusal(log, JoinRefusalText.IncompatibleVersionOf(41), CancellationToken.None));
+        // A long log is read from its tail only: a refusal before it is not this join's.
+        using (var writer = File.AppendText(log)) writer.Write(new string('x', 4096) + "\n");
+        Assert.Null(ServerActor.LastRefusal(log, JoinRefusalText.IncompatibleVersionOf(41), CancellationToken.None, tail: 2048));
+        Assert.Equal(ServerLog, ServerActor.LastRefusal(log, JoinRefusalText.IncompatibleVersionOf(41), CancellationToken.None));
     }
 
     [Fact] public void ACrossplayJoinThatReturnsToTheMenuWithAnErrorFails()
