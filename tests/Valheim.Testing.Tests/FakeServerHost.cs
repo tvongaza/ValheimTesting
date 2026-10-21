@@ -13,7 +13,7 @@ using Valheim.Testing.GameSessions;
 /// </summary>
 internal sealed class FakeServerHost : IGameHost
 {
-    private readonly string _mirror;
+    private readonly string? _mirror; // null: this machine itself, its host paths are this machine's (ThisMachine)
     private readonly FakeOwnedServer? _server;
     private readonly GameHostKind _kind;
     private readonly object _sync = new();
@@ -21,9 +21,20 @@ internal sealed class FakeServerHost : IGameHost
     private int _nextClient = 77;
 
     public FakeServerHost(string name, string mirror, FakeOwnedServer? server = null, int tunnelPort = 15577, GameHostKind kind = GameHostKind.Ssh, bool windows = false)
+        : this(name, server, tunnelPort, kind, windows, mirror ?? throw new ArgumentNullException(nameof(mirror))) { }
+    private FakeServerHost(string name, FakeOwnedServer? server, int tunnelPort, GameHostKind kind, bool windows, string? mirror)
     {
         Name = name; _mirror = mirror; _server = server; TunnelPort = tunnelPort; _kind = kind; Windows = windows;
     }
+
+    /// <summary>
+    /// This machine, answered in process: a local host whose paths are this machine's own (no mirror) and whose scripts answer as
+    /// this machine's shell's do (pwsh on Windows, bash elsewhere), so a test of what the toolkit decides runs no shell.
+    /// SourceScriptShellTests compares its settlement, listing and read answers with the real scripts, and names where the other
+    /// scripts' real runs are.
+    /// </summary>
+    public static FakeServerHost ThisMachine(string name = "this machine") =>
+        new(name, server: null, tunnelPort: 15577, GameHostKind.Local, OperatingSystem.IsWindows(), mirror: null);
     public string Name { get; }
     /// <summary>What a Windows host's server-task logon check replies: s4u, interactive, or "unsupported &lt;why&gt;".</summary>
     public string ServerTaskLogon { get; set; } = "s4u";
@@ -130,7 +141,8 @@ internal sealed class FakeServerHost : IGameHost
     }
     public IReadOnlyList<string> Scripts { get { lock (_sync) return Runs.Select(run => run.Script).ToList(); } }
 
-    public string Local(string hostPath) => Path.Combine([_mirror, .. hostPath.Replace(':', '/').Split(['/', '\\'], StringSplitOptions.RemoveEmptyEntries)]);
+    public string Local(string hostPath) => _mirror == null ? hostPath
+        : Path.Combine([_mirror, .. hostPath.Replace(':', '/').Split(['/', '\\'], StringSplitOptions.RemoveEmptyEntries)]);
 
     private static bool CharacterFile(string path, IReadOnlyDictionary<string, string> v)
     {
@@ -360,59 +372,44 @@ internal sealed class FakeServerHost : IGameHost
             case "preflight-exists":
                 return Ok(string.Concat(v["paths"].Split('\n').Where(relative => relative.Length != 0 && File.Exists(Local(HostPath.Join(v["root"], relative))))
                     .Select(relative => "VT-EXISTS file " + relative + "\n")) + "VT-EXISTS done\n");
+            // As HostClientPreflight's scripts (SourceScriptShellTests runs them): missing (not a file), then unreadable by the host
+            // user (or, on Windows, held open by another process: locked), then over the limit, then the bytes.
             case "preflight-read":
             {
                 string file = Local(v["path"]);
-                if (!File.Exists(file)) return Ok("VT-PREFLIGHT missing\n");
+                // A file, through any link (a dangling link is missing, as -f and File.Exists on the target say).
+                if (!File.Exists(file) || new FileInfo(file).LinkTarget != null && new FileInfo(file).ResolveLinkTarget(returnFinalTarget: true) is not { Exists: true })
+                    return Ok("VT-PREFLIGHT missing\n");
                 if (UnreadableFiles.Contains(v["path"])) return Ok("VT-PREFLIGHT unreadable\n");
-                var bytes = File.ReadAllBytes(file);
-                return Ok(bytes.Length > long.Parse(v["limit"], System.Globalization.CultureInfo.InvariantCulture) ? "VT-PREFLIGHT too-large\n" : "VT-PREFLIGHT " + Convert.ToBase64String(bytes) + "\n");
-            }
-            // As the real scripts do (ProfileSourceCheckTests runs them): each added file moved into keep, each added folder removed once empty.
-            case "source-settle":
-            {
-                var reply = new StringBuilder();
-                string root = Local(v["root"]), keep = Local(v["keep"]);
-                foreach (string line in v["files"].Split('\n', StringSplitOptions.RemoveEmptyEntries))
+                try
                 {
-                    string relative = Encoding.UTF8.GetString(Convert.FromBase64String(line)), from = Path.Combine(root, relative), to = Path.Combine(keep, relative);
-                    if (!File.Exists(from)) { reply.Append("VT-GONE ").Append(line).Append('\n'); continue; }
-                    Directory.CreateDirectory(Path.GetDirectoryName(to)!);
-                    File.Move(from, to);
-                    reply.Append("VT-MOVED ").Append(line).Append('\n');
+                    using var stream = File.OpenRead(file);
+                    if (stream.Length > long.Parse(v["limit"], System.Globalization.CultureInfo.InvariantCulture)) return Ok("VT-PREFLIGHT too-large\n");
+                    var bytes = new byte[stream.Length];
+                    stream.ReadExactly(bytes);
+                    return Ok("VT-PREFLIGHT " + Convert.ToBase64String(bytes) + "\n");
                 }
-                foreach (string line in v["folders"].Split('\n', StringSplitOptions.RemoveEmptyEntries))
-                {
-                    string folder = Path.Combine(root, Encoding.UTF8.GetString(Convert.FromBase64String(line)));
-                    if (!Directory.Exists(folder)) reply.Append("VT-GONE ").Append(line).Append('\n');
-                    else if (Directory.EnumerateFileSystemEntries(folder).Any()) reply.Append("VT-NOTMOVED ").Append(line).Append(" not-empty\n");
-                    else { Directory.Delete(folder); reply.Append("VT-RMDIR ").Append(line).Append('\n'); }
-                }
-                return Ok(reply + "VT-SETTLED\n");
+                catch (UnauthorizedAccessException) { return Ok("VT-PREFLIGHT unreadable\n"); }
+                catch (IOException error) when (Windows && (error.HResult & 0xFFFF) is 32 or 33) { return Ok("VT-PREFLIGHT locked\n"); }
+                catch (IOException error) { return new HostResult(HostOutcome.Exited, Windows ? 1 : 3, "", error.Message, TimeSpan.Zero, false); }
             }
+            // As SourceSettleScripts' pair does (SourceScriptShellTests runs both on the same folders and compares the replies).
+            case "source-settle": return Ok(Settle(v));
             case "source-reachable":
                 foreach (string path in new[] { v["root"], v["parent"] })
                     if (!Directory.Exists(Local(path))) return Ok("VT-REACHABLE no " + path + "\n");
                 return Ok("VT-REACHABLE yes\n");
             case "source-write":
-                Directory.CreateDirectory(Path.GetDirectoryName(Local(v["path"]))!);
-                File.WriteAllBytes(Local(v["path"]), Convert.FromBase64String(v["content"]));
-                return Ok("VT-SOURCE-WRITTEN\n");
-            case "source-evidence":
-            {
-                string profileParent = Local(v["parent"]), added = Local(v["keep"]);
-                if (v["recovered"].Length != 0 && Directory.Exists(added))
+                try
                 {
-                    string to = Path.Combine(Local(v["recovered"]), "added");
-                    if (Directory.Exists(to)) return Ok("VT-SOURCE-REFUSED " + v["recovered"] + "/added already exists\n");
-                    Directory.CreateDirectory(Local(v["recovered"]));
-                    Directory.Move(added, to);
+                    Directory.CreateDirectory(Path.GetDirectoryName(Local(v["path"]))!);
+                    File.WriteAllBytes(Local(v["path"]) + ".vt-tmp", Convert.FromBase64String(v["content"]));
+                    File.Move(Local(v["path"]) + ".vt-tmp", Local(v["path"]), overwrite: true);
                 }
-                else if (v["recovered"].Length == 0 && v["added"] == "1" && Directory.Exists(added)) Directory.Delete(added, recursive: true);
-                if (v.GetValueOrDefault("baseline") == "1" && File.Exists(Path.Combine(profileParent, ProfileSourceCheck.BaselineFile)))
-                    File.Delete(Path.Combine(profileParent, ProfileSourceCheck.BaselineFile));
-                return Ok("VT-SOURCE-SETTLED\n");
-            }
+                catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+                { return new HostResult(HostOutcome.Exited, Windows ? 1 : 3, "", error.Message, TimeSpan.Zero, false); }
+                return Ok("VT-SOURCE-WRITTEN\n");
+            case "source-evidence": return Evidence(v);
             case "profile-seed":
             {
                 string destination = Local(v["runtime"]);
@@ -657,12 +654,16 @@ internal sealed class FakeServerHost : IGameHost
                 if (!Directory.Exists(root)) return Ok("VT-LIST missing\n");
                 var text = new StringBuilder();
                 string[] patterns = v["dirs"].Split('\n', StringSplitOptions.RemoveEmptyEntries);
-                foreach (string file in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
+                bool nocase = Windows || v.GetValueOrDefault("nocase") == "1";
+                // As the scripts: the walk never enters a link, and a link the listing reaches (anywhere when it lists everything, else
+                // a named path, one inside it or a linked folder on the way to it) is refused before anything is hashed.
+                var (files, folders, links) = Walk(root);
+                var refused = links.Where(link => patterns.Length == 0 || patterns.Any(pattern => LinkReached(root, link, pattern, nocase))).Take(5).ToList();
+                if (refused.Count != 0) return Ok("VT-LIST links\n" + string.Concat(refused.Select(link => "./" + link + "\n")));
+                foreach (string relative in files)
                 {
-                    string relative = Path.GetRelativePath(root, file).Replace('\\', '/');
-                    if (patterns.Length != 0 && !patterns.Any(pattern => MatchesListedPath(relative, pattern, Windows || v.GetValueOrDefault("nocase") == "1"))) continue;
-                    if ((File.GetAttributes(file) & FileAttributes.ReparsePoint) != 0)
-                        return Ok("VT-LIST links\n./" + relative + "\n");
+                    string file = Path.Combine(root, relative);
+                    if (patterns.Length != 0 && !patterns.Any(pattern => MatchesListedPath(relative, pattern, nocase))) continue;
                     if (v.GetValueOrDefault("metadata") == "1")
                     {
                         var info = new FileInfo(file);
@@ -673,8 +674,8 @@ internal sealed class FakeServerHost : IGameHost
                         text.Append(FileHash.Sha256(file)).Append("  ./").Append(relative).Append('\n');
                 }
                 if (v.GetValueOrDefault("metadata") == "1")
-                    foreach (string folder in Directory.EnumerateDirectories(root, "*", SearchOption.AllDirectories))
-                        text.Append("VT-DIR ").Append(Convert.ToBase64String(Encoding.UTF8.GetBytes(Path.GetRelativePath(root, folder).Replace('\\', '/')))).Append('\n');
+                    foreach (string folder in folders)
+                        text.Append("VT-DIR ").Append(Convert.ToBase64String(Encoding.UTF8.GetBytes(folder))).Append('\n');
                 if (File.Exists(Path.Combine(root, GameLaunch.ServerLinuxExecutable))) text.Append("VT-EXEC ").Append(GameLaunch.ServerLinuxExecutable).Append('\n');
                 return Ok(text.Append("VT-LIST done\n").ToString());
             }
@@ -891,6 +892,209 @@ internal sealed class FakeServerHost : IGameHost
             }
         }
         throw new InvalidOperationException("Unexpected script on the fake host.");
+    }
+
+    // Every file, folder and link under root, relative with / separators, as the listing scripts walk it: a link is never entered.
+    private static (List<string> Files, List<string> Folders, List<string> Links) Walk(string root)
+    {
+        var files = new List<string>(); var folders = new List<string>(); var links = new List<string>();
+        var pending = new Stack<string>([root]);
+        while (pending.Count > 0)
+            foreach (string entry in Directory.EnumerateFileSystemEntries(pending.Pop()).Order(StringComparer.Ordinal))
+            {
+                string relative = Path.GetRelativePath(root, entry).Replace('\\', '/');
+                if (IsLink(entry)) links.Add(relative);
+                else if (Directory.Exists(entry)) { folders.Add(relative); pending.Push(entry); }
+                else files.Add(relative);
+            }
+        return (files, folders, links);
+    }
+
+    // Whether a listing of pattern reaches the link at relative: the link is the named path or lies inside it, or it is a linked
+    // folder on the way to it (bash records one before the last segment; PowerShell refuses one whose target opens).
+    private static bool LinkReached(string root, string relative, string pattern, bool ignoreCase)
+    {
+        string[] parts = relative.Split('/'), segments = pattern.Replace('\\', '/').Split('/');
+        int shared = Math.Min(parts.Length, segments.Length);
+        for (int i = 0; i < shared; i++)
+            if (!FileSystemName.MatchesSimpleExpression(segments[i], parts[i], ignoreCase)) return false;
+        return parts.Length >= segments.Length || Directory.Exists(Path.Combine(root, relative));
+    }
+
+    // A symbolic link or junction (any reparse point), dangling or not, as the scripts' -L and ReparsePoint checks see it.
+    private static bool IsLink(string path)
+    {
+        var info = new FileInfo(path);
+        return info.LinkTarget != null || ((info.Exists || Directory.Exists(path)) && (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0);
+    }
+
+    // A symbolic link or junction (a name link), as bash's -L and PowerShell's Test-VtLink see it: another reparse point is not one.
+    private static bool NameLink(string path) => new FileInfo(path).LinkTarget != null;
+
+    // Every folder below path made writable and enterable for this user, and every read-only attribute cleared; links never entered.
+    private static void Writable(string path)
+    {
+        if (OperatingSystem.IsWindows()) File.SetAttributes(path, File.GetAttributes(path) & ~FileAttributes.ReadOnly);
+        else File.SetUnixFileMode(path, File.GetUnixFileMode(path) | UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        foreach (string entry in Directory.EnumerateFileSystemEntries(path))
+            if (NameLink(entry)) continue;
+            else if (Directory.Exists(entry)) Writable(entry);
+            else if (OperatingSystem.IsWindows()) File.SetAttributes(entry, File.GetAttributes(entry) & ~FileAttributes.ReadOnly);
+    }
+
+    // The path as a Windows host script opens it (\\?\ form): never trimmed of a trailing dot or space. Elsewhere unchanged.
+    private static string Exact(string path) => !OperatingSystem.IsWindows() ? path
+        : path.StartsWith(@"\\", StringComparison.Ordinal) ? @"\\?\UNC\" + path[2..] : @"\\?\" + path;
+
+    // A settlement line's relative path, by segment, or null when it is outside (SourceSettleScripts' vt_relative and Get-VtRelative):
+    // not base64, empty, rooted, or holding an empty, "." or ".." segment (a Windows host splits on \ too).
+    private string[]? SettleRelative(string line)
+    {
+        string relative;
+        try { relative = Encoding.UTF8.GetString(Convert.FromBase64String(line)); } catch (FormatException) { return null; }
+        string[] parts = Windows ? relative.Split('/', '\\') : relative.Split('/');
+        if (relative.Length == 0 || parts.Any(part => part is "" or "." or "..") || Windows && relative.Length > 1 && relative[1] == ':') return null;
+        return parts;
+    }
+
+    // Whether no link lies on the way from root to root/parts, root included (ProtectedPaths.BashUnlinked, PowerShellUnlinked).
+    private static bool Unlinked(string root, string[] parts)
+    {
+        string current = root;
+        if (IsLink(current)) return false;
+        foreach (string part in parts)
+        {
+            current = Path.Combine(current, part);
+            if (IsLink(Exact(current))) return false;
+        }
+        return true;
+    }
+
+    // SourceSettleScripts.Bash and .PowerShell: refused as a whole (no root or keep, a root that is not a folder, a keep folder that is
+    // not outside the root once links are resolved), else each file moved or named with its reason, then each folder removed once empty.
+    private string Settle(IReadOnlyDictionary<string, string> v)
+    {
+        if (v["root"].Length == 0 || v["keep"].Length == 0) return "VT-SETTLE-REFUSED no source install or keep folder was named\n";
+        // Full paths with this system's separator, as PowerShell's GetFullPath makes them (the \\?\ form takes no /).
+        string Full(string path) => Path.TrimEndingDirectorySeparator(OperatingSystem.IsWindows() ? Path.GetFullPath(path) : path);
+        string root = Full(Local(v["root"])), keep = Full(Local(v["keep"]));
+        if (!Directory.Exists(root) || IsLink(root)) return "VT-SETTLE-REFUSED the source install is not a folder\n";
+        bool inside;
+        try { inside = ProtectedPaths.Contains(root, keep); } catch (IOException) { inside = true; }
+        if (inside) return "VT-SETTLE-REFUSED the keep folder is not outside the source install\n";
+        var reply = new StringBuilder();
+        void Line(string kind, string line, string? reason = null) => reply.Append(kind).Append(' ').Append(line).Append(reason == null ? "" : " " + reason).Append('\n');
+        foreach (string line in v["files"].Split('\n'))
+        {
+            if (line.Length == 0) continue;
+            if (SettleRelative(line) is not { } parts) { Line("VT-NOTMOVED", line, "outside"); continue; }
+            string source = Exact(Path.Combine([root, .. parts])), target = Exact(Path.Combine([keep, .. parts]));
+            if (!Unlinked(root, parts)) { Line("VT-NOTMOVED", line, "link"); continue; }
+            if (!File.Exists(source) && !Directory.Exists(source)) { Line("VT-GONE", line); continue; }
+            if (!File.Exists(source)) { Line("VT-NOTMOVED", line, "not-a-file"); continue; }
+            if (File.Exists(target) || Directory.Exists(target) || IsLink(target)) { Line("VT-NOTMOVED", line, "kept-already"); continue; }
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+                File.Move(source, target);
+                Line("VT-MOVED", line);
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException) { Line("VT-NOTMOVED", line, "move-failed"); }
+        }
+        foreach (string line in v["folders"].Split('\n'))
+        {
+            if (line.Length == 0) continue;
+            if (SettleRelative(line) is not { } parts) { Line("VT-NOTMOVED", line, "outside"); continue; }
+            string folder = Exact(Path.Combine([root, .. parts]));
+            if (!Unlinked(root, parts)) { Line("VT-NOTMOVED", line, "link"); continue; }
+            if (!Directory.Exists(folder)) { Line("VT-GONE", line); continue; }
+            bool removed = false;
+            try { if (!Directory.EnumerateFileSystemEntries(folder).Any()) { Directory.Delete(folder); removed = true; } }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
+            if (removed) Line("VT-RMDIR", line); else Line("VT-NOTMOVED", line, "not-empty");
+        }
+        return reply.Append("VT-SETTLED\n").ToString();
+    }
+
+    // SourceSettleScripts.BashEvidence and .PowerShellEvidence: the refusals that cannot change, then the moved-files folder adopted
+    // into a recovery's folder (or removed once fetched), then the baseline, every delete strictly below the profile's folder.
+    private HostResult Evidence(IReadOnlyDictionary<string, string> v)
+    {
+        string parent = v["parent"], keep = v["keep"], recovered = v.GetValueOrDefault("recovered", "");
+        HostResult Refused(string why) => Ok("VT-SOURCE-REFUSED " + why + "\n");
+        HostResult Failed(string why) => new(HostOutcome.Exited, Windows ? 1 : 3, "", why, TimeSpan.Zero, false);
+        if (parent.Length == 0 || keep.Length == 0) return Refused("no profile folder or moved files folder was named");
+        if (Windows)
+        {
+            // Both sides as full paths with one separator, compared ignoring case; the folder's name as -like 'source-added*'.
+            string Full(string path) => (OperatingSystem.IsWindows() ? Path.GetFullPath(path) : path).Replace('/', '\\').TrimEnd('\\');
+            string full = Full(keep);
+            if (!string.Equals(Full(full[..Math.Max(full.LastIndexOf('\\'), 0)]), Full(parent), StringComparison.OrdinalIgnoreCase))
+                return Refused(keep + " is not directly in " + parent);
+            if (!full[(full.LastIndexOf('\\') + 1)..].StartsWith(ProfileSourceCheck.AddedFolder, StringComparison.OrdinalIgnoreCase))
+                return Refused(keep + " is not a moved files folder");
+        }
+        else
+        {
+            // As dirname and basename: trailing slashes go first; the parent is compared as written.
+            string trimmed = keep.TrimEnd('/');
+            int slash = trimmed.LastIndexOf('/');
+            string folder = slash < 0 ? "." : trimmed[..slash].TrimEnd('/') is { Length: > 0 } up ? up : "/";
+            if (folder != parent) return Refused(keep + " is not directly in " + parent);
+            string leaf = trimmed[(slash + 1)..];
+            if (leaf != ProfileSourceCheck.AddedFolder && !leaf.StartsWith(ProfileSourceCheck.AddedFolder + "-", StringComparison.Ordinal))
+                return Refused(keep + " is not a moved files folder");
+        }
+        string kept = Local(keep), root = Local(parent);
+        if (recovered.Length != 0)
+        {
+            if (NameLink(kept)) return Refused("the moved files folder is a link");
+            if (Directory.Exists(kept))
+            {
+                string to = Windows ? recovered.TrimEnd('\\', '/') + "\\added" : recovered + "/added";
+                if (File.Exists(Local(to)) || Directory.Exists(Local(to)) || IsLink(Local(to))) return Refused(to + " already exists");
+                try
+                {
+                    Directory.CreateDirectory(Local(recovered));
+                    // bash's mv copies a folder to another volume; .NET's (and PowerShell's) Move refuses that.
+                    try { Directory.Move(kept, Local(to)); }
+                    catch (IOException) when (!Windows && Directory.Exists(kept) && !Path.Exists(Local(to))) { CopyDirectory(kept, Local(to)); Directory.Delete(kept, recursive: true); }
+                }
+                catch (Exception error) when (error is IOException or UnauthorizedAccessException) { return Failed(error.Message); }
+            }
+        }
+        else if (v.GetValueOrDefault("added") == "1" && RemoveBelow(kept, root) is { } notRemoved) return Failed(notRemoved);
+        if (v.GetValueOrDefault("baseline") == "1" && RemoveBelow(Path.Combine(root, ProfileSourceCheck.BaselineFile), root) is { } baseline) return Failed(baseline);
+        return Ok("VT-SOURCE-SETTLED\n");
+    }
+
+    // ProtectedPaths.BashRemove and PowerShellRemove: a link is unlinked (never entered) when it stands in root; anything else is
+    // deleted only when it lies strictly below root once links are resolved; a path that is not there is gone. Null when done, else why not.
+    private string? RemoveBelow(string path, string root)
+    {
+        var comparison = Windows ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        path = Path.TrimEndingDirectorySeparator(path);
+        try
+        {
+            string @base = Path.TrimEndingDirectorySeparator(ProtectedPaths.Resolve(root));
+            if (Path.GetPathRoot(@base) is { } volume && Path.TrimEndingDirectorySeparator(volume) == @base) return "Refusing to remove below a volume root: " + path;
+            bool Below(string real, bool orAt) => orAt && real.Equals(@base, comparison) || real.StartsWith(@base + Path.DirectorySeparatorChar, comparison);
+            if (NameLink(path))
+            {
+                if (!Below(Path.TrimEndingDirectorySeparator(ProtectedPaths.Resolve(Path.GetDirectoryName(path)!)), orAt: true)) return "Refusing to remove a link outside " + root + ": " + path;
+                if (OperatingSystem.IsWindows() && Directory.Exists(path)) Directory.Delete(path); else File.Delete(path);
+                return null;
+            }
+            if (!File.Exists(path) && !Directory.Exists(path)) return null;
+            if (!Below(Path.TrimEndingDirectorySeparator(ProtectedPaths.Resolve(path)), orAt: false)) return "Refusing to remove outside " + root + ": " + path;
+            if (!Directory.Exists(path)) { File.Delete(path); return null; }
+            // A read-only entry below keeps the delete from emptying the folder: bash makes each folder writable first (chmod u+rwx),
+            // PowerShell clears the read-only attribute entry by entry; links are never entered.
+            try { Directory.Delete(path, recursive: true); }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException) { Writable(path); Directory.Delete(path, recursive: true); }
+            return null;
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { return error.Message; }
     }
 
     public static IReadOnlyList<(string Kind, string Text)> Spec(string spec) =>

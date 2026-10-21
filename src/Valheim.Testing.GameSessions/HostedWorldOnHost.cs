@@ -107,7 +107,7 @@ internal static class HostedWorldOnHost
     /// </summary>
     internal static Func<string, IHostedWorldSite> ThisMachine(string output, string actor)
     {
-        var host = new LocalGameHost("this machine", HostShell.ThisMachine);
+        var host = LocalGameHost.ThisMachine();
         return worlds =>
         {
             var journal = RunJournal.ThisProcess; // The run this flow journals as it places the world, for every line of the placement.
