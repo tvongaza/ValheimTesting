@@ -460,7 +460,7 @@ public sealed class TargetedRegressionTests : IDisposable
         Directory.Delete(_rig.Install);
     }
 
-    [Theory]
+    [ClientHostTheory]
     [InlineData(false)]
     [InlineData(true)]
     public void ACompletedArmRetainsItsProfileUntilTheConsumerRecordsRetirement(bool scenarioFails)
@@ -488,7 +488,7 @@ public sealed class TargetedRegressionTests : IDisposable
         Assert.Equal(retired, host.Runs.Count(run => run.Script == "cleanup-stage"));
     }
 
-    [Fact] public void AReportWriteFailureStillRetiresTheProfileAndReleasesTheLock()
+    [ClientHostFact] public void AReportWriteFailureStillRetiresTheProfileAndReleasesTheLock()
     {
         var (host, scope) = InProcess(); using var _ = scope;
         var regression = _rig.Regression(_rig.Manifest(), skipHostLock: false);
@@ -504,7 +504,7 @@ public sealed class TargetedRegressionTests : IDisposable
         regression.Remove();
     }
 
-    [Fact] public void ReportWriteAndRetirementFailuresAreBothKeptWithoutAnAutomaticRetry()
+    [ClientHostFact] public void ReportWriteAndRetirementFailuresAreBothKeptWithoutAnAutomaticRetry()
     {
         var (host, scope) = InProcess(); using var _ = scope;
         var regression = _rig.Regression(_rig.Manifest(), skipHostLock: false);
@@ -527,7 +527,7 @@ public sealed class TargetedRegressionTests : IDisposable
         Assert.Empty(host.Claims.Except(host.Releases));
     }
 
-    [Fact] public void PreflightAndRetirementFailuresKeepTheOriginalRefusalAndAttemptCleanupOnce()
+    [ClientHostFact] public void PreflightAndRetirementFailuresKeepTheOriginalRefusalAndAttemptCleanupOnce()
     {
         var (host, scope) = InProcess(); using var _ = scope;
         var inputs = _rig.Manifest();
@@ -546,7 +546,7 @@ public sealed class TargetedRegressionTests : IDisposable
         regression.Remove();
     }
 
-    [Fact] public void AFailedRetirementWhileReplacingAnArmIsNotRetriedByTheStageFailureGuard()
+    [ClientHostFact] public void AFailedRetirementWhileReplacingAnArmIsNotRetriedByTheStageFailureGuard()
     {
         var (host, scope) = InProcess(); using var _ = scope;
         var regression = _rig.Regression(_rig.Manifest(), skipHostLock: false);
@@ -565,7 +565,7 @@ public sealed class TargetedRegressionTests : IDisposable
         Assert.Empty(host.Claims.Except(host.Releases));
     }
 
-    [Fact] public void SuccessfulReplacementDoesNotSuppressCleanupOfTheNewFailedStage()
+    [ClientHostFact] public void SuccessfulReplacementDoesNotSuppressCleanupOfTheNewFailedStage()
     {
         var (host, scope) = InProcess(); using var _ = scope;
         var inputs = _rig.Manifest();
@@ -581,7 +581,7 @@ public sealed class TargetedRegressionTests : IDisposable
         Assert.Empty(host.Claims.Except(host.Releases));
     }
 
-    [Theory]
+    [ClientHostTheory]
     [InlineData(false)]
     [InlineData(true)]
     public void ReplacementIntegrityFailureReleasesTheRetiredProfilesLockOrPreservesItsReleaseFailure(bool releaseFails)
@@ -613,7 +613,7 @@ public sealed class TargetedRegressionTests : IDisposable
         Assert.Empty(host.Claims.Except(host.Releases));
     }
 
-    [Fact] public void TheReportingRemovePreservesCleanupAndWriteFailuresTogether()
+    [ClientHostFact] public void TheReportingRemovePreservesCleanupAndWriteFailuresTogether()
     {
         var (host, scope) = InProcess(); using var _ = scope;
         var regression = _rig.Regression(_rig.Manifest(), skipHostLock: false);
