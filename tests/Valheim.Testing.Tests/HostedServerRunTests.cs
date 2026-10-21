@@ -1189,6 +1189,31 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.Equal(["apart", "profile-storage"], host.Scripts);
     }
 
+    // #612 review 4: every refusal of the storage preflight names the environment, not only its verdict: a runtime inside the
+    // install (the apart check) and a host that cannot answer the probe.
+    [Theory]
+    [InlineData("inside")]
+    [InlineData("transport")]
+    public async Task EveryStoragePreflightRefusalNamesTheInventoryEnvironment(string fault)
+    {
+        var server = NewServer(); var host = NewHost(server);
+        string runtime = fault == "inside" ? Install + "/runs" : Runs;
+        if (fault == "transport") host.Failures["profile-storage"] = FakeServerHost.TransportFailure;
+        var (plan, _) = Write(host);
+        string inventory = Path.Combine(_root, "environments.json");
+        File.WriteAllText(inventory, JsonSerializer.Serialize(new
+        {
+            hosts = new Dictionary<string, object> { ["linux-box"] = new { kind = "ssh", platform = "linux", shell = "bash", destination = "tester@linux-box.example", @lock = "/var/tmp/vt/lock" } },
+            environments = new object[] { new { name = "box-server", host = "linux-box", roles = new[] { "server" }, install = Install, runtime, cliPort = 5577, gamePort = 2456 } },
+        }));
+        // A refusal fails the run (1); a probe whose reply was lost leaves its outcome unknown (3).
+        Assert.Equal(fault == "transport" ? 3 : 1, await PinnedServerRun.MainAsync(["--inventory", inventory, "run", plan, Output], Options(host, server)));
+        var step = Step("check the Linux profile storage");
+        Assert.False(step.GetProperty("Passed").GetBoolean());
+        Assert.StartsWith($"server environment box-server (runtime {runtime}): ", step.GetProperty("Error").GetString());
+        Assert.DoesNotContain(host.Scripts, script => script is "lock" or "profile-seed" or "ship");
+    }
+
     [Fact] public async Task AnotherRunsLockRefusesAfterOnlyTheExactClaimIntentAndAtomicClaimAttempt()
     {
         var host = NewHost(NewServer()); host.HeldBy = "other-runner run-x [0123]";

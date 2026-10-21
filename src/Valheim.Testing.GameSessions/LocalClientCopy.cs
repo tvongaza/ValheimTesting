@@ -99,7 +99,7 @@ internal sealed class LocalClientCopy
         var runtimeRoot = await HostedRuntimeStage.DefaultProfileRootAsync(host, HostedRuntimeKind.Client, source, data, StepTimeout, cancellation).ConfigureAwait(false);
         string root = HostPath.Join(runtimeRoot.Path, "local-clients");
         Console.WriteLine($"profile runtime root: {root} ({runtimeRoot.Reason}).");
-        await HostedRuntimeStage.RequireProfileStorageAsync(host, HostedRuntimeKind.Client, source, root, StepTimeout, cancellation,
+        var storage = await HostedRuntimeStage.RequireProfileStorageAsync(host, HostedRuntimeKind.Client, source, root, StepTimeout, cancellation,
             explicitRuntime: false).ConfigureAwait(false);
         // One folder per profile: a run may prepare two plans for one client name (a client opened without its mod, then with it).
         string parent = Path.Combine(root, "vt-prep-" + journal.RunId + "-" + actor + "-" + Guid.NewGuid().ToString("N")[..8]);
@@ -119,7 +119,7 @@ internal sealed class LocalClientCopy
         Directory.CreateDirectory(root);
         // Journalled before the profile: an interrupted preparation leaves a record of every path it may own.
         journal.AppendLocal(actor, JournalEntry.Of(JournalEntry.CopyIntended, ("runtime", runtime), ("stage", stage), ("parent", parent),
-            ("runtimeKind", "client"), ("launchRoot", HostedRuntimeStage.LaunchRoot(host.Shell.Kind == HostShellKind.PowerShell ? "windows" : "macos", HostedRuntimeKind.Client, source, runtime))));
+            ("runtimeKind", "client"), ("launchRoot", HostedRuntimeStage.LaunchRoot(storage.Platform, HostedRuntimeKind.Client, source, runtime))));
         HostedRuntimeStage.PreparedProfile profile;
         try
         {

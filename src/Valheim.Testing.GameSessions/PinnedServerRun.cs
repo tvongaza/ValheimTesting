@@ -690,7 +690,10 @@ public static class PinnedServerRun
                     // needs the trial link, so a refusal names the environment it chose.
                     string? storage;
                     try { storage = await hosted.PreflightProfileStorageAsync(cancellation.Token).ConfigureAwait(false); }
-                    catch (InvalidOperationException refusal) when (placedEnvironment != null)
+                    // Every refusal of the storage owner: its verdict, the apart check's overlap (ArgumentException), a link it could not
+                    // resolve (IOException) or a host that could not answer (HostOperationException, an InvalidOperationException).
+                    catch (Exception refusal) when (placedEnvironment != null && refusal is InvalidOperationException or ArgumentException or
+                        IOException or PlatformNotSupportedException or UnauthorizedAccessException)
                     {
                         throw new InvalidOperationException($"server environment {placedEnvironment} (runtime {hosted.Role.Runtime}): {refusal.Message}", refusal);
                     }
