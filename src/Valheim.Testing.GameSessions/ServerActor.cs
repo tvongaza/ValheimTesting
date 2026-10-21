@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Valheim.Testing.Game;
 
 namespace Valheim.Testing.GameSessions;
@@ -195,26 +196,39 @@ public sealed class ServerActor : IOwnedServer, IDisposable
         : (Host == null || Host.Kind == GameHostKind.Local) && RuntimeDirectory.Length != 0 ? Path.Combine(RuntimeDirectory, "BepInEx", "LogOutput.log") : null;
 
     /// <summary>
-    /// The current boot's line where the game refused a peer's network version (#860), from the log the game writes to (the plan's
-    /// <c>-logFile</c> file, otherwise BepInEx's), on this machine or the server's host: one read within <paramref name="within"/>,
-    /// never retried. Null when there is none, or the server is scripted or has no plan. For a refused join's reason.
+    /// The current boot's line where the game refused a peer on network version <paramref name="network"/> (#860), from the log the
+    /// game writes to (the plan's <c>-logFile</c> file, otherwise BepInEx's), on this machine (its last <see cref="RefusalLogTail"/>
+    /// bytes) or on the server's host (awaited within <paramref name="within"/>): one read, never retried. Null when there is none,
+    /// or the server is scripted or has no plan. For a refused join's reason.
     /// </summary>
-    internal string? IncompatibleVersionLine(TimeSpan within, CancellationToken cancellation)
+    internal string? IncompatibleVersionLine(uint network, TimeSpan within, CancellationToken cancellation)
     {
         if (_scripted != null || _plan is not { } plan || RuntimeDirectory.Length == 0) return null;
+        var pattern = JoinRefusalText.IncompatibleVersionOf(network);
         if (Host == null || Host.Kind == GameHostKind.Local)
-        {
-            string log = plan.GameLogFile(RuntimeDirectory, WorldDirectory) ?? CrossplayServer.BepInExLog(RuntimeDirectory);
-            if (!File.Exists(log)) return null;
-            using var stream = new FileStream(log, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-            using var reader = new StreamReader(stream);
-            string? last = null;
-            for (string? line; (line = reader.ReadLine()) != null;) if (JoinRefusalText.IncompatibleVersion.IsMatch(line)) last = line;
-            return last;
-        }
+            return LastRefusal(plan.GameLogFile(RuntimeDirectory, WorldDirectory) ?? CrossplayServer.BepInExLog(RuntimeDirectory), pattern, cancellation);
         var result = Host.WaitForLogAsync(plan.GameLogFile(RuntimeDirectory, WorldDirectory) ?? CrossplayServer.HostBepInExLog(RuntimeDirectory), 0,
-            JoinRefusalText.IncompatibleVersion, [], within, cancellation).GetAwaiter().GetResult();
+            pattern, [], within, cancellation).GetAwaiter().GetResult();
         return result.Outcome == HostLogOutcome.Matched ? result.Line : null;
+    }
+
+    /// <summary>How much of a local server log's end the refusal read looks at: the refusal is the latest event of a join just refused.</summary>
+    internal const long RefusalLogTail = 4 << 20;
+
+    /// <summary>The last line of <paramref name="log"/>'s last <see cref="RefusalLogTail"/> bytes that <paramref name="pattern"/> matches; the game may still write it.</summary>
+    internal static string? LastRefusal(string log, Regex pattern, CancellationToken cancellation)
+    {
+        if (!File.Exists(log)) return null;
+        using var stream = new FileStream(log, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        if (stream.Length > RefusalLogTail) stream.Seek(-RefusalLogTail, SeekOrigin.End);
+        using var reader = new StreamReader(stream);
+        string? last = null;
+        for (string? line; (line = reader.ReadLine()) != null;)
+        {
+            cancellation.ThrowIfCancellationRequested();
+            if (pattern.IsMatch(line)) last = line;
+        }
+        return last;
     }
 
     /// <summary>

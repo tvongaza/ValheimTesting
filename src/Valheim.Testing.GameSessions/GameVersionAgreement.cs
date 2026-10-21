@@ -55,7 +55,7 @@ internal static class GameVersionAgreement
             assembly = InstallPins.GameAssembly(install);
             bytes = await ReadHereAsync(assembly, assembly, "this machine", cancellation).ConfigureAwait(false);
         }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException)
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException or ArgumentException or NotSupportedException)
         {
             return new(null, null, error.Message);
         }

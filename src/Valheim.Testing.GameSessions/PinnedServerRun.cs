@@ -654,7 +654,7 @@ public static class PinnedServerRun
                 await report.StepAsync(StepPhase.Preflight, "read the declared clients' game versions", async () =>
                 {
                     for (int i = 0; i < owned.Count; i++)
-                        await builds.AdmitInPlaceAsync(owned.Count == 1 ? "client" : "client" + (i + 1).ToString(CultureInfo.InvariantCulture),
+                        await builds.AdmitInPlaceAsync(owned.Count == 1 ? "declared client" : "declared client " + (i + 1).ToString(CultureInfo.InvariantCulture),
                             owned[i].Install, cancellation.Token).ConfigureAwait(false);
                 }).ConfigureAwait(false);
             hosted = HostedServerRun.Create(environment, plan, options.Name, options.Hooks, prepared: prepared != null,

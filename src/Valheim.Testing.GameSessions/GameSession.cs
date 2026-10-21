@@ -263,7 +263,7 @@ public sealed class GameSession : IAsyncDisposable
     // What a client joins and its own build, as this run read them before staging, for a refused join's reason (#860).
     private void Target(ClientRunPlan plan, string actor)
     {
-        if (Builds?.Of(actor) is { } own) plan.PreparedBuild = own;
+        plan.PreparedBuild = Builds?.Of(actor); // never a build an earlier run read; a copy made for this open sets its own
         plan.PreparedJoinTarget = plan.JoinsHost && Host is { } host ? new JoinTarget(host.Name, Builds?.Of(host.Name))
             : Server is { } server ? new JoinTarget("server", Builds?.Of("server"), server.IncompatibleVersionLine) : null;
     }

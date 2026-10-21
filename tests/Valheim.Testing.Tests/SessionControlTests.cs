@@ -287,6 +287,8 @@ public class SessionControlTests
         var crossplay = JoinPlan("owned"); crossplay.Crossplay = true;
         Assert.Contains("lobby", Assert.Throws<ArgumentException>(() => session.JoinWorld(crossplay, "4242")).Message);
         Assert.Contains("by address", Assert.Throws<ArgumentException>(() => session.JoinWorld(JoinPlan("owned"), "4242", new CrossplayLobby("player", "lobby"))).Message);
+        // A lobby's player id is one token, checked before anything is sent, whichever join takes it.
+        Assert.Contains("single tokens", Assert.Throws<ArgumentException>(() => session.JoinWorld(crossplay, "4242", new CrossplayLobby("A B", "lobby"))).Message);
         Assert.Throws<ArgumentException>(() => session.JoinWorld(JoinPlan("owned"), "not-a-uid"));
         Assert.All(client.Commands, c => Assert.StartsWith("cli_expect", c));
     }

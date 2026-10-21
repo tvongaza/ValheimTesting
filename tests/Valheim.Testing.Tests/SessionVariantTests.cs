@@ -244,7 +244,7 @@ public sealed class SessionVariantTests : IDisposable
     }
 
     // #860: a join the game refuses names why, read once at the menu, with what the run read of both installs before staging.
-    private static ClientRunPlan RefusedPlan(GameBuild? client, GameBuild? server, Func<TimeSpan, CancellationToken, string?>? log = null) => new()
+    private static ClientRunPlan RefusedPlan(GameBuild? client, GameBuild? server, Func<uint, TimeSpan, CancellationToken, string?>? log = null) => new()
     {
         Mode = "attached", Install = "", Port = 5556, Join = "127.0.0.1:2456", Character = "Tester",
         Pins = new() { ["valheimCLI.valheimCLI"] = new string('a', 32) },
@@ -257,11 +257,12 @@ public sealed class SessionVariantTests : IDisposable
     {
         var transport = Client("ErrorVersion");
         using var actor = transport.Actor("client", Menu);
-        int logReads = 0;
-        var error = Assert.Throws<InvalidOperationException>(() => new SessionControl(actor).JoinWorld(RefusedPlan(V20, V17, (_, _) => { logReads++; return ServerLog; }), "7"));
+        int logReads = 0; uint? soughtNetwork = null;
+        var error = Assert.Throws<InvalidOperationException>(() => new SessionControl(actor).JoinWorld(RefusedPlan(V20, V17, (network, _, _) => { logReads++; soughtNetwork = network; return ServerLog; }), "7"));
+        Assert.Equal(41u, soughtNetwork); // only this client's network version is looked for in the server's log
         Assert.Equal("valheim.session/join failed: join_failed: The game refused the session transition. The game refused the join with ErrorVersion (3): " +
             "this client's install is Valheim 1.0.20 (network version 41) and server's is Valheim 1.0.17 (network version 40); Valheim refuses a join across " +
-            "network versions. Update the older install (Steam, or SteamCMD for a dedicated server). server's log refused a peer at 1.0.20 (network version 41) " +
+            "network versions. Update the older install (Steam, or SteamCMD for a dedicated server). The log of server refused this client's 1.0.20 (network version 41) " +
             "as itself 1.0.17 (network version 40). Nothing was retried; the client is back at its menu.", error.Message);
         Assert.DoesNotContain("76561190000000000", error.Message); // the peer's endpoint can be a Steam ID
         Assert.Equal("ErrorVersion", error.Data["connection.status"]);
@@ -286,15 +287,16 @@ public sealed class SessionVariantTests : IDisposable
         using var actor = transport.Actor("client", Menu);
         var error = Assert.Throws<InvalidOperationException>(() => new SessionControl(actor).JoinWorld(RefusedPlan(null, V17), "7"));
         Assert.Contains("the network versions of this client and server were not both read before staging, so this is Valheim's network version check or a mod's own", error.Message);
-        // The server's own log line proves a game mismatch; it is this client's when its version is the refused one.
-        Assert.StartsWith("Valheim's network version check refused a peer. server's log refused a peer at 1.0.20",
+        // The server's own refusal of this client's network version proves a game mismatch when the server's install was not read.
+        Assert.StartsWith("Valheim refused this client's network version 41. The log of server refused this client's 1.0.20",
+            JoinRefusalText.Explain(GameConnectionStatus.ErrorVersion, V20, new JoinTarget("server", null), ServerLog).Split(": ", 2)[1]);
+        // Without this client's version no log line is attributed to it.
+        Assert.StartsWith("the network versions of this client and server were not both read",
             JoinRefusalText.Explain(GameConnectionStatus.ErrorVersion, null, new JoinTarget("server", null), ServerLog).Split(": ", 2)[1]);
-        Assert.StartsWith("Valheim refused this client's network version 41. server's log",
-            JoinRefusalText.Explain(GameConnectionStatus.ErrorVersion, V20 with { NetworkVersion = 41 }, new JoinTarget("server", null), ServerLog).Split(": ", 2)[1]);
     }
 
     [Theory]
-    [InlineData("ErrorPassword", "the password did not match; check the plan's passwordVariable")]
+    [InlineData("ErrorPassword", "the password did not match the server's")]
     [InlineData("ErrorFull", "the server is full.")]
     [InlineData("ErrorBanned", "the ban list or permitted list refused this client.")]
     public void AnotherRefusalIsExplainedWithoutVersionsOrALogRead(string status, string meaning)
@@ -302,7 +304,7 @@ public sealed class SessionVariantTests : IDisposable
         var transport = Client(status);
         using var actor = transport.Actor("client", Menu);
         int logReads = 0;
-        var error = Assert.Throws<InvalidOperationException>(() => new SessionControl(actor).JoinWorld(RefusedPlan(V20, V17, (_, _) => { logReads++; return ServerLog; }), "7"));
+        var error = Assert.Throws<InvalidOperationException>(() => new SessionControl(actor).JoinWorld(RefusedPlan(V20, V17, (_, _, _) => { logReads++; return ServerLog; }), "7"));
         Assert.Contains($"The game refused the join with {status} (", error.Message);
         Assert.Contains(meaning, error.Message);
         Assert.DoesNotContain("network version", error.Message);
@@ -327,12 +329,29 @@ public sealed class SessionVariantTests : IDisposable
         Assert.Equal(0, transport.Count("cli_connection_status"));
     }
 
+    [Fact] public void TheServersLogIsReadForThisClientsRefusalOnlyAndOnlyFromItsEnd()
+    {
+        string log = Path.Combine(_root, "LogOutput.log");
+        File.WriteAllLines(log, [
+            "Peer 1 has incompatible version, mine:1.0.17 (network version 40)   remote 1.0.16 (network version 39)",
+            ServerLog,
+            "Peer 3 has incompatible version, mine:1.0.17 (network version 40)   remote 1.0.16 (network version 39)",
+        ]);
+        Assert.Equal(ServerLog, ServerActor.LastRefusal(log, JoinRefusalText.IncompatibleVersionOf(41), CancellationToken.None));
+        Assert.Null(ServerActor.LastRefusal(log, JoinRefusalText.IncompatibleVersionOf(42), CancellationToken.None));
+        Assert.Null(ServerActor.LastRefusal(log + ".missing", JoinRefusalText.IncompatibleVersionOf(41), CancellationToken.None));
+        // A long log is read from its last RefusalLogTail bytes only: a refusal before them is not this join's.
+        using (var writer = File.AppendText(log)) writer.Write(new string('x', (int)ServerActor.RefusalLogTail) + "\n");
+        Assert.Null(ServerActor.LastRefusal(log, JoinRefusalText.IncompatibleVersionOf(41), CancellationToken.None));
+    }
+
     [Fact] public void ACrossplayJoinThatReturnsToTheMenuWithAnErrorFails()
     {
         var transport = CrossplayClient(failWith: "ErrorConnectFailed");
         using var actor = transport.Actor("client", Menu);
         var error = Assert.Throws<WaitFailedException>(() => new SessionControl(actor).JoinCrossplay("ENTITY42", "Tester", "7", Menu, TimeSpan.FromSeconds(10)));
-        Assert.Contains("the crossplay join failed: the game refused the join with ErrorConnectFailed (5): nothing answered at the join address", error.Message);
+        Assert.Contains("the crossplay join failed: the game refused the join with ErrorConnectFailed (5): the connection to the server or host failed", error.Message);
+        Assert.Equal("ErrorConnectFailed", error.Data["connection.status"]); // classified as an address join's refusal is
         Assert.Equal(1, transport.Count("cli_connect_playfab_user"));
     }
 
