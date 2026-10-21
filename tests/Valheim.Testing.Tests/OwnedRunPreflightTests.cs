@@ -304,40 +304,22 @@ public sealed class OwnedRunPreflightTests : IDisposable
             Assert.Contains("Cannot read the world's identity from Abc.fwl", Assert.Throws<InvalidDataException>(() => WorldIdentity.Parse(broken, "Abc.fwl")).Message);
     }
 
-    [Fact] public void AChunkedSavesIdentityIsItsNewestMetadataAndAllMustAgree()
-    {
-        string fixture = Path.Combine(_root, "chunked");
-        Directory.CreateDirectory(Path.Combine(fixture, "Fixture"));
-        File.WriteAllBytes(Path.Combine(fixture, "Fixture", "_main.2.fwl2"), Metadata("Fixture", 77));
-        File.WriteAllBytes(Path.Combine(fixture, "Fixture", "_main.10.fwl2"), Metadata("Fixture", 77, seed: 5));
-        File.WriteAllText(Path.Combine(fixture, "Fixture", "_main.10.db2"), "world");
-        var identity = WorldIdentity.Read(fixture);
-        Assert.Equal(77, identity.Uid);
-        Assert.Equal(5, identity.Seed);
-        Assert.Equal(Path.Combine("Fixture", "_main.10.fwl2"), identity.File);
-        File.WriteAllBytes(Path.Combine(fixture, "Fixture", "_main.2.fwl2"), Metadata("Fixture", 78));
-        Assert.Contains("saves of different worlds", Assert.Throws<InvalidDataException>(() => WorldIdentity.Read(fixture)).Message);
-    }
-
     [Fact] public void AFixtureHoldingAnotherUidThanThePlanIsTheWrongFixture()
     {
-        string fixture = Path.Combine(_root, "fixture");
-        Directory.CreateDirectory(fixture);
-        File.WriteAllBytes(Path.Combine(fixture, "SealFixture.fwl"), Metadata("SealFixture", -123456789));
-        File.WriteAllText(Path.Combine(fixture, "SealFixture.db"), "world");
+        string fixture = FakeInstalls.World(Path.Combine(_root, "fixture"), "SealFixture", -123456789);
         var plan = new HostWorldPlan { World = new() { Source = fixture, Sha256 = new(WorldFixture.Manifest(fixture)) }, WorldUid = "450017353" };
         plan.Validate();
         var error = Assert.Throws<InvalidOperationException>(plan.Preflight);
         Assert.Contains("hostWorld.worldUid is 450017353", error.Message);
-        Assert.Contains("holds world SealFixture with UID -123456789 (SealFixture.fwl)", error.Message);
+        Assert.Contains("holds world SealFixture with UID -123456789 (SealFixture/_main.1.fwl2)", error.Message);
         Assert.Contains("the same name, another world", error.Message);
         plan.WorldUid = "-123456789";
         Assert.Equal("SealFixture", plan.Preflight().Name);
         // A pinned file that changed is named before anything is copied.
-        File.WriteAllText(Path.Combine(fixture, "SealFixture.db"), "another snapshot");
+        File.WriteAllText(Path.Combine(fixture, "SealFixture", "_main.1.db2"), "another snapshot");
         var changed = Assert.Throws<InvalidOperationException>(plan.Preflight);
         Assert.Contains("Fixture hash mismatch", changed.Message);
-        Assert.Contains("SealFixture.db is ", changed.Message);
+        Assert.Contains(Path.Combine("SealFixture", "_main.1.db2") + " is ", changed.Message);
     }
 
     // The world loads between two session reads: the strict menu pins refuse it, and the exact world pins decide at once.

@@ -12,13 +12,14 @@ Choose what you want to prove. This page walks through the fast logic test: the 
 
 ### 1. Run the example
 
-You need the .NET 10 SDK and NuGet.org access. Create a directory outside the ValheimTesting checkout. Download these three files from one repository revision and save them at the listed destinations:
+You need the .NET 10 SDK and NuGet.org access. Create a directory outside any ValheimTesting checkout. Download these files from one repository revision and save them at the listed destinations:
 
 | Source | Destination | Purpose |
 |---|---|---|
 | [DrySiteRule.cs](../examples/ModWithTests/MyMod/DrySiteRule.cs) | `MyMod/DrySiteRule.cs` | The production placement decision |
 | [MyMod.Tests.csproj](../examples/ModWithTests/MyMod.Tests/MyMod.Tests.csproj) | `MyMod.Tests/MyMod.Tests.csproj` | Links the source and pins the doubles package |
 | [DrySiteTests.cs](../examples/ModWithTests/MyMod.Tests/DrySiteTests.cs) | `MyMod.Tests/DrySiteTests.cs` | Inputs, assertions and static-state restoration |
+| [NuGet.Config](../examples/TargetedRegression/consumer/NuGet.Config) | `NuGet.Config` | NuGet.org as the only package source |
 
 From that new directory, run:
 
@@ -32,9 +33,11 @@ Passed!  - Failed:     0, Passed:     5, Skipped:     0, Total:     5, Duration:
 
 The project restores `Valheim.Testing.Doubles` from NuGet.org. It needs no toolkit checkout. The five tests cover wet ground, the allowed boundary, dry ground, horizontal coordinates and restoring the previous world after a failure.
 
+Now prove the tests can fail: change `>=` to `>` in `MyMod/DrySiteRule.cs` and run the command again. The exact-boundary case fails. Restore the rule.
+
 ### 2. Add the test project to your mod
 
-Keep `MyMod.Tests` beside your existing mod project. Change its `Compile Include` to one source file of your mod and retain the pinned test package:
+Copy `MyMod.Tests/` next to your existing mod project. Change its `Compile Include` to one source file of your mod and retain the pinned test package:
 
 ```xml
 <Compile Include="../YourMod/YourRule.cs" Link="Mod/YourRule.cs" />
@@ -68,7 +71,7 @@ Copy the example's [workflow](../examples/ModWithTests/.github/workflows/tests.y
 
 ## Check the result
 
-Change `>=` to `>` in your copied `MyMod/DrySiteRule.cs`. Run the command again: the exact-boundary case must fail. Restore the rule afterwards.
+Break your own rule on purpose, for example by flipping a comparison, and run the tests again. At least one must fail; if none does, the tests do not cover that decision. Restore the rule.
 
 This checks the production decision on declared inputs. [Choose a test layer](guides/choose-a-test-layer.md) explains what needs native gameplay, persistence or client observations.
 

@@ -28,7 +28,7 @@ If the bake succeeds, the command prints `Baked fixture: ` and the destination, 
 | Option | Meaning | Required |
 |---|---|---|
 | `--server-only` | Runs the owned server with no client. | Yes |
-| `--world-fixture DIR` | Source: exactly one named world, directly or under `worlds_local/`. Without it, the packaged smoke world. | No |
+| `--world-fixture DIR` | Source: exactly one complete Valheim 1.0 world, directly or under `worlds_local/` ([what a fixture holds](game-preflight.md#what-the-preflight-catches)). It is checked before anything is staged. Without it, the packaged smoke world. | No |
 | `--bake-fixture NEW_DIR` | Destination of the baked fixture. It must not exist. | Yes |
 | `--before-save-command TEXT` with `--before-save-line PREFIX` | One-time change. Runs once, before the assertion. | No. Give both. |
 | `--assert-command TEXT` with `--assert-line PREFIX` | One strict pinned command after the world accepts connections. | Yes. Give both. |

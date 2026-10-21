@@ -6,7 +6,7 @@
   href: guides/run-an-ab-regression.md
 - name: Extend a gameplay test
   items:
-  - name: Check startup and world readiness
+  - name: Your first server load check
     href: tutorials/first-server-load-check.md
   - name: Save, restart and rejoin
     href: guides/test-save-restart-rejoin.md

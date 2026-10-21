@@ -27,8 +27,11 @@
       "world": {
         "source": "<full path of the host fixture world folder>",
         "sha256": {
-          "HostFixture.fwl": "<sha256>",
-          "HostFixture.db": "<sha256>"
+          "HostFixture/_main.1.fwl2": "<sha256>",
+          "HostFixture/_main.1.db2": "<sha256>",
+          "HostFixture/_main.1.chunks": "<sha256>",
+          "HostFixture/_main.1.ok": "<sha256>",
+          "HostFixture/00_00__0_1.chunk": "<sha256>"
         }
       },
       "worldUid": "<the host fixture world's UID>",

@@ -24,6 +24,7 @@ round.Step("exactly one marker stands there in the host's saved objects", () => 
 ## You need
 
 - The .NET 10 SDK and the [Windows native prerequisites](../reference/platforms.md#windows).
+- Valheim and the free Valheim Dedicated Server installed through Steam, with the Steam client signed in. `env preflight` checks both installs.
 - Permission to launch Valheim with a disposable fixture and character.
 - A new directory outside any ValheimTesting checkout.
 
