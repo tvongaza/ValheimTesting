@@ -16,9 +16,10 @@ public sealed class HostedWorldOnHostTests : IDisposable
     private HostWorldPlan Plan()
     {
         string fixture = Path.Combine(_root, "fixture");
-        string flat = FakeInstalls.World(Path.Combine(_root, "flat"));
+        // A world never saved: its lone _main.0.fwl2.
         Directory.CreateDirectory(Path.Combine(fixture, "Campaign"));
-        if (!File.Exists(Path.Combine(fixture, "Campaign", "_main.0.fwl2"))) File.Copy(Path.Combine(flat, "Campaign.fwl"), Path.Combine(fixture, "Campaign", "_main.0.fwl2"));
+        if (!File.Exists(Path.Combine(fixture, "Campaign", "_main.0.fwl2")))
+            File.WriteAllBytes(Path.Combine(fixture, "Campaign", "_main.0.fwl2"), FakeInstalls.Metadata("Campaign", 4242, needsDb: false));
         return new() { World = new() { Source = fixture, Sha256 = new(WorldFixture.Manifest(fixture)) }, WorldUid = "4242" };
     }
     private HostedWorldOnHost.Site Site() => new(_host, "pc", Worlds, "/runs/run-1/host-world-stage", "/runs/run-1/host-world",

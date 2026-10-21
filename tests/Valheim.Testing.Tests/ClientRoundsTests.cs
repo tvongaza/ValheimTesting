@@ -31,8 +31,7 @@ public sealed class ClientRoundsTests : IDisposable
     public ClientRoundsTests()
     {
         Directory.CreateDirectory(Output); Directory.CreateDirectory(Fixture); Directory.CreateDirectory(Worlds);
-        File.WriteAllBytes(Path.Combine(Fixture, Name + ".fwl"), OwnedRunPreflightTests.Metadata(Name, long.Parse(WorldUid)));
-        File.WriteAllText(Path.Combine(Fixture, Name + ".db"), "fixture world");
+        FakeInstalls.World(Fixture, Name, long.Parse(WorldUid));
         File.WriteAllText(Path.Combine(Worlds, "MyWorld.fwl"), "the user's world"); // Never touched.
         File.WriteAllText(Path.Combine(Worlds, "MyWorld.db"), "the user's world");
         bool joined = false;
@@ -150,7 +149,7 @@ public sealed class ClientRoundsTests : IDisposable
                 .Extension(leaveOffered ? "valheim.session" : "other.extension", "leave", _ =>
                 {
                     Hosting = false;
-                    File.WriteAllText(Path.Combine(worlds, Name + ".db.old"), "backup");
+                    File.WriteAllText(Path.Combine(worlds, Name, "_main.2.ok"), "saved on leave");
                     return new { source = "session-leave", complete = true, action = "leave" };
                 }, readOnly: false)
                 .On("cli_set_player_safety true", _ => ScriptedTransport.Ok("OK: playerSafety enabled=True god=True ghost=True debugMode=True cheats=True ghostReplicated=True"));
@@ -515,7 +514,7 @@ public sealed class ClientRoundsTests : IDisposable
         Assert.Equal(1, _process.Stops);
         // The client failed in the world and may still run it: its world stays where it is, and the report names it.
         Assert.Equal(new[] { "stop only the owned client" }, After(report, "first: measure"));
-        if (hosted) { Assert.Contains(Name + ".fwl", OurWorldFiles()); Assert.Contains(Name, report.Provenance["hostWorldLeftInPlace"]); }
+        if (hosted) { Assert.Contains(Name, OurWorldFiles()); Assert.Contains(Name, report.Provenance["hostWorldLeftInPlace"]); }
     }
 
     // ---- What each kind of client accepts ----
@@ -571,7 +570,7 @@ public sealed class ClientRoundsTests : IDisposable
         RunHosted(report, HostPlan(), game, Measure(also: round =>
         {
             Assert.Same(round.Server, round.Client); // The host is both.
-            placedDuringRun.Add(File.Exists(Path.Combine(Worlds, Name + ".fwl")));
+            placedDuringRun.Add(File.Exists(Path.Combine(Worlds, Name, "_main.1.fwl2")));
         }));
 
         Assert.True(report.Passed, string.Join("; ", report.Steps.Where(s => !s.Passed).Select(s => s.Name + ": " + s.Error)));
@@ -610,7 +609,7 @@ public sealed class ClientRoundsTests : IDisposable
         Assert.Equal("the user's world", File.ReadAllText(Path.Combine(Worlds, "MyWorld.fwl")));
         string evidence = report.Provenance["hostWorldEvidence"];
         Assert.Equal(Path.Combine(Output, "host-world"), evidence);
-        foreach (string file in new[] { Name + ".fwl", Name + ".db", Name + ".db.old" }) Assert.True(File.Exists(Path.Combine(evidence, file)), file);
+        foreach (string file in new[] { "_main.1.fwl2", "_main.1.db2", FakeInstalls.ChunkFile, "_main.2.ok" }) Assert.True(File.Exists(Path.Combine(evidence, Name, file)), file);
         // The verified input copy stays beside it, as the server runner keeps its fixture copies.
         Assert.Single(Directory.GetDirectories(Output, "valheim-test-*"));
         Assert.True(File.Exists(Path.Combine(Output, "first-reading.json"))); Assert.True(File.Exists(Path.Combine(Output, "after-restart-reading.json")));
@@ -631,7 +630,7 @@ public sealed class ClientRoundsTests : IDisposable
             var report = new ScenarioReport("host");
             Assert.Throws<OperationCanceledException>(() => RunHosted(report, HostPlan("attach"), new Game(Worlds), round => round.Step("hold until the runner is killed", () =>
             {
-                File.WriteAllText(Path.Combine(Worlds, Name + ".db"), "saved by the game");
+                File.WriteAllText(Path.Combine(Worlds, Name, "_main.2.db2"), "saved by the game");
                 throw new OperationCanceledException("the runner was killed");
             })));
             Assert.Contains(Name, report.Provenance["hostWorldLeftInPlace"]);
@@ -660,7 +659,7 @@ public sealed class ClientRoundsTests : IDisposable
         Assert.Empty(OurWorldFiles());
         Assert.Equal(new[] { "MyWorld.db", "MyWorld.fwl" }, Directory.EnumerateFileSystemEntries(Worlds).Select(Path.GetFileName).Order(StringComparer.Ordinal));
         Assert.Equal("the user's world", File.ReadAllText(Path.Combine(Worlds, "MyWorld.fwl")));
-        Assert.Equal("saved by the game", File.ReadAllText(Path.Combine(Output, runId, "host-world", Name + ".db")));
+        Assert.Equal("saved by the game", File.ReadAllText(Path.Combine(Output, runId, "host-world", Name, "_main.2.db2")));
         Assert.Equal(JournalRunState.Ended, (await Status()).State);
     }
 
@@ -680,9 +679,9 @@ public sealed class ClientRoundsTests : IDisposable
                 Assert.True(report.Passed, run + ": " + string.Join("; ", report.Steps.Where(s => !s.Passed).Select(s => s.Name + ": " + s.Error)));
                 Assert.Empty(OurWorldFiles());
             }
-        foreach (string evidence in new[] { "host-world", "host-world-2" }) Assert.True(File.Exists(Path.Combine(Output, evidence, Name + ".fwl")), evidence);
-        Assert.True(File.Exists(Path.Combine(Output, runId, "host-world", Name + ".fwl")));
-        Assert.True(File.Exists(Path.Combine(Output, "placement-2", runId, "host-world", Name + ".fwl")));
+        foreach (string evidence in new[] { "host-world", "host-world-2" }) Assert.True(File.Exists(Path.Combine(Output, evidence, Name, "_main.1.fwl2")), evidence);
+        Assert.True(File.Exists(Path.Combine(Output, runId, "host-world", Name, "_main.1.fwl2")));
+        Assert.True(File.Exists(Path.Combine(Output, "placement-2", runId, "host-world", Name, "_main.1.fwl2")));
     }
 
     [ClientHostFact] public void HostingClientCannotAdvertiseWorldPinsBeforeItsFixtureLoads()
@@ -772,7 +771,7 @@ public sealed class ClientRoundsTests : IDisposable
         Assert.Equal("detach from the operator's client", report.Steps[^1].Name);
         Assert.True(game.Transport.Disposed); Assert.Equal(0, _process.Stops);
         // The operator's client may still host it, so the world stays and the report names it.
-        Assert.Contains(Name + ".fwl", OurWorldFiles());
+        Assert.Contains(Name, OurWorldFiles());
         Assert.Contains(Name, report.Provenance["hostWorldLeftInPlace"]);
         Assert.False(report.Provenance.ContainsKey("hostWorldEvidence"));
     }
@@ -878,31 +877,6 @@ public sealed class ClientRoundsTests : IDisposable
         Assert.Throws<ArgumentException>(() => RunHosted(new ScenarioReport("host"), plan, new Game(Worlds), Measure()));
         Assert.Equal(0, _opens);
     }
-
-    [Theory]
-    [InlineData(new[] { "HostFixture.fwl", "HostFixture.db", "HostFixture.fwl.old", "HostFixture_backup_auto-1.db" }, "HostFixture")]
-    [InlineData(new[] { "Abc.fwl", "Abc.db/chunk-0" }, "Abc")]
-    // Valheim 1.0 saves a world as a directory of chunks (the layout a 1.0.16 server wrote this fixture in).
-    [InlineData(new[] { "LifecycleFixture/_main.1.chunks", "LifecycleFixture/_main.1.db2", "LifecycleFixture/_main.1.fwl2", "LifecycleFixture/_main.1.ok" }, "LifecycleFixture")]
-    [InlineData(new[] { "Abc\\_main.12.fwl2", "Abc\\_main.12.db2" }, "Abc")]
-    public void TheHostedWorldIsNamedByItsFixture(string[] files, string name) => Assert.Equal(name, HostedWorld.NameOf(files));
-
-    public static TheoryData<string[]> NotOneNamedWorld => new()
-    {
-        new[] { "A.fwl", "B.fwl", "A.db" }, // Two worlds.
-        new[] { "HostFixture.db" }, // No world metadata.
-        new[] { "HostFixture.fwl" }, // No world data: the game would generate it afresh.
-        new[] { "HostFixture.fwl", "HostFixture.db", "readme.txt" }, // A file that is not the world's.
-        new[] { "Ab.fwl", "Ab.db" }, // Too short a name for the game.
-        new[] { "My World.fwl", "My World.db" }, // Not one command token.
-        new[] { "sub/HostFixture.fwl", "HostFixture.db" }, // The metadata is not at the root.
-        new[] { "HostFixture/_main.1.fwl2", "HostFixture.fwl", "HostFixture.db" }, // Two worlds: a chunked save and the older pair.
-        new[] { "A1c/_main.1.fwl2", "B2c/_main.1.fwl2" }, // Two chunked worlds.
-        new[] { "HostFixture/_main.1.fwl2", "readme.txt" }, // A file that is not the world's.
-        new[] { "HostFixture/deeper/_main.1.fwl2" }, // The chunked metadata is not directly in the world's directory.
-    };
-    [Theory] [MemberData(nameof(NotOneNamedWorld))]
-    public void AFixtureThatIsNotOneNamedWorldIsRefused(string[] files) => Assert.Throws<ArgumentException>(() => HostedWorld.NameOf(files));
 
 }
 

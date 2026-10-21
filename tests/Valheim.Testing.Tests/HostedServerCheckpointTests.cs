@@ -25,7 +25,7 @@ public sealed partial class HostedServerRunTests
         {
             var actor = run.GameSession.Server!;
             var (original, hashes) = actor.OriginalFixture!.Value;
-            string worldFile = Path.Combine(host.Local(actor.WorldDirectory), "worlds_local", "Test.db");
+            string worldFile = Path.Combine(host.Local(actor.WorldDirectory), "worlds_local", "Test", "_main.1.db2");
             File.WriteAllText(worldFile, "round changed world");
             actor.StopCheckpoint();
             Assert.Null(actor.CurrentProcess);
@@ -34,12 +34,12 @@ public sealed partial class HostedServerRunTests
             string archive = Path.Combine(Output, "round-one"); Directory.CreateDirectory(archive);
             actor.ArchiveCheckpoint(archive, CancellationToken.None);
             DetachedCheckpoints.VerifyArchive(archive);
-            Assert.Equal("round changed world", File.ReadAllText(Path.Combine(archive, "world", "worlds_local", "Test.db")));
+            Assert.Equal("round changed world", File.ReadAllText(Path.Combine(archive, "world", "worlds_local", "Test", "_main.1.db2")));
             Assert.Single(host.Claims); Assert.Empty(host.Releases);
             Assert.True(Directory.Exists(host.Local(actor.RuntimeDirectory)));
             if (drift != "none")
             {
-                string changedFile = drift == "source" ? Path.Combine(original, "worlds_local", "Test.db") : worldFile;
+                string changedFile = drift == "source" ? Path.Combine(original, "worlds_local", "Test", "_main.1.db2") : worldFile;
                 File.WriteAllText(changedFile, "source drift");
                 Assert.Throws<InvalidOperationException>(() => actor.RestoreCheckpoint(original, hashes, archive, CancellationToken.None));
                 Assert.Equal(drift == "source" ? "round changed world" : "source drift", File.ReadAllText(worldFile));
@@ -48,7 +48,7 @@ public sealed partial class HostedServerRunTests
             else
             {
                 actor.RestoreCheckpoint(original, hashes, archive, CancellationToken.None);
-                Assert.Equal("world", File.ReadAllText(worldFile));
+                Assert.Equal("fixture", File.ReadAllText(worldFile));
                 WorldFixture.Verify(original, hashes);
                 actor.StartCheckpoint(CancellationToken.None);
                 Assert.Equal(2, actor.StartedProcesses.Count);
