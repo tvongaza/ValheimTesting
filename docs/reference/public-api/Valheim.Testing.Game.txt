@@ -702,11 +702,14 @@ static class Valheim.Testing.Game.FileHash
   method static System.Threading.Tasks.Task`1<System.String> Sha256Async(System.String path, System.Threading.CancellationToken cancellation = null)
 static class Valheim.Testing.Game.FixtureLayout
   field const System.String ExpectedTree = "<fixture root>/
-  <WorldName>/          one Valheim 1.0 chunked save, exactly as the game wrote it
-    _main.<n>.fwl2
+  <WorldName>/                     one Valheim 1.0 world, exactly as the game saved it
+    _main.<n>.fwl2                 one save: all four _main.<n> files
     _main.<n>.db2
-    ...                 (its chunk files)
-or, from an older save, <WorldName>.fwl and <WorldName>.db directly in <fixture root>. Nothing else."
+    _main.<n>.chunks
+    _main.<n>.ok
+    *.chunk                        the chunk files _main.<n>.chunks lists
+  <WorldName>_backup_auto-<date>/  optional: the game's backups of the same world (also _backup_<date>)
+Nothing else. A pre-1.0 <WorldName>.fwl and .db: open and save the world once in Valheim 1.0 or later."
   method static Valheim.Testing.Game.WorldIdentity Discover(System.String root, System.String worldUid)
 sealed class Valheim.Testing.Game.GameActor : System.IDisposable
   method System.String SaveConfirmed()
@@ -1664,6 +1667,7 @@ class Valheim.Testing.Game.ServerRunPlan
   method System.Void RequireScenario(params System.String[] known)
   method System.Void ValidateServerPlan(System.Collections.Generic.IEnumerable`1<System.String> requiredPlugins, System.String sessionTokenVariable)
   method Valheim.Testing.Game.StartupEvents DedicatedStartupEvents(System.String runtime)
+  method Valheim.Testing.Game.WorldIdentity PreflightWorld()
   method static System.String ExecutableFor(Valheim.Testing.Game.ServerPlatform platform)
   method static System.Void CheckLaunchHost(Valheim.Testing.Game.ServerPlatform platform, System.Boolean windowsHost)
   method static System.Void CheckLaunchHost(Valheim.Testing.Game.ServerPlatform platform, Valheim.Testing.Game.ServerPlatform host)
