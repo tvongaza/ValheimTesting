@@ -10,23 +10,62 @@ Use this when a coding agent works in your mod's repository and you want it to a
 
 ### 1. Copy the skill into your mod repository
 
-Run from your mod repository's root:
+You need the GitHub CLI (`gh`), signed in. From your mod repository's root, resolve the latest stable release once and download its skill.
 
-```sh
-mkdir -p .agents/skills/valheim-mod-testing .claude/skills/valheim-mod-testing
-curl -fsSL -o .agents/skills/valheim-mod-testing/SKILL.md \
-  https://raw.githubusercontent.com/tvongaza/ValheimTesting/main/.agents/skills/valheim-mod-testing/SKILL.md
-cp .agents/skills/valheim-mod-testing/SKILL.md .claude/skills/valheim-mod-testing/SKILL.md
+In PowerShell 7 (the Windows default):
+
+```powershell
+& {
+  $ErrorActionPreference = 'Stop'
+  $vtReleaseTag = gh api repos/tvongaza/ValheimTesting/releases/latest --jq .tag_name
+  if ($LASTEXITCODE -ne 0 -or -not $vtReleaseTag) { throw 'Could not resolve the latest ValheimTesting release.' }
+  $vtReleaseSource = gh api "repos/tvongaza/ValheimTesting/commits/$vtReleaseTag" --jq .sha
+  if ($LASTEXITCODE -ne 0 -or $vtReleaseSource -notmatch '^[0-9a-f]{40}$') { throw "Could not resolve $vtReleaseTag to a commit." }
+  $vtSkillDownload = New-TemporaryFile
+  try {
+    Invoke-WebRequest -OutFile $vtSkillDownload.FullName "https://raw.githubusercontent.com/tvongaza/ValheimTesting/$vtReleaseSource/.agents/skills/valheim-mod-testing/SKILL.md"
+    foreach ($vtSkillDir in '.agents/skills/valheim-mod-testing', '.claude/skills/valheim-mod-testing') {
+      New-Item -ItemType Directory -Force $vtSkillDir | Out-Null
+      Copy-Item $vtSkillDownload.FullName (Join-Path $vtSkillDir 'SKILL.md') -Force
+    }
+    "$vtReleaseTag $vtReleaseSource"
+  } finally { Remove-Item $vtSkillDownload.FullName -ErrorAction SilentlyContinue }
+}
 ```
 
-This writes one `SKILL.md` for each agent. If you use only one agent, keep only its copy:
+In bash or zsh (macOS, Linux or Git Bash), which also needs `curl`:
+
+```sh
+(
+  set -eu
+  vtReleaseTag=$(gh api repos/tvongaza/ValheimTesting/releases/latest --jq .tag_name)
+  test -n "$vtReleaseTag"
+  vtReleaseSource=$(gh api "repos/tvongaza/ValheimTesting/commits/$vtReleaseTag" --jq .sha)
+  test "${#vtReleaseSource}" -eq 40
+  case "$vtReleaseSource" in *[!0-9a-f]*) exit 1 ;; esac
+  vtSkillDownload=$(mktemp)
+  trap 'rm -f "$vtSkillDownload"' 0
+  curl -fsSL -o "$vtSkillDownload" \
+    "https://raw.githubusercontent.com/tvongaza/ValheimTesting/$vtReleaseSource/.agents/skills/valheim-mod-testing/SKILL.md"
+  mkdir -p .agents/skills/valheim-mod-testing .claude/skills/valheim-mod-testing
+  cp "$vtSkillDownload" .agents/skills/valheim-mod-testing/SKILL.md
+  cp "$vtSkillDownload" .claude/skills/valheim-mod-testing/SKILL.md
+  printf '%s %s\n' "$vtReleaseTag" "$vtReleaseSource"
+)
+```
+
+This writes one `SKILL.md` for each agent and prints its release tag and source commit. If you use only one agent, keep only its copy:
 
 | Agent | Path in your mod repository | Ask for it by name |
 |---|---|---|
 | Codex | `.agents/skills/valheim-mod-testing/SKILL.md` | `$valheim-mod-testing` |
 | Claude Code | `.claude/skills/valheim-mod-testing/SKILL.md` | `/valheim-mod-testing` |
 
-The source is [valheim-mod-testing/SKILL.md](../../.agents/skills/valheim-mod-testing/SKILL.md). Its links open the current docs on this repository's `main`. Commit the copies with the mod, and copy the file again to update it.
+The source is [valheim-mod-testing/SKILL.md](../../.agents/skills/valheim-mod-testing/SKILL.md). Record the resolved tag and commit with your copied skill. Commit both agent copies with your mod; rerun these commands to update them.
+
+The tagged skill may lack a needed journey. To use a newer reviewed skill before its release, explicitly replace `vtReleaseSource` with one `docsSourceSHA`. Use that revision for the skill, its instructions and the entire example map; identify it as unreleased documentation.
+
+Before downloading an example, check that every mapped file exists at the chosen revision. Keep published package identity separate, using the release's attached `release-contract.json`; never mix source revisions or silently download from `main`.
 
 ### 2. Put your mod's own facts in its AGENTS.md
 
@@ -55,7 +94,7 @@ Using the Valheim mod testing skill, add one source-linked unit test for the rec
 Using the Valheim mod testing skill, check that this build loads in a disposable hosted game, and report the plugin identity, result and cleanup.
 ```
 
-The first request needs only the .NET SDK. The second starts the game, so the agent asks you first.
+The first request needs only the .NET SDK. The second starts the game, so the agent needs your authorization unless you already provided it.
 
 ## Check the result
 

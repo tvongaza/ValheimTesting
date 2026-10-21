@@ -5,21 +5,36 @@ description: Add or run ValheimTesting tests in a Valheim mod repository, from s
 
 # Test a Valheim mod with ValheimTesting
 
-Read the mod repository's own instructions first. The mod's tests, adapters and fixtures live in the mod repository; no ValheimTesting package goes into the production plugin. Use the published packages and the `valheim-test` tool: never clone, bootstrap or build ValheimTesting. The full workflow is the [agent workflow](https://github.com/tvongaza/ValheimTesting/blob/main/docs/agent-guide.md).
+Read the mod repository's instructions first. Keep its tests, adapter and fixtures there; testing packages stay out of the production plugin. Consume published packages and `valheim-test` without cloning or building ValheimTesting.
 
-1. Choose the cheapest layer that can observe the behaviour ([Choose a test layer](https://github.com/tvongaza/ValheimTesting/blob/main/docs/guides/choose-a-test-layer.md)):
-   - Logic that uses game types: `Valheim.Testing.Doubles`, source-linked ([guide](https://github.com/tvongaza/ValheimTesting/blob/main/docs/guides/test-logic-that-uses-game-types.md)).
-   - Terrain decisions: `Valheim.Testing` ([guide](https://github.com/tvongaza/ValheimTesting/blob/main/docs/guides/test-terrain-decisions.md)).
-   - Retry, refusal or cleanup in a scenario driver: `Valheim.Testing.Game.Fakes`.
-   - Whether the mod loads: `valheim-test server-load` or `valheim-test start` ([guide](https://github.com/tvongaza/ValheimTesting/blob/main/docs/guides/check-a-mod-loads.md)).
-   - Save, restart and rejoin: `PinnedServerRun` with `ClientRounds` ([FullLifecycle](https://github.com/tvongaza/ValheimTesting/blob/main/examples/FullLifecycle/README.md)).
-   - One mod before and after a change: `TargetedRegression` ([example](https://github.com/tvongaza/ValheimTesting/blob/main/examples/TargetedRegression/README.md)).
-2. Pin exact published versions from the [package table](https://github.com/tvongaza/ValheimTesting/blob/main/docs/package-versions.md).
-3. Run the mod's test project with `dotnet test`. Stop if that answers the question.
-4. A native check starts the game on the user's machine: ask first. Read the [native-run checklist](https://github.com/tvongaza/ValheimTesting/blob/main/docs/guides/before-a-native-run.md), run `valheim-test env preflight`, then one guide's command. Read `result.json` and the log scan.
-5. Afterwards, `valheim-test env status` must list nothing your run left. Recover an interrupted run with `valheim-test env recover --run ID`; if recovery keeps something for inspection (exit 3), remove it with `valheim-test env teardown --run ID`.
-6. Report what you tested, the build and package versions, the checks run with pass or fail, the checks not run, the evidence paths, the teardown status and the next step ([report shape](https://github.com/tvongaza/ValheimTesting/blob/main/docs/agent-guide.md#completion-and-handoff)).
+## Choose one source revision
 
-A connected ValheimCLI, a synthetic pass or an incomplete observation is not evidence that the mod works in the game.
+Resolve the latest stable [GitHub release](https://api.github.com/repos/tvongaza/ValheimTesting/releases/latest) once. Record its tag and full commit SHA. Read the workflow and download source files at that SHA, using `https://raw.githubusercontent.com/tvongaza/ValheimTesting/SOURCE_SHA/FILE` with those two path components replaced.
 
-Every `valheim-test` command and option: [the tool's page](https://github.com/tvongaza/ValheimTesting/blob/main/docs/packages/Valheim.Testing.NativeSmoke.md). A toolkit bug goes to [ValheimTesting issues](https://github.com/tvongaza/ValheimTesting/issues); a ValheimCLI problem goes there too, with the `valheimcli` label ([what a report carries](https://github.com/tvongaza/ValheimTesting/blob/main/docs/agent-guide.md#report-a-problem)).
+Before copying an example, check that every file in its documented map exists at that revision. If required files are absent, use one explicitly chosen `docsSourceSHA` for the entire map and its instructions. Report that source revision separately from the published package versions. Never silently fall back to moving `main` or mix files from different revisions.
+
+Read `docs/agent-guide.md` at the chosen source revision. Take package IDs and exact versions from the chosen release's attached `release-contract.json` (`packages[].id` and `packages[].version`), then verify a public restore. The tag can precede the release-pin record: use `docs/package-versions.md` and example pins only when they agree with that contract. If the contract or matching source pins are unavailable, report the missing input rather than guessing or hand-bumping the example. Candidate source is not evidence of published behavior.
+
+## Run the smallest useful check
+
+| Task | Read at the chosen source revision |
+|---|---|
+| Test a production decision without the game | `docs/getting-started.md` |
+| Adapt code that calls game types | `docs/guides/test-logic-that-uses-game-types.md` |
+| Test terrain decisions | `docs/guides/test-terrain-decisions.md` |
+| Exercise driver failures without a game | `examples/FullLifecycle/consumer/README.md` |
+| Assert gameplay in one hosted game | `docs/tutorials/first-gameplay-assertion.md` |
+| Compare the same assertion on two builds | `docs/guides/run-an-ab-regression.md` |
+| Save, restart and rejoin | `docs/guides/test-save-restart-rejoin.md` |
+| Observe a change from two clients | `docs/guides/run-a-session-with-several-clients.md` |
+| Check startup only | `docs/guides/check-a-mod-loads.md` |
+
+Run the mod's test command. Stop if it answers the question. For an existing failure, preserve the failing output and verify the matching correction with the same assertion.
+
+A native run needs authorization and a disposable fixture. If authorization is already provided, continue within that scope. Otherwise obtain it before launching. Read `docs/guides/before-a-native-run.md`; check local readiness with `valheim-test env preflight`, or all session hosts with `valheim-test session check SESSION --hosts`. Follow the guide's supported entry and normal lifecycle; do not bypass a refusal with raw transport.
+
+Read the actual report, named assertions, complete observations and cleanup. A connected ValheimCLI or successful mutation reply does not prove gameplay; incomplete is not zero.
+
+Afterwards, `valheim-test env status` must list nothing your run left. Recover only the named interrupted run with `valheim-test env recover --run ID`; follow its reported inspection/teardown state.
+
+Report the mod build, package versions, source revision, checks passed/failed/not run, private evidence paths and cleanup status. Use `docs/agent-guide.md#completion-and-handoff`. Keep secrets, account identifiers and saves out of public output. Report toolkit or ValheimCLI gaps with the evidence shape in `docs/agent-guide.md#report-a-problem`.
