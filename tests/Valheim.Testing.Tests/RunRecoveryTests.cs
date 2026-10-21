@@ -1590,7 +1590,8 @@ public sealed class RunRecoveryTests : IDisposable
     {
         const string Worlds = "/home/p/.config/unity3d/IronGate/Valheim/worlds_local", KeepIn = "/srv/runs/run-host/host-world";
         ChunkedWorld(Worlds, "Campaign", 4242);
-        File.WriteAllText(_host.Local(Worlds + "/Campaign_backup_auto-1.db"), "backup");
+        Directory.CreateDirectory(_host.Local(Worlds + "/Campaign_backup_auto-20261006-120000"));
+        File.WriteAllText(_host.Local(Worlds + "/Campaign_backup_auto-20261006-120000/_main.0.db2"), "backup");
         File.WriteAllText(_host.Local(Worlds + "/MyWorld.fwl"), "the user's world");
         Line(_host, "run-host", "host", Gone, JournalEntry.CopyIntended, ("runtime", Worlds + "/Campaign"), ("stage", ""), ("parent", Worlds),
             ("holds", "hosted-world"), ("world", "Campaign"), ("worldUid", "4242"), ("keepIn", KeepIn));
@@ -1602,7 +1603,7 @@ public sealed class RunRecoveryTests : IDisposable
         Assert.StartsWith("moved out of the client's worlds into " + KeepIn, Assert.Single(recovered.Steps, step => step.What == "copy " + Worlds + "/Campaign").Outcome);
         Assert.Equal(new[] { "MyWorld.fwl" }, Directory.EnumerateFileSystemEntries(_host.Local(Worlds)).Select(Path.GetFileName));
         Assert.Equal("chunk", File.ReadAllText(_host.Local(KeepIn + "/Campaign/0_0.chunk")));
-        Assert.Equal("backup", File.ReadAllText(_host.Local(KeepIn + "/Campaign_backup_auto-1.db")));
+        Assert.Equal("backup", File.ReadAllText(_host.Local(KeepIn + "/Campaign_backup_auto-20261006-120000/_main.0.db2")));
         Assert.All((await StatusAsync()).Runs, run => Assert.Equal(JournalRunState.Ended, run.State));
 
         // Refused: a folder that is not a worlds_local, a line without the world UID, and a keep folder outside the run's directory.

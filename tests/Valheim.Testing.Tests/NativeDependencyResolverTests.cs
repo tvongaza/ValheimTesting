@@ -1633,7 +1633,9 @@ public sealed class NativeDependencyResolverTests : IDisposable
             .Extension("valheim.session", "leave", _ =>
             {
                 hosting = false; joined = false;
-                File.WriteAllText(hosts["pc"].Local(worlds + "/Campaign_backup_auto-20261006.db"), "backup"); // the game's backup beside it
+                string backup = hosts["pc"].Local(worlds + "/Campaign_backup_auto-20261006-120000");
+                Directory.CreateDirectory(backup);
+                File.WriteAllText(Path.Combine(backup, "_main.1.db2"), "backup"); // the game's backup beside it
                 return new { source = "session-leave", complete = true, action = "leave" };
             }, readOnly: false)
             .On("cli_set_player_safety true", _ => ScriptedTransport.Ok("OK: playerSafety enabled=True god=True ghost=True debugMode=True cheats=True ghostReplicated=True"));
@@ -1704,7 +1706,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         Assert.False(Directory.Exists(pc.Local(On("pc", "/runs/run-hosted"))));
         string evidence = result.GetProperty("Provenance").GetProperty("hostWorldEvidence").GetString()!;
         Assert.True(File.Exists(Path.Combine(evidence, "Campaign", "_main.1.fwl2")));
-        Assert.True(File.Exists(Path.Combine(evidence, "Campaign_backup_auto-20261006.db")));
+        Assert.True(File.Exists(Path.Combine(evidence, "Campaign_backup_auto-20261006-120000", "_main.1.db2")));
         var journal = await RunJournalOnHost.ReadAsync(pc, RunJournal.DirectoryFor(EnvironmentInventory.Read(inventory).Hosts["pc"]), "run-hosted", TimeSpan.FromSeconds(5));
         var worldEntries = journal.Where(record => record.Entry.Fields.GetValueOrDefault("runtime") == worlds + "/Campaign").Select(record => record.Entry.Kind).ToList();
         Assert.Equal(new[] { JournalEntry.CopyIntended, JournalEntry.CopyIntended, JournalEntry.CopyDone, JournalEntry.CopyRetired }, worldEntries);

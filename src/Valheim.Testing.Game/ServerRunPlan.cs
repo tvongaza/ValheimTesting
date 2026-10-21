@@ -117,20 +117,20 @@ public partial class ServerRunPlan
     /// Before anything is staged or copied: the world fixture is a dedicated server's <c>-savedir</c>, a directory holding
     /// <c>worlds_local/</c> with exactly one complete world in it (<see cref="WorldIdentity.Read"/>), whose own UID is the plan's
     /// <c>worlduid</c> pin when it has one. Returns that identity, or null for the one fixture without a world: a plan pinned
-    /// <c>world=any</c> whose fixture has no <c>worlds_local/</c>, which the game fills with a new world on its first boot.
+    /// <c>world=any</c> whose fixture has no world (no file in <c>worlds_local/</c>, or none), which the game fills with a new world on
+    /// its first boot.
     /// </summary>
     public WorldIdentity? PreflightWorld()
     {
         string source = Path.GetFullPath(World.Source);
         if (!Directory.Exists(source)) throw new DirectoryNotFoundException("The world fixture does not exist: " + source);
         string worlds = Path.Combine(source, "worlds_local");
+        bool empty = !Directory.Exists(worlds) || !Directory.EnumerateFiles(worlds, "*", SearchOption.AllDirectories).Any();
+        if (empty && Pins.TryGetValue("world", out string? world) && world == "any") return null; // a new world, made on first boot
         if (!Directory.Exists(worlds))
-        {
-            if (Pins.TryGetValue("world", out string? world) && world == "any") return null;
             throw new ArgumentException($"The world fixture {source} has no worlds_local/. A dedicated server's world fixture is its -savedir: a directory holding " +
                 "worlds_local/<name>/, the world exactly as the game saved it; the server makes a fresh world when it finds none there. " +
-                "Move the world folder into worlds_local/ (or pin world=any for a fixture that is meant to start without a world).");
-        }
+                "Move the world folder into worlds_local/, or pin world=any for a fixture that is meant to start without a world.");
         var identity = WorldIdentity.Read(worlds);
         if (Pins.TryGetValue("worlduid", out string? uid) && uid != identity.UidText)
             throw new InvalidOperationException($"The plan pins worlduid={uid}, but the fixture {worlds} holds world {identity.Name} with UID {identity.UidText} ({identity.File}): " +

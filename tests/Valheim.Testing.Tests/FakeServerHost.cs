@@ -848,7 +848,7 @@ internal sealed class FakeServerHost : IGameHost
             case "world-meta":
             {
                 // As the host scripts: whether an entry MoveOut would move is there, and the metadata of every such entry, base64:
-                // the _main.<n>.fwl2 files of an <entry>/ folder.
+                // the _main.<n>.fwl2 files of an <entry>/ folder; an entry that is not a folder is named.
                 string worlds = Local(v["worlds"]), world = v["name"];
                 var named = Directory.Exists(worlds) ? Directory.EnumerateFileSystemEntries(worlds).Where(entry => HostedWorld.IsNamedFor(Path.GetFileName(entry), world))
                     .Order(StringComparer.Ordinal).ToList() : [];
@@ -859,6 +859,7 @@ internal sealed class FakeServerHost : IGameHost
                     if (Directory.Exists(entry))
                         foreach (string file in Directory.EnumerateFiles(entry).Where(file => Regex.IsMatch(Path.GetFileName(file), @"^_main\.[0-9]+\.fwl2$")).Order(StringComparer.Ordinal))
                             reply.Append("VT-WORLD-META " + leaf + "/" + Path.GetFileName(file) + " " + Convert.ToBase64String(File.ReadAllBytes(file)) + "\n");
+                    else reply.Append("VT-WORLD-FILE " + leaf + "\n");
                 }
                 return Ok(reply + "VT-WORLD-METAS " + (named.Count != 0 ? "present" : "absent") + "\n");
             }

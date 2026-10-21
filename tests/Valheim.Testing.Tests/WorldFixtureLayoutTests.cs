@@ -111,9 +111,12 @@ public sealed class WorldFixtureLayoutTests : IDisposable
     [InlineData(new[] { "LifecycleFixture/_main.1.chunks", "LifecycleFixture/_main.1.db2", "LifecycleFixture/_main.1.fwl2", "LifecycleFixture/_main.1.ok" }, "LifecycleFixture")]
     [InlineData(new[] { "Abc\\_main.12.fwl2", "Abc\\_main.12.db2", "Abc\\_main.12.chunks", "Abc\\_main.12.ok", "Abc\\00_00__0_3.chunk" }, "Abc")]
     [InlineData(new[] { "Abc/_main.0.fwl2" }, "Abc")] // a world never saved
-    [InlineData(new[] { "Abc/_main.1.fwl2", "Abc/_main.1.db2", "Abc/_main.1.chunks", "Abc/_main.1.ok", "Abc_backup_auto-20261020-120000/_main.0.fwl2", "fixture-provenance.json" }, "Abc")]
-    // A save's backup and a restore's, as a 1.0.20 dedicated server wrote one beside its world (#869's native check).
-    [InlineData(new[] { "Abc/_main.0.fwl2", "Abc_backup_20261021-092942/_main.1.fwl2", "Abc_backup_restore-20261021-092942/_main.1.fwl2" }, "Abc")]
+    [InlineData(new[] { "Abc/_main.1.fwl2", "Abc/_main.1.db2", "Abc/_main.1.chunks", "Abc/_main.1.ok", "Abc_backup_auto-20261020-120000/_main.0.fwl2" }, "Abc")]
+    // Every backup kind the game names (SaveSystem.cs:1100): a standard one as a 1.0.20 dedicated server wrote beside its world
+    // (#869's native check), a restore's and a cloud one; a world name with underscores of its own.
+    [InlineData(new[] { "Abc/_main.0.fwl2", "Abc_backup_20261021-092942/_main.1.fwl2", "Abc_backup_restore-20261021-092942/_main.1.fwl2",
+        "Abc_backup_cloud-20261021-092942/_main.1.fwl2" }, "Abc")]
+    [InlineData(new[] { "My_Base/_main.0.fwl2", "My_Base_backup_auto-20261021-092942/_main.1.fwl2" }, "My_Base")]
     public void TheWorldIsNamedByItsFolder(string[] files, string name) => Assert.Equal(name, HostedWorld.NameOf(files));
 
     public static TheoryData<string[]> NotOneCompleteWorld => new()
@@ -132,8 +135,9 @@ public sealed class WorldFixtureLayoutTests : IDisposable
         new[] { "HostFixture/_main.0.fwl2", "HostFixture/00_00__0_1.chunk" }, // Chunks no list names.
         new[] { "HostFixture/_main.0.fwl2", "Other_backup_auto-20261020-120000/_main.0.fwl2" }, // Another world's backup.
         new[] { "HostFixture/_main.0.fwl2", "HostFixture_backup_auto-20261020-120000/_main.0.db2" }, // A backup without metadata.
-        new[] { "HostFixture/_main.0.fwl2", "HostFixture_backup_cloud-20261020-120000/_main.0.fwl2" }, // A character's cloud backup name, not a world's.
-        new[] { "HostFixture/_main.0.fwl2", "HostFixture_backup_auto-2026102-120000/_main.0.fwl2" }, // Not a date the game writes.
+        new[] { "HostFixture/_main.0.fwl2", "HostFixture_backup_auto-2026102-120000/_main.0.fwl2" }, // No timestamp the game reads.
+        new[] { "HostFixture/_main.0.fwl2", "HostFixture_backup_auto-20261340-120000/_main.0.fwl2" }, // Not a valid date: the game reads no timestamp.
+        new[] { "HostFixture/_main.0.fwl2", "fixture-provenance.json" }, // A copy's record in a pinned manifest: the placement would ship it.
         new[] { "HostFixture_backup_auto-20261020-120000/_main.0.fwl2" }, // Only a backup.
         Array.Empty<string>(), // Nothing.
     };
@@ -178,6 +182,8 @@ public sealed class WorldFixtureLayoutTests : IDisposable
         string empty = Path.Combine(_root, "new-world");
         Directory.CreateDirectory(empty);
         File.WriteAllText(Path.Combine(empty, "NEW-WORLD.txt"), "the game makes the world on first boot");
+        Assert.Null(new ServerRunPlan { World = new() { Source = empty }, Pins = new() { ["world"] = "any" } }.PreflightWorld());
+        Directory.CreateDirectory(Path.Combine(empty, "worlds_local")); // an empty worlds_local/ the game fills
         Assert.Null(new ServerRunPlan { World = new() { Source = empty }, Pins = new() { ["world"] = "any" } }.PreflightWorld());
         Assert.Throws<ArgumentException>(() => new ServerRunPlan { World = new() { Source = empty } }.PreflightWorld());
     }

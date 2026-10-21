@@ -132,10 +132,11 @@ public static class OwnedCopies
         bool Has(string relative) => File.Exists(System.IO.Path.Combine(copy, relative)) || Directory.Exists(System.IO.Path.Combine(copy, relative));
         if (Has(GameLaunch.ServerWindowsExecutable) || Has(GameLaunch.ServerLinuxExecutable) || Has(GameLaunch.ServerMacExecutable)) return OwnedCopyKind.ServerRuntime;
         if (Has(GameLaunch.ClientWindowsExecutable) || Has(GameLaunch.ClientMacBundle)) return OwnedCopyKind.ClientRuntime;
-        // A world: a save directory, or a Valheim 1.0 world's files (<name>/_main.N.fwl2 and .db2), at the top or one directory down.
+        // A world: a save directory, or world files at the top or one directory down: 1.0's <name>/_main.N.fwl2 and .db2, or a
+        // pre-1.0 .fwl/.db pair an older run saved. Fixtures are 1.0 worlds only (#869); this keeps such a copy as a world, not retired.
         var options = new EnumerationOptions { RecurseSubdirectories = true, MaxRecursionDepth = 1, AttributesToSkip = FileAttributes.ReparsePoint, IgnoreInaccessible = true };
         if (Has("worlds_local") || Has("worlds") || Directory.EnumerateFiles(copy, "*", options).Any(file =>
-                System.IO.Path.GetExtension(file).ToLowerInvariant() is ".fwl2" or ".db2"))
+                System.IO.Path.GetExtension(file).ToLowerInvariant() is ".fwl" or ".fwl2" or ".db" or ".db2"))
             return OwnedCopyKind.World;
         return OwnedCopyKind.Other;
     }

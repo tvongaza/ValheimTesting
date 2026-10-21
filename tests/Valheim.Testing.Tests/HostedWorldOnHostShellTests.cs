@@ -105,8 +105,13 @@ public sealed class HostedWorldOnHostShellTests : IDisposable
         Assert.True(await Check("Campaign", "4242"));
         Assert.Contains("UID 4242, not the fixture's 7", (await Assert.ThrowsAsync<InvalidDataException>(() => Check("Campaign", "7"))).Message);
         Assert.False(await Check("Absent", "4242"));
-        File.WriteAllText(Path.Combine(Worlds, "Partial.db"), "data");
+        Directory.CreateDirectory(Path.Combine(Worlds, "Partial"));
+        File.WriteAllText(Path.Combine(Worlds, "Partial", "_main.1.db2"), "data");
         Assert.Contains("holds no world metadata", (await Assert.ThrowsAsync<InvalidDataException>(() => Check("Partial", "4242"))).Message);
+        // #869: a pre-1.0 world a user put back under the name is a file no run places; the move-out would take it, so it is refused.
+        File.WriteAllText(Path.Combine(Worlds, "Campaign.fwl"), "the user's pre-1.0 world");
+        Assert.Contains("Campaign.fwl in", (await Assert.ThrowsAsync<InvalidDataException>(() => Check("Campaign", "4242"))).Message);
+        File.Delete(Path.Combine(Worlds, "Campaign.fwl"));
 
         // #829: every entry a move-out would take is read, in any case, not only <name>/: another world's metadata in a backup
         // folder (in another case) is refused, so the world stays where it is.

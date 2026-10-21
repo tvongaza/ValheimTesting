@@ -25,8 +25,8 @@ public sealed record WorldIdentity(string Name, string SeedName, int Seed, long 
     /// <item>one save set <c>_main.&lt;n&gt;.fwl2</c>, <c>.db2</c>, <c>.chunks</c> and <c>.ok</c>; or a world never saved, a lone
     /// <c>_main.0.fwl2</c> whose metadata says it has no data yet (without its <c>.db2</c> the game silently makes a fresh world);</item>
     /// <item>every chunk file <c>_main.&lt;n&gt;.chunks</c> lists, and no other (the game fails on a missing one and deletes an unlisted one);</item>
-    /// <item>optional backups the game made beside the world (SaveSystem: <c>&lt;name&gt;_backup_auto-&lt;yyyyMMdd-HHmmss&gt;/</c>, and
-    /// <c>_backup_</c> or <c>_backup_restore-</c> with the same date), checked only for the same world name and UID.</item>
+    /// <item>optional backups the game made beside the world (<c>&lt;name&gt;_backup_auto-&lt;yyyyMMdd-HHmmss&gt;/</c> and every other
+    /// kind the game names a backup, <see cref="BackupOf"/>), checked only for the same world name and UID.</item>
     /// </list>
     /// A pre-1.0 world (<c>&lt;name&gt;.fwl</c> and <c>&lt;name&gt;.db</c>) is refused: open and save it once in Valheim 1.0 or later.
     /// The metadata holds a length-prefixed package that starts with the world version, the name, the seed name, the seed and
@@ -37,7 +37,9 @@ public sealed record WorldIdentity(string Name, string SeedName, int Seed, long 
     {
         fixture = Path.GetFullPath(fixture);
         if (!Directory.Exists(fixture)) throw new DirectoryNotFoundException("The fixture world does not exist: " + fixture);
-        var relative = Directory.EnumerateFiles(fixture, "*", SearchOption.AllDirectories).Select(path => Path.GetRelativePath(fixture, path)).ToList();
+        // A copy's own record (WorldFixture.Copy) is not part of the world; a pinned manifest never lists it (NameOf refuses it there).
+        var relative = Directory.EnumerateFiles(fixture, "*", SearchOption.AllDirectories).Select(path => Path.GetRelativePath(fixture, path))
+            .Where(path => path != WorldFixture.ProvenanceFile).ToList();
         var layout = Layout(relative);
         byte[] Bytes(string file) => System.IO.File.ReadAllBytes(Path.Combine(fixture, file));
         var identity = ParseMetadata(Bytes(layout.Metadata), layout.Metadata, out bool? needsDb);
@@ -75,8 +77,28 @@ public sealed record WorldIdentity(string Name, string SeedName, int Seed, long 
     internal sealed record WorldFiles(string Name, string Metadata, bool Lone, string? ChunkList, IReadOnlyList<string> Chunks, IReadOnlyList<string> BackupMetadata);
 
     private static readonly Regex SaveFile = new(@"^_main\.(0|[1-9][0-9]*)\.(fwl2|db2|chunks|ok)$", RegexOptions.CultureInvariant);
-    // The world backups the game names (SaveSystem, 1.0.17): automatic, before a save or a restore, each with its yyyyMMdd-HHmmss date.
-    private static readonly Regex Backup = new(@"^(.+)_backup_(?:auto-|restore-)?[0-9]{8}-[0-9]{6}$", RegexOptions.CultureInvariant);
+    private static readonly Regex Timestamp = new(@".+(\d{4})-*(\d{2})-*(\d{2})-*(\d{2})-*(\d{2})-*(\d{2})");
+
+    /// <summary>
+    /// The save a folder is a backup of, as the game classifies a save's name (SaveSystem.UpdateSaveNameAndReturnSaveFileType with
+    /// GetTimestampFromPath, SaveSystem.cs:1100 in 1.0.17): a name holding a valid timestamp whose second-to-last <c>_</c> starts
+    /// <c>_backup_</c> is a backup (automatic <c>_backup_auto-</c>, <c>_backup_cloud-</c>, <c>_backup_restore-</c> or a standard
+    /// <c>_backup_</c>) of the save named before it. Null for any other name.
+    /// </summary>
+    internal static string? BackupOf(string folder)
+    {
+        var stamp = Timestamp.Match(folder);
+        if (!stamp.Success) return null;
+        try
+        {
+            var parts = stamp.Groups.Values.Skip(1).Select(group => int.Parse(group.Value, CultureInfo.InvariantCulture)).ToArray();
+            _ = new DateTime(parts[0], parts[1], parts[2], parts[3], parts[4], parts[5]);
+        }
+        catch (Exception error) when (error is ArgumentOutOfRangeException or FormatException or OverflowException) { return null; } // the game reads no timestamp, so no backup
+        int last = folder.LastIndexOf('_');
+        int second = last > 0 ? folder.LastIndexOf('_', last - 1) : -1;
+        return second > 0 && string.CompareOrdinal(folder, second, "_backup_", 0, "_backup_".Length) == 0 ? folder[..second] : null;
+    }
     private static readonly string[] SetParts = ["fwl2", "db2", "chunks", "ok"];
 
     /// <summary>
@@ -86,7 +108,7 @@ public sealed record WorldIdentity(string Name, string SeedName, int Seed, long 
     /// </summary>
     internal static WorldFiles Layout(IEnumerable<string> relativePaths)
     {
-        var paths = relativePaths.Select(path => path.Replace('\\', '/')).Where(path => path != WorldFixture.ProvenanceFile).ToList();
+        var paths = relativePaths.Select(path => path.Replace('\\', '/')).ToList();
         var flat = paths.Where(path => !path.Contains('/') && Regex.IsMatch(path, @"\.(fwl|db)(\.old)?$", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase)).ToList();
         if (flat.Count != 0)
         {
@@ -99,14 +121,14 @@ public sealed record WorldIdentity(string Name, string SeedName, int Seed, long 
         if (loose.Count != 0)
             throw new ArgumentException($"The fixture holds {Few(loose)} beside the world folder; a fixture holds only one world folder <name>/ (and the game's <name>_backup_…<date> copies of it). Remove {(loose.Count == 1 ? "it" : "them")}.");
         var folders = paths.Select(path => path[..path.IndexOf('/')]).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList();
-        var worlds = folders.Where(folder => !Backup.IsMatch(folder)).ToList();
+        var worlds = folders.Where(folder => BackupOf(folder) == null).ToList();
         if (worlds.Count != 1)
             throw new ArgumentException(worlds.Count == 0
                 ? $"The fixture holds no world folder{(folders.Count == 0 ? "" : " (only backups: " + Few(folders) + ")")}. A fixture holds one Valheim 1.0 world folder <name>/ with its _main.<n>.fwl2."
                 : $"A fixture holds exactly one world, not {worlds.Count}: {Few(worlds.Select(world => world + "/").ToList())}. Copy only the world under test into a new empty directory.");
         string name = RequireName(worlds[0]);
         foreach (string folder in folders.Where(folder => folder != name))
-            if (Backup.Match(folder).Groups[1].Value != name)
+            if (BackupOf(folder) != name)
                 throw new ArgumentException($"The fixture holds {folder}/, a backup of another world than {name}; keep only {name}/ and the game's own {name}_backup_…<date> copies of it.");
 
         var files = paths.Where(path => path.StartsWith(name + "/", StringComparison.Ordinal)).Select(path => path[(name.Length + 1)..]).ToList();

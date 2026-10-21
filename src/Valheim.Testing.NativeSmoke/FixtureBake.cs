@@ -54,7 +54,7 @@ internal static class FixtureBake
     /// </summary>
     internal static (string Worlds, string ManifestFile, WorldIdentity Identity) Inspect(string source)
     {
-        source = Path.GetFullPath(source);
+        source = Path.TrimEndingDirectorySeparator(Path.GetFullPath(source)); // C:\x\worlds_local\ is worlds_local too
         string manifestFile = Path.Combine(Path.GetFileName(source) == "worlds_local" ? Path.GetDirectoryName(source)! : source, "fixture-manifest.json");
         if (Directory.Exists(Path.Combine(source, "worlds_local"))) source = Path.Combine(source, "worlds_local");
         return (source, manifestFile, WorldIdentity.Read(source));

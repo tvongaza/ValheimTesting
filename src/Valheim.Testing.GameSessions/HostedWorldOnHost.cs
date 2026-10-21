@@ -387,7 +387,8 @@ internal static class HostedWorldOnHost
     /// Before env recover moves a journalled world out of a client's worlds: every metadata file of the world there
     /// (<c>&lt;name&gt;/_main.&lt;n&gt;.fwl2</c> in Valheim 1.0's save folder, and in the game's backups of it) must state
     /// <paramref name="worldUid"/>, the fixture's UID the run journalled before placing it. A world the user made under that name has
-    /// another UID and is refused, as is one whose identity cannot be read (entries named for the world but no readable metadata).
+    /// another UID and is refused, as is one whose identity cannot be read (entries named for the world but no readable metadata, or a
+    /// file named for it, which only a pre-1.0 world has).
     /// The game rewrites the files once it hosted the world, so the UID, not the bytes, is what stays the run's. Returns false when
     /// nothing named for the world is there.
     /// </summary>
@@ -401,6 +402,10 @@ internal static class HostedWorldOnHost
         var lines = result.Stdout.Split('\n').Select(line => line.TrimEnd('\r')).ToList();
         if (lines.FirstOrDefault(line => line.StartsWith("VT-WORLD-META-LARGE ", StringComparison.Ordinal)) is { } large)
             throw new InvalidDataException($"{large["VT-WORLD-META-LARGE ".Length..]} in {worlds} is too large to be world metadata, so the world there cannot be proven the run's");
+        // A file named for the world (a pre-1.0 <name>.fwl or .db a user put there): no run placed it and Valheim 1.0 writes none,
+        // so nothing proves it the run's, and the move-out would take it.
+        if (lines.FirstOrDefault(line => line.StartsWith("VT-WORLD-FILE ", StringComparison.Ordinal)) is { } file)
+            throw new InvalidDataException($"{file["VT-WORLD-FILE ".Length..]} in {worlds} is a file named for the world {name}, which no run places and Valheim 1.0 does not write (a pre-1.0 world's?), so it cannot be proven the run's; inspect it and move it out yourself");
         var read = lines.Where(line => line.StartsWith("VT-WORLD-META ", StringComparison.Ordinal)).Select(line =>
         {
             string[] parts = line["VT-WORLD-META ".Length..].Split(' ');
@@ -442,7 +447,8 @@ internal static class HostedWorldOnHost
         """;
 
     // The metadata of every entry named for the world (the one rule, any case, as MoveOut moves them), base64: the _main.<n>.fwl2
-    // files of an <entry>/ folder (Valheim 1.0's save, or the game's backup of it), each labelled with its path in worlds_local.
+    // files of an <entry>/ folder (Valheim 1.0's save, or the game's backup of it), each labelled with its path in worlds_local. An
+    // entry that is not a folder is named (VT-WORLD-FILE): neither a run nor Valheim 1.0 writes one for a world.
     // VT-WORLD-METAS says whether any entry named for the world is there at all. Metadata is a few hundred bytes; a file over 1 MiB
     // is named, not read.
     internal static readonly string WindowsMetadata = "$ErrorActionPreference = 'Stop'\n" + WindowsNamed + """
@@ -458,6 +464,7 @@ internal static class HostedWorldOnHost
                         if ($inner -match '^_main\.[0-9]+\.fwl2$') { $files += ,@($file, ($leaf + '/' + $inner)) }
                     }
                 }
+                else { 'VT-WORLD-FILE ' + $leaf }
             }
             foreach ($file in $files) {
                 if ((Get-Item -LiteralPath $file[0]).Length -gt 1048576) { 'VT-WORLD-META-LARGE ' + $file[1]; continue }
@@ -486,6 +493,8 @@ internal static class HostedWorldOnHost
                         case "$inner" in _main.*[!0-9]*.fwl2|_main..fwl2) continue ;; esac
                         meta "$file" "$leaf/$inner"
                     done
+                else
+                    printf 'VT-WORLD-FILE %s\n' "$leaf"
                 fi
             done
         fi
