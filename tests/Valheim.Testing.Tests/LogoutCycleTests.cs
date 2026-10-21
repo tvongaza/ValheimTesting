@@ -147,9 +147,12 @@ public sealed class LogoutCycleTests : IDisposable
         var (fake, _, client) = Joined();
         fake.WriteLate = true;
         var result = Cycle().Run(client, Plan(), WorldUid);
-        Assert.True(result.WriteSeen >= TimeSpan.FromMilliseconds(300), result.WriteSeen.ToString());
+        // The cycle returned only after the write a second after the leave: not by how long its own wait took, which a busy
+        // machine shortens by delaying the menu (the write can then land within the first 100 ms of the wait).
+        Assert.True(fake.LateWrite!.IsCompleted, "The cycle returned before the late write.");
         Assert.NotEqual(result.FileBefore.Sha256, result.FileAfter.Sha256);
-        await fake.LateWrite!;
+        Assert.True(result.WriteSeen > TimeSpan.Zero, result.WriteSeen.ToString());
+        await fake.LateWrite;
     }
 
     // On Windows a watcher callback already in flight runs after the watcher is disposed. When the wait's semaphore was
