@@ -61,6 +61,113 @@ public sealed class MarkerScenarioTests : IDisposable
         Assert.Equal(1, _process.Stops);
     }
 
+    private ScenarioReport RunPair(MarkerPlan plan, bool aliasActors = false)
+    {
+        var report = new ScenarioReport("examplemod-two-clients");
+        try
+        {
+            MarkerScenario.RunPair(plan, _world.Server(), () =>
+            {
+                var first = _world.Client(plan).Actor("A");
+                return new Dictionary<string, GameActor>
+                {
+                    [MarkerPlan.FirstClientName] = first,
+                    [MarkerPlan.SecondClientName] = aliasActors ? first : _world.Client(plan, second: true).Actor("B"),
+                };
+            }, () => { }, report, _output);
+        }
+        catch (Exception) { Assert.False(report.Passed); }
+        return report;
+    }
+
+    [Fact] public void BothClientsSeeTheMarkerAndBRejoinsWhileAStays()
+    {
+        var report = RunPair(_world.PairPlan());
+        Assert.True(report.Passed, string.Join("; ", report.Steps.Where(s => !s.Passed).Select(s => s.Name + ": " + s.Error)));
+        Assert.Equal(2, _world.MarkCommands);
+        Assert.Equal(0, _world.Restarts); // This mode proves visibility, not persistence.
+        Assert.Equal(1, _world.ClientTransport!.Count("cli_extension valheim.session/join"));
+        Assert.Equal(2, _world.SecondClientTransport!.Count("cli_extension valheim.session/join"));
+        Assert.Equal(1, _world.ClientTransport.Count("cli_extension valheim.session/leave"));
+        Assert.Equal(2, _world.SecondClientTransport.Count("cli_extension valheim.session/leave"));
+        Assert.Contains(report.Steps, s => s.Name == "A remains pinned in the world while B is away" && s.Passed);
+        Assert.Contains(report.Steps, s => s.Name == "B sees exactly one marker after rejoin" && s.Passed);
+    }
+
+    [Theory]
+    [InlineData(false, true, "lists 0")]
+    [InlineData(true, false, "Incomplete client observation")]
+    public void BMustIndependentlyObserveACompleteMarkerCensus(bool visible, bool complete, string error)
+    {
+        _world.SecondClientSeesMarkers = visible;
+        _world.SecondObservationComplete = complete;
+        var report = RunPair(_world.PairPlan());
+        Assert.Contains(report.Steps, s => s.Name == "A sees exactly one marker" && s.Passed);
+        var failure = Assert.Single(report.Steps.Where(s => !s.Passed));
+        Assert.Equal("B independently sees exactly one marker", failure.Name);
+        Assert.Contains(error, failure.Error);
+        Assert.Equal(1, _world.SecondClientTransport!.Count("cli_extension valheim.session/join"));
+    }
+
+    [Fact] public void TwoNamesCannotStandForTheSameClientActor()
+    {
+        var report = RunPair(_world.PairPlan(), aliasActors: true);
+        Assert.Equal(new[] { "open both pinned clients on their assigned hosts" }, Failed(report));
+        Assert.Equal(0, _world.ClientTransport!.Count("cli_extension valheim.session/join"));
+    }
+
+    [Fact] public void TheNamedMapRetainsBothOriginalPlanInstancesAndRejectsAnAlias()
+    {
+        var plan = _world.PairPlan();
+        var clients = ExampleSession.Clients(plan);
+        Assert.Same(plan.Client, clients[MarkerPlan.FirstClientName]);
+        Assert.Same(plan.SecondClient, clients[MarkerPlan.SecondClientName]);
+        Assert.Equal(2, clients.Count);
+        plan.SecondClient = plan.Client;
+        Assert.Contains("separate plan objects", Assert.Throws<ArgumentException>(() => MarkerPlan.Clients(plan)).Message);
+    }
+
+    [Theory]
+    [InlineData("lifecycle-pair")]
+    [InlineData("visibility-single")]
+    [InlineData("missing-arrival")]
+    [InlineData("missing-client")]
+    public void ScenarioModeAndSecondClientPairMustAgreeBeforeTheModActs(string invalid)
+    {
+        var plan = _world.PairPlan();
+        if (invalid == "lifecycle-pair") plan.Scenario = MarkerPlan.ScenarioName;
+        if (invalid == "visibility-single") { plan.SecondClient = null; plan.SecondArrival = null; }
+        if (invalid == "missing-arrival") plan.SecondArrival = null;
+        if (invalid == "missing-client") plan.SecondClient = null;
+        Assert.Throws<ArgumentException>(() => MarkerScenario.RunPair(plan, _world.Server(),
+            () => throw new InvalidOperationException("must not open"), () => { }, new ScenarioReport("invalid"), _output));
+        Assert.Equal(0, _world.MarkCommands);
+    }
+
+    [Theory]
+    [InlineData("near-A")]
+    [InlineData("far-marker")]
+    [InlineData("wet")]
+    [InlineData("nonfinite")]
+    [InlineData("same-character")]
+    [InlineData("different-server")]
+    [InlineData("mod-present")]
+    [InlineData("attached")]
+    public void SecondClientInputsMustMatchTheObservationContract(string invalid)
+    {
+        var plan = _world.PairPlan();
+        if (invalid == "near-A") plan.SecondArrival!.X = plan.Arrival.X + 1;
+        if (invalid == "far-marker") plan.SecondArrival!.X = plan.DrySite.X + 21;
+        if (invalid == "wet") plan.SecondArrival!.Ground = 30;
+        if (invalid == "nonfinite") plan.SecondArrival!.X = float.NaN;
+        if (invalid == "same-character") plan.SecondClient!.Character = plan.Client!.Character;
+        if (invalid == "different-server") plan.SecondClient!.Join = "different:2456";
+        if (invalid == "mod-present") plan.SecondClient!.Pins[MarkerPlan.ModPlugin] = new string('a', 32);
+        if (invalid == "attached") plan.SecondClient!.Mode = "attach";
+        Assert.Throws<ArgumentException>(plan.CheckSites);
+        Assert.Equal(0, _world.MarkCommands);
+    }
+
     // The declaration the session checks at runtime-ready is met by the census the adapter reports; with the patch gone the
     // same check fails, naming it.
     [Fact] public void TheModsDeclarationIsMetByItsAdaptersCensusAndAMissingPatchFails()

@@ -79,9 +79,11 @@ Set `hostDirectory` to a fresh, private, absolute path without spaces **on the c
 public sealed class DrySiteSessionTests(ExampleSession fixture) : IClassFixture<ExampleSession>
 {
     [SessionFact]
-    public Task TheMarkerSurvivesASaveAndARestart() => fixture.Test("dry-site lifecycle", () => Task.Run(() => MarkerScenario.Run(fixture.Session, fixture.Plan)));
+    public Task TheDeclaredMarkerScenarioPasses() => fixture.Test(fixture.Plan.Scenario, () => Task.Run(() => MarkerScenario.Run(fixture.Session, fixture.Plan)));
 }
 ```
+
+For simultaneous A/B visibility and B rejoin, select `dry-site-two-clients` with both `SecondClient` and `SecondArrival`. Follow [Run a session with several clients](../../docs/guides/run-a-session-with-several-clients.md); the lifecycle scenario refuses those fields. The xUnit plan filename stays `dry-site-lifecycle.plan.json` for either declared mode.
 
 The server is always owned and runs from a [disposable profile](../../docs/reference/sessions-profiles.md). The client is `owned`, launched from a profile and stopped at the end, or `attach`, which you launch yourself and the run never stops.
 

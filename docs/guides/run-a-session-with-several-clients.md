@@ -1,104 +1,119 @@
 # Run a session with several clients
 
-Run one dedicated server and two or more owned clients together, each client on its own machine and Steam account, as one test.
+Place one marker, then require two clean clients to observe it independently. Make B leave and rejoin while A stays in the pinned world.
+
+Excerpts from the canonical [marker scenario](../../examples/FullLifecycle/ExampleMod.Tests/MarkerScenario.cs):
+
+```csharp
+report.Step("the mod marks the dry site", () => server.Execute(Mark(plan.DrySite)).RequireLine("OK: marked ", "ExampleMod did not mark the dry site"));
+```
+
+```csharp
+report.Step("A sees exactly one marker", () => RequireClientMarkers(a, plan.DrySite, 1));
+report.Step("B independently sees exactly one marker", () => RequireClientMarkers(b, plan.DrySite, 1));
+```
+
+The scenario also requires zero markers before acting, the wet-site refusal, and complete server counts. A passing reply from the mod does not satisfy these observations.
+
+Captured result fields:
+
+```json
+{
+  "Name": "B sees exactly one marker after rejoin",
+  "Passed": true
+}
+```
 
 ## When to use this
 
-Use it when a check needs more than one player: a hand-over between two clients, a second client seeing the first one's change, or a join and rejoin under load. One client and a server on this machine need none of this; see [test a save, restart and rejoin](test-save-restart-rejoin.md).
+Use this for replication to simultaneous players or rejoining while another player remains connected. For persistence across a server restart, use [Test a save, restart and rejoin](test-save-restart-rejoin.md).
 
-You need, for each client, a Windows or macOS machine with Valheim, Steam signed in to an account that owns the game, and a desktop session. Each client needs its own host and its own account.
+Start with an existing two-client campaign and two registered disposable characters. `server-load` currently derives one client role and one seed character.
+
+<!-- TODO(docs): verify optional second-role bootstrap after #901 -->
+
+Each client needs its own host and Steam account. See [Platforms](../reference/platforms.md) and the [native-run checklist](before-a-native-run.md).
 
 ## Steps
 
 ### 1. Describe the machines
 
-Write an [inventory file](../reference/sessions-inventory.md) with one client environment per host. Name a `leaseHost` and `leaseDirectory`, where the Steam-account leases live. The tests' [sample inventory](../../tests/Valheim.Testing.NativeAcceptance/sample-environment-inventory.json) has a server and two clients on two Windows hosts.
+Prepare an [inventory](../reference/sessions-inventory.md) with a client environment on each host. Keep the server address reachable from both clients. The toolkit discovers signed-in accounts and refuses conflicts; it does not sign Steam in.
 
 ### 2. Lock each role's files
 
-Write a dependency lock per role, so a server-only mod never reaches a client:
-
-```sh
-dotnet run scripts/native-dependencies.cs -- resolve /private/test/request.json /private/test/locks/server.json
-```
-
-Run it from a ValheimTesting checkout, once per role ([resolve dependencies](../reference/game-run-inputs.md#resolve-mod-dependencies)).
+Keep the tool-generated dependency locks and adapter from the [persistence setup](test-save-restart-rejoin.md#1-prepare-the-mod-and-adapter). Both clients exclude the production mod. Reuse a clean-client lock when its file set is identical; do not replace hashes by hand.
 
 ### 3. Register a character per client
 
-Register a different game-created local character for each client in a `DisposableCharacterStore`. One character copied twice is still one player.
+Use two [registered disposable test characters](xref:Valheim.Testing.Game.DisposableCharacterStore). Copies of one seed retain the same player ID and cannot represent simultaneous players.
 
 ### 4. Write the session manifest
 
-Save it outside the repository, for example as `session.json`. The paths are illustrative:
+Use the existing [session manifest](../reference/sessions-campaigns.md#the-session-manifest) with roles `client` and `client-b`. Give B its own registered character and constrain it to another host. Keep the original fixture, server adapter, role locks and inventory.
 
-```json
-{
-  "inventory": "./environments.json",
-  "world": "./fixture-world",
-  "join": "test-server.example:2456",
-  "server": { "dependencyLock": "./locks/server.json" },
-  "clients": {
-    "client-a": { "dependencyLock": "./locks/client-a.json",
-      "character": { "store": "./characters/a", "registeredName": "tester-a", "fileName": "vt-campaign-a" } },
-    "client-b": { "dependencyLock": "./locks/client-b.json", "differentHostFrom": ["client-a"],
-      "character": { "store": "./characters/b", "registeredName": "tester-b", "fileName": "vt-campaign-b" } }
-  }
-}
-```
+Use the same [three-file consumer map](../../examples/FullLifecycle/consumer/README.md#native-persistence-entry). In `RUN_OUTPUT` (the directory the persistence guide's `--preflight-only` run printed), copy `client-plan.json` to `second-client-plan.json` and change only what differs for B.
 
-[Campaigns](../reference/sessions-campaigns.md#the-session-manifest) lists every field.
+In `marker-plan.json`, select `dry-site-two-clients` and declare `SecondArrival` from independently measured terrain. Keep the original dry/wet sites and A arrival. Require dry arrivals 3–20 metres from the same marker and at least 3 metres apart.
+
+The entry binds both plan sections to the named campaign roles. `dry-site-lifecycle` refuses second-client settings; `dry-site-two-clients` requires both client sections and arrivals.
 
 ### 5. Check the session
 
+Check the two-role campaign from step 4:
+
 ```sh
-valheim-test session check session.json --hosts
+valheim-test session check RUN_OUTPUT/campaign.json --hosts --json
 ```
 
-It reports every problem in one pass, then `READY` when the hosts pass. It reads the installs, ports, free space, signed-in Steam accounts and run journals, and changes nothing, apart from one trial hard link for a Linux or Mac server's profile, made and removed under its runtime root.
+The check reads the hosts, installs, ports, accounts and registered character identities before a game starts.
 
-<!-- TODO(docs): capture output of `valheim-test session check session.json --hosts` -->
+Captured result field:
+
+```json
+{
+  "Ready": true
+}
+```
 
 ### 6. Open the clients in your scenario
 
-Pass the plan's client sections by name to the runner:
+From the generated consumer folder, run the unchanged entry:
 
-```csharp
-return await PinnedServerRun.RunCampaignAsync(manifestFile, plan,
-    plan => new Dictionary<string, ClientRunPlan> { ["client-a"] = plan.Client!, ["client-b"] = plan.SecondClient! },
-    output, options);
+```sh
+dotnet run --project SmokeCheck.csproj -c Release -- RUN_OUTPUT/campaign.json NEW_RESULT_DIRECTORY
 ```
 
-In the scenario, open both at once, then join each:
+The [canonical scenario](../../examples/FullLifecycle/ExampleMod.Tests/MarkerScenario.cs) calls `GameSession.OpenClientsAsync` with the same named plan objects used by campaign binding. The toolkit owns both clients and their cleanup.
 
-```csharp
-var clients = await session.OpenClientsAsync(new Dictionary<string, ClientRunPlan>
-{
-    ["client-a"] = plan.Client!, ["client-b"] = plan.SecondClient!,
-});
+Captured final line:
+
+```text
+PASS
 ```
-
-The [three-actor scenario](../../tests/Valheim.Testing.NativeAcceptance/ThreeActorSmokeScenario.cs) joins, leaves and rejoins two clients.
 
 ## Check the result
 
-- Each client writes its evidence into its own folder, `<output>/client-a/` and `<output>/client-b/`.
-- `prepared/environment-assignments.json` names the host each actor ran on.
-- `valheim-test env status --inventory environments.json` exits 0 when every lease, lock and profile was released.
+Require separate A and B marker checks, two connected peers, A still pinned while B leaves, one peer during B's absence, and two peers after rejoin. Require B's complete marker census again after rejoin.
+
+Inspect `result.json`, `junit.xml`, each client's command trace, and `prepared/environment-assignments.json`. Finish with `valheim-test env status --inventory environments.json`; it must list nothing your run left.
 
 ## Problems
 
 | Symptom | Fix |
 |---|---|
-| Two clients placed on one host are refused | Add a client environment on another host, or `differentHostFrom` |
-| A client is refused because its account is leased | Wait for the holder run, or `valheim-test env recover --run ID` once it is over |
-| Two clients are refused on one Steam account | Sign each client host in to its own account |
-| A client stops at once with "Logged In Elsewhere" | Someone plays on that account elsewhere; end that session and start Steam on the host again |
-| A local client is refused for its CLI port | Use the port of the environment the client was assigned |
-| A client is refused for `-savedir` | Remove it from the client's launch arguments |
+| Duplicate player identity | Register another game-created disposable character |
+| Account or host conflict | Use distinct client hosts and signed-in accounts |
+| B has an incomplete observation | Inspect B's trace; incomplete does not mean zero |
+| Invalid arrival | Measure dry ground beside the same marker |
+| Cleanup fails | Follow [recovery](../reference/sessions-leases-and-recovery.md) |
+
+## Limits
+
+This visibility mode does not prove save/restart persistence. Captured results use published toolkit `0.1.0`, fixture UID `3010640879`, a macOS server/client A and Windows client B. Published `0.2` verification remains pending.
 
 ## Related
 
+- [Standalone consumers and scripted controls](../../examples/FullLifecycle/consumer/README.md)
 - [Campaigns](../reference/sessions-campaigns.md)
-- [Locks, leases and recovery](../reference/sessions-leases-and-recovery.md)
 - [Game sessions](../reference/sessions-game-session.md)
