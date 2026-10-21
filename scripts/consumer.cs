@@ -486,7 +486,14 @@ void FullLifecycle(string config, Dictionary<string, string> env)
         (string?)reference.Attribute("Include") == "Valheim.Testing.GameSessions").SetAttributeValue("Version", "[" + manifest["Valheim.Testing.GameSessions"] + "]");
     document.Save(project);
     Run(env, directory, "dotnet", "restore", project, "--configfile", config);
-    Run(env, directory, "dotnet", "run", Path.Combine(root, "scripts", "validate.cs"), "--", "--test-project", root, project,
-        Path.Combine(root, "artifacts", "validate", "consumer-lifecycle"), "Category!=Native");
+    string results = Path.Combine(root, "artifacts", "validate", "consumer-lifecycle");
+    if (Directory.Exists(results)) Directory.Delete(results, recursive: true);
+    // A test project in the working directory takes precedence over a dotnet run file argument.
+    Run(env, work, "dotnet", "run", Path.Combine(root, "scripts", "validate.cs"), "--", "--test-project", root, project,
+        results, "Category!=Native");
+    var counters = System.Xml.Linq.XDocument.Load(Directory.GetFiles(Path.Combine(results, "LifecycleTests"), "*.trx").Single())
+        .Descendants().Single(element => element.Name.LocalName == "Counters");
+    if ((int?)counters.Attribute("executed") is not > 0)
+        throw new InvalidOperationException("The standalone lifecycle test map executed no tests.");
     Console.WriteLine("ok   The canonical lifecycle scripted controls run from a package-only consumer outside the checkout.");
 }
