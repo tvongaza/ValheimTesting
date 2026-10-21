@@ -77,7 +77,7 @@ dotnet run scripts/native-dependencies.cs -- check /private/test/dependency-lock
 
 An assembly a soft integration references is a candidate, not automatically optional. Add its assembly name to `optionalReferences` only after confirming the mod guards that use when the integration is absent.
 
-`NativeDependencyLock.ApplyTo(inputs, cliManifestPath)` fills a `RegressionInputs`' CLI, plugin and optional-reference fields. You supply the fixture, character and mod arms, then run `TargetedRegression.Preflight()` and the scenario, calling `Remove()` in a `finally` block, or `Remove(report, output)` after the last arm of a run ([cleanup](sessions-targeted-regression.md#clean-up-after-a-run)).
+`NativeDependencyLock.ApplyTo(inputs, cliManifestPath)` fills a `RegressionInputs`' CLI, plugin and optional-reference fields. You supply the fixture, character and mod arms. Follow the [cleanup contract](sessions-targeted-regression.md#clean-up-after-a-run) when preflighting or running the scenario.
 
 ## Limits
 

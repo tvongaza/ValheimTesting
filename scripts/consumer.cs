@@ -24,7 +24,7 @@
 // from the feed at exactly the manifest version.
 //
 // TargetedRegression builds from the current candidate or released GameSessions package outside this checkout.
-// The source example uses a project reference for local editing; the consumer swaps only that reference for the exact package.
+// It stages the published four-file consumer map and substitutes only the package identity/feed for candidate validation.
 using System.Diagnostics;
 using System.Security;
 using System.Text.Json;
@@ -276,26 +276,27 @@ int Usage(string problem)
 // Build the source example from this checkout's GameSessions package, outside the checkout.
 void TargetedRegression(string config, string cache, Dictionary<string, string> env)
 {
-    string source = Path.Combine(root, "examples", "TargetedRegression");
-    // Git may check this project out with CRLF on Windows; compare its structure with one newline convention.
-    string xml = File.ReadAllText(Path.Combine(source, "TargetedRegression.csproj")).Replace("\r\n", "\n", StringComparison.Ordinal);
-    const string sourceReference = "  <ItemGroup Condition=\"'$(GameSessionsPackageVersion)' == ''\"><ProjectReference Include=\"../../src/Valheim.Testing.GameSessions/Valheim.Testing.GameSessions.csproj\" /></ItemGroup>\n" +
-        "  <ItemGroup Condition=\"'$(GameSessionsPackageVersion)' != ''\"><PackageReference Include=\"Valheim.Testing.GameSessions\" Version=\"[$(GameSessionsPackageVersion)]\" /></ItemGroup>";
-    if (!xml.Contains(sourceReference, StringComparison.Ordinal))
-        throw new InvalidOperationException("TargetedRegression's source project no longer has the expected GameSessions reference; update this consumer check with the example.");
-    string version = manifest["Valheim.Testing.GameSessions"];
-    xml = xml.Replace(sourceReference, $"  <ItemGroup><PackageReference Include=\"Valheim.Testing.GameSessions\" Version=\"[{version}]\" /></ItemGroup>", StringComparison.Ordinal);
     string directory = Path.Combine(work, "targeted");
     Directory.CreateDirectory(directory);
-    File.WriteAllText(Path.Combine(directory, "TargetedRegression.csproj"), xml);
-    foreach (string name in new[] { "Program.cs", "Scenario.cs" })
-        File.Copy(Path.Combine(source, name), Path.Combine(directory, name));
-    Run(env, directory, "dotnet", "restore", "TargetedRegression.csproj", "--configfile", config);
+    foreach (var (from, to) in new[]
+    {
+        ("examples/TargetedRegression/Program.cs", "Program.cs"),
+        ("examples/TargetedRegression/Scenario.cs", "Scenario.cs"),
+        ("examples/TargetedRegression/consumer/MarkerRegression/MarkerRegression.csproj", "MarkerRegression.csproj"),
+        ("examples/TargetedRegression/consumer/NuGet.Config", "NuGet.Config"),
+    }) File.Copy(Path.Combine(root, from), Path.Combine(directory, to));
+    string project = Path.Combine(directory, "MarkerRegression.csproj");
+    string version = manifest["Valheim.Testing.GameSessions"];
+    var document = System.Xml.Linq.XDocument.Load(project);
+    document.Descendants("PackageReference").Single(reference =>
+        (string?)reference.Attribute("Include") == "Valheim.Testing.GameSessions").SetAttributeValue("Version", "[" + version + "]");
+    document.Save(project);
+    Run(env, directory, "dotnet", "restore", project, "--configfile", config);
     string metadata = Path.Combine(cache, "valheim.testing.gamesessions", version.ToLowerInvariant());
     string expected = local ? Path.GetFullPath(localFeed) : NuGetOrg;
     if (!string.Equals(Metadata(metadata, "source"), expected, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
         throw new InvalidOperationException($"TargetedRegression did not restore Valheim.Testing.GameSessions {version} from {expected} ({metadata}).");
-    Run(env, directory, "dotnet", "build", "TargetedRegression.csproj", "-c", "Release", "--no-restore");
+    Run(env, directory, "dotnet", "build", project, "-c", "Release", "--no-restore");
     Console.WriteLine($"ok   TargetedRegression builds outside the checkout from Valheim.Testing.GameSessions {version} on {(local ? "the local candidate feed" : "NuGet.org")}.");
 }
 
