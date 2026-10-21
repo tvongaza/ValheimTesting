@@ -400,8 +400,12 @@ jobs:
           if ! out=$(dotnet run scripts/pins.cs -- bump 2>&1); then
             echo "$out"
             case "$out" in *"choose its next version by hand"*) ;; *) echo "::error::bump failed"; exit 1 ;; esac
+            # The maintainer's choice: the next patch prerelease after each package's recorded release.
             for project in src/Valheim.Testing*/Valheim.Testing*.csproj; do
-              sed -i -E 's#<Version>[^<]+</Version>#<Version>0.1.1-preview.1</Version>#' "$project"
+              id=$(basename "$project" .csproj)
+              recorded=$(sed -nE "s/.*\"$id\": \"([^\"]+)\".*/\\1/p" toolkit-versions.json)
+              next=$(echo "${recorded%%-*}" | awk -F. '{print $1"."$2"."$3+1"-preview.1"}')
+              sed -i -E "s#<Version>[^<]+</Version>#<Version>$next</Version>#" "$project"
             done
             dotnet run scripts/pins.cs -- bump
           fi

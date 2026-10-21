@@ -18,8 +18,8 @@ The transport, [`Valheim.Testing.Cli`](Valheim.Testing.Cli.md), comes with this 
 Add the package to a separate system-test project, never to the mod. It targets net10.0.
 
 ```xml
-<PackageReference Include="Valheim.Testing.Game" Version="[0.1.0]" />
-<PackageReference Include="Valheim.Testing.GameSessions" Version="[0.1.0]" />
+<PackageReference Include="Valheim.Testing.Game" Version="[0.2.0]" />
+<PackageReference Include="Valheim.Testing.GameSessions" Version="[0.2.0]" />
 ```
 
 Brackets pin an exact version; the released versions are in the [package table](../package-versions.md).

@@ -18,7 +18,7 @@ This check reads your mod DLL with [Mono.Cecil](https://github.com/jbevain/cecil
 Install the tool into `.tools`. Then point it at your built mod and the game's `Managed` directory:
 
 ```sh
-dotnet tool install Valheim.Testing.Bindings.Tool --version 0.1.0 --tool-path .tools
+dotnet tool install Valheim.Testing.Bindings.Tool --version 0.2.0 --tool-path .tools
 .tools/valheim-bindings MyMod/bin/Release/MyMod.dll --game-dir "path/to/valheim_Data/Managed"
 ```
 
