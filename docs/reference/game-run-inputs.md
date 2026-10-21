@@ -24,8 +24,8 @@ loader.Write(privateManifestPath);
 // The loader is a property of the client environment: its loaderPackage in the inventory.
 File.WriteAllText(privateEnvironmentsPath, $$"""{ "environments": [ { "name": "local-client", "roles": ["client"], "loaderPackage": {{JsonSerializer.Serialize(privateManifestPath)}} } ] }""");
 var run = new TargetedRegression(RegressionInputs.Read(privateRegressionInputs), inventory: EnvironmentInventory.Read(privateEnvironmentsPath));
-try { run.Preflight(); } // checks the package and copied install without launching Valheim
-finally { run.Remove(); } // Preflight leaves its last arm staged under the client host's lock; retire it
+run.Preflight(); // checks the package and prepared profile without launching Valheim
+run.Remove(); // retire the successful preflight's profile; a failed preflight attempts retirement itself
 ```
 
 `Capture` records the files present in the extracted package; `Read` refuses changed or missing files. A package must be a complete loader for at least one platform; applying it, locally or on a host, refuses one that is not complete for that platform.
@@ -77,7 +77,7 @@ dotnet run scripts/native-dependencies.cs -- check /private/test/dependency-lock
 
 An assembly a soft integration references is a candidate, not automatically optional. Add its assembly name to `optionalReferences` only after confirming the mod guards that use when the integration is absent.
 
-`NativeDependencyLock.ApplyTo(inputs, cliManifestPath)` fills a `RegressionInputs`' CLI, plugin and optional-reference fields. You supply the fixture, character and mod arms, then run `TargetedRegression.Preflight()` and the scenario, calling `Remove()` in a `finally` block, or `Remove(report, output)` after the last arm of a run ([cleanup](sessions-targeted-regression.md#clean-up-after-a-run)).
+`NativeDependencyLock.ApplyTo(inputs, cliManifestPath)` fills a `RegressionInputs`' CLI, plugin and optional-reference fields. You supply the fixture, character and mod arms, then run `TargetedRegression.Preflight()` and the scenario, calling `Remove()` after a successful preflight, or `Remove(report, output)` after the last arm of a run ([cleanup](sessions-targeted-regression.md#clean-up-after-a-run)).
 
 ## Limits
 

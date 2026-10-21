@@ -205,6 +205,7 @@ internal static class SmokeProject
                     // Add focused assertions here using round.Server and round.Step(...).
                     // A load smoke alone does not prove that the mod's feature works.
                 }, cancellation.Token);
+            regression.Remove(report, resultDirectory);
             return report.Passed ? 0 : 1;
             """);
         File.WriteAllText(Path.Combine(directory, "README.md"), $$"""

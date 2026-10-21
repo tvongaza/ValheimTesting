@@ -45,23 +45,27 @@ File names never count in the metadata check. A probe's or the mod's own command
 |---|---|
 | `Preflight()` | Stages every arm in turn; the last stays staged ([clean up](#clean-up-after-a-run)) |
 | `Run(arm, output, scenario, rounds, measure)` | Stages the arm, writes `run-manifest.json`, calls `Verify()` right before the launch, runs the hosted `ClientRounds` with the scenario's capabilities required live before its first round, scans the client's logs and writes the report in every outcome |
-| `Remove()` | Call it in `finally` ([clean up](#clean-up-after-a-run)): retires only the shared-stage copy this runner prepared and releases the host lock |
+| `Remove()` | Retires only this runner's prepared profile and releases its host lock ([cleanup](#clean-up-after-a-run)) |
 
 ## Clean up after a run
 
-A `Stage`, `Preflight` or `Run` that staged an arm leaves it in place under an exclusive journalled lock on the client host, whatever the outcome of the run. Until that copy is retired, the next native run on the host is blocked. Call `Remove()` in a `finally` block, so a later exception, a failed scenario or an early return retires it too:
+A successful `Stage` or `Preflight` keeps its profile under the client's journalled host lock. A returned `Run` report keeps it for another arm. Call `Remove()` when finished, or `Remove(report, output)` after the last arm to record retirement in its report.
+
+Retire a successful preflight before printing its snapshots:
 
 ```csharp
 var regression = TargetedRegression.Read(inputsFile);
-try
-{
-    foreach (var arm in regression.Preflight())
-        foreach (string line in arm.Describe()) Console.WriteLine(line);
-}
-finally { regression.Remove(); }
+var arms = regression.Preflight();
+regression.Remove();
+foreach (var arm in arms)
+    foreach (string line in arm.Describe()) Console.WriteLine(line);
 ```
 
-After the last arm of a run, call `Remove(report, output)` instead: it also records in that arm's `result.json` whether the removal was verified. The [example](../../examples/TargetedRegression/README.md) does both.
+The output lists each arm's identity and pinned files. Nothing launches.
+
+If `Stage`, `Preflight` or `Run` throws, it attempts retirement before propagating the error. This includes a failed report write. It preserves operation and cleanup failures together, without automatically retrying failed retirement. `Remove(report, output)` also preserves both errors if retirement and writing fail.
+
+A normal scenario failure returns a failed report. Call `Remove(report, output)` before checking `report.Passed`, as the [example](../../examples/TargetedRegression/Program.cs) does. A failed retirement keeps unretired state and its host lock for recovery; it never deletes an unowned path.
 
 An interrupted run leaves its journal for `valheim-test env recover` ([recovery](sessions-leases-and-recovery.md#env-recover)).
 

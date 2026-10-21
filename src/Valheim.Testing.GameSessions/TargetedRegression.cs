@@ -101,6 +101,7 @@ public sealed class TargetedRegression
     private readonly string _stage;
     private readonly bool _runtimeExplicit;
     private bool _prepared;
+    private int _cleanupFailures;
     private double _lastStageSeconds;
     private string? _activeGameRoot;
     private InstallPins? _activePins;
@@ -215,20 +216,23 @@ public sealed class TargetedRegression
     }
 
     /// <summary>Stages and preflights every arm in turn, without the game; returns them in manifest order (the last stays staged).
-    /// Call <see cref="Remove()"/> in a <c>finally</c> block to retire that copy and release the host lock.
+    /// Call <see cref="Remove()"/> after a successful preflight to retire that copy and release the host lock.
+    /// A failed operation attempts retirement itself; cleanup failures are reported with the original failure.
     /// </summary>
-    public IReadOnlyList<StagedArm> Preflight()
+    public IReadOnlyList<StagedArm> Preflight() => WithFailureCleanup(() =>
     {
         RequireDirectClientDesktop();
         return Inputs.Mod.Arms.Keys.Select(Stage).ToList();
-    }
+    });
 
     /// <summary>
     /// Stages <paramref name="arm"/> into the disposable install and runs every static check (see the class summary).
     /// Refuses with the corrective action at the first problem; nothing is launched. A successful stage stays in place under the
-    /// host lock: call <see cref="Remove()"/> in a <c>finally</c> block to retire it.
+    /// host lock: call <see cref="Remove()"/> after using it. A failed stage attempts retirement itself.
     /// </summary>
-    public StagedArm Stage(string arm)
+    public StagedArm Stage(string arm) => WithFailureCleanup(() => StageCore(arm));
+
+    private StagedArm StageCore(string arm)
     {
         var env = Inputs;
         if (!env.Mod.Arms.TryGetValue(arm, out var chosen))
@@ -287,7 +291,6 @@ public sealed class TargetedRegression
         string generatedConfig = Path.Combine(Path.GetTempPath(), "vt-regression-" + Guid.NewGuid().ToString("N") + ".cfg");
         // The regression client hosts its own world (below), so it is not a joined client and needs no mutation access.
         selected = CliServerConfig.Stage(selected, "Regression client", Port, generatedConfig, requireClientMutations: false);
-        try
         {
             try { PrepareCopy(selected); }
             finally { File.Delete(generatedConfig); }
@@ -353,11 +356,20 @@ public sealed class TargetedRegression
                 env.Mod.Repeatability, arms, allowlist, configs, installPins, identity.Name, identity.UidText, fixture.Count, Capabilities, LiveOnlyCapabilities, cliManifest);
             return new StagedArm(arm, plan, manifest, tree, install);
         }
+    }
+
+    // A nested stage or profile replacement can already have failed retirement before its caller sees the error.
+    // Count failures at the retirement owner: successful replacement must not suppress cleanup of a new profile.
+    private T WithFailureCleanup<T>(Func<T> action)
+    {
+        int failures = _cleanupFailures;
+        try { return action(); }
         catch (Exception failure)
         {
-            // A rejected preflight must not strand a valid but unusable game copy or a live journal entry.
-            try { if (_prepared || _hostLock != null) Remove(); }
-            catch (Exception cleanup) { throw new AggregateException("Regression preflight and copy cleanup both failed.", failure, cleanup); }
+            if (_cleanupFailures == failures && (_prepared || _hostLock != null))
+                try { Remove(); }
+                catch (Exception cleanup)
+                { throw new AggregateException("Regression operation and copy cleanup both failed.", failure, cleanup); }
             throw;
         }
     }
@@ -366,7 +378,8 @@ public sealed class TargetedRegression
     /// Runs one arm: stages and preflights it, writes <c>run-manifest.json</c>, then <see cref="ClientRounds"/> with
     /// <paramref name="rounds"/> and <paramref name="measure"/>, refusing a changed install right before the launch and
     /// requiring the scenario's capabilities live before its first round. Scans the client's logs and writes
-    /// <c>result.json</c> and <c>junit.xml</c> in every outcome. <paramref name="output"/> must not exist yet.
+    /// <c>result.json</c> and <c>junit.xml</c> in every outcome. If the operation throws, including a report-write failure,
+    /// it attempts to retire its profile before rethrowing. <paramref name="output"/> must not exist yet.
     /// Call <see cref="Remove(ScenarioReport, string)"/> after the last arm to retire the copy and release the host lock.
     /// <paramref name="afterPinnedClientOpened"/> runs once the owned client has reached its menu with the selected
     /// plugins verified; a caller can record cold-start timing there without treating later world entry as plugin load.
@@ -386,7 +399,13 @@ public sealed class TargetedRegression
         Func<ClientRunPlan, string, ICollection<RunLog>, CancellationToken, ClientSession>? openClient,
         Action? afterStaged,
         Action<CharacterStageEvent, string, string, string, string>? characterJournal = null,
-        bool deferReportWrite = false)
+        bool deferReportWrite = false) => WithFailureCleanup(() => RunCore(arm, output, scenario, rounds, measure,
+            cancellation, afterPinnedClientOpened, openClient, afterStaged, characterJournal, deferReportWrite));
+
+    private ScenarioReport RunCore(string arm, string output, string scenario, IReadOnlyList<string> rounds, Action<ClientRound> measure,
+        CancellationToken cancellation, Action<ScenarioReport>? afterPinnedClientOpened,
+        Func<ClientRunPlan, string, ICollection<RunLog>, CancellationToken, ClientSession>? openClient,
+        Action? afterStaged, Action<CharacterStageEvent, string, string, string, string>? characterJournal, bool deferReportWrite)
     {
         ArgumentNullException.ThrowIfNull(measure);
         if (openClient == null) RequireDirectClientDesktop();
@@ -524,11 +543,13 @@ public sealed class TargetedRegression
     /// <summary>
     /// Deletes the disposable install as a <see cref="StepPhase.Cleanup"/> step of the last arm's report, records what
     /// happened to it (<c>disposableInstall</c>) and writes that report again to <paramref name="lastArmOutput"/>, so its
-    /// <c>result.json</c> says whether cleanup was verified. Rethrows a refusal after recording it.
+    /// <c>result.json</c> says whether cleanup was verified. Rethrows a refusal after recording it; if reporting also fails,
+    /// an <see cref="AggregateException"/> preserves both failures.
     /// </summary>
     public void Remove(ScenarioReport lastArm, string lastArmOutput)
     {
         ArgumentNullException.ThrowIfNull(lastArm);
+        Exception? retirement = null;
         try
         {
             lastArm.Step(StepPhase.Cleanup, "remove the disposable install", Remove);
@@ -537,13 +558,18 @@ public sealed class TargetedRegression
         catch (Exception error)
         {
             lastArm.Provenance["disposableInstall"] = "kept, removal refused: " + error.Message;
-            throw;
+            retirement = error;
         }
-        finally { lastArm.Write(lastArmOutput); }
+        try { lastArm.Write(lastArmOutput); }
+        catch (Exception write) when (retirement != null)
+        { throw new AggregateException("Regression copy cleanup and report write both failed.", retirement, write); }
+        if (retirement != null) System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw(retirement);
     }
 
     /// <summary>Retires the copy made by this runner through the shared hosted-runtime owner.</summary>
-    public void Remove()
+    public void Remove() => RecordCleanupFailure(RemoveCore);
+
+    private void RemoveCore()
     {
         Exception? retirement = null;
         if (!_prepared)
@@ -640,6 +666,23 @@ public sealed class TargetedRegression
     }
 
     private void RetirePrepared()
+    {
+        try { RetirePreparedCore(); }
+        catch
+        {
+            // A delayed source-integrity error can follow proven physical retirement. Its remaining lock still needs release.
+            if (_prepared) _cleanupFailures++;
+            throw;
+        }
+    }
+
+    private void RecordCleanupFailure(Action cleanup)
+    {
+        try { cleanup(); }
+        catch { _cleanupFailures++; throw; }
+    }
+
+    private void RetirePreparedCore()
     {
         RequireStopped([_activeGameRoot ?? Install], clientSession: false);
         Exception? integrity = null;
