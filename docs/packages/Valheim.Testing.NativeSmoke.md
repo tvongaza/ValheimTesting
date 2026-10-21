@@ -113,7 +113,7 @@ Both compared builds must declare the same plugin identities. The client needs i
 valheim-test server-load --mod /path/to/ServerMod.dll
 ```
 
-`server-load` prints the server and client it chose, writes `campaign.json` and runs the read-only host preflight before anything is copied. Then one clean client without the mod joins the owned server.
+`server-load` prints the server and client it chose, writes `campaign.json` and runs the read-only host preflight before anything is copied. The preflight refuses a server and client whose installs are on different Valheim network versions. Then one clean client without the mod joins the owned server.
 
 | Option | Does |
 |---|---|
@@ -264,7 +264,7 @@ The last line is `N runs ended and left nothing. Nothing was changed.` `env stat
 valheim-test session check SESSION [--hosts] [--json]
 ```
 
-`session check` reports every problem with a `session.json`'s inputs and actor assignment without contacting a host, then `ELIGIBLE` or `REFUSED` lines. `--hosts` adds the read-only host checks (installs, loaders, ports, free space, conflicting games, journals, signed-in Steam accounts) and prints `READY` when they pass. Sessions: [GameSessions](../reference/sessions-inventory.md).
+`session check` reports every problem with a `session.json`'s inputs and actor assignment without contacting a host, then `ELIGIBLE` or `REFUSED` lines. `--hosts` adds the read-only host checks (installs and their Valheim network versions, loaders, ports, free space, conflicting games, journals, signed-in Steam accounts) and prints `READY` when they pass. Sessions: [GameSessions](../reference/sessions-inventory.md).
 
 ## detach
 

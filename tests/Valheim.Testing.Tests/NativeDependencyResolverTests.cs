@@ -366,36 +366,35 @@ public sealed class NativeDependencyResolverTests : IDisposable
         Assert.All(keptCampaign.Copies, copy => Assert.True(Directory.Exists(hosts[copy.Host].Local(copy.Runtime))));
     }
 
-    // Run A (#258): a run never makes macOS show a dialog. A macOS client's source bundle with a changed sealed file is refused
-    // in the preflight; one with files only added inside it is fine, since the profile launches that install, which macOS already
-    // let run. The bundle check is a read-only bash script (MacAppBundle.Bash), answered here by the fake host; the real script
-    // runs on CI's macOS leg (MacAppBundleTests).
-    [Fact] public async Task AMacClientsSourceMustBeOneMacOSLaunchesWithoutADialog()
+    // A ready campaign on two ssh hosts: a Windows dedicated server and a macOS client, each install a Valheim 1.0.17 (network version 40).
+    private (string Manifest, Dictionary<string, FakeServerHost> Hosts, string MacSource) TwoHostCampaign(string prefix)
     {
-        string serverMod = _rig.Write("mac-campaign/Server.dll", RegressionRig.Assembly("Server", new("example.server")));
-        string clientMod = _rig.Write("mac-campaign/Client.dll", RegressionRig.Assembly("Client", new("example.client")));
-        string serverLock = Lock(serverMod, "mac-server"), clientLock = Lock(clientMod, "mac-client");
-        string store = Store("macone", 404, "mac/");
-        string world = Path.Combine(_rig.Root, "mac-campaign-world");
+        string serverMod = _rig.Write(prefix + "/Server.dll", RegressionRig.Assembly("Server", new("example.server")));
+        string clientMod = _rig.Write(prefix + "/Client.dll", RegressionRig.Assembly("Client", new("example.client")));
+        string serverLock = Lock(serverMod, prefix + "-server"), clientLock = Lock(clientMod, prefix + "-client");
+        string store = Store("macone", 404, prefix + "/");
+        string world = Path.Combine(_rig.Root, prefix + "-world");
         FakeInstalls.World(world);
-        var server = new FakeServerHost("server", Path.Combine(_rig.Root, "mac-mirror-server"), windows: true);
+        var server = new FakeServerHost("server", Path.Combine(_rig.Root, prefix + "-mirror-server"), windows: true);
         string serverSource = server.Local(@"C:\game\source");
         FakeInstalls.Server(serverSource);
         File.WriteAllText(Path.Combine(serverSource, GameLaunch.ServerWindowsExecutable), "game");
         File.WriteAllText(Path.Combine(serverSource, "winhttp.dll"), "MZ target_assembly");
         File.WriteAllText(Path.Combine(serverSource, "doorstop_config.ini"), "[General]\nenabled=true\ntarget_assembly=BepInEx\\core\\BepInEx.Preloader.dll\n");
-        var mac = new FakeServerHost("mac", Path.Combine(_rig.Root, "mac-mirror-client")) { SteamUserReply = "VT-STEAMUSER account 404\n" };
+        var mac = new FakeServerHost("mac", Path.Combine(_rig.Root, prefix + "-mirror-client")) { SteamUserReply = "VT-STEAMUSER account 404\n" };
         string macSource = mac.Local("/game/source");
-        foreach (var (relative, text) in new[] { ("Valheim.app/Contents/MacOS/Valheim", "game"), ("Valheim.app/Contents/Resources/Data/Managed/" + InstallPins.GameAssemblyName, "game build 1"),
-            ("BepInEx/core/BepInEx.dll", "bepinex"), ("BepInEx/core/BepInEx.Preloader.dll", "preloader"), ("libdoorstop.dylib", "doorstop") })
+        foreach (var (relative, text) in new[] { ("Valheim.app/Contents/MacOS/Valheim", "game"), ("BepInEx/core/BepInEx.dll", "bepinex"), ("BepInEx/core/BepInEx.Preloader.dll", "preloader"), ("libdoorstop.dylib", "doorstop") })
         {
             Directory.CreateDirectory(Path.GetDirectoryName(Path.Combine(macSource, relative))!);
             File.WriteAllText(Path.Combine(macSource, relative), text);
         }
+        string macManaged = Path.Combine(macSource, "Valheim.app", "Contents", "Resources", "Data", "Managed");
+        Directory.CreateDirectory(macManaged);
+        File.WriteAllBytes(Path.Combine(macManaged, InstallPins.GameAssemblyName), FakeInstalls.GameAssembly());
         Directory.CreateDirectory(mac.Local("/home/t/characters_local"));
         Directory.CreateDirectory(mac.Local("/home/t/userdata"));
         var hosts = new Dictionary<string, FakeServerHost> { ["server"] = server, ["mac"] = mac };
-        string inventoryFile = Path.Combine(_rig.Root, "mac-inventory.json");
+        string inventoryFile = Path.Combine(_rig.Root, prefix + "-inventory.json");
         File.WriteAllText(inventoryFile, JsonSerializer.Serialize(new
         {
             hosts = new Dictionary<string, object>
@@ -410,7 +409,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
             },
             leaseHost = "server", leaseDirectory = @"C:\leases",
         }));
-        string manifestFile = Path.Combine(_rig.Root, "mac-campaign.json");
+        string manifestFile = Path.Combine(_rig.Root, prefix + ".json");
         File.WriteAllText(manifestFile, JsonSerializer.Serialize(new
         {
             inventory = inventoryFile, world, join = "test-server.example:2456",
@@ -418,7 +417,17 @@ public sealed class NativeDependencyResolverTests : IDisposable
             clients = new Dictionary<string, object> { ["player"] = new { dependencyLock = clientLock,
                 character = new { store, registeredName = "macone", fileName = "vt-mac", charactersLocalDirectory = "/home/t/characters_local", steamUserDataDirectory = "/home/t/userdata" } } },
         }));
+        return (manifestFile, hosts, macSource);
+    }
 
+    // Run A (#258): a run never makes macOS show a dialog. A macOS client's source bundle with a changed sealed file is refused
+    // in the preflight; one with files only added inside it is fine, since the profile launches that install, which macOS already
+    // let run. The bundle check is a read-only bash script (MacAppBundle.Bash), answered here by the fake host; the real script
+    // runs on CI's macOS leg (MacAppBundleTests).
+    [Fact] public async Task AMacClientsSourceMustBeOneMacOSLaunchesWithoutADialog()
+    {
+        var (manifestFile, hosts, macSource) = TwoHostCampaign("mac-campaign");
+        var mac = hosts["mac"];
         // A sealed file changed in the source: refused in the preflight, read only, naming the file.
         mac.MacBundleInspect = "VT-BUNDLE broken 1 " + Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes("file modified: /game/source/Valheim.app/Contents/Info.plist"));
         var broken = await HostedCampaignPreparation.InspectAsync(manifestFile, TimeSpan.FromSeconds(30), name => hosts[name], pinnedLoader: null);
@@ -441,6 +450,49 @@ public sealed class NativeDependencyResolverTests : IDisposable
         Assert.All(mac.Runs.Where(run => run.Script == "mac-bundle"), run => Assert.Equal("/game/source/Valheim.app", run.Variables["app"]));
         Assert.DoesNotContain("copy", mac.Scripts);
         Assert.Equal("game", File.ReadAllText(Path.Combine(macSource, "Valheim.app/Contents/MacOS/Valheim")));
+    }
+
+    // #860: Valheim refuses a join across network versions, so the host check reads each install's game assembly on its own host and
+    // refuses a mismatched or unknown pair before any profile is staged. The same inspection serves session check --hosts, campaign
+    // preparation and one-shot server-load.
+    [Fact] public async Task InstallsOnAnotherNetworkVersionAreRefusedBeforeAnythingIsStaged()
+    {
+        var (manifestFile, hosts, macSource) = TwoHostCampaign("versions");
+        string clientAssembly = Path.Combine(macSource, "Valheim.app", "Contents", "Resources", "Data", "Managed", InstallPins.GameAssemblyName);
+        string serverAssembly = Path.Combine(hosts["server"].Local(@"C:\game\source"), "valheim_server_Data", "Managed", InstallPins.GameAssemblyName);
+        Task<CampaignPreflightReport> Inspect() => HostedCampaignPreparation.InspectAsync(manifestFile, TimeSpan.FromSeconds(30), name => hosts[name], pinnedLoader: null);
+
+        // One network version on both hosts: ready, and each actor carries the build read on its host.
+        var ready = await Inspect();
+        Assert.True(ready.Ready, string.Join("; ", ready.Problems.Select(problem => problem.Message)));
+        Assert.All(ready.Actors, actor => Assert.Equal(("1.0.17", (uint?)40), (actor.GameVersion, actor.NetworkVersion)));
+        Assert.All(hosts.Values, host => Assert.Contains(host.Runs, run => run.Script == "preflight-read" && run.Variables["path"].EndsWith(InstallPins.GameAssemblyName)));
+
+        // The client updated first (1.0.20, network version 41): refused naming both installs, and nothing staged on either host.
+        File.WriteAllBytes(clientAssembly, FakeInstalls.GameAssembly("1.0.20", 41));
+        var mismatch = await Inspect();
+        var problem = Assert.Single(mismatch.Problems);
+        Assert.Equal(("player", "game version"), (problem.Actor, problem.Input));
+        Assert.StartsWith("player's install /game/source on mac is Valheim 1.0.20 (network version 41), but server's install C:\\game\\source on server " +
+            "is Valheim 1.0.17 (network version 40).", problem.Message);
+        Assert.Equal([(uint?)40, 41], mismatch.Actors.OrderBy(actor => actor.Name == "server" ? 0 : 1).Select(actor => actor.NetworkVersion));
+        await Assert.ThrowsAsync<ArgumentException>(() => HostedCampaignPreparation.PrepareAsync(manifestFile, Path.Combine(_rig.Root, "versions-refused"),
+            TimeSpan.FromSeconds(30), name => hosts[name], pinnedLoader: null));
+        Assert.All(hosts.Values, host => Assert.DoesNotContain(host.Scripts, script => script is "copy" or "profile-seed" or "apply-stage"));
+        // Distinct game versions on one network version still join.
+        File.WriteAllBytes(clientAssembly, FakeInstalls.GameAssembly("1.0.18", 40));
+        Assert.True((await Inspect()).Ready);
+
+        // A server assembly that is not the game's: unknown, refused, never inferred.
+        File.WriteAllText(serverAssembly, "game build 1");
+        var unknown = Assert.Single((await Inspect()).Problems);
+        Assert.Equal(("server", "game version"), (unknown.Actor, unknown.Input));
+        Assert.Contains(@"is unknown: C:\game\source\valheim_server_Data\Managed\assembly_valheim.dll on server is not a readable .NET assembly", unknown.Message);
+
+        // A file that changed after the install was listed is not the listed build.
+        File.WriteAllBytes(serverAssembly, FakeInstalls.GameAssembly());
+        hosts["server"].BeforeScript = script => { if (script == "preflight-read") File.WriteAllBytes(serverAssembly, FakeInstalls.GameAssembly("1.0.20", 41)); };
+        Assert.Contains("changed after the install was listed", Assert.Single((await Inspect()).Problems).Message);
     }
 
     // #256's acceptance in one preflight: six independent faults, each refused under its own actor and input, all in one

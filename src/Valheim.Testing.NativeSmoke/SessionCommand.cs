@@ -46,6 +46,8 @@ internal static class SessionCommand
             {
                 output.WriteLine($"{actor.Name}: {actor.Kind} on {actor.Host} ({actor.Platform})" +
                     (actor.Environment == null ? "" : $" via {actor.Environment}: {actor.SelectionReason}"));
+                if (actor.NetworkVersion != null)
+                    output.WriteLine($"  game {actor.GameVersion ?? "version unread"} (network version {actor.NetworkVersion})");
                 if (actor.CharactersDirectory != null)
                     output.WriteLine($"  characters_local {actor.CharactersDirectory}; Steam userdata {actor.SteamUserDataDirectory}");
             }
