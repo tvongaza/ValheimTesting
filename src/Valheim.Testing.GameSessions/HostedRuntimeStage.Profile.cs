@@ -212,9 +212,9 @@ internal static partial class HostedRuntimeStage
         Func<IGameHost, string, TimeSpan, CancellationToken, Task<MacBundleInspection.Verdict>>? inspectMac = null,
         MacSteamRuntimePackage? steamRuntimePackage = null)
     {
-        await RequireStagePathsAsync(host, kind, source, destination, staging, files, timeout, cancellation).ConfigureAwait(false);
+        RequireStagePaths(host, kind, source, destination, staging, files);
         bool windows = host.Shell.Kind == HostShellKind.PowerShell;
-        var storage = await RequireProfileStorageAsync(host, kind, source, destination, timeout, cancellation).ConfigureAwait(false);
+        var storage = await RequireProfileStorageAsync(host, kind, source, destination, timeout, cancellation, apart: [destination, staging]).ConfigureAwait(false);
         bool linked = storage.Layout == ProfileLayout.Linked;
         // Where the linked game files go: the profile itself, or two folders down for a Mac server (ProfileLayouts.GameFolder).
         string gameFolder = linked ? ProfileLayouts.GameFolder(storage.Platform, kind == HostedRuntimeKind.Server) : "";

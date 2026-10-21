@@ -656,6 +656,17 @@ public sealed class HostedRuntimeStageTests : IDisposable
     public void TheHostPlatformDecidesTheProfileLayout(string platform, bool server, bool linked) =>
         Assert.Equal(linked ? ProfileLayout.Linked : ProfileLayout.SourceExecutable, ProfileLayouts.For(platform, server));
 
+    // #612 review: every copy-intended entry (a server's, a campaign actor's, a local client's) journals where the game will start,
+    // so recovery of an interrupted staging looks for the run's processes there: a linked profile's game folder, or a Mac
+    // client's source install.
+    [Theory]
+    [InlineData("windows", false, "/rt")]
+    [InlineData("linux", true, "/rt")]
+    [InlineData("macos", true, "/rt/game/server")]
+    [InlineData("macos", false, "/src")]
+    public void TheJournalledLaunchRootFollowsTheLayout(string platform, bool server, string root) =>
+        Assert.Equal(root, HostedRuntimeStage.LaunchRoot(platform, server ? HostedRuntimeKind.Server : HostedRuntimeKind.Client, "/src", "/rt"));
+
     // One disposable profile per actor, prepared on a fake host (HostedRuntimeStage.PrepareProfileAsync): the selected files, the loader.
     private string Mirror => Path.Combine(_root, "host");
     private static void StageLoader(string root)
@@ -733,6 +744,8 @@ public sealed class HostedRuntimeStageTests : IDisposable
         Assert.Equal((runtime, runtime), (prepared.GameRoot, prepared.LoaderRoot));
         Assert.Equal(source, prepared.Source.Root);
         Assert.Equal(source + "\n" + runtime, Assert.Single(host.Runs, run => run.Script == "profile-storage").Variables["paths"]);
+        // The runtime and its staging are proven apart from the install once, before anything is written (#612 review 11).
+        Assert.Equal(runtime + "\n" + staging, Assert.Single(host.Runs, run => run.Script == "apart").Variables["paths"]);
         var seed = Assert.Single(host.Runs, run => run.Script == "profile-seed");
         string[] Decoded(string variable) => seed.Variables[variable].Split('\n', StringSplitOptions.RemoveEmptyEntries)
             .Select(line => System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(line))).Order(StringComparer.Ordinal).ToArray();

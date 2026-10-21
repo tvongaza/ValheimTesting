@@ -113,7 +113,7 @@ Both compared builds must declare the same plugin identities. The client needs i
 valheim-test server-load --mod /path/to/ServerMod.dll
 ```
 
-`server-load` prints the server and client it chose, writes `campaign.json` and runs the read-only host preflight before anything is copied. The preflight refuses a server and client whose installs are on different Valheim network versions. Then one clean client without the mod joins the owned server.
+`server-load` prints the server and client it chose, writes `campaign.json` and runs the host preflight before anything is copied (it writes nothing but a Linux or Mac server's trial link, made and removed under the runtime root). The preflight refuses a server and client whose installs are on different Valheim network versions. Then one clean client without the mod joins the owned server.
 
 | Option | Does |
 |---|---|

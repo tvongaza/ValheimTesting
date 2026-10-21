@@ -22,14 +22,20 @@ internal static partial class HostedRuntimeStage
     /// Every route to a Unix verdict comes here, so none misses the trial link.
     /// </summary>
     internal static async Task<ProfileStorageCheck> RequireProfileStorageAsync(IGameHost host, HostedRuntimeKind kind, string source,
-        string runtime, TimeSpan timeout, CancellationToken cancellation = default, bool explicitRuntime = false, bool inPlaceAvailable = false)
+        string runtime, TimeSpan timeout, CancellationToken cancellation = default, bool explicitRuntime = false, bool inPlaceAvailable = false,
+        IReadOnlyList<string>? apart = null)
     {
         bool server = kind == HostedRuntimeKind.Server;
+        // The one home of the rule that a profile lies outside the install it is made from, decided on the host with links
+        // resolved there (a runtime reached through a link into the install is inside it). It runs before anything is written:
+        // before a preparation makes its folders (apart: the runtime and its staging) and before a bash server's trial link below.
+        if (apart != null || server && host.Shell.Kind == HostShellKind.Bash)
+            await HostInstall.RequireApartAsync(host, source, apart ?? [runtime], "the source install", timeout, cancellation).ConfigureAwait(false);
         string platform;
         ProfileStorageVerdict verdict;
         if (host.Shell.Kind == HostShellKind.PowerShell)
         {
-            platform = "windows";
+            platform = HostProfile.Windows; // a PowerShell host is Windows (HostProfile.ShellFor)
             try
             {
                 if (host is LocalGameHost && OperatingSystem.IsWindows())
@@ -49,8 +55,6 @@ internal static partial class HostedRuntimeStage
         else
         {
             if (!server) return new(ProfileLayout.SourceExecutable, "macos", null);
-            // The trial link writes under the runtime root: never inside the install, whose next listing would count it.
-            await HostInstall.RequireApartAsync(host, source, [runtime], "the source install", timeout, cancellation).ConfigureAwait(false);
             var probe = await ProbeUnixStorageAsync(host, [source, runtime], timeout, cancellation, linkTest: true).ConfigureAwait(false);
             platform = probe.Platform;
             if (ProfileLayouts.For(platform, server) == ProfileLayout.SourceExecutable) return new(ProfileLayout.SourceExecutable, platform, null);

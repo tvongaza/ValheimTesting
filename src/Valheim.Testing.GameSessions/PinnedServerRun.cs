@@ -632,6 +632,8 @@ public static class PinnedServerRun
                 });
                 environment = prepared!.Environment;
             }
+            // The inventory environment this run placed its server on; null when the caller resolved it.
+            string? placedEnvironment = null;
             if (environment == null)
             {
                 // A standalone run has one actor to place: its dedicated server, on the inventory's first environment that fits,
@@ -639,6 +641,7 @@ public static class PinnedServerRun
                 var inventory = inventoryPath != null ? EnvironmentInventory.Read(inventoryPath) : EnvironmentInventory.ThisMachineServer(
                     plan.Runtime.Source, plan.Port, HostedServerRun.GamePort(plan) ?? 2456); // the game's own port when the plan names none
                 var (placed, assignment, loaderPackage) = inventory.PlaceServer(plan);
+                placedEnvironment = assignment.Environment;
                 serverLoaderPackage = loaderPackage;
                 if (inventory.Detected.Count != 0) report.Provenance["inventoryDetected"] = string.Join("; ", inventory.Detected);
                 environment = placed;
@@ -683,7 +686,14 @@ public static class PinnedServerRun
             if (prepared == null && ProfileLayouts.For(hosted.HostProfile.Platform, server: true) == ProfileLayout.Linked)
                 await report.StepAsync(StepPhase.Preflight, $"check the {ProfileLinkRules.For(hosted.HostProfile.Platform).Platform} profile storage", async () =>
                 {
-                    string? storage = await hosted.PreflightProfileStorageAsync(cancellation.Token).ConfigureAwait(false);
+                    // A Unix environment's storage is judged here, not at placement (EnvironmentRuns.PlaceServer): its verdict
+                    // needs the trial link, so a refusal names the environment it chose.
+                    string? storage;
+                    try { storage = await hosted.PreflightProfileStorageAsync(cancellation.Token).ConfigureAwait(false); }
+                    catch (InvalidOperationException refusal) when (placedEnvironment != null)
+                    {
+                        throw new InvalidOperationException($"server environment {placedEnvironment} (runtime {hosted.Role.Runtime}): {refusal.Message}", refusal);
+                    }
                     if (storage != null) Console.WriteLine("profile storage: " + storage);
                 }).ConfigureAwait(false);
             phase = StepPhase.Setup;

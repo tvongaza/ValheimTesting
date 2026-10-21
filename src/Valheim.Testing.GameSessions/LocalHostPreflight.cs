@@ -3,9 +3,10 @@ using Valheim.Testing.Game;
 namespace Valheim.Testing.GameSessions;
 
 /// <summary>
-/// Read-only checks shared by local one-shot commands and inventory preflight. A caller supplies only the roles it will
-/// actually use; a server-only run need not have a client desktop or Steam account. No check creates run evidence or copies
-/// game files. Campaigns use the same individual checks for their local actors and add their remote-host checks.
+/// Read-only checks shared by local one-shot commands and inventory preflight, but for the profile-storage check's one trial
+/// hard link for a Linux or Mac server, made and removed under the runtime root (HostedRuntimeStage.RequireProfileStorageAsync).
+/// A caller supplies only the roles it will actually use; a server-only run need not have a client desktop or Steam account.
+/// No check creates run evidence or copies game files. Campaigns use the same individual checks for their local actors and add their remote-host checks.
 /// </summary>
 internal static class LocalHostPreflight
 {

@@ -44,8 +44,7 @@ public sealed class ServerActor : IOwnedServer, IDisposable
             // The launch adds SteamAppId and the Doorstop loader variables BepInEx needs; a macOS profile starts in its owned loader root.
             var environment = plan.Environment.ToDictionary(entry => entry.Key, entry => plan.Expand(entry.Value, runtime, world));
             environment[sessionTokenVariable] = token;
-            var launch = GameLaunch.ForServerWithLoader(placement.GameDirectory, placement.LoaderDirectory,
-                plan.LaunchArguments(runtime, world), environment, placement.Platform, placement.MacSteamRuntimeDirectory, placement.Linked);
+            var launch = Launch(placement, plan.LaunchArguments(runtime, world), environment);
             int n = ++boot;
             var started = placement.Start(n, launch, output, TimeSpan.FromSeconds(plan.QuitSeconds), launchCancellation);
             // What the stop keeps: BepInEx's log, Unity's log when the plan passes -logFile {runtime}/toolkit-unity.log, and the
@@ -332,6 +331,11 @@ public sealed class ServerActor : IOwnedServer, IDisposable
         _game = null;
         _session?.Dispose(); // A scripted world is its test's to dispose.
     }
+
+    /// <summary>The one launch of a boot on <paramref name="placement"/>: its game and loader roots, platform, Steam runtime and layout.</summary>
+    internal static GameLaunch Launch(IServerPlacement placement, IEnumerable<string> arguments, IReadOnlyDictionary<string, string> environment) =>
+        GameLaunch.ForServerWithLoader(placement.GameDirectory, placement.LoaderDirectory, arguments, environment, placement.Platform,
+            placement.MacSteamRuntimeDirectory, placement.Linked);
 }
 
 /// <summary>Where an owned server's boots run: what differs between this machine and a host of the environment.</summary>

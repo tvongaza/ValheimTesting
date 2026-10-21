@@ -130,7 +130,7 @@ internal sealed class LocalClientCopy
         Directory.CreateDirectory(root);
         // Journalled before the profile: an interrupted preparation leaves a record of every path it may own.
         journal.AppendLocal(actor, JournalEntry.Of(JournalEntry.CopyIntended, ("runtime", runtime), ("stage", stage), ("parent", parent),
-            ("runtimeKind", "client"), ("launchRoot", source)));
+            ("runtimeKind", "client"), ("launchRoot", HostedRuntimeStage.LaunchRoot(host.Shell.Kind == HostShellKind.PowerShell ? "windows" : "macos", HostedRuntimeKind.Client, source, runtime))));
         HostedRuntimeStage.PreparedProfile profile;
         try
         {

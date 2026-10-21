@@ -3,9 +3,9 @@ using Valheim.Testing.Game;
 using Valheim.Testing.GameSessions;
 
 /// <summary>
-/// The environments: what the inventory holds (<c>list</c>), whether a one-off can run on it (<c>preflight</c>, read only), and
-/// what earlier runs left on each host, from their journals (<c>status</c>, <c>recover</c>, <c>teardown</c>). A session's own
-/// check is <see cref="SessionCommand"/>.
+/// The environments: what the inventory holds (<c>list</c>), whether a one-off can run on it (<c>preflight</c>, read only but
+/// for a Linux or Mac server's one trial link, made and removed under its runtime root), and what earlier runs left on each
+/// host, from their journals (<c>status</c>, <c>recover</c>, <c>teardown</c>). A session's own check is <see cref="SessionCommand"/>.
 /// </summary>
 internal static class EnvCommand
 {

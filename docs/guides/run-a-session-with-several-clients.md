@@ -55,7 +55,7 @@ Save it outside the repository, for example as `session.json`. The paths are ill
 valheim-test session check session.json --hosts
 ```
 
-It reports every problem in one pass, then `READY` when the hosts pass. It reads the installs, ports, free space, signed-in Steam accounts and run journals, and changes nothing.
+It reports every problem in one pass, then `READY` when the hosts pass. It reads the installs, ports, free space, signed-in Steam accounts and run journals, and changes nothing, apart from one trial hard link for a Linux or Mac server's profile, made and removed under its runtime root.
 
 <!-- TODO(docs): capture output of `valheim-test session check session.json --hosts` -->
 

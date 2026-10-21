@@ -131,7 +131,7 @@ If the server did not stop cleanly, the profile and the host lock stay. The repo
 
 ## A server on another host
 
-With `--inventory`, the runner places the server on the first server environment, in inventory order, that fits the plan. It records the choice and every skipped environment as `serverEnvironment` in `result.json`, beside `inventorySha256`. When none fits, the run is refused before anything is written.
+With `--inventory`, the runner places the server on the first server environment, in inventory order, that fits the plan. It records the choice and every skipped environment as `serverEnvironment` in `result.json`, beside `inventorySha256`. When none fits, the run is refused before anything is written. A Linux or macOS environment's profile storage is not judged at placement, because its verdict needs a trial link: the run's own storage preflight ("check the Linux profile storage") refuses it before the lock or staging, naming the environment and its `runtime`, and that trial link under the runtime root, made and removed at once, is the only write before the refusal ([where a profile lives](sessions-profiles.md#where-a-profile-lives)).
 
 An environment fits when its `cliPort` is the plan's `port` and its `gamePort` matches any `-port` in the plan's arguments. On the host, the runner then:
 

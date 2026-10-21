@@ -7,7 +7,9 @@ public sealed class HostProfile
 {
     internal static string CurrentPlatform => OperatingSystem.IsWindows() ? "windows" : OperatingSystem.IsMacOS() ? "macos" : "linux";
     /// <summary>The one shell a host of <paramref name="platform"/> runs its scripts in: <c>pwsh</c> (PowerShell 7) on Windows, <c>bash</c> on macOS and Linux.</summary>
-    internal static string ShellFor(string platform) => platform == "windows" ? "pwsh" : "bash";
+    internal static string ShellFor(string platform) => platform == Windows ? "pwsh" : "bash";
+    /// <summary>The platform name of a Windows host, the one host whose shell is PowerShell (<see cref="ShellFor"/>).</summary>
+    internal const string Windows = "windows";
     /// <summary>
     /// What a Windows host without PowerShell 7 needs, in every refusal that names it: the install command, run in a desktop
     /// terminal on that machine (the installer is refused with access denied over SSH).

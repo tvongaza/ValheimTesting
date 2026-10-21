@@ -1167,6 +1167,28 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.Empty(host.Claims);
     }
 
+    // #612 review 2: placement does not judge a Unix environment's storage (its verdict needs the trial link); the run's own
+    // storage preflight refuses it before the lock or staging, naming the environment it placed the server on and its runtime.
+    [Fact] public async Task AnInventoryLinuxEnvironmentOnAnotherMountIsRefusedByNameAtTheStoragePreflight()
+    {
+        var server = NewServer(); var host = NewHost(server);
+        host.UnixVolumes["/opt"] = new UnixStorageVolume("/opt", "2065", "xfs", Writable: true);
+        var (plan, _) = Write(host);
+        string inventory = Path.Combine(_root, "environments.json");
+        File.WriteAllText(inventory, JsonSerializer.Serialize(new
+        {
+            hosts = new Dictionary<string, object> { ["linux-box"] = new { kind = "ssh", platform = "linux", shell = "bash", destination = "tester@linux-box.example", @lock = "/var/tmp/vt/lock" } },
+            environments = new object[] { new { name = "box-server", host = "linux-box", roles = new[] { "server" }, install = Install, runtime = Runs, cliPort = 5577, gamePort = 2456 } },
+        }));
+        Assert.Equal(1, await PinnedServerRun.MainAsync(["--inventory", inventory, "run", plan, Output], Options(host, server)));
+        Assert.StartsWith("box-server: ", Result().GetProperty("Provenance").GetProperty("serverEnvironment").GetString());
+        var step = Step("check the Linux profile storage");
+        Assert.False(step.GetProperty("Passed").GetBoolean());
+        Assert.StartsWith($"server environment box-server (runtime {Runs}): the explicit inventory runtime folder {Runs} is on / (ext4, device 2049), " +
+            "not the source install's mount /opt (xfs, device 2065).", step.GetProperty("Error").GetString());
+        Assert.Equal(["apart", "profile-storage"], host.Scripts);
+    }
+
     [Fact] public async Task AnotherRunsLockRefusesAfterOnlyTheExactClaimIntentAndAtomicClaimAttempt()
     {
         var host = NewHost(NewServer()); host.HeldBy = "other-runner run-x [0123]";
@@ -1174,7 +1196,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.Equal(1, await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["run", plan, Output], Options(host, NewServer())));
         var step = Step("take the server host's lock");
         Assert.False(step.GetProperty("Passed").GetBoolean()); Assert.Contains("other-runner run-x [0123]", step.GetProperty("Error").GetString());
-        // Only the read-only profile-storage probe runs before the claim.
+        // Only the apart check and the profile-storage probe (its one trial link, removed at once) run before the claim.
         Assert.Equal(["apart", "profile-storage", "journal", "lock", "journal"], host.Scripts);
         var journal = await RunJournalOnHost.ReadAsync(host, "/var/tmp/vt/journal", RunId, TimeSpan.FromSeconds(5));
         Assert.Equal([JournalEntry.LockIntended, JournalEntry.RunEnded], journal.Where(record => record.Actor == "run").Select(record => record.Entry.Kind));

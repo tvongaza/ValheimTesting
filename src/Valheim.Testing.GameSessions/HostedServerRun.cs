@@ -369,8 +369,8 @@ internal sealed class HostedServerRun : IServerPlacement
         }
         return report.StepAsync(StepPhase.Setup, "the server host can load crossplay's libraries", async () =>
             report.Provenance["crossplayLibraries"] = await CrossplayLibraries.RequireAsync(Host,
-                // The launch every boot builds (ServerActor), without the plan's arguments: what libparty.so loads with is its own.
-                GameLaunch.ForServerWithLoader(GameDirectory, LoaderDirectory, [], null, ServerPlatform.Linux, linked: ((IServerPlacement)this).Linked),
+                // The launch every boot builds (ServerActor.Launch), without the plan's arguments: libparty.so loads with its environment.
+                ServerActor.Launch(this, [], new Dictionary<string, string>()),
                 HostedTimeouts.Quick, cancellation).ConfigureAwait(false) + " loads on " + Host.Name);
     }
 
