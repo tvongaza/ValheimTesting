@@ -436,7 +436,7 @@ public sealed class CampaignPreflightTests : IDisposable
             inventory, server = new { dependencyLock = "missing-lock.json" }, clients = new Dictionary<string, object>(),
         });
         var host = new FakeServerHost("box", Path.Combine(_root, "linux-storage-mirror"));
-        host.LinuxVolumes["/srv"] = new LinuxStorageVolume("/srv", "2065", "ext4", Writable: true);
+        host.UnixVolumes["/srv"] = new UnixStorageVolume("/srv", "2065", "ext4", Writable: true);
 
         var report = await HostedCampaignPreparation.InspectAsync(file, TimeSpan.FromSeconds(2), _ => host, pinnedLoader: null);
 

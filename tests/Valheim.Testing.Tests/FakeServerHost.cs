@@ -111,8 +111,10 @@ internal sealed class FakeServerHost : IGameHost
     /// dedicated server, else Linux, as only a real host of that system could hold it.
     /// </summary>
     public string? HostSystem { get; set; }
-    /// <summary>The Linux profile-storage probe's mount for each probed path, by path prefix; by default the root's ext4.</summary>
-    public Dictionary<string, LinuxStorageVolume> LinuxVolumes { get; } = new(StringComparer.Ordinal);
+    /// <summary>The Unix profile-storage probe's mount for each probed path, by path prefix; by default the root's ext4 (APFS on a Mac).</summary>
+    public Dictionary<string, UnixStorageVolume> UnixVolumes { get; } = new(StringComparer.Ordinal);
+    /// <summary>The probe's trial link: its error when it fails (fs.protected_hardlinks), or null when it links.</summary>
+    public string? LinkError { get; set; }
     /// <summary>A process this host reports as running until it is stopped; for journal tests.</summary>
     public void Running(int pid, string start)
     {
@@ -149,7 +151,7 @@ internal sealed class FakeServerHost : IGameHost
         ("drop-kept", [HostedRunScripts.DropKept, HostedRunScripts.WindowsDropKept]),
         ("apply-stage", [HostedRuntimeStage.WindowsApply, HostedRuntimeStage.BashApply]),
         ("profile-seed", [HostedRuntimeStage.WindowsProfileSeed, HostedRuntimeStage.BashProfileSeed]),
-        ("profile-storage", [HostedRuntimeStage.WindowsProfileStorage, LinuxStorageProbe.Script]),
+        ("profile-storage", [HostedRuntimeStage.WindowsProfileStorage, UnixStorageProbe.Script]),
         ("steam-runtime-verify", [MacSteamRuntimePackage.VerificationScript]),
         ("steam-runtime-stage", [MacSteamRuntimeOnHost.Stage]),
         ("keep-logs", [RunRecovery.BashKeepLogs, RunRecovery.WindowsKeepLogs]),
@@ -229,15 +231,17 @@ internal sealed class FakeServerHost : IGameHost
                 string[] paths = v["paths"].Split('\n', StringSplitOptions.RemoveEmptyEntries);
                 string system = HostSystem ?? (File.Exists(Path.Combine(Local(paths[0]), GameLaunch.ServerMacExecutable)) ? "Darwin" : "Linux");
                 var text = new StringBuilder("VT-PROFILE-OS " + system + "\n");
-                if (system != "Linux") return Ok(text.ToString());
+                if (system is not ("Linux" or "Darwin")) return Ok(text.ToString());
                 for (int i = 0; i < paths.Length; i++)
                 {
-                    var volume = LinuxVolumes.Where(item => paths[i] == item.Key || paths[i].StartsWith(item.Key.TrimEnd('/') + "/", StringComparison.Ordinal))
+                    var volume = UnixVolumes.Where(item => paths[i] == item.Key || paths[i].StartsWith(item.Key.TrimEnd('/') + "/", StringComparison.Ordinal))
                         .OrderByDescending(item => item.Key.Length).Select(item => item.Value).FirstOrDefault()
-                        ?? new LinuxStorageVolume("/", "2049", "ext4", Writable: true);
-                    text.Append($"VT-PROFILE-VOLUME {i} {volume.Device} {(volume.Writable ? 1 : 0)} {volume.FileSystem} ")
+                        ?? new UnixStorageVolume("/", "2049", system == "Linux" ? "ext4" : "apfs", Writable: true);
+                    text.Append($"VT-PROFILE-VOLUME {i} {volume.Device} {(volume.Writable ? 1 : 0)} {(volume.AtMountPoint ? 1 : 0)} {volume.FileSystem} ")
                         .Append(Convert.ToBase64String(Encoding.UTF8.GetBytes(volume.MountPoint))).Append('\n');
                 }
+                if (v.GetValueOrDefault("linktest") == "1")
+                    text.Append(LinkError == null ? "VT-PROFILE-LINK ok\n" : "VT-PROFILE-LINK refused " + Convert.ToBase64String(Encoding.UTF8.GetBytes(LinkError)) + "\n");
                 return Ok(text.Append("VT-PROFILE-VOLUMES\n").ToString());
             }
             case "profile-storage":
@@ -409,7 +413,9 @@ internal sealed class FakeServerHost : IGameHost
                     .Concat(v["files"].Split('\n', StringSplitOptions.RemoveEmptyEntries)))
                 {
                     string relative = Encoding.UTF8.GetString(Convert.FromBase64String(encoded));
-                    string target = Path.Combine(destination, relative);
+                    // As the seed: a game file goes to the game folder (a Mac server's lies below the profile), a loader file to the profile.
+                    bool gameFile = v["gameFiles"].Split('\n').Contains(encoded);
+                    string target = Path.Combine(gameFile && v.TryGetValue("game", out string? game) ? Local(game) : destination, relative);
                     Directory.CreateDirectory(Path.GetDirectoryName(target)!);
                     File.Copy(Path.Combine(Local(v["source"]), relative), target);
                 }

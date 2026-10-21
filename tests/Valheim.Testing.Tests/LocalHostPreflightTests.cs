@@ -118,23 +118,24 @@ public sealed class LocalHostPreflightTests : IDisposable
     }
 
     // #612: `env preflight` on a Linux machine checks its server's linked profile through the one storage owner, the bash probe
-    // on this machine's host; a Mac's server profile launches its source, so a Mac is asked nothing about mounts.
+    // on this machine's host; a Mac client's profile launches its source bundle, so a Mac is asked nothing about it.
     [Fact]
-    public async Task ALinuxServerProfileOnAnotherMountIsRefusedAndAMacOneIsNotProbed()
+    public async Task ALinuxServerProfileOnAnotherMountIsRefusedAndAMacClientIsNotProbed()
     {
-        EnvironmentInventory Inventory(string platform) => new()
+        EnvironmentInventory Inventory(string platform, string role = "server") => new()
         {
             Hosts = new() { ["box"] = new HostProfile { Kind = "local", Platform = platform, Shell = "bash", Lock = "/vt/lock" } },
-            Environments = [new EnvironmentRecipe { Name = "server", Host = "box", Roles = ["server"],
+            Environments = [new EnvironmentRecipe { Name = role, Host = "box", Roles = [role],
                 Install = "/srv/valheim", Runtime = "/home/tester/runs", CliPort = 5551 }],
         };
         var probes = new LocalHostPreflight.Probes(
             Processes: (_, _, _, _) => Task.CompletedTask,
             Port: (_, _, _, _) => Task.CompletedTask,
             Lock: (_, _, _, _) => Task.FromResult(new HostLockResult(HostLockState.Free, null, "free")),
+            MacDesktop: () => { }, SteamRunning: () => true,
             Journals: (_, _) => Task.FromResult<IReadOnlyList<CampaignPreflightProblem>>([]), Packaged: () => null);
         var host = new FakeServerHost("box", Path.Combine(_root, "linux-storage-mirror"), kind: GameHostKind.Local);
-        host.LinuxVolumes["/srv"] = new LinuxStorageVolume("/srv", "2065", "ext4", Writable: true);
+        host.UnixVolumes["/srv"] = new UnixStorageVolume("/srv", "2065", "ext4", Writable: true);
 
         var linux = Inventory("linux");
         var refused = Assert.Single(await LocalHostPreflight.InspectAsync(linux, linux.Environments.Select(recipe => new LocalHostPreflight.Actor(recipe.Name, recipe)),
@@ -145,7 +146,7 @@ public sealed class LocalHostPreflightTests : IDisposable
         Assert.Single(host.Runs, run => run.Script == "profile-storage");
         Assert.DoesNotContain(host.Scripts, script => script is "profile-seed" or "apply-stage" or "ship");
 
-        var mac = Inventory("macos");
+        var mac = Inventory("macos", "client");
         Assert.Empty(await LocalHostPreflight.InspectAsync(mac, mac.Environments.Select(recipe => new LocalHostPreflight.Actor(recipe.Name, recipe)),
             TimeSpan.FromSeconds(1), hostFactory: _ => host, probes: probes));
         Assert.Single(host.Runs, run => run.Script == "profile-storage");

@@ -20,23 +20,25 @@ A client that leaves and rejoins between rounds reuses its profile.
 
 | OS | The game runs from |
 |---|---|
-| Windows (client and server), Linux (server) | The profile's launch folder, which hard-links the install's launch files |
-| macOS (client and server) | The install's own executable, with Doorstop pointed at the profile |
+| Windows (client and server), Linux (server), macOS (server) | The profile's launch folder, which hard-links the install's launch files |
+| macOS (client) | The install's own app bundle, with Doorstop pointed at the profile |
 
-A linked launch folder is the game's root for the run: `Paths.GameRootPath`, BepInEx's `preloader_*.log` beside the executable and any file a mod writes there land in the profile, not the install. macOS cannot do this: a client bundle started from another path fails Gatekeeper's check, so a Mac profile starts the source bundle, and the Mac dedicated server stays in place with it. A write beside a Mac executable can reach the install.
+A linked launch folder is the game's root for the run: `Paths.GameRootPath`, BepInEx's `preloader_*.log` and any file a mod writes there land in the profile, not the install. The Mac dedicated server's files are linked two folders down, at `<profile>/game/server/`: BepInEx on macOS takes the game root as the executable's fourth parent folder (it expects `Valheim.app/Contents/MacOS/Valheim`), so with the executable at `<profile>/game/server/valheim_server/Valheim` that is the profile itself, where its loader is. Run from its install, the same server's game root is two folders above the install. A macOS client cannot be linked: a bundle started from another path fails Gatekeeper's check, so a Mac client's profile starts the source bundle. A write beside a Mac client's executable can reach the install.
 
 The launch folder hard-links only these:
 
-| Linked | Windows | Linux |
-|---|---|---|
-| The executable | `valheim.exe` or `valheim_server.exe` | `valheim_server.x86_64` |
-| Its data | The matching `valheim_Data/**` or `valheim_server_Data/**` | `valheim_server_Data/**` |
-| Other trees | `MonoBleedingEdge/**`, `D3D12/**` | `linux64/**` (`steamclient.so`) |
-| Root files | `UnityCrashHandler64.exe`, `UnityPlayer.dll`, `steam_api64.dll`, `steamclient64.dll`, `steamwebrtc64.dll`, `tier0_s64.dll`, `vstdlib_s64.dll` | `UnityPlayer.so`, `libparty.so` |
+| Linked | Windows | Linux | macOS server |
+|---|---|---|---|
+| The executable | `valheim.exe` or `valheim_server.exe` | `valheim_server.x86_64` | `valheim_server/Valheim` |
+| Its data | The matching `valheim_Data/**` or `valheim_server_Data/**` | `valheim_server_Data/**` | The rest of `valheim_server/**`: its `*.dylib`, `Data/**`, `MonoBleedingEdge/**` and `PlugIns/**` |
+| Other trees | `MonoBleedingEdge/**`, `D3D12/**` | `linux64/**` (`steamclient.so`) | None |
+| Root files | `UnityCrashHandler64.exe`, `UnityPlayer.dll`, `steam_api64.dll`, `steamclient64.dll`, `steamwebrtc64.dll`, `tier0_s64.dll`, `vstdlib_s64.dll` | `UnityPlayer.so`, `libparty.so` | None |
 
-Everything else stays out: BepInEx, Doorstop, `logs/`, text and log output, crash dumps, `steam_appid.txt`, start scripts, mod-manager proxies and unknown root libraries. A left-out root file is recorded as `<actor>ProfileLeftOut` in the provenance, with its reason. An unknown root DLL's or `.so`'s reason says to add it to the game's list if a launch then fails during start-up.
+Everything else stays out: BepInEx, Doorstop, `logs/`, text and log output, crash dumps, `steam_appid.txt`, start scripts (`start_server.command` on a Mac), the manual, Steam's `steamapps/` and `EmptySteamDepot/`, Finder's `.DS_Store`, mod-manager proxies and unknown root libraries. A left-out root file is recorded as `<actor>ProfileLeftOut` in the provenance, with its reason. An unknown root DLL's or `.so`'s reason says to add it to the game's list if a launch then fails during start-up.
 
 A hard link is the install's file under a second name. A new file lands in the profile, but a write that overwrites a linked game file in place changes the install too.
+
+On a container host whose install is in the image, a hard link to a file of a lower overlayfs layer copies that file up into the container's own layer first. The link then costs the file's size in the container, and the image's install is never touched.
 
 Into the profile, the run stages:
 
@@ -53,16 +55,18 @@ If a loader package has no `BepInEx.cfg`, a macOS profile keeps the source file 
 
 A profile lives under its environment's `runtime` folder, in a new run directory (`<runtime>/<runId>/runtime` for a server, `<runtime>/vt-prep-<runId>-<actor>` in a campaign).
 
-A hard link cannot cross a Windows volume or a Linux mount, so a linked profile's runtime must be on the install's. On Windows that is the install's NTFS volume. On Linux it is the install's mount: the same device and the same mount point, because a bind mount of the same disk, or another btrfs subvolume, still refuses the link. A this-machine runtime follows the install: it stays in ValheimTesting's data folder when that folder is on the install's volume or mount, otherwise it is `<install volume>\ValheimTesting\runs` on Windows and `<install mount>/ValheimTesting/runs` on Linux. Journals and locks stay in the data folder. A macOS profile links nothing, so its runtime stays in the data folder.
+A hard link cannot cross a Windows volume, a Linux mount or a Mac volume, so a linked profile's runtime must be on the install's. On Windows that is the install's NTFS volume. On Linux and macOS it is the install's mount: the same device and the same mount point, because a bind mount of the same disk, or another btrfs subvolume, still refuses the link. A this-machine runtime follows the install: it stays in ValheimTesting's data folder when that folder is on the install's volume or mount, otherwise it is `<install volume>\ValheimTesting\runs` on Windows and `<install mount>/ValheimTesting/runs` on Linux and macOS. It never goes inside the install. Journals and locks stay in the data folder. A macOS client's profile links nothing, so its runtime stays in the data folder.
 
 | Runtime | Result |
 |---|---|
-| On the install's NTFS volume (Windows) or mount (Linux) | Staged |
+| On the install's NTFS volume (Windows) or mount (Linux, macOS) | Staged |
 | On another volume or mount, a bind mount, exFAT, FAT32 or a Windows network share | Refused, naming the required location |
-| A Linux folder this user cannot create or write | Refused, naming it |
+| A Linux or Mac folder this user cannot create or write | Refused, naming it |
+| An install this user cannot hard-link (Linux's `fs.protected_hardlinks`, on by default, allows a link only to a file the user owns or can write: an install made with `sudo steamcmd` is root's) | Refused: run as the install's owner, or give this user the install |
+| An install that is its mount's root (a Docker volume, a disk of its own) | Refused: no folder on that mount lies outside the install. Move the install into a folder of that filesystem and set the inventory `runtime` beside it |
 | The install itself, inside it, or holding it | Refused |
 
-`valheim-test env preflight`, `valheim-test session check SESSION --hosts` and the server's own preflight give the same refusals before anything is staged on the host. A profile is never copied in place of the links. A Steam library on exFAT, FAT32 or a network share cannot hold a profile: move it to NTFS on Windows, or to a filesystem with hard links (ext4, xfs or btrfs) on Linux.
+On Linux and macOS the preflight's storage probe tries one hard link of the install's server executable into a new folder where the runtime will be, and removes both at once: no listing shows whether the kernel allows the link. `valheim-test env preflight`, `valheim-test session check SESSION --hosts` and the server's own preflight give the same refusals before the profile is staged. A profile is never copied in place of the links. A Steam library on exFAT, FAT32 or a network share cannot hold a profile: move it to NTFS on Windows, or to a filesystem with hard links (ext4, xfs or btrfs on Linux, APFS or Mac OS Extended on macOS).
 
 ## Source checks
 

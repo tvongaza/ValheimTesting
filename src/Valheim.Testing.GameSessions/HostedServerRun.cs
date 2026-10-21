@@ -114,6 +114,8 @@ internal sealed class HostedServerRun : IServerPlacement
     public string GameDirectory => Role.PreparedGameRoot ?? RuntimeDirectory;
     public string LoaderDirectory => RuntimeDirectory;
     public string? MacSteamRuntimeDirectory => Role.PreparedSteamRuntimeRoot;
+    // Every server's profile is linked (ProfileLayouts.For).
+    bool IServerPlacement.Linked => ProfileLayouts.For(HostProfile.Platform, server: true) == ProfileLayout.Linked;
     public string WorldDirectory { get; private set; }
     /// <summary>The profile's game files on the host (the listing a campaign's server profile records too), once staged.</summary>
     public IReadOnlyDictionary<string, string> RuntimeHashes => _runtime?.Files ?? new Dictionary<string, string>();
@@ -362,7 +364,8 @@ internal sealed class HostedServerRun : IServerPlacement
             return Task.CompletedTask;
         }
         return report.StepAsync(StepPhase.Setup, "the server host can load crossplay's libraries", async () =>
-            report.Provenance["crossplayLibraries"] = await CrossplayLibraries.RequireAsync(Host, GameDirectory, HostedTimeouts.Quick, cancellation).ConfigureAwait(false) + " loads on " + Host.Name);
+            report.Provenance["crossplayLibraries"] = await CrossplayLibraries.RequireAsync(Host, GameDirectory,
+                inheritLibraryPath: !((IServerPlacement)this).Linked, HostedTimeouts.Quick, cancellation).ConfigureAwait(false) + " loads on " + Host.Name);
     }
 
     /// <summary>Ships the verified local world copy to the host and verifies every file there.</summary>

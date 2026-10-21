@@ -64,7 +64,7 @@ Linux hosts run the dedicated server only. Linux machines detect no client envir
 Linux hosts run the dedicated server only; start the client on Windows or macOS.
 ```
 
-A Linux server's profile is its own launch folder, as a Windows profile is: it hard-links the install's game files, so the server's game root, and anything written beside its executable, is the profile's. Its `runtime` must be on the install's mount, and a runtime on another one is refused before anything is staged ([where a profile lives](sessions-profiles.md#where-a-profile-lives)).
+A Linux server's profile is its own launch folder, as a Windows profile is: it hard-links the install's game files, so the server's game root, and anything written beside its executable, is the profile's. Its `runtime` must be on the install's mount and this user must be able to link the install's files (an install made with `sudo steamcmd` is root's, and Linux's `fs.protected_hardlinks` refuses the link). Both are checked before anything is staged ([where a profile lives](sessions-profiles.md#where-a-profile-lives)). On a container host, a link to a file of the image's layer copies it into the container's layer: it costs space there, and the image's install is not changed.
 
 [docker/linux-server](../../docker/linux-server/README.md) builds a local x86-64 image with the server, BepInEx and .NET 10. [LinuxServerSmoke](../../docker/linux-server/smoke/README.md) boots the server in that image twice, on a new world and on its save. The [scheduled server checks](../../docker/linux-server/README.md#scheduled-checks-in-ci) run every night and after each new public server build. They run that smoke and the server half of the [native acceptance suite](../../tests/Valheim.Testing.NativeAcceptance/README.md).
 
@@ -92,6 +92,8 @@ The install is not an app bundle:
 - The server is `valheim_server/Valheim`, a universal (x86_64 and arm64) executable.
 - Unity's and Mono's libraries and its `Data` folder sit beside it.
 - `steamapps/appmanifest_896660.acf` records the build id.
+
+Because it is no bundle, a run's profile hard-links the server's `valheim_server/` folder two folders down in the profile, at `game/server/`, and starts it there. BepInEx on macOS takes the game root as the executable's fourth parent folder, which is then the profile; started from the install, it would be the folder two above the install. The profile's `runtime` must be on the install's volume ([what a profile holds](sessions-profiles.md#what-a-profile-holds)).
 
 Before you compare a Mac server with a client on another OS, check that the build ids match. A macOS server runs only on a Mac. A Mac runs neither the Windows nor the Linux server. A `Valheim.app` client is refused as a server runtime. [macOS dedicated server](game-launch.md#macos-dedicated-server) describes the launch.
 

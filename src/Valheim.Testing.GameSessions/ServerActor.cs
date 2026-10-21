@@ -45,7 +45,7 @@ public sealed class ServerActor : IOwnedServer, IDisposable
             var environment = plan.Environment.ToDictionary(entry => entry.Key, entry => plan.Expand(entry.Value, runtime, world));
             environment[sessionTokenVariable] = token;
             var launch = GameLaunch.ForServerWithLoader(placement.GameDirectory, placement.LoaderDirectory,
-                plan.LaunchArguments(runtime, world), environment, placement.Platform, placement.MacSteamRuntimeDirectory);
+                plan.LaunchArguments(runtime, world), environment, placement.Platform, placement.MacSteamRuntimeDirectory, placement.Linked);
             int n = ++boot;
             var started = placement.Start(n, launch, output, TimeSpan.FromSeconds(plan.QuitSeconds), launchCancellation);
             // What the stop keeps: BepInEx's log, Unity's log when the plan passes -logFile {runtime}/toolkit-unity.log, and the
@@ -346,6 +346,8 @@ internal interface IServerPlacement
     string GameDirectory => RuntimeDirectory;
     string LoaderDirectory => RuntimeDirectory;
     string? MacSteamRuntimeDirectory => null;
+    /// <summary>Whether the boots run from a linked profile (<see cref="ProfileLayout.Linked"/>), which inherits no injected libraries.</summary>
+    bool Linked => false;
     string WorldDirectory { get; }
     /// <summary>The host the boots run on, or null for this machine.</summary>
     IGameHost? Host { get; }

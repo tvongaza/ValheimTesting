@@ -92,13 +92,23 @@ internal static partial class HostedRuntimeStage
         "If the game needs it, a launch fails inside Steam or Unity start-up: report it so the game's root library list " +
         "(HostedRuntimeStage.LinuxGameRootLibraries) gains it. Otherwise nothing to do");
 
+    // The Mac dedicated server keeps its executable, libraries and data in valheim_server/ (Valheim, *.dylib, Data/**,
+    // MonoBleedingEdge/**, PlugIns/**), linked whole. Its root holds only what the launch does not use: Steam's own folders,
+    // the manual and the start script.
+    private static readonly LinkTable MacLinks = new("macOS", StringComparison.Ordinal,
+        new Dictionary<string, string> { [GameLaunch.ServerMacExecutable] = "valheim_server/" },
+        [], ".dylib", [], [], [], "", [],
+        "an unknown root library, so it is not linked: the Mac server's libraries are in valheim_server/, which is linked whole. " +
+        "If the game needs it, a launch fails during start-up: report it. Otherwise nothing to do");
+
     /// <summary>
     /// Sorts <paramref name="files"/> (relative, <c>/</c> separators) of a <paramref name="platform"/> game install into what
     /// the profile's launch folder hard-links. On Windows: the installed executable, its matching <c>_Data</c> tree, Unity's
     /// <c>MonoBleedingEdge</c> and <c>D3D12</c> trees, <see cref="WindowsGameRootFiles"/> and <see cref="WindowsGameRootDlls"/>.
     /// On Linux: <c>valheim_server.x86_64</c>, its <c>valheim_server_Data</c> tree, the <c>linux64</c> tree (the Steam client
-    /// library) and <see cref="LinuxGameRootLibraries"/>. Writable text/log/crash output is excluded even below an otherwise
-    /// selected tree, and so are the loader and the start scripts. Every unrelated nested file is reported in one aggregate per
+    /// library) and <see cref="LinuxGameRootLibraries"/>. On macOS (the dedicated server): its whole <c>valheim_server</c> folder.
+    /// Writable text/log/crash output and Finder's <c>.DS_Store</c> are excluded even below an otherwise selected tree, and so
+    /// are the loader and the start scripts. Every unrelated nested file is reported in one aggregate per
     /// top-level folder. A root file left out is reported unless it is the loader's or a known proxy
     /// (<see cref="KnownProxyDlls"/>), which are expected; an unknown root library gets an actionable reason, because a library
     /// the game needs and the profile dropped fails inside Steam or Unity start-up with no other hint (#651).
@@ -109,7 +119,7 @@ internal static partial class HostedRuntimeStage
         {
             ClientPlatform.Windows => WindowsLinks,
             ClientPlatform.Linux => LinuxLinks,
-            _ => throw new ArgumentException("A macOS profile launches its source executable; nothing is linked.", nameof(platform)),
+            _ => MacLinks,
         };
         var names = StringComparer.FromComparison(table.Names);
         string[] listing = files.Order(StringComparer.Ordinal).ToArray();
@@ -138,6 +148,7 @@ internal static partial class HostedRuntimeStage
                 path.EndsWith(".mdmp", StringComparison.OrdinalIgnoreCase) ||
                 path.EndsWith(".dump", StringComparison.OrdinalIgnoreCase)) reason = "a crash dump";
             else if (path.EndsWith(".log", StringComparison.OrdinalIgnoreCase)) reason = "a log file";
+            else if (path.Split('/')[^1] == ".DS_Store") reason = "Finder's folder metadata";
             else if (path.Equals("steam_appid.txt", StringComparison.OrdinalIgnoreCase)) reason = "not needed because the launch supplies SteamAppId";
             else if (path.EndsWith(".txt", StringComparison.OrdinalIgnoreCase)) reason = "a writable text output";
             else if (table.RootFiles.Contains(path, names) || table.Libraries.Contains(path, names) ||
@@ -196,8 +207,11 @@ internal static partial class HostedRuntimeStage
     {
         await RequireStagePathsAsync(host, kind, source, destination, staging, files, timeout, cancellation).ConfigureAwait(false);
         bool windows = host.Shell.Kind == HostShellKind.PowerShell;
-        bool linked = (await RequireProfileStorageAsync(host, kind, source, destination, timeout, cancellation).ConfigureAwait(false))
-            .Layout == ProfileLayout.Linked;
+        var storage = await RequireProfileStorageAsync(host, kind, source, destination, timeout, cancellation).ConfigureAwait(false);
+        bool linked = storage.Layout == ProfileLayout.Linked;
+        // Where the linked game files go: the profile itself, or two folders down for a Mac server (ProfileLayouts.GameFolder).
+        string gameFolder = linked ? ProfileLayouts.GameFolder(storage.Platform, kind == HostedRuntimeKind.Server) : "";
+        string gameRoot = gameFolder.Length == 0 ? destination : HostPath.Join(destination, gameFolder);
         var (selected, explicitlySelectedSettings) = SelectPayload(files, loaderPackage, host.Shell.Kind);
         if (steamRuntimePackage != null) loaderPackage?.RequireNativeMacServer();
         if (steamRuntimePackage != null)
@@ -229,13 +243,14 @@ internal static partial class HostedRuntimeStage
                 preserveSourceSettings && path.Equals(settings,
                     windows ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal)).ToArray()
             : preserveSourceSettings ? [settings] : Array.Empty<string>();
-        // A linked profile is the launch folder: Windows loads the proxy from the executable directory, and a Linux server's
-        // Paths.GameRootPath (where BepInEx's preloader log goes) is the executable's. It hard-links game files only, then
-        // receives a separately copied loader and selected BepInEx files.
+        // A linked profile is the launch folder: Windows loads the proxy from the executable directory, and a server's
+        // Paths.GameRootPath (where BepInEx's preloader log goes) is found from the executable's path. It hard-links game files
+        // only, then receives a separately copied loader and selected BepInEx files.
         // A mod manager may have placed another proxy beside valheim.exe (for example version.dll). Linking
         // arbitrary root DLLs into our launch folder would load that manager's chain alongside this profile.
         // Keep only the game's known root dependencies; every other source file stays untouched and out of the run.
-        var plan = linked ? PlanLinkedProfile(windows ? ClientPlatform.Windows : ClientPlatform.Linux, game.Files.Keys) : new LinkedProfileFiles([], []);
+        var plan = linked ? PlanLinkedProfile(storage.Platform switch { "windows" => ClientPlatform.Windows, "macos" => ClientPlatform.MacOS, _ => ClientPlatform.Linux },
+            game.Files.Keys) : new LinkedProfileFiles([], []);
         string[] gameLinks = [.. plan.Links];
         var sourceCheck = ProfileSourceCheck.Prepare(game, gameLinks);
         if (plan.LeftOut.Count != 0)
@@ -276,7 +291,7 @@ internal static partial class HostedRuntimeStage
             created = true;
             var seed = await host.RunAsync(windows ? WindowsProfileSeed : BashProfileSeed,
                 new Dictionary<string, string> {
-                    ["source"] = source, ["runtime"] = destination,
+                    ["source"] = source, ["runtime"] = destination, ["game"] = gameRoot,
                     ["files"] = string.Join('\n', sourceLoader.Select(Encode)),
                     ["gameFiles"] = string.Join('\n', gameLinks.Select(Encode)),
                 }, timeout, cancellation).ConfigureAwait(false);
@@ -334,11 +349,25 @@ internal static partial class HostedRuntimeStage
                 if (profile.Files.Keys.Where(name => name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)).Any(name => !expected.Contains(name)))
                     throw new IOException($"The prepared profile on {host.Name} retained an unselected {directory} file.");
             }
-            var pins = linked ? HostInstall.Pins(profile) : HostInstall.Pins(game, profile);
+            HostListing preparedGame, loader;
+            InstallPins pins;
+            if (!linked) (preparedGame, loader, pins) = (game, profile, HostInstall.Pins(game, profile));
+            else if (gameRoot == destination)
+            {
+                preparedGame = loader = LinkedProfileListing(game, profile, plan.Links);
+                pins = HostInstall.Pins(profile);
+            }
+            else
+            {
+                // A Mac server's game lies below the loader: its linked game code is listed where it runs, and the loader's
+                // listing carries the links under their folder, so retirement tells them from what the run wrote.
+                var linkedGame = await HostInstall.ListAsync(host, gameRoot, timeout, InstallPins.ManagedFolders, cancellation).ConfigureAwait(false);
+                preparedGame = LinkedProfileListing(game, linkedGame, plan.Links);
+                loader = LinkedProfileListing(game, profile, plan.Links, gameFolder + "/");
+                pins = HostInstall.Pins(preparedGame, profile);
+            }
             if (loaderPackage != null && !pins.Loader.Equals(loaderPackage.Loader, StringComparison.OrdinalIgnoreCase))
                 throw new IOException($"The profile loader on {host.Name} is not the reviewed package's loader.");
-            var preparedGame = linked ? LinkedProfileListing(game, profile, plan.Links) : game;
-            var loader = linked ? preparedGame : profile;
             sourceCheck.RecordPreparedProfile(preparedGame, loader,
                 selected.Keys.Where(path => path.StartsWith("steam-runtime/", StringComparison.Ordinal)));
             return new PreparedProfile(game, preparedGame, loader, pins, plan.LeftOut, sourceCheck);
@@ -369,25 +398,27 @@ internal static partial class HostedRuntimeStage
     }
 
     // A linked profile's full game listing without re-hashing its hard links: their bytes are the preparation listing's
-    // bytes, while every copied loader/BepInEx path comes from the narrow verified profile listing above.
-    private static HostListing LinkedProfileListing(HostListing source, HostListing profile, IEnumerable<string> links)
+    // bytes, while every copied loader/BepInEx path comes from the narrow verified profile listing above. The links are named
+    // under prefix when the game lies below the listed root (a Mac server's loader listing).
+    private static HostListing LinkedProfileListing(HostListing source, HostListing profile, IEnumerable<string> links, string prefix = "")
     {
         var files = new Dictionary<string, string>(profile.Names);
         var states = new Dictionary<string, HostFileState>(profile.Names);
         foreach (string path in links)
         {
-            files[path] = source.Files[path];
-            states[path] = source.States[path];
+            files[prefix + path] = source.Files[path];
+            states[prefix + path] = source.States[path];
         }
         foreach (var (path, hash) in profile.Files) files[path] = hash;
         foreach (var (path, state) in profile.States) states[path] = state;
         return new HostListing(profile.HostName, profile.Shell, profile.Root, files,
-            source.Executables.Where(path => files.ContainsKey(path)).ToArray(), states);
+            source.Executables.Select(path => prefix + path).Where(files.ContainsKey).ToArray(), states);
     }
 
     private static string Encode(string name) => Convert.ToBase64String(Encoding.UTF8.GetBytes(name));
 
-    // A linked profile's game files are hard links, never copies: a failed link refuses the profile, as on Windows.
+    // A linked profile's game files are hard links, never copies, made in game (the profile, or a Mac server's folder below it):
+    // a failed link refuses the profile, as on Windows.
     internal static readonly string BashProfileSeed = """
         set -eu
         if [ -e "$runtime" ]; then echo 'VT-PROFILE-EXISTS'; exit 0; fi
@@ -395,9 +426,10 @@ internal static partial class HostedRuntimeStage
         while IFS= read -r line; do
           [ -n "$line" ] || continue
           # The x keeps a name's trailing line break, which $( ) would strip.
-          relative=$({ printf '%s' "$line" | base64 -D 2>/dev/null || printf '%s' "$line" | base64 -d; } && printf x); relative=${relative%x}
-          mkdir -p -- "$(dirname "$runtime/$relative")"
-          if ! error=$(ln -- "$source/$relative" "$runtime/$relative" 2>&1); then
+          relative=$({ printf '%s' "$line" | base64 -D 2>/dev/null || printf '%s' "$line" | base64 -d; } && printf x) || exit 3
+          relative=${relative%x}
+          mkdir -p -- "$(dirname "$game/$relative")"
+          if ! error=$(ln -- "$source/$relative" "$game/$relative" 2>&1); then
             echo "Could not create a hard link in runtime folder $runtime from the install's mount containing $source: $error" >&2
             exit 1
           fi
@@ -405,7 +437,8 @@ internal static partial class HostedRuntimeStage
         while IFS= read -r line; do
           [ -n "$line" ] || continue
           # The x keeps a name's trailing line break, which $( ) would strip.
-          relative=$({ printf '%s' "$line" | base64 -D 2>/dev/null || printf '%s' "$line" | base64 -d; } && printf x); relative=${relative%x}
+          relative=$({ printf '%s' "$line" | base64 -D 2>/dev/null || printf '%s' "$line" | base64 -d; } && printf x) || exit 3
+          relative=${relative%x}
           mkdir -p -- "$(dirname "$runtime/$relative")"
           cp "$source/$relative" "$runtime/$relative"
         done <<< "$files"

@@ -15,6 +15,8 @@ public sealed class ServerLoadOneOffTests : IDisposable
         Port: (_, _, _, _) => Task.CompletedTask,
         Lock: (_, _, _, _) => Task.FromResult(new HostLockResult(HostLockState.Free, null, "free")),
         Desktop: _ => Task.CompletedTask, MacDesktop: () => { }, SteamRunning: () => true,
+        // This machine's linked server profile (#612) is checked on hosts this rig does not have.
+        ProfileStorage: (_, _, _, _, _, _) => Task.FromResult<string?>(null),
         Journals: (_, _) => Task.FromResult<IReadOnlyList<CampaignPreflightProblem>>([]), Packaged: () => null));
     public void Dispose() { _preflight.Dispose(); _rig.Dispose(); }
 

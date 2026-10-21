@@ -6,14 +6,18 @@ namespace Valheim.Testing.GameSessions;
 
 internal static partial class HostedRuntimeStage
 {
-    /// <summary>A profile's layout on its host (<see cref="ProfileLayouts.For"/>) and, for a linked one, what its storage verdict found.</summary>
-    internal sealed record ProfileStorageCheck(ProfileLayout Layout, string? Description);
+    /// <summary>
+    /// A profile's layout on its host (<see cref="ProfileLayouts.For"/>), the host's platform (<c>windows</c>, <c>linux</c> or
+    /// <c>macos</c>) and, for a linked one, what its storage verdict found.
+    /// </summary>
+    internal sealed record ProfileStorageCheck(ProfileLayout Layout, string Platform, string? Description);
 
     /// <summary>
     /// Decides a profile's layout from its host's platform and, for a linked profile, checks the two roots it will hard-link
-    /// between, without creating either profile or probe file. PowerShell is Windows; a bash host names its system through the
-    /// Linux storage probe (<see cref="LinuxStorageProbe"/>), which only a server's profile asks: Linux runs no client, so a bash
-    /// host's client profile is a Mac's. A runtime on another volume or mount, or on a filesystem without hard links, is refused.
+    /// between, without creating the profile. PowerShell is Windows; a bash host names its system through the Unix storage probe
+    /// (<see cref="UnixStorageProbe"/>), which only a server's profile asks: Linux runs no client, so a bash host's client profile
+    /// is a Mac's, launched from its source. A runtime on another volume or mount, on a filesystem without hard links, or where
+    /// this user cannot link the install's executable (the probe's one trial link, removed at once) is refused.
     /// </summary>
     internal static async Task<ProfileStorageCheck> RequireProfileStorageAsync(IGameHost host, HostedRuntimeKind kind, string source,
         string runtime, TimeSpan timeout, CancellationToken cancellation = default, bool explicitRuntime = false, bool inPlaceAvailable = false)
@@ -40,16 +44,20 @@ internal static partial class HostedRuntimeStage
         }
         else
         {
-            var probe = server ? await ProbeLinuxStorageAsync(host, [source, runtime], timeout, cancellation).ConfigureAwait(false) : default;
-            if (ProfileLayouts.For(server ? probe.Platform : "macos", server) == ProfileLayout.SourceExecutable)
-                return new(ProfileLayout.SourceExecutable, null);
+            var probe = server ? await ProbeUnixStorageAsync(host, [source, runtime], timeout, cancellation, linkTest: true).ConfigureAwait(false) : default;
+            string platform = server ? probe.Platform : "macos";
+            if (ProfileLayouts.For(platform, server) == ProfileLayout.SourceExecutable)
+                return new(ProfileLayout.SourceExecutable, platform, null);
             verdict = probe.Volumes is { } volumes
-                ? ProfileRuntimeStorage.Verdict(source, volumes[0], runtime, volumes[1], explicitRuntime, inPlaceAvailable)
-                : ProfileRuntimeStorage.Unknown(ProfileLinkRules.Linux, source, probe.Error!);
+                ? ProfileRuntimeStorage.Verdict(source, volumes[0], runtime, volumes[1], explicitRuntime, inPlaceAvailable, probe.LinkError)
+                : ProfileRuntimeStorage.Unknown(ProfileLinkRules.For(platform), source, probe.Error!);
+            verdict.Require();
+            if (verdict.Warning != null) Console.WriteLine("warning: " + verdict.Warning);
+            return new(ProfileLayout.Linked, platform, verdict.Description);
         }
         verdict.Require();
         if (verdict.Warning != null) Console.WriteLine("warning: " + verdict.Warning);
-        return new(ProfileLayout.Linked, verdict.Description);
+        return new(ProfileLayout.Linked, "windows", verdict.Description);
     }
 
     /// <summary>
@@ -73,9 +81,10 @@ internal static partial class HostedRuntimeStage
                 return ProfileRuntimeStorage.DefaultRoot(dataRuns, volumes.Source, volumes.Runtime);
             }
             // As RequireProfileStorageAsync: only a server's profile asks a bash host its system.
-            var probe = server ? await ProbeLinuxStorageAsync(host, [source, dataRoot], timeout, cancellation).ConfigureAwait(false) : default;
+            var probe = server ? await ProbeUnixStorageAsync(host, [source, dataRoot], timeout, cancellation).ConfigureAwait(false) : default;
             if (ProfileLayouts.For(server ? probe.Platform : "macos", server) == ProfileLayout.SourceExecutable)
                 return ProfileRuntimeStorage.SourceExecutableRoot(dataRuns);
+            rules = ProfileLinkRules.For(probe.Platform);
             if (probe.Error != null) throw probe.Error;
             return ProfileRuntimeStorage.DefaultRoot(dataRuns, probe.Volumes![0], probe.Volumes[1]);
         }
@@ -86,26 +95,27 @@ internal static partial class HostedRuntimeStage
         }
     }
 
-    // A bash host's system and, on Linux, each path's mount. A reply that names no system refuses (the layout is unknown); a Linux
-    // one whose mounts could not be read returns why, for the verdict's warning.
-    private static async Task<(string Platform, IReadOnlyList<LinuxStorageVolume>? Volumes, Exception? Error)> ProbeLinuxStorageAsync(
-        IGameHost host, IReadOnlyList<string> paths, TimeSpan timeout, CancellationToken cancellation)
+    // A bash host's system and each path's mount, with the trial link's error when linkTest asked for one. A reply that names no
+    // system refuses (the layout is unknown); one whose mounts could not be read returns why, for the verdict's warning.
+    private static async Task<(string Platform, IReadOnlyList<UnixStorageVolume>? Volumes, string? LinkError, Exception? Error)> ProbeUnixStorageAsync(
+        IGameHost host, IReadOnlyList<string> paths, TimeSpan timeout, CancellationToken cancellation, bool linkTest = false)
     {
-        var result = await host.RunAsync(LinuxStorageProbe.Script,
-            new Dictionary<string, string> { ["paths"] = string.Join('\n', paths) }, timeout, cancellation).ConfigureAwait(false);
-        if (LinuxStorageProbe.SystemName(result.Stdout) is not { } system)
+        var result = await host.RunAsync(UnixStorageProbe.Script, new Dictionary<string, string>
+        {
+            ["paths"] = string.Join('\n', paths), ["linktest"] = linkTest ? "1" : "",
+        }, timeout, cancellation).ConfigureAwait(false);
+        if (UnixStorageProbe.SystemName(result.Stdout) is not { } system)
         {
             result.EnsureSuccess($"Inspecting the profile storage on {host.Name}");
             throw new HostOperationException($"No profile-storage verdict from {host.Name}", result);
         }
-        string platform = LinuxStorageProbe.Platform(system, host.Name);
-        if (platform != "linux") return (platform, null, null);
+        string platform = UnixStorageProbe.Platform(system, host.Name);
         try
         {
-            result.EnsureSuccess($"Inspecting Linux profile storage on {host.Name}");
-            return (platform, LinuxStorageProbe.Volumes(result.Stdout, paths.Count), null);
+            result.EnsureSuccess($"Inspecting the {ProfileLinkRules.For(platform).Platform} profile storage on {host.Name}");
+            return (platform, UnixStorageProbe.Volumes(result.Stdout, paths.Count, platform), UnixStorageProbe.LinkRefusal(result.Stdout), null);
         }
-        catch (Exception error) when (error is HostOperationException or InvalidDataException) { return (platform, null, error); }
+        catch (Exception error) when (error is HostOperationException or InvalidDataException) { return (platform, null, null, error); }
     }
 
     private static async Task<(WindowsStorageVolume Source, WindowsStorageVolume Runtime)> ProbeProfileStorageAsync(IGameHost host,

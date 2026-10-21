@@ -43,7 +43,7 @@ For xUnit, copy [GameSessionFixture.cs](../../examples/FullLifecycle/ExampleMod.
 
 | Behaviour | Rule |
 |---|---|
-| Profiles | Each owned process runs from a disposable loader profile; the install is only read and never copied ([profiles](../reference/sessions-profiles.md)) |
+| Profiles | Each owned process runs from a disposable loader profile; the install is only read, and its game files are hard-linked into the profile (a macOS client runs its bundle in place), never copied ([profiles](../reference/sessions-profiles.md)) |
 | Hosts | Each machine is a host with one shell; Linux hosts run the dedicated server only ([game hosts](../reference/sessions-hosts.md)) |
 | Claims | A run takes each host's lock and leases each client's Steam account ([locks and leases](../reference/sessions-leases-and-recovery.md)) |
 | Journal | Every profile, copy, character and process is journalled before it is made, for `valheim-test env status` and `env recover` |

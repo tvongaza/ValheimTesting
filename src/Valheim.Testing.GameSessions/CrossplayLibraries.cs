@@ -55,7 +55,13 @@ public static class CrossplayLibraries
     /// cannot load, naming what is missing; returns the library it checked. A host without <c>ldd</c> is refused too: nothing
     /// else there can prove the library loads.
     /// </summary>
-    public static async Task<string> RequireAsync(IGameHost host, string runtime, TimeSpan timeout, CancellationToken cancellation = default)
+    public static Task<string> RequireAsync(IGameHost host, string runtime, TimeSpan timeout, CancellationToken cancellation = default) =>
+        RequireAsync(host, runtime, inheritLibraryPath: true, timeout, cancellation);
+
+    // The check as a launch resolves the library: a linked profile's launch unsets the session's LD_LIBRARY_PATH
+    // (GameLaunch.Unset), so its check leaves it out too; a launch of the caller's own folder keeps it.
+    internal static async Task<string> RequireAsync(IGameHost host, string runtime, bool inheritLibraryPath, TimeSpan timeout,
+        CancellationToken cancellation = default)
     {
         ArgumentNullException.ThrowIfNull(host);
         ArgumentException.ThrowIfNullOrWhiteSpace(runtime);
@@ -64,6 +70,7 @@ public static class CrossplayLibraries
         var result = (await host.RunAsync(CrossplayLibraryScripts.Check, new Dictionary<string, string>
         {
             ["runtime"] = runtime.Length > 1 ? runtime.TrimEnd('/') : runtime, ["libraries"] = string.Join('\n', PartyLibraries),
+            ["inheritlibs"] = inheritLibraryPath ? "1" : "",
         }, timeout, cancellation).ConfigureAwait(false)).EnsureSuccess($"Checking crossplay's libraries on {host.Name}");
         return Verdict(host.Name, result.Stdout) ?? throw new HostOperationException($"Unexpected reply while checking crossplay's libraries on {host.Name}", result);
     }
@@ -106,9 +113,9 @@ public static class CrossplayLibraries
 // The fixed check script. Values arrive as variables (ScriptedGameHost.Compose); it ends with one verdict line.
 internal static class CrossplayLibraryScripts
 {
-    // Variables: runtime, libraries (candidates relative to the runtime, one per line). ldd runs with the launch's
-    // LD_LIBRARY_PATH order (linux64, doorstop_libs, then the session's), as the game resolves the library's dependencies; its
-    // output comes back line by line.
+    // Variables: runtime, libraries (candidates relative to the runtime, one per line), inheritlibs (empty when the launch unsets
+    // the session's LD_LIBRARY_PATH). ldd runs with the launch's LD_LIBRARY_PATH order (linux64, doorstop_libs, then the
+    // session's unless the launch drops it), as the game resolves the library's dependencies; its output comes back line by line.
     public const string Body = """
         vt_party_check() {
             if [ "$(uname -s)" != Linux ]; then echo "VT-PARTY unsupported $(uname -s)"; return 0; fi
@@ -118,7 +125,9 @@ internal static class CrossplayLibraryScripts
             done <<< "$libraries"
             if [ -z "$lib" ]; then echo "VT-PARTY absent"; return 0; fi
             if ! command -v ldd > /dev/null 2>&1; then echo "VT-PARTY noldd"; return 0; fi
-            out=$(LD_LIBRARY_PATH="$runtime/linux64:$runtime/doorstop_libs${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" ldd "$runtime/$lib" 2>&1); code=$?
+            local session=
+            if [ -n "${inheritlibs-1}" ]; then session=${LD_LIBRARY_PATH:-}; fi
+            out=$(LD_LIBRARY_PATH="$runtime/linux64:$runtime/doorstop_libs${session:+:$session}" ldd "$runtime/$lib" 2>&1); code=$?
             while IFS= read -r f; do printf 'VT-LDD %s\n' "$f"; done <<< "$out"
             echo "VT-PARTY checked $lib $code"
         }

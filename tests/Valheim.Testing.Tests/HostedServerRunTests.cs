@@ -1070,7 +1070,10 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.False(step.GetProperty("Passed").GetBoolean());
         Assert.Contains("libpulse.so.0 (package libpulse0) is missing", step.GetProperty("Error").GetString());
         // libparty.so is the game's: read where the profile's game runs from, the linked profile on Linux (#612).
-        Assert.Equal(RunDirectory + "/runtime", Assert.Single(host.Runs, run => run.Script == "party").Variables["runtime"]);
+        var party = Assert.Single(host.Runs, run => run.Script == "party");
+        Assert.Equal(RunDirectory + "/runtime", party.Variables["runtime"]);
+        // The linked launch drops the session's LD_LIBRARY_PATH, so the check resolves the library without it too (#612 review).
+        Assert.Equal("", party.Variables["inheritlibs"]);
         Assert.DoesNotContain(host.Runs, run => run.Script == "start");
     }
 
@@ -1151,7 +1154,7 @@ public sealed partial class HostedServerRunTests : IDisposable
     [Fact] public async Task ALinuxRuntimeOnAnotherMountIsRefusedBeforeTheLockOrAnyHostWrite()
     {
         var host = NewHost(NewServer());
-        host.LinuxVolumes["/opt"] = new LinuxStorageVolume("/opt", "2065", "xfs", Writable: true);
+        host.UnixVolumes["/opt"] = new UnixStorageVolume("/opt", "2065", "xfs", Writable: true);
         var (plan, profile) = Write(host);
         Assert.Equal(1, await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["run", plan, Output], Options(host, NewServer())));
         var step = Step("check the Linux profile storage");

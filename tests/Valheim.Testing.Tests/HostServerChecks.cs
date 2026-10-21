@@ -53,6 +53,13 @@ internal static partial class HostServerChecks
                 finally { if (!killed.HasExited) await killed.StopAsync(TimeSpan.FromSeconds(5)); }
             }, logs: []);
             HostInstall.RequireSame(before.Files, await HostInstall.ListAsync(host, install, Generous), "Mac server source after a profile boot");
+            // #612: the server ran from its linked profile, so what BepInEx writes at Paths.GameRootPath (the executable's fourth
+            // parent) lands in the profile, beside its loader.
+            Assert.Equal(prepared.Profile + "/" + ProfileLayouts.MacServerGameFolder + "/" + GameLaunch.ServerMacExecutable, launch.Executable);
+            (await host.RunAsync("test -f \"$profile/$marker\"", new Dictionary<string, string>
+            {
+                ["profile"] = prepared.Profile, ["marker"] = MacServerStandIn.GameRootMarker,
+            }, Generous)).EnsureSuccess("Finding the stand-in's game-root marker in the profile");
         }, serversRunFromIt: true);
 
     // A server install as far as the launch and the pins need one: the game's Managed folder, BepInEx core, Doorstop's library
@@ -97,10 +104,10 @@ internal static partial class HostServerChecks
             Assert.Contains(GameLaunch.ServerLinuxExecutable, links);
             (await host.RunAsync(HostedRuntimeStage.BashProfileSeed, new Dictionary<string, string>
             {
-                ["source"] = install, ["runtime"] = profile, ["gameFiles"] = string.Join('\n', links.Select(Encode)),
+                ["source"] = install, ["runtime"] = profile, ["game"] = profile, ["gameFiles"] = string.Join('\n', links.Select(Encode)),
                 ["files"] = string.Join('\n', before.Files.Keys.Where(path => InstallPins.IsLoaderFile(path)).Select(Encode)),
             }, Generous)).EnsureSuccess("Seeding the linked profile");
-            var launch = GameLaunch.ForServerWithLoader(profile, profile, ["-batchmode"], null, ServerPlatform.Linux);
+            var launch = GameLaunch.ForServerWithLoader(profile, profile, ["-batchmode"], null, ServerPlatform.Linux, linked: true);
             Assert.Equal((profile, profile + "/" + GameLaunch.ServerLinuxExecutable), (launch.WorkingDirectory, launch.Executable));
             using var evidence = new TempDirectory();
             await StandInServer.RunAsync(host, launch, boot, Generous,
