@@ -1,26 +1,72 @@
 # Run an A/B regression
 
-Prove that a change fixes a bug in the real game: run the same scenario on the parent build and the candidate build of your mod, with everything else pinned, and compare.
+Keep the marker assertion unchanged while replacing the mod build. Selected action and independent-count lines from [Scenario.cs](../../examples/TargetedRegression/Scenario.cs):
+
+```csharp
+var reply = host.Execute("examplemod_mark " + At());
+round.Step("exactly one marker stands there in the host's saved objects", () => RequireMarkers(host, x, z, ExpectedMarkers));
+```
+
+`ExpectedMarkers` is `1`. The no-op parent replies `OK: marked` but creates nothing. Captured parent step:
+
+```json
+{
+  "Name": "first: exactly one marker stands there in the host's saved objects",
+  "Passed": false,
+  "Error": "0 wood_pole2 marker(s) stand at (-2.1 -2.2); expected 1."
+}
+```
+
+The corrected candidate passes the same step:
+
+```json
+{
+  "Name": "first: exactly one marker stands there in the host's saved objects",
+  "Passed": true
+}
+```
+
+See [Limits](#limits) for the toolkit build used by these excerpts.
 
 ## When to use this
 
 | You want to compare | Use |
 |---|---|
-| Two builds of a client-side mod loading | `valheim-test start --mod DLL --compare-mod DLL --compare-source COMMIT` ([start](../packages/Valheim.Testing.NativeSmoke.md#start)) |
-| A server mod set with and without one mod | `valheim-test server-load-ab` ([server-load-ab](../packages/Valheim.Testing.NativeSmoke.md#server-load-ab)) |
-| Your own scenario on two builds, in one hosted world | `TargetedRegression`, below |
+| Two builds loading in a client | [Start's load comparison](../packages/Valheim.Testing.NativeSmoke.md#start) |
+| A server mod set with and without one mod | [Server load A/B](../packages/Valheim.Testing.NativeSmoke.md#server-load-ab) |
+| The same gameplay assertion on two builds | `TargetedRegression`, below |
 
-You need a Windows or macOS PC with Valheim and Steam signed in, the two builds of your mod with their commits, and a fixture world.
+Complete [Your first gameplay assertion](../tutorials/first-gameplay-assertion.md) first. Keep its completed run directory: it records the fixture, character, ValheimCLI and loader inputs.
 
 ## Steps
 
 ### 1. Copy the example
 
-Copy [examples/TargetedRegression](../../examples/TargetedRegression/README.md) into your repository. Keep `Program.cs` as it is, and put your mod's steps in `Scenario.cs`. In your copy, reference the `Valheim.Testing.GameSessions` package at an exact version ([versions](../package-versions.md)).
+Download the [four-file package consumer](../../examples/TargetedRegression/consumer/README.md#ab-regression-consumer) into `MarkerRegression`, outside the toolkit checkout. Download all four from the same revision as that page. Keep `Program.cs` and `Scenario.cs` unchanged.
+
+The project builds with the published packages it pins.
 
 ### 2. Fill in regression.json
 
-Copy `regression.sample.json` outside the repository and replace every `<...>`. The two arms are your builds:
+From the directory where you ran [Your first gameplay assertion](../tutorials/first-gameplay-assertion.md) (it holds `tools/` and `MarkerMod/`), build each real source commit:
+
+```powershell
+.\tools\valheim-test.exe build --project MarkerMod/MarkerMod.csproj
+```
+
+Each build prints `Built mod:` and `Build inputs:` paths. Retain both output directories. Use the [deliberately buggy parent](../../examples/TargetedRegression/consumer/README.md#deliberately-buggy-parent), then restore the production line and build the candidate. Record both source commits and each build's `ModSha256` from `build-inputs.json`.
+
+Copy the completed `start` run's `regression.json` into `MarkerRegression`. Before moving it, resolve relative input paths against its original directory:
+
+| Paths | Keep fixed |
+|---|---|
+| `fixture.root`, `client.characterStore` | Original world and disposable character sources |
+| `cli.core.file`, `cli.manifest` | The same pinned ValheimCLI |
+| `plugins[*].file`, `probe.file`, `patchers[*].file`, `configs` values | Every dependency and configuration |
+
+If `environments.json` sits beside the original regression file, copy that recorded snapshot too. Resolve its relative paths against its original directory before moving it. Keep it beside your new `regression.json`; the program reads it automatically. Preserve any original client-environment selection: append `--client-env NAME` to every command below.
+
+Preserve all non-mod fields. Replace `mod.arms` with your two artifact paths, reviewed hashes and real commits:
 
 ```json
 "mod": {
@@ -32,15 +78,15 @@ Copy `regression.sample.json` outside the repository and replace every `<...>`. 
 }
 ```
 
-Leave a `sha256` empty and the preflight prints the hash for you to review. The machine is not in the file: by default the client is this machine's detected Valheim.
-
 ### 3. Preflight without the game
 
+From `MarkerRegression`:
+
 ```sh
-dotnet run --project examples/TargetedRegression -c Release -- preflight /absolute/path/to/regression.json
+dotnet run --project MarkerRegression.csproj -c Release -- preflight regression.json
 ```
 
-It stages each arm's profile and checks every hash, the fixture and the plugins' metadata. It ends with:
+It checks both arms and retires their prepared profiles. It ends with:
 
 ```text
 PREFLIGHT PASSED; nothing was launched. Review the arms' commits and hashes above before the run.
@@ -48,35 +94,40 @@ PREFLIGHT PASSED; nothing was launched. Review the arms' commits and hashes abov
 
 ### 4. Run each arm
 
+From the same directory, use new private evidence directories outside your repository:
+
 ```sh
-dotnet run --project examples/TargetedRegression -c Release -- run /absolute/path/to/regression.json parent /absolute/path/to/new-evidence-parent
-dotnet run --project examples/TargetedRegression -c Release -- run /absolute/path/to/regression.json candidate /absolute/path/to/new-evidence-candidate
+dotnet run --project MarkerRegression.csproj -c Release -- run regression.json parent /absolute/path/to/new-evidence-parent
+dotnet run --project MarkerRegression.csproj -c Release -- run regression.json candidate /absolute/path/to/new-evidence-candidate
 ```
 
-Each prints `PASS` or `FAIL` and fills its evidence directory. Each arm gets a fresh profile.
+The parent prints `FAIL`; the candidate prints `PASS`. Each writes `result.json`, `junit.xml`, `run-manifest.json` and command traces. Each arm gets a fresh profile and fixture copy.
 
 ## Check the result
 
-Compare the arms by their `result.json`, not by exit code alone:
+Require the parent to fail only the named final count, and the candidate to pass every step. Both must have `CleanupVerified: true` and `disposableInstall: removed`.
 
-- The parent fails at the step the change fixes.
-- The candidate passes every step.
-- The two `run-manifest.json` files differ only in the mod's hash.
+Compare every non-mod input. In `run-manifest.json`, normalize only `arm`, `modCommit`, `modSha256` and the selected mod's `sha256`/`md5` under `allowlist`. The remaining fields must match. Keep the same scenario and verify unchanged fixture-source hashes.
 
-To share a public copy, run [regression-bundle](../../tools/regression-bundle/README.md) on the two evidence directories.
+Keep full logs, plans and saves private. [Regression bundle](../../tools/regression-bundle/README.md) prepares a public copy for review.
 
 ## Problems
 
-| Symptom | Fix |
+| Result | Meaning or next step |
 |---|---|
-| Two arms with one SHA256 are refused | Use two builds, or set `"repeatability": true` to run one build twice |
-| A file is refused for its hash | Review the printed hash and paste it, or rebuild the arm from its commit |
-| The fixture layout is refused | Give a root holding exactly one world, as the game saved it |
-| A hard dependency is missing | Add it to `plugins`, or run the [dependency resolver](../reference/game-run-inputs.md#resolve-mod-dependencies) |
-| A run was interrupted | `valheim-test env status`, then `valheim-test env recover --run ID` |
+| Exit `1` | A report failed; inspect setup, scenario and cleanup steps |
+| Exit `3` | Refusal or unknown outcome; an I/O or cleanup error can follow a launch |
+| Two arms have one SHA256 | Supply distinct builds, or declare a repeatability run |
+| A run was interrupted | Follow [recovery](debug-a-native-run.md) for its exact run ID |
+
+## Limits
+
+Native excerpts use candidate packages built from [this source revision](https://github.com/tvongaza/ValheimTesting/blob/364d1b63d5e52d430c5cdf736da64bbf46df5923/examples/TargetedRegression/Program.cs), on Mac.
+
+Run the direct Windows consumer from an interactive desktop terminal. It has no SSH/session-0 desktop launch route.
 
 ## Related
 
-- [Targeted regression](../reference/sessions-targeted-regression.md): the stage checks and members.
-- [TargetedRegression example](../../examples/TargetedRegression/README.md): every field of `regression.json`.
+- [Targeted regression contract](../reference/sessions-targeted-regression.md)
+- [TargetedRegression example](../../examples/TargetedRegression/README.md)
 - [Check that a mod loads](check-a-mod-loads.md)

@@ -12,11 +12,11 @@ One owned client hosts one disposable fixture world with one mod under test. You
 | [Scenario.cs](Scenario.cs) | The rounds and assertions, the same on every machine | Yes: your mod's steps |
 | [regression.sample.json](regression.sample.json) | The files to stage, the fixture and the character | Yes: copy it outside the repository |
 
-The sample scenario tests FullLifecycle's ExampleMod through ValheimCLI's own observations, so it stages no probe. It checks that the mod's Harmony patch is applied. It also checks that `examplemod_mark` leaves exactly one pole where the host stands. Keep paths, ports and names out of `Scenario.cs`, so the source you ran is the source you can share.
+The sample scenario tests FullLifecycle's ExampleMod through ValheimCLI's Harmony and saved-object observations, so it stages no probe. It checks that the mod's Harmony patch is applied, requires zero markers before `examplemod_mark`, then exactly one pole where the host stands. Keep paths, ports and names out of `Scenario.cs`, so the source you ran is the source you can share.
 
 **The machine is not in the file.** The client environment supplies three things: the game install (only read), the disposable profile folder and the client's ValheimCLI port. By default, that environment is this machine's detected Valheim. To pick another, add `--inventory environments.json --client-env NAME` after the command; see [this machine, with no file](../../docs/reference/game-inventory.md#this-machine-with-no-file). If you leave out `--inventory` and an `environments.json` sits beside `regression.json`, the tool uses that file. `valheim-test start` writes the same `regression.json`.
 
-In this checkout, the example references the GameSessions source project. In your copy, use an exact `Valheim.Testing.GameSessions` package reference ([versions](../../docs/package-versions.md)) instead.
+Use the [four-file package consumer](consumer/README.md#ab-regression-consumer) outside this checkout. [Run an A/B regression](../../docs/guides/run-an-ab-regression.md) starts from the one-shot's recorded inputs. This checkout's development project references GameSessions source.
 
 If your mod has several dependencies, run the [dependency resolver](../../docs/reference/game-run-inputs.md#resolve-mod-dependencies) before you fill in `regression.json`.
 
@@ -145,9 +145,9 @@ The tool stages the profile at `vt-prep-regression-<name>-<run-id>/runtime` in t
 | Exit code | Meaning |
 |---|---|
 | `0` | Passed |
-| `1` | `run` only: the scenario failed |
+| `1` | `run` only: a report failed; inspect setup, scenario and cleanup |
 | `2` | Usage error |
-| `3` | Refused; the message names the field and the fix |
+| `3` | Refusal or unknown outcome; I/O or cleanup can fail after launch |
 
 ## 3. Run each arm
 
@@ -175,7 +175,7 @@ The directory also holds the scenario's own JSON files. Each arm gets a fresh pr
 
 ## Review the result
 
-Compare the arms by their `result.json`, not by exit code alone. The parent should fail at the step the change fixes, and the candidate should pass every step. The two `run-manifest.json` files should differ only in the mod's hash. Logs, saves and command traces can hold account identifiers and machine paths, so keep them private.
+Compare the arms by their `result.json`, not by exit code alone. The parent should fail at the step the change fixes, and the candidate should pass every step. The selected arm, source commit and mod hashes change. Every other manifest field must match after normalizing `arm`, `modCommit`, `modSha256` and the selected mod's `sha256`/`md5` in `allowlist`. Logs, saves and command traces can hold account identifiers and machine paths, so keep them private.
 
 ## Share the result
 

@@ -16,6 +16,19 @@ The consumer imports no repository props, targets or source projects. The mod pr
 
 Follow [Your first gameplay assertion](../../../docs/tutorials/first-gameplay-assertion.md) for the command and expected result. If you already build your own mod, retain its project and replace the marker-specific code in `Scenario.cs`.
 
+## A/B regression consumer
+
+For two builds of the same mod, copy these four files into a separate `MarkerRegression` directory. Download all four from the revision that holds this section; until a release tag includes it, that is `main`.
+
+| Source | Destination | Purpose |
+|---|---|---|
+| [Program.cs](../Program.cs) | `MarkerRegression/Program.cs` | Preflight, run and retirement |
+| [Scenario.cs](../Scenario.cs) | `MarkerRegression/Scenario.cs` | The same marker assertions |
+| [MarkerRegression.csproj](MarkerRegression/MarkerRegression.csproj) | `MarkerRegression/MarkerRegression.csproj` | The exact GameSessions package |
+| [NuGet.Config](NuGet.Config) | `MarkerRegression/NuGet.Config` | NuGet.org as the only source |
+
+Follow [Run an A/B regression](../../../docs/guides/run-an-ab-regression.md). It reuses the completed one-shot's inputs and pins two mod builds. Keep `Program.cs` unchanged; edit `Scenario.cs` for your mod's behavior.
+
 ## Deliberately buggy parent
 
 In your copied `MarkerMod/Plugin.cs`, omit this production line and retain the following `OK: marked` reply:
