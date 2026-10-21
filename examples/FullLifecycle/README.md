@@ -51,7 +51,7 @@ valheim-test session check examples/FullLifecycle/ExampleMod.Tests/session.json 
 dotnet test examples/FullLifecycle/ExampleMod.Tests/ExampleMod.Tests.csproj -c Release --filter "FullyQualifiedName~DrySiteSessionTests"
 ```
 
-The native test passes only when the run passed, after the [log scan](../../docs/reference/game-log-scan.md) of every server boot and client. Each run writes a new evidence directory under `session-runs/` in the test output ([what it holds](../../docs/guides/test-save-restart-rejoin.md#check-the-result)).
+The native test passes only when the run passed, after the [log scan](../../docs/reference/game-log-scan.md) of every server boot and client. Each run writes a new evidence directory under `session-runs/` in the test output ([what it holds](../../docs/reference/evidence.md)).
 
 To include one optional screenshot after the first joined-client marker check, add `reviewStill` to the private plan:
 
@@ -70,7 +70,7 @@ Set `hostDirectory` to a fresh, private, absolute path without spaces **on the c
 
 ## The native session
 
-[Test that a change survives a save, restart and rejoin](../../docs/guides/test-save-restart-rejoin.md) walks through a package-only consumer: generated dependency locks, campaign inputs, feature expectations and the run. The test finds two private files beside the test project, `session.json` and `dry-site-lifecycle.plan.json`, which `.gitignore` lists. Without them, the native test is skipped with that reason, so `dotnet test` stays offline.
+[Test that a change survives a save, restart and rejoin](../../docs/guides/test-save-restart-rejoin.md) walks through a package-only consumer: generated dependency locks, campaign inputs, feature expectations and the run. This checkout's native test instead finds two private files beside the test project, `session.json` ([the session manifest](../../docs/reference/sessions-campaigns.md#the-session-manifest), with one [dependency lock](../../docs/reference/game-run-inputs.md#resolve-mod-dependencies) per role) and `dry-site-lifecycle.plan.json`, which `.gitignore` lists. Without them, the native test is skipped with that reason, so `dotnet test` stays offline.
 
 [GameSessionFixture.cs](ExampleMod.Tests/GameSessionFixture.cs) runs one session per test class and hands the started session and plan to the tests. Copy it as it is:
 
