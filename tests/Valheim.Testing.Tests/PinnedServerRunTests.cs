@@ -31,8 +31,7 @@ public sealed class PinnedServerRunTests : IDisposable
     private string WritePlan(Dictionary<string, object>? logScan = null, InstallPins? runtimePins = null,
         object? client = null)
     {
-        Directory.CreateDirectory(Path.Combine(World, "worlds_local"));
-        File.WriteAllText(Path.Combine(World, "worlds_local", "Test.db"), "world");
+        FakeInstalls.World(Path.Combine(World, "worlds_local"), "Test", 1);
         var listener = new TcpListener(IPAddress.Loopback, 0); listener.Start(); int port = ((IPEndPoint)listener.LocalEndpoint).Port; listener.Stop();
         var plan = new Dictionary<string, object>
         {
@@ -116,7 +115,7 @@ public sealed class PinnedServerRunTests : IDisposable
         // #612: a Linux server's profile is linked too, so its storage is checked first.
         string[] storage = [LocalServerMachine.Windows ? "check the Windows profile storage" : "check the Linux profile storage"];
         string[] task = LocalServerMachine.Windows ? ["the server host can start a server task"] : [];
-        Assert.Equal([ "enough free disk space for the copies", .. storage, .. task, "take the server host's lock",
+        Assert.Equal([ "the world fixture is one complete world", "enough free disk space for the copies", .. storage, .. task, "take the server host's lock",
                 "check the server host's install against the pinned runtime and stage its profile", "copy and verify pinned world",
                 "ship and verify the world copy on the server host", "server runtime has the plan's server executable",
                 "server runtime is the pinned game build, loader and patchers", "prepared only; no game launched",
@@ -127,7 +126,7 @@ public sealed class PinnedServerRunTests : IDisposable
         // Validate prepares and cleans up; it runs no scenario, so the scenario state is not reported as passed.
         Assert.Equal((true, true, false, true), (result.GetProperty("PreflightPassed").GetBoolean(), result.GetProperty("RuntimeReady").GetBoolean(),
             result.GetProperty("ScenarioPassed").GetBoolean(), result.GetProperty("CleanupVerified").GetBoolean()));
-        Assert.Equal([ "Preflight", .. storage.Select(_ => "Preflight"), .. task.Select(_ => "Setup"), "Setup", "Setup", "Setup", "Setup", "Setup", "Setup", "Setup", "Cleanup", "Cleanup", "Cleanup", "Cleanup", "Cleanup" ],
+        Assert.Equal([ "Preflight", "Preflight", .. storage.Select(_ => "Preflight"), .. task.Select(_ => "Setup"), "Setup", "Setup", "Setup", "Setup", "Setup", "Setup", "Setup", "Cleanup", "Cleanup", "Cleanup", "Cleanup", "Cleanup" ],
             result.GetProperty("Steps").EnumerateArray().Select(s => s.GetProperty("Phase").GetString()));
         var provenance = result.GetProperty("Provenance");
         Assert.Equal(("this machine", EnvironmentInventory.LocalHost, EnvironmentInventory.LocalHost + ":" + LocalServerMachine.Install),
@@ -237,7 +236,7 @@ public sealed class PinnedServerRunTests : IDisposable
     [Fact] public async Task AChangedFixtureFailsBeforeAnythingLaunches()
     {
         string plan = WritePlan();
-        File.WriteAllText(Path.Combine(World, "worlds_local", "Test.db"), "edited after pins recorded");
+        File.WriteAllText(Path.Combine(World, "worlds_local", "Test", "_main.1.db2"), "edited after pins recorded");
         Assert.Equal(1, await RunHere(["validate", plan, Output], Options()));
         Assert.False(Result().GetProperty("Passed").GetBoolean());
     }
@@ -339,13 +338,30 @@ public sealed class PinnedServerRunTests : IDisposable
         Assert.Contains("may still run", Copy(result, "runtimeCopy"));
         stubborn.RefuseStop = false;
     }
+    // #869: a standalone run reads its fixture as one complete world before the host is touched, the profile staged or the world copied.
+    [Theory]
+    [InlineData("incomplete")]
+    [InlineData("pre-1.0")]
+    [InlineData("unwrapped")]
+    public async Task AWorldFixtureThatIsNotOneCompleteWorldIsRefusedBeforeAnythingIsStaged(string shape)
+    {
+        string plan = WritePlan();
+        string worlds = Path.Combine(World, "worlds_local");
+        if (shape == "incomplete") File.Delete(Path.Combine(worlds, "Test", "_main.1.ok"));
+        else if (shape == "pre-1.0") { File.WriteAllText(Path.Combine(worlds, "Test.fwl"), "world"); File.WriteAllText(Path.Combine(worlds, "Test.db"), "world"); }
+        else Directory.Move(worlds, Path.Combine(World, "moved")); // the world folder not in worlds_local/
+        Assert.Equal(1, await RunHere(["validate", plan, Output], Options()));
+        Assert.False(Directory.Exists(Output)); // no world copy, no evidence
+        Assert.Empty(_machine.Host.Scripts); // the host was never touched: no lock, no profile
+    }
+
     [Fact] public async Task AFullDriveIsRefusedBeforeAnythingIsCopied()
     {
         string plan = WritePlan();
         DiskSpace.AvailableOverride = _ => 1024;
         try { Assert.Equal(1, await RunHere(["validate", plan, Output], Options())); }
         finally { DiskSpace.AvailableOverride = null; }
-        var step = Result().GetProperty("Steps").EnumerateArray().First();
+        var step = Result().GetProperty("Steps").EnumerateArray().First(step => !step.GetProperty("Passed").GetBoolean());
         Assert.Equal("enough free disk space for the copies", step.GetProperty("Name").GetString());
         Assert.False(step.GetProperty("Passed").GetBoolean());
         Assert.Contains("Not enough free disk space for this run's world copy", step.GetProperty("Error").GetString());
@@ -455,8 +471,7 @@ public sealed class KeepRuntimeVariableTests : IDisposable
     {
         var machine = new LocalServerMachine(Path.Combine(_root, "local-host"));
         string runtime = machine.InstallDirectory, world = Path.Combine(_root, "world"), output = Path.Combine(_root, "out");
-        Directory.CreateDirectory(Path.Combine(world, "worlds_local"));
-        File.WriteAllText(Path.Combine(world, "worlds_local", "Test.db"), "world");
+        FakeInstalls.World(Path.Combine(world, "worlds_local"), "Test", 1);
         string plan = Path.Combine(_root, "plan.json");
         File.WriteAllText(plan, JsonSerializer.Serialize(new Dictionary<string, object>
         {

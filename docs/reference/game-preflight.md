@@ -14,7 +14,8 @@ The static checks an owned run makes before anything is staged or started, and t
 | An old monolithic ValheimCLI with no `cli_extensions`; a default plugin without the required built-ins | Live, once the client answers | `CliCapabilities.Require(actor, paths)` reads `cli_extensions` once and names every missing command |
 | The wrong ValheimCLI generation, found before anything starts | Static, with a `cliManifest` | The staged files match the manifest by SHA256 and offer every capability the run uses |
 | A standing expectations file with several pins on one line | Static, when ValheimCLI's config sets `[Expectations] File` | `StandingPins.Parse` and `Read` name the line; `Format` and `Write` write one pin per line |
-| A reused world name hiding a snapshot with another UID | Static, before the fixture is copied | `WorldIdentity.Read(fixture)` reads the fixture's own metadata; `HostWorldPlan.Preflight()` refuses a `worldUid` it does not hold |
+| A world fixture the game would not load as it is: incomplete, holding extra saves or chunks, or saved before Valheim 1.0 | Static, before anything is staged or copied | `WorldIdentity.Read(fixture)`, the one check of every world fixture (see below) |
+| A reused world name hiding a snapshot with another UID | Static, before the fixture is copied | `WorldIdentity.Read(fixture)` reads the fixture's own metadata; `HostWorldPlan.Preflight()` and `ServerRunPlan.PreflightWorld()` refuse a world UID it does not hold |
 | A hand-typed candidate file name or hash | Static | `InstallPins.Plugins(install, files)` refuses a name not in the folder; `WorldFixture.Verify` refuses changed fixture files |
 
 Details per row:
@@ -24,7 +25,14 @@ Details per row:
 - **ScriptEngine.** The refusal also offers the simpler layout: one default `valheimCLI.dll` in `plugins`.
 - **Live capabilities.** `CliCapabilities.Require` names the default plugin that provides each missing command, or says the ValheimCLI predates the built-in command API. `GameActor.RequireCapability` gives the same messages.
 - **Standing expectations.** The preflight also refuses a configured file that is missing, a strict one (`Strict = true`) that names no world (`world=any` lets the transition through while the actor still pins the exact UID), and one that contradicts the plan's pins or hosted world UID.
-- **World identity.** The metadata (`<name>/_main.<n>.fwl2` or `<name>.fwl`) is a length-prefixed package: world version, name, seed name, seed, UID. After the start, another UID fails as the wrong world, naming both UIDs, never as a load failure.
+- **World fixture.** A fixture holds one Valheim 1.0 world folder `<name>/`, exactly as the game saved it, and nothing else. `WorldIdentity.Read` refuses, naming the file and what to do:
+  - a save that is not all four `_main.<n>.fwl2`, `.db2`, `.chunks` and `.ok` files. The one exception is a world never saved: a lone `_main.0.fwl2` whose metadata says so. Without its data the game silently makes a fresh world.
+  - a second save set, or a `.chunk` file that `_main.<n>.chunks` does not list. The game deletes both when it loads the world, so the run would not load the pinned files. A listed chunk that is missing fails the game's load.
+  - a pre-1.0 world (`<name>.fwl` and `<name>.db`). Open it once in Valheim 1.0 or later and save it; the game then writes the `<name>/` folder.
+  - anything else at the root, or in the world folder.
+
+  The game's backups beside the world folder (`<name>_backup_auto-<yyyyMMdd-HHmmss>/`, or `_backup_` and `_backup_restore-` with the same date) may stay; they are checked for the world's name and UID only. A dedicated server's fixture is its `-savedir`: one such world in `worlds_local/`. Every route reads it before staging: hosted clients (`HostWorldPlan.Preflight`), `PinnedServerRun` and campaigns (`ServerRunPlan.PreflightWorld`), and `valheim-test server-load --world-fixture`, `server-load-phases` and `detach server-load`.
+- **World identity.** The metadata (`<name>/_main.<n>.fwl2`) is a length-prefixed package: world version, name, seed name, seed, UID. After the start, another UID fails as the wrong world, naming both UIDs, never as a load failure.
 - **Plugin pins.** A pinned MD5 that no DLL in `BepInEx/plugins` or `BepInEx/scripts` has is refused, naming similar files and their hashes; so is one installed more than once. `FileHash.Md5(path)` is the hash `cli_manifest` reports.
 
 Every check of an install on another host uses `BepInExLoader.LoaderFiles`, the one list of loader files each platform needs: the Windows proxy and configuration or the Linux `doorstop_libs/libdoorstop_x64.so`, beside the preloader and core; on macOS either `libdoorstop.dylib` or `doorstop_libs/libdoorstop_x64.dylib`. A remote client's files are checked for existence in one round trip; only the Windows proxy and configuration are read.

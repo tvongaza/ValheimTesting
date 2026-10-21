@@ -314,7 +314,7 @@ public sealed class TargetedRegressionTests : IDisposable
     [ClientHostTheory]
     [InlineData("world-folder", "is a world folder itself", "Point fixture.root at its parent")]
     [InlineData("worlds_local", "holds a worlds_local/ wrapper", "Copy only the one world folder")]
-    [InlineData("two-worlds", "holds 2 worlds (Other, SealFixture)", "Copy only the world under test")]
+    [InlineData("two-worlds", "exactly one world, not 2: Other/, SealFixture/", "Copy only the world under test")]
     public void AWronglyNestedFixtureIsRefusedWithTheExpectedTree(string shape, string diagnosis, string action)
     {
         string root = shape switch
@@ -1002,8 +1002,7 @@ internal sealed class RegressionRig : IDisposable
         Write("game/BepInEx/config/BepInEx.cfg", Encoding.UTF8.GetBytes("[Chainloader]\nHideManagerGameObject = true\n"));
         Write("game/BepInEx/plugins/Unrelated.dll", Encoding.UTF8.GetBytes("a plugin of the prepared game, never staged"));
         Write("save/characters_local/smoketest.fch", Encoding.UTF8.GetBytes("character"));
-        Write("fixture/SealFixture/_main.1.fwl2", OwnedRunPreflightTests.Metadata("SealFixture", long.Parse(Uid)));
-        Write("fixture/SealFixture/_main.1.db2", Encoding.UTF8.GetBytes("world"));
+        FakeInstalls.World(Fixture, "SealFixture", long.Parse(Uid));
         _core = Write("cli/valheimCLI.dll", Assembly("valheimCLI", new("valheimCLI.valheimCLI", "0.4.0")));
         _dependency = Write("deps/Dependency.dll", Assembly("Dependency", new("example.dependency", "1.3.0")));
         _probe = Write("probe/Probe.dll", Assembly("Probe", new("testing.probe") { Hard = ["valheimCLI.valheimCLI"], Soft = ["example.mod"] }));
@@ -1103,8 +1102,7 @@ internal sealed class RegressionRig : IDisposable
     /// <summary>A second world beside the fixture's own.</summary>
     public string AddWorld(string name, long uid)
     {
-        Write($"fixture/{name}/_main.1.fwl2", OwnedRunPreflightTests.Metadata(name, uid));
-        return Fixture;
+        return FakeInstalls.World(Fixture, name, uid);
     }
 
     private static void CopyTree(string source, string target)

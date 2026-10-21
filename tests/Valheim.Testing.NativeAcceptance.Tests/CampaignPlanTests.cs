@@ -338,7 +338,11 @@ public sealed class CampaignPlanTests : IDisposable
             var client = Client(); client.Remove("join");
             client["hostWorld"] = new JsonObject
             {
-                ["world"] = new JsonObject { ["source"] = Path.Combine(_directory, "host-world"), ["sha256"] = new JsonObject { ["HostFixture.fwl"] = new string('a', 64), ["HostFixture.db"] = new string('b', 64) } },
+                ["world"] = new JsonObject { ["source"] = Path.Combine(_directory, "host-world"), ["sha256"] = new JsonObject
+                {
+                    ["HostFixture/_main.1.fwl2"] = new string('a', 64), ["HostFixture/_main.1.db2"] = new string('b', 64),
+                    ["HostFixture/_main.1.chunks"] = new string('c', 64), ["HostFixture/_main.1.ok"] = new string('d', 64),
+                } },
                 ["worldUid"] = "4242",
             };
             return new JsonObject

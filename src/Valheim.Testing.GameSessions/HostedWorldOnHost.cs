@@ -372,7 +372,7 @@ internal static class HostedWorldOnHost
         string Leaf(string path) => path.Replace('\\', '/').TrimEnd('/').Split('/').Last();
         if (!Leaf(worlds).Equals("worlds_local", StringComparison.OrdinalIgnoreCase))
             throw new InvalidDataException($"its journal names {worlds}, which is not a client's worlds_local");
-        _ = HostedWorld.NameOf([name + "/_main.0.fwl2"]); // a fixture world's name
+        _ = WorldIdentity.RequireName(name); // a fixture world's name
         string separator = worlds.Contains('\\') ? "\\" : "/";
         if (!runtime.Equals(worlds.TrimEnd('/', '\\') + separator + name, StringComparison.Ordinal))
             throw new InvalidDataException($"its journal names {runtime}, which is not {name} in {worlds}");
@@ -385,7 +385,7 @@ internal static class HostedWorldOnHost
 
     /// <summary>
     /// Before env recover moves a journalled world out of a client's worlds: every metadata file of the world there
-    /// (<c>&lt;name&gt;/_main.&lt;n&gt;.fwl2</c>, Valheim 1.0's chunked save folder, or <c>&lt;name&gt;.fwl</c>) must state
+    /// (<c>&lt;name&gt;/_main.&lt;n&gt;.fwl2</c> in Valheim 1.0's save folder, and in the game's backups of it) must state
     /// <paramref name="worldUid"/>, the fixture's UID the run journalled before placing it. A world the user made under that name has
     /// another UID and is refused, as is one whose identity cannot be read (entries named for the world but no readable metadata).
     /// The game rewrites the files once it hosted the world, so the UID, not the bytes, is what stays the run's. Returns false when
@@ -410,7 +410,7 @@ internal static class HostedWorldOnHost
         if (read.Count == 0)
         {
             if (done == "absent") return false;
-            throw new InvalidDataException($"{name} in {worlds} holds no world metadata ({name}/_main.<n>.fwl2 or {name}.fwl), so it cannot be proven the run's world UID {worldUid}; inspect it and move it out yourself");
+            throw new InvalidDataException($"{name} in {worlds} holds no world metadata ({name}/_main.<n>.fwl2), so it cannot be proven the run's world UID {worldUid}; inspect it and move it out yourself");
         }
         var other = read.FirstOrDefault(identity => identity.UidText != worldUid);
         if (other != null)
@@ -419,8 +419,8 @@ internal static class HostedWorldOnHost
     }
 
     // The one rule of what is named for a world on a host (HostedWorld.IsNamedFor): <name>, <name>.* and the game's <name>_backup*,
-    // in any case. A hosting client runs on Windows or macOS, whose folders ignore case, so the game takes campaign.fwl for
-    // Campaign.fwl: the refusal must see it, and a move-out may take it, because the refusal proved nothing named for the world was
+    // in any case. A hosting client runs on Windows or macOS, whose folders ignore case, so the game takes campaign for
+    // Campaign: the refusal must see it, and a move-out may take it, because the refusal proved nothing named for the world was
     // there before the placement. Failed placement rollback uses individual transfer receipts instead. Lower-casing is culture-free
     // (C locale, invariant culture). Each script below uses it.
     internal const string WindowsNamed = """
@@ -441,8 +441,8 @@ internal static class HostedWorldOnHost
 
         """;
 
-    // The metadata of every entry named for the world (the one rule, any case, as MoveOut moves them), base64: a <entry>.fwl file
-    // and the _main.<n>.fwl2 files of an <entry>/ folder (Valheim 1.0's chunked save), each labelled with its path in worlds_local.
+    // The metadata of every entry named for the world (the one rule, any case, as MoveOut moves them), base64: the _main.<n>.fwl2
+    // files of an <entry>/ folder (Valheim 1.0's save, or the game's backup of it), each labelled with its path in worlds_local.
     // VT-WORLD-METAS says whether any entry named for the world is there at all. Metadata is a few hundred bytes; a file over 1 MiB
     // is named, not read.
     internal static readonly string WindowsMetadata = "$ErrorActionPreference = 'Stop'\n" + WindowsNamed + """
@@ -458,7 +458,6 @@ internal static class HostedWorldOnHost
                         if ($inner -match '^_main\.[0-9]+\.fwl2$') { $files += ,@($file, ($leaf + '/' + $inner)) }
                     }
                 }
-                elseif ($leaf.ToLowerInvariant().EndsWith('.fwl', [StringComparison]::Ordinal)) { $files += ,@($entry, $leaf) }
             }
             foreach ($file in $files) {
                 if ((Get-Item -LiteralPath $file[0]).Length -gt 1048576) { 'VT-WORLD-META-LARGE ' + $file[1]; continue }
@@ -487,8 +486,6 @@ internal static class HostedWorldOnHost
                         case "$inner" in _main.*[!0-9]*.fwl2|_main..fwl2) continue ;; esac
                         meta "$file" "$leaf/$inner"
                     done
-                elif [ -f "$entry" ]; then
-                    case "$l" in *.fwl) meta "$entry" "$leaf" ;; esac
                 fi
             done
         fi

@@ -521,9 +521,7 @@ public sealed class CliCapabilityManifestTests : IDisposable
         public HostWorldPlan Plan { get; }
         public HostedFixture(string root)
         {
-            string fixture = Directory.CreateDirectory(Path.Combine(root, "fixture")).FullName;
-            File.WriteAllBytes(Path.Combine(fixture, "HostFixture.fwl"), OwnedRunPreflightTests.Metadata("HostFixture", 4242));
-            File.WriteAllText(Path.Combine(fixture, "HostFixture.db"), "fixture world");
+            string fixture = FakeInstalls.World(Path.Combine(root, "fixture"), "HostFixture", 4242);
             string save = Path.Combine(root, "client-data");
             Worlds = Directory.CreateDirectory(Path.Combine(save, "worlds_local")).FullName;
             Output = Directory.CreateDirectory(Path.Combine(root, "out")).FullName;

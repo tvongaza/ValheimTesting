@@ -221,8 +221,8 @@ public sealed class NativeDependencyResolverTests : IDisposable
             campaign.ApplyTo(plan, HostedCampaignManifest.Read(manifestFile), clients, output);
             Assert.Equal("4242", plan.Pins["worlduid"]);
             Assert.All(plan.World.Sha256.Keys, path => Assert.StartsWith("worlds_local" + Path.DirectorySeparatorChar, path));
-            Assert.True(File.Exists(Path.Combine(plan.World.Source, "worlds_local", "Campaign.fwl")));
-            Assert.True(File.Exists(Path.Combine(plan.World.Source, "worlds_local", "Campaign.db")));
+            Assert.True(File.Exists(Path.Combine(plan.World.Source, "worlds_local", "Campaign", "_main.1.fwl2")));
+            Assert.True(File.Exists(Path.Combine(plan.World.Source, "worlds_local", "Campaign", FakeInstalls.ChunkFile)));
             WorldFixture.Verify(plan.World.Source, plan.World.Sha256);
             Assert.Equal(profile.Server.Install, plan.Runtime.Source);
             Assert.Equal("vt-one", clients["client-a"].Character);
@@ -1540,11 +1540,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         string clientLock = Lock(clientMod, "hosted-client");
         string storeA = Store("hosta", 501, "hosted/"), storeB = Store("peerb", 502, "hosted/");
         // A chunked fixture, as Valheim 1.0 writes worlds: one Campaign/ directory.
-        string world = Path.Combine(_rig.Root, "hosted-world");
-        string flat = FakeInstalls.World(Path.Combine(_rig.Root, "hosted-world-flat"));
-        Directory.CreateDirectory(Path.Combine(world, "Campaign"));
-        File.Copy(Path.Combine(flat, "Campaign.fwl"), Path.Combine(world, "Campaign", "_main.0.fwl2"));
-        File.WriteAllText(Path.Combine(world, "Campaign", "_main.0.db2"), "fixture");
+        string world = FakeInstalls.World(Path.Combine(_rig.Root, "hosted-world"));
         // A host's path: on this machine (a local pc), a real one in the test's folder, read in place as a local host's files are.
         string pcHere = Path.Combine(_rig.Root, "pc-here");
         string On(string name, string path) => localHost && name == "pc" ? pcHere + path : path;
@@ -1619,7 +1615,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
             .OnPrefix("cli_start_host_world ", command =>
             {
                 hosting = true; readings = 0;
-                placedWhileHosting = File.Exists(hosts["pc"].Local(worlds + "/Campaign/_main.0.fwl2"));
+                placedWhileHosting = File.Exists(hosts["pc"].Local(worlds + "/Campaign/_main.1.fwl2"));
                 return ScriptedTransport.Ok($"OK: Starting hosted world '{command.Split(' ')[1]}' using character 'vt-host' (vt-host, Local); open=true, public=False, crossplay=False, backend=Steamworks, passwordSet=False");
             })
             .On("cli_multiplayer_identity", _ => ScriptedTransport.Ok($"OK: steamId=76561197960266229, playFabLoginState=LoggedIn, playFabId=AB, backend=Steamworks, gameState=InGame, connectionStatus=Connected, isServer={(hosting ? "True" : "False")}, isOpenServer={(hosting ? "True" : "False")}, server="))
@@ -1707,7 +1703,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         // Fetched into the evidence, the host's collected copy goes, and the run's folder there with it (#791).
         Assert.False(Directory.Exists(pc.Local(On("pc", "/runs/run-hosted"))));
         string evidence = result.GetProperty("Provenance").GetProperty("hostWorldEvidence").GetString()!;
-        Assert.True(File.Exists(Path.Combine(evidence, "Campaign", "_main.0.fwl2")));
+        Assert.True(File.Exists(Path.Combine(evidence, "Campaign", "_main.1.fwl2")));
         Assert.True(File.Exists(Path.Combine(evidence, "Campaign_backup_auto-20261006.db")));
         var journal = await RunJournalOnHost.ReadAsync(pc, RunJournal.DirectoryFor(EnvironmentInventory.Read(inventory).Hosts["pc"]), "run-hosted", TimeSpan.FromSeconds(5));
         var worldEntries = journal.Where(record => record.Entry.Fields.GetValueOrDefault("runtime") == worlds + "/Campaign").Select(record => record.Entry.Kind).ToList();

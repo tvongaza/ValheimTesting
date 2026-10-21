@@ -35,7 +35,7 @@ public sealed class HostedWorldPlacementSafetyTests : IDisposable
         var plan = new HostWorldPlan { World = new() { Source = fixture, Sha256 = new(WorldFixture.Manifest(fixture)) }, WorldUid = "4242" };
         string worlds = Path.Combine(_root, "worlds_local"), stage = Path.Combine(_root, "runs", "run-1", "host-world-stage");
         string keep = Path.Combine(_root, "runs", "run-1", "host-world");
-        byte[] bytes = File.ReadAllBytes(Path.Combine(FakeInstalls.World(Path.Combine(_root, "foreign"), uid: uid), "Campaign.fwl"));
+        byte[] bytes = FakeInstalls.Metadata("Campaign", uid);
         var journal = new List<JournalEntry>();
         var host = new ForwardingWorldHost(inner);
         host.BeforeRun = (script, variables) =>
@@ -71,7 +71,8 @@ public sealed class HostedWorldPlacementSafetyTests : IDisposable
     {
         string root = Path.Combine(_root, suffix);
         Directory.CreateDirectory(root);
-        string fixture = FakeInstalls.World(Path.Combine(root, "fixture"));
+        // Two entries, as the move-out's receipts need: the world and the game's backup of it.
+        string fixture = FakeInstalls.Backup(FakeInstalls.World(Path.Combine(root, "fixture")));
         var plan = new HostWorldPlan { World = new() { Source = fixture, Sha256 = new(WorldFixture.Manifest(fixture)) }, WorldUid = "4242" };
         var journal = new List<JournalEntry>();
         var host = new ForwardingWorldHost(new LocalGameHost("local", HostShell.ThisMachine));
@@ -97,7 +98,7 @@ public sealed class HostedWorldPlacementSafetyTests : IDisposable
         Assert.ThrowsAny<Exception>(() => site.Place(plan, Path.Combine(_root, "output"), default));
         Assert.DoesNotContain(journal, entry => entry.Kind == JournalEntry.CopyRetired);
         Assert.DoesNotContain(journal, entry => entry.Fields.GetValueOrDefault("verified") == "true");
-        Assert.True(File.Exists(Path.Combine(site.WorldsDirectory, "Campaign.fwl")));
+        Assert.True(Directory.Exists(Path.Combine(site.WorldsDirectory, "Campaign")));
         Assert.Empty(Directory.EnumerateFileSystemEntries(site.KeepIn));
         for (int attempt = 0; attempt < 2; attempt++)
             Assert.Contains("never confirmed", Assert.Throws<InvalidDataException>(() => HostedWorldOnHost.RecoverAsync(host, Fields(journal),
@@ -125,7 +126,7 @@ public sealed class HostedWorldPlacementSafetyTests : IDisposable
         // The interrupted host command finishes after recovery looked: the journal must still describe this uncertain effect.
         Assert.NotNull(delayed);
         (await new LocalGameHost("delayed", HostShell.ThisMachine).RunAsync(delayed, delayedVariables, TimeSpan.FromSeconds(30))).EnsureSuccess("delayed transfer");
-        Assert.True(File.Exists(Path.Combine(site.WorldsDirectory, "Campaign.fwl")));
+        Assert.True(Directory.Exists(Path.Combine(site.WorldsDirectory, "Campaign")));
         await Assert.ThrowsAsync<InvalidDataException>(() => HostedWorldOnHost.RecoverAsync(host, fields,
             Path.Combine(site.WorldsDirectory, "Campaign"), "run-1", TimeSpan.FromSeconds(30), default));
     }
@@ -148,14 +149,15 @@ public sealed class HostedWorldPlacementSafetyTests : IDisposable
         };
         Assert.Throws<IOException>(() => site.Place(plan, Path.Combine(_root, "output"), default));
         Assert.Equal("partial", Fields(journal)["placementState"]);
-        byte[] personal = File.ReadAllBytes(Path.Combine(FakeInstalls.World(Path.Combine(_root, "personal"), uid: uid, seed: "Personal"), "Campaign.fwl"));
-        File.WriteAllBytes(Path.Combine(site.WorldsDirectory, "Campaign.fwl"), personal);
+        byte[] personal = FakeInstalls.Metadata("Campaign", uid, seed: "Personal");
+        string replaced = Path.Combine(site.WorldsDirectory, "Campaign", "_main.1.fwl2");
+        File.WriteAllBytes(replaced, personal);
         host.BeforeRun = null;
         for (int attempt = 0; attempt < 2; attempt++)
         {
             Assert.Contains("historical receipts", (await Assert.ThrowsAsync<InvalidDataException>(() => HostedWorldOnHost.RecoverAsync(host, Fields(journal),
                 Path.Combine(site.WorldsDirectory, "Campaign"), "run-1", TimeSpan.FromSeconds(30), default))).Message);
-            Assert.Equal(personal, File.ReadAllBytes(Path.Combine(site.WorldsDirectory, "Campaign.fwl")));
+            Assert.Equal(personal, File.ReadAllBytes(replaced));
             Assert.Empty(Directory.EnumerateFileSystemEntries(site.KeepIn));
         }
     }
@@ -164,9 +166,7 @@ public sealed class HostedWorldPlacementSafetyTests : IDisposable
     public void ADirectoryArrivingImmediatelyBeforeTheMoveCannotReceiveANestedFixtureOrBecomeOwned()
     {
         var (_, site, host, journal) = Setup();
-        string fixture = Path.Combine(_root, "chunked-fixture");
-        Directory.CreateDirectory(Path.Combine(fixture, "Campaign"));
-        File.Copy(Path.Combine(_root, "fixture", "Campaign.fwl"), Path.Combine(fixture, "Campaign", "_main.0.fwl2"));
+        string fixture = FakeInstalls.World(Path.Combine(_root, "chunked-fixture"));
         var plan = new HostWorldPlan { World = new() { Source = fixture, Sha256 = new(WorldFixture.Manifest(fixture)) }, WorldUid = "4242" };
         host.TransformScript = (script, variables) => variables?.GetValueOrDefault("worlds") != site.Stage ? script :
             host.Shell.Kind == HostShellKind.Bash
@@ -175,26 +175,18 @@ public sealed class HostedWorldPlacementSafetyTests : IDisposable
         Assert.ThrowsAny<Exception>(() => site.Place(plan, Path.Combine(_root, "output"), default));
         Assert.Equal("personal", File.ReadAllText(Path.Combine(site.WorldsDirectory, "Campaign", "personal-save")));
         Assert.False(Directory.Exists(Path.Combine(site.WorldsDirectory, "Campaign", "Campaign")));
-        Assert.True(File.Exists(Path.Combine(site.Stage, "Campaign", "_main.0.fwl2")));
+        Assert.True(File.Exists(Path.Combine(site.Stage, "Campaign", "_main.1.fwl2")));
         Assert.DoesNotContain(journal, entry => entry.Kind == JournalEntry.CopyRetired || entry.Fields.GetValueOrDefault("verified") == "true");
     }
 
     [OsFact("windows")]
     public async Task WindowsCrossVolumePublicationRefusesLateFilesAndDirectoriesAndPreservesUncertainDeletion()
     {
-        foreach (bool chunked in new[] { false, true })
         foreach (string fault in new[] { "none", "collision", "delete" })
         {
-            string variant = "cross-" + chunked + "-" + fault;
+            string variant = "cross-" + fault;
             var (plan, site, host, journal) = Setup(variant);
-            string leaf = chunked ? "Campaign" : "Campaign.fwl";
-            if (chunked)
-            {
-                string fixture = Path.Combine(_root, variant, "chunked");
-                Directory.CreateDirectory(Path.Combine(fixture, leaf));
-                File.Copy(Path.Combine(plan.World.Source, "Campaign.fwl"), Path.Combine(fixture, leaf, "_main.0.fwl2"));
-                plan = new HostWorldPlan { World = new() { Source = fixture, Sha256 = new(WorldFixture.Manifest(fixture)) }, WorldUid = "4242" };
-            }
+            const string leaf = "Campaign";
             host.TransformScript = (script, variables) =>
             {
                 if (variables?.GetValueOrDefault("worlds") != site.Stage) return script;
@@ -202,8 +194,7 @@ public sealed class HostedWorldPlacementSafetyTests : IDisposable
                 script = script.Replace("[IO.Path]::GetPathRoot($entry) -ne [IO.Path]::GetPathRoot($dest)", "$true");
                 if (fault == "collision")
                     script = script.Replace("Copy-Item -LiteralPath $entry -Destination $copy -Recurse", "Copy-Item -LiteralPath $entry -Destination $copy -Recurse\n" +
-                        (chunked ? "[void][IO.Directory]::CreateDirectory($dest); [IO.File]::WriteAllText((Join-Path $dest 'personal-save'), 'personal')" :
-                            "if ($move[2] -ceq 'Campaign.fwl') { [IO.File]::WriteAllText($dest, 'personal') }"));
+                        "if ($move[2] -ceq 'Campaign') { [void][IO.Directory]::CreateDirectory($dest); [IO.File]::WriteAllText((Join-Path $dest 'personal-save'), 'personal') }");
                 if (fault == "delete") script = script.Replace("Remove-VtTree $entry $worlds",
                     $"if ($move[2] -ceq '{leaf}') {{ throw 'source-delete failed' }}\nRemove-VtTree $entry $worlds");
                 return script;
@@ -221,7 +212,7 @@ public sealed class HostedWorldPlacementSafetyTests : IDisposable
                 Assert.ThrowsAny<Exception>(() => site.Place(plan, output, default));
                 Assert.True(Path.Exists(Path.Combine(site.Stage, leaf)));
                 if (fault == "collision")
-                    Assert.Equal("personal", File.ReadAllText(chunked ? Path.Combine(site.WorldsDirectory, leaf, "personal-save") : Path.Combine(site.WorldsDirectory, leaf)));
+                    Assert.Equal("personal", File.ReadAllText(Path.Combine(site.WorldsDirectory, leaf, "personal-save")));
                 else
                     Assert.True(Path.Exists(Path.Combine(site.WorldsDirectory, leaf)));
                 await Assert.ThrowsAsync<InvalidDataException>(() => HostedWorldOnHost.RecoverAsync(host, Fields(journal),
@@ -245,16 +236,17 @@ public sealed class HostedWorldPlacementSafetyTests : IDisposable
         Assert.Equal("uncertain", Fields(journal)["placementState"]);
         Assert.Single(Directory.EnumerateFileSystemEntries(site.KeepIn));
         string remaining = Assert.Single(Directory.EnumerateFileSystemEntries(site.WorldsDirectory));
-        byte[] bytes = File.ReadAllBytes(remaining);
+        string metadata = Assert.Single(Directory.EnumerateFiles(remaining, "_main.*.fwl2"));
+        byte[] bytes = File.ReadAllBytes(metadata);
         Assert.DoesNotContain(journal, entry => entry.Kind == JournalEntry.CopyRetired);
         for (int attempt = 0; attempt < 2; attempt++)
         {
             await Assert.ThrowsAsync<InvalidDataException>(() => HostedWorldOnHost.RecoverAsync(host, Fields(journal),
                 Path.Combine(site.WorldsDirectory, "Campaign"), "run-1", TimeSpan.FromSeconds(30), default));
-            Assert.Equal(bytes, File.ReadAllBytes(remaining));
+            Assert.Equal(bytes, File.ReadAllBytes(metadata));
         }
         // Receipt names being absent is still insufficient: the unproved command's other effects are uncertain.
-        File.Delete(remaining);
+        Directory.Delete(remaining, recursive: true);
         await Assert.ThrowsAsync<InvalidDataException>(() => HostedWorldOnHost.RecoverAsync(host, Fields(journal),
             Path.Combine(site.WorldsDirectory, "Campaign"), "run-1", TimeSpan.FromSeconds(30), default));
     }
@@ -318,8 +310,8 @@ public sealed class HostedWorldPlacementSafetyTests : IDisposable
         };
         Assert.Throws<IOException>(() => site.Place(plan, Path.Combine(_root, "output"), default));
         Assert.Equal("foreign", File.ReadAllText(Path.Combine(site.WorldsDirectory, "Campaign_backup_foreign.db")));
-        Assert.True(File.Exists(Path.Combine(site.KeepIn, "Campaign.fwl")));
-        Assert.False(File.Exists(Path.Combine(site.WorldsDirectory, "Campaign.fwl")));
+        Assert.True(Directory.Exists(Path.Combine(site.KeepIn, "Campaign")));
+        Assert.False(Directory.Exists(Path.Combine(site.WorldsDirectory, "Campaign")));
         if (retirementJournalFails)
             for (int attempt = 0; attempt < 2; attempt++)
                 Assert.Empty(await HostedWorldOnHost.RecoverAsync(host, Fields(journal), Path.Combine(site.WorldsDirectory, "Campaign"),
@@ -358,7 +350,7 @@ public sealed class HostedWorldPlacementSafetyTests : IDisposable
         var plan = new HostWorldPlan { World = new() { Source = fixture, Sha256 = new(WorldFixture.Manifest(fixture)) }, WorldUid = "4242" };
         var placed = next.Place(plan, Path.Combine(_root, "input"), default);
         placed.Collect();
-        Assert.True(File.Exists(Path.Combine(output, "placement-2", run, "host-world", "Campaign.fwl")));
+        Assert.True(Directory.Exists(Path.Combine(output, "placement-2", run, "host-world", "Campaign")));
         Assert.Empty(Directory.EnumerateFileSystemEntries(Path.Combine(output, run)));
     }
 
@@ -378,8 +370,8 @@ public sealed class HostedWorldPlacementSafetyTests : IDisposable
             var placed = site.Place(plan, Path.Combine(_root, "input-" + index), default);
             placed.Collect();
         })));
-        Assert.True(File.Exists(Path.Combine(output, run, "host-world", "Campaign.fwl")));
-        Assert.True(File.Exists(Path.Combine(output, "placement-2", run, "host-world", "Campaign.fwl")));
+        Assert.True(Directory.Exists(Path.Combine(output, run, "host-world", "Campaign")));
+        Assert.True(Directory.Exists(Path.Combine(output, "placement-2", run, "host-world", "Campaign")));
     }
 }
 
