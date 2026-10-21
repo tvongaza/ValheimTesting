@@ -1,11 +1,19 @@
-- name: Get started
+- name: Test my mod in Valheim
+  href: tutorials/first-gameplay-assertion.md
+- name: Test logic quickly
   href: getting-started.md
-- name: Tutorials
+- name: Keep a fix from returning
+  href: guides/run-an-ab-regression.md
+- name: Extend a gameplay test
   items:
-  - name: Your first gameplay assertion
-    href: tutorials/first-gameplay-assertion.md
   - name: Your first server load check
     href: tutorials/first-server-load-check.md
+  - name: Save, restart and rejoin
+    href: guides/test-save-restart-rejoin.md
+  - name: Observe several clients
+    href: guides/run-a-session-with-several-clients.md
+  - name: Run the server on another machine
+    href: guides/run-on-another-machine.md
 - name: Guides
   items:
   - name: Choose a test layer
@@ -18,14 +26,6 @@
     href: guides/run-tests-in-ci.md
   - name: Check that a mod loads
     href: guides/check-a-mod-loads.md
-  - name: Test a save, restart and rejoin
-    href: guides/test-save-restart-rejoin.md
-  - name: Run an A/B regression
-    href: guides/run-an-ab-regression.md
-  - name: Run the server on another machine
-    href: guides/run-on-another-machine.md
-  - name: Run a session with several clients
-    href: guides/run-a-session-with-several-clients.md
   - name: Before a native run
     href: guides/before-a-native-run.md
   - name: Debug a native run

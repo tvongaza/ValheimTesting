@@ -9,11 +9,12 @@ Native checks run through ValheimCLI, created by Warpalicious ([jneb802/valheimC
 
 ## Start
 
-- [Get started](https://github.com/tvongaza/ValheimTesting/blob/main/docs/getting-started.md): add a test project to a mod, pin the packages and run the first test
+- [Your first gameplay assertion](https://github.com/tvongaza/ValheimTesting/blob/main/docs/tutorials/first-gameplay-assertion.md): run a mod action in Valheim and assert its effect independently, with a deliberate failing control
+- [Get started](https://github.com/tvongaza/ValheimTesting/blob/main/docs/getting-started.md): test a mod's decision without the game: copy the example, link your source, run it
 - [Choose a test layer](https://github.com/tvongaza/ValheimTesting/blob/main/docs/guides/choose-a-test-layer.md): which layer tests which behaviour, and what each layer cannot prove
 - [Your first server load check](https://github.com/tvongaza/ValheimTesting/blob/main/docs/tutorials/first-server-load-check.md): `env preflight`, `server-load` and `env status` on one Windows PC
 - [Package versions](https://github.com/tvongaza/ValheimTesting/blob/main/docs/package-versions.md): every package, its version and the pins to copy
-- [Examples](https://github.com/tvongaza/ValheimTesting/blob/main/examples/README.md): runnable examples, from the first unit test to a native session
+- [Examples](https://github.com/tvongaza/ValheimTesting/blob/main/examples/README.md): runnable examples: the marker mod as a unit test, scripted integration, a gameplay assertion and an A/B regression
 
 ## Guides
 

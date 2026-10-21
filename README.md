@@ -1,54 +1,47 @@
 # ValheimTesting
 
-Reusable test inputs, fixtures and assertions for Valheim mods. Most tests run without Valheim, Unity, Steam or a dedicated server; native checks drive disposable game sessions through ValheimCLI on supported Windows and macOS hosts (game clients) and Windows, macOS and Linux hosts (dedicated servers).
+Test what your Valheim mod does in the game. Start with a small action and an independent assertion, then reuse that scenario to protect a fix.
 
-> Unofficial community tooling; not affiliated with or endorsed by Iron Gate or Coffee Stain. Valheim is a trademark of Iron Gate AB.
+The marker example asks the mod to place a pole, then counts its saved objects. Selected action and assertion lines from [Scenario.cs](examples/TargetedRegression/Scenario.cs):
+
+```csharp
+var reply = host.Execute("examplemod_mark " + At());
+round.Step("exactly one marker stands there in the host's saved objects", () => RequireMarkers(host, x, z, ExpectedMarkers));
+```
+
+`ExpectedMarkers` is `1`. A captured run records **"first: exactly one marker stands there in the host's saved objects"** with **`Passed: true`**. The unchanged assertion also catches a command that reports success without creating a pole.
+
+[Run your first gameplay assertion](docs/tutorials/first-gameplay-assertion.md): the complete source, files to edit, tested command and failure result.
+
+## Choose your task
+
+| You want to | Start here |
+|---|---|
+| Test your mod's gameplay in Valheim | [Your first gameplay assertion](docs/tutorials/first-gameplay-assertion.md) |
+| Test a decision quickly, without the game | [Get started](docs/getting-started.md#steps) |
+| Keep a fixed bug from returning | [Run an A/B regression](docs/guides/run-an-ab-regression.md) |
+
+A [load check](docs/tutorials/first-server-load-check.md) proves that plugins start and enter a world. Gameplay checks need their own action and assertion.
 
 ## First test in three steps
 
-1. Install the .NET 10 SDK (Visual Studio 2026 brings it) on the PC where you build your mod.
-2. Copy [ModWithTests](examples/ModWithTests/README.md) beside your mod: a test project that links your mod's real source files and references `Valheim.Testing.Doubles` from NuGet.org.
-3. Run `dotnet test MyMod.Tests/MyMod.Tests.csproj`. No game, Steam or ValheimCLI is needed.
+Follow [Get started](docs/getting-started.md) for the offline example and its copy map. You need no toolkit clone or bootstrap.
 
-Then [Choose a test layer](docs/guides/choose-a-test-layer.md) picks the layer for each behaviour, [Get started](docs/getting-started.md) runs your first test, [package versions](docs/package-versions.md) lists every package and pin, and the [examples](examples/README.md) go up to native checks with owned game processes. Supported hosts and limits are in [platforms](docs/reference/platforms.md). New to BepInEx and Harmony? The community wiki's [overview](https://github.com/Valheim-Modding/Wiki/wiki/Best-Practices) explains the concepts; check its older samples against 1.0 ([wiki caveats](docs/guides/before-a-native-run.md#older-wiki-pages)). A plugin that will not load, or two mods that conflict: [debugging guide](docs/guides/check-a-mod-loads.md).
-
-To make the test workflow discoverable to your coding agent, [copy the ValheimTesting skill into your mod repository](docs/guides/give-your-agent-the-workflow.md).
-
-For a disposable in-game load check, build your mod and run the tool from the directory containing its single `.csproj`:
-
-```sh
-dotnet build -c Release
-valheim-test env preflight
-valheim-test server-load
-```
-
-`server-load` selects the newest built `[BepInPlugin]` DLL, prints the choice, and records it in the run. `start` uses the same default for a client mod; `server-load-ab` requires explicit mod paths to keep both arms fixed. The tool refuses a missing, stale or ambiguous build instead of guessing. It writes run output under this machine's ValheimTesting data folder, outside your mod project. See the [one-shot guide](docs/packages/Valheim.Testing.NativeSmoke.md) for setup and explicit options.
+Native runs need a supported host: game clients on Windows and macOS, dedicated servers on Windows, macOS and Linux ([platforms](docs/reference/platforms.md)); the gameplay tutorial is written for Windows. New to BepInEx and Harmony? Read the community wiki's [overview](https://github.com/Valheim-Modding/Wiki/wiki/Best-Practices). A plugin that will not load, or two mods that conflict: the [debugging guide](docs/guides/check-a-mod-loads.md).
 
 ## Packages
 
-Each package's page is its reference: what it is for, the types a test calls, how it fails and its limits.
-
-| Package (source and reference) | Purpose | Runtime |
-|---|---|---|
-| [`Valheim.Testing`](src/Valheim.Testing) ([reference](docs/packages/Valheim.Testing.md)) | Composable terrain, exact recorded-input replay, pinned grid dumps, terrain rendering with contours, parity checks and `StaticOverride` (scoped static and environment overrides for any test); no ValheimCLI dependency | netstandard2.0 |
-| [`Valheim.Testing.Game`](src/Valheim.Testing.Game) ([reference](docs/packages/Valheim.Testing.Game.md)) | One game process from outside: typed observations, fixtures, owned server and client sessions, comparisons and JSON/JUnit reports | net10.0 |
-| [`Valheim.Testing.GameSessions`](src/Valheim.Testing.GameSessions) ([reference](docs/packages/Valheim.Testing.GameSessions.md)) | Game sessions: a dedicated server, clients and hosted worlds as one run (`GameSession`, `PinnedServerRun`), on this PC or on other machines over SSH or a container, with host locks, Steam-account leases and recovery of what a run left; built on `Valheim.Testing.Game` | net10.0 |
-| [`Valheim.Testing.Cli`](cli-dependency.json) ([reference](docs/packages/Valheim.Testing.Cli.md)) | ValheimCLI's client transport and YAML runner, packaged unchanged from pinned ValheimCLI source (MIT, by Warpalicious) | net10.0 |
-| [`Valheim.Testing.Adapter`](src/Valheim.Testing.Adapter) ([reference](docs/packages/Valheim.Testing.Adapter.md)) | Source compiled into a mod's game-side test adapter plugin: registration with ValheimCLI, the owned-session identity the runners check, and read-only observations | source (net48, C# 10) |
-| [`Valheim.Testing.Doubles`](src/Valheim.Testing.Doubles) ([reference](docs/packages/Valheim.Testing.Doubles.md)) | Source-only doubles of the Unity, Valheim, BepInEx and Jotunn types a mod's pure-logic sources use, compiled into your test project; every type is partial; `ValheimWorldScope` puts back every static they keep (a mod scopes its own with `StaticOverride`) | source (C# 10); [member index](docs/packages/Valheim.Testing.Doubles.members.txt) |
-| [`Valheim.Testing.Bindings`](src/Valheim.Testing.Bindings) ([reference](docs/packages/Valheim.Testing.Bindings.md)) | Offline check that a built mod's references into the game assemblies still bind (Mono.Cecil); missing members fail, access changes are reported separately | netstandard2.0 |
-| [`Valheim.Testing.Bindings.Tool`](src/Valheim.Testing.Bindings.Tool) ([reference](docs/packages/Valheim.Testing.Bindings.md#in-ci)) | The same check as the `valheim-bindings` .NET tool, for a mod's CI before any native run | net10.0 |
-| [`Valheim.Testing.NativeSmoke`](src/Valheim.Testing.NativeSmoke) ([reference](docs/packages/Valheim.Testing.NativeSmoke.md)) | `valheim-test`: one-command disposable mod-load checks, A/B mod isolation, an editable NuGet-only consumer project, and the environment commands (`env`, `session check`) | .NET 10 tool |
-
-The dependency goes **ValheimTesting → ValheimCLI**, never the reverse: the game-side extension API stays in ValheimCLI, and a mod keeps its own adapter and scenarios. No test package belongs in a production mod or a player's plugin folder. `Valheim.Testing.Cli` is ValheimCLI's transport packaged by this repository from the fork commit `cli-dependency.json` pins, not an official ValheimCLI release. Preview APIs may change; the [candidate API reference](https://tvongaza.github.io/ValheimTesting/reference/) inventories them for the [stable-contract review](docs/reference/compatibility.md).
+[Package versions](docs/package-versions.md) lists every package, exact pin and reference link. Keep test packages in test projects, outside a player's plugin folder. The dependency goes ValheimTesting → ValheimCLI, never the reverse: a mod keeps its own adapter and scenarios. Preview APIs may change; see [compatibility](docs/reference/compatibility.md).
 
 ## Test layers
 
-Unit, integration, bounded game checks and human judgement: [Choose a test layer](docs/guides/choose-a-test-layer.md) matches each behaviour to a layer and says what that layer cannot prove.
+[Choose a test layer](docs/guides/choose-a-test-layer.md) explains what unit tests, scripted integration, native checks and human review each prove. The [example index](examples/README.md) shows the marker at those layers.
 
 ## Contribute
 
-Mod developers and coding agents are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) has repository ownership, a worked fixture example, local checks (`dotnet run scripts/bootstrap-cli.cs`, then `dotnet run scripts/validate.cs`, on every OS; no game) and PR expectations. Agents start with [AGENTS.md](AGENTS.md) and the [agent workflow](docs/agent-guide.md). Before a native run, read the [native-run checklist](docs/guides/before-a-native-run.md).
+Read [CONTRIBUTING.md](CONTRIBUTING.md) to change the toolkit; coding agents changing it start with [AGENTS.md](AGENTS.md). To have your coding agent test your mod, [give it the workflow](docs/guides/give-your-agent-the-workflow.md).
+
+> Unofficial community tooling; not affiliated with or endorsed by Iron Gate or Coffee Stain. Valheim is a trademark of Iron Gate AB.
 
 ## Credits
 

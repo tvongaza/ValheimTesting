@@ -1,50 +1,53 @@
 # ValheimTesting
 
-ValheimTesting gives you automated tests for Valheim mods built on BepInEx: unit tests that run against game doubles with no game, and native checks that drive a real dedicated server and client. It is for mod authors, and most of its tests run without Valheim, Unity, Steam or a dedicated server.
+Test your mod's actual effect in Valheim, test its decisions without the game, or keep a fixed bug from returning.
+
+The marker example places one pole and checks the saved objects independently. Selected action and assertion lines from [Scenario.cs](../examples/TargetedRegression/Scenario.cs):
+
+```csharp
+var reply = host.Execute("examplemod_mark " + At());
+round.Step("exactly one marker stands there in the host's saved objects", () => RequireMarkers(host, x, z, ExpectedMarkers));
+```
+
+`ExpectedMarkers` is `1`. The captured result records **"first: exactly one marker stands there in the host's saved objects"** with **`Passed: true`**. The unchanged assertion catches a success reply that creates no pole.
+
+[Your first gameplay assertion](tutorials/first-gameplay-assertion.md) shows the complete source, files to edit, command and failure evidence.
 
 ## Your first test
 
-1. Install the .NET 10 SDK on the PC where you build your mod.
-2. Copy [`MyMod.Tests/`](../examples/ModWithTests/MyMod.Tests/MyMod.Tests.csproj) from the [ModWithTests](../examples/ModWithTests/README.md) example beside your mod. Keep its `Valheim.Testing.Doubles` reference, and point `Compile Include` at one of your mod's source files:
+| You want to | Follow |
+|---|---|
+| Test your mod's gameplay in Valheim | [Your first gameplay assertion](tutorials/first-gameplay-assertion.md) |
+| Test a decision quickly, without the game | [Get started](getting-started.md#steps) |
+| Keep a fixed bug from returning | [Run an A/B regression](guides/run-an-ab-regression.md) |
 
-   ```xml
-   <Compile Include="../YourMod/YourRule.cs" Link="Mod/YourRule.cs" />
-   ```
-
-3. Run the tests from your mod checkout. A passing run exits 0:
-
-   ```sh
-   dotnet test MyMod.Tests/MyMod.Tests.csproj -c Release
-   ```
-
-[Get started](getting-started.md) walks through it with output and the GitHub Actions workflow.
+A [load check](tutorials/first-server-load-check.md) proves startup and world readiness. It does not assert the mod's gameplay.
 
 ## Find the guide for your task
 
-| I want to | Read |
+| You want to | Read |
 |---|---|
-| I do not know which kind of test I need | [Choose a test layer](guides/choose-a-test-layer.md) |
-| Test mod code that calls Valheim or Unity types | [Test logic that uses game types](guides/test-logic-that-uses-game-types.md) |
-| Test heights, slopes, biomes or zone seams without the game | [Test terrain decisions](guides/test-terrain-decisions.md) |
-| Run my tests on every push and pull request | [Run tests in CI](guides/run-tests-in-ci.md) |
-| Pin a package version | [Packages](package-versions.md) |
-| Check that a mod loads on a dedicated server | [Your first server load check](tutorials/first-server-load-check.md) |
-| Find which mod breaks a load, alone or with others | [Check that a mod loads](guides/check-a-mod-loads.md) |
-| Check that my mod's change survives a save, restart and rejoin | [Test a save, restart and rejoin](guides/test-save-restart-rejoin.md) |
-| Prove a fix by running the parent and candidate builds | [Run an A/B regression](guides/run-an-ab-regression.md) |
-| Run the dedicated server on another machine | [Run on another machine](guides/run-on-another-machine.md) |
-| Run a test with two or more players | [Run a session with several clients](guides/run-a-session-with-several-clients.md) |
-| Prepare the machine and mod for a run of the real game | [Before a native run](guides/before-a-native-run.md) |
-| Find why a native run refused or failed, or clean up after it | [Debug a native run](guides/debug-a-native-run.md) |
-| Look up a `valheim-test` command or option | [`valheim-test`](packages/Valheim.Testing.NativeSmoke.md) |
-| Let my coding agent add and run the tests | [Give your coding agent the workflow](guides/give-your-agent-the-workflow.md) |
+| Choose the cheapest useful test | [Choose a test layer](guides/choose-a-test-layer.md) |
+| Test code that calls game types | [Test logic that uses game types](guides/test-logic-that-uses-game-types.md) |
+| Test terrain decisions without the game | [Test terrain decisions](guides/test-terrain-decisions.md) |
+| Exercise lost replies and failed saves without the game | [MarkerScenarioTests](../examples/FullLifecycle/ExampleMod.Tests/MarkerScenarioTests.cs) |
+| Run tests on every push | [Run tests in CI](guides/run-tests-in-ci.md) |
+| Diagnose plugins that fail to load | [Check that a mod loads](guides/check-a-mod-loads.md) |
+| Assert saved state after restart and rejoin | [Test a save, restart and rejoin](guides/test-save-restart-rejoin.md) |
+| Compare a parent and candidate build | [Run an A/B regression](guides/run-an-ab-regression.md) |
+| Run the server on another machine | [Run on another machine](guides/run-on-another-machine.md) |
+| Test visibility for several players | [Run a session with several clients](guides/run-a-session-with-several-clients.md) |
+| Prepare a native run | [Before a native run](guides/before-a-native-run.md) |
+| Diagnose a refusal, failure or leftover | [Debug a native run](guides/debug-a-native-run.md) |
+| Look up a command or option | [`valheim-test`](packages/Valheim.Testing.NativeSmoke.md) |
+| Give your coding agent the workflow | [Agent setup](guides/give-your-agent-the-workflow.md) |
 
 ## Reference
 
-- [Packages](package-versions.md): every package, version and pin.
+- [Package versions](package-versions.md): every package, exact pin and reference link.
 - [API reference](reference/index.md): the public types, generated from source.
-- [Package pages](packages/Valheim.Testing.md): each package has its own page. Start with `Valheim.Testing`.
+- [Examples](../examples/README.md): unit, scripted integration and native scenarios.
 
-Source, issues and contributions: [github.com/tvongaza/ValheimTesting](https://github.com/tvongaza/ValheimTesting).
+Source, issues and contributions: [ValheimTesting on GitHub](https://github.com/tvongaza/ValheimTesting).
 
-Native checks run through [ValheimCLI](https://github.com/jneb802/valheimCLI), created by Warpalicious; see [credits](https://github.com/tvongaza/ValheimTesting#credits).
+Native checks use [ValheimCLI](https://github.com/jneb802/valheimCLI), created by Warpalicious; see [credits](https://github.com/tvongaza/ValheimTesting#credits).
