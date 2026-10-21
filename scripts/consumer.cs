@@ -486,6 +486,7 @@ void FullLifecycle(string config, Dictionary<string, string> env)
         (string?)reference.Attribute("Include") == "Valheim.Testing.GameSessions").SetAttributeValue("Version", "[" + manifest["Valheim.Testing.GameSessions"] + "]");
     document.Save(project);
     Run(env, directory, "dotnet", "restore", project, "--configfile", config);
-    Run(env, directory, "dotnet", "test", project, "-c", "Release", "--no-restore", "--filter", "Category!=Native");
+    Run(env, directory, "dotnet", "run", Path.Combine(root, "scripts", "validate.cs"), "--", "--test-project", root, project,
+        Path.Combine(root, "artifacts", "validate", "consumer-lifecycle"), "Category!=Native");
     Console.WriteLine("ok   The canonical lifecycle scripted controls run from a package-only consumer outside the checkout.");
 }
