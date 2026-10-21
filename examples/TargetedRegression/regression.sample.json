@@ -13,7 +13,6 @@
     "manifest": "<that build's capability manifest>"
   },
   "plugins": [],
-  "probe": { "file": "<probe build>/ExampleMod.TestAdapter.dll", "sha256": "<sha256>" },
   "mod": {
     "installAs": "ExampleMod.dll",
     "arms": {

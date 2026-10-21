@@ -6,9 +6,9 @@ using Valheim.Testing.Game;
 /// The scenario: the rounds and assertions that are the same in every environment, so this file can be shared as it was
 /// run. Paths, ports, the character and which files are staged live in the manifest, never here.
 /// <para>
-/// This one tests the <see href="../FullLifecycle/README.md">FullLifecycle</see> example mod, ExampleMod, hosted with its test
-/// adapter as the probe: its Harmony patch is applied, and its <c>examplemod_mark</c> command marks the ground where the
-/// host stands with exactly one pole in the host's saved objects. Replace <see cref="Measure"/> with your mod's steps.
+/// This tests ExampleMod: its Harmony patch is applied, and its <c>examplemod_mark</c> command creates exactly one
+/// pole where the host stands. ValheimCLI supplies the observations; no mod-specific adapter is needed.
+/// Replace <see cref="Measure"/> with your mod's steps.
 /// </para>
 /// </summary>
 public static class Scenario
@@ -20,6 +20,7 @@ public static class Scenario
     /// <summary>The ValheimCLI extension commands the steps use, beyond the hosted rounds' own: checked live once the client answers.</summary>
     public static readonly string[] Capabilities = ["valheim.observe/harmony"];
 
+    private const int ExpectedMarkers = 1;
     private const string Mod = "example.examplemod", Marker = "wood_pole2";
     private static readonly DeclaredPatch[] Patches = [new("Terminal::InitTerminal", "postfix", "ExampleMod.Plugin+RegisterCommands::Postfix")];
     private static readonly Regex Position = new(@"position=(-?[\d.]+),(-?[\d.]+),(-?[\d.]+)", RegexOptions.CultureInvariant);
@@ -43,6 +44,7 @@ public static class Scenario
             round.Write("player-position", new { x, z, reply = reply.Output });
         });
         string At() => string.Create(CultureInfo.InvariantCulture, $"{x:F1} {z:F1}"); // Once the position is recorded.
+        round.Step("no marker stands there before the mod acts", () => RequireMarkers(host, x, z, 0));
         round.Step("the mod marks the ground where the host stands", () =>
         {
             var reply = host.Execute("examplemod_mark " + At());
@@ -50,18 +52,21 @@ public static class Scenario
             if (reply.Output.Count(line => line.StartsWith("OK: marked ", StringComparison.Ordinal)) != 1)
                 throw new InvalidOperationException("ExampleMod did not confirm one marker: " + string.Join(" | ", reply.Output));
         });
-        round.Step("exactly one marker stands there in the host's saved objects", () =>
-        {
-            var output = host.Execute("cli_zdos_at " + At() + " 8").Output;
-            var objects = output.Select(line => ZdoLine.Match(line)).Where(match => match.Success).ToList();
-            var totals = output.Select(line => ZdoSummary.Match(line)).Where(match => match.Success).ToList();
-            // An observation counts only when it is complete: its summary lists exactly the objects returned.
-            if (totals.Count != 1 || int.Parse(totals[0].Groups[1].Value, CultureInfo.InvariantCulture) != objects.Count)
-                throw new InvalidOperationException("Incomplete census: the reply's summary does not account for the objects listed.");
-            int markers = objects.Count(match => match.Groups[1].Value == Marker &&
-                Math.Abs(double.Parse(match.Groups[2].Value, CultureInfo.InvariantCulture) - x) <= 1.5 &&
-                Math.Abs(double.Parse(match.Groups[4].Value, CultureInfo.InvariantCulture) - z) <= 1.5);
-            if (markers != 1) throw new InvalidOperationException($"{markers} {Marker} marker(s) stand at ({At()}); expected 1.");
-        });
+        round.Step("exactly one marker stands there in the host's saved objects", () => RequireMarkers(host, x, z, ExpectedMarkers));
+    }
+
+    private static void RequireMarkers(GameActor host, double x, double z, int expected)
+    {
+        string at = string.Create(CultureInfo.InvariantCulture, $"{x:F1} {z:F1}");
+        var output = host.Execute("cli_zdos_at " + at + " 8").Output;
+        var objects = output.Select(line => ZdoLine.Match(line)).Where(match => match.Success).ToList();
+        var totals = output.Select(line => ZdoSummary.Match(line)).Where(match => match.Success).ToList();
+        if (totals.Count != 1 || int.Parse(totals[0].Groups[1].Value, CultureInfo.InvariantCulture) != objects.Count)
+            throw new InvalidOperationException("Incomplete census: the reply's summary does not account for the objects listed.");
+        int markers = objects.Count(match => match.Groups[1].Value == Marker &&
+            Math.Abs(double.Parse(match.Groups[2].Value, CultureInfo.InvariantCulture) - x) <= 1.5 &&
+            Math.Abs(double.Parse(match.Groups[4].Value, CultureInfo.InvariantCulture) - z) <= 1.5);
+        if (markers != expected)
+            throw new InvalidOperationException($"{markers} {Marker} marker(s) stand at ({at}); expected {expected}.");
     }
 }
