@@ -17,15 +17,19 @@ internal static partial class HostedRuntimeStage
     /// between, without creating the profile. PowerShell is Windows; a bash host names its system through the Unix storage probe
     /// (<see cref="UnixStorageProbe"/>), which only a server's profile asks: Linux runs no client, so a bash host's client profile
     /// is a Mac's, launched from its source. A runtime on another volume or mount, on a filesystem without hard links, or where
-    /// this user cannot link the install's executable (the probe's one trial link, removed at once) is refused.
+    /// this user cannot link the install's executable is refused. That last check is the one write a preflight makes: one trial
+    /// link in a new folder under the runtime root, removed at once, and only once the runtime is proven apart from the install.
+    /// Every route to a Unix verdict comes here, so none misses the trial link.
     /// </summary>
     internal static async Task<ProfileStorageCheck> RequireProfileStorageAsync(IGameHost host, HostedRuntimeKind kind, string source,
         string runtime, TimeSpan timeout, CancellationToken cancellation = default, bool explicitRuntime = false, bool inPlaceAvailable = false)
     {
         bool server = kind == HostedRuntimeKind.Server;
+        string platform;
         ProfileStorageVerdict verdict;
         if (host.Shell.Kind == HostShellKind.PowerShell)
         {
+            platform = "windows";
             try
             {
                 if (host is LocalGameHost && OperatingSystem.IsWindows())
@@ -44,20 +48,19 @@ internal static partial class HostedRuntimeStage
         }
         else
         {
-            var probe = server ? await ProbeUnixStorageAsync(host, [source, runtime], timeout, cancellation, linkTest: true).ConfigureAwait(false) : default;
-            string platform = server ? probe.Platform : "macos";
-            if (ProfileLayouts.For(platform, server) == ProfileLayout.SourceExecutable)
-                return new(ProfileLayout.SourceExecutable, platform, null);
+            if (!server) return new(ProfileLayout.SourceExecutable, "macos", null);
+            // The trial link writes under the runtime root: never inside the install, whose next listing would count it.
+            await HostInstall.RequireApartAsync(host, source, [runtime], "the source install", timeout, cancellation).ConfigureAwait(false);
+            var probe = await ProbeUnixStorageAsync(host, [source, runtime], timeout, cancellation, linkTest: true).ConfigureAwait(false);
+            platform = probe.Platform;
+            if (ProfileLayouts.For(platform, server) == ProfileLayout.SourceExecutable) return new(ProfileLayout.SourceExecutable, platform, null);
             verdict = probe.Volumes is { } volumes
                 ? ProfileRuntimeStorage.Verdict(source, volumes[0], runtime, volumes[1], explicitRuntime, inPlaceAvailable, probe.LinkError)
                 : ProfileRuntimeStorage.Unknown(ProfileLinkRules.For(platform), source, probe.Error!);
-            verdict.Require();
-            if (verdict.Warning != null) Console.WriteLine("warning: " + verdict.Warning);
-            return new(ProfileLayout.Linked, platform, verdict.Description);
         }
         verdict.Require();
         if (verdict.Warning != null) Console.WriteLine("warning: " + verdict.Warning);
-        return new(ProfileLayout.Linked, "windows", verdict.Description);
+        return new(ProfileLayout.Linked, platform, verdict.Description);
     }
 
     /// <summary>

@@ -633,6 +633,17 @@ public sealed class HostedRuntimeStageTests : IDisposable
             Assert.Single(plan.LeftOut, item => item.Path == "valheim_server/**").Reason);
         Assert.Contains("unknown root library", Assert.Single(plan.LeftOut, item => item.Path == "libextra.dylib").Reason);
         Assert.Equal("not an input to the macOS game launch", Assert.Single(plan.LeftOut, item => item.Path == "start_server.command").Reason);
+        // #612 review 6: its native code, re-checked before each boot, is the executable and the libraries beside it.
+        Assert.Equal(new[] { "valheim_server/UnityPlayer.dylib", "valheim_server/Valheim", "valheim_server/libmono-native.dylib" }, plan.Checked);
+    }
+
+    // The re-checked native code on Windows and Linux stays every root file the profile linked.
+    [Fact] public void WindowsAndLinuxRecheckEveryLinkedRootFile()
+    {
+        Assert.Equal(new[] { "UnityPlayer.so", "valheim_server.x86_64" }, HostedRuntimeStage.PlanLinkedProfile(ClientPlatform.Linux,
+            ["valheim_server.x86_64", "UnityPlayer.so", "linux64/steamclient.so", "valheim_server_Data/Managed/assembly_valheim.dll"]).Checked);
+        Assert.Equal(new[] { "UnityPlayer.dll", "valheim.exe" }, HostedRuntimeStage.PlanLinkedProfile(ClientPlatform.Windows,
+            ["valheim.exe", "UnityPlayer.dll", "valheim_Data/boot.config"]).Checked);
     }
 
     // #612: one decision between a linked profile and one that launches its source executable, from the host's platform.
@@ -1288,6 +1299,78 @@ public sealed class HostedRuntimeStageTests : IDisposable
             HostedRuntimeKind.Server, source, shm + "/vt-runs/runtime", TimeSpan.FromSeconds(30), explicitRuntime: true));
         Assert.Contains("A Linux profile hard-links the install's game files, and a hard link cannot cross mounts. " +
             $"Put the inventory runtime on the install's mount {volumes[0].MountPoint}.", refused.Message);
+    }
+
+    // #612 review 5: a preflight's trial link never writes inside the install. A runtime inside it is refused by the apart check
+    // before the probe runs, on a fake host and with this machine's own tools, and nothing is left in the install.
+    [Fact]
+    public async Task ARuntimeInsideTheInstallIsRefusedBeforeTheTrialLinkWrites()
+    {
+        var fake = new FakeServerHost("linux-server", Mirror);
+        LinuxServerInstall(fake.Local("/srv/valheim"));
+        await Assert.ThrowsAnyAsync<Exception>(() => HostedRuntimeStage.RequireProfileStorageAsync(fake, HostedRuntimeKind.Server,
+            "/srv/valheim", "/srv/valheim/runs/runtime", TimeSpan.FromSeconds(30), explicitRuntime: true));
+        Assert.Equal(["apart"], fake.Scripts);
+
+        if (OperatingSystem.IsWindows()) return;
+        var host = new LocalGameHost("local-inside", HostShell.Bash);
+        string source = Directory.CreateDirectory(Path.Combine(_root, "inside source")).FullName;
+        string executable = Path.Combine(source, OperatingSystem.IsMacOS() ? GameLaunch.ServerMacExecutable : GameLaunch.ServerLinuxExecutable);
+        Directory.CreateDirectory(Path.GetDirectoryName(executable)!);
+        File.WriteAllText(executable, "server");
+        var before = WorldFixture.Manifest(source);
+        await Assert.ThrowsAnyAsync<Exception>(() => HostedRuntimeStage.RequireProfileStorageAsync(host, HostedRuntimeKind.Server,
+            source, Path.Combine(source, "runs", "runtime"), TimeSpan.FromSeconds(30), explicitRuntime: true));
+        Assert.Equal(before, WorldFixture.Manifest(source));
+        Assert.Empty(Directory.GetDirectories(source, ".vt-link-probe.*", SearchOption.AllDirectories));
+        // The probe itself never puts its trial folder inside the install either, even when asked with no apart check.
+        var probed = await host.RunAsync(UnixStorageProbe.Script, new Dictionary<string, string>
+        {
+            ["paths"] = source + "\n" + Path.Combine(source, "runs"), ["linktest"] = "1",
+        }, TimeSpan.FromSeconds(30));
+        Assert.DoesNotContain("VT-PROFILE-LINK", probed.EnsureSuccess("probing").Stdout);
+        Assert.Equal(before, WorldFixture.Manifest(source));
+    }
+
+    // #612 review 11: this machine's probe is bounded: one still running at the deadline is killed and refused as an IOException,
+    // which the default root reads as a probe that could not answer; a runner's own linktest never reaches it.
+    [Fact]
+    public void ThisMachinesProbeIsKilledAtItsDeadlineAndIgnoresTheRunnersLinktest()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        string marker = Path.Combine(_root, "probe-still-ran");
+        var clock = Stopwatch.StartNew();
+        var error = Assert.Throws<IOException>(() => UnixStorageProbe.Run($"sleep 20; touch '{marker}'", [_root], TimeSpan.FromSeconds(1)));
+        Assert.Contains("did not finish within 1 s", error.Message);
+        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(15), clock.Elapsed.ToString());
+        Environment.SetEnvironmentVariable("linktest", "1");
+        try { Assert.Equal("", UnixStorageProbe.Run("printf '%s' \"${linktest:-}\"", [_root], TimeSpan.FromSeconds(30))); }
+        finally { Environment.SetEnvironmentVariable("linktest", null); }
+        Assert.False(File.Exists(marker));
+    }
+
+    // #612 review 12: the seed keeps a folder name's trailing line break, which $( ) would strip, for the links and the loader alike.
+    [Fact]
+    public async Task TheRealBashSeedKeepsAFolderNamesTrailingLineBreak()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        var host = new LocalGameHost("local-newline", HostShell.Bash);
+        string source = Directory.CreateDirectory(Path.Combine(_root, "newline source")).FullName;
+        const string game = "Data\n/game.bin", loader = "BepInEx\n/core.dll";
+        foreach (string relative in new[] { game, loader })
+        {
+            Directory.CreateDirectory(Path.Combine(source, relative.Split('/')[0]));
+            File.WriteAllText(Path.Combine(source, relative), relative);
+        }
+        static string Encode(string relative) => Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(relative));
+        string runtime = Path.Combine(_root, "newline runtime");
+        (await host.RunAsync(HostedRuntimeStage.BashProfileSeed, new Dictionary<string, string>
+        {
+            ["source"] = source, ["runtime"] = runtime, ["game"] = runtime, ["gameFiles"] = Encode(game), ["files"] = Encode(loader),
+        }, TimeSpan.FromSeconds(30))).EnsureSuccess("Seeding names with line breaks");
+        Assert.Equal(game, File.ReadAllText(Path.Combine(runtime, game)));
+        Assert.Equal(loader, File.ReadAllText(Path.Combine(runtime, loader)));
+        Assert.False(Directory.Exists(Path.Combine(runtime, "Data")));
     }
 
     [Fact] public async Task FailedCleanupKeepsBothTheOriginalErrorAndTheUnprovenResidue()

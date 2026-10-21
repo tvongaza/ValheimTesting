@@ -58,10 +58,16 @@ public static class CrossplayLibraries
     public static Task<string> RequireAsync(IGameHost host, string runtime, TimeSpan timeout, CancellationToken cancellation = default) =>
         RequireAsync(host, runtime, inheritLibraryPath: true, timeout, cancellation);
 
-    // The check as a launch resolves the library: a linked profile's launch unsets the session's LD_LIBRARY_PATH
-    // (GameLaunch.Unset), so its check leaves it out too; a launch of the caller's own folder keeps it.
-    internal static async Task<string> RequireAsync(IGameHost host, string runtime, bool inheritLibraryPath, TimeSpan timeout,
-        CancellationToken cancellation = default)
+    /// <summary>The check for <paramref name="launch"/>: its game root, with the library path the launch itself will have.</summary>
+    internal static Task<string> RequireAsync(IGameHost host, GameLaunch launch, TimeSpan timeout, CancellationToken cancellation = default) =>
+        RequireAsync(host, launch.GameDirectory, InheritsLibraryPath(launch), timeout, cancellation);
+
+    // Whether a launch keeps the session's LD_LIBRARY_PATH behind its own entries: a profile's launch unsets it (GameLaunch.Unset),
+    // so its check leaves it out too; a launch of the caller's own folder keeps it. The host start and the pre-check both ask here.
+    internal static bool InheritsLibraryPath(GameLaunch launch) => !launch.Unset.Contains("LD_LIBRARY_PATH");
+
+    private static async Task<string> RequireAsync(IGameHost host, string runtime, bool inheritLibraryPath, TimeSpan timeout,
+        CancellationToken cancellation)
     {
         ArgumentNullException.ThrowIfNull(host);
         ArgumentException.ThrowIfNullOrWhiteSpace(runtime);

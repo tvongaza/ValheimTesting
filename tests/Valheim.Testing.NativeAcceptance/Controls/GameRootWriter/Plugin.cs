@@ -6,10 +6,12 @@ namespace AcceptanceMod.Controls.GameRootWriter;
 
 /// <summary>
 /// Native control for #612: on load it writes <c>vt612-game-root-&lt;id&gt;.txt</c> into BepInEx's game root
-/// (<c>Paths.GameRootPath</c>, the folder of the executable that ran, where a preloader failure log goes), and, as the
+/// (<c>Paths.GameRootPath</c>, found from the executable that ran, where a preloader failure log goes), and, as the
 /// owned-storage control, <c>vt612-config-&lt;id&gt;.txt</c> into BepInEx's config folder and <c>vt612-cwd-&lt;id&gt;.txt</c>
-/// into the working directory. It logs each path it wrote. A run with it must leave the source install unchanged: on Windows and
-/// Linux the game root is the profile; on macOS the source check moves the game-root file into the run's evidence and names it.
+/// into the working directory. It logs each path it wrote. A run with it must leave the source install unchanged: on a linked
+/// profile (Windows, a Linux or macOS dedicated server) the game root is the profile, and all three files come back under
+/// <c>runtime-changes/</c>; on a macOS client, which runs its install in place, the source check moves the game-root and
+/// working-directory files into <c>source-changes/</c> and names them.
 /// </summary>
 [BepInPlugin(Guid, "AcceptanceMod control: game-root writer (ValheimTesting acceptance suite)", "0.1.0")]
 public sealed class Plugin : BaseUnityPlugin

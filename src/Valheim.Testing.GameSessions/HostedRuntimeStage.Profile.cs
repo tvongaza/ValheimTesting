@@ -67,15 +67,20 @@ internal static partial class HostedRuntimeStage
     /// </summary>
     internal static readonly string[] LinuxGameRootLibraries = ["UnityPlayer.so", "libparty.so"];
 
-    /// <summary>The files of a game install a linked profile hard-links, and the root files it leaves out that are worth a line of evidence.</summary>
-    internal sealed record LinkedProfileFiles(IReadOnlyList<string> Links, IReadOnlyList<ProfileLeftOut> LeftOut);
+    /// <summary>
+    /// The files of a game install a linked profile hard-links; of those, the native code re-checked before each boot (the
+    /// executable and the libraries beside it, <see cref="Checked"/>); and the root files it leaves out that are worth a line
+    /// of evidence.
+    /// </summary>
+    internal sealed record LinkedProfileFiles(IReadOnlyList<string> Links, IReadOnlyList<ProfileLeftOut> LeftOut, IReadOnlyList<string> Checked);
 
     // One platform's link table: each executable and the data tree it reads, the other root files and the root libraries the
     // game needs, whole trees, the root libraries left out for a stated reason or without a word (a mod manager's proxy), the
-    // reason an unknown root library gets, and how the platform's file system compares names.
+    // reason an unknown root library gets, how the platform's file system compares names, and the folder whose files (the
+    // executable and its native libraries) are re-checked before each boot: the root, or the Mac server's valheim_server/.
     private sealed record LinkTable(string Name, StringComparison Names, IReadOnlyDictionary<string, string> DataRoots,
         string[] RootFiles, string Library, string[] Libraries, string[] Trees, string[] Omitted, string OmittedReason,
-        string[] Proxies, string UnknownLibrary);
+        string[] Proxies, string UnknownLibrary, string NativeFolder = "");
 
     private static readonly LinkTable WindowsLinks = new("Windows", StringComparison.OrdinalIgnoreCase,
         new Dictionary<string, string> { [GameLaunch.ClientWindowsExecutable] = "valheim_Data/", [GameLaunch.ServerWindowsExecutable] = "valheim_server_Data/" },
@@ -99,7 +104,7 @@ internal static partial class HostedRuntimeStage
         new Dictionary<string, string> { [GameLaunch.ServerMacExecutable] = "valheim_server/" },
         [], ".dylib", [], [], [], "", [],
         "an unknown root library, so it is not linked: the Mac server's libraries are in valheim_server/, which is linked whole. " +
-        "If the game needs it, a launch fails during start-up: report it. Otherwise nothing to do");
+        "If the game needs it, a launch fails during start-up: report it. Otherwise nothing to do", NativeFolder: "valheim_server/");
 
     /// <summary>
     /// Sorts <paramref name="files"/> (relative, <c>/</c> separators) of a <paramref name="platform"/> game install into what
@@ -190,7 +195,9 @@ internal static partial class HostedRuntimeStage
             string count = group.Reasons.Count == 1 ? "1 file" : $"{group.Reasons.Count} files";
             leftOut.Add(new ProfileLeftOut(group.Name + "/**", $"{count} left out: {string.Join("; ", reasons)}"));
         }
-        return new LinkedProfileFiles(links, leftOut.OrderBy(item => item.Path, StringComparer.Ordinal).ToArray());
+        string[] native = links.Where(path => path.StartsWith(table.NativeFolder, table.Names) &&
+            !path[table.NativeFolder.Length..].Contains('/')).ToArray();
+        return new LinkedProfileFiles(links, leftOut.OrderBy(item => item.Path, StringComparer.Ordinal).ToArray(), native);
     }
 
     /// <summary>
@@ -249,11 +256,9 @@ internal static partial class HostedRuntimeStage
         // A mod manager may have placed another proxy beside valheim.exe (for example version.dll). Linking
         // arbitrary root DLLs into our launch folder would load that manager's chain alongside this profile.
         // Keep only the game's known root dependencies; every other source file stays untouched and out of the run.
-        var plan = linked ? PlanLinkedProfile(storage.Platform switch { "windows" => ClientPlatform.Windows, "macos" => ClientPlatform.MacOS, _ => ClientPlatform.Linux },
-            game.Files.Keys) : new LinkedProfileFiles([], []);
+        var plan = linked ? PlanLinkedProfile(SourcePlatform(host, kind, game), game.Files.Keys) : new LinkedProfileFiles([], [], []);
         string[] gameLinks = [.. plan.Links];
-        // The native code re-checked before each boot (until the link table names it: the root files).
-        var sourceCheck = ProfileSourceCheck.Prepare(game, gameLinks.Where(path => !path.Contains('/')), storage.Layout);
+        var sourceCheck = ProfileSourceCheck.Prepare(game, plan.Checked, storage.Layout);
         if (plan.LeftOut.Count != 0)
             Console.WriteLine($"The profile {destination} on {host.Name} leaves out {ProfileLeftOut.Describe(plan.LeftOut)}.");
         string payload = Path.Combine(Path.GetTempPath(), "valheim-profile-stage-" + Guid.NewGuid().ToString("N"));
@@ -429,7 +434,8 @@ internal static partial class HostedRuntimeStage
           # The x keeps a name's trailing line break, which $( ) would strip.
           relative=$({ printf '%s' "$line" | base64 -D 2>/dev/null || printf '%s' "$line" | base64 -d; } && printf x) || exit 3
           relative=${relative%x}
-          mkdir -p -- "$(dirname "$game/$relative")"
+          folder=$(dirname -- "$game/$relative" && printf x) || exit 3
+          mkdir -p -- "${folder%?x}"
           if ! error=$(ln -- "$source/$relative" "$game/$relative" 2>&1); then
             echo "Could not create a hard link in runtime folder $runtime from the install's mount containing $source: $error" >&2
             exit 1
@@ -440,7 +446,8 @@ internal static partial class HostedRuntimeStage
           # The x keeps a name's trailing line break, which $( ) would strip.
           relative=$({ printf '%s' "$line" | base64 -D 2>/dev/null || printf '%s' "$line" | base64 -d; } && printf x) || exit 3
           relative=${relative%x}
-          mkdir -p -- "$(dirname "$runtime/$relative")"
+          folder=$(dirname -- "$runtime/$relative" && printf x) || exit 3
+          mkdir -p -- "${folder%?x}"
           cp "$source/$relative" "$runtime/$relative"
         done <<< "$files"
         echo 'VT-PROFILE-SEEDED'

@@ -833,7 +833,8 @@ public sealed partial class HostedServerRunTests : IDisposable
         var profileEntries = journal.Where(record => record.Actor == "server" && record.Entry.Fields.GetValueOrDefault("runtime") == RunDirectory + "/runtime").ToList();
         Assert.Equal([JournalEntry.CopyIntended, JournalEntry.CopyDone, JournalEntry.SourceBaseline, JournalEntry.SourceSettled, JournalEntry.CopyRetired],
             profileEntries.Select(record => record.Entry.Kind));
-        Assert.Equal((RunDirectory + "/staging", RunDirectory, "server", Install), (profileEntries[0].Entry.Fields["stage"], profileEntries[0].Entry.Fields["parent"],
+        // #612 review 9: the linked server starts from its profile, so recovery of an interrupted staging looks there, not in the install.
+        Assert.Equal((RunDirectory + "/staging", RunDirectory, "server", RunDirectory + "/runtime"), (profileEntries[0].Entry.Fields["stage"], profileEntries[0].Entry.Fields["parent"],
             profileEntries[0].Entry.Fields["runtimeKind"], profileEntries[0].Entry.Fields["launchRoot"]));
         Assert.True(JournalIndex(host, JournalEntry.CopyIntended) < host.Runs.FindIndex(run => run.Script == "profile-seed"));
         // Each boot starts with the plan's arguments on the host's paths, its own boot directory and the logs moved aside.
@@ -1162,7 +1163,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.StartsWith("the explicit inventory runtime folder " + Runs, step.GetProperty("Error").GetString());
         Assert.Contains("not the source install's mount /opt (xfs, device 2065). A Linux profile hard-links the install's game files, " +
             "and a hard link cannot cross mounts. Put the inventory runtime on the install's mount /opt.", step.GetProperty("Error").GetString());
-        Assert.Equal(["profile-storage"], host.Scripts);
+        Assert.Equal(["apart", "profile-storage"], host.Scripts); // the trial link's runtime is proven apart from the install first
         Assert.Empty(host.Claims);
     }
 
@@ -1174,7 +1175,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         var step = Step("take the server host's lock");
         Assert.False(step.GetProperty("Passed").GetBoolean()); Assert.Contains("other-runner run-x [0123]", step.GetProperty("Error").GetString());
         // Only the read-only profile-storage probe runs before the claim.
-        Assert.Equal(["profile-storage", "journal", "lock", "journal"], host.Scripts);
+        Assert.Equal(["apart", "profile-storage", "journal", "lock", "journal"], host.Scripts);
         var journal = await RunJournalOnHost.ReadAsync(host, "/var/tmp/vt/journal", RunId, TimeSpan.FromSeconds(5));
         Assert.Equal([JournalEntry.LockIntended, JournalEntry.RunEnded], journal.Where(record => record.Actor == "run").Select(record => record.Entry.Kind));
         Assert.DoesNotContain(journal, record => record.Entry.Kind == JournalEntry.LockHeld);

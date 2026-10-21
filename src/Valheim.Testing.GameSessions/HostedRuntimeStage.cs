@@ -184,6 +184,31 @@ internal static partial class HostedRuntimeStage
         return selected.Values.ToArray();
     }
 
+    /// <summary>
+    /// Where a profile's game will start from, journalled before it is staged so that recovery of an interrupted staging looks
+    /// for the run's processes there: a linked profile's game folder (<see cref="ProfileLayouts.GameFolder"/>), or the source
+    /// install that a macOS client starts in place.
+    /// </summary>
+    internal static string LaunchRoot(string platform, HostedRuntimeKind kind, string source, string runtime)
+    {
+        bool server = kind == HostedRuntimeKind.Server;
+        if (ProfileLayouts.For(platform, server) == ProfileLayout.SourceExecutable) return source;
+        string folder = ProfileLayouts.GameFolder(platform, server);
+        return folder.Length == 0 ? runtime : HostPath.Join(runtime, folder);
+    }
+
+    /// <summary>The operating system of an inspected source install: a server's by its executable, a client's by its host's shell.</summary>
+    internal static ClientPlatform SourcePlatform(IGameHost host, HostedRuntimeKind kind, HostListing source) =>
+        kind == HostedRuntimeKind.Server
+            ? HostInstall.DetectServer(source) switch
+            {
+                ServerPlatform.Windows => ClientPlatform.Windows,
+                ServerPlatform.MacOS => ClientPlatform.MacOS,
+                _ => ClientPlatform.Linux,
+            }
+            : host.Shell.Kind == HostShellKind.PowerShell ? ClientPlatform.Windows
+            : ClientPlatform.MacOS;
+
     /// <summary>Read-only source-install eligibility, shared by campaign preflight and the later profile staging.</summary>
     internal static async Task<HostListing> InspectSourceAsync(IGameHost host, HostedRuntimeKind kind, string source,
         BepInExLoaderPackage? loaderPackage, TimeSpan timeout, CancellationToken cancellation = default)
@@ -205,15 +230,7 @@ internal static partial class HostedRuntimeStage
             if (windows != (host.Shell.Kind == HostShellKind.PowerShell))
                 throw new InvalidOperationException($"The client install on {host.Name} does not match its host platform.");
         }
-        var platform = kind == HostedRuntimeKind.Server
-            ? HostInstall.DetectServer(sourceListing) switch
-            {
-                ServerPlatform.Windows => ClientPlatform.Windows,
-                ServerPlatform.MacOS => ClientPlatform.MacOS,
-                _ => ClientPlatform.Linux,
-            }
-            : host.Shell.Kind == HostShellKind.PowerShell ? ClientPlatform.Windows
-            : ClientPlatform.MacOS;
+        var platform = SourcePlatform(host, kind, sourceListing);
         // A reviewed package replaces the source loader, so it, not the source, must be this platform's complete loader.
         if (loaderPackage != null) loaderPackage.RequireFor(platform, $"reviewed loader package for {host.Name}");
         else

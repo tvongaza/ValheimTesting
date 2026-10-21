@@ -82,7 +82,7 @@ public static class HostServer
             ["files"] = string.Join('\n', launch.RequiredFiles), ["dir"] = directory,
             ["spec"] = launch.Spec(), ["logs"] = string.Join('\n', kept),
             ["crossplay"] = launch.Crossplay ? "1" : "", ["libraries"] = string.Join('\n', CrossplayLibraries.PartyLibraries),
-            ["inheritlibs"] = launch.Unset.Contains("LD_LIBRARY_PATH") ? "" : "1",
+            ["inheritlibs"] = CrossplayLibraries.InheritsLibraryPath(launch) ? "1" : "",
             ["seconds"] = Math.Max(5, (int)Math.Floor(timeout.TotalSeconds) - 10).ToString(CultureInfo.InvariantCulture),
             ["task"] = ownership.TaskName, ["owner"] = ownership.FileName, ["launcher"] = HostServerScripts.WindowsLauncher,
         };

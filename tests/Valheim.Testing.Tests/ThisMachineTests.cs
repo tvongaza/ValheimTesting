@@ -278,10 +278,11 @@ public sealed class ThisMachineTests : IDisposable
             "macOS client profiles launch the source game and keep their loader under ValheimTesting's data folder"), (clientRoot.Path, clientRoot.Reason));
     }
 
-    // The inventory's this-machine server on Linux gets that root and its storage verdict when it is read, as a Windows one does: an
-    // install mount this user cannot write under is refused, naming the default root, before any run.
+    // The inventory's this-machine server on Linux gets that root when it is read, from one read-only probe of both paths. Its
+    // verdict is not read here (#612 review 4): it needs the storage probe's trial link, which only a preflight makes, so every
+    // route to a Unix verdict is the host's (HostedServerRunTests.ALinuxRuntimeOnAnotherMountIsRefusedBeforeTheLockOrAnyHostWrite).
     [Fact]
-    public void ALinuxServerOnAnotherMountDefaultsToItsMountAndAnUnwritableOneIsRefused()
+    public void ALinuxServerOnAnotherMountDefaultsToItsMountAndItsVerdictIsLeftToThePreflight()
     {
         var linux = new FakeMachine("linux");
         string server = linux.App("/mnt/games", "896660", "Valheim dedicated server", "valheim_server.x86_64");
@@ -292,14 +293,9 @@ public sealed class ThisMachineTests : IDisposable
         var recipe = Assert.Single(EnvironmentInventory.Read(file, linux).Environments);
         Assert.Equal("/mnt/games/ValheimTesting/runs/server", recipe.Runtime);
         Assert.False(recipe.RuntimeExplicit);
-        Assert.Null(recipe.ProfileStorage!.Refusal);
-
-        linux.UnixStorage["/mnt/games"] = new UnixStorageVolume("/mnt/games", "2065", "ext4", Writable: false);
-        recipe = Assert.Single(EnvironmentInventory.Read(file, linux).Environments);
-        Assert.StartsWith("the default runtime folder /mnt/games/ValheimTesting/runs/server on /mnt/games (ext4, device 2065) is not writable by this user.",
-            recipe.ProfileStorage!.Refusal);
-        var plan = new ServerRunPlan { Executable = GameLaunch.ServerLinuxExecutable, Port = 5577, Arguments = ["-port", "2456"] };
-        Assert.Contains("is not writable by this user", Assert.Throws<ArgumentException>(() => EnvironmentInventory.Read(file, linux).PlaceServer(plan)).Message);
+        Assert.Null(recipe.ProfileStorage);
+        Assert.Equal(1, linux.UnixProbes);
+        Assert.Throws<PlatformNotSupportedException>(() => ProfileRuntimeStorage.Inspect(linux, server, recipe.Runtime, explicitRuntime: false));
     }
 
     // #612 review: an install that is its mount's root (a Docker volume, a dedicated disk) leaves no folder on that mount outside

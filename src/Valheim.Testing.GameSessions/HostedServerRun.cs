@@ -193,7 +193,10 @@ internal sealed class HostedServerRun : IServerPlacement
         provenance["runtimeSource"] = Role.Host + ":" + (Role.PreparedSourceRoot ?? Role.Install);
     }
 
-    /// <summary>The read-only hard-link storage check of a linked profile, before this run takes a lock or stages its profile.</summary>
+    /// <summary>
+    /// The hard-link storage check of a linked profile, before this run takes a lock or stages its profile. On a Linux or Mac
+    /// host it writes one trial link in a new folder under the runtime root and removes both (<see cref="HostedRuntimeStage.RequireProfileStorageAsync"/>).
+    /// </summary>
     internal async Task<string?> PreflightProfileStorageAsync(CancellationToken cancellation) =>
         (await HostedRuntimeStage.RequireProfileStorageAsync(Host, HostedRuntimeKind.Server, Role.Install, Role.Runtime,
             HostedTimeouts.Quick, cancellation, explicitRuntime: Role.RuntimeExplicit).ConfigureAwait(false)).Description;
@@ -302,7 +305,8 @@ internal sealed class HostedServerRun : IServerPlacement
         // Journalled before the profile: an interrupted preparation leaves a record of every path it may own.
         await _runFolder.MakeAsync(cancellation).ConfigureAwait(false);
         await JournalAsync(Host, Role.Host, "server", JournalEntry.Of(JournalEntry.CopyIntended, ("runtime", RuntimeDirectory), ("stage", StagingDirectory),
-            ("parent", RunDirectory), ("runtimeKind", "server"), ("launchRoot", Role.Install)), cancellation).ConfigureAwait(false);
+            ("parent", RunDirectory), ("runtimeKind", "server"),
+            ("launchRoot", HostedRuntimeStage.LaunchRoot(HostProfile.Platform, HostedRuntimeKind.Server, Role.Install, RuntimeDirectory))), cancellation).ConfigureAwait(false);
         _runtimeIntended = true;
         HostedRuntimeStage.PreparedProfile profile;
         try
@@ -364,8 +368,10 @@ internal sealed class HostedServerRun : IServerPlacement
             return Task.CompletedTask;
         }
         return report.StepAsync(StepPhase.Setup, "the server host can load crossplay's libraries", async () =>
-            report.Provenance["crossplayLibraries"] = await CrossplayLibraries.RequireAsync(Host, GameDirectory,
-                inheritLibraryPath: !((IServerPlacement)this).Linked, HostedTimeouts.Quick, cancellation).ConfigureAwait(false) + " loads on " + Host.Name);
+            report.Provenance["crossplayLibraries"] = await CrossplayLibraries.RequireAsync(Host,
+                // The launch every boot builds (ServerActor), without the plan's arguments: what libparty.so loads with is its own.
+                GameLaunch.ForServerWithLoader(GameDirectory, LoaderDirectory, [], null, ServerPlatform.Linux, linked: ((IServerPlacement)this).Linked),
+                HostedTimeouts.Quick, cancellation).ConfigureAwait(false) + " loads on " + Host.Name);
     }
 
     /// <summary>Ships the verified local world copy to the host and verifies every file there.</summary>

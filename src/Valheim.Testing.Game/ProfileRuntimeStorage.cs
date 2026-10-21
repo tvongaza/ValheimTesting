@@ -166,7 +166,9 @@ internal static class UnixStorageProbe
         if [ -n "${linktest:-}" ] && [ "${#existing[@]}" -ge 2 ]; then
           case "$os" in Linux) exe=valheim_server.x86_64 ;; *) exe=valheim_server/Valheim ;; esac
           source=${existing[0]}; target=${existing[1]}
-          if [ -f "$source/$exe" ] && [ -d "$target" ] && [ -w "$target" ]; then
+          # Never inside the install, whose next listing would count the trial folder (a caller proves the runtime apart first).
+          case "$target/" in "$source/"*) target= ;; esac
+          if [ -n "$target" ] && [ -f "$source/$exe" ] && [ -d "$target" ] && [ -w "$target" ]; then
             probe=$(mktemp -d "$target/.vt-link-probe.XXXXXX") || exit 3
             if error=$(ln -- "$source/$exe" "$probe/game" 2>&1); then echo 'VT-PROFILE-LINK ok'; else echo "VT-PROFILE-LINK refused $(b64 "$error")"; fi
             rm -f -- "$probe/game"; rmdir -- "$probe"
@@ -217,28 +219,43 @@ internal static class UnixStorageProbe
         catch (FormatException) { throw new InvalidDataException("Malformed storage probe line: " + line); }
     }
 
-    /// <summary>This machine's mounts for <paramref name="paths"/>, through the same script run once by this machine's bash.</summary>
+    /// <summary>
+    /// This machine's mounts for <paramref name="paths"/>, through the same script run once by this machine's bash, for the
+    /// inventory's default root. It never makes the trial link: a verdict comes only from a host's preflight
+    /// (<c>HostedRuntimeStage.RequireProfileStorageAsync</c>).
+    /// </summary>
     internal static IReadOnlyList<UnixStorageVolume> Inspect(IReadOnlyList<string> paths)
+    {
+        string stdout = Run(Script, paths, TimeSpan.FromSeconds(30));
+        return Volumes(stdout, paths.Count, Platform(SystemName(stdout) ?? "", "this machine"));
+    }
+
+    // Runs a probe script in this machine's bash with paths as its one variable, and returns its output. Both streams are read
+    // while it runs, so a stalled mount (a stale NFS server) is bounded by the wait, not by a read; a probe still running then
+    // is killed, and every failure is an IOException, which the default root reads as a probe that could not answer.
+    internal static string Run(string script, IReadOnlyList<string> paths, TimeSpan timeout)
     {
         if (OperatingSystem.IsWindows()) throw new PlatformNotSupportedException("Unix mount inspection runs only on Linux and macOS.");
         if (paths.Count == 0 || paths.Any(string.IsNullOrWhiteSpace)) throw new ArgumentException("Name each path to inspect.", nameof(paths));
         var start = new ProcessStartInfo("bash") { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
         start.ArgumentList.Add("-c");
-        start.ArgumentList.Add(Script);
+        start.ArgumentList.Add(script);
         start.Environment["paths"] = string.Join('\n', paths);
+        // Nothing of the runner's environment may ask this probe for its trial link.
+        start.Environment.Remove("linktest");
         using var process = Process.Start(start) ?? throw new IOException("bash did not start for the storage probe.");
-        // Both streams are read while the probe runs, so a stalled mount (a stale NFS server) is bounded by the wait, not by a read.
         var output = process.StandardOutput.ReadToEndAsync();
         var error = process.StandardError.ReadToEndAsync();
-        if (!process.WaitForExit(30_000))
+        if (!process.WaitForExit(timeout))
         {
-            process.Kill(entireProcessTree: true);
-            throw new IOException($"The storage probe for {string.Join(", ", paths)} did not finish within 30 s.");
+            try { process.Kill(entireProcessTree: true); }
+            catch (Exception kill) when (kill is InvalidOperationException or Win32Exception or NotSupportedException)
+            { throw new IOException($"The storage probe for {string.Join(", ", paths)} did not finish within {timeout.TotalSeconds:0} s and could not be stopped: {kill.Message}", kill); }
+            throw new IOException($"The storage probe for {string.Join(", ", paths)} did not finish within {timeout.TotalSeconds:0} s.");
         }
         if (process.ExitCode != 0)
             throw new IOException($"The storage probe for {string.Join(", ", paths)} failed (exit {process.ExitCode}): {error.GetAwaiter().GetResult().Trim()}");
-        string stdout = output.GetAwaiter().GetResult();
-        return Volumes(stdout, paths.Count, Platform(SystemName(stdout) ?? "", "this machine"));
+        return output.GetAwaiter().GetResult();
     }
 }
 
@@ -385,21 +402,28 @@ internal static class ProfileRuntimeStorage
         return new(relocated, $"the install is on {source.Description}, not the data folder's {data.Description}, so {source.Rules.Platform} profiles follow the install {source.Rules.Unit}");
     }
 
+    /// <summary>
+    /// This Windows machine's verdict, from its native volume probe. A Unix machine has none here: its verdict needs the storage
+    /// probe's trial link, which only a preflight makes (<c>HostedRuntimeStage.RequireProfileStorageAsync</c>), so reading an
+    /// inventory writes nothing.
+    /// </summary>
     internal static ProfileStorageVerdict Inspect(ISteamLocator machine, string sourcePath, string runtimePath,
         bool explicitRuntime, bool inPlaceAvailable = false)
     {
+        if (machine.Platform != "windows") throw new PlatformNotSupportedException("A Unix profile's storage is checked by its host's preflight.");
         try
         {
-            var (source, runtime) = Volumes(machine, machine.FinalPath(sourcePath), machine.FinalPath(runtimePath));
+            var source = machine.StorageVolume(machine.FinalPath(sourcePath));
+            var runtime = machine.StorageVolume(machine.FinalPath(runtimePath));
             return Verdict(sourcePath, source, runtimePath, runtime, explicitRuntime, inPlaceAvailable);
         }
         catch (Exception error) when (ProbeFailure(error))
         {
-            return Unknown(ProfileLinkRules.For(machine.Platform), sourcePath, error);
+            return Unknown(ProfileLinkRules.Windows, sourcePath, error);
         }
     }
 
-    // This machine's volumes (Windows) or mounts (Linux, macOS: one probe for both paths) holding two paths.
+    // This machine's volumes (Windows) or mounts (Linux, macOS: one probe for both paths) holding two paths, for the default root.
     private static (IProfileStorageVolume First, IProfileStorageVolume Second) Volumes(ISteamLocator machine, string first, string second)
     {
         if (machine.Platform == "windows") return (machine.StorageVolume(first), machine.StorageVolume(second));

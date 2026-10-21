@@ -1,8 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <!--
     A native control for #612, never part of a normal runtime: a plugin that writes into the game root, as a preloader failure
-    log or a careless mod does. Install it on an owned run's client or server; the run's source check must find its file in the
-    source install (macOS) or the profile must hold it (Windows, Linux), and the install must end unchanged.
+    log or a careless mod does. Install it on an owned run's client or server; a linked profile (Windows, a Linux or macOS
+    dedicated server) must hold its files, a macOS client's source check must move them out of the install, and the install
+    must end unchanged.
     It compiles against your game install like AcceptanceMod (-p:ValheimPath=), never in this repository or its CI.
   -->
   <Import Project="../../../../tools/game-references/Valheim.GameReferences.props" />

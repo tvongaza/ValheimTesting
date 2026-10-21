@@ -618,7 +618,7 @@ public sealed class ProfileSourceCheckTests : IDisposable
         File.WriteAllText(Path.Combine(_root, "valheim_Data", "data.unity3d"), "game data");
         var source = await ProfileSourceCheck.InspectAsync(_host, _root, TimeSpan.FromSeconds(30));
         var plan = HostedRuntimeStage.PlanLinkedProfile(Valheim.Testing.Game.ClientPlatform.Windows, source.Files.Keys);
-        var check = ProfileSourceCheck.Prepare(source, plan.Links.Where(path => !path.Contains('/')), ProfileLayout.Linked); // Windows checks its root files
+        var check = ProfileSourceCheck.Prepare(source, plan.Checked, ProfileLayout.Linked); // Windows checks its root files
 
         Assert.Contains("UnityPlayer.dll", check.BeforeBoot.Keys);
         Assert.Contains("steam_api64.dll", check.BeforeBoot.Keys);

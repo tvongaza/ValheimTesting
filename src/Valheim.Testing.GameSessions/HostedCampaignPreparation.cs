@@ -1052,7 +1052,8 @@ public static class HostedCampaignPreparation
                     await journal.AppendAsync(host, journalDirectory, name, JournalEntry.Of(JournalEntry.CopyIntended,
                         ("runtime", runtime), ("stage", stage), ("parent", parent),
                         ("runtimeKind", kind == HostedRuntimeKind.Server ? "server" : "client"),
-                        ("launchRoot", role.Install)), timeout, cancellation).ConfigureAwait(false);
+                        ("launchRoot", HostedRuntimeStage.LaunchRoot(profile.Hosts[hostName].Platform, kind, role.Install, runtime))),
+                        timeout, cancellation).ConfigureAwait(false);
                     // Owned from here: a failed preparation retires a partial copy too (idempotent where nothing was made), so its
                     // run-ended entry says cleanup was verified only when no copy of it remains, not when the copy's own cleanup failed.
                     copies.Add((hostName, name, runtime, stage));

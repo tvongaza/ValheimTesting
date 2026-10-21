@@ -240,7 +240,8 @@ public sealed class EnvironmentInventory
                 recipe.RuntimeReason = runtime.Reason;
                 assumed.Add($"runtime {recipe.Runtime} ({runtime.Reason})");
             }
-            if (ProfileLayouts.For(machine.Platform, serves) == ProfileLayout.Linked && recipe.Install.Length != 0)
+            // A Unix verdict needs the storage probe's trial link, which only a preflight makes: reading the inventory writes nothing.
+            if (windows && recipe.Install.Length != 0)
                 recipe.ProfileStorage = ProfileRuntimeStorage.Inspect(machine, recipe.Install, recipe.Runtime, explicitRuntime);
             if (recipe.CliPort == 0)
             {
