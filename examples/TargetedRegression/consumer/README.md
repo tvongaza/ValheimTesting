@@ -1,6 +1,6 @@
 # Standalone marker consumer
 
-Copy these seven files into a new directory outside the ValheimTesting checkout. Select one repository revision before downloading the files. The relative source links follow that revision.
+Copy these seven files into a new directory outside the ValheimTesting checkout. Select the latest release tag on the repository's Releases page before downloading the files, so they match the pinned packages. The relative source links follow that revision.
 
 | Source | Destination | Purpose |
 |---|---|---|
