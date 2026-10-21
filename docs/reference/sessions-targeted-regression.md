@@ -43,9 +43,25 @@ File names never count in the metadata check. A probe's or the mod's own command
 
 | Member | Does |
 |---|---|
-| `Preflight()` | Stages every arm in turn |
+| `Preflight()` | Stages every arm in turn; the last stays staged ([clean up](#clean-up-after-a-run)) |
 | `Run(arm, output, scenario, rounds, measure)` | Stages the arm, writes `run-manifest.json`, calls `Verify()` right before the launch, runs the hosted `ClientRounds` with the scenario's capabilities required live before its first round, scans the client's logs and writes the report in every outcome |
-| `Remove()` | Call it in `finally`: retires only the shared-stage copy this runner prepared and releases the host lock |
+| `Remove()` | Call it in `finally` ([clean up](#clean-up-after-a-run)): retires only the shared-stage copy this runner prepared and releases the host lock |
+
+## Clean up after a run
+
+A `Stage`, `Preflight` or `Run` that staged an arm leaves it in place under an exclusive journalled lock on the client host, whatever the outcome of the run. Until that copy is retired, the next native run on the host is blocked. Call `Remove()` in a `finally` block, so a later exception, a failed scenario or an early return retires it too:
+
+```csharp
+var regression = TargetedRegression.Read(inputsFile);
+try
+{
+    foreach (var arm in regression.Preflight())
+        foreach (string line in arm.Describe()) Console.WriteLine(line);
+}
+finally { regression.Remove(); }
+```
+
+After the last arm of a run, call `Remove(report, output)` instead: it also records in that arm's `result.json` whether the removal was verified. The [example](../../examples/TargetedRegression/README.md) does both.
 
 An interrupted run leaves its journal for `valheim-test env recover` ([recovery](sessions-leases-and-recovery.md#env-recover)).
 
@@ -53,4 +69,5 @@ An interrupted run leaves its journal for `valheim-test env recover` ([recovery]
 
 - It serves one owned client hosting one world. For a dedicated server or several clients, use a [session](sessions-game-session.md).
 - It holds the client host's lock until its profile is retired.
+- The strict plan it builds hosts the world (`hostWorld`), so a scenario cannot use [`LogoutCycle`](game-client-rounds.md#log-out-and-log-in), which refuses a hosting client.
 - The metadata checks read what BepInEx reads. Only the live run checks a dependency a mod finds by reflection.

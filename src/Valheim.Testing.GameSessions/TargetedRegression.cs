@@ -225,7 +225,8 @@ public sealed class TargetedRegression
 
     /// <summary>
     /// Stages <paramref name="arm"/> into the disposable install and runs every static check (see the class summary).
-    /// Refuses with the corrective action at the first problem; nothing is launched.
+    /// Refuses with the corrective action at the first problem; nothing is launched. A successful stage stays in place under the
+    /// host lock: call <see cref="Remove()"/> in a <c>finally</c> block to retire it.
     /// </summary>
     public StagedArm Stage(string arm)
     {

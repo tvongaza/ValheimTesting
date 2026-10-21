@@ -78,6 +78,8 @@ In Valheim 1.0.16 the character is saved inside the logout, before the menu load
 
 `LogoutCycle.Run(round, plan, worldUid)` reads `valheim.observe/custom-data`, has the client leave to its menu, waits for the character file to be rewritten, joins again and requires every key back with its value.
 
+The rejoin is by address to a dedicated server, so `Run` refuses a crossplay plan or a plan with a `hostWorld` section (a hosting client) before the client leaves, with an `ArgumentException`. Use it with a plan that joins an owned dedicated server.
+
 | Field | Does |
 |---|---|
 | `Capability` | The custom-data observation, `valheim.observe/custom-data` |
