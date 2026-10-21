@@ -19,6 +19,34 @@ From the client environment the regression takes: the game install, only read; t
 
 `client.environment` sets non-secret process variables on the disposable game process, such as a mod's documented defer-generation switch. The same `environment` field exists on an owned `ClientRunPlan`; an attached plan refuses it. Validation rejects invalid names, multiline values and loader overrides before anything is copied or launched. It is not a credential channel: scenario evidence may include the plan.
 
+## Fixture and character
+
+The fixture contains exactly one saved world. `WorldIdentity.Read(root).UidText` reads its UID from metadata; the filename is not its identity.
+
+| Input | Does | Constraint |
+|---|---|---|
+| `DefaultSmokeWorld.Prepare` | Copies the packaged smoke world into a new directory | Use a fresh source directory |
+| `DefaultSmokeCharacter.Ensure` | Supplies the packaged disposable character store | Copies share one player ID |
+| `client.character` | Names the local character staged for the run | With `characterStore`, a same-named local or Cloud save is refused |
+| `client.characterStore` | Names a `DisposableCharacterStore` with that registered character | Use a game-created disposable character |
+
+With `characterStore`, `run` stages the registered character before launch and removes its file and backups after the owned client stops, including on failure. Without that field, stage your disposable local character yourself.
+
+## Optional input fields
+
+| Field | Does | Fails or refuses when |
+|---|---|---|
+| `mod.repeatability` | Allows arms with the same SHA256 | Otherwise identical arms are refused |
+| `configs` | Stages named BepInEx config files | Files do not match their declared inputs |
+| `patchers` | Stages the declared preloader patchers | A file is missing or changed |
+| `optionalReferences` | Names optional assembly references | An unresolved reference is not listed |
+| `gamePins` | Pins the game, selected loader and patchers | A pin differs |
+| `client.startSeconds`, `client.joinSeconds` | Bound menu startup and each hosted start | Outside 10–1800 or 10–900 seconds respectively |
+| `client.environment` | Supplies non-secret variables to the owned process | Invalid names, multiline values or loader overrides |
+| `logScan` | Declares expected error headers and their reasons | New or different errors appear |
+
+See the canonical [input sample](../../examples/TargetedRegression/regression.sample.json) for the JSON shape and [log scan](game-log-scan.md) for expected-error declarations. Without a supplied `valheimCLI.valheimCLI.cfg`, staging writes the environment's port.
+
 ## Stage checks
 
 `TargetedRegression.Stage(arm)` works without the game and refuses at the first problem, naming the field and the fix.

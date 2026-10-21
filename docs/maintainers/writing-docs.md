@@ -9,7 +9,7 @@ Every page follows these rules. A reviewer can check each one.
 2. **Short sentences.** No sentence over 30 words. Paragraphs have at most four sentences and one idea.
 3. **Condition first, then instruction.** "If your Steam library is elsewhere, set `VALHEIM_PATH`." Never the reverse.
 4. **Say what the reader does, then what they see.** Every command block is followed by its result (an output block, or one sentence naming the file it writes).
-5. **No history.** No issue numbers, PR numbers, "previously", "formerly", "renamed from", "removed in", measurement anecdotes or dates in body text. Issue numbers appear only inside `<!-- TODO(docs): ... -->`.
+5. **No history.** No issue numbers, PR numbers, "previously", "formerly", "renamed from", "removed in", measurement anecdotes or dates in body text. Issue numbers appear only inside `<!-- TODO(docs): ... -->`. Captured evidence may name its toolkit release, example source revision, fixture UID and platform; these identify the result, not a product timeline.
 6. **No filler.** Delete "simply", "just", "easy", "note that", "it is worth", "in order to", and any sentence that restates the heading.
 7. **One home per fact.** A fact is written on one page; every other page links to it. If you are about to paraphrase another page, link instead.
 8. **Honest scope, no hedging prose.** State a limit in one sentence under **Limits**; do not weave caveats through every paragraph.
@@ -57,7 +57,7 @@ A page is exactly one type. If a reference page starts giving advice, move the a
 
 **1. From `docs/getting-started.md`, intro.**
 Before: "The unit tests need only the .NET 10 SDK, on any OS; no game. The usual setup for the native checks is the **Windows PC where Valheim is installed through Steam**: an owned dedicated server and an owned client run there, both started from test copies of the Steam installs."
-After: "Unit tests need the .NET 10 SDK and nothing else. They run on any OS. Native checks run on the Windows PC where Steam installed Valheim: `valheim-test` starts a dedicated server and a client from disposable profiles and leaves the install untouched."
+After: "Unit tests need the .NET 10 SDK and nothing else. They run on any OS. For native host requirements, see Platforms; follow the gameplay tutorial for the complete setup."
 
 **2. From `docs/packages/Valheim.Testing.Game.md`, "Pins".**
 Before: "**Computing the pins.** Every strict plan needs `runtimePins`, and an owned client section needs `installPins`; `ValidateServerPlan` and `ClientRunPlan.Validate` refuse a plan without them. Compute the values once with `InstallPins.Of(<runtime>)` and `InstallPins.Of(<client install>)` (or the shell listing above), review them, and add them to the plan: … `bepinexCore`, which pinned `BepInEx/core` alone, was replaced by `loader` (#295); a plan that still names it is refused with that instruction."
@@ -84,3 +84,33 @@ After: "A pull request changes code, tests and docs. Leave versions, pins, `tool
 - **Preserve public entry points.** Keep published URLs and useful heading anchors. If content moves, leave a short pointer page or section at the old location. Update internal links directly; add no redirect framework.
 - **No dated validation records.** State a durable fact as behaviour on the page that needs it, for example: a mod that reads a private game member at run time needs `AllowUnsafeBlocks=true`, and `IgnoresAccessChecksTo` alone throws `FieldAccessException`. Don't add "a native campaign proved X" claims.
 - **ValheimCLI problems** go to the pinned ValheimCLI fork, or to this repository's issues with the `valheimcli` label. Toolkit bugs go to this repository's issues.
+
+
+## Recapture example output
+
+Keep canonical source and captured results separate: the source revision identifies the example; the package release identifies the toolkit it runs. One result does not verify another release or platform.
+
+| Journey | Command directory and entry | Result to compare |
+|---|---|---|
+| Logic | Independent three-file folder; [Get started](../getting-started.md#steps) | Positive, boundary failure, restored pass |
+| One-shot gameplay | Independent mod folder; [gameplay tutorial](../tutorials/first-gameplay-assertion.md) | Named marker count and deliberate failure |
+| A/B gameplay | Independent regression consumer; [A/B guide](../guides/run-an-ab-regression.md) | Parent failure, candidate pass, frozen inputs |
+| Persistence | Generated consumer; [persistence guide](../guides/test-save-restart-rejoin.md) | Save, distinct server boots, rejoin count |
+| Two-client visibility | Generated consumer; [multi-client guide](../guides/run-a-session-with-several-clients.md) | Separate A/B counts and B rejoin |
+
+1. Follow the linked command from its stated directory. Record the exact command, toolkit version, example source commit and hashes, fixture UID and platform privately. Download every mapped source file from that one revision.
+2. Keep the complete `result.json`, `junit.xml`, command traces and input manifest. For xUnit, keep the actual TRX and validator transcript. Verify matching step names, outcomes, complete observations and cleanup before quoting a result.
+3. Copy selected output from those files. Publish only the needed `Name`, `Passed`, `Error` or test-count fields. Keep paths, accounts, credentials, character files and full logs private. Copy source excerpts directly from the canonical file and link it.
+4. Re-extract the same selection from the retained evidence and require byte-identical output. Deliberately change one quoted value and require that comparison to fail; restore it before committing.
+5. Run the existing [contributor validation](../../CONTRIBUTING.md#set-up-and-validate-locally), `pins.cs` docs checks and `api-docs.cs`. Inspect rendered source links at the committed head. `consumer.cs` checks standalone maps and records bounded test results; [Regression bundle](../../tools/regression-bundle/README.md) validates a shareable A/B record.
+
+Keep released, candidate and pending evidence distinct:
+
+| Toolkit | What it establishes | Refresh gate |
+|---|---|---|
+| Published `0.1.0` | Only the recorded commands and platforms | Preserve actual capture attribution |
+| Candidate packages | Only the named candidate source | Do not describe them as a release |
+| Release candidate | Candidate behavior on recorded inputs | Published-package verification remains separate |
+| Published release | The journeys actually rerun from that feed | Update claims only after matching evidence |
+
+Use the existing source, consumers and validators. Add no second snippet, capture or lifecycle framework.

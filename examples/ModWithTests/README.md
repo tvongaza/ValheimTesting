@@ -13,19 +13,9 @@ This miniature mod and its xUnit project test the mod's real source file with th
 
 ## Run it
 
-From this directory:
+Follow [Get started](../../docs/getting-started.md#steps) for the complete three-file map, standalone command and captured output. Its [result check](../../docs/getting-started.md#check-the-result) changes the boundary operator, requires the matching failure, then restores the source.
 
-```sh
-dotnet test MyMod.Tests/MyMod.Tests.csproj -c Release
-```
-
-Success is **5 passed, 0 failed**, exit 0. A failed assertion returns nonzero.
-
-The project pins `Valheim.Testing.Doubles` `0.1.0` from NuGet.org. Inside a ValheimTesting checkout, `NuGet.Config` also offers the local `.packages` feed. To be sure you test the published package, run from a copy outside the checkout.
-
-The five tests cover submerged ground, the exact allowed boundary, dry ground, sampling at x/z instead of the object's y, and the previous world returning after a throw.
-
-To see a test fail, change `>=` to `>` in `MyMod/DrySiteRule.cs`. The boundary case fails. Restore the rule afterwards.
+The five cases cover submerged ground, the allowed boundary, dry ground, horizontal coordinates and static-state restoration. This directory keeps the production rule and its tests together; no game or Steam process starts.
 
 ## Next
 
