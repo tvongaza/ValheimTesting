@@ -52,7 +52,7 @@ Use two [registered disposable test characters](xref:Valheim.Testing.Game.Dispos
 
 Use the existing [session manifest](../reference/sessions-campaigns.md#the-session-manifest) with roles `client` and `client-b`. Give B its own registered character and constrain it to another host. Keep the original fixture, server adapter, role locks and inventory.
 
-Use the same [three-file consumer map](../../examples/FullLifecycle/consumer/README.md#native-persistence-entry). Put B's client plan in `second-client-plan.json` beside the original `client-plan.json`.
+Use the same [three-file consumer map](../../examples/FullLifecycle/consumer/README.md#native-persistence-entry). In `RUN_OUTPUT` (the directory the persistence guide's `--preflight-only` run printed), copy `client-plan.json` to `second-client-plan.json` and change only what differs for B.
 
 In `marker-plan.json`, select `dry-site-two-clients` and declare `SecondArrival` from independently measured terrain. Keep the original dry/wet sites and A arrival. Require dry arrivals 3–20 metres from the same marker and at least 3 metres apart.
 
@@ -60,10 +60,10 @@ The entry binds both plan sections to the named campaign roles. `dry-site-lifecy
 
 ### 5. Check the session
 
-From the independent campaign folder:
+Check the two-role campaign from step 4:
 
 ```sh
-valheim-test session check campaign.json --hosts --json
+valheim-test session check RUN_OUTPUT/campaign.json --hosts --json
 ```
 
 The check reads the hosts, installs, ports, accounts and registered character identities before a game starts.
