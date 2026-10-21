@@ -612,12 +612,22 @@ public sealed class TargetedRegressionTests : IDisposable
 
     // ---- start's hosted fixture world (#818, #820) ----
     // Through start's own seam: TargetedRegression.Run with its hosted ClientRounds, a fake hosting client (no game), this
-    // machine's real host scripts and the run journal on disk, then env status and env recover as the command runs them.
+    // machine's real host scripts (or, where a test answers it in process, InProcess) and the run journal on disk, then env status
+    // and env recover as the command runs them.
 
     private const string FixtureWorld = "SealFixture";
     private string Worlds => Path.Combine(_rig.Save, "worlds_local");
     private Dictionary<string, HostProfile> Hosts() => new() { ["local"] = new HostProfile { Kind = "local", Lock = Path.Combine(_rig.Root, "lock") } };
-    private static readonly IGameHost Here = new LocalGameHost("this machine", HostShell.ThisMachine);
+    // This machine as the run reaches it: its shell, or in a test that answers it in process (InProcess) that test's host.
+    private static IGameHost Here => LocalGameHost.ThisMachine();
+    // For the tests of what a start decides (its verdicts, steps, journal and what it leaves): this machine answered in process for
+    // the test's flow, so no step starts a shell. SourceScriptShellTests compares the fake's settlement answers with the real scripts
+    // and names where the other scripts' real runs are.
+    private static (FakeServerHost Host, IDisposable Scope) InProcess()
+    {
+        var host = FakeServerHost.ThisMachine();
+        return (host, LocalGameHost.UseThisMachineForTest(host));
+    }
 
     // A hosting client at its menu until it starts a world, then the world's UID once loaded and its player after.
     private ScriptedTransport HostingClient()
@@ -742,6 +752,8 @@ public sealed class TargetedRegressionTests : IDisposable
     // to the game root) is moved into that arm's evidence and named; the arm passes with the warning, and the install is as it was.
     [ClientHostFact] public void AFileTheGameAddsToTheInstallIsMovedIntoTheArmsEvidence()
     {
+        var (here, scope) = InProcess();
+        using var machine = scope;
         using var data = new FakeClientDataDirectory(_rig.Save);
         Directory.CreateDirectory(Worlds);
         var before = Directory.EnumerateFiles(_rig.Game, "*", SearchOption.AllDirectories).Order(StringComparer.Ordinal).ToList();
@@ -763,12 +775,15 @@ public sealed class TargetedRegressionTests : IDisposable
             Assert.Equal(before, Directory.EnumerateFiles(_rig.Game, "*", SearchOption.AllDirectories).Order(StringComparer.Ordinal));
         }
         Assert.Empty(Directory.Exists(_rig.Runtime) ? Directory.EnumerateFileSystemEntries(_rig.Runtime) : []);
+        Assert.Contains("source-evidence", here.Scripts); // settled in process, never through a shell
     }
 
     // #791: a passing start leaves nothing in the client environment's runtime folder (its disposable profile retired, its hosted
     // world collected into the evidence), and env status lists nothing of it.
     [ClientHostFact] public void APassingStartLeavesNoFolderInTheClientsRuntime()
     {
+        var (here, scope) = InProcess();
+        using var machine = scope;
         using var data = new FakeClientDataDirectory(_rig.Save);
         Directory.CreateDirectory(Worlds);
         var (report, output, runId) = Start(() => new LocalFakeOwnedProcess(60));
@@ -778,6 +793,7 @@ public sealed class TargetedRegressionTests : IDisposable
         var status = Status(runId);
         Assert.Equal(JournalRunState.Ended, status.State);
         Assert.Empty(status.Items);
+        Assert.Contains("source-evidence", here.Scripts); // settled in process, never through a shell
     }
 
     // #820: a start refused before launch because the client's worlds already hold the fixture world's name copied the fixture

@@ -94,7 +94,7 @@ internal sealed class LocalClientCopy
         var (manifest, location, setFolder) = InstallSelection.ReadCliSet(manifestPath);
 
         string data = dataRoot ?? CliBundle.DataRoot;
-        host ??= new LocalGameHost("this machine", HostShell.ThisMachine);
+        host ??= LocalGameHost.ThisMachine();
         var journal = RunJournal.ThisProcess;
         var runtimeRoot = await HostedRuntimeStage.DefaultProfileRootAsync(host, HostedRuntimeKind.Client, source, data, StepTimeout, cancellation).ConfigureAwait(false);
         string root = HostPath.Join(runtimeRoot.Path, "local-clients");

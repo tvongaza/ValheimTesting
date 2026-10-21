@@ -8,6 +8,10 @@ public sealed class ProfileSourceCheckTests : IDisposable
 {
     private readonly string _root = Directory.CreateTempSubdirectory("profile-source-check-").FullName;
     private readonly LocalGameHost _host = new("source-host", HostShell.ThisMachine);
+    // This machine answered in process, for the tests of what the owner decides: its settlement, listing and read answers are the
+    // real scripts' (SourceScriptShellTests runs both and compares them), so no step starts a shell. Its own name, so a step sent to
+    // the real host fails.
+    private readonly FakeServerHost _fake = FakeServerHost.ThisMachine("source-host-in-process");
 
     public void Dispose()
     {
@@ -16,8 +20,9 @@ public sealed class ProfileSourceCheckTests : IDisposable
             if (Directory.Exists(folder)) DirectoryLinks.DeleteTree(folder);
     }
 
-    private async Task<ProfileSourceCheck> PrepareAsync(params string[] links) =>
-        ProfileSourceCheck.Prepare(await ProfileSourceCheck.InspectAsync(_host, _root, TimeSpan.FromSeconds(30)), links, links.Length == 0 ? ProfileLayout.SourceExecutable : ProfileLayout.Linked);
+    private Task<ProfileSourceCheck> PrepareAsync(params string[] links) => PrepareOnAsync(_host, links);
+    private async Task<ProfileSourceCheck> PrepareOnAsync(IGameHost host, params string[] links) =>
+        ProfileSourceCheck.Prepare(await ProfileSourceCheck.InspectAsync(host, _root, TimeSpan.FromSeconds(30)), links, links.Length == 0 ? ProfileLayout.SourceExecutable : ProfileLayout.Linked);
 
     // The profile beside the install, as every owned launch path lays it out: <runs>/vt-prep-*/runtime, its parent holding the baseline.
     private string Runtime => Path.GetFullPath(Path.Combine(_root, "..", Path.GetFileName(_root) + "-runs", "vt-prep-test-client", "runtime"));
@@ -25,7 +30,7 @@ public sealed class ProfileSourceCheckTests : IDisposable
     private readonly List<JournalEntry> _journal = [];
     private string Output => Path.Combine(Path.GetFullPath(Path.Combine(_root, "..")), Path.GetFileName(_root) + "-output");
 
-    private async Task<SourceVerdict> SettleAsync(ProfileSourceCheck check, string? output = null) => await check.SettleAsync(_host,
+    private async Task<SourceVerdict> SettleAsync(ProfileSourceCheck check, string? output = null, IGameHost? host = null) => await check.SettleAsync(host ?? _host,
         SourceSettlement.Run("client", Path.GetFullPath(Runtime), output ?? Output), entry => { _journal.Add(entry); return Task.CompletedTask; },
         TimeSpan.FromSeconds(60));
 
@@ -175,10 +180,10 @@ public sealed class ProfileSourceCheckTests : IDisposable
     {
         Write("game.bin", "game");
         Directory.CreateDirectory(Parent);
-        var check = await PrepareAsync();
+        var check = await PrepareOnAsync(_fake);
         Write("preloader_1.log", "first");
-        Assert.Equal(SourceVerdictKind.Restored, (await SettleAsync(check)).Verdict);
-        var again = await SettleAsync(check, Output + "-again");
+        Assert.Equal(SourceVerdictKind.Restored, (await SettleAsync(check, host: _fake)).Verdict);
+        var again = await SettleAsync(check, Output + "-again", _fake);
         Assert.Equal(SourceVerdictKind.Unchanged, again.Verdict);
         Assert.Empty(again.Added);
         Assert.False(Directory.Exists(Output + "-again"));
@@ -186,7 +191,7 @@ public sealed class ProfileSourceCheckTests : IDisposable
         // As if a settlement moved this and stopped before keeping it.
         Directory.CreateDirectory(check.MovedFilesFolder(Runtime));
         File.WriteAllText(Path.Combine(check.MovedFilesFolder(Runtime), "preloader_2.log"), "moved, not kept");
-        var resumed = await SettleAsync(check, Output + "-resumed");
+        var resumed = await SettleAsync(check, Output + "-resumed", _fake);
         Assert.Equal(SourceVerdictKind.Restored, resumed.Verdict);
         Assert.Equal("preloader_2.log", Assert.Single(resumed.Added).Path);
         Assert.Equal("moved, not kept", File.ReadAllText(Path.Combine(Output + "-resumed", "source-changes", "client", "added", "preloader_2.log")));
@@ -220,34 +225,34 @@ public sealed class ProfileSourceCheckTests : IDisposable
         Write("game.bin", "game");
         Directory.CreateDirectory(Path.Combine(_root, "empty"));
         Directory.CreateDirectory(Parent);
-        var check = await PrepareAsync();
-        await PersistAsync(check);
+        var check = await PrepareOnAsync(_fake);
+        await PersistAsync(check, _fake);
         var baseline = Assert.Single(_journal);
         Assert.Equal(JournalEntry.SourceBaseline, baseline.Kind);
         Assert.Equal(Path.Combine(Parent, ProfileSourceCheck.BaselineFile), baseline.Fields["baseline"]);
         Assert.Equal((_root, "client", check.MovedFilesFolder(Runtime)), (baseline.Fields["sourceRoot"], baseline.Fields["sourceActor"], baseline.Fields["sourceAdded"]));
 
         Write("preloader_1.log", "after the run");
-        var verdict = await RecoverAsync(baseline.Fields);
+        var verdict = await RecoverAsync(baseline.Fields, host: _fake);
         Assert.Equal(SourceVerdictKind.Restored, verdict!.Verdict);
         Assert.Equal("after the run", File.ReadAllText(Path.Combine(RecoveredProfile, "added", "preloader_1.log")));
         Assert.Contains("\"verdict\": \"restored\"", File.ReadAllText(Path.Combine(RecoveredProfile, "source-changes.json")));
         Assert.False(File.Exists(baseline.Fields["baseline"])); // settled and journalled: the baseline went last
         Assert.Equal([JournalEntry.SourceBaseline, JournalEntry.SourceMoveIntended, JournalEntry.SourceSettled], _journal.Select(entry => entry.Kind));
 
-        await PersistAsync(check);
+        await PersistAsync(check, _fake);
         File.AppendAllText(baseline.Fields["baseline"], " ");
-        var error = await Assert.ThrowsAsync<InvalidDataException>(() => RecoverAsync(baseline.Fields));
+        var error = await Assert.ThrowsAsync<InvalidDataException>(() => RecoverAsync(baseline.Fields, host: _fake));
         Assert.Contains("differs from its journalled SHA-256", error.Message);
     }
 
     // The copy's one recovered folder (its journal actor's, beside its logs), and in it this profile's own source-changes-<id>.
     private string Recovered => Path.Combine(_root + "-runs", "run", "recovered-regression-test");
     private string RecoveredProfile => Assert.Single(Directory.GetDirectories(Recovered, "source-changes-*"));
-    private Task PersistAsync(ProfileSourceCheck check) =>
-        check.PersistAsync(_host, Path.GetFullPath(Runtime), "client", entry => { _journal.Add(entry); return Task.CompletedTask; }, TimeSpan.FromSeconds(30));
-    private Task<SourceVerdict?> RecoverAsync(IReadOnlyDictionary<string, string> fields, Func<string, bool>? keptApart = null, bool teardown = false) =>
-        ProfileSourceCheck.RecoverAsync(_host, Path.GetFullPath(Runtime), "regression-test", fields, Recovered, keptApart ?? (_ => false), teardown,
+    private Task PersistAsync(ProfileSourceCheck check, IGameHost? host = null) =>
+        check.PersistAsync(host ?? _host, Path.GetFullPath(Runtime), "client", entry => { _journal.Add(entry); return Task.CompletedTask; }, TimeSpan.FromSeconds(30));
+    private Task<SourceVerdict?> RecoverAsync(IReadOnlyDictionary<string, string> fields, Func<string, bool>? keptApart = null, bool teardown = false, IGameHost? host = null) =>
+        ProfileSourceCheck.RecoverAsync(host ?? _host, Path.GetFullPath(Runtime), "regression-test", fields, Recovered, keptApart ?? (_ => false), teardown,
             entry => { _journal.Add(entry); return Task.CompletedTask; }, TimeSpan.FromSeconds(60));
 
     // #612 item 1: the baseline goes only after source-settled is journalled. One gone without that line is an explicit verdict,
@@ -257,21 +262,21 @@ public sealed class ProfileSourceCheckTests : IDisposable
     {
         Write("game.bin", "game");
         Directory.CreateDirectory(Parent);
-        var check = await PrepareAsync();
-        await PersistAsync(check);
+        var check = await PrepareOnAsync(_fake);
+        await PersistAsync(check, _fake);
         var fields = new Dictionary<string, string>(_journal[0].Fields);
         File.Delete(fields["baseline"]);
 
-        var unknown = await RecoverAsync(fields);
+        var unknown = await RecoverAsync(fields, host: _fake);
         Assert.Equal(SourceVerdictKind.Unknown, unknown!.Verdict);
         Assert.Contains("is gone, so the install was not compared", unknown.Reason);
 
         // Settled by the run, then interrupted before its moved files were kept.
         fields["sourceVerdict"] = "Restored";
-        Assert.Null(await RecoverAsync(fields));
+        Assert.Null(await RecoverAsync(fields, host: _fake));
         Directory.CreateDirectory(check.MovedFilesFolder(Runtime));
         File.WriteAllText(Path.Combine(check.MovedFilesFolder(Runtime), "preloader_1.log"), "moved, not kept");
-        var adopted = await RecoverAsync(fields);
+        var adopted = await RecoverAsync(fields, host: _fake);
         Assert.Equal(SourceVerdictKind.Restored, adopted!.Verdict);
         Assert.Equal("moved, not kept", File.ReadAllText(Path.Combine(RecoveredProfile, "added", "preloader_1.log")));
         Assert.False(Directory.Exists(check.MovedFilesFolder(Runtime)));
@@ -284,14 +289,16 @@ public sealed class ProfileSourceCheckTests : IDisposable
     {
         Write("game.bin", "game");
         Directory.CreateDirectory(Parent);
-        var check = await PrepareAsync();
-        await PersistAsync(check);
+        var check = await PrepareOnAsync(_fake);
+        await PersistAsync(check, _fake);
         var fields = _journal[0].Fields;
         Write("preloader_1.log", "the game's");
-        var failing = new FailingHost(_host, "evidence");
+        // The evidence step's connection is lost.
+        _fake.Failures["source-evidence"] = new HostResult(HostOutcome.TransportFailed, null, "", "connection lost", TimeSpan.Zero, false);
 
-        var verdict = await check.SettleAsync(failing, SourceSettlement.Run("client", Path.GetFullPath(Runtime), Output),
+        var verdict = await check.SettleAsync(_fake, SourceSettlement.Run("client", Path.GetFullPath(Runtime), Output),
             entry => { _journal.Add(entry); return Task.CompletedTask; }, TimeSpan.FromSeconds(60));
+        _fake.Failures.Remove("source-evidence");
 
         Assert.True(verdict.KeepsProfile);
         Assert.False(verdict.Settled);
@@ -303,7 +310,7 @@ public sealed class ProfileSourceCheckTests : IDisposable
         Assert.True(File.Exists(Path.Combine(check.MovedFilesFolder(Runtime), "preloader_1.log")));
         Assert.Throws<IOException>(() => verdict.Record(null));
 
-        var settled = await RecoverAsync(new Dictionary<string, string>(fields) { ["sourceVerdict"] = "Failed" });
+        var settled = await RecoverAsync(new Dictionary<string, string>(fields) { ["sourceVerdict"] = "Failed" }, host: _fake);
         Assert.Equal(SourceVerdictKind.Restored, settled!.Verdict);
         Assert.True(settled.Settled);
         Assert.Equal("the game's", File.ReadAllText(Path.Combine(RecoveredProfile, "added", "preloader_1.log")));
@@ -393,13 +400,13 @@ public sealed class ProfileSourceCheckTests : IDisposable
     {
         Write("game.bin", "game");
         Directory.CreateDirectory(Parent);
-        var check = await PrepareAsync();
-        await PersistAsync(check);
+        var check = await PrepareOnAsync(_fake);
+        await PersistAsync(check, _fake);
         var fields = _journal[0].Fields;
         string outside = _root + "-runs";
         DirectoryLinks.Create(Path.Combine(_root, "linked"), outside);
 
-        var linked = await SettleAsync(check);
+        var linked = await SettleAsync(check, host: _fake);
         Assert.Equal((SourceVerdictKind.Failed, true), (linked.Verdict, linked.Settled));
         Assert.Contains("now holds a link", linked.Reason);
         DirectoryLinks.Remove(Path.Combine(_root, "linked"));
@@ -407,13 +414,13 @@ public sealed class ProfileSourceCheckTests : IDisposable
         // r4 item 0: an install that is not there may be an offline NAS or an unplugged volume: kept for a later settlement, except
         // under env teardown, which removes the profile and names the install gone.
         Directory.Delete(_root, recursive: true);
-        var unreachable = await SettleAsync(check, Output + "-again");
+        var unreachable = await SettleAsync(check, Output + "-again", _fake);
         Assert.Equal((SourceVerdictKind.Unknown, false), (unreachable.Verdict, unreachable.Settled));
         Assert.Contains("not reachable", unreachable.Reason);
         Assert.Throws<SourceProfileKeptException>(() => unreachable.RequireRetirable());
-        var recovered = await RecoverAsync(fields);
+        var recovered = await RecoverAsync(fields, host: _fake);
         Assert.Equal((SourceVerdictKind.Unknown, false), (recovered!.Verdict, recovered.Settled));
-        var gone = await RecoverAsync(fields, teardown: true);
+        var gone = await RecoverAsync(fields, teardown: true, host: _fake);
         Assert.Equal((SourceVerdictKind.Failed, true), (gone!.Verdict, gone.Settled));
         Assert.Contains("is gone", gone.Reason);
         gone.RequireRetirable();
@@ -493,8 +500,8 @@ public sealed class ProfileSourceCheckTests : IDisposable
     {
         Write("game.bin", "game");
         Directory.CreateDirectory(Parent);
-        var check = await PrepareAsync();
-        await PersistAsync(check);
+        var check = await PrepareOnAsync(_fake);
+        await PersistAsync(check, _fake);
         var fields = new Dictionary<string, string>(_journal[0].Fields);
         if (settledByTheRun) fields["sourceVerdict"] = "Restored";
         File.Delete(fields["baseline"]);
@@ -505,18 +512,18 @@ public sealed class ProfileSourceCheckTests : IDisposable
         Directory.CreateDirectory(check.MovedFilesFolder(Runtime));
         File.WriteAllText(Path.Combine(check.MovedFilesFolder(Runtime), "preloader_1.log"), "the game's");
 
-        var verdict = await RecoverAsync(fields);
+        var verdict = await RecoverAsync(fields, host: _fake);
 
         // r7 items 1 and 2: nothing was compared, so no settlement is journalled (a later recovery would read it as the run's) and the
         // earlier recovery's report is not overwritten; a second recovery is refused the same way.
         Assert.DoesNotContain(_journal, entry => entry.Kind == JournalEntry.SourceSettled);
         Assert.Equal("an earlier recovery's report", File.ReadAllText(earlierReport));
-        Assert.Equal(SourceVerdictKind.Failed, (await RecoverAsync(fields))!.Verdict);
+        Assert.Equal(SourceVerdictKind.Failed, (await RecoverAsync(fields, host: _fake))!.Verdict);
         Assert.Equal("an earlier recovery's report", File.ReadAllText(earlierReport));
         // r4 item 2: a finished failure on either branch, never a Restored that did not happen; the folder stays, journalled kept.
         Assert.Equal((SourceVerdictKind.Failed, true), (verdict!.Verdict, verdict.Settled));
         Assert.Contains("already exists", verdict.Reason);
-        Assert.Equal(_host.Name + ":" + Path.Combine(check.MovedFilesFolder(Runtime), "preloader_1.log"), Assert.Single(verdict.Added).KeptAs);
+        Assert.Equal(_fake.Name + ":" + Path.Combine(check.MovedFilesFolder(Runtime), "preloader_1.log"), Assert.Single(verdict.Added).KeptAs);
         Assert.Contains(_journal, entry => entry.Kind == JournalEntry.CopyKept && entry.Fields["runtime"] == check.MovedFilesFolder(Runtime));
         Assert.Equal([check.MovedFilesFolder(Runtime)], verdict.KeptFolders);
     }
@@ -666,89 +673,7 @@ public sealed class ProfileSourceCheckTests : IDisposable
         Assert.DoesNotContain(host.Runs, run => run.Script == "source-settle" && run.Variables["files"].Length != 0);
     }
 
-    // The settlement script on this machine's real shell (bash, or pwsh on Windows): each refusal, and folders removed deepest first.
-    [Fact]
-    public async Task TheSettleScriptRefusesLinksEscapesNonFilesAndKeptNamesAndRemovesFoldersDeepestFirst()
-    {
-        string outside = _root + "-runs";
-        Directory.CreateDirectory(Path.Combine(outside, "elsewhere"));
-        File.WriteAllText(Path.Combine(outside, "elsewhere", "target.txt"), "outside the install");
-        DirectoryLinks.Create(Path.Combine(_root, "linked"), Path.Combine(outside, "elsewhere"));
-        Directory.CreateDirectory(Path.Combine(_root, "a-folder"));
-        Write("kept.log", "added");
-        string keep = Path.Combine(outside, "keep");
-        Directory.CreateDirectory(keep);
-        File.WriteAllText(Path.Combine(keep, "kept.log"), "an earlier move");
-        Directory.CreateDirectory(Path.Combine(_root, "a", "b", "c"));
-        Write("moved.log", "moved");
-
-        string reply = await SettleScript(keep, ["linked/target.txt", "../outside.txt", "a-folder", "kept.log", "moved.log"], ["a/b/c", "a/b", "a"]);
-
-        Assert.Contains("VT-NOTMOVED " + B64("linked/target.txt") + " link", reply);
-        Assert.Contains("VT-NOTMOVED " + B64("../outside.txt") + " outside", reply);
-        Assert.Contains("VT-NOTMOVED " + B64("a-folder") + " not-a-file", reply);
-        Assert.Contains("VT-NOTMOVED " + B64("kept.log") + " kept-already", reply);
-        Assert.Contains("VT-MOVED " + B64("moved.log"), reply);
-        Assert.Equal(["a/b/c", "a/b", "a"], reply.Split('\n').Where(line => line.StartsWith("VT-RMDIR ", StringComparison.Ordinal))
-            .Select(line => System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(line["VT-RMDIR ".Length..].Trim()))));
-        Assert.Equal("outside the install", File.ReadAllText(Path.Combine(outside, "elsewhere", "target.txt")));
-        Assert.Equal("added", File.ReadAllText(Path.Combine(_root, "kept.log")));
-        Assert.Equal("moved", File.ReadAllText(Path.Combine(keep, "moved.log")));
-        DirectoryLinks.Remove(Path.Combine(_root, "linked"));
-
-        // A keep folder inside the install, or one that is the install in another letter case on macOS, is refused before anything moves.
-        Assert.Contains("VT-SETTLE-REFUSED", await SettleScript(Path.Combine(_root, "keep"), ["kept.log"], []));
-        if (OperatingSystem.IsMacOS())
-            Assert.Contains("VT-SETTLE-REFUSED", await SettleScript(Path.Combine(Path.GetDirectoryName(_root)!, Path.GetFileName(_root).ToUpperInvariant(), "keep"), ["kept.log"], []));
-        Assert.True(File.Exists(Path.Combine(_root, "kept.log")));
-    }
-
-    // A name that ends in a line break is moved as itself (bash's $( ) would otherwise strip it).
-    [UnixFact]
-    public async Task TheSettleScriptKeepsANamesTrailingLineBreak()
-    {
-        Write("note\n", "a name ending in a line break");
-        Write("note", "the install's own");
-        Write("folder\n/inside.log", "in a folder whose name ends in a line break");
-        string keep = Path.Combine(_root + "-runs", "keep");
-
-        string reply = await SettleScript(keep, ["note\n", "folder\n/inside.log"], []);
-
-        Assert.Contains("VT-MOVED " + B64("note\n"), reply);
-        Assert.Equal("a name ending in a line break", File.ReadAllText(Path.Combine(keep, "note\n")));
-        Assert.Equal("in a folder whose name ends in a line break", File.ReadAllText(Path.Combine(keep, "folder\n", "inside.log")));
-        Assert.Equal("the install's own", File.ReadAllText(Path.Combine(_root, "note")));
-    }
-
-    private static string B64(string path) => Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(path));
-
-    private async Task<string> SettleScript(string keep, string[] files, string[] folders) =>
-        (await _host.RunAsync(_host.Shell.Kind == HostShellKind.PowerShell ? SourceSettleScripts.PowerShell : SourceSettleScripts.Bash,
-            new Dictionary<string, string>
-            {
-                ["root"] = _root, ["keep"] = keep, ["files"] = string.Join('\n', files.Select(B64)), ["folders"] = string.Join('\n', folders.Select(B64)),
-            }, TimeSpan.FromSeconds(60))).EnsureSuccess("the settlement script").Stdout;
-
-    // This machine, except that the named step's script fails as a lost connection would.
-    private sealed class FailingHost(LocalGameHost inner, string step) : IGameHost
-    {
-        public string Name => inner.Name;
-        public GameHostKind Kind => inner.Kind;
-        public HostShell Shell => inner.Shell;
-        public Task<HostResult> RunAsync(string script, IReadOnlyDictionary<string, string>? variables, TimeSpan timeout, CancellationToken cancellation = default) =>
-            step == "evidence" && (script == SourceSettleScripts.BashEvidence || script == SourceSettleScripts.PowerShellEvidence)
-                ? Task.FromResult(new HostResult(HostOutcome.TransportFailed, null, "", "connection lost", TimeSpan.Zero, false))
-                : inner.RunAsync(script, variables, timeout, cancellation);
-        public Task<HostLock> AcquireLockAsync(string lockPath, string owner, TimeSpan timeout, CancellationToken cancellation = default) => inner.AcquireLockAsync(lockPath, owner, timeout, cancellation);
-        public Task<HostLockResult> CheckLockAsync(string lockPath, string owner, TimeSpan timeout, CancellationToken cancellation = default) => inner.CheckLockAsync(lockPath, owner, timeout, cancellation);
-        public Task<HostLockResult> ReleaseLockAsync(string lockPath, string owner, TimeSpan timeout, CancellationToken cancellation = default) => inner.ReleaseLockAsync(lockPath, owner, timeout, cancellation);
-        public Task<Shipment> ShipRevisionAsync(string repository, string revision, string hostDirectory, TimeSpan timeout, CancellationToken cancellation = default) => inner.ShipRevisionAsync(repository, revision, hostDirectory, timeout, cancellation);
-        public Task<Shipment> ShipFilesAsync(string localDirectory, string hostDirectory, TimeSpan timeout, CancellationToken cancellation = default) => inner.ShipFilesAsync(localDirectory, hostDirectory, timeout, cancellation);
-        public Task<long> LogOffsetAsync(string logPath, TimeSpan timeout, CancellationToken cancellation = default) => inner.LogOffsetAsync(logPath, timeout, cancellation);
-        public Task<HostLogResult> WaitForLogAsync(string logPath, long fromOffset, System.Text.RegularExpressions.Regex success, IReadOnlyList<System.Text.RegularExpressions.Regex>? failures, TimeSpan timeout, CancellationToken cancellation = default) => inner.WaitForLogAsync(logPath, fromOffset, success, failures, timeout, cancellation);
-        public Task<FetchedDirectory> FetchDirectoryAsync(string hostDirectory, string localDirectory, TimeSpan timeout, CancellationToken cancellation = default) => inner.FetchDirectoryAsync(hostDirectory, localDirectory, timeout, cancellation);
-        public Task<CliTunnel> OpenCliTunnelAsync(int hostPort, TimeSpan readyTimeout, int localPort = 0, CancellationToken cancellation = default) => inner.OpenCliTunnelAsync(hostPort, readyTimeout, localPort, cancellation);
-    }
+    // The settlement and read scripts on this machine's real shell, each refusal among them, are SourceScriptShellTests'.
 
     [Fact]
     public async Task TheBeforeBootScopeIncludesEveryRootFileChosenByTheWindowsLinkPlan()

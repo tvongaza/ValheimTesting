@@ -18,6 +18,30 @@ public sealed class LocalGameHost : ScriptedGameHost
     public LocalGameHost(string name, HostShell shell) : this(name, UnixBash(shell, !OperatingSystem.IsWindows(), "this machine"), SystemProcessLauncher.Instance) { }
     internal LocalGameHost(string name, HostShell shell, IProcessLauncher launcher) : base(name, shell, launcher) { }
     public override GameHostKind Kind => GameHostKind.Local;
+
+    // Test seam: the host ThisMachine returns in this flow instead of a shell on this machine.
+    private static readonly AsyncLocal<IGameHost?> s_thisMachineForTest = new();
+
+    /// <summary>
+    /// This machine as every owned path that runs here reaches it (a local client's profile and its source settlement, its hosted
+    /// world, the process checks around its launch): a <see cref="LocalGameHost"/> on this machine's shell, unless a test replaced it
+    /// for its flow (<see cref="UseThisMachineForTest"/>).
+    /// </summary>
+    internal static IGameHost ThisMachine() => s_thisMachineForTest.Value ?? new LocalGameHost("this machine", HostShell.ThisMachine);
+
+    /// <summary>Test seam: <see cref="ThisMachine"/> returns <paramref name="host"/> in this flow until the scope is disposed.</summary>
+    internal static IDisposable UseThisMachineForTest(IGameHost host)
+    {
+        ArgumentNullException.ThrowIfNull(host);
+        var previous = s_thisMachineForTest.Value;
+        s_thisMachineForTest.Value = host;
+        return new ThisMachineScope(previous);
+    }
+
+    private sealed class ThisMachineScope(IGameHost? previous) : IDisposable
+    {
+        public void Dispose() => s_thisMachineForTest.Value = previous;
+    }
     internal override (string Executable, IReadOnlyList<string> Arguments) WrapperCommand() => (Shell.Executable, WrapperArguments(Shell));
     internal override bool IsTransportFailure(ProcessExit exit) => false;
     // A failure to launch can also mean access denial, an invalid cwd or resource pressure. Only the native missing-file

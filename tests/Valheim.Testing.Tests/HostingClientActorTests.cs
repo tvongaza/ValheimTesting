@@ -297,6 +297,10 @@ public sealed class HostingClientActorTests : IDisposable
 
     [Fact] public async Task AJoinRefusesAPeerOfTheWrongKind()
     {
+        // Which peer a join takes is the session's decision: this machine's world scripts answer in process (SourceScriptShellTests
+        // and HostedWorldOnHostShellTests run the real ones), so no step starts a shell.
+        var here = FakeServerHost.ThisMachine();
+        using var machine = LocalGameHost.UseThisMachineForTest(here);
         var report = new ScenarioReport("hosted");
         using var data = new FakeClientDataDirectory(Save);
         var notAPeer = PeerPlan(); notAPeer.JoinsHost = false; notAPeer.Join = "127.0.0.1:2456";
@@ -306,6 +310,7 @@ public sealed class HostingClientActorTests : IDisposable
         await session.StartAsync();
         var error = await Assert.ThrowsAsync<ArgumentException>(() => session.Join("other"));
         Assert.Contains("set joinsHost", error.Message);
+        Assert.Contains("world-reserve", here.Scripts); // the world placed in process, never through a shell
     }
 
     [Fact] public void APeerPlanJoinsTheHostOnly()

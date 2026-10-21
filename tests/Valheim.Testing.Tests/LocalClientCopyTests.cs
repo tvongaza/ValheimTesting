@@ -6,7 +6,8 @@ using Valheim.Testing.GameSessions;
 // #296 step 3: every owned client runs from a disposable loader profile of its install, made by the one stage owner
 // (HostedRuntimeStage on this machine), with the run's ValheimCLI set staged into the profile and the static check always run;
 // inPlace (--in-place) runs the install as it is and writes nothing into it. The profile tests run the real seed, stage and
-// retire scripts on this machine's shell, on a fake install; nothing launches.
+// retire scripts on this machine's shell, on a fake install; nothing launches. The tests of what a session decides from a copy's
+// source settlement answer this machine in process instead (InProcess).
 public sealed class LocalClientCopyTests : IDisposable
 {
     private readonly RegressionRig _rig = new();
@@ -33,6 +34,15 @@ public sealed class LocalClientCopyTests : IDisposable
         var local = new LocalGameHost("this machine", HostShell.ThisMachine);
         // A fake Valheim.app is unsigned, so the real macOS bundle check would refuse it (MacAppBundleTests covers that check).
         return new BundleAcceptingHost(local, assumeNoGame: true);
+    }
+
+    // This machine answered in process, for the tests of what a copy's owner decides (its verdict, its report step, what it journals,
+    // kept or retired), so no step starts a shell. SourceScriptShellTests compares the fake's settlement answers with the real scripts
+    // and names where the other scripts' real runs are. Every step that asks for this machine gets it for the test's flow.
+    private static (FakeServerHost Host, IDisposable Scope) InProcess()
+    {
+        var host = FakeServerHost.ThisMachine();
+        return (host, LocalGameHost.UseThisMachineForTest(host));
     }
 
     private static Dictionary<string, string> Tree(string root) =>
@@ -149,7 +159,9 @@ public sealed class LocalClientCopyTests : IDisposable
         plan.HostWorld = new() { World = new() { Source = fixture, Sha256 = new() }, WorldUid = "4242", SaveDirectory = Path.Combine(_rig.Root, "save") };
         string data = Path.Combine(_rig.Root, "data");
         using var journalDirectory = RunJournal.UseLocalDirectory(Path.Combine(data, "journal"));
-        var copy = await LocalClientCopy.PrepareAsync("host", plan, default, data, ThisMachine(), loader: (_, _) => null);
+        var (host, scope) = InProcess();
+        using var machine = scope;
+        var copy = await LocalClientCopy.PrepareAsync("host", plan, default, data, host, loader: (_, _) => null);
         var placement = new LocalClientPlacement();
         Assert.True(placement.Add(copy, plan));
         string changed = Directory.EnumerateFiles(_rig.Game, "*", SearchOption.AllDirectories).Order(StringComparer.Ordinal).First();
@@ -168,6 +180,7 @@ public sealed class LocalClientCopyTests : IDisposable
         Assert.True(File.Exists(Path.Combine(output, "source-changes", "host", "source-changes.json")));
         Assert.True(Assert.Single(report.Steps, step => step.Name == "remove the disposable client copy").Passed);
         Assert.False(Directory.Exists(copy.Runtime));
+        Assert.Contains("source-evidence", host.Scripts); // settled in process, never through a shell
     }
 
     // #612 r2 item 8: an actor that retires its own placement in a session (ClientActor.OnThisMachine) records a failing verdict in its
@@ -178,7 +191,9 @@ public sealed class LocalClientCopyTests : IDisposable
         plan.CliManifest = CliSet();
         string data = Path.Combine(_rig.Root, "data");
         using var journalDirectory = RunJournal.UseLocalDirectory(Path.Combine(data, "journal"));
-        var copy = await LocalClientCopy.PrepareAsync("client", plan, default, data, ThisMachine(), loader: (_, _) => null);
+        var (inProcess, scope) = InProcess();
+        using var machine = scope;
+        var copy = await LocalClientCopy.PrepareAsync("client", plan, default, data, inProcess, loader: (_, _) => null);
         var report = new ScenarioReport("retiring placement");
         var placement = new LocalClientPlacement { Report = report, Evidence = Path.Combine(_rig.Root, "session") };
         Assert.True(placement.Add(copy, plan));
@@ -188,6 +203,7 @@ public sealed class LocalClientCopyTests : IDisposable
 
         Assert.False(Assert.Single(report.Steps, step => step.Name.StartsWith("verify client's source install", StringComparison.Ordinal)).Passed);
         Assert.False(Directory.Exists(copy.Runtime));
+        Assert.Contains("source-evidence", inProcess.Scripts); // settled in process, never through a shell
     }
 
     // #612 r3 item 7: a settlement that throws before it compares anything (here the host the copy was prepared on is renamed) never
@@ -198,7 +214,9 @@ public sealed class LocalClientCopyTests : IDisposable
         plan.CliManifest = CliSet();
         string data = Path.Combine(_rig.Root, "data");
         using var journalDirectory = RunJournal.UseLocalDirectory(Path.Combine(data, "journal"));
-        var host = new RenamedHost(ThisMachine());
+        var (inProcess, scope) = InProcess();
+        using var machine = scope;
+        var host = new RenamedHost(inProcess);
         var copy = await LocalClientCopy.PrepareAsync("client", plan, default, data, host, loader: (_, _) => null);
         var report = new ScenarioReport("thrown settlement");
         var placement = new LocalClientPlacement { Report = report, Evidence = Path.Combine(_rig.Root, "session") };
@@ -214,6 +232,7 @@ public sealed class LocalClientCopyTests : IDisposable
         Assert.Contains("journalled kept", kept.Message);
         Assert.True(Directory.Exists(copy.Runtime));
         Assert.Contains("\"copy-kept\"", string.Concat(Directory.EnumerateFiles(Path.Combine(data, "journal"), "client.jsonl", SearchOption.AllDirectories).Select(File.ReadAllText)));
+        Assert.Contains("profile-seed", inProcess.Scripts); // prepared in process, never through a shell
     }
 
     // A host whose name a test changes after a copy was prepared on it.
