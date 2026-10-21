@@ -137,6 +137,59 @@ public sealed class LocalClientCopyTests : IDisposable
         Assert.Equal(before, Tree(source));
     }
 
+    // #612: a hosting client on this machine has its own placement (a standalone hosting-client run, PinnedServerRun's host mode).
+    // Its copy is settled by the session into the session's report and evidence folder, in its own step; a failing verdict never
+    // fails the retirement, and the copy is removed. Outside a session the same failure is thrown.
+    [ClientHostFact] public async Task AHostingClientsCopyIsSettledByTheSessionInItsOwnStep()
+    {
+        var plan = Plan(_rig.Game);
+        plan.CliManifest = CliSet();
+        string fixture = Path.Combine(_rig.Root, "fixture");
+        Directory.CreateDirectory(fixture);
+        plan.HostWorld = new() { World = new() { Source = fixture, Sha256 = new() }, WorldUid = "4242", SaveDirectory = Path.Combine(_rig.Root, "save") };
+        string data = Path.Combine(_rig.Root, "data");
+        using var journalDirectory = RunJournal.UseLocalDirectory(Path.Combine(data, "journal"));
+        var copy = await LocalClientCopy.PrepareAsync("host", plan, default, data, ThisMachine(), loader: (_, _) => null);
+        var placement = new LocalClientPlacement();
+        Assert.True(placement.Add(copy, plan));
+        string changed = Directory.EnumerateFiles(_rig.Game, "*", SearchOption.AllDirectories).Order(StringComparer.Ordinal).First();
+        File.AppendAllText(changed, " changed during the run");
+        var report = new ScenarioReport("hosted copy");
+        string output = Path.Combine(_rig.Root, "session");
+        Directory.CreateDirectory(output);
+
+        await using (new GameSession(report, output, "4242", server: null, [], CancellationToken.None,
+            token => new HostingClientActor("host", plan, output, placement, token))) { }
+
+        var step = Assert.Single(report.Steps, step => step.Name == "verify host's source install after the run (size and modified time)");
+        Assert.False(step.Passed);
+        Assert.Contains(Path.GetRelativePath(_rig.Game, changed).Replace('\\', '/'), step.Error);
+        Assert.StartsWith("failed: ", report.Provenance["sourceIntegrity.host"]);
+        Assert.True(File.Exists(Path.Combine(output, "source-changes", "host", "source-changes.json")));
+        Assert.True(Assert.Single(report.Steps, step => step.Name == "remove the disposable client copy").Passed);
+        Assert.False(Directory.Exists(copy.Runtime));
+    }
+
+    // #612 r2 item 8: an actor that retires its own placement in a session (ClientActor.OnThisMachine) records a failing verdict in its
+    // own step of the report; the retirement, which runs inside the actor's stop step, fails only for what it could not remove.
+    [ClientHostFact] public async Task ARetiringPlacementInASessionRecordsAFailingVerdictInItsOwnStep()
+    {
+        var plan = Plan(_rig.Game);
+        plan.CliManifest = CliSet();
+        string data = Path.Combine(_rig.Root, "data");
+        using var journalDirectory = RunJournal.UseLocalDirectory(Path.Combine(data, "journal"));
+        var copy = await LocalClientCopy.PrepareAsync("client", plan, default, data, ThisMachine(), loader: (_, _) => null);
+        var report = new ScenarioReport("retiring placement");
+        var placement = new LocalClientPlacement { Report = report, Evidence = Path.Combine(_rig.Root, "session") };
+        Assert.True(placement.Add(copy, plan));
+        File.AppendAllText(Directory.EnumerateFiles(_rig.Game, "*", SearchOption.AllDirectories).Order(StringComparer.Ordinal).First(), " changed");
+
+        await placement.RetireAsync();
+
+        Assert.False(Assert.Single(report.Steps, step => step.Name.StartsWith("verify client's source install", StringComparison.Ordinal)).Passed);
+        Assert.False(Directory.Exists(copy.Runtime));
+    }
+
     // #860: a client a scenario opens on this machine is admitted to the run's builds where its install is listed for the copy:
     // one the server cannot take is refused before anything is journalled or copied, and one that can carries its build.
     [ClientHostFact] public async Task AClientTheServerCannotTakeIsRefusedBeforeItsCopyAndOneThatCanCarriesItsBuild()

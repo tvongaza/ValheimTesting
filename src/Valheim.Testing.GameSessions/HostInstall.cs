@@ -335,12 +335,12 @@ public static class HostInstall
             RequireSame(sourceCheck.StagedBeforeBoot, new HostListing(loader.HostName, loader.Shell, loader.Root, staged, []),
                 kind + " staged files");
         }
-        if (sourceCheck.LinkedRootFiles.Count != 0)
+        if (sourceCheck.LinkedNativeFiles.Count != 0)
         {
-            var native = game.Files.Where(file => sourceCheck.LinkedRootFiles.ContainsKey(file.Key))
+            var native = game.Files.Where(file => sourceCheck.LinkedNativeFiles.ContainsKey(file.Key))
                 .ToDictionary(file => file.Key, file => file.Value, game.Names);
-            RequireSame(sourceCheck.LinkedRootFiles, new HostListing(game.HostName, game.Shell, game.Root, native, []),
-                kind + " linked root files");
+            RequireSame(sourceCheck.LinkedNativeFiles, new HostListing(game.HostName, game.Shell, game.Root, native, []),
+                kind + " linked native files");
         }
         if (!Pins(source, loader).Game.Equals(pinned.Game, StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException($"The source game changed after its loader profile was staged for {kind}; refuse this launch and prepare a new profile.");

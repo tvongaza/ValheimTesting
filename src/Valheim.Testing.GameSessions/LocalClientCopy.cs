@@ -168,9 +168,8 @@ internal sealed class LocalClientCopy
         Exception? integrity = null;
         try { if (verifySource) await SettleSourceAsync(null).ConfigureAwait(false); }
         catch (Exception error) { integrity = error; }
-        // A settlement that did not finish keeps the profile with its baseline and moved files, journalled kept, for env recover.
-        if (Volatile.Read(ref _sourceVerdict) is { KeepsProfile: true })
-            throw new IOException($"The disposable client profile {_runtime} is kept: its source settlement did not finish. valheim-test env status names it; env teardown settles and removes it.", integrity);
+        // A settlement that did not finish keeps the profile with its baseline and moved files, journalled kept, for env teardown.
+        Volatile.Read(ref _sourceVerdict)?.RequireRetirable();
         try
         {
             await HostedRuntimeStage.RetireAsync(_host, _runtime, _stage, StepTimeout).ConfigureAwait(false);

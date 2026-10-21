@@ -782,7 +782,7 @@ internal sealed class HostedServerRun : IServerPlacement
         }
         if (_runtime != null)
         {
-            bool keepProfile = false;
+            SourceVerdict? settled = null;
             if (!Prepared && _sourceCheck != null)
             {
                 // The install settled before the profile goes (its run folder holds the baseline and the moved files).
@@ -795,11 +795,11 @@ internal sealed class HostedServerRun : IServerPlacement
                 catch (IOException error) when (verdict.Verdict != SourceVerdictKind.Unknown) { failures.Add(error); Console.Error.WriteLine("Teardown: " + error.Message); }
                 catch (IOException) { }
                 // A settlement that did not finish keeps the profile, journalled kept by the settlement, so the run folder stays too.
-                keepProfile = verdict.KeepsProfile;
+                settled = verdict;
             }
             try
             {
-                if (keepProfile) throw new IOException($"Kept {Host.Name}:{RuntimeDirectory}: its source settlement did not finish. valheim-test env status names it; env teardown settles and removes it.");
+                settled?.RequireRetirable();
                 await retirement.HostAsync(Role.Host, Host, _loader ?? _runtime, RuntimeDirectory, launched, serverStopped, cleanup).ConfigureAwait(false);
                 // A campaign's prepared profile is journalled by its preparation; a standalone run's own profile here. A failed retire
                 // journals nothing more: the profile stays open in the journal, for env recover.

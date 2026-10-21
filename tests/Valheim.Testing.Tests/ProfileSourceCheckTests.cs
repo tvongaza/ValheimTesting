@@ -17,7 +17,7 @@ public sealed class ProfileSourceCheckTests : IDisposable
     }
 
     private async Task<ProfileSourceCheck> PrepareAsync(params string[] links) =>
-        ProfileSourceCheck.Prepare(await ProfileSourceCheck.InspectAsync(_host, _root, TimeSpan.FromSeconds(30)), links);
+        ProfileSourceCheck.Prepare(await ProfileSourceCheck.InspectAsync(_host, _root, TimeSpan.FromSeconds(30)), links, links.Length == 0 ? ProfileLayout.SourceExecutable : ProfileLayout.Linked);
 
     // The profile beside the install, as every owned launch path lays it out: <runs>/vt-prep-*/runtime, its parent holding the baseline.
     private string Runtime => Path.GetFullPath(Path.Combine(_root, "..", Path.GetFileName(_root) + "-runs", "vt-prep-test-client", "runtime"));
@@ -230,8 +230,8 @@ public sealed class ProfileSourceCheckTests : IDisposable
         Write("preloader_1.log", "after the run");
         var verdict = await RecoverAsync(baseline.Fields);
         Assert.Equal(SourceVerdictKind.Restored, verdict!.Verdict);
-        Assert.Equal("after the run", File.ReadAllText(Path.Combine(Recovered, "source-added", "preloader_1.log")));
-        Assert.Contains("\"verdict\": \"restored\"", File.ReadAllText(Path.Combine(Recovered, "source-changes.json")));
+        Assert.Equal("after the run", File.ReadAllText(Path.Combine(RecoveredProfile, "added", "preloader_1.log")));
+        Assert.Contains("\"verdict\": \"restored\"", File.ReadAllText(Path.Combine(RecoveredProfile, "source-changes.json")));
         Assert.False(File.Exists(baseline.Fields["baseline"])); // settled and journalled: the baseline went last
         Assert.Equal([JournalEntry.SourceBaseline, JournalEntry.SourceMoveIntended, JournalEntry.SourceSettled], _journal.Select(entry => entry.Kind));
 
@@ -241,11 +241,14 @@ public sealed class ProfileSourceCheckTests : IDisposable
         Assert.Contains("differs from its journalled SHA-256", error.Message);
     }
 
-    private string Recovered => Path.Combine(_root + "-runs", "run", "recovered-client");
+    // The copy's one recovered folder (its journal actor's, beside its logs), and in it this profile's own source-changes-<id>.
+    private string Recovered => Path.Combine(_root + "-runs", "run", "recovered-regression-test");
+    private string RecoveredProfile => Assert.Single(Directory.GetDirectories(Recovered, "source-changes-*"));
     private Task PersistAsync(ProfileSourceCheck check) =>
         check.PersistAsync(_host, Path.GetFullPath(Runtime), "client", entry => { _journal.Add(entry); return Task.CompletedTask; }, TimeSpan.FromSeconds(30));
-    private Task<SourceVerdict?> RecoverAsync(IReadOnlyDictionary<string, string> fields) => ProfileSourceCheck.RecoverAsync(_host, Path.GetFullPath(Runtime),
-        "regression-test", fields, _ => Recovered, entry => { _journal.Add(entry); return Task.CompletedTask; }, TimeSpan.FromSeconds(60));
+    private Task<SourceVerdict?> RecoverAsync(IReadOnlyDictionary<string, string> fields, Func<string, bool>? keptApart = null) =>
+        ProfileSourceCheck.RecoverAsync(_host, Path.GetFullPath(Runtime), "regression-test", fields, Recovered, keptApart ?? (_ => false),
+            entry => { _journal.Add(entry); return Task.CompletedTask; }, TimeSpan.FromSeconds(60));
 
     // #612 item 1: the baseline goes only after source-settled is journalled. One gone without that line is an explicit verdict,
     // never a copy kept forever; one gone after it is settled, and what it had moved but not kept is kept now.
@@ -270,7 +273,7 @@ public sealed class ProfileSourceCheckTests : IDisposable
         File.WriteAllText(Path.Combine(check.MovedFilesFolder(Runtime), "preloader_1.log"), "moved, not kept");
         var adopted = await RecoverAsync(fields);
         Assert.Equal(SourceVerdictKind.Restored, adopted!.Verdict);
-        Assert.Equal("moved, not kept", File.ReadAllText(Path.Combine(Recovered, "source-added", "preloader_1.log")));
+        Assert.Equal("moved, not kept", File.ReadAllText(Path.Combine(RecoveredProfile, "added", "preloader_1.log")));
         Assert.False(Directory.Exists(check.MovedFilesFolder(Runtime)));
     }
 
@@ -303,7 +306,7 @@ public sealed class ProfileSourceCheckTests : IDisposable
         var settled = await RecoverAsync(new Dictionary<string, string>(fields) { ["sourceVerdict"] = "Failed" });
         Assert.Equal(SourceVerdictKind.Restored, settled!.Verdict);
         Assert.True(settled.Settled);
-        Assert.Equal("the game's", File.ReadAllText(Path.Combine(Recovered, "source-added", "preloader_1.log")));
+        Assert.Equal("the game's", File.ReadAllText(Path.Combine(RecoveredProfile, "added", "preloader_1.log")));
         Assert.False(File.Exists(fields["baseline"]));
     }
 
@@ -332,6 +335,119 @@ public sealed class ProfileSourceCheckTests : IDisposable
         Assert.Equal(JournalEntry.CopyKept, _journal[^1].Kind);
     }
 
+    // #612 r2 item 2: a refusal that cannot change (here a profile whose moved-files folder would lie inside the install) is a finished
+    // failure naming it, never a retry: the profile may retire, and what the settlement kept is journalled for env teardown.
+    [Fact]
+    public async Task ARefusedSettlementIsAFinishedFailureAndTheProfileRetires()
+    {
+        Write("game.bin", "game");
+        var check = await PrepareAsync();
+        string inside = Path.Combine(_root, "vt-prep-inside", "runtime");
+        Write("preloader_1.log", "the game's");
+
+        var verdict = await check.SettleAsync(_host, SourceSettlement.Run("client", inside, Output),
+            entry => { _journal.Add(entry); return Task.CompletedTask; }, TimeSpan.FromSeconds(60));
+
+        Assert.Equal(SourceVerdictKind.Failed, verdict.Verdict);
+        Assert.True(verdict.Settled);
+        verdict.RequireRetirable();
+        Assert.Contains("refused", verdict.Reason);
+        Assert.Contains("Resolve it by hand", verdict.Reason);
+        Assert.True(File.Exists(Path.Combine(_root, "preloader_1.log")));
+        Assert.Equal([JournalEntry.SourceMoveIntended, JournalEntry.CopyKept, JournalEntry.SourceSettled], _journal.Select(entry => entry.Kind));
+        Assert.Equal(check.MovedFilesFolder(inside), _journal[1].Fields["runtime"]);
+    }
+
+    // #612 r2 item 2: each recovered profile has its own folder, and a folder already there is a finished refusal, never a retry.
+    [Fact]
+    public async Task ARecoveryIntoAFolderAlreadyThereIsAFinishedRefusal()
+    {
+        Write("game.bin", "game");
+        Directory.CreateDirectory(Parent);
+        var check = await PrepareAsync();
+        await PersistAsync(check);
+        var fields = _journal[0].Fields;
+        string id = Path.GetFileName(fields["sourceAdded"])[(ProfileSourceCheck.AddedFolder.Length + 1)..];
+        Directory.CreateDirectory(Path.Combine(Recovered, "source-changes-" + id, "added"));
+        Write("preloader_1.log", "the game's");
+
+        var verdict = await RecoverAsync(fields);
+
+        Assert.Equal(SourceVerdictKind.Failed, verdict!.Verdict);
+        Assert.True(verdict.Settled);
+        Assert.Contains("already exists", verdict.Reason);
+        Assert.True(File.Exists(Path.Combine(check.MovedFilesFolder(Runtime), "preloader_1.log"))); // kept where it was, journalled
+        Assert.Contains(_journal, entry => entry.Kind == JournalEntry.CopyKept && entry.Fields["runtime"] == check.MovedFilesFolder(Runtime));
+    }
+
+    // #612 r2 item 3: a moved-files folder the run kept on purpose (past the size limits, or no evidence folder) has its own kept
+    // entry: a recovery never adopts it as "not kept yet", and leaves it to env teardown.
+    [Fact]
+    public async Task ARecoveryLeavesAMovedFilesFolderTheRunKeptOnPurpose()
+    {
+        Write("game.bin", "game");
+        Directory.CreateDirectory(Parent);
+        var check = await PrepareAsync();
+        await PersistAsync(check);
+        var fields = new Dictionary<string, string>(_journal[0].Fields) { ["sourceVerdict"] = "Restored" };
+        File.Delete(fields["baseline"]);
+        Directory.CreateDirectory(check.MovedFilesFolder(Runtime));
+        File.WriteAllText(Path.Combine(check.MovedFilesFolder(Runtime), "crash.dmp"), "past the size limits");
+
+        Assert.Null(await RecoverAsync(fields, path => path == check.MovedFilesFolder(Runtime)));
+
+        Assert.True(File.Exists(Path.Combine(check.MovedFilesFolder(Runtime), "crash.dmp")));
+        Assert.False(Directory.Exists(Recovered));
+    }
+
+    // #612 r2 item 1: a runtime written with / on Windows (an inventory may) is the same folder to the evidence step's guard, which
+    // compares full paths; before, GetDirectoryName's \ never equalled the written / and every settlement was refused. Real pwsh.
+    [Fact]
+    public async Task AProfileFolderWrittenWithForwardSlashesSettlesOnWindows()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        Write("game.bin", "game");
+        Directory.CreateDirectory(Parent);
+        var check = await PrepareAsync();
+        Write("preloader_1.log", "the game's");
+
+        var verdict = await check.SettleAsync(_host, SourceSettlement.Run("client", Runtime.Replace('\\', '/'), Output),
+            entry => { _journal.Add(entry); return Task.CompletedTask; }, TimeSpan.FromSeconds(60));
+
+        Assert.Equal((SourceVerdictKind.Restored, true), (verdict.Verdict, verdict.Settled));
+        Assert.Empty(Directory.EnumerateFileSystemEntries(Parent));
+    }
+
+    // #612 r2 item 6: the Mac server's native code lies under valheim_server/, not at the root. Every native file the link table names
+    // is re-checked before each boot, so an executable swapped in the install after staging is refused before the server starts.
+    [Fact]
+    public async Task AMacServersLinkedExecutableIsRecheckedBeforeEachBoot()
+    {
+        Write("valheim_server/Valheim", "the server");
+        Write("valheim_server/libsteam_api.dylib", "steam");
+        Write("valheim_server/Data/Managed/assembly_valheim.dll", "game code");
+        var source = await ProfileSourceCheck.InspectAsync(_host, _root, TimeSpan.FromSeconds(30));
+        var check = ProfileSourceCheck.Prepare(source, ["valheim_server/Valheim", "valheim_server/libsteam_api.dylib"], ProfileLayout.Linked);
+        Assert.Contains("valheim_server/Valheim", check.LinkedNativeFiles.Keys);
+        Assert.Contains("valheim_server/libsteam_api.dylib", check.BeforeBoot.Keys);
+        string profile = Path.Combine(Parent, "runtime");
+        FakeServerHost.CopyDirectory(_root, profile); // a stand-in for the linked profile
+        File.AppendAllText(Path.Combine(_root, "valheim_server", "Valheim"), " swapped after staging");
+
+        var error = await Assert.ThrowsAnyAsync<Exception>(() => HostInstall.CheckProfilePinsAsync(_host, new InstallPins(), profile, profile, check,
+            "prepared server profile before launch", TimeSpan.FromSeconds(30), CancellationToken.None));
+
+        Assert.Contains("valheim_server/Valheim", error.Message);
+    }
+
+    [Fact]
+    public void AnUnknownStepNameNeverCutsAWindowsPathInTheReason()
+    {
+        Assert.Equal("verify client's source install after the run (unknown: not compared)",
+            SourceVerdict.NotCompared("client", @"its source baseline C:\vt\runs\x is gone").StepName);
+        Assert.Equal("verify client's source install after the run (unknown: stop not proven)", SourceVerdict.Unknown("client", "C:\\x still runs").StepName);
+    }
+
     // #612 item 4: a linked profile's game cannot write into the install, so what appears there is named, left in place and fails
     // nothing; in place, nothing is moved when a file also changed, and the verdict names every path.
     [Fact]
@@ -339,7 +455,7 @@ public sealed class ProfileSourceCheckTests : IDisposable
     {
         Write("game.bin", "game");
         Directory.CreateDirectory(Parent);
-        var linked = ProfileSourceCheck.Prepare(await ProfileSourceCheck.InspectAsync(_host, _root, TimeSpan.FromSeconds(30)), ["game.bin"]);
+        var linked = ProfileSourceCheck.Prepare(await ProfileSourceCheck.InspectAsync(_host, _root, TimeSpan.FromSeconds(30)), ["game.bin"], ProfileLayout.Linked);
         Assert.True(linked.Linked);
         Write("steamapps/appmanifest.acf", "Steam wrote this");
 
@@ -398,7 +514,7 @@ public sealed class ProfileSourceCheckTests : IDisposable
         string source = @"C:\valheim", runtime = @"C:\vt\vt-prep-test\runtime";
         Directory.CreateDirectory(host.Local(source));
         File.WriteAllText(Path.Combine(host.Local(source), "game.bin"), "game");
-        var check = ProfileSourceCheck.Prepare(await ProfileSourceCheck.InspectAsync(host, source, TimeSpan.FromSeconds(30)), []);
+        var check = ProfileSourceCheck.Prepare(await ProfileSourceCheck.InspectAsync(host, source, TimeSpan.FromSeconds(30)), [], ProfileLayout.SourceExecutable);
         File.WriteAllText(Path.Combine(host.Local(source), "game.bin."), "a name Windows trims");
 
         var verdict = await check.SettleAsync(host, SourceSettlement.Run("client", runtime, Output), _ => Task.CompletedTask, TimeSpan.FromSeconds(30));
@@ -452,12 +568,14 @@ public sealed class ProfileSourceCheckTests : IDisposable
     {
         Write("note\n", "a name ending in a line break");
         Write("note", "the install's own");
+        Write("folder\n/inside.log", "in a folder whose name ends in a line break");
         string keep = Path.Combine(_root + "-runs", "keep");
 
-        string reply = await SettleScript(keep, ["note\n"], []);
+        string reply = await SettleScript(keep, ["note\n", "folder\n/inside.log"], []);
 
         Assert.Contains("VT-MOVED " + B64("note\n"), reply);
         Assert.Equal("a name ending in a line break", File.ReadAllText(Path.Combine(keep, "note\n")));
+        Assert.Equal("in a folder whose name ends in a line break", File.ReadAllText(Path.Combine(keep, "folder\n", "inside.log")));
         Assert.Equal("the install's own", File.ReadAllText(Path.Combine(_root, "note")));
     }
 
@@ -500,15 +618,15 @@ public sealed class ProfileSourceCheckTests : IDisposable
         File.WriteAllText(Path.Combine(_root, "valheim_Data", "data.unity3d"), "game data");
         var source = await ProfileSourceCheck.InspectAsync(_host, _root, TimeSpan.FromSeconds(30));
         var plan = HostedRuntimeStage.PlanLinkedProfile(Valheim.Testing.Game.ClientPlatform.Windows, source.Files.Keys);
-        var check = ProfileSourceCheck.Prepare(source, plan.Links);
+        var check = ProfileSourceCheck.Prepare(source, plan.Links.Where(path => !path.Contains('/')), ProfileLayout.Linked); // Windows checks its root files
 
         Assert.Contains("UnityPlayer.dll", check.BeforeBoot.Keys);
         Assert.Contains("steam_api64.dll", check.BeforeBoot.Keys);
         Assert.DoesNotContain("unrelated.txt", check.BeforeBoot.Keys);
-        Assert.Contains("valheim.exe", check.LinkedRootFiles.Keys);
-        Assert.Contains("valheim_server.exe", check.LinkedRootFiles.Keys);
-        Assert.Contains("UnityCrashHandler64.exe", check.LinkedRootFiles.Keys);
-        Assert.DoesNotContain("valheim_Data/data.unity3d", check.LinkedRootFiles.Keys);
+        Assert.Contains("valheim.exe", check.LinkedNativeFiles.Keys);
+        Assert.Contains("valheim_server.exe", check.LinkedNativeFiles.Keys);
+        Assert.Contains("UnityCrashHandler64.exe", check.LinkedNativeFiles.Keys);
+        Assert.DoesNotContain("valheim_Data/data.unity3d", check.LinkedNativeFiles.Keys);
     }
 
     [Fact]

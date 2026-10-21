@@ -252,7 +252,8 @@ internal static partial class HostedRuntimeStage
         var plan = linked ? PlanLinkedProfile(storage.Platform switch { "windows" => ClientPlatform.Windows, "macos" => ClientPlatform.MacOS, _ => ClientPlatform.Linux },
             game.Files.Keys) : new LinkedProfileFiles([], []);
         string[] gameLinks = [.. plan.Links];
-        var sourceCheck = ProfileSourceCheck.Prepare(game, gameLinks);
+        // The native code re-checked before each boot (until the link table names it: the root files).
+        var sourceCheck = ProfileSourceCheck.Prepare(game, gameLinks.Where(path => !path.Contains('/')), storage.Layout);
         if (plan.LeftOut.Count != 0)
             Console.WriteLine($"The profile {destination} on {host.Name} leaves out {ProfileLeftOut.Describe(plan.LeftOut)}.");
         string payload = Path.Combine(Path.GetTempPath(), "valheim-profile-stage-" + Guid.NewGuid().ToString("N"));

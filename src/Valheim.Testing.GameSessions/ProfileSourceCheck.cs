@@ -25,7 +25,7 @@ internal sealed class ProfileSourceCheck
     private const long BaselineLimit = 64L << 20;
 
     private readonly IReadOnlyDictionary<string, string> _beforeBoot;
-    private readonly IReadOnlyDictionary<string, string> _linkedRootFiles;
+    private readonly IReadOnlyDictionary<string, string> _linkedNativeFiles;
     private IReadOnlyDictionary<string, string> _stagedBeforeBoot = new Dictionary<string, string>();
     private HostListing? _preparedGame, _preparedLoader;
     // A baseline read back from its journal keeps the comparison its run persisted.
@@ -33,7 +33,7 @@ internal sealed class ProfileSourceCheck
 
     private ProfileSourceCheck(HostListing source, IReadOnlyDictionary<string, string> beforeBoot,
         IReadOnlyDictionary<string, string> linkedRootFiles, bool linked, string id)
-    { Source = source; _beforeBoot = beforeBoot; _linkedRootFiles = linkedRootFiles; Linked = linked; Id = id; }
+    { Source = source; _beforeBoot = beforeBoot; _linkedNativeFiles = linkedRootFiles; Linked = linked; Id = id; }
 
     /// <summary>Whether the game launches from a linked profile (it hard-links game files), so it cannot add a file to the install.</summary>
     internal bool Linked { get; }
@@ -42,7 +42,7 @@ internal sealed class ProfileSourceCheck
 
     internal HostListing Source { get; }
     internal IReadOnlyDictionary<string, string> BeforeBoot => _beforeBoot;
-    internal IReadOnlyDictionary<string, string> LinkedRootFiles => _linkedRootFiles;
+    internal IReadOnlyDictionary<string, string> LinkedNativeFiles => _linkedNativeFiles;
     internal IReadOnlyDictionary<string, string> StagedBeforeBoot => _stagedBeforeBoot;
 
     // steam-runtime/ is on DYLD_LIBRARY_PATH, so the whole folder is compared before boot: an extra file there could load.
@@ -54,21 +54,21 @@ internal sealed class ProfileSourceCheck
     internal bool HashAfterRun => _contentMode ?? HashAfterRunOverride.Value ?? Environment.GetEnvironmentVariable(HashAfterRunVariable) == "1";
 
     /// <summary>The preparation row: retain the one complete content listing and derive every later narrow scope from it.</summary>
-    internal static ProfileSourceCheck Prepare(HostListing source, IEnumerable<string> linkedFiles)
+    internal static ProfileSourceCheck Prepare(HostListing source, IEnumerable<string> checkedFiles, ProfileLayout layout)
     {
         ArgumentNullException.ThrowIfNull(source);
         if (!source.Files.Keys.ToHashSet(source.Names).SetEquals(source.States.Keys))
             throw new InvalidDataException($"The preparation listing of {source.Root} on {source.HostName} has no size and modified time for every file.");
-        // Every root file the link plan selected (any linked layout) is a write-through hard link, including the game and
-        // crash-handler executables. Nested game data is covered by the managed-code pins; it is not promoted into this root-file row.
-        string[] links = linkedFiles.ToArray();
-        string[] rootFiles = links.Where(path => !path.Contains('/')).ToArray();
-        string[] paths = [.. InstallPins.ManagedFolders, .. rootFiles.Select(HostInstall.LiteralPathPattern)];
+        // The link table's native code (LinkedProfileFiles.Checked: the executable and the libraries beside it, at the root on Windows
+        // and Linux, in valheim_server/ on the Mac server) is write-through hard links, every entry re-checked before each boot. Other
+        // game data is covered by the managed-code pins.
+        string[] native = checkedFiles.ToArray();
+        string[] paths = [.. InstallPins.ManagedFolders, .. native.Select(HostInstall.LiteralPathPattern)];
         bool ignoreCase = source.Shell == HostShellKind.PowerShell;
         Dictionary<string, string> Expected(IEnumerable<string> selected) => source.Files
             .Where(file => HostInstall.MatchesAny(file.Key, selected, ignoreCase))
             .ToDictionary(file => file.Key, file => file.Value, source.Names);
-        return new ProfileSourceCheck(source, Expected(paths), Expected(rootFiles.Select(HostInstall.LiteralPathPattern)), links.Length != 0,
+        return new ProfileSourceCheck(source, Expected(paths), Expected(native.Select(HostInstall.LiteralPathPattern)), layout == ProfileLayout.Linked,
             Guid.NewGuid().ToString("N")[..8]);
     }
 
@@ -123,9 +123,9 @@ internal sealed class ProfileSourceCheck
         .Concat((copied ?? []).Select(HostInstall.LiteralPathPattern))
         .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
 
-    /// <summary>The before-boot row: game/loader pin paths plus root files linked into a linked profile.</summary>
+    /// <summary>The before-boot row: game/loader pin paths plus the native files linked into a linked profile.</summary>
     internal string[] ProfileBeforeBootPaths(bool includePlugins) =>
-        InstallPins.PinPaths.Concat(_linkedRootFiles.Keys.Select(HostInstall.LiteralPathPattern))
+        InstallPins.PinPaths.Concat(_linkedNativeFiles.Keys.Select(HostInstall.LiteralPathPattern))
         .Concat(_stagedBeforeBoot.Keys.Select(HostInstall.LiteralPathPattern))
         .Concat(StagesSteamRuntime ? [SteamRuntimeFolder] : [])
         .Concat(includePlugins ? ["BepInEx/plugins", "BepInEx/scripts"] : [])
@@ -138,9 +138,9 @@ internal sealed class ProfileSourceCheck
         .Concat(includePlugins ? ["BepInEx/plugins", "BepInEx/scripts"] : [])
         .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
 
-    /// <summary>The source side of the before-boot row: game-code pins plus root files linked or launched directly from the source.</summary>
+    /// <summary>The source side of the before-boot row: game-code pins plus the native files linked from the source.</summary>
     internal string[] SourceBeforeBootPaths() =>
-        InstallPins.ManagedFolders.Concat(_linkedRootFiles.Keys.Select(HostInstall.LiteralPathPattern))
+        InstallPins.ManagedFolders.Concat(_linkedNativeFiles.Keys.Select(HostInstall.LiteralPathPattern))
         .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
 
     private sealed record PersistedFile(string Path, long Size, string Modified, string Sha256);
@@ -177,27 +177,29 @@ internal sealed class ProfileSourceCheck
 
     /// <summary>
     /// A recovery's settlement of the profile <paramref name="runtime"/> of a copy whose journalled <paramref name="fields"/> name a
-    /// persisted baseline (<see cref="JournalEntry.SourceBaseline"/>): what the game added goes to <paramref name="recoveredIn"/>
-    /// (<c>recovered-&lt;actor&gt;</c>). Null when none was journalled, or when the run settled the install itself (its
+    /// persisted baseline (<see cref="JournalEntry.SourceBaseline"/>): what the game added goes to this profile's own
+    /// <c>source-changes-&lt;id&gt;</c> folder in <paramref name="recoveredIn"/> (the copy's <c>recovered-&lt;actor&gt;</c>, beside its logs),
+    /// with its <c>source-changes.json</c>; a moved-files folder <paramref name="keptApart"/> names (journalled kept on its own) is left
+    /// to its owner, <c>env teardown</c>. Null when none was journalled, or when the run settled the install itself (its
     /// <see cref="JournalEntry.SourceSettled"/>) and kept everything it moved. A baseline whose SHA-256 or root differs from the
     /// journal's is refused before anything is moved or removed. A baseline that is gone although no settlement was journalled is
     /// its own verdict, never a reason to keep the copy: what was moved is kept, and the install is named as not compared.
     /// </summary>
     internal static async Task<SourceVerdict?> RecoverAsync(IGameHost host, string runtime, string actor, IReadOnlyDictionary<string, string> fields,
-        Func<string, string> recoveredIn, Func<JournalEntry, Task> journal, TimeSpan timeout, CancellationToken cancellation = default)
+        string recoveredIn, Func<string, bool> keptApart, Func<JournalEntry, Task> journal, TimeSpan timeout, CancellationToken cancellation = default)
     {
         if (!fields.TryGetValue("baseline", out string? path)) return null;
         actor = fields.GetValueOrDefault("sourceActor") ?? actor;
         string root = fields.GetValueOrDefault("sourceRoot") ?? "", sha256 = fields.GetValueOrDefault("baselineSha256") ?? "";
-        var where = SourceSettlement.Recovery(actor, runtime, recoveredIn(actor));
+        string id = Leaf(fields.GetValueOrDefault("sourceAdded") ?? AddedFolder)[AddedFolder.Length..].TrimStart('-');
+        var where = SourceSettlement.Recovery(actor, runtime, HostPath.Join(recoveredIn, "source-changes-" + (id.Length == 0 ? "profile" : id))) with { KeptApart = keptApart };
         byte[]? bytes = await HostClientPreflight.Read(host, path, timeout, cancellation, BaselineLimit).ConfigureAwait(false);
         if (bytes == null)
         {
             // The baseline goes only after its settlement was journalled, so without one it was removed by hand or by a run before
             // that order: keep whatever was moved, and name the install as not compared.
             var orphan = new ProfileSourceCheck(new HostListing(host.Name, host.Shell.Kind, root, new Dictionary<string, string>(), []),
-                new Dictionary<string, string>(), new Dictionary<string, string>(), linked: false,
-                Leaf(fields.GetValueOrDefault("sourceAdded") ?? AddedFolder)[AddedFolder.Length..].TrimStart('-'));
+                new Dictionary<string, string>(), new Dictionary<string, string>(), linked: false, id);
             var (kept, _) = await orphan.KeepAsync(host, where, journal, timeout, cancellation).ConfigureAwait(false);
             await orphan.DropAsync(host, where, kept.Count == 0, timeout, cancellation).ConfigureAwait(false);
             if (kept.Count == 0 && fields.ContainsKey("sourceVerdict")) return null;
@@ -255,7 +257,7 @@ internal sealed class ProfileSourceCheck
             new(where.Actor, host.Name, Source.Root, mode, kind, kept, found.Changed, found.Missing, found.MissingDirectories,
                 found.Added.Select(path => new SourceNotMoved(path, notMoved.GetValueOrDefault(path) ?? "still in the install"))
                     .Concat(found.AddedDirectories.Select(path => new SourceNotMoved(path + "/", notMoved.GetValueOrDefault(path) ?? "still in the install"))).ToList(),
-                removed, reason) { Settled = settled };
+                removed, reason) { Settled = settled, Profile = where.Runtime };
         SourceVerdict verdict;
         string? evidence = null;
         try
@@ -290,10 +292,25 @@ internal sealed class ProfileSourceCheck
                 ("missing", verdict.Missing.Count.ToString(CultureInfo.InvariantCulture)), ("notMoved", verdict.NotMoved.Count.ToString(CultureInfo.InvariantCulture)))).ConfigureAwait(false);
             await DropAsync(host, where, evidence != null || kept.Count == 0, timeout, cancellation).ConfigureAwait(false);
         }
+        catch (SourceRefusedException refused)
+        {
+            // A refusal that cannot change is a finished failure, never a retry: the profile retires as usual, and what was moved stays
+            // on the host, named and journalled kept for env teardown.
+            verdict = Verdict(SourceVerdictKind.Failed, refused.Message + ". Resolve it by hand; env teardown removes the moved files it kept");
+            try
+            {
+                await journal(JournalEntry.Of(JournalEntry.CopyKept, ("runtime", KeepFolder(where.Parent)), ("stage", ""), ("parent", where.Parent),
+                    ("holds", AddedFolder), ("why", "its source settlement was refused: " + refused.Message))).ConfigureAwait(false);
+                await journal(JournalEntry.Of(JournalEntry.SourceSettled, ("runtime", where.Runtime), ("sourceVerdict", verdict.Verdict.ToString()),
+                    ("refused", refused.Message))).ConfigureAwait(false);
+            }
+            catch (Exception lost) { Console.Error.WriteLine($"Warning: could not journal the refused settlement of {where.Actor} on {host.Name}: {lost.Message}"); }
+        }
         catch (Exception error)
         {
-            // An abandoned cleanup included. The profile, its baseline and its moved files stay, journalled kept, so a recovery settles
-            // them again; the evidence fetched so far is in the run's folder too.
+            // Anything else may pass (a host that failed or timed out, an abandoned cleanup, an I/O error on a move, a journal that
+            // refused its line). The profile, its baseline and its moved files stay, journalled kept, so a recovery settles them again;
+            // the evidence fetched so far is in the run's folder too.
             verdict = Verdict(SourceVerdictKind.Failed, "the settlement did not finish: " + error.Message, settled: false);
             if (where.RecoveredIn == null)
                 try
@@ -357,7 +374,7 @@ internal sealed class ProfileSourceCheck
                 ["folders"] = string.Join('\n', found.AddedDirectories.Where(path => !NamesInstall(path)).Select(Encode)),
             }, timeout, cancellation).ConfigureAwait(false)).EnsureSuccess($"Moving what the run added out of {Source.Root} on {host.Name}");
         if (InteractiveClient.Line(result.Stdout, "VT-SETTLE-REFUSED ") is { } refused)
-            throw new IOException($"The source install {Source.Root} on {host.Name} was not settled: {refused}.");
+            throw new SourceRefusedException($"the host refused to settle {Source.Root} on {host.Name}: {refused}");
         if (InteractiveClient.Line(result.Stdout, "VT-SETTLED") == null)
             throw new HostOperationException($"Unexpected reply while settling {Source.Root} on {host.Name}", result);
         foreach (string line in result.Stdout.Split('\n'))
@@ -376,6 +393,8 @@ internal sealed class ProfileSourceCheck
         Func<JournalEntry, Task> journal, TimeSpan timeout, CancellationToken cancellation)
     {
         string keep = KeepFolder(where.Parent);
+        // A folder the run kept on purpose (past the size limits, or no evidence folder) has its own kept entry: env teardown's, not ours.
+        if (where.KeptApart?.Invoke(keep) == true) return ([], null);
         HostListing? moved;
         try { moved = await ListAsync(host, keep, content: true, timeout, cancellation).ConfigureAwait(false); }
         catch (DirectoryNotFoundException) { moved = null; }
@@ -397,7 +416,7 @@ internal sealed class ProfileSourceCheck
             await host.FetchDirectoryAsync(keep, Path.Combine(evidence, "added"), timeout, cancellation).ConfigureAwait(false);
         }
         return (files.Select(file => new SourceAddedFile(file.Key, Bytes(file.Key), file.Value,
-            where.RecoveredIn != null ? HostPath.Join(where.RecoveredIn, AddedFolder, file.Key)
+            where.RecoveredIn != null ? HostPath.Join(where.RecoveredIn, "added", file.Key)
             : evidence != null ? "added/" + file.Key : host.Name + ":" + HostPath.Join(keep, file.Key))).ToList(), evidence);
     }
 
@@ -405,14 +424,15 @@ internal sealed class ProfileSourceCheck
     // no file), or in a recovery moved into recovered-<actor>; the baseline goes last.
     private async Task DropAsync(IGameHost host, SourceSettlement where, bool dropMoved, TimeSpan timeout, CancellationToken cancellation)
     {
+        bool apart = where.KeptApart?.Invoke(KeepFolder(where.Parent)) == true;
         var reply = (await host.RunAsync(host.Shell.Kind == HostShellKind.PowerShell ? SourceSettleScripts.PowerShellEvidence : SourceSettleScripts.BashEvidence,
             new Dictionary<string, string>
             {
-                ["parent"] = where.Parent, ["keep"] = KeepFolder(where.Parent), ["added"] = dropMoved && where.RecoveredIn == null ? "1" : "",
-                ["recovered"] = where.RecoveredIn ?? "",
+                ["parent"] = where.Parent, ["keep"] = KeepFolder(where.Parent), ["added"] = dropMoved && where.RecoveredIn == null && !apart ? "1" : "",
+                ["recovered"] = apart ? "" : where.RecoveredIn ?? "",
             }, timeout, cancellation).ConfigureAwait(false)).EnsureSuccess($"Settling the moved files of {where.Runtime} on {host.Name}");
         if (InteractiveClient.Line(reply.Stdout, "VT-SOURCE-REFUSED ") is { } refused)
-            throw new IOException($"The files moved out of the source install were not kept: {refused}.");
+            throw new SourceRefusedException($"the host refused to keep the files moved out of {Source.Root} on {host.Name}: {refused}");
         if (InteractiveClient.Line(reply.Stdout, "VT-SOURCE-SETTLED") == null)
             throw new HostOperationException($"Unexpected reply while settling the moved files of {where.Runtime} on {host.Name}", reply);
     }

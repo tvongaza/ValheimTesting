@@ -54,19 +54,34 @@ internal sealed record SourceVerdict(string Actor, string Host, string Root, str
     };
 
     /// <summary>
-    /// False when the settlement did not finish (a host that failed, an abandoned cleanup, a journal that refused its line): the
-    /// profile, its baseline and its moved files stay, journalled kept, for a recovery to settle again.
+    /// False when the settlement did not finish for a reason that can pass (a host that failed or timed out, an abandoned cleanup,
+    /// an I/O error on a move, a journal that refused its line): the profile, its baseline and its moved files stay, journalled
+    /// kept, for a recovery to settle again. A refusal that cannot change is a finished <see cref="SourceVerdictKind.Failed"/>.
     /// </summary>
     public bool Settled { get; init; } = true;
 
+    /// <summary>The profile the verdict is about (its journalled runtime), for the one kept-profile message.</summary>
+    [JsonIgnore] internal string? Profile { get; init; }
+
     /// <summary>Whether the caller must keep the profile instead of retiring it: a settlement that did not finish (<see cref="Settled"/>).</summary>
     [JsonIgnore] internal bool KeepsProfile => !Settled;
+
+    /// <summary>
+    /// The one answer to a caller about to retire the profile: nothing when it may, else the owner's kept-profile refusal (the
+    /// settlement journalled it kept already), which the caller reports instead of retiring.
+    /// </summary>
+    internal void RequireRetirable()
+    {
+        if (KeepsProfile) throw new SourceProfileKeptException($"{Actor}'s profile {Profile} is kept: its source settlement did not finish ({Reason}). " +
+            "valheim-test env status names it; env teardown settles the install again and removes it.");
+    }
 
     /// <summary>The verdict for an actor that runs its install in place.</summary>
     internal static SourceVerdict NotApplicable(string actor) => new(actor, "", "", "", SourceVerdictKind.NotApplicable, [], [], [], [], [], []);
 
     /// <summary>The verdict when a process launched from the actor's profile was not proven stopped: nothing was listed or moved.</summary>
-    internal static SourceVerdict Unknown(string actor, string reason) => NotCompared(actor, "stop not proven: " + reason);
+    internal static SourceVerdict Unknown(string actor, string reason) => NotCompared(actor, StopNotProven + ": " + reason);
+    private const string StopNotProven = "stop not proven";
 
     /// <summary>The verdict when the install could not be compared, and why.</summary>
     internal static SourceVerdict NotCompared(string actor, string reason) => new(actor, "", "", "", SourceVerdictKind.Unknown, [], [], [], [], [], [], reason);
@@ -78,7 +93,7 @@ internal sealed record SourceVerdict(string Actor, string Host, string Root, str
     [JsonIgnore] internal string StepName => $"verify {Actor}'s source install after the run ({Verdict switch
     {
         SourceVerdictKind.NotApplicable => "not applicable: runs in place",
-        SourceVerdictKind.Unknown => "unknown: " + (Reason ?? "").Split(':')[0],
+        SourceVerdictKind.Unknown => (Reason ?? "").StartsWith(StopNotProven, StringComparison.Ordinal) ? "unknown: " + StopNotProven : "unknown: not compared",
         _ => Mode,
     }})";
 
@@ -152,6 +167,8 @@ internal sealed record SourceVerdict(string Actor, string Host, string Root, str
 /// </summary>
 internal sealed record SourceSettlement(string Actor, string Runtime, string? Output, string? RecoveredIn)
 {
+    /// <summary>In a recovery: whether a moved-files folder has its own kept journal entry, so it is left to <c>env teardown</c>.</summary>
+    internal Func<string, bool>? KeptApart { get; init; }
     internal static SourceSettlement Run(string actor, string runtime, string? output) => new(actor, runtime, output, null);
     internal static SourceSettlement Recovery(string actor, string runtime, string recoveredIn) => new(actor, runtime, null, recoveredIn);
     internal string Parent => HostPath.Parent(Runtime);
@@ -179,7 +196,7 @@ internal static class SourceSettleScripts
     // so a repeated settlement carries on. The root's listing, not this reply, decides the verdict. A decoded name keeps a trailing
     // line break (the printf x guard); the keep folder is compared with the root ignoring case on macOS, which errs toward a refusal.
     internal static readonly string Bash = "set -u\n" + ProtectedPaths.BashInside + ProtectedPaths.BashUnlinked + """
-        [ -n "$root" ] && [ -n "$keep" ] || exit 3
+        if [ -z "$root" ] || [ -z "$keep" ]; then echo 'VT-SETTLE-REFUSED no source install or keep folder was named'; exit 0; fi
         if [ ! -d "$root" ] || [ -L "$root" ]; then echo 'VT-SETTLE-REFUSED the source install is not a folder'; exit 0; fi
         vt_inside "$root" "$keep" fold; case $? in 1) ;; *) echo 'VT-SETTLE-REFUSED the keep folder is not outside the source install'; exit 0;; esac
         vt_relative() {
@@ -196,7 +213,9 @@ internal static class SourceSettleScripts
             if [ ! -e "$src" ]; then printf 'VT-GONE %s\n' "$line"; continue; fi
             if [ ! -f "$src" ]; then printf 'VT-NOTMOVED %s not-a-file\n' "$line"; continue; fi
             if [ -e "$target" ] || [ -L "$target" ]; then printf 'VT-NOTMOVED %s kept-already\n' "$line"; continue; fi
-            if mkdir -p -- "$(dirname -- "$target")" 2> /dev/null && mv -- "$src" "$target" 2> /dev/null; then printf 'VT-MOVED %s\n' "$line"
+            # dirname's output, with the x guard, keeps a folder name's trailing line break.
+            folder=$(dirname -- "$target"; printf x); folder=${folder%x}; folder=${folder%$'\n'}
+            if mkdir -p -- "$folder" 2> /dev/null && mv -- "$src" "$target" 2> /dev/null; then printf 'VT-MOVED %s\n' "$line"
             else printf 'VT-NOTMOVED %s move-failed\n' "$line"; fi
         done <<< "$files"
         while IFS= read -r line; do
@@ -213,7 +232,7 @@ internal static class SourceSettleScripts
     // The bash settlement's PowerShell 7 counterpart, with the same variables and replies. Every file operation uses the \\?\ form
     // of the path, so a name Windows would trim (a trailing dot or space) is never read as another file.
     internal static readonly string PowerShell = ProtectedPaths.PowerShellInside + ProtectedPaths.PowerShellUnlinked + """
-        if (-not $root -or -not $keep) { exit 3 }
+        if (-not $root -or -not $keep) { 'VT-SETTLE-REFUSED no source install or keep folder was named'; exit 0 }
         $root = [IO.Path]::GetFullPath($root).TrimEnd('\', '/')
         if (-not [IO.Directory]::Exists($root) -or ([IO.File]::GetAttributes($root) -band [IO.FileAttributes]::ReparsePoint)) { 'VT-SETTLE-REFUSED the source install is not a folder'; exit 0 }
         $inside = $true
@@ -276,16 +295,17 @@ internal static class SourceSettleScripts
         """.ReplaceLineEndings("\n");
 
     // Variables: parent (the profile's folder), keep (its moved-files folder, a source-added-* folder directly in parent), added (1:
-    // remove keep, fetched or holding no file), recovered (a recovery's recovered-<actor> folder: keep is moved into it as
-    // source-added, never removed). The baseline goes last; every delete stays below the parent (ProtectedPaths).
+    // remove keep, fetched or holding no file), recovered (a recovery's per-profile folder in recovered-<actor>: keep is moved into it
+    // as added, never removed). The baseline goes last; every delete stays below the parent (ProtectedPaths). A path that breaks
+    // these rules is refused ("VT-SOURCE-REFUSED <why>"), never retried: it cannot change.
     internal static readonly string BashEvidence = "set -u\n" + ProtectedPaths.BashInside + ProtectedPaths.BashRemove + """
-        [ -n "$parent" ] && [ -n "$keep" ] || exit 3
-        [ "$(dirname -- "$keep")" = "$parent" ] || exit 3
-        case "$(basename -- "$keep")" in source-added|source-added-*) ;; *) exit 3;; esac
+        if [ -z "$parent" ] || [ -z "$keep" ]; then echo 'VT-SOURCE-REFUSED no profile folder or moved files folder was named'; exit 0; fi
+        if [ "$(dirname -- "$keep")" != "$parent" ]; then echo "VT-SOURCE-REFUSED $keep is not directly in $parent"; exit 0; fi
+        case "$(basename -- "$keep")" in source-added|source-added-*) ;; *) echo "VT-SOURCE-REFUSED $keep is not a moved files folder"; exit 0;; esac
         if [ -n "$recovered" ]; then
             if [ -L "$keep" ]; then echo 'VT-SOURCE-REFUSED the moved files folder is a link'; exit 0; fi
             if [ -d "$keep" ]; then
-                to="$recovered/source-added"
+                to="$recovered/added"
                 if [ -e "$to" ] || [ -L "$to" ]; then echo "VT-SOURCE-REFUSED $to already exists"; exit 0; fi
                 mkdir -p -- "$recovered" && mv -- "$keep" "$to" || exit 3
             fi
@@ -296,12 +316,17 @@ internal static class SourceSettleScripts
         """.ReplaceLineEndings("\n");
 
     internal static readonly string PowerShellEvidence = ProtectedPaths.PowerShellInside + ProtectedPaths.PowerShellRemove + """
-        if (-not $parent -or -not $keep) { exit 3 }
-        if ([IO.Path]::GetDirectoryName($keep) -ne $parent -or -not ([IO.Path]::GetFileName($keep) -like 'source-added*')) { exit 3 }
+        if (-not $parent -or -not $keep) { 'VT-SOURCE-REFUSED no profile folder or moved files folder was named'; exit 0 }
+        # Both sides as full paths, one separator: a runtime written with / is the same folder (GetDirectoryName rewrites / to \).
+        function Get-VtFull([string]$path) { return [IO.Path]::GetFullPath($path).Replace('/', '\').TrimEnd('\') }
+        if (-not [string]::Equals((Get-VtFull ([IO.Path]::GetDirectoryName((Get-VtFull $keep)))), (Get-VtFull $parent), [StringComparison]::OrdinalIgnoreCase)) {
+            'VT-SOURCE-REFUSED ' + $keep + ' is not directly in ' + $parent; exit 0
+        }
+        if (-not ([IO.Path]::GetFileName((Get-VtFull $keep)) -like 'source-added*')) { 'VT-SOURCE-REFUSED ' + $keep + ' is not a moved files folder'; exit 0 }
         if ($recovered) {
             if (Test-VtLink $keep) { 'VT-SOURCE-REFUSED the moved files folder is a link'; exit 0 }
             if ([IO.Directory]::Exists($keep)) {
-                $to = Join-Path $recovered 'source-added'
+                $to = Join-Path $recovered 'added'
                 if ([IO.Directory]::Exists($to) -or [IO.File]::Exists($to)) { 'VT-SOURCE-REFUSED ' + $to + ' already exists'; exit 0 }
                 [void][IO.Directory]::CreateDirectory($recovered)
                 [IO.Directory]::Move($keep, $to)
@@ -312,3 +337,13 @@ internal static class SourceSettleScripts
         'VT-SOURCE-SETTLED'
         """.ReplaceLineEndings("\n");
 }
+
+/// <summary>A profile kept because its source settlement did not finish (<see cref="SourceVerdict.RequireRetirable"/>): the owner's one message.</summary>
+internal sealed class SourceProfileKeptException(string message) : IOException(message);
+
+/// <summary>
+/// A settlement step refused on the host for a reason that cannot change (a source install that is not a folder, a keep folder
+/// inside it, a moved-files folder that is not the profile's, a recovered folder already there): the verdict is a finished
+/// <see cref="SourceVerdictKind.Failed"/> naming it, never a retry.
+/// </summary>
+internal sealed class SourceRefusedException(string message) : IOException(message);

@@ -299,7 +299,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         environment.Server.PreparedLoaderRoot = owned;
         environment.Server.PreparedSourceRoot = Install;
         var preparedListing = await ProfileSourceCheck.InspectAsync(host, Install, TimeSpan.FromSeconds(30));
-        var sourceCheck = ProfileSourceCheck.Prepare(preparedListing, [GameLaunch.ServerLinuxExecutable]);
+        var sourceCheck = ProfileSourceCheck.Prepare(preparedListing, [GameLaunch.ServerLinuxExecutable], ProfileLayout.Linked);
         sourceCheck.RecordPreparedProfile(preparedListing,
             await HostInstall.ListAsync(host, owned, TimeSpan.FromSeconds(30), cancellation: CancellationToken.None), []);
         var hosted = HostedServerRun.Create(environment, plan, "test", new FakeRunHooks { Host = _ => host, RunId = RunId }, prepared: true,
@@ -330,7 +330,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         environment.Server.PreparedGameRoot = Install;
         environment.Server.PreparedLoaderRoot = owned;
         environment.Server.PreparedSourceRoot = Install;
-        var sourceCheck = ProfileSourceCheck.Prepare(await ProfileSourceCheck.InspectAsync(host, Install, TimeSpan.FromSeconds(30)), []);
+        var sourceCheck = ProfileSourceCheck.Prepare(await ProfileSourceCheck.InspectAsync(host, Install, TimeSpan.FromSeconds(30)), [], ProfileLayout.SourceExecutable);
         sourceCheck.RecordPreparedProfile(sourceCheck.Source,
             await HostInstall.ListAsync(host, owned, TimeSpan.FromSeconds(30), cancellation: CancellationToken.None), []);
         var hosted = HostedServerRun.Create(environment, plan, "test", new FakeRunHooks { Host = _ => host, RunId = RunId }, prepared: true,
@@ -358,7 +358,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         environment.Server.PreparedGameRoot = owned;
         environment.Server.PreparedLoaderRoot = owned;
         environment.Server.PreparedSourceRoot = source;
-        var sourceCheck = ProfileSourceCheck.Prepare(await ProfileSourceCheck.InspectAsync(host, source, TimeSpan.FromSeconds(30)), ["UnityPlayer.dll"]);
+        var sourceCheck = ProfileSourceCheck.Prepare(await ProfileSourceCheck.InspectAsync(host, source, TimeSpan.FromSeconds(30)), ["UnityPlayer.dll"], ProfileLayout.Linked);
         var ownedListing = await HostInstall.ListAsync(host, owned, TimeSpan.FromSeconds(30), cancellation: CancellationToken.None);
         sourceCheck.RecordPreparedProfile(ownedListing, ownedListing, []);
         var hosted = HostedServerRun.Create(environment, plan, "test", new FakeRunHooks { Host = _ => host, RunId = RunId }, prepared: true,

@@ -153,9 +153,7 @@ internal sealed class LocalClientPlacement : IClientPlacement
         {
             var made = (PrepareCopy ?? ((actor, client, token) => LocalClientCopy.PrepareAsync(actor, client, token, builds: Builds)))(name, plan, cancellation).GetAwaiter().GetResult();
             made.Output = output;
-            bool closed;
-            lock (_copies) { closed = _closed; if (!closed) _copies.Add((made, plan, [])); }
-            if (closed)
+            if (!Add(made, plan))
             {
                 // Closed while the copy was made (teardown, cancellation): nothing else would remove it.
                 made.RetireAsync().GetAwaiter().GetResult();
@@ -198,22 +196,28 @@ internal sealed class LocalClientPlacement : IClientPlacement
     /// Each owned client's source verdict, recorded in <see cref="Report"/> (<see cref="SourceVerdict.Record"/>): a copy whose
     /// clients were all stopped settles its install (<see cref="LocalClientCopy.SettleSourceAsync"/>), one whose client was not
     /// proven stopped is unknown, and a client that ran in place is not applicable, once. Each failed verdict goes to
-    /// <paramref name="failed"/> once all were recorded. <see cref="RetireAsync"/> settles through here too, so every user of a
-    /// placement reaches one path.
+    /// <paramref name="failed"/> once all were recorded. <see cref="RetireAsync"/> settles through here too, from the same snapshot
+    /// it retires, so every user of a placement reaches one path.
     /// </summary>
-    internal async Task SettleSourcesAsync(Action<Exception> failed)
+    internal Task SettleSourcesAsync(Action<Exception> failed) => SettleAsync(Snapshot(close: false), failed);
+
+    // Each copy, and whether every client launched from it is proven stopped, taken once; closing makes no more copies.
+    private List<(LocalClientCopy Copy, bool Stopped)> Snapshot(bool close)
     {
-        List<(LocalClientCopy Copy, ClientRunPlan Plan, List<Func<bool>> Stopped)> copies;
-        string[] inPlace = [];
         lock (_copies)
         {
-            copies = [.. _copies];
-            if (Report != null && !_inPlaceRecorded) { inPlace = [.. _inPlace]; _inPlaceRecorded = true; }
+            if (close) _closed = true;
+            var snapshot = _copies.Select(entry => (entry.Copy, entry.Stopped.All(proven => proven()))).ToList();
+            if (close) _copies.Clear();
+            return snapshot;
         }
-        foreach (var (copy, _, launches) in copies)
-        {
-            bool stopped;
-            lock (_copies) stopped = launches.All(proven => proven());
+    }
+
+    private async Task SettleAsync(List<(LocalClientCopy Copy, bool Stopped)> copies, Action<Exception> failed)
+    {
+        string[] inPlace = [];
+        lock (_copies) if (Report != null && !_inPlaceRecorded) { inPlace = [.. _inPlace]; _inPlaceRecorded = true; }
+        foreach (var (copy, stopped) in copies)
             try
             {
                 if (stopped) await copy.SettleSourceAsync(Report, Evidence).ConfigureAwait(false);
@@ -221,8 +225,18 @@ internal sealed class LocalClientPlacement : IClientPlacement
                 else if (Report != null) SourceVerdict.Unknown(copy.Actor, "a client launched from its profile was not proven stopped").Record(Report);
             }
             catch (Exception error) { failed(error); }
-        }
         foreach (string actor in inPlace) SourceVerdict.NotApplicable(actor).Record(Report);
+    }
+
+    /// <summary>Keeps a copy made for <paramref name="plan"/> for its later opens; false once the placement is closed.</summary>
+    internal bool Add(LocalClientCopy copy, ClientRunPlan plan)
+    {
+        lock (_copies)
+        {
+            if (_closed) return false;
+            _copies.Add((copy, plan, []));
+            return true;
+        }
     }
 
     /// <summary>Notes an owned client that runs its install in place, once by name, for its not-applicable source verdict.</summary>
@@ -236,20 +250,19 @@ internal sealed class LocalClientPlacement : IClientPlacement
 
     internal async Task RetireAsync(bool verifySource = true)
     {
+        var copies = Snapshot(close: true);
         var failures = new List<Exception>();
-        if (verifySource) await SettleSourcesAsync(failures.Add).ConfigureAwait(false);
-        List<(LocalClientCopy Copy, ClientRunPlan Plan, List<Func<bool>> Stopped)> copies;
-        lock (_copies) { _closed = true; copies = [.. _copies]; _copies.Clear(); }
-        foreach (var (copy, _, launches) in copies)
+        // In a session each verdict is its own step of the report, so only a verdict with no report to hold it fails the retirement.
+        if (verifySource) await SettleAsync(copies, error => { if (Report == null) failures.Add(error); }).ConfigureAwait(false);
+        foreach (var (copy, stopped) in copies)
         {
-            bool stopped;
-            lock (_copies) stopped = launches.All(proven => proven());
             if (!stopped)
             {
                 failures.Add(new IOException($"The disposable client copy {copy.Runtime} is kept: a client launched from it was not proven stopped. valheim-test env status names it; env recover removes it."));
                 continue;
             }
             try { await copy.RetireAsync(verifySource: false).ConfigureAwait(false); }
+            catch (SourceProfileKeptException kept) { failures.Add(kept); } // the owner's words: kept for env teardown
             catch (Exception error) { failures.Add(new IOException($"The disposable client copy {copy.Runtime} was not removed ({error.Message}); valheim-test env status names it and env recover removes it.", error)); }
         }
         if (failures.Count == 1) throw failures[0];

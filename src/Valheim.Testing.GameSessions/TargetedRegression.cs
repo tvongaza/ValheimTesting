@@ -645,9 +645,8 @@ public sealed class TargetedRegression
         // An arm that recorded its verdict already is not settled or reported a second time.
         try { if (_sourceVerdict == null) SettleSource().Record(null); }
         catch (Exception error) { integrity = error; }
-        // A settlement that did not finish keeps the profile with its baseline and moved files, journalled kept, for env recover.
-        if (_sourceVerdict is { KeepsProfile: true })
-            throw new IOException($"The regression profile {Install} is kept: its source settlement did not finish. valheim-test env status names it; env teardown settles and removes it.", integrity);
+        // A settlement that did not finish keeps the profile with its baseline and moved files, journalled kept, for env teardown.
+        _sourceVerdict?.RequireRetirable();
         try { HostedRuntimeStage.RetireAsync(_host, Install, _stage, LocalClientCopy.StepTimeout).GetAwaiter().GetResult(); }
         catch (Exception cleanup) when (integrity != null)
         { throw new AggregateException("Source integrity failed and the regression profile was not retired.", integrity, cleanup); }

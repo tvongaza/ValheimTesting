@@ -586,15 +586,16 @@ internal static class RunRecovery
                         // The profile's source install settled first, from the journalled baseline (#612), as the run would have: what the
                         // game added is moved into recovered-<actor>/source-added; a refused baseline, or a settlement that did not finish,
                         // keeps the copy.
-                        string? recoveredIn = null;
-                        if (await ProfileSourceCheck.RecoverAsync(host, copy.What, copy.Actor, copy.Fields, actor => recoveredIn = RecoveredFolder(host, copy.What, runId, actor),
+                        string recoveredIn = RecoveredFolder(host, copy.What, runId, copy.Actor);
+                        if (await ProfileSourceCheck.RecoverAsync(host, copy.What, copy.Actor, copy.Fields, recoveredIn,
+                            path => run.Items.Any(item => item.Kind == "copy" && item.Host == group.Key && item.What == path),
                             entry => journal.AppendAsync(host, RunJournal.DirectoryFor(hosts[group.Key]), Actor, entry, timeout, cancellation),
                             timeout, cancellation).ConfigureAwait(false) is { } verdict)
                         {
-                            if (verdict.Added.Count != 0 || verdict.Verdict != SourceVerdictKind.Unchanged) leftHere.Add(recoveredIn!);
+                            if (verdict.Added.Count != 0 || verdict.Verdict != SourceVerdictKind.Unchanged) leftHere.Add(recoveredIn);
                             Step(group.Key, $"source install of {verdict.Actor} ({verdict.Root})", verdict.Describe() +
                                 (verdict.Verdict == SourceVerdictKind.Unchanged ? "" : $"; evidence in {recoveredIn}"), failed: verdict.Fails);
-                            if (verdict.KeepsProfile) throw new IOException("its source settlement did not finish, so it stays for the next env recover");
+                            verdict.RequireRetirable();
                         }
                         // The game's logs go with the copy: kept first, so a copy whose logs could not be kept stays (#412).
                         RecoveredLogs logs;

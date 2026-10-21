@@ -395,8 +395,8 @@ internal sealed class FakeServerHost : IGameHost
                 string profileParent = Local(v["parent"]), added = Local(v["keep"]);
                 if (v["recovered"].Length != 0 && Directory.Exists(added))
                 {
-                    string to = Path.Combine(Local(v["recovered"]), ProfileSourceCheck.AddedFolder);
-                    if (Directory.Exists(to)) return Ok("VT-SOURCE-REFUSED " + v["recovered"] + " already holds source-added\n");
+                    string to = Path.Combine(Local(v["recovered"]), "added");
+                    if (Directory.Exists(to)) return Ok("VT-SOURCE-REFUSED " + v["recovered"] + " already holds added\n");
                     Directory.CreateDirectory(Local(v["recovered"]));
                     Directory.Move(added, to);
                 }

@@ -372,7 +372,7 @@ public sealed class RunRecoveryTests : IDisposable
         Line(_host, run, "server", Gone, JournalEntry.CopyIntended, ("runtime", runtime), ("stage", Prep + "/staging"), ("parent", Prep),
             ("runtimeKind", "server"), ("launchRoot", source));
         Line(_host, run, "server", Gone, JournalEntry.CopyDone, ("runtime", runtime), ("files", "1"));
-        var check = ProfileSourceCheck.Prepare(await ProfileSourceCheck.InspectAsync(_host, source, TimeSpan.FromSeconds(5)), []);
+        var check = ProfileSourceCheck.Prepare(await ProfileSourceCheck.InspectAsync(_host, source, TimeSpan.FromSeconds(5)), [], ProfileLayout.SourceExecutable);
         await check.PersistAsync(_host, runtime, "server", entry =>
         {
             Line(_host, run, "server", Gone, entry.Kind, [.. entry.Fields.Select(field => (field.Key, field.Value))]);
@@ -401,9 +401,9 @@ public sealed class RunRecoveryTests : IDisposable
         var settled = Assert.Single(recovered.Steps, step => step.What.StartsWith("source install of server", StringComparison.Ordinal));
         Assert.Contains("preloader_20261020.log", settled.Outcome);
         Assert.Contains(recoveredIn, settled.Outcome);
-        Assert.Equal("the game's preloader log", File.ReadAllText(Path.Combine(_host.Local(recoveredIn), "source-added", "preloader_20261020.log")));
-        Assert.Equal("written by the game", File.ReadAllText(Path.Combine(_host.Local(recoveredIn), "source-added", "logs", "stats.txt")));
-        Assert.Contains("\"verdict\": \"restored\"", File.ReadAllText(Path.Combine(_host.Local(recoveredIn), "source-changes.json")));
+        Assert.Equal("the game's preloader log", File.ReadAllText(Path.Combine(Assert.Single(Directory.GetDirectories(_host.Local(recoveredIn), "source-changes-*")), "added", "preloader_20261020.log")));
+        Assert.Equal("written by the game", File.ReadAllText(Path.Combine(Assert.Single(Directory.GetDirectories(_host.Local(recoveredIn), "source-changes-*")), "added", "logs", "stats.txt")));
+        Assert.Contains("\"verdict\": \"restored\"", File.ReadAllText(Path.Combine(Assert.Single(Directory.GetDirectories(_host.Local(recoveredIn), "source-changes-*")), "source-changes.json")));
         Assert.Equal(["valheim_server.x86_64"], Directory.EnumerateFileSystemEntries(_host.Local(source)).Select(Path.GetFileName));
         Assert.False(Directory.Exists(_host.Local(Prep))); // the copy, its baseline and the moved files' folder are gone
         Assert.Empty(Assert.Single((await StatusAsync()).Runs).Items);

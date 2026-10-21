@@ -61,7 +61,7 @@ A game can write into the install it runs from: BepInEx's `preloader_*.log` besi
 | `failed` | Check the named files in your install; verify the game files in Steam if one changed |
 | `unknown` | A process was not proven stopped; run `valheim-test env status` |
 
-After an interrupted run, `env recover` moves the added files into `recovered-<actor>/source-added` in the run's folder on that host.
+After an interrupted run, `env recover` moves the added files into `recovered-<actor>/source-changes-<id>/added` in the run's folder on that host, one folder per profile, beside its `source-changes.json`.
 
 ### Diagnose an owned game that does not reach its menu or world
 
