@@ -117,6 +117,8 @@ public sealed class WorldFixtureLayoutTests : IDisposable
     [InlineData(new[] { "Abc/_main.0.fwl2", "Abc_backup_20261021-092942/_main.1.fwl2", "Abc_backup_restore-20261021-092942/_main.1.fwl2",
         "Abc_backup_cloud-20261021-092942/_main.1.fwl2" }, "Abc")]
     [InlineData(new[] { "My_Base/_main.0.fwl2", "My_Base_backup_auto-20261021-092942/_main.1.fwl2" }, "My_Base")]
+    // A world a client opened: its minimap cache beside the save (Minimap.cs).
+    [InlineData(new[] { "Abc/_main.0.fwl2", "Abc/cacheMinimapMask", "Abc/cacheMinimapBiome", "Abc/cacheMinimapHeight", "Abc/cacheMinimapMeta" }, "Abc")]
     public void TheWorldIsNamedByItsFolder(string[] files, string name) => Assert.Equal(name, HostedWorld.NameOf(files));
 
     public static TheoryData<string[]> NotOneCompleteWorld => new()
@@ -129,6 +131,8 @@ public sealed class WorldFixtureLayoutTests : IDisposable
         new[] { "HostFixture/deeper/_main.0.fwl2" }, // The metadata is not directly in the world folder.
         new[] { "Ab/_main.0.fwl2" }, // Too short a name for the game.
         new[] { "My World/_main.0.fwl2" }, // Not one command token.
+        new[] { "Base_20261021-120000/_main.0.fwl2" }, // A name the game reads as a rolling save of "Base".
+        new[] { "HostFixture/_main.0.fwl2", "HostFixture/.DS_Store" }, // Finder's file in the world folder.
         new[] { "HostFixture/_main.1.fwl2" }, // Metadata alone of a saved world.
         new[] { "HostFixture/_main.01.fwl2", "HostFixture/_main.01.db2", "HostFixture/_main.01.chunks", "HostFixture/_main.01.ok" }, // Not a name the game writes.
         new[] { "HostFixture/_main.0.fwl2", "HostFixture/_main.1.fwl2", "HostFixture/_main.1.db2", "HostFixture/_main.1.chunks", "HostFixture/_main.1.ok" }, // An orphan set.

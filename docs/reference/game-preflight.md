@@ -29,7 +29,8 @@ Details per row:
   - a save that is not all four `_main.<n>.fwl2`, `.db2`, `.chunks` and `.ok` files. The one exception is a world never saved: a lone `_main.0.fwl2` whose metadata says so. Without its data the game silently makes a fresh world.
   - a second save set, or a `.chunk` file that `_main.<n>.chunks` does not list. The game deletes both when it loads the world, so the run would not load the pinned files. A listed chunk that is missing fails the game's load.
   - a pre-1.0 world (`<name>.fwl` and `<name>.db`). Open it once in Valheim 1.0 or later and save it; the game then writes the `<name>/` folder.
-  - anything else at the root, or in the world folder.
+  - anything else at the root, or in the world folder besides a client's minimap cache (`cacheMinimap*`), such as Finder's `.DS_Store`: remove it.
+  - a world name with a date the game reads in it, such as `Base_20261021-120000`: the game takes it for a backup of another save.
 
   The game's backups beside the world folder (`<name>_backup_auto-<yyyyMMdd-HHmmss>/`, or `_backup_` and `_backup_restore-` with the same date) may stay; they are checked for the world's name and UID only. A dedicated server's fixture is its `-savedir`: one such world in `worlds_local/`. Every route reads it before staging: hosted clients (`HostWorldPlan.Preflight`), a standalone `PinnedServerRun` (`ServerRunPlan.PreflightWorld`), a campaign's fixture when the campaign is inspected, and `valheim-test server-load --world-fixture`, `server-load-phases` and `detach server-load`. Only a plan pinned `world=any` may give a dedicated server no world, which the game then makes on its first boot (not on a macOS server, which ignores `-savedir`).
 - **World identity.** The metadata (`<name>/_main.<n>.fwl2`) is a length-prefixed package: world version, name, seed name, seed, UID. After the start, another UID fails as the wrong world, naming both UIDs, never as a load failure.

@@ -87,19 +87,14 @@ public sealed record WorldIdentity(string Name, string SeedName, int Seed, long 
     /// </summary>
     internal static string? BackupOf(string folder)
     {
-        var stamp = Timestamp.Match(folder);
-        if (!stamp.Success) return null;
-        try
-        {
-            var parts = stamp.Groups.Values.Skip(1).Select(group => int.Parse(group.Value, CultureInfo.InvariantCulture)).ToArray();
-            _ = new DateTime(parts[0], parts[1], parts[2], parts[3], parts[4], parts[5]);
-        }
-        catch (Exception error) when (error is ArgumentOutOfRangeException or FormatException or OverflowException) { return null; } // the game reads no timestamp, so no backup
+        if (!ReadsTimestamp(folder)) return null;
         int last = folder.LastIndexOf('_');
         int second = last > 0 ? folder.LastIndexOf('_', last - 1) : -1;
         return second > 0 && string.CompareOrdinal(folder, second, "_backup_", 0, "_backup_".Length) == 0 ? folder[..second] : null;
     }
     private static readonly string[] SetParts = ["fwl2", "db2", "chunks", "ok"];
+    // What a client writes beside a world it opens (Minimap.cs, 1.0.17): its minimap cache, which the game reads or rebuilds.
+    private static readonly HashSet<string> MinimapCache = new(["cacheMinimapMask", "cacheMinimapBiome", "cacheMinimapHeight", "cacheMinimapMeta"], StringComparer.Ordinal);
 
     /// <summary>
     /// The layout rules of a world fixture, from its relative file paths: exactly one world folder <c>&lt;name&gt;/</c> at the root,
@@ -132,10 +127,10 @@ public sealed record WorldIdentity(string Name, string SeedName, int Seed, long 
                 throw new ArgumentException($"The fixture holds {folder}/, a backup of another world than {name}; keep only {name}/ and the game's own {name}_backup_…<date> copies of it.");
 
         var files = paths.Where(path => path.StartsWith(name + "/", StringComparison.Ordinal)).Select(path => path[(name.Length + 1)..]).ToList();
-        var stray = files.Where(file => file.Contains('/') || !(SaveFile.IsMatch(file) || file.EndsWith(".chunk", StringComparison.Ordinal))).ToList();
+        var stray = files.Where(file => file.Contains('/') || !(SaveFile.IsMatch(file) || file.EndsWith(".chunk", StringComparison.Ordinal) || MinimapCache.Contains(file))).ToList();
         if (stray.Count != 0)
             throw new ArgumentException($"The fixture's world {name}/ holds {Few(stray.Select(file => name + "/" + file).ToList())}, which the game does not write: a world folder holds " +
-                "_main.<n>.fwl2, .db2, .chunks and .ok and its chunk files. Copy the world folder again, exactly as the game saved it.");
+                "_main.<n>.fwl2, .db2, .chunks and .ok, its chunk files and a client's minimap cache. Remove those files, or copy the world folder again exactly as the game saved it.");
         var sets = files.Select(file => SaveFile.Match(file)).Where(match => match.Success)
             .GroupBy(match => match.Groups[1].Value, StringComparer.Ordinal).OrderBy(set => set.Key.Length).ThenBy(set => set.Key, StringComparer.Ordinal).ToList();
         if (sets.Count != 1)
@@ -172,11 +167,30 @@ public sealed record WorldIdentity(string Name, string SeedName, int Seed, long 
         return new WorldFiles(name, $"{name}/_main.{n}.fwl2", lone, lone ? null : $"{name}/_main.{n}.chunks", chunks, backups);
     }
 
-    /// <summary>A fixture world's name: at least 3 characters, one token and a valid file name on every platform.</summary>
+    // GetTimestampFromPath (SaveSystem.cs, 1.0.17): whether the game reads a valid date in a save's name.
+    private static bool ReadsTimestamp(string name)
+    {
+        var stamp = Timestamp.Match(name);
+        if (!stamp.Success) return false;
+        try
+        {
+            var parts = stamp.Groups.Values.Skip(1).Select(group => int.Parse(group.Value, CultureInfo.InvariantCulture)).ToArray();
+            _ = new DateTime(parts[0], parts[1], parts[2], parts[3], parts[4], parts[5]);
+            return true;
+        }
+        catch (Exception error) when (error is ArgumentOutOfRangeException or FormatException or OverflowException) { return false; }
+    }
+
+    /// <summary>
+    /// A fixture world's name: at least 3 characters, one token and a valid file name on every platform, and no date the game reads
+    /// in it (a name with a date and an <c>_</c> is to the game a backup or rolling save of another, SaveSystem.cs:1100).
+    /// </summary>
     internal static string RequireName(string name)
     {
         if (name.Length < 3 || name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 || name.IndexOfAny(['/', '\\', ':', '*', '?', '"', '<', '>', '|']) >= 0 || name.Any(char.IsWhiteSpace))
             throw new ArgumentException($"The fixture world's name \"{name}\" must be at least 3 characters, one token and a valid file name on every platform.");
+        if (name.Contains('_') && ReadsTimestamp(name))
+            throw new ArgumentException($"The fixture world's name \"{name}\" holds a date: the game reads such a name as a backup of another save, not as a world of its own. Rename the world.");
         return name;
     }
 
