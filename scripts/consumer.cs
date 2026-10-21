@@ -320,19 +320,14 @@ void MarkerOneShot(string config, string cache, Dictionary<string, string> env)
         File.Copy(Path.Combine(root, from), destination);
     }
     string project = Path.Combine(directory, "MarkerScenario", "MarkerScenario.csproj");
-    // A NuGet.org check builds the committed copyable pin through the copied NuGet.Config, and refuses a pin that is not this
-    // release; local validation substitutes only its exact candidate package identity and its candidate feed.
+    // Builds this checkout's version: the copyable pin moves to a release only in the pins PR after it (pins.cs check
+    // guards that pin), so on a release tag it still names the previous release. A NuGet.org check restores through the
+    // copied NuGet.Config; local validation uses its candidate feed.
     string version = manifest["Valheim.Testing.GameSessions"];
     var document = System.Xml.Linq.XDocument.Load(project);
-    var pin = document.Descendants("PackageReference").Single(reference =>
-        (string?)reference.Attribute("Include") == "Valheim.Testing.GameSessions");
-    if (local)
-    {
-        pin.SetAttributeValue("Version", "[" + version + "]");
-        document.Save(project);
-    }
-    else if ((string?)pin.Attribute("Version") != "[" + version + "]")
-        throw new InvalidOperationException($"MarkerScenario.csproj pins Valheim.Testing.GameSessions {(string?)pin.Attribute("Version")}, not this release's [{version}].");
+    document.Descendants("PackageReference").Single(reference =>
+        (string?)reference.Attribute("Include") == "Valheim.Testing.GameSessions").SetAttributeValue("Version", "[" + version + "]");
+    document.Save(project);
     Run(env, directory, "dotnet", "restore", project, "--configfile", local ? config : Path.Combine(directory, "NuGet.Config"));
     Run(env, directory, "dotnet", "build", project, "-c", "Release", "--no-restore");
     string metadata = Path.Combine(cache, "valheim.testing.gamesessions", version.ToLowerInvariant());
