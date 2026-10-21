@@ -6,57 +6,106 @@ namespace Valheim.Testing.GameSessions;
 
 internal static partial class HostedRuntimeStage
 {
+    /// <summary>A profile's layout on its host (<see cref="ProfileLayouts.For"/>) and, for a linked one, what its storage verdict found.</summary>
+    internal sealed record ProfileStorageCheck(ProfileLayout Layout, string? Description);
+
     /// <summary>
-    /// Checks the two roots a Windows profile will hard-link between, without creating either profile or probe file. Unix
-    /// profiles launch the source executable and need no hard-link storage check.
+    /// Decides a profile's layout from its host's platform and, for a linked profile, checks the two roots it will hard-link
+    /// between, without creating either profile or probe file. PowerShell is Windows; a bash host names its system through the
+    /// Linux storage probe (<see cref="LinuxStorageProbe"/>), which only a server's profile asks: Linux runs no client, so a bash
+    /// host's client profile is a Mac's. A runtime on another volume or mount, or on a filesystem without hard links, is refused.
     /// </summary>
-    internal static async Task<string?> RequireProfileStorageAsync(IGameHost host, string source, string runtime,
-        TimeSpan timeout, CancellationToken cancellation = default, bool explicitRuntime = false, bool inPlaceAvailable = false)
+    internal static async Task<ProfileStorageCheck> RequireProfileStorageAsync(IGameHost host, HostedRuntimeKind kind, string source,
+        string runtime, TimeSpan timeout, CancellationToken cancellation = default, bool explicitRuntime = false, bool inPlaceAvailable = false)
     {
-        if (host.Shell.Kind != HostShellKind.PowerShell) return null;
+        bool server = kind == HostedRuntimeKind.Server;
         ProfileStorageVerdict verdict;
-        try
+        if (host.Shell.Kind == HostShellKind.PowerShell)
         {
-            if (host is LocalGameHost && OperatingSystem.IsWindows())
-                verdict = ProfileRuntimeStorage.Inspect(EnvironmentInventory.ThisMachine, source, runtime, explicitRuntime, inPlaceAvailable);
-            else
+            try
             {
-                var volumes = await ProbeProfileStorageAsync(host, source, runtime, timeout, cancellation).ConfigureAwait(false);
-                verdict = ProfileRuntimeStorage.Verdict(source, volumes.Source, runtime, volumes.Runtime, explicitRuntime, inPlaceAvailable);
+                if (host is LocalGameHost && OperatingSystem.IsWindows())
+                    verdict = ProfileRuntimeStorage.Inspect(EnvironmentInventory.ThisMachine, source, runtime, explicitRuntime, inPlaceAvailable);
+                else
+                {
+                    var volumes = await ProbeProfileStorageAsync(host, source, runtime, timeout, cancellation).ConfigureAwait(false);
+                    verdict = ProfileRuntimeStorage.Verdict(source, volumes.Source, runtime, volumes.Runtime, explicitRuntime, inPlaceAvailable);
+                }
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidDataException or
+                ArgumentException or NotSupportedException or HostOperationException)
+            {
+                verdict = ProfileRuntimeStorage.Unknown(ProfileLinkRules.Windows, source, error);
             }
         }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidDataException or
-            ArgumentException or NotSupportedException or HostOperationException)
+        else
         {
-            verdict = ProfileRuntimeStorage.Unknown(source, error);
+            var probe = server ? await ProbeLinuxStorageAsync(host, [source, runtime], timeout, cancellation).ConfigureAwait(false) : default;
+            if (ProfileLayouts.For(server ? probe.Platform : "macos", server) == ProfileLayout.SourceExecutable)
+                return new(ProfileLayout.SourceExecutable, null);
+            verdict = probe.Volumes is { } volumes
+                ? ProfileRuntimeStorage.Verdict(source, volumes[0], runtime, volumes[1], explicitRuntime, inPlaceAvailable)
+                : ProfileRuntimeStorage.Unknown(ProfileLinkRules.Linux, source, probe.Error!);
         }
         verdict.Require();
         if (verdict.Warning != null) Console.WriteLine("warning: " + verdict.Warning);
-        return verdict.Description;
+        return new(ProfileLayout.Linked, verdict.Description);
     }
 
     /// <summary>
-    /// Chooses a Windows default profile root from a caller-supplied host. Production's real local host uses the native probe;
-    /// wrappers and controlled hosts answer through their own script, so a test's paths never consult the runner machine.
+    /// Chooses a default profile root from a caller-supplied host, by the rule <see cref="ProfileRuntimeStorage.DefaultRoot(string, IProfileStorageVolume, IProfileStorageVolume)"/>
+    /// gives this machine. Production's real local Windows host uses the native probe; wrappers and controlled hosts answer
+    /// through their own script, so a test's paths never consult the runner machine.
     /// </summary>
-    internal static async Task<ProfileRuntimeRoot> DefaultProfileRootAsync(IGameHost host, string source, string dataRoot,
+    internal static async Task<ProfileRuntimeRoot> DefaultProfileRootAsync(IGameHost host, HostedRuntimeKind kind, string source, string dataRoot,
         TimeSpan timeout, CancellationToken cancellation = default)
     {
         string dataRuns = HostPath.Join(dataRoot, "runs");
-        if (host.Shell.Kind != HostShellKind.PowerShell)
-            return new(dataRuns, "Unix profiles launch the source game and keep their loader under ValheimTesting's data folder");
+        bool windows = host.Shell.Kind == HostShellKind.PowerShell, server = kind == HostedRuntimeKind.Server;
+        var rules = windows ? ProfileLinkRules.Windows : ProfileLinkRules.Linux;
         try
         {
-            if (host is LocalGameHost && OperatingSystem.IsWindows())
-                return ProfileRuntimeStorage.DefaultRoot(EnvironmentInventory.ThisMachine, source, dataRoot);
-            var volumes = await ProbeProfileStorageAsync(host, source, dataRoot, timeout, cancellation).ConfigureAwait(false);
-            return ProfileRuntimeStorage.DefaultRoot(dataRuns, volumes.Source, volumes.Runtime);
+            if (windows && host is LocalGameHost && OperatingSystem.IsWindows())
+                return ProfileRuntimeStorage.DefaultRoot(EnvironmentInventory.ThisMachine, source, dataRoot, server);
+            if (windows)
+            {
+                var volumes = await ProbeProfileStorageAsync(host, source, dataRoot, timeout, cancellation).ConfigureAwait(false);
+                return ProfileRuntimeStorage.DefaultRoot(dataRuns, volumes.Source, volumes.Runtime);
+            }
+            // As RequireProfileStorageAsync: only a server's profile asks a bash host its system.
+            var probe = server ? await ProbeLinuxStorageAsync(host, [source, dataRoot], timeout, cancellation).ConfigureAwait(false) : default;
+            if (ProfileLayouts.For(server ? probe.Platform : "macos", server) == ProfileLayout.SourceExecutable)
+                return ProfileRuntimeStorage.SourceExecutableRoot(dataRuns);
+            if (probe.Error != null) throw probe.Error;
+            return ProfileRuntimeStorage.DefaultRoot(dataRuns, probe.Volumes![0], probe.Volumes[1]);
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidDataException or
             ArgumentException or NotSupportedException or HostOperationException)
         {
-            return new(dataRuns, $"the Windows storage probe could not identify the install volume ({error.Message}); using ValheimTesting's data folder, and preflight will check it before staging");
+            return new(dataRuns, $"the {rules.Platform} storage probe could not identify the install {rules.Unit} ({error.Message}); using ValheimTesting's data folder, and preflight will check it before staging");
         }
+    }
+
+    // A bash host's system and, on Linux, each path's mount. A reply that names no system refuses (the layout is unknown); a Linux
+    // one whose mounts could not be read returns why, for the verdict's warning.
+    private static async Task<(string Platform, IReadOnlyList<LinuxStorageVolume>? Volumes, Exception? Error)> ProbeLinuxStorageAsync(
+        IGameHost host, IReadOnlyList<string> paths, TimeSpan timeout, CancellationToken cancellation)
+    {
+        var result = await host.RunAsync(LinuxStorageProbe.Script,
+            new Dictionary<string, string> { ["paths"] = string.Join('\n', paths) }, timeout, cancellation).ConfigureAwait(false);
+        if (LinuxStorageProbe.SystemName(result.Stdout) is not { } system)
+        {
+            result.EnsureSuccess($"Inspecting the profile storage on {host.Name}");
+            throw new HostOperationException($"No profile-storage verdict from {host.Name}", result);
+        }
+        string platform = LinuxStorageProbe.Platform(system, host.Name);
+        if (platform != "linux") return (platform, null, null);
+        try
+        {
+            result.EnsureSuccess($"Inspecting Linux profile storage on {host.Name}");
+            return (platform, LinuxStorageProbe.Volumes(result.Stdout, paths.Count), null);
+        }
+        catch (Exception error) when (error is HostOperationException or InvalidDataException) { return (platform, null, error); }
     }
 
     private static async Task<(WindowsStorageVolume Source, WindowsStorageVolume Runtime)> ProbeProfileStorageAsync(IGameHost host,

@@ -76,19 +76,32 @@ internal static partial class HostServerChecks
         if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(server, File.GetUnixFileMode(server) | UnixFileMode.UserExecute);
     }
 
+    // #612: a Linux server's profile is its launch folder, the install's game files hard-linked into it by the profile seed and
+    // its loader copied. What the server writes in its working directory (Steam's logs/) and beside its executable (BepInEx's
+    // preloader_<time>.log, a mod writing into Paths.GameRootPath) lands in the profile; the install is unchanged.
     public static Task AProfileServerKeepsRuntimeWritesOutOfTheInstall(IGameHost host, string parent) =>
         GameHostChecks.WithRootAsync(host, parent, async root =>
         {
             using var source = new TempDirectory();
             WriteInstall(source.Path);
             string server = Path.Combine(source.Path, GameLaunch.ServerLinuxExecutable);
-            File.WriteAllText(server, "#!/bin/bash\nmkdir -p logs\nprintf 'owned runtime output\\n' > logs/stats_log.txt\nexec sleep 300\n");
+            // The preloader log first, so the wait on Steam's log below proves both were written.
+            File.WriteAllText(server, "#!/bin/bash\nprintf 'preloader output\\n' > \"$(dirname \"$0\")/preloader_$(date +%s).log\"\n" +
+                "mkdir -p logs\nprintf 'owned runtime output\\n' > logs/stats_log.txt\nexec sleep 300\n");
             if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(server, File.GetUnixFileMode(server) | UnixFileMode.UserExecute);
             string install = root + "/install", profile = root + "/profile", boot = root + "/boot-1";
             await host.ShipFilesAsync(source.Path, install, Generous);
-            await host.ShipFilesAsync(source.Path, profile, Generous); // a stand-in profile holding the loader
             var before = await HostInstall.ListAsync(host, install, Generous);
-            var launch = GameLaunch.ForServerWithLoader(install, profile, ["-batchmode"], null, ServerPlatform.Linux);
+            static string Encode(string relative) => Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(relative));
+            var links = HostedRuntimeStage.PlanLinkedProfile(ClientPlatform.Linux, before.Files.Keys).Links;
+            Assert.Contains(GameLaunch.ServerLinuxExecutable, links);
+            (await host.RunAsync(HostedRuntimeStage.BashProfileSeed, new Dictionary<string, string>
+            {
+                ["source"] = install, ["runtime"] = profile, ["gameFiles"] = string.Join('\n', links.Select(Encode)),
+                ["files"] = string.Join('\n', before.Files.Keys.Where(path => InstallPins.IsLoaderFile(path)).Select(Encode)),
+            }, Generous)).EnsureSuccess("Seeding the linked profile");
+            var launch = GameLaunch.ForServerWithLoader(profile, profile, ["-batchmode"], null, ServerPlatform.Linux);
+            Assert.Equal((profile, profile + "/" + GameLaunch.ServerLinuxExecutable), (launch.WorkingDirectory, launch.Executable));
             using var evidence = new TempDirectory();
             await StandInServer.RunAsync(host, launch, boot, Generous,
                 nameof(AProfileServerKeepsRuntimeWritesOutOfTheInstall), async process =>
@@ -103,6 +116,8 @@ internal static partial class HostServerChecks
             HostInstall.RequireSame(before.Files, await HostInstall.ListAsync(host, install, Generous), "source install after profile boot");
             (await host.WaitForLogAsync(profile + "/logs/stats_log.txt", 0,
                 new System.Text.RegularExpressions.Regex("owned runtime output"), null, Generous)).EnsureMatched();
+            Assert.Contains("preloader output", (await host.RunAsync("cat -- \"$profile\"/preloader_*.log",
+                new Dictionary<string, string> { ["profile"] = profile }, Generous)).EnsureSuccess("Reading the profile's preloader log").Stdout);
         });
 
     public static Task AServerRunsFromAVerifiedCopyAndStopsByIdentity(IGameHost host, string parent) => GameHostChecks.WithRootAsync(host, parent, async root =>

@@ -679,8 +679,8 @@ public static class PinnedServerRun
                 if (DiskSpace.Require(output, DiskSpace.DirectoryBytes(plan.World.Source), "this run's world copy") is { } free)
                     report.Provenance["freeBytesBeforeCopies"] = free.ToString(CultureInfo.InvariantCulture);
             });
-            if (prepared == null && hosted.HostProfile.Platform == "windows")
-                await report.StepAsync(StepPhase.Preflight, "check the Windows profile storage", async () =>
+            if (prepared == null && ProfileLayouts.For(hosted.HostProfile.Platform, server: true) == ProfileLayout.Linked)
+                await report.StepAsync(StepPhase.Preflight, $"check the {ProfileLinkRules.For(hosted.HostProfile.Platform).Platform} profile storage", async () =>
                 {
                     string? storage = await hosted.PreflightProfileStorageAsync(cancellation.Token).ConfigureAwait(false);
                     if (storage != null) Console.WriteLine("profile storage: " + storage);

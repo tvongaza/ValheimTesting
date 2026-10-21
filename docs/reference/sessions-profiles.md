@@ -20,19 +20,23 @@ A client that leaves and rejoins between rounds reuses its profile.
 
 | OS | The game runs from |
 |---|---|
-| Windows | The profile's launch folder, which hard-links the install's launch files |
-| Linux, macOS | The install's own executable, with Doorstop pointed at the profile |
+| Windows (client and server), Linux (server) | The profile's launch folder, which hard-links the install's launch files |
+| macOS (client and server) | The install's own executable, with Doorstop pointed at the profile |
 
-On Windows the launch folder hard-links only these:
+A linked launch folder is the game's root for the run: `Paths.GameRootPath`, BepInEx's `preloader_*.log` beside the executable and any file a mod writes there land in the profile, not the install. macOS cannot do this: a client bundle started from another path fails Gatekeeper's check, so a Mac profile starts the source bundle, and the Mac dedicated server stays in place with it. A write beside a Mac executable can reach the install.
 
-| Linked | Files |
-|---|---|
-| The executable | `valheim.exe` or `valheim_server.exe` |
-| Its data | The matching `valheim_Data/**` or `valheim_server_Data/**` |
-| Unity's trees | `MonoBleedingEdge/**`, `D3D12/**` |
-| Root files | `UnityCrashHandler64.exe`, `UnityPlayer.dll`, `steam_api64.dll`, `steamclient64.dll`, `steamwebrtc64.dll`, `tier0_s64.dll`, `vstdlib_s64.dll` |
+The launch folder hard-links only these:
 
-Everything else stays out: BepInEx, Doorstop, `logs/`, text and log output, crash dumps, `steam_appid.txt`, mod-manager proxies and unknown root DLLs. A left-out root file is recorded as `<actor>ProfileLeftOut` in the provenance, with its reason. An unknown root DLL's reason says to add it to the game's DLL list if a launch then fails during start-up.
+| Linked | Windows | Linux |
+|---|---|---|
+| The executable | `valheim.exe` or `valheim_server.exe` | `valheim_server.x86_64` |
+| Its data | The matching `valheim_Data/**` or `valheim_server_Data/**` | `valheim_server_Data/**` |
+| Other trees | `MonoBleedingEdge/**`, `D3D12/**` | `linux64/**` (`steamclient.so`) |
+| Root files | `UnityCrashHandler64.exe`, `UnityPlayer.dll`, `steam_api64.dll`, `steamclient64.dll`, `steamwebrtc64.dll`, `tier0_s64.dll`, `vstdlib_s64.dll` | `UnityPlayer.so`, `libparty.so` |
+
+Everything else stays out: BepInEx, Doorstop, `logs/`, text and log output, crash dumps, `steam_appid.txt`, start scripts, mod-manager proxies and unknown root libraries. A left-out root file is recorded as `<actor>ProfileLeftOut` in the provenance, with its reason. An unknown root DLL's or `.so`'s reason says to add it to the game's list if a launch then fails during start-up.
+
+A hard link is the install's file under a second name. A new file lands in the profile, but a write that overwrites a linked game file in place changes the install too.
 
 Into the profile, the run stages:
 
@@ -49,22 +53,23 @@ If a loader package has no `BepInEx.cfg`, a macOS profile keeps the source file 
 
 A profile lives under its environment's `runtime` folder, in a new run directory (`<runtime>/<runId>/runtime` for a server, `<runtime>/vt-prep-<runId>-<actor>` in a campaign).
 
-On Windows a hard link cannot cross volumes, so the runtime must be on the install's NTFS volume. A this-machine runtime follows the install: it stays in ValheimTesting's data folder when that folder is on the install's volume, otherwise it is `<install volume>\ValheimTesting\runs`. Journals and locks stay in the data folder.
+A hard link cannot cross a Windows volume or a Linux mount, so a linked profile's runtime must be on the install's. On Windows that is the install's NTFS volume. On Linux it is the install's mount: the same device and the same mount point, because a bind mount of the same disk, or another btrfs subvolume, still refuses the link. A this-machine runtime follows the install: it stays in ValheimTesting's data folder when that folder is on the install's volume or mount, otherwise it is `<install volume>\ValheimTesting\runs` on Windows and `<install mount>/ValheimTesting/runs` on Linux. Journals and locks stay in the data folder. A macOS profile links nothing, so its runtime stays in the data folder.
 
 | Runtime | Result |
 |---|---|
-| On the install's NTFS volume | Staged |
-| On another volume, or on exFAT, FAT32 or a network share | Refused, naming the required location |
+| On the install's NTFS volume (Windows) or mount (Linux) | Staged |
+| On another volume or mount, a bind mount, exFAT, FAT32 or a Windows network share | Refused, naming the required location |
+| A Linux folder this user cannot create or write | Refused, naming it |
 | The install itself, inside it, or holding it | Refused |
 
-`valheim-test env preflight` and `start` give the same refusals before staging. A Steam library on exFAT, FAT32 or a network share cannot hold a profile: move it to NTFS.
+`valheim-test env preflight`, `valheim-test session check SESSION --hosts` and the server's own preflight give the same refusals before anything is staged on the host. A profile is never copied in place of the links. A Steam library on exFAT, FAT32 or a network share cannot hold a profile: move it to NTFS on Windows, or to a filesystem with hard links (ext4, xfs or btrfs) on Linux.
 
 ## Source checks
 
 | When | Check |
 |---|---|
 | Before staging | Every supplied pin against the source install; a listing of the install by SHA-256 |
-| Before each launch | The profile's bound pins, and on Windows every root native DLL it linked |
+| Before each launch | The profile's bound pins, and every root file a Windows or Linux profile linked |
 | After the run | The source install against its listing, by size and modified time |
 
 A changed, missing or added source file fails the run and is never repaired. Set `VALHEIM_TESTING_SOURCE_HASH_AFTER_RUN=1` to compare content hashes after the run. On macOS, preparing a client profile also checks the app bundle's code seal ([Mac session limits](platforms.md#mac-session-limits)).
@@ -97,5 +102,5 @@ A clean test runtime is BepInEx core plus your plugins, with an empty `patchers`
 
 ## Limits
 
-- A Unix preloader failure may still write a crash log beside the source executable.
+- A macOS preloader failure may still write a crash log beside the source executable.
 - A profile never takes the install's top-level `logs/` folder.

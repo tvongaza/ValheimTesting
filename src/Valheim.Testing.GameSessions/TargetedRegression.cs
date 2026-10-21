@@ -230,7 +230,7 @@ public sealed class TargetedRegression
         var env = Inputs;
         if (!env.Mod.Arms.TryGetValue(arm, out var chosen))
             throw new ArgumentException($"There is no arm \"{arm}\"; the manifest names {string.Join(", ", env.Mod.Arms.Keys)}.");
-        _ = HostedRuntimeStage.RequireProfileStorageAsync(_host, Game, Install, LocalClientCopy.StepTimeout,
+        _ = HostedRuntimeStage.RequireProfileStorageAsync(_host, HostedRuntimeKind.Client, Game, Install, LocalClientCopy.StepTimeout,
             explicitRuntime: _runtimeExplicit, inPlaceAvailable: false).GetAwaiter().GetResult();
         var identity = FixtureLayout.Discover(env.Fixture.Root, env.Fixture.WorldUid);
         var fixture = WorldFixture.Manifest(env.Fixture.Root);

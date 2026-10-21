@@ -69,18 +69,20 @@ internal static class LocalHostPreflight
                 continue;
             }
             bool client = group.Any(actor => actor.Recipe.Roles.Contains("client"));
-            if (inventory.Hosts[group.Key].Platform == "windows")
-                foreach (var actor in group)
-                    try
-                    {
-                        if (probes.ProfileStorage is { } profileStorage)
-                            _ = await profileStorage(host, actor.Recipe.Install, actor.Recipe.Runtime, actor.Recipe.RuntimeExplicit,
-                                timeout, cancellation).ConfigureAwait(false);
-                        else
-                            _ = await HostedRuntimeStage.RequireProfileStorageAsync(host, actor.Recipe.Install, actor.Recipe.Runtime,
-                                timeout, cancellation, explicitRuntime: actor.Recipe.RuntimeExplicit).ConfigureAwait(false);
-                    }
-                    catch (Exception error) when (Refusal(error)) { problems.Add(new(actor.Name, "profile storage", error.Message)); }
+            foreach (var actor in group.Where(actor => ProfileLayouts.For(inventory.Hosts[group.Key].Platform,
+                actor.Recipe.Roles.Contains("server")) == ProfileLayout.Linked))
+                try
+                {
+                    if (probes.ProfileStorage is { } profileStorage)
+                        _ = await profileStorage(host, actor.Recipe.Install, actor.Recipe.Runtime, actor.Recipe.RuntimeExplicit,
+                            timeout, cancellation).ConfigureAwait(false);
+                    else
+                        _ = await HostedRuntimeStage.RequireProfileStorageAsync(host,
+                            actor.Recipe.Roles.Contains("server") ? HostedRuntimeKind.Server : HostedRuntimeKind.Client,
+                            actor.Recipe.Install, actor.Recipe.Runtime, timeout, cancellation,
+                            explicitRuntime: actor.Recipe.RuntimeExplicit).ConfigureAwait(false);
+                }
+                catch (Exception error) when (Refusal(error)) { problems.Add(new(actor.Name, "profile storage", error.Message)); }
             try
             {
                 var claim = probes.Lock is { } lockProbe

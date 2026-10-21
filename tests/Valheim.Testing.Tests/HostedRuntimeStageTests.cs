@@ -423,7 +423,7 @@ public sealed class HostedRuntimeStageTests : IDisposable
             "valheim_server_Data/Managed/not-this-install.dll", "readme.md",
         ];
 
-        var plan = HostedRuntimeStage.PlanWindowsProfile(listing);
+        var plan = HostedRuntimeStage.PlanLinkedProfile(ClientPlatform.Windows, listing);
 
         Assert.Equal(new[]
         {
@@ -472,7 +472,7 @@ public sealed class HostedRuntimeStageTests : IDisposable
             "valheim_server_Data/Plugins/x86_64/steam_api64.dll", "valheim_server_Data/Plugins/x86_64/XCurl.dll",
             "valheim_server_Data/Plugins/x86_64/XGamingRuntimeThunks.dll",
         ];
-        var plan = HostedRuntimeStage.PlanWindowsProfile(serverListing);
+        var plan = HostedRuntimeStage.PlanLinkedProfile(ClientPlatform.Windows, serverListing);
         Assert.Equal(expectedLinks.Order(StringComparer.Ordinal), plan.Links);
         Assert.DoesNotContain("steam_api64.dll", plan.Links);
         Assert.Contains("valheim_server_Data/Plugins/x86_64/steam_api64.dll", plan.Links);
@@ -483,7 +483,7 @@ public sealed class HostedRuntimeStageTests : IDisposable
             Assert.Equal("32-bit Steam client library, not loaded by the 64-bit game",
                 Assert.Single(plan.LeftOut, item => item.Path == dll).Reason);
         // A case-insensitive host lists the same files in another spelling.
-        var spelled = HostedRuntimeStage.PlanWindowsProfile(["d3d12/D3D12Core.DLL", "STEAMWEBRTC64.DLL", "TIER0_S64.DLL", "VSTDLIB_S64.dll", "Version.dll"]);
+        var spelled = HostedRuntimeStage.PlanLinkedProfile(ClientPlatform.Windows, ["d3d12/D3D12Core.DLL", "STEAMWEBRTC64.DLL", "TIER0_S64.DLL", "VSTDLIB_S64.dll", "Version.dll"]);
         Assert.Equal(new[] { "STEAMWEBRTC64.DLL", "TIER0_S64.DLL", "VSTDLIB_S64.dll", "d3d12/D3D12Core.DLL" }.Order(StringComparer.Ordinal), spelled.Links);
         Assert.Empty(spelled.LeftOut);
     }
@@ -498,7 +498,7 @@ public sealed class HostedRuntimeStageTests : IDisposable
             "valheim.exe", "valheim_Data/diagnostics/output_log.txt", "valheim_Data/crashdumps/report.dmp",
         ];
 
-        var plan = HostedRuntimeStage.PlanWindowsProfile(writable);
+        var plan = HostedRuntimeStage.PlanLinkedProfile(ClientPlatform.Windows, writable);
 
         Assert.Equal(new[] { "valheim.exe" }, plan.Links);
         Assert.Equal(new[] { "Player.log", "core.dump", "crash.dmp", "crashdumps/**", "diagnostics/**", "error.MDMP", "logs/**",
@@ -519,7 +519,7 @@ public sealed class HostedRuntimeStageTests : IDisposable
             "BepInEx/core/BepInEx.dll", "newsteamthing64.dll", "crash.log", "logs/server.log",
             "valheim_server_Data/Plugins/x86_64/nested.dll",
         ];
-        var plan = HostedRuntimeStage.PlanWindowsProfile(listing);
+        var plan = HostedRuntimeStage.PlanLinkedProfile(ClientPlatform.Windows, listing);
 
         Assert.Equal(new[] { "crash.log", "logs/**", "newsteamthing64.dll" },
             plan.LeftOut.Select(item => item.Path));
@@ -534,7 +534,7 @@ public sealed class HostedRuntimeStageTests : IDisposable
         Assert.DoesNotContain("loader file", evidence);
         Assert.Contains("newsteamthing64.dll: an unknown root DLL", evidence);
         Assert.Null(HostedRuntimeStage.ProfileLeftOut.Describe(
-            HostedRuntimeStage.PlanWindowsProfile(["valheim.exe", "UnityPlayer.dll", "version.dll", "winhttp.dll"]).LeftOut));
+            HostedRuntimeStage.PlanLinkedProfile(ClientPlatform.Windows, ["valheim.exe", "UnityPlayer.dll", "version.dll", "winhttp.dll"]).LeftOut));
     }
 
     // Positive selection already omits every unrelated nested folder. Those omissions are evidence even though RuntimeSkips
@@ -542,13 +542,74 @@ public sealed class HostedRuntimeStageTests : IDisposable
     [Fact] public void WindowsProfileRecordsEachTopLevelFolderItDoesNotLink()
     {
         string[] listing = ["valheim.exe", "logs/steam.txt", "crashdumps/a.dmp", "cache/temporary.bin", "cache/other.bin"];
-        var plan = HostedRuntimeStage.PlanWindowsProfile(listing);
+        var plan = HostedRuntimeStage.PlanLinkedProfile(ClientPlatform.Windows, listing);
         Assert.Equal(new[] { "valheim.exe" }, plan.Links);
         Assert.Equal(new[] { "cache/**", "crashdumps/**", "logs/**" }, plan.LeftOut.Select(item => item.Path));
         Assert.StartsWith("2 files left out:", plan.LeftOut[0].Reason);
         // A standalone hosted run's runtime copy uses the same skip test.
         Assert.True(HostInstall.Skipped("logs/steam.txt", HostedRuntimeStage.RuntimeSkips, StringComparer.Ordinal));
     }
+
+    // #612: a Linux dedicated server's profile is linked like a Windows one, by the same rules from its own table: the executable,
+    // its data tree, linux64 (the Steam client library) and the root libraries the game needs. Logs, text, crash dumps, the loader
+    // and the start scripts never become links.
+    [Fact] public void LinuxProfileLinksOnlyTheDedicatedServerLaunchInputs()
+    {
+        string[] listing =
+        [
+            "valheim_server.x86_64", "UnityPlayer.so", "libparty.so", "linux64/steamclient.so", "steam_appid.txt",
+            "start_server.sh", "start_server_xterm.sh", "start_server_bepinex.sh", "Valheim Dedicated Server Manual.pdf",
+            "valheim_server_Data/boot.config", "valheim_server_Data/Managed/assembly_valheim.dll",
+            "valheim_server_Data/Plugins/libparty.so", "valheim_server_Data/Plugins/libsteam_api.so",
+            "valheim_server_Data/output_log.txt", "valheim_server_Data/crashdumps/core.dmp", "valheim_server_Data/Player.log",
+            "doorstop_libs/libdoorstop_x64.so", ".doorstop_version", "BepInEx/core/BepInEx.Preloader.dll", "BepInEx/LogOutput.log",
+            "logs/stats_log.txt", "preloader_20261020.log", "core.dump",
+        ];
+
+        var plan = HostedRuntimeStage.PlanLinkedProfile(ClientPlatform.Linux, listing);
+
+        Assert.Equal(new[]
+        {
+            "UnityPlayer.so", "libparty.so", "linux64/steamclient.so", "valheim_server.x86_64", "valheim_server_Data/Managed/assembly_valheim.dll",
+            "valheim_server_Data/Plugins/libparty.so", "valheim_server_Data/Plugins/libsteam_api.so", "valheim_server_Data/boot.config",
+        }.Order(StringComparer.Ordinal), plan.Links);
+        Assert.Equal(new[]
+        {
+            "Valheim Dedicated Server Manual.pdf", "core.dump", "logs/**", "preloader_20261020.log", "start_server.sh",
+            "start_server_bepinex.sh", "start_server_xterm.sh", "steam_appid.txt", "valheim_server_Data/**",
+        }, plan.LeftOut.Select(item => item.Path));
+        Assert.Equal("not an input to the Linux game launch", Assert.Single(plan.LeftOut, item => item.Path == "start_server.sh").Reason);
+        Assert.Equal("3 files left out: a crash dump; a log file; a writable text output",
+            Assert.Single(plan.LeftOut, item => item.Path == "valheim_server_Data/**").Reason);
+        Assert.DoesNotContain(plan.LeftOut, item => item.Path is "doorstop_libs/**" or "BepInEx/**" or ".doorstop_version");
+    }
+
+    // An unknown root library is left out with what to do about it, as an unknown root DLL is on Windows (#651). Linux names are
+    // case-sensitive: another spelling of a game file is not the game's.
+    [Fact] public void LinuxProfileRecordsAnUnknownRootLibraryAndComparesNamesExactly()
+    {
+        var plan = HostedRuntimeStage.PlanLinkedProfile(ClientPlatform.Linux,
+            ["valheim_server.x86_64", "UnityPlayer.so", "libnewsteam.so", "unityplayer.SO", "Linux64/steamclient.so"]);
+
+        Assert.Equal(new[] { "UnityPlayer.so", "valheim_server.x86_64" }, plan.Links);
+        var unknown = Assert.Single(plan.LeftOut, item => item.Path == "libnewsteam.so");
+        Assert.Contains("unknown root library", unknown.Reason);
+        Assert.Contains("HostedRuntimeStage.LinuxGameRootLibraries", unknown.Reason);
+        Assert.Contains(plan.LeftOut, item => item.Path == "unityplayer.SO");
+        Assert.Contains(plan.LeftOut, item => item.Path == "Linux64/**");
+        // A macOS profile links nothing: it launches its source executable (ProfileLayout.SourceExecutable).
+        Assert.Throws<ArgumentException>(() => HostedRuntimeStage.PlanLinkedProfile(ClientPlatform.MacOS, ["valheim_server/Valheim"]));
+    }
+
+    // #612: one decision between a linked profile and one that launches its source executable, from the host's platform.
+    [Theory]
+    [InlineData("windows", true, true)]
+    [InlineData("windows", false, true)]
+    [InlineData("linux", true, true)]
+    [InlineData("macos", true, false)]
+    [InlineData("macos", false, false)]
+    public void TheHostPlatformDecidesTheProfileLayout(string platform, bool server, bool linked) =>
+        Assert.Equal(linked ? ProfileLayout.Linked : ProfileLayout.SourceExecutable, ProfileLayouts.For(platform, server));
 
     // One disposable profile per actor, prepared on a fake host (HostedRuntimeStage.PrepareProfileAsync): the selected files, the loader.
     private string Mirror => Path.Combine(_root, "host");
@@ -590,6 +651,121 @@ public sealed class HostedRuntimeStageTests : IDisposable
         Assert.False(File.Exists(Path.Combine(install, "BepInEx", "plugins", "chosen-mac.dll")));
     }
 
+
+    // A Linux dedicated server's install as a profile reads it: the executable, Unity's player, the data tree, the Steam client
+    // library, the loader, and the start scripts and Steam's app id that the launch does not need.
+    private static void LinuxServerInstall(string install)
+    {
+        FakeInstalls.Server(install);
+        FakeInstalls.LinuxLoader(install);
+        foreach (string relative in new[] { GameLaunch.ServerLinuxExecutable, "UnityPlayer.so", "linux64/steamclient.so",
+            "valheim_server_Data/Plugins/libparty.so", "start_server.sh", "steam_appid.txt", "BepInEx/core/BepInEx.dll",
+            "BepInEx/core/BepInEx.Preloader.dll" })
+        {
+            string path = Path.Combine(install, relative);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, relative);
+        }
+    }
+
+    // #612: a Linux server's profile is its launch folder, as a Windows one is: the game's files are linked into it (the seed's
+    // gameFiles), the loader and selected plugin copied, so the launch's working directory, executable, library path and
+    // command line all name the profile. Paths.GameRootPath, and the preloader log BepInEx writes beside the executable, are
+    // the profile's.
+    [Fact] public async Task ALinuxServerProfileIsItsLaunchFolderWithTheGameFilesLinked()
+    {
+        var host = new FakeServerHost("linux-server", Mirror);
+        const string source = "/srv/valheim", runtime = "/srv/runs/linked/runtime", staging = "/srv/runs/linked/staging";
+        string install = host.Local(source);
+        LinuxServerInstall(install);
+        string chosen = Path.Combine(_root, "chosen-linux.dll");
+        File.WriteAllText(chosen, "selected plugin");
+        var before = WorldFixture.Manifest(install);
+
+        var prepared = await HostedRuntimeStage.PrepareProfileAsync(host, HostedRuntimeKind.Server, source, runtime, staging,
+            [new HostedRuntimeFile(chosen, "BepInEx/plugins/chosen-linux.dll")], TimeSpan.FromSeconds(30));
+
+        Assert.Equal((runtime, runtime), (prepared.GameRoot, prepared.LoaderRoot));
+        Assert.Equal(source, prepared.Source.Root);
+        Assert.Equal(source + "\n" + runtime, Assert.Single(host.Runs, run => run.Script == "profile-storage").Variables["paths"]);
+        var seed = Assert.Single(host.Runs, run => run.Script == "profile-seed");
+        string[] Decoded(string variable) => seed.Variables[variable].Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(line => System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(line))).Order(StringComparer.Ordinal).ToArray();
+        string[] links = Decoded("gameFiles");
+        Assert.All(new[] { "UnityPlayer.so", "linux64/steamclient.so", GameLaunch.ServerLinuxExecutable,
+            "valheim_server_Data/Managed/" + InstallPins.GameAssemblyName, "valheim_server_Data/Plugins/libparty.so" }, path => Assert.Contains(path, links));
+        Assert.All(links, path => Assert.True(path is "UnityPlayer.so" or "linux64/steamclient.so" or GameLaunch.ServerLinuxExecutable ||
+            path.StartsWith("valheim_server_Data/", StringComparison.Ordinal), path));
+        Assert.Empty(Decoded("files").Where(path => !path.StartsWith("BepInEx/core/", StringComparison.Ordinal) && !path.StartsWith("doorstop_libs/", StringComparison.Ordinal)));
+        Assert.Contains(prepared.LeftOut, item => item.Path == "start_server.sh");
+        Assert.Contains(GameLaunch.ServerLinuxExecutable, prepared.Game.Files.Keys);
+        Assert.Contains(GameLaunch.ServerLinuxExecutable, prepared.Game.Executables);
+        Assert.Equal(FileHash.Sha256(chosen), prepared.Loader.Files["BepInEx/plugins/chosen-linux.dll"]);
+        Assert.True(File.Exists(Path.Combine(host.Local(runtime), GameLaunch.ServerLinuxExecutable)));
+        Assert.Equal(before, WorldFixture.Manifest(install));
+
+        var launch = GameLaunch.ForServerWithLoader(prepared.GameRoot, prepared.LoaderRoot, ["-batchmode"], null, ServerPlatform.Linux);
+        Assert.Equal(runtime, launch.WorkingDirectory);
+        Assert.Equal(runtime + "/" + GameLaunch.ServerLinuxExecutable, launch.Executable);
+        Assert.Equal(runtime + "/linux64:" + runtime + "/doorstop_libs", launch.Prepended["LD_LIBRARY_PATH"]);
+        Assert.Equal(runtime + "/BepInEx/core/BepInEx.Preloader.dll", launch.Environment["DOORSTOP_TARGET_ASSEMBLY"]);
+        // Still a profile: the runner's injected libraries are dropped, as from a macOS profile's separate loader root.
+        Assert.Contains("LD_PRELOAD", launch.Unset);
+        Assert.Contains("LD_LIBRARY_PATH", launch.Unset);
+        Assert.Equal(HostProcessProbe.ExpectedCommandLineSha256(false, runtime + "/" + GameLaunch.ServerLinuxExecutable, ["-batchmode"]),
+            launch.CommandLineSha256());
+    }
+
+    // The negative control: a Mac dedicated server's profile is not linked. Its host names Darwin, so the probe reads no mount,
+    // nothing is linked, and its launch runs the source executable with the profile as its working directory.
+    [Fact] public async Task AMacServerProfileStillLaunchesTheSourceExecutable()
+    {
+        var host = new FakeServerHost("mac-server", Mirror);
+        const string source = "/game/mac-server", runtime = "/runs/mac-source/runtime", staging = "/runs/mac-source/staging";
+        string install = host.Local(source);
+        string executable = Path.Combine(install, "valheim_server", "Valheim");
+        Directory.CreateDirectory(Path.Combine(install, "valheim_server", "Data", "Managed"));
+        File.WriteAllText(executable, "mac server");
+        File.WriteAllText(Path.Combine(install, "valheim_server", "Data", "Managed", InstallPins.GameAssemblyName), "mac game assembly");
+        FakeInstalls.MacLoader(install);
+        Directory.CreateDirectory(Path.Combine(install, "BepInEx", "core"));
+        File.WriteAllText(Path.Combine(install, "BepInEx", "core", "BepInEx.dll"), "core");
+        File.WriteAllText(Path.Combine(install, "BepInEx", "core", "BepInEx.Preloader.dll"), "preloader");
+
+        string chosen = Path.Combine(_root, "chosen-mac-source.dll");
+        File.WriteAllText(chosen, "selected plugin");
+
+        var prepared = await HostedRuntimeStage.PrepareProfileAsync(host, HostedRuntimeKind.Server, source, runtime, staging,
+            [new HostedRuntimeFile(chosen, "BepInEx/plugins/chosen-mac-source.dll")], TimeSpan.FromSeconds(30));
+
+        Assert.Equal((source, runtime), (prepared.GameRoot, prepared.LoaderRoot));
+        Assert.Empty(Assert.Single(host.Runs, run => run.Script == "profile-seed").Variables["gameFiles"]);
+        Assert.False(File.Exists(host.Local(runtime + "/valheim_server/Valheim")));
+        var launch = GameLaunch.ForServerWithLoader(prepared.GameRoot, prepared.LoaderRoot, [], null, ServerPlatform.MacOS);
+        Assert.Equal(source + "/" + GameLaunch.ServerMacExecutable, launch.Executable);
+        Assert.Equal(runtime, launch.WorkingDirectory);
+    }
+
+    // A Linux runtime the links cannot reach is refused before anything is staged on the host, in the Windows refusal's words.
+    [Fact] public async Task ALinuxServerProfileOnAnotherMountIsRefusedBeforeStaging()
+    {
+        var host = new FakeServerHost("linux-server", Mirror);
+        const string source = "/srv/valheim", runtime = "/home/tester/runs/other/runtime", staging = "/home/tester/runs/other/staging";
+        LinuxServerInstall(host.Local(source));
+        host.LinuxVolumes["/srv"] = new LinuxStorageVolume("/srv", "2065", "ext4", Writable: true);
+        string chosen = Path.Combine(_root, "chosen-other-mount.dll");
+        File.WriteAllText(chosen, "selected plugin");
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => HostedRuntimeStage.PrepareProfileAsync(host,
+            HostedRuntimeKind.Server, source, runtime, staging, [new HostedRuntimeFile(chosen, "BepInEx/plugins/chosen.dll")],
+            TimeSpan.FromSeconds(30)));
+
+        Assert.Equal("the default runtime folder /home/tester/runs/other/runtime is on / (ext4, device 2049), not the source install's mount " +
+            "/srv (ext4, device 2065). A Linux profile hard-links the install's game files, and a hard link cannot cross mounts. " +
+            "Put the default runtime on the install's mount /srv.", error.Message);
+        Assert.DoesNotContain(host.Scripts, script => script is "list" or "ship" or "profile-seed" or "apply-stage");
+        Assert.False(Directory.Exists(host.Local(runtime)));
+    }
 
     [Fact] public async Task OneHostedProfileStagesOnlySelectedFilesWithoutChangingTheSource()
     {
@@ -948,6 +1124,81 @@ public sealed class HostedRuntimeStageTests : IDisposable
             Assert.Contains(source, result.Stderr);
             Assert.Contains("install's volume", result.Stderr);
         }
+    }
+
+    // #612, with Linux's own tools: the seed hard-links a game file (the install's inode), copies the loader, and refuses a link
+    // across filesystems in the Windows seed's words, never copying the game instead. /dev/shm is a tmpfs; the second half is
+    // skipped where it shares the temporary folder's filesystem.
+    [Fact]
+    public async Task TheRealBashSeedLinksTheGameAndRefusesALinkAcrossFilesystems()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+        var host = new LocalGameHost("local-link", HostShell.Bash);
+        string source = Directory.CreateDirectory(Path.Combine(_root, "link source")).FullName;
+        const string loader = "doorstop_libs/libdoorstop_x64.so";
+        File.WriteAllText(Path.Combine(source, GameLaunch.ServerLinuxExecutable), "server");
+        Directory.CreateDirectory(Path.Combine(source, "doorstop_libs"));
+        File.WriteAllText(Path.Combine(source, loader), "loader");
+        static string Encode(string relative) => Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(relative));
+        Task<HostResult> Seed(string runtime) => host.RunAsync(HostedRuntimeStage.BashProfileSeed, new Dictionary<string, string>
+        {
+            ["source"] = source, ["runtime"] = runtime,
+            ["gameFiles"] = Encode(GameLaunch.ServerLinuxExecutable), ["files"] = Encode(loader),
+        }, TimeSpan.FromSeconds(30));
+        async Task<string> Stat(string format, string path) => (await host.RunAsync("stat -c \"$format\" -- \"$path\"",
+            new Dictionary<string, string> { ["format"] = format, ["path"] = path }, TimeSpan.FromSeconds(30))).EnsureSuccess("stat").Stdout.Trim();
+
+        string runtime = Path.Combine(_root, "link runtime");
+        Assert.Contains("VT-PROFILE-SEEDED", (await Seed(runtime)).EnsureSuccess("Seeding a linked profile").Stdout);
+        Assert.Equal(await Stat("%i", Path.Combine(source, GameLaunch.ServerLinuxExecutable)), await Stat("%i", Path.Combine(runtime, GameLaunch.ServerLinuxExecutable)));
+        Assert.NotEqual(await Stat("%i", Path.Combine(source, loader)), await Stat("%i", Path.Combine(runtime, loader)));
+
+        const string shm = "/dev/shm";
+        if (!Directory.Exists(shm) || await Stat("%d", shm) == await Stat("%d", source)) return;
+        string other = Path.Combine(shm, "vt-link-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var refused = await Seed(other);
+            Assert.True(refused.Failed, refused.Describe());
+            Assert.Contains($"Could not create a hard link in runtime folder {other} from the install's mount containing {source}: ", refused.Stderr);
+            Assert.Contains("Invalid cross-device link", refused.Stderr);
+            Assert.False(File.Exists(Path.Combine(other, GameLaunch.ServerLinuxExecutable)));
+        }
+        finally { if (Directory.Exists(other)) Directory.Delete(other, recursive: true); }
+    }
+
+    // #612: the real storage probe through this machine's bash. A Mac names Darwin, so its server profile launches the source
+    // (the negative control) and nothing else is read; on Linux a runtime beside the install is on its mount, the probe agrees
+    // with the inventory's own reading of this machine, and /dev/shm's tmpfs is another mount, refused before anything is made.
+    [Fact]
+    public async Task TheRealStorageProbeDecidesTheLayoutAndReadsTheLinuxMount()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        var host = new LocalGameHost("local-probe", HostShell.Bash);
+        string source = Directory.CreateDirectory(Path.Combine(_root, "probe source")).FullName;
+        string runtime = Path.Combine(_root, "probe runs", "runtime"); // not made yet: its nearest existing parent is read
+        var server = await HostedRuntimeStage.RequireProfileStorageAsync(host, HostedRuntimeKind.Server, source, runtime, TimeSpan.FromSeconds(30));
+        // A bash host's client profile is a Mac's: the host is not asked.
+        Assert.Equal((ProfileLayout.SourceExecutable, (string?)null), ((await HostedRuntimeStage.RequireProfileStorageAsync(host,
+            HostedRuntimeKind.Client, "/no/such/install", "/no/such/runtime", TimeSpan.FromSeconds(30))).Layout, null));
+        if (OperatingSystem.IsMacOS())
+        {
+            Assert.Equal((ProfileLayout.SourceExecutable, (string?)null), (server.Layout, server.Description));
+            return;
+        }
+        Assert.Equal(ProfileLayout.Linked, server.Layout);
+        var mount = LinuxStorageProbe.Inspect(source);
+        Assert.Equal($"source {source} and runtime {runtime} are on {mount.Description}", server.Description);
+        Assert.True(mount.SameVolume(LinuxStorageProbe.Inspect(runtime)));
+        Assert.True(mount.Writable);
+        Assert.False(Directory.Exists(Path.Combine(_root, "probe runs")));
+
+        const string shm = "/dev/shm";
+        if (!Directory.Exists(shm) || LinuxStorageProbe.Inspect(shm).SameVolume(mount)) return;
+        var refused = await Assert.ThrowsAsync<InvalidOperationException>(() => HostedRuntimeStage.RequireProfileStorageAsync(host,
+            HostedRuntimeKind.Server, source, shm + "/vt-runs/runtime", TimeSpan.FromSeconds(30), explicitRuntime: true));
+        Assert.Contains("A Linux profile hard-links the install's game files, and a hard link cannot cross mounts. " +
+            $"Put the inventory runtime on the install's mount {mount.MountPoint}.", refused.Message);
     }
 
     [Fact] public async Task FailedCleanupKeepsBothTheOriginalErrorAndTheUnprovenResidue()

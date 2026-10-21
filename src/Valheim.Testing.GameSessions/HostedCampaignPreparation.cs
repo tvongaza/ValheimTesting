@@ -496,12 +496,14 @@ public static class HostedCampaignPreparation
                 return;
             }
             bool localHost = inputs.Profile.Hosts[group.Key].Kind == "local";
-            if (!localHost && inputs.Profile.Hosts[group.Key].Platform == "windows")
-                foreach (var item in group)
+            if (!localHost)
+                foreach (var item in group.Where(item => ProfileLayouts.For(inputs.Profile.Hosts[group.Key].Platform,
+                    item.Name == "server") == ProfileLayout.Linked))
                     try
                     {
-                        await HostedRuntimeStage.RequireProfileStorageAsync(host, item.Role.Install, item.Role.Runtime,
-                            timeout, cancellation, explicitRuntime: item.Role.RuntimeExplicit).ConfigureAwait(false);
+                        await HostedRuntimeStage.RequireProfileStorageAsync(host,
+                            item.Name == "server" ? HostedRuntimeKind.Server : HostedRuntimeKind.Client, item.Role.Install,
+                            item.Role.Runtime, timeout, cancellation, explicitRuntime: item.Role.RuntimeExplicit).ConfigureAwait(false);
                     }
                     catch (Exception error) when (HostCheckRefusal(error))
                     { failures.Add(new(item.Name, "profile storage", error.Message)); }

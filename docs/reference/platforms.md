@@ -64,6 +64,8 @@ Linux hosts run the dedicated server only. Linux machines detect no client envir
 Linux hosts run the dedicated server only; start the client on Windows or macOS.
 ```
 
+A Linux server's profile is its own launch folder, as a Windows profile is: it hard-links the install's game files, so the server's game root, and anything written beside its executable, is the profile's. Its `runtime` must be on the install's mount, and a runtime on another one is refused before anything is staged ([where a profile lives](sessions-profiles.md#where-a-profile-lives)).
+
 [docker/linux-server](../../docker/linux-server/README.md) builds a local x86-64 image with the server, BepInEx and .NET 10. [LinuxServerSmoke](../../docker/linux-server/smoke/README.md) boots the server in that image twice, on a new world and on its save. The [scheduled server checks](../../docker/linux-server/README.md#scheduled-checks-in-ci) run every night and after each new public server build. They run that smoke and the server half of the [native acceptance suite](../../tests/Valheim.Testing.NativeAcceptance/README.md).
 
 You can place a server on another host from any OS:

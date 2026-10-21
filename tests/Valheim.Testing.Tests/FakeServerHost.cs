@@ -106,6 +106,13 @@ internal sealed class FakeServerHost : IGameHost
     /// <summary>The Windows profile-storage probe's source and runtime volumes.</summary>
     public WindowsStorageVolume ProfileSourceVolume { get; set; } = new(@"C:\", "volume-c", "NTFS", false);
     public WindowsStorageVolume ProfileRuntimeVolume { get; set; } = new(@"C:\", "volume-c", "NTFS", false);
+    /// <summary>
+    /// The system a bash host's profile-storage probe names (uname -s); by default a Mac's when the probed source holds a Mac
+    /// dedicated server, else Linux, as only a real host of that system could hold it.
+    /// </summary>
+    public string? HostSystem { get; set; }
+    /// <summary>The Linux profile-storage probe's mount for each probed path, by path prefix; by default the root's ext4.</summary>
+    public Dictionary<string, LinuxStorageVolume> LinuxVolumes { get; } = new(StringComparer.Ordinal);
     /// <summary>A process this host reports as running until it is stopped; for journal tests.</summary>
     public void Running(int pid, string start)
     {
@@ -142,7 +149,7 @@ internal sealed class FakeServerHost : IGameHost
         ("drop-kept", [HostedRunScripts.DropKept, HostedRunScripts.WindowsDropKept]),
         ("apply-stage", [HostedRuntimeStage.WindowsApply, HostedRuntimeStage.BashApply]),
         ("profile-seed", [HostedRuntimeStage.WindowsProfileSeed, HostedRuntimeStage.BashProfileSeed]),
-        ("profile-storage", [HostedRuntimeStage.WindowsProfileStorage]),
+        ("profile-storage", [HostedRuntimeStage.WindowsProfileStorage, LinuxStorageProbe.Script]),
         ("steam-runtime-verify", [MacSteamRuntimePackage.VerificationScript]),
         ("steam-runtime-stage", [MacSteamRuntimeOnHost.Stage]),
         ("keep-logs", [RunRecovery.BashKeepLogs, RunRecovery.WindowsKeepLogs]),
@@ -214,6 +221,22 @@ internal sealed class FakeServerHost : IGameHost
         if (Failures.TryGetValue(name, out var failure)) return failure;
         switch (name)
         {
+            case "profile-storage" when !Windows:
+            {
+                string[] paths = v["paths"].Split('\n', StringSplitOptions.RemoveEmptyEntries);
+                string system = HostSystem ?? (File.Exists(Path.Combine(Local(paths[0]), GameLaunch.ServerMacExecutable)) ? "Darwin" : "Linux");
+                var text = new StringBuilder("VT-PROFILE-OS " + system + "\n");
+                if (system != "Linux") return Ok(text.ToString());
+                for (int i = 0; i < paths.Length; i++)
+                {
+                    var volume = LinuxVolumes.Where(item => paths[i] == item.Key || paths[i].StartsWith(item.Key.TrimEnd('/') + "/", StringComparison.Ordinal))
+                        .OrderByDescending(item => item.Key.Length).Select(item => item.Value).FirstOrDefault()
+                        ?? new LinuxStorageVolume("/", "2049", "ext4", Writable: true);
+                    text.Append($"VT-PROFILE-VOLUME {i} {volume.Device} {(volume.Writable ? 1 : 0)} {volume.FileSystem} ")
+                        .Append(Convert.ToBase64String(Encoding.UTF8.GetBytes(volume.MountPoint))).Append('\n');
+                }
+                return Ok(text.Append("VT-PROFILE-VOLUMES\n").ToString());
+            }
             case "profile-storage":
             {
                 object Item(WindowsStorageVolume volume) => new

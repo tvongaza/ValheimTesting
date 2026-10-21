@@ -81,10 +81,10 @@ internal sealed class LocalClientCopy
         string data = dataRoot ?? CliBundle.DataRoot;
         host ??= new LocalGameHost("this machine", HostShell.ThisMachine);
         var journal = RunJournal.ThisProcess;
-        var runtimeRoot = await HostedRuntimeStage.DefaultProfileRootAsync(host, source, data, StepTimeout, cancellation).ConfigureAwait(false);
+        var runtimeRoot = await HostedRuntimeStage.DefaultProfileRootAsync(host, HostedRuntimeKind.Client, source, data, StepTimeout, cancellation).ConfigureAwait(false);
         string root = HostPath.Join(runtimeRoot.Path, "local-clients");
         Console.WriteLine($"profile runtime root: {root} ({runtimeRoot.Reason}).");
-        await HostedRuntimeStage.RequireProfileStorageAsync(host, source, root, StepTimeout, cancellation,
+        await HostedRuntimeStage.RequireProfileStorageAsync(host, HostedRuntimeKind.Client, source, root, StepTimeout, cancellation,
             explicitRuntime: false).ConfigureAwait(false);
         // One folder per profile: a run may prepare two plans for one client name (a client opened without its mod, then with it).
         string parent = Path.Combine(root, "vt-prep-" + journal.RunId + "-" + actor + "-" + Guid.NewGuid().ToString("N")[..8]);

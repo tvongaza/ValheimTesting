@@ -55,6 +55,15 @@ internal sealed class FakeMachine(string platform = "windows") : ISteamLocator
         string root = Platform == "windows" && path.Length >= 2 && path[1] == ':' ? char.ToUpperInvariant(path[0]) + @":\" : Path.GetPathRoot(path) ?? path;
         return new WindowsStorageVolume(root, root, Platform == "windows" ? "NTFS" : "", path.StartsWith(@"\\", StringComparison.Ordinal));
     }
+    /// <summary>Linux mounts by mount point; a path under none of them is on the root's ext4.</summary>
+    public Dictionary<string, LinuxStorageVolume> LinuxStorage { get; } = new(StringComparer.Ordinal);
+    public LinuxStorageVolume LinuxStorageVolume(string path)
+    {
+        if (StorageError != null) throw StorageError;
+        return LinuxStorage.Where(item => path == item.Key || path.StartsWith(item.Key.TrimEnd('/') + "/", StringComparison.Ordinal))
+            .OrderByDescending(item => item.Key.Length).Select(item => item.Value).FirstOrDefault()
+            ?? new LinuxStorageVolume("/", "2049", "ext4", Writable: true);
+    }
 
     private char Separator => Platform == "windows" ? '\\' : '/';
     public void File(string path, string text = "")
@@ -189,6 +198,117 @@ public sealed class ThisMachineTests : IDisposable
             Assert.Contains("--in-place", ProfileRuntimeStorage.Refusal(@"E:\game", unsupported, @"E:\runs", unsupported,
                 explicitRuntime: false, inPlaceAvailable: true));
         }
+    }
+
+    // #612: a Linux server profile hard-links the install too, so the same verdict refuses a runtime the links cannot reach: another
+    // device, a bind mount of the same device (rename and link refuse EXDEV across mounts), FAT or exFAT, or a folder this user
+    // cannot write. Each refusal names the inventory runtime or the default root and where to put it.
+    [Fact]
+    public void LinuxProfileStorageRefusesAnotherMountABindMountFilesystemsWithoutLinksAndAnUnwritableRoot()
+    {
+        var games = new LinuxStorageVolume("/mnt/games", "2065", "ext4", Writable: true);
+        Assert.Null(ProfileRuntimeStorage.Refusal("/mnt/games/valheim", games, "/mnt/games/runs", games));
+        var verdict = ProfileRuntimeStorage.Verdict("/mnt/games/valheim", games, "/mnt/games/runs", games, explicitRuntime: true);
+        Assert.Equal("source /mnt/games/valheim and runtime /mnt/games/runs are on /mnt/games (ext4, device 2065)", verdict.Description);
+
+        string other = Assert.IsType<string>(ProfileRuntimeStorage.Refusal("/mnt/games/valheim", games, "/home/tester/runs",
+            new LinuxStorageVolume("/", "2049", "ext4", Writable: true)));
+        Assert.Equal("the explicit inventory runtime folder /home/tester/runs is on / (ext4, device 2049), not the source install's mount " +
+            "/mnt/games (ext4, device 2065). A Linux profile hard-links the install's game files, and a hard link cannot cross mounts. " +
+            "Put the inventory runtime on the install's mount /mnt/games.", other);
+
+        // A bind mount shares the device; only its mount point differs, and the link still fails.
+        string bind = Assert.IsType<string>(ProfileRuntimeStorage.Refusal("/mnt/games/valheim", games, "/srv/runs",
+            new LinuxStorageVolume("/srv", "2065", "ext4", Writable: true), explicitRuntime: false));
+        Assert.Contains("the default runtime folder /srv/runs is on /srv (ext4, device 2065), not the source install's mount", bind);
+        Assert.Contains("Put the default runtime on the install's mount /mnt/games.", bind);
+        // A btrfs subvolume has its own device under the same mount point.
+        Assert.NotNull(ProfileRuntimeStorage.Refusal("/data/valheim", new LinuxStorageVolume("/data", "40", "btrfs", true), "/data/runs",
+            new LinuxStorageVolume("/data", "41", "btrfs", true)));
+
+        foreach (string fileSystem in new[] { "vfat", "exfat", "msdos" })
+        {
+            var noLinks = new LinuxStorageVolume("/media/usb", "2081", fileSystem, Writable: true);
+            string source = Assert.IsType<string>(ProfileRuntimeStorage.Refusal("/media/usb/valheim", noLinks, "/media/usb/runs", noLinks));
+            Assert.Equal($"the source install /media/usb/valheim is on /media/usb ({fileSystem}, device 2081), which cannot hold the hard links " +
+                "a Linux profile requires. Move the Steam library to a filesystem with hard links (ext4, xfs or btrfs).", source);
+            string runtime = Assert.IsType<string>(ProfileRuntimeStorage.Refusal("/mnt/games/valheim", games, "/media/usb/runs", noLinks));
+            Assert.Contains("which cannot hold the hard links a Linux profile requires. Put the inventory runtime on the install's mount /mnt/games.", runtime);
+        }
+
+        string unwritable = Assert.IsType<string>(ProfileRuntimeStorage.Refusal("/mnt/games/valheim", games, "/mnt/games/ValheimTesting/runs/server",
+            games with { Writable = false }, explicitRuntime: false));
+        Assert.Equal("the default runtime folder /mnt/games/ValheimTesting/runs/server on /mnt/games (ext4, device 2065) is not writable by this user. " +
+            "Create it with write access for this user, or put the default runtime in a writable folder on the install's mount /mnt/games.", unwritable);
+    }
+
+    // #612: a Linux server's default root follows Windows' rule. ValheimTesting's data folder when it is on the install's mount, else
+    // ValheimTesting/runs at the install's mount point; a probe that fails keeps the data folder for preflight to check. A Mac's
+    // profiles launch their source executable, so they keep the data folder whatever the mounts.
+    [Fact]
+    public void LinuxProfileDefaultsStayInDataOnTheInstallMountAndFollowTheInstallElsewhere()
+    {
+        var same = new FakeMachine("linux");
+        var sameRoot = ProfileRuntimeStorage.DefaultRoot(same, "/home/tester/.steam/steam/steamapps/common/Valheim dedicated server");
+        Assert.Equal("/home/tester/.local/share/ValheimTesting/runs", sameRoot.Path);
+        Assert.Equal("ValheimTesting's data folder is on the install mount / (ext4, device 2049)", sameRoot.Reason);
+
+        var other = new FakeMachine("linux");
+        other.LinuxStorage["/mnt/games"] = new LinuxStorageVolume("/mnt/games", "2065", "xfs", Writable: true);
+        var moved = ProfileRuntimeStorage.DefaultRoot(other, "/mnt/games/steamapps/common/Valheim dedicated server");
+        Assert.Equal("/mnt/games/ValheimTesting/runs", moved.Path);
+        Assert.Equal("the install is on /mnt/games (xfs, device 2065), not the data folder's / (ext4, device 2049), so Linux profiles follow the install mount", moved.Reason);
+
+        var failed = new FakeMachine("linux") { StorageError = new IOException("df: unrecognized option '--output'") };
+        Assert.Equal("/home/tester/.local/share/ValheimTesting/runs", ProfileRuntimeStorage.DefaultRoot(failed, "/mnt/games/valheim").Path);
+        Assert.Contains("the Linux storage probe could not identify the install mount (df: unrecognized option", ProfileRuntimeStorage.DefaultRoot(failed, "/mnt/games/valheim").Reason);
+
+        var mac = new FakeMachine("macos") { StorageError = new InvalidOperationException("a Mac is never probed") };
+        var macRoot = ProfileRuntimeStorage.DefaultRoot(mac, "/Volumes/Games/Valheim dedicated server");
+        Assert.Equal(("/Users/tester/Library/Application Support/ValheimTesting/runs",
+            "macOS profiles launch the source game and keep their loader under ValheimTesting's data folder"), (macRoot.Path, macRoot.Reason));
+    }
+
+    // The inventory's this-machine server on Linux gets that root and its storage verdict when it is read, as a Windows one does: an
+    // install mount this user cannot write under is refused, naming the default root, before any run.
+    [Fact]
+    public void ALinuxServerOnAnotherMountDefaultsToItsMountAndAnUnwritableOneIsRefused()
+    {
+        var linux = new FakeMachine("linux");
+        string server = linux.App("/mnt/games", "896660", "Valheim dedicated server", "valheim_server.x86_64");
+        string file = Path.Combine(_root, "linux-server.json");
+        File.WriteAllText(file, $$"""{ "environments": [ { "name": "server", "roles": ["server"], "install": "{{server}}" } ] }""");
+        linux.LinuxStorage["/mnt/games"] = new LinuxStorageVolume("/mnt/games", "2065", "ext4", Writable: true);
+
+        var recipe = Assert.Single(EnvironmentInventory.Read(file, linux).Environments);
+        Assert.Equal("/mnt/games/ValheimTesting/runs/server", recipe.Runtime);
+        Assert.False(recipe.RuntimeExplicit);
+        Assert.Null(recipe.ProfileStorage!.Refusal);
+
+        linux.LinuxStorage["/mnt/games"] = new LinuxStorageVolume("/mnt/games", "2065", "ext4", Writable: false);
+        recipe = Assert.Single(EnvironmentInventory.Read(file, linux).Environments);
+        Assert.StartsWith("the default runtime folder /mnt/games/ValheimTesting/runs/server on /mnt/games (ext4, device 2065) is not writable by this user.",
+            recipe.ProfileStorage!.Refusal);
+        var plan = new ServerRunPlan { Executable = GameLaunch.ServerLinuxExecutable, Port = 5577, Arguments = ["-port", "2456"] };
+        Assert.Contains("is not writable by this user", Assert.Throws<ArgumentException>(() => EnvironmentInventory.Read(file, linux).PlaceServer(plan)).Message);
+    }
+
+    // The probe's reply: the host's system first, then each path's mount. Anything else is refused, never read as a mount.
+    [Fact]
+    public void TheLinuxStorageProbeReplyIsReadStrictly()
+    {
+        string mount = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes("/mnt/my games"));
+        string reply = $"VT-PROFILE-OS Linux\nVT-PROFILE-VOLUME 0 2065 1 ext4 {mount}\nVT-PROFILE-VOLUME 1 2049 0 tmpfs {Convert.ToBase64String("/tmp"u8)}\nVT-PROFILE-VOLUMES\n";
+        Assert.Equal("Linux", LinuxStorageProbe.SystemName(reply));
+        Assert.Equal("linux", LinuxStorageProbe.Platform("Linux", "lab"));
+        Assert.Equal("macos", LinuxStorageProbe.Platform("Darwin", "lab"));
+        Assert.Contains("lab runs FreeBSD", Assert.Throws<PlatformNotSupportedException>(() => LinuxStorageProbe.Platform("FreeBSD", "lab")).Message);
+        Assert.Equal([new LinuxStorageVolume("/mnt/my games", "2065", "ext4", true), new LinuxStorageVolume("/tmp", "2049", "tmpfs", false)],
+            LinuxStorageProbe.Volumes(reply, 2));
+        Assert.Throws<InvalidDataException>(() => LinuxStorageProbe.Volumes(reply, 3));
+        Assert.Throws<InvalidDataException>(() => LinuxStorageProbe.Volumes(reply.Replace("VT-PROFILE-VOLUMES\n", ""), 2));
+        Assert.Throws<InvalidDataException>(() => LinuxStorageProbe.Volumes(reply.Replace("VT-PROFILE-VOLUME 1", "VT-PROFILE-VOLUME 2"), 2));
+        Assert.Null(LinuxStorageProbe.SystemName("VT-PROFILE-VOLUMES\n"));
     }
 
     [Theory]

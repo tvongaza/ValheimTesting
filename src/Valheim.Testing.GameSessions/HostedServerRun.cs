@@ -109,8 +109,8 @@ internal sealed class HostedServerRun : IServerPlacement
     public string RuntimeDirectory { get; }
     // A standalone profile's staging folder (HostedRuntimeStage.RequireStaging's rule: a sibling named staging).
     private string StagingDirectory { get; }
-    // The owned runtime remains the log and retirement root. A Unix profile starts the executable
-    // from this read-only game root while Doorstop and BepInEx remain under RuntimeDirectory.
+    // The owned runtime remains the log and retirement root. A Windows or Linux profile is linked, so it is the game root too;
+    // a macOS profile starts the executable from this read-only game root while Doorstop and BepInEx remain under RuntimeDirectory.
     public string GameDirectory => Role.PreparedGameRoot ?? RuntimeDirectory;
     public string LoaderDirectory => RuntimeDirectory;
     public string? MacSteamRuntimeDirectory => Role.PreparedSteamRuntimeRoot;
@@ -191,10 +191,10 @@ internal sealed class HostedServerRun : IServerPlacement
         provenance["runtimeSource"] = Role.Host + ":" + (Role.PreparedSourceRoot ?? Role.Install);
     }
 
-    /// <summary>The read-only Windows hard-link storage check, before this run takes a lock or stages its profile.</summary>
-    internal Task<string?> PreflightProfileStorageAsync(CancellationToken cancellation) =>
-        HostedRuntimeStage.RequireProfileStorageAsync(Host, Role.Install, Role.Runtime, HostedTimeouts.Quick, cancellation,
-            explicitRuntime: Role.RuntimeExplicit);
+    /// <summary>The read-only hard-link storage check of a linked profile, before this run takes a lock or stages its profile.</summary>
+    internal async Task<string?> PreflightProfileStorageAsync(CancellationToken cancellation) =>
+        (await HostedRuntimeStage.RequireProfileStorageAsync(Host, HostedRuntimeKind.Server, Role.Install, Role.Runtime,
+            HostedTimeouts.Quick, cancellation, explicitRuntime: Role.RuntimeExplicit).ConfigureAwait(false)).Description;
 
     /// <summary>
     /// Takes the server host's lock, then readies the server's profile: a campaign's prepared one is verified where it is; a

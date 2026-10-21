@@ -117,6 +117,40 @@ public sealed class LocalHostPreflightTests : IDisposable
         Assert.DoesNotContain(host.Scripts, script => script is "profile-seed" or "apply-stage");
     }
 
+    // #612: `env preflight` on a Linux machine checks its server's linked profile through the one storage owner, the bash probe
+    // on this machine's host; a Mac's server profile launches its source, so a Mac is asked nothing about mounts.
+    [Fact]
+    public async Task ALinuxServerProfileOnAnotherMountIsRefusedAndAMacOneIsNotProbed()
+    {
+        EnvironmentInventory Inventory(string platform) => new()
+        {
+            Hosts = new() { ["box"] = new HostProfile { Kind = "local", Platform = platform, Shell = "bash", Lock = "/vt/lock" } },
+            Environments = [new EnvironmentRecipe { Name = "server", Host = "box", Roles = ["server"],
+                Install = "/srv/valheim", Runtime = "/home/tester/runs", CliPort = 5551 }],
+        };
+        var probes = new LocalHostPreflight.Probes(
+            Processes: (_, _, _, _) => Task.CompletedTask,
+            Port: (_, _, _, _) => Task.CompletedTask,
+            Lock: (_, _, _, _) => Task.FromResult(new HostLockResult(HostLockState.Free, null, "free")),
+            Journals: (_, _) => Task.FromResult<IReadOnlyList<CampaignPreflightProblem>>([]), Packaged: () => null);
+        var host = new FakeServerHost("box", Path.Combine(_root, "linux-storage-mirror"), kind: GameHostKind.Local);
+        host.LinuxVolumes["/srv"] = new LinuxStorageVolume("/srv", "2065", "ext4", Writable: true);
+
+        var linux = Inventory("linux");
+        var refused = Assert.Single(await LocalHostPreflight.InspectAsync(linux, linux.Environments.Select(recipe => new LocalHostPreflight.Actor(recipe.Name, recipe)),
+            TimeSpan.FromSeconds(1), hostFactory: _ => host, probes: probes));
+        Assert.Equal(("server", "profile storage"), (refused.Actor, refused.Input));
+        Assert.Contains("A Linux profile hard-links the install's game files, and a hard link cannot cross mounts. " +
+            "Put the inventory runtime on the install's mount /srv.", refused.Message);
+        Assert.Single(host.Runs, run => run.Script == "profile-storage");
+        Assert.DoesNotContain(host.Scripts, script => script is "profile-seed" or "apply-stage" or "ship");
+
+        var mac = Inventory("macos");
+        Assert.Empty(await LocalHostPreflight.InspectAsync(mac, mac.Environments.Select(recipe => new LocalHostPreflight.Actor(recipe.Name, recipe)),
+            TimeSpan.FromSeconds(1), hostFactory: _ => host, probes: probes));
+        Assert.Single(host.Runs, run => run.Script == "profile-storage");
+    }
+
     // #821: a client's profile is staged under the environment's own runtime folder (a regression, a campaign), so preflight
     // checks that folder through the same check the stage runs. It once substituted LocalClientCopy's default folder and
     // reported ELIGIBLE for an inventory runtime on another volume, which start then refused.

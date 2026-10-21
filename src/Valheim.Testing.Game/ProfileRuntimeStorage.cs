@@ -1,18 +1,192 @@
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
 
 namespace Valheim.Testing.Game;
 
+/// <summary>
+/// How a disposable profile launches the game. <see cref="ProfileLayouts.For"/> decides it once, from the host's platform.
+/// </summary>
+internal enum ProfileLayout
+{
+    /// <summary>
+    /// The profile is the launch folder: the game's files are hard-linked into it and the game starts from there, so
+    /// <c>Paths.GameRootPath</c> and every write beside the executable are the profile's. Every Windows profile and a Linux
+    /// dedicated server's.
+    /// </summary>
+    Linked,
+    /// <summary>
+    /// The game starts from its source install and its loader from the profile. Every macOS profile: a client bundle launched
+    /// from a new path trips Gatekeeper, and the Mac dedicated server stays in place with it.
+    /// </summary>
+    SourceExecutable,
+}
+
+/// <summary>The one decision between <see cref="ProfileLayout.Linked"/> and <see cref="ProfileLayout.SourceExecutable"/>.</summary>
+internal static class ProfileLayouts
+{
+    /// <summary>
+    /// The layout of a profile on a <paramref name="platform"/> host (<c>windows</c>, <c>linux</c> or <c>macos</c>) for a dedicated
+    /// <paramref name="server"/> or a client. Linux runs no client, so only its server is linked.
+    /// </summary>
+    internal static ProfileLayout For(string platform, bool server) =>
+        platform == "windows" || platform == "linux" && server ? ProfileLayout.Linked : ProfileLayout.SourceExecutable;
+}
+
+/// <summary>
+/// The words one platform's hard-link rule is refused in: its name, what a link cannot cross (a Windows volume, a Linux mount),
+/// where the runtime belongs and which file systems hold the links.
+/// </summary>
+internal sealed record ProfileLinkRules(string Platform, string Unit, string Home, string FileSystems)
+{
+    internal static readonly ProfileLinkRules Windows = new("Windows", "volume", "NTFS volume", "NTFS");
+    internal static readonly ProfileLinkRules Linux = new("Linux", "mount", "mount", "a filesystem with hard links (ext4, xfs or btrfs)");
+
+    /// <summary>The rules of a linked profile on <paramref name="platform"/> (<c>windows</c> or <c>linux</c>).</summary>
+    internal static ProfileLinkRules For(string platform) => platform == "windows" ? Windows : Linux;
+}
+
+/// <summary>Where a linked profile's game files live: the Windows volume or the Linux mount that holds a path.</summary>
+internal interface IProfileStorageVolume
+{
+    /// <summary>The volume's root or the mount point: where a default runtime root moves to follow the install.</summary>
+    string Root { get; }
+    string Description { get; }
+    bool SupportsProfileLinks { get; }
+    /// <summary>Whether this user can create the runtime folder there (the probed path or its nearest existing parent).</summary>
+    bool Writable { get; }
+    ProfileLinkRules Rules { get; }
+    bool SameVolume(IProfileStorageVolume other);
+}
+
 /// <summary>The Windows volume and file system that contain a path (or its nearest existing parent).</summary>
-internal sealed record WindowsStorageVolume(string Root, string Identity, string FileSystem, bool Network)
+internal sealed record WindowsStorageVolume(string Root, string Identity, string FileSystem, bool Network) : IProfileStorageVolume
 {
     internal bool SameVolume(WindowsStorageVolume other) =>
         Identity.Equals(other.Identity, StringComparison.OrdinalIgnoreCase);
 
-    internal bool SupportsProfileLinks => !Network && FileSystem.Equals("NTFS", StringComparison.OrdinalIgnoreCase);
+    bool IProfileStorageVolume.SameVolume(IProfileStorageVolume other) => other is WindowsStorageVolume windows && SameVolume(windows);
 
-    internal string Description => Network ? $"network share {Root} ({FileSystem})" : $"{Root} ({FileSystem})";
+    public bool SupportsProfileLinks => !Network && FileSystem.Equals("NTFS", StringComparison.OrdinalIgnoreCase);
+
+    public string Description => Network ? $"network share {Root} ({FileSystem})" : $"{Root} ({FileSystem})";
+
+    // The Windows probe reads no permissions: staging reports a folder it cannot create.
+    bool IProfileStorageVolume.Writable => true;
+
+    ProfileLinkRules IProfileStorageVolume.Rules => ProfileLinkRules.Windows;
+}
+
+/// <summary>
+/// The Linux mount that contains a path (or its nearest existing parent): its mount point, the device of that path, the
+/// filesystem type, and whether this user can write to the path. A hard link needs one device on one mount: a bind mount of
+/// the same device, or another btrfs subvolume, still refuses it (<c>EXDEV</c>), so both are compared.
+/// </summary>
+internal sealed record LinuxStorageVolume(string MountPoint, string Device, string FileSystem, bool Writable) : IProfileStorageVolume
+{
+    // FAT and exFAT have no hard links.
+    private static readonly string[] NoLinks = ["vfat", "msdos", "exfat"];
+
+    public string Root => MountPoint;
+
+    public string Description => $"{MountPoint} ({FileSystem}, device {Device})";
+
+    public bool SupportsProfileLinks => !NoLinks.Contains(FileSystem, StringComparer.OrdinalIgnoreCase);
+
+    public ProfileLinkRules Rules => ProfileLinkRules.Linux;
+
+    public bool SameVolume(IProfileStorageVolume other) =>
+        other is LinuxStorageVolume linux && linux.Device == Device && linux.MountPoint == MountPoint;
+}
+
+/// <summary>
+/// The one Linux storage probe, a bash script that a local, SSH or container host runs (and this machine, for the inventory's
+/// default root). It names the host's system first (<c>VT-PROFILE-OS</c>, from <c>uname -s</c>), then, on Linux only, each of
+/// the newline-separated <c>paths</c> by its nearest existing parent: its device (<c>stat</c>), its filesystem type and mount
+/// point (<c>df</c>, which matches a bind mount's own entry where <c>stat</c>'s mount point does not) and whether it is writable.
+/// It creates nothing.
+/// </summary>
+internal static class LinuxStorageProbe
+{
+    internal static readonly string Script = """
+        set -u
+        os=$(uname -s) || exit 3
+        echo "VT-PROFILE-OS $os"
+        [ "$os" = Linux ] || exit 0
+        i=0
+        while IFS= read -r path; do
+          [ -n "$path" ] || continue
+          while [ ! -e "$path" ]; do
+            parent=$(dirname -- "$path")
+            if [ "$parent" = "$path" ]; then echo "No existing parent could identify the Linux mount for $path." >&2; exit 3; fi
+            path=$parent
+          done
+          path=$(readlink -f -- "$path") || exit 3
+          device=$(stat -L -c %d -- "$path") || exit 3
+          row=$(df --output=fstype,target -- "$path" | tail -n 1)
+          [ -n "$row" ] || exit 3
+          read -r fs mount <<< "$row"
+          if [ -w "$path" ]; then writable=1; else writable=0; fi
+          printf 'VT-PROFILE-VOLUME %s %s %s %s %s\n' "$i" "$device" "$writable" "$fs" "$(printf '%s' "$mount" | base64 | tr -d '\n')"
+          i=$((i + 1))
+        done <<< "$paths"
+        echo 'VT-PROFILE-VOLUMES'
+        """.ReplaceLineEndings("\n");
+
+    /// <summary>The host's system as the probe named it (<c>uname -s</c>), or null when the reply has none.</summary>
+    internal static string? SystemName(string stdout) =>
+        stdout.Split('\n').Select(line => line.TrimEnd('\r')).FirstOrDefault(line => line.StartsWith("VT-PROFILE-OS ", StringComparison.Ordinal))?["VT-PROFILE-OS ".Length..];
+
+    /// <summary>The platform name (<c>linux</c>, <c>macos</c>) of a probed system; a system the toolkit does not run on is refused.</summary>
+    internal static string Platform(string system, string where) => system switch
+    {
+        "Linux" => "linux",
+        "Darwin" => "macos",
+        _ => throw new PlatformNotSupportedException($"{where} runs {system}; a profile needs a Linux, macOS or Windows host."),
+    };
+
+    /// <summary>The volumes of a Linux probe's reply, in the order of its paths; refuses a reply that is incomplete.</summary>
+    internal static IReadOnlyList<LinuxStorageVolume> Volumes(string stdout, int count)
+    {
+        var lines = stdout.Split('\n').Select(line => line.TrimEnd('\r')).ToList();
+        if (!lines.Contains("VT-PROFILE-VOLUMES")) throw new InvalidDataException("The Linux storage probe did not finish.");
+        var volumes = new List<LinuxStorageVolume>();
+        foreach (string line in lines.Where(line => line.StartsWith("VT-PROFILE-VOLUME ", StringComparison.Ordinal)))
+        {
+            string[] parts = line.Split(' ');
+            if (parts.Length != 6 || parts[1] != volumes.Count.ToString(System.Globalization.CultureInfo.InvariantCulture))
+                throw new InvalidDataException("Malformed Linux storage probe line: " + line);
+            string mount;
+            try { mount = Encoding.UTF8.GetString(Convert.FromBase64String(parts[5])); }
+            catch (FormatException) { throw new InvalidDataException("Malformed Linux storage probe line: " + line); }
+            volumes.Add(new LinuxStorageVolume(mount, parts[2], parts[4], parts[3] == "1"));
+        }
+        if (volumes.Count != count) throw new InvalidDataException($"The Linux storage probe named {volumes.Count} of {count} paths.");
+        return volumes;
+    }
+
+    /// <summary>This machine's mount for <paramref name="path"/>, through the same script run by this machine's bash.</summary>
+    internal static LinuxStorageVolume Inspect(string path)
+    {
+        if (!OperatingSystem.IsLinux()) throw new PlatformNotSupportedException("Linux mount inspection runs only on Linux.");
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        var start = new ProcessStartInfo("bash") { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
+        start.ArgumentList.Add("-c");
+        start.ArgumentList.Add(Script);
+        start.Environment["paths"] = path;
+        using var process = Process.Start(start) ?? throw new IOException("bash did not start for the Linux storage probe.");
+        var error = process.StandardError.ReadToEndAsync();
+        string stdout = process.StandardOutput.ReadToEnd();
+        if (!process.WaitForExit(30_000))
+        {
+            process.Kill(entireProcessTree: true);
+            throw new IOException($"The Linux storage probe for {path} did not finish within 30 s.");
+        }
+        if (process.ExitCode != 0)
+            throw new IOException($"The Linux storage probe for {path} failed (exit {process.ExitCode}): {error.GetAwaiter().GetResult().Trim()}");
+        return Volumes(stdout, 1)[0];
+    }
 }
 
 /// <summary>Raw Windows storage facts, before path syntax and drive type are classified in one place.</summary>
@@ -109,42 +283,52 @@ internal static class WindowsStorageClassifier
 internal sealed record ProfileRuntimeRoot(string Path, string Reason);
 
 /// <summary>
-/// One owner of the default profile root on this machine. Windows profiles follow the install's volume so their game files
-/// can be hard-linked; Unix profiles keep ValheimTesting's data folder because they launch the source executable in place.
+/// One owner of a linked profile's storage: the default profile root and the verdict on a runtime folder. Linked profiles
+/// (<see cref="ProfileLayout.Linked"/>) follow the install's Windows volume or Linux mount so their game files can be
+/// hard-linked; macOS profiles keep ValheimTesting's data folder because they launch the source executable in place.
 /// </summary>
 internal static class ProfileRuntimeStorage
 {
-    internal static ProfileStorageVerdict Unknown(string sourcePath, Exception error) =>
-        new(null, null, $"Could not read the Windows volume for install {sourcePath}: {error.Message} Staging will try the hard links and report their error if they fail.");
+    internal static ProfileStorageVerdict Unknown(ProfileLinkRules rules, string sourcePath, Exception error) =>
+        new(null, null, $"Could not read the {rules.Platform} {rules.Unit} for install {sourcePath}: {error.Message} Staging will try the hard links and report their error if they fail.");
 
-    internal static ProfileRuntimeRoot DefaultRoot(ISteamLocator machine, string install, string? dataRoot = null)
+    /// <summary>The root of a profile that launches its source executable: ValheimTesting's data folder.</summary>
+    internal static ProfileRuntimeRoot SourceExecutableRoot(string dataRuns) =>
+        new(dataRuns, "macOS profiles launch the source game and keep their loader under ValheimTesting's data folder");
+
+    /// <summary>
+    /// The default root of this machine's profiles of <paramref name="install"/> (a dedicated server's when
+    /// <paramref name="server"/>): ValheimTesting's data folder when it can hold the profile's links, else a folder at the
+    /// install's volume root or mount point.
+    /// </summary>
+    internal static ProfileRuntimeRoot DefaultRoot(ISteamLocator machine, string install, string? dataRoot = null, bool server = true)
     {
         dataRoot ??= machine.DataRoot;
         string dataRuns = HostPath.Join(dataRoot, "runs");
-        if (machine.Platform != "windows")
-            return new(dataRuns, "Unix profiles launch the source game and keep their loader under ValheimTesting's data folder");
+        if (ProfileLayouts.For(machine.Platform, server) == ProfileLayout.SourceExecutable) return SourceExecutableRoot(dataRuns);
+        var rules = ProfileLinkRules.For(machine.Platform);
         if (string.IsNullOrEmpty(install))
-            return new(dataRuns, "the install was not detected, so no install volume could be selected");
+            return new(dataRuns, $"the install was not detected, so no install {rules.Unit} could be selected");
 
         try
         {
             string finalInstall = machine.FinalPath(install);
-            var source = machine.StorageVolume(finalInstall);
-            var data = machine.StorageVolume(machine.FinalPath(dataRoot));
+            var source = Volume(machine, finalInstall);
+            var data = Volume(machine, machine.FinalPath(dataRoot));
             return DefaultRoot(dataRuns, source, data);
         }
         catch (Exception error) when (ProbeFailure(error))
         {
-            return new(dataRuns, $"the Windows storage probe could not identify the install volume ({error.Message}); using ValheimTesting's data folder, and preflight will check it before staging");
+            return new(dataRuns, $"the {rules.Platform} storage probe could not identify the install {rules.Unit} ({error.Message}); using ValheimTesting's data folder, and preflight will check it before staging");
         }
     }
 
-    internal static ProfileRuntimeRoot DefaultRoot(string dataRuns, WindowsStorageVolume source, WindowsStorageVolume data)
+    internal static ProfileRuntimeRoot DefaultRoot(string dataRuns, IProfileStorageVolume source, IProfileStorageVolume data)
     {
         if (source.SameVolume(data))
-            return new(dataRuns, $"ValheimTesting's data folder is on the install volume {source.Description}");
+            return new(dataRuns, $"ValheimTesting's data folder is on the install {source.Rules.Unit} {source.Description}");
         string relocated = HostPath.Join(source.Root, "ValheimTesting", "runs");
-        return new(relocated, $"the install is on {source.Description}, not the data folder's {data.Description}, so Windows profiles follow the install volume");
+        return new(relocated, $"the install is on {source.Description}, not the data folder's {data.Description}, so {source.Rules.Platform} profiles follow the install {source.Rules.Unit}");
     }
 
     internal static ProfileStorageVerdict Inspect(ISteamLocator machine, string sourcePath, string runtimePath,
@@ -152,18 +336,22 @@ internal static class ProfileRuntimeStorage
     {
         try
         {
-            var source = machine.StorageVolume(machine.FinalPath(sourcePath));
-            var runtime = machine.StorageVolume(machine.FinalPath(runtimePath));
+            var source = Volume(machine, machine.FinalPath(sourcePath));
+            var runtime = Volume(machine, machine.FinalPath(runtimePath));
             return Verdict(sourcePath, source, runtimePath, runtime, explicitRuntime, inPlaceAvailable);
         }
         catch (Exception error) when (ProbeFailure(error))
         {
-            return Unknown(sourcePath, error);
+            return Unknown(ProfileLinkRules.For(machine.Platform), sourcePath, error);
         }
     }
 
-    internal static ProfileStorageVerdict Verdict(string sourcePath, WindowsStorageVolume source, string runtimePath,
-        WindowsStorageVolume runtime, bool explicitRuntime, bool inPlaceAvailable = false) =>
+    // This machine's volume (Windows) or mount (Linux) holding a path.
+    private static IProfileStorageVolume Volume(ISteamLocator machine, string path) =>
+        machine.Platform == "windows" ? machine.StorageVolume(path) : machine.LinuxStorageVolume(path);
+
+    internal static ProfileStorageVerdict Verdict(string sourcePath, IProfileStorageVolume source, string runtimePath,
+        IProfileStorageVolume runtime, bool explicitRuntime, bool inPlaceAvailable = false) =>
         new($"source {sourcePath} and runtime {runtimePath} are on {source.Description}",
             Refusal(sourcePath, source, runtimePath, runtime, explicitRuntime, inPlaceAvailable));
 
@@ -172,32 +360,37 @@ internal static class ProfileRuntimeStorage
         if (!explicitRuntime) return new(null, null);
         string? source = WindowsStorageClassifier.SyntaxRoot(sourcePath), runtime = WindowsStorageClassifier.SyntaxRoot(runtimePath);
         if (source == null || runtime == null || source.Equals(runtime, StringComparison.OrdinalIgnoreCase)) return new(null, null);
-        return new(null, CrossVolumeRefusal(explicitRuntime, runtimePath, runtime, source, source));
+        return new(null, CrossVolumeRefusal(ProfileLinkRules.Windows, explicitRuntime, runtimePath, runtime, source, source));
     }
 
     /// <summary>
     /// The one wording of the same-volume rule, for the filesystem verdict and the path-syntax placement verdict alike: a
-    /// profile hard-links the install's files, and a hard link cannot cross volumes.
+    /// profile hard-links the install's files, and a hard link cannot cross volumes (on Linux, mounts).
     /// </summary>
-    private static string CrossVolumeRefusal(bool explicitRuntime, string runtimePath, string runtimeVolume, string sourceVolume,
-        string sourceRoot) =>
+    private static string CrossVolumeRefusal(ProfileLinkRules rules, bool explicitRuntime, string runtimePath, string runtimeVolume,
+        string sourceVolume, string sourceRoot) =>
         $"the {(explicitRuntime ? "explicit inventory runtime folder" : "default runtime folder")} {runtimePath} is on {runtimeVolume}, " +
-        $"not the source install's volume {sourceVolume}. A Windows profile hard-links the install's game files, and a hard link cannot cross volumes. " +
-        $"Put {(explicitRuntime ? "the inventory runtime" : "the default runtime")} on the install's NTFS volume {sourceRoot}.";
+        $"not the source install's {rules.Unit} {sourceVolume}. A {rules.Platform} profile hard-links the install's game files, and a hard link cannot cross {rules.Unit}s. " +
+        $"Put {(explicitRuntime ? "the inventory runtime" : "the default runtime")} on the install's {rules.Home} {sourceRoot}.";
 
-    internal static string? Refusal(string sourcePath, WindowsStorageVolume source, string runtimePath,
-        WindowsStorageVolume runtime, bool explicitRuntime = true, bool inPlaceAvailable = false)
+    internal static string? Refusal(string sourcePath, IProfileStorageVolume source, string runtimePath,
+        IProfileStorageVolume runtime, bool explicitRuntime = true, bool inPlaceAvailable = false)
     {
+        var rules = source.Rules;
         string alternative = inPlaceAvailable ? " An owned client can instead use --in-place." : "";
         string runtimeKind = explicitRuntime ? "explicit inventory runtime folder" : "default runtime folder";
+        string runtimeName = explicitRuntime ? "the inventory runtime" : "the default runtime";
         if (!source.SupportsProfileLinks)
-            return $"the source install {sourcePath} is on {source.Description}, which cannot hold the hard links a Windows profile requires. " +
-                "Move the Steam library to NTFS." + alternative;
+            return $"the source install {sourcePath} is on {source.Description}, which cannot hold the hard links a {rules.Platform} profile requires. " +
+                $"Move the Steam library to {rules.FileSystems}." + alternative;
         if (!runtime.SupportsProfileLinks)
-            return $"the {runtimeKind} {runtimePath} is on {runtime.Description}, which cannot hold the hard links a Windows profile requires. " +
-                $"Put {(explicitRuntime ? "the inventory runtime" : "the default runtime")} on the install's NTFS volume {source.Root}." + alternative;
+            return $"the {runtimeKind} {runtimePath} is on {runtime.Description}, which cannot hold the hard links a {rules.Platform} profile requires. " +
+                $"Put {runtimeName} on the install's {rules.Home} {source.Root}." + alternative;
         if (!source.SameVolume(runtime))
-            return CrossVolumeRefusal(explicitRuntime, runtimePath, runtime.Description, source.Description, source.Root) + alternative;
+            return CrossVolumeRefusal(rules, explicitRuntime, runtimePath, runtime.Description, source.Description, source.Root) + alternative;
+        if (!runtime.Writable)
+            return $"the {runtimeKind} {runtimePath} on {runtime.Description} is not writable by this user. " +
+                $"Create it with write access for this user, or put {runtimeName} in a writable folder on the install's {rules.Home} {source.Root}." + alternative;
         return null;
     }
 
