@@ -189,6 +189,9 @@ internal sealed class FakeServerHost : IGameHost
         ("launcher-inspect", [HostServerLauncher.UnixInspect, HostServerLauncher.WindowsInspect]),
         ("launcher-retire", [HostServerLauncher.UnixRetire, HostServerLauncher.WindowsRetire]),
         ("mac-bundle", [MacAppBundle.Bash]),
+        ("source-settle", [SourceSettleScripts.Bash, SourceSettleScripts.PowerShell]),
+        ("source-write", [SourceSettleScripts.BashWrite, SourceSettleScripts.PowerShellWrite]),
+        ("source-evidence", [SourceSettleScripts.BashEvidence, SourceSettleScripts.PowerShellEvidence]),
         ("machine-name", [RunJournalStatus.WindowsMachineName]),
         ("lock", [HostScripts.Lock(HostShellKind.Bash), HostScripts.Lock(HostShellKind.PowerShell)]),
         ("scheduled-task-register", [WindowsScheduledTask.RegisterScript]),
@@ -357,6 +360,48 @@ internal sealed class FakeServerHost : IGameHost
                 var bytes = File.ReadAllBytes(file);
                 return Ok(bytes.Length > long.Parse(v["limit"], System.Globalization.CultureInfo.InvariantCulture) ? "VT-PREFLIGHT too-large\n" : "VT-PREFLIGHT " + Convert.ToBase64String(bytes) + "\n");
             }
+            // As the real scripts do (ProfileSourceCheckTests runs them): each added file moved into keep, each added folder removed once empty.
+            case "source-settle":
+            {
+                var reply = new StringBuilder();
+                string root = Local(v["root"]), keep = Local(v["keep"]);
+                foreach (string line in v["files"].Split('\n', StringSplitOptions.RemoveEmptyEntries))
+                {
+                    string relative = Encoding.UTF8.GetString(Convert.FromBase64String(line)), from = Path.Combine(root, relative), to = Path.Combine(keep, relative);
+                    if (!File.Exists(from)) { reply.Append("VT-GONE ").Append(line).Append('\n'); continue; }
+                    long size = new FileInfo(from).Length;
+                    string sha = FileHash.Sha256(from);
+                    Directory.CreateDirectory(Path.GetDirectoryName(to)!);
+                    File.Move(from, to);
+                    reply.Append("VT-MOVED ").Append(line).Append(' ').Append(size).Append(' ').Append(sha).Append('\n');
+                }
+                foreach (string line in v["folders"].Split('\n', StringSplitOptions.RemoveEmptyEntries))
+                {
+                    string folder = Path.Combine(root, Encoding.UTF8.GetString(Convert.FromBase64String(line)));
+                    if (!Directory.Exists(folder)) reply.Append("VT-GONE ").Append(line).Append('\n');
+                    else if (Directory.EnumerateFileSystemEntries(folder).Any()) reply.Append("VT-NOTMOVED ").Append(line).Append(" not-empty\n");
+                    else { Directory.Delete(folder); reply.Append("VT-RMDIR ").Append(line).Append('\n'); }
+                }
+                return Ok(reply + "VT-SETTLED\n");
+            }
+            case "source-write":
+                Directory.CreateDirectory(Path.GetDirectoryName(Local(v["path"]))!);
+                File.WriteAllBytes(Local(v["path"]), Convert.FromBase64String(v["content"]));
+                return Ok("VT-SOURCE-WRITTEN\n");
+            case "source-evidence":
+            {
+                string profileParent = Local(v["parent"]), added = Path.Combine(profileParent, ProfileSourceCheck.AddedFolder);
+                if (v["recovered"].Length != 0 && Directory.Exists(added))
+                {
+                    string to = Path.Combine(Local(v["recovered"]), ProfileSourceCheck.AddedFolder);
+                    if (Directory.Exists(to)) return Ok("VT-SOURCE-REFUSED " + v["recovered"] + " already holds source-added\n");
+                    Directory.CreateDirectory(Local(v["recovered"]));
+                    Directory.Move(added, to);
+                }
+                else if (v["added"] == "1" && Directory.Exists(added)) Directory.Delete(added, recursive: true);
+                if (File.Exists(Path.Combine(profileParent, ProfileSourceCheck.BaselineFile))) File.Delete(Path.Combine(profileParent, ProfileSourceCheck.BaselineFile));
+                return Ok("VT-SOURCE-SETTLED\n");
+            }
             case "profile-seed":
             {
                 string destination = Local(v["runtime"]);
@@ -433,6 +478,8 @@ internal sealed class FakeServerHost : IGameHost
             case "cleanup-stage":
                 foreach (string path in new[] { v["runtime"], v["stage"] }.Where(path => path.Length != 0))
                     if (Directory.Exists(Local(path))) Directory.Delete(Local(path), recursive: true);
+                if (v["runtime"].Split('/', '\\').Last() == "runtime" && File.Exists(Path.Combine(Local(v["parent"]), ProfileSourceCheck.BaselineFile)))
+                    File.Delete(Path.Combine(Local(v["parent"]), ProfileSourceCheck.BaselineFile));
                 if (v.GetValueOrDefault("keepparent", "").Length == 0 && v.TryGetValue("parent", out string? parent) && Directory.Exists(Local(parent)) &&
                     !Directory.EnumerateFileSystemEntries(Local(parent)).Any())
                     Directory.Delete(Local(parent));
@@ -612,6 +659,9 @@ internal sealed class FakeServerHost : IGameHost
                     if (v.GetValueOrDefault("content") != "0")
                         text.Append(FileHash.Sha256(file)).Append("  ./").Append(relative).Append('\n');
                 }
+                if (v.GetValueOrDefault("metadata") == "1")
+                    foreach (string folder in Directory.EnumerateDirectories(root, "*", SearchOption.AllDirectories))
+                        text.Append("VT-DIR ").Append(Convert.ToBase64String(Encoding.UTF8.GetBytes(Path.GetRelativePath(root, folder).Replace('\\', '/')))).Append('\n');
                 if (File.Exists(Path.Combine(root, GameLaunch.ServerLinuxExecutable))) text.Append("VT-EXEC ").Append(GameLaunch.ServerLinuxExecutable).Append('\n');
                 return Ok(text.Append("VT-LIST done\n").ToString());
             }

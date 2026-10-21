@@ -123,6 +123,8 @@ internal sealed class LocalClientPlacement : IClientPlacement
 {
     // Each copy with, per launch from it, whether that client is proven stopped; a copy is removed only once each one is.
     private readonly List<(LocalClientCopy Copy, ClientRunPlan Plan, List<Func<bool>> Stopped)> _copies = [];
+    // The owned clients that ran their install in place: each gets the one not-applicable source verdict at teardown.
+    private readonly List<string> _inPlace = [];
     private bool _closed;
     // Test seam: the copy, in place of LocalClientCopy.PrepareAsync.
     internal Func<string, ClientRunPlan, CancellationToken, Task<LocalClientCopy>>? PrepareCopy { get; init; }
@@ -137,10 +139,12 @@ internal sealed class LocalClientPlacement : IClientPlacement
             HostedRuntimeStage.RequireStoppedAsync(new LocalGameHost("this machine", HostShell.ThisMachine),
                 LocalClientCopy.StepTimeout, cancellation, clientSession: true).GetAwaiter().GetResult();
             if (Builds != null) plan.PreparedBuild = Builds.AdmitInPlaceAsync(name, plan.Install, cancellation).GetAwaiter().GetResult();
+            RanInPlace(name);
         }
         else if (plan.CopySource)
         {
             var made = (PrepareCopy ?? ((actor, client, token) => LocalClientCopy.PrepareAsync(actor, client, token, builds: Builds)))(name, plan, cancellation).GetAwaiter().GetResult();
+            made.Output = output;
             bool closed;
             lock (_copies) { closed = _closed; if (!closed) _copies.Add((made, plan, [])); }
             if (closed)
@@ -183,23 +187,38 @@ internal sealed class LocalClientPlacement : IClientPlacement
     }
 
     /// <summary>
-    /// Retires every copy this placement made whose clients were all stopped, each once, and makes no more; a copy one of whose
-    /// clients was not proven stopped is kept (<c>valheim-test env status</c> names it, <c>env recover</c> removes it). The first
-    /// failure is rethrown after all were tried.
+    /// Each owned client's source verdict, recorded in <paramref name="report"/> (<see cref="SourceVerdict.Record"/>): a copy whose
+    /// clients were all stopped settles its install (<see cref="LocalClientCopy.SettleSourceAsync"/>), one whose client was not
+    /// proven stopped is unknown, and a client that ran in place is not applicable. Each failed verdict goes to
+    /// <paramref name="failed"/> once all were recorded.
     /// </summary>
-    internal async Task VerifySourcesAsync(Func<string, Func<Task>, Task> step)
+    internal async Task SettleSourcesAsync(ScenarioReport report, Action<Exception> failed)
     {
         List<(LocalClientCopy Copy, ClientRunPlan Plan, List<Func<bool>> Stopped)> copies;
-        lock (_copies) copies = [.. _copies];
+        string[] inPlace;
+        lock (_copies) { copies = [.. _copies]; inPlace = [.. _inPlace]; }
         foreach (var (copy, _, launches) in copies)
         {
             bool stopped;
             lock (_copies) stopped = launches.All(proven => proven());
-            if (stopped) await step(copy.SourceVerdictName, copy.VerifySourceAsync).ConfigureAwait(false);
-            else await step(copy.SourceVerdictName + " (incomplete: client stop not proven)",
-                () => Task.FromException(new IOException("Source integrity is incomplete because the client stop was not proven."))).ConfigureAwait(false);
+            try
+            {
+                if (stopped) await copy.SettleSourceAsync(report).ConfigureAwait(false);
+                else SourceVerdict.Unknown(copy.Actor, "a client launched from its profile was not proven stopped").Record(report);
+            }
+            catch (Exception error) { failed(error); }
         }
+        foreach (string actor in inPlace) SourceVerdict.NotApplicable(actor).Record(report);
     }
+
+    /// <summary>Notes an owned client that runs its install in place, once by name, for its not-applicable source verdict.</summary>
+    internal void RanInPlace(string name)
+    {
+        lock (_copies) if (!_inPlace.Contains(name, StringComparer.Ordinal)) _inPlace.Add(name);
+    }
+
+    /// <summary>Whether this placement has a source verdict to record: a copy it made, or an owned client that ran in place.</summary>
+    internal bool HasSourceVerdicts { get { lock (_copies) return _copies.Count + _inPlace.Count != 0; } }
 
     internal async Task RetireAsync(bool verifySource = true)
     {

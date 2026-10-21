@@ -336,10 +336,10 @@ public sealed class NativeDependencyResolverTests : IDisposable
         Assert.True(File.Exists(sharedHost.Local(@"C:\save\characters_local\vt-one.fch")));
         Assert.True(Directory.Exists(sharedHost.Local(blockedRuntime)));
         var incomplete = Assert.Single(blockedReport.Steps, step => step.Name.Contains("client-a's source install after the run", StringComparison.Ordinal) &&
-            step.Name.Contains("incomplete: actor stop not proven", StringComparison.Ordinal));
+            step.Name.Contains("unknown: stop not proven", StringComparison.Ordinal));
         Assert.False(incomplete.Passed);
-        Assert.Contains("incomplete", incomplete.Error, StringComparison.OrdinalIgnoreCase);
-        Assert.StartsWith("incomplete: actor stop not proven", blockedReport.Provenance["sourceIntegrity.client-a"]);
+        Assert.Contains("unknown", incomplete.Error, StringComparison.OrdinalIgnoreCase);
+        Assert.StartsWith("unknown: stop not proven", blockedReport.Provenance["sourceIntegrity.client-a"]);
         await blockedCampaign.DisposeAsync();
         Assert.False(File.Exists(sharedHost.Local(@"C:\save\characters_local\vt-one.fch")));
         Assert.False(Directory.Exists(sharedHost.Local(blockedRuntime)));
@@ -358,7 +358,8 @@ public sealed class NativeDependencyResolverTests : IDisposable
         Assert.All(keptCampaign.Copies, copy => Assert.True(Directory.Exists(hosts[copy.Host].Local(copy.Runtime)), copy.Runtime));
         Assert.All(keptCampaign.Copies, copy => Assert.True(retirement.Kept(copy.Host.ToLowerInvariant(), copy.Runtime)));
         Assert.False(File.Exists(sharedHost.Local(@"C:\save\characters_local\vt-one.fch")));
-        Assert.Equal(metadataBefore + keptCampaign.SourceChecks.Count, hosts.Values.SelectMany(host => host.Runs)
+        // Each settlement lists its source install once and its moved-files folder once (#612).
+        Assert.Equal(metadataBefore + 2 * keptCampaign.SourceChecks.Count, hosts.Values.SelectMany(host => host.Runs)
             .Count(run => run.Script == "list" && run.Variables["metadata"] == "1"));
         int scripts = hosts.Values.Sum(host => host.Scripts.Count);
         Assert.Empty(await retirement.CampaignAsync(keptCampaign, []));
@@ -857,7 +858,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         var preparationClaim = journal.First(record => record.Entry.Kind == JournalEntry.LockIntended).Entry.Fields["claimant"];
         Assert.Equal(preparationClaim, journal.First(record => record.Entry.Kind == JournalEntry.LockHeld).Entry.Fields["claimant"]);
         Assert.Equal(preparationClaim, journal.First(record => record.Entry.Kind == JournalEntry.LockReleased).Entry.Fields["claimant"]);
-        Assert.Equal([JournalEntry.CopyIntended, JournalEntry.CopyDone, JournalEntry.CopyRetired],
+        Assert.Equal([JournalEntry.CopyIntended, JournalEntry.CopyDone, JournalEntry.SourceBaseline, JournalEntry.SourceSettled, JournalEntry.CopyRetired],
             journal.Where(record => record.Actor == "server").Select(record => record.Entry.Kind));
         // The server run's world copy on the host is journalled too, before its ship, and retired after its verified fetch (under
         // the hooks' fixed run id here; a real campaign's server run has the campaign's).
@@ -886,8 +887,10 @@ public sealed class NativeDependencyResolverTests : IDisposable
         Assert.Equal(host.Claims.Count, host.Releases.Count + 1);
         string unknownRun = unknown.GetProperty("Provenance").GetProperty("runId").GetString()!;
         var unknownJournal = await RunJournalOnHost.ReadAsync(host, @"C:\locks\journal", unknownRun, TimeSpan.FromSeconds(5));
-        Assert.Equal([JournalEntry.CopyIntended, JournalEntry.CopyDone, JournalEntry.CopyKept],
+        // Its source is not settled: the journalled baseline stays for env recover to settle it from (#612).
+        Assert.Equal([JournalEntry.CopyIntended, JournalEntry.CopyDone, JournalEntry.SourceBaseline, JournalEntry.CopyKept],
             unknownJournal.Where(record => record.Actor == "server").Select(record => record.Entry.Kind));
+        Assert.True(File.Exists(Path.Combine(kept, ProfileSourceCheck.BaselineFile)));
         // The world copy too: its server may still run.
         Assert.Equal(JournalEntry.CopyKept, (await RunJournalOnHost.ReadAsync(host, @"C:\locks\journal", "run-test", TimeSpan.FromSeconds(5)))
             .Last(record => record.Entry.Kind.StartsWith("copy-", StringComparison.Ordinal)).Entry.Kind);

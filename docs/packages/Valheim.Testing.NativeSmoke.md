@@ -328,7 +328,7 @@ macOS only. It writes a reviewed manifest of SteamCMD's native server libraries.
 |---|---|
 | `VALHEIMCLI_BUNDLE` | A folder with one ValheimCLI manifest and its DLLs |
 | `VALHEIM_TESTING_KEEP_RUNTIME=1` | Keeps the owned runtime; `env status` then reports the run as `KEPT` |
-| `VALHEIM_TESTING_SOURCE_HASH_AFTER_RUN=1` | Re-hashes the whole source install after the run, not only sizes and times |
+| `VALHEIM_TESTING_SOURCE_HASH_AFTER_RUN=1` | Re-hashes the whole source install after the run, not only sizes and times ([source checks](../reference/sessions-profiles.md#source-checks)) |
 
 ## What a run writes
 
@@ -337,7 +337,7 @@ macOS only. It writes a reviewed manifest of SteamCMD's native server libraries.
 | `dependencies.lock.json` | Every resolved file and dependency decision |
 | `campaign.json`, `plan.json`, `client-plan.json` | `server-load`'s derived inputs; `plan.json` holds the server password |
 | `regression.json`, `environments.json` | `start`'s derived inputs |
-| `evidence/` | `result.json`, `junit.xml` and the kept logs ([where each log is](../guides/debug-a-native-run.md#read-the-kept-logs)) |
+| `evidence/` | `result.json`, `junit.xml` and the kept logs ([where each log is](../guides/debug-a-native-run.md#read-the-kept-logs)); `source-changes/<actor>/` when the game wrote into an install ([what the game wrote](../guides/debug-a-native-run.md#read-what-the-game-wrote-into-your-install)) |
 
 `result.json` reports each step with its phase, four states and the `Toolkit` that ran ([evidence](../reference/evidence.md)). Keep the output private: it holds local paths, a server password, account identifiers and a copy of your recent-servers list.
 

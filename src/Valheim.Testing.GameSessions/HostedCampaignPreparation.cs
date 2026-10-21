@@ -1079,6 +1079,9 @@ public static class HostedCampaignPreparation
                         ("runtime", runtime), ("files", listings[name].Files.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)),
                         ("runtimeKind", kind == HostedRuntimeKind.Server ? "server" : "client"),
                         ("launchRoot", role.PreparedGameRoot ?? runtime)), timeout, cancellation).ConfigureAwait(false);
+                    // The baseline an interrupted run's recovery settles the install from, before anything launches from the profile.
+                    await prepared.SourceCheck.PersistAsync(host, runtime, entry => journal.AppendAsync(host, journalDirectory, name, entry, timeout, cancellation),
+                        timeout, cancellation).ConfigureAwait(false);
                     if (characters.TryGetValue(name, out var selected))
                     {
                         // The folders the host check resolved, never the manifest's object.

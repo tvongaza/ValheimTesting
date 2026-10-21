@@ -99,11 +99,26 @@ public sealed class LocalClientCopyTests : IDisposable
         Assert.Contains("\"copy-intended\"", journal);
         Assert.Contains("\"copy-done\"", journal);
 
+        // The baseline a recovery would settle from is beside the profile, journalled before any launch.
+        Assert.True(File.Exists(Path.Combine(Path.GetDirectoryName(copy.Runtime)!, ProfileSourceCheck.BaselineFile)));
+        Assert.Contains("\"source-baseline\"", string.Concat(Directory.EnumerateFiles(Path.Combine(data, "journal"), "client.jsonl", SearchOption.AllDirectories).Select(File.ReadAllText)));
+        // #612: what the game writes into the install while it runs (BepInEx's preloader log beside a macOS executable) is moved into
+        // the run's evidence and named; the verdict passes with the warning, and the install is as it was.
+        string preloader = Path.Combine(OperatingSystem.IsMacOS() ? Path.Combine(source, "Valheim.app", "Contents", "MacOS") : source, "preloader_20261020.log");
+        Directory.CreateDirectory(Path.GetDirectoryName(preloader)!);
+        File.WriteAllText(preloader, "written beside the executable");
         var report = new ScenarioReport("local client evidence");
-        await report.StepAsync(StepPhase.Cleanup, copy.SourceVerdictName, copy.VerifySourceAsync);
+        copy.Output = Path.Combine(_rig.Root, "evidence");
+        await copy.SettleSourceAsync(report);
         Assert.Contains(report.Steps, step => step.Name == "verify client's source install after the run (size and modified time)" && step.Passed);
+        Assert.StartsWith("restored with a warning: ", report.Provenance["sourceIntegrity.client"]);
+        string relative = Path.GetRelativePath(source, preloader).Replace('\\', '/');
+        Assert.Contains(relative, report.Provenance["sourceIntegrity.client"]);
+        Assert.Equal("written beside the executable", File.ReadAllText(Path.Combine(_rig.Root, "evidence", "source-changes", "client", "added", relative)));
+        Assert.False(File.Exists(preloader));
         await copy.RetireAsync(verifySource: false);
         Assert.False(Directory.Exists(copy.Runtime));
+        Assert.False(Directory.Exists(Path.GetDirectoryName(copy.Runtime))); // nothing of the profile is left beside it
         // The plan is as it was: a run that reuses it makes a new profile.
         Assert.True(plan.CopySource);
         Assert.Equal(source, plan.Install);
@@ -175,6 +190,7 @@ public sealed class LocalClientCopyTests : IDisposable
         var failure = await Record.ExceptionAsync(async () =>
         {
             var copy = await LocalClientCopy.PrepareAsync("client", plan, default, data, ThisMachine(), loader: (_, _) => null);
+            copy.Output = Path.Combine(_rig.Root, "evidence");
             await copy.RetireAsync();
         });
 
@@ -217,7 +233,7 @@ public sealed class LocalClientCopyTests : IDisposable
             Assert.Equal(2, transport.Commands.Count(command => command.StartsWith("cli_expect --strict", StringComparison.Ordinal)));
             Assert.Equal(before, Tree(source));
         }
-        finally { await profile.RetireAsync(); }
+        finally { profile.Output = Path.Combine(_rig.Root, "evidence"); await profile.RetireAsync(); }
         Assert.False(Directory.Exists(profile.Runtime));
         Assert.Equal(before, Tree(source));
         Assert.Null(plan.PreparedLaunchMode);
@@ -267,6 +283,7 @@ public sealed class LocalClientCopyTests : IDisposable
         var copy = await LocalClientCopy.PrepareAsync("client", plan, default, data, ThisMachine(), loader: (_, _) => null);
         Assert.Equal(chosen, File.ReadAllText(Path.Combine(copy.Runtime, "BepInEx", "config", "valheimCLI.valheimCLI.cfg")));
         Assert.Equal(before, Tree(_rig.Game));
+        copy.Output = Path.Combine(_rig.Root, "evidence");
         await copy.RetireAsync();
     }
 
@@ -316,6 +333,7 @@ public sealed class LocalClientCopyTests : IDisposable
         var copy = await LocalClientCopy.PrepareAsync("client", plan, default, data, ThisMachine(), loader: (_, _) => null);
         Assert.Equal(chosen, File.ReadAllText(Path.Combine(copy.Runtime, "BepInEx", "config", "valheimCLI.valheimCLI.cfg")));
         Assert.Equal(before, Tree(_rig.Game));
+        copy.Output = Path.Combine(_rig.Root, "evidence");
         await copy.RetireAsync();
     }
 
@@ -342,6 +360,7 @@ public sealed class LocalClientCopyTests : IDisposable
         Assert.Contains("shipped = true", File.ReadAllText(Path.Combine(copy.Runtime, "BepInEx", "config", "BepInEx.cfg")));
         Assert.Equal(BepInExLoaderPackage.Read(package).Loader, plan.InstallPins!.Loader);
         Assert.Equal(before, Tree(_rig.Game));
+        copy.Output = Path.Combine(_rig.Root, "evidence");
         await copy.RetireAsync();
     }
 

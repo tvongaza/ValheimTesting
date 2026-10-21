@@ -571,8 +571,30 @@ internal static class RunRecovery
                             await Note(group.Key, JournalEntry.Of(JournalEntry.CopyRetired, ("runtime", copy.What))).ConfigureAwait(false);
                             continue;
                         }
+                        // What a run's source settlement moved out of an install and kept past the size limits (ProfileSourceCheck): the
+                        // run kept it on purpose, so only teardown reaches it, and it goes whole.
+                        if (copy.Fields.GetValueOrDefault("holds") == ProfileSourceCheck.AddedFolder)
+                        {
+                            HostedRuntimeStage.RequirePrepared(host, copy.What, runId);
+                            await HostedRuntimeStage.RetireAsync(host, copy.What, "", timeout, cancellation, runId).ConfigureAwait(false);
+                            await Note(group.Key, JournalEntry.Of(JournalEntry.CopyRetired, ("runtime", copy.What))).ConfigureAwait(false);
+                            Step(group.Key, what, "removed (teardown requested)");
+                            continue;
+                        }
                         // The journalled stage is read from disk: it must be this copy's own before anything runs on the host, logs included.
                         if (stage.Length != 0) HostedRuntimeStage.RequireStaging(host, HostedRuntimeStage.RequirePrepared(host, copy.What, runId), stage);
+                        // The profile's source install settled first, from the journalled baseline (#612), as the run would have: what the
+                        // game added is moved into recovered-<actor>/source-added; a refused baseline keeps the copy.
+                        if (await ProfileSourceCheck.FromJournalAsync(host, copy.Fields, timeout, cancellation).ConfigureAwait(false) is { } source)
+                        {
+                            string recoveredIn = RecoveredFolder(host, copy.What, runId, copy.Actor);
+                            var verdict = await source.SettleAsync(host, SourceSettlement.Recovery(copy.Actor, copy.What, recoveredIn),
+                                entry => journal.AppendAsync(host, RunJournal.DirectoryFor(hosts[group.Key]), Actor, entry, timeout, cancellation),
+                                timeout, cancellation).ConfigureAwait(false);
+                            if (verdict.Added.Count != 0 || verdict.Verdict != SourceVerdictKind.Unchanged) leftHere.Add(recoveredIn);
+                            Step(group.Key, $"source install of {copy.Actor} ({source.Source.Root})", verdict.Describe() +
+                                (verdict.Verdict == SourceVerdictKind.Unchanged ? "" : $"; source-changes.json in {recoveredIn}"), failed: verdict.Fails);
+                        }
                         // The game's logs go with the copy: kept first, so a copy whose logs could not be kept stays (#412).
                         RecoveredLogs logs;
                         try { logs = await KeepLogsAsync(host, copy.What, runId, copy.Actor, copy.SinceUtc, timeout, cancellation).ConfigureAwait(false); }
@@ -1018,11 +1040,7 @@ internal static class RunRecovery
     internal static async Task<RecoveredLogs> KeepLogsAsync(IGameHost host, string runtime, string runId, string actor, DateTime copiedUtc,
         TimeSpan timeout, CancellationToken cancellation = default)
     {
-        string parent = HostedRuntimeStage.RequirePrepared(host, runtime, runId);
-        int at = parent.LastIndexOfAny(['/', '\\']);
-        if (at <= 0) throw new ArgumentException("A prepared copy's folder has no parent to keep its logs in.", nameof(runtime));
-        if (!RunJournal.SafeName(runId) || !RunJournal.SafeName(actor)) throw new ArgumentException("A run id and an actor are letters, digits, '.', '_' and '-'.");
-        string folder = HostPath.Join(parent[..at], runId, "recovered-" + actor);
+        string folder = RecoveredFolder(host, runtime, runId, actor);
         var result = (await host.RunAsync(host.Shell.Kind == HostShellKind.PowerShell ? WindowsKeepLogs : BashKeepLogs, new Dictionary<string, string>
         {
             ["runtime"] = runtime, ["keep"] = folder, ["unitylog"] = GameLaunch.UnityLogName,
@@ -1032,6 +1050,19 @@ internal static class RunRecovery
         List<string> Named(string verdict) => result.Stdout.Split('\n').Select(line => line.Trim())
             .Where(line => line.StartsWith(verdict + " ", StringComparison.Ordinal)).Select(line => line[(verdict.Length + 1)..]).ToList();
         return new(folder, Named("VT-LOG-KEPT"), Named("VT-LOG-OLDER"));
+    }
+
+    /// <summary>
+    /// The one folder a recovery keeps a host copy's evidence in, its game logs and what its source settlement moved out of the
+    /// install: <c>&lt;runs&gt;/&lt;run&gt;/recovered-&lt;actor&gt;</c> on that host.
+    /// </summary>
+    internal static string RecoveredFolder(IGameHost host, string runtime, string runId, string actor)
+    {
+        string parent = HostedRuntimeStage.RequirePrepared(host, runtime, runId);
+        int at = parent.LastIndexOfAny(['/', '\\']);
+        if (at <= 0) throw new ArgumentException("A prepared copy's folder has no parent to keep its logs in.", nameof(runtime));
+        if (!RunJournal.SafeName(runId) || !RunJournal.SafeName(actor)) throw new ArgumentException("A run id and an actor are letters, digits, '.', '_' and '-'.");
+        return HostPath.Join(parent[..at], runId, "recovered-" + actor);
     }
 
     // Variables: runtime, keep, unitylog (GameLaunch.UnityLogName), since (Unix seconds: when the copy was made). Each log written since the copy was made is copied into keep with its time, and named;

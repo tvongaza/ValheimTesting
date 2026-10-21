@@ -25,6 +25,11 @@ internal sealed record JournalEntry(string Kind, IReadOnlyDictionary<string, str
     /// <summary>An operator-confirmed recovery's word that an otherwise unprovable launch is gone after checking its host.</summary>
     public const string LaunchAbandoned = "launch-abandoned";
     public const string LeaseHeld = "lease-held", LeaseReleased = "lease-released", LeaseKept = "lease-kept";
+    /// <summary>
+    /// A profile's source settlement (ProfileSourceCheck), each naming its copy's <c>runtime</c>: the persisted baseline before the
+    /// launch, the added paths about to be moved out of the install, and the verdict once the install was listed again.
+    /// </summary>
+    public const string SourceBaseline = "source-baseline", SourceMoveIntended = "source-move-intended", SourceSettled = "source-settled";
     public const string RunEnded = "run-ended", RunRecovered = "run-recovered", CleanupAbandoned = "cleanup-abandoned";
 
     public static JournalEntry Of(string kind, params (string Key, string Value)[] fields) =>

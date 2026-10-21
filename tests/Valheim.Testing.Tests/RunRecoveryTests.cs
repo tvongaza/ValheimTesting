@@ -355,6 +355,60 @@ public sealed class RunRecoveryTests : IDisposable
         Assert.Empty(Assert.Single((await StatusAsync()).Runs).Items);
     }
 
+    // #612: a run killed after its server launched leaves its profile and the journalled source baseline. Recovery settles the
+    // install from that baseline before it retires the copy: what the game added is moved into the run's recovered-<actor> folder
+    // with its source-changes.json, the install lists as before, and the step names it. A baseline whose hash differs from the
+    // journal's is refused, and nothing is moved or removed.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RecoverySettlesTheSourceInstallFromItsJournalledBaseline(bool tampered)
+    {
+        const string run = "run-src", source = "/srv/game", runtime = Prep + "/runtime";
+        Directory.CreateDirectory(_host.Local(source));
+        File.WriteAllText(Path.Combine(_host.Local(source), "valheim_server.x86_64"), "game");
+        Directory.CreateDirectory(Path.Combine(_host.Local(runtime), "BepInEx"));
+        Directory.CreateDirectory(_host.Local(Prep + "/staging"));
+        Line(_host, run, "server", Gone, JournalEntry.CopyIntended, ("runtime", runtime), ("stage", Prep + "/staging"), ("parent", Prep),
+            ("runtimeKind", "server"), ("launchRoot", source));
+        Line(_host, run, "server", Gone, JournalEntry.CopyDone, ("runtime", runtime), ("files", "1"));
+        var check = ProfileSourceCheck.Prepare(await ProfileSourceCheck.InspectAsync(_host, source, TimeSpan.FromSeconds(5)), []);
+        await check.PersistAsync(_host, runtime, entry =>
+        {
+            Line(_host, run, "server", Gone, entry.Kind, [.. entry.Fields.Select(field => (field.Key, field.Value))]);
+            return Task.CompletedTask;
+        }, TimeSpan.FromSeconds(5));
+        // The killed game wrote beside its executable and made a folder.
+        File.WriteAllText(Path.Combine(_host.Local(source), "preloader_20261020.log"), "the game's preloader log");
+        Directory.CreateDirectory(Path.Combine(_host.Local(source), "logs"));
+        File.WriteAllText(Path.Combine(_host.Local(source), "logs", "stats.txt"), "written by the game");
+        if (tampered) File.AppendAllText(_host.Local(Prep + "/" + ProfileSourceCheck.BaselineFile), " ");
+
+        var recovered = await RecoverAsync(run);
+
+        string recoveredIn = "/srv/runs/server/" + run + "/recovered-server";
+        if (tampered)
+        {
+            Assert.False(recovered.Recovered);
+            Assert.Contains("differs from its journalled SHA-256", Assert.Single(recovered.Steps, step => step.What == "copy " + runtime).Outcome);
+            Assert.True(File.Exists(Path.Combine(_host.Local(source), "preloader_20261020.log")));
+            Assert.True(Directory.Exists(_host.Local(runtime)));
+            Assert.False(Directory.Exists(_host.Local(recoveredIn)));
+            Assert.DoesNotContain(_host.Runs, call => call.Script is "source-settle" or "cleanup-stage");
+            return;
+        }
+        Assert.True(recovered.Recovered, string.Join("\n", recovered.Steps));
+        var settled = Assert.Single(recovered.Steps, step => step.What.StartsWith("source install of server", StringComparison.Ordinal));
+        Assert.Contains("preloader_20261020.log", settled.Outcome);
+        Assert.Contains(recoveredIn, settled.Outcome);
+        Assert.Equal("the game's preloader log", File.ReadAllText(Path.Combine(_host.Local(recoveredIn), "source-added", "preloader_20261020.log")));
+        Assert.Equal("written by the game", File.ReadAllText(Path.Combine(_host.Local(recoveredIn), "source-added", "logs", "stats.txt")));
+        Assert.Contains("\"verdict\": \"restored\"", File.ReadAllText(Path.Combine(_host.Local(recoveredIn), "source-changes.json")));
+        Assert.Equal(["valheim_server.x86_64"], Directory.EnumerateFileSystemEntries(_host.Local(source)).Select(Path.GetFileName));
+        Assert.False(Directory.Exists(_host.Local(Prep))); // the copy, its baseline and the moved files' folder are gone
+        Assert.Empty(Assert.Single((await StatusAsync()).Runs).Items);
+    }
+
     [Fact]
     public async Task InterruptedPlainStartRecoversItsPartialHostedCopy()
     {

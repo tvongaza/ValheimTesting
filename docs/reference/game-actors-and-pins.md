@@ -118,8 +118,8 @@ The profile replaces the install's own ValheimCLI with the toolkit's set. A supp
 
 | Client | Needs | Observed |
 |---|---|---|
-| Owned, disposable profile (default) | May omit `installPins` and plugin pins | The source install; the staged profile is the enforced set, every value recorded with its origin |
-| Owned, `inPlace` | `installPins` and an exact ValheimCLI MD5 in `pins` | Nothing |
+| Owned, disposable profile (default) | May omit `installPins` and plugin pins | The source install; the staged profile is the enforced set, every value recorded with its origin. After the run the install is settled ([source checks](sessions-profiles.md#source-checks)) |
+| Owned, `inPlace` | `installPins` and an exact ValheimCLI MD5 in `pins` | Nothing; its source verdict is `not applicable` |
 | Owned, placed on another host by an inventory | `installPins` | <!-- TODO(docs): what a remote owned client observes --> |
 | Attached | Exact plugin expectations checked in game; no `installPins`, its operator's install is not read | Nothing; the game build is not pinned, since the game refuses a join only across network versions |
 

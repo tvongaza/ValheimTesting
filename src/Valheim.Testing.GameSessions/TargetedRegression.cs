@@ -105,7 +105,9 @@ public sealed class TargetedRegression
     private string? _activeGameRoot;
     private InstallPins? _activePins;
     private ProfileSourceCheck? _activeSourceCheck;
-    private bool _sourceVerified;
+    // The active profile's settled source verdict, once; and the arm evidence folder its settlement keeps what the game added in.
+    private SourceVerdict? _sourceVerdict;
+    private string? _sourceOutput;
     private string? _activeLeftOut; // the profile's left-out root files, as run evidence
 
     public RegressionInputs Inputs { get; }
@@ -390,6 +392,7 @@ public sealed class TargetedRegression
         output = Path.GetFullPath(output);
         if (Path.Exists(output)) throw new IOException($"{output} already exists; give every run a new evidence directory.");
         Directory.CreateDirectory(output);
+        _sourceOutput = output;
         var report = new ScenarioReport(scenario);
         var logs = new List<RunLog>();
         RegisteredCharacterStage? characterStage = null;
@@ -460,11 +463,14 @@ public sealed class TargetedRegression
             if (_activeSourceCheck != null)
                 try
                 {
-                    report.Step(StepPhase.Cleanup, _activeSourceCheck.VerdictName("client"), () =>
+                    SourceVerdict verdict;
+                    try
                     {
                         RequireStopped([_activeGameRoot ?? Install], clientSession: false);
-                        VerifySource();
-                    });
+                        verdict = SettleSource();
+                    }
+                    catch (Exception error) { verdict = SourceVerdict.Unknown("client", error.Message); }
+                    verdict.Record(report);
                 }
                 catch (Exception error) { Console.Error.WriteLine("Teardown: " + error.Message); }
             if (characterStage != null)
@@ -612,13 +618,16 @@ public sealed class TargetedRegression
             _activeGameRoot = profile.GameRoot;
             _activePins = profile.Pins;
             _activeSourceCheck = profile.SourceCheck;
-            _sourceVerified = false;
+            _sourceVerdict = null;
             _activeLeftOut = HostedRuntimeStage.ProfileLeftOut.Describe(profile.LeftOut);
             _lastStageSeconds = stageClock.Elapsed.TotalSeconds;
             _journal.AppendLocal(actor, JournalEntry.Of(JournalEntry.CopyDone, ("runtime", Install),
                 ("files", profile.Loader.Files.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)), ("source", source),
                 ("runtimeKind", "client")));
             _prepared = true;
+            // The baseline an interrupted run's recovery settles the install from, before the client launches; Remove retires the profile.
+            profile.SourceCheck.PersistAsync(_host, Install, entry => { _journal.AppendLocal(actor, entry); return Task.CompletedTask; },
+                LocalClientCopy.StepTimeout).GetAwaiter().GetResult();
         }
         catch (Exception error) when (error is not AggregateException)
         {
@@ -633,7 +642,8 @@ public sealed class TargetedRegression
     {
         RequireStopped([_activeGameRoot ?? Install], clientSession: false);
         Exception? integrity = null;
-        try { VerifySource(); }
+        // An arm that recorded its verdict already is not settled or reported a second time.
+        try { if (_sourceVerdict == null) SettleSource().Record(null); }
         catch (Exception error) { integrity = error; }
         try { HostedRuntimeStage.RetireAsync(_host, Install, _stage, LocalClientCopy.StepTimeout).GetAwaiter().GetResult(); }
         catch (Exception cleanup) when (integrity != null)
@@ -647,14 +657,17 @@ public sealed class TargetedRegression
         if (integrity != null) throw integrity;
     }
 
-    private void VerifySource()
+    private SourceVerdict SettleSource()
     {
-        if (_sourceVerified) return;
+        if (_sourceVerdict is { } settled) return settled;
         var check = _activeSourceCheck ?? throw new InvalidOperationException("The profile source check was not retained.");
         // The report owns this verdict. Cache a failed verdict too, so later copy retirement removes the profile without
         // listing the same source again or reporting the same integrity finding a second time.
-        _sourceVerified = true;
-        check.VerifyAfterRunAsync(_host, LocalClientCopy.StepTimeout).GetAwaiter().GetResult();
+        // The last arm's evidence; a profile staged and removed without an arm keeps it in the run's own folder beside the profile.
+        string actor = "regression-" + Inputs.Name;
+        string output = _sourceOutput ?? Path.Combine(Path.GetDirectoryName(Path.GetDirectoryName(Install)!)!, _journal.RunId);
+        return _sourceVerdict = check.SettleAsync(_host, SourceSettlement.Run("client", Install, output),
+            entry => { _journal.AppendLocal(actor, entry); return Task.CompletedTask; }, LocalClientCopy.StepTimeout).GetAwaiter().GetResult();
     }
 
     private void RequireStopped(IReadOnlyCollection<string>? runtimes, bool clientSession)

@@ -831,7 +831,8 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.Contains(Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(GameLaunch.ServerLinuxExecutable)), seed.Variables["gameFiles"].Split('\n'));
         Assert.Equal(new[] { RunDirectory + "/staging", RunDirectory + "/world" }, host.Runs.Where(run => run.Script == "ship").Select(run => run.Variables["dest"]));
         var profileEntries = journal.Where(record => record.Actor == "server" && record.Entry.Fields.GetValueOrDefault("runtime") == RunDirectory + "/runtime").ToList();
-        Assert.Equal([JournalEntry.CopyIntended, JournalEntry.CopyDone, JournalEntry.CopyRetired], profileEntries.Select(record => record.Entry.Kind));
+        Assert.Equal([JournalEntry.CopyIntended, JournalEntry.CopyDone, JournalEntry.SourceBaseline, JournalEntry.SourceSettled, JournalEntry.CopyRetired],
+            profileEntries.Select(record => record.Entry.Kind));
         Assert.Equal((RunDirectory + "/staging", RunDirectory, "server", Install), (profileEntries[0].Entry.Fields["stage"], profileEntries[0].Entry.Fields["parent"],
             profileEntries[0].Entry.Fields["runtimeKind"], profileEntries[0].Entry.Fields["launchRoot"]));
         Assert.True(JournalIndex(host, JournalEntry.CopyIntended) < host.Runs.FindIndex(run => run.Script == "profile-seed"));
@@ -895,13 +896,16 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.False(provenance.TryGetProperty("outcome", out _));
     }
 
+    // #612: a file the fake server adds to the install is moved into the run's evidence, its new folder removed, and named; the
+    // run passes with the warning and the install is as it was. Nothing of the settlement is left in the run folder on the host.
     [Theory]
     [InlineData("run-write.txt")]
     [InlineData("logs/steam-runtime.txt")]
-    public async Task ASourceWriteDuringTheFakeRunFailsTheRecordedPostRunVerdictAndNamesTheFile(string relative)
+    public async Task ASourceWriteDuringTheFakeRunIsMovedIntoTheEvidenceAndNamed(string relative)
     {
         var server = NewServer(); var host = NewHost(server);
         var (plan, profile) = Write(host);
+        var before = Directory.EnumerateFileSystemEntries(host.Local(Install), "*", SearchOption.AllDirectories).Order(StringComparer.Ordinal).ToList();
         int code = await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["run", plan, Output], Options(host, server, _ =>
         {
             string path = Path.Combine(host.Local(Install), relative);
@@ -910,13 +914,43 @@ public sealed partial class HostedServerRunTests : IDisposable
             return Task.CompletedTask;
         }));
 
-        Assert.Equal(1, code);
+        Assert.Equal(0, code);
         var result = Result();
         var step = result.GetProperty("Steps").EnumerateArray().Single(item =>
             item.GetProperty("Name").GetString()!.StartsWith("verify server's source install after the run", StringComparison.Ordinal));
+        Assert.True(step.GetProperty("Passed").GetBoolean());
+        Assert.Contains(relative, result.GetProperty("Provenance").GetProperty("sourceIntegrity.server").GetString());
+        Assert.Equal("written while the fake server ran", File.ReadAllText(Path.Combine(Output, "source-changes", "server", "added", relative)));
+        Assert.Contains(relative, File.ReadAllText(Path.Combine(Output, "source-changes", "server", "source-changes.json")));
+        Assert.Equal(before, Directory.EnumerateFileSystemEntries(host.Local(Install), "*", SearchOption.AllDirectories).Order(StringComparer.Ordinal));
+        Assert.False(Directory.Exists(host.Local(RunDirectory)));
+        var journal = await RunJournalOnHost.ReadAsync(host, "/var/tmp/vt/journal", RunId, TimeSpan.FromSeconds(5));
+        Assert.Equal([JournalEntry.SourceBaseline, JournalEntry.SourceMoveIntended, JournalEntry.SourceSettled],
+            journal.Where(record => record.Entry.Kind.StartsWith("source-", StringComparison.Ordinal)).Select(record => record.Entry.Kind));
+        Assert.True(JournalIndex(host, JournalEntry.SourceBaseline) < host.Runs.ToList().FindIndex(run => run.Script == "start"));
+    }
+
+    // A file the fake server changes in the install fails the verdict and is named, never repaired.
+    [Fact]
+    public async Task ASourceFileTheFakeRunChangesFailsTheRecordedVerdictAndIsLeftAsItIs()
+    {
+        var server = NewServer(); var host = NewHost(server);
+        var (plan, profile) = Write(host);
+        string changed = Directory.EnumerateFiles(host.Local(Install), "*", SearchOption.AllDirectories).Order(StringComparer.Ordinal).First();
+        string relative = Path.GetRelativePath(host.Local(Install), changed).Replace('\\', '/');
+        int code = await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["run", plan, Output], Options(host, server, _ =>
+        {
+            File.AppendAllText(changed, " changed while the fake server ran");
+            return Task.CompletedTask;
+        }));
+
+        Assert.Equal(1, code);
+        var step = Result().GetProperty("Steps").EnumerateArray().Single(item =>
+            item.GetProperty("Name").GetString()!.StartsWith("verify server's source install after the run", StringComparison.Ordinal));
         Assert.False(step.GetProperty("Passed").GetBoolean());
         Assert.Contains(relative, step.GetProperty("Error").GetString());
-        Assert.True(File.Exists(Path.Combine(host.Local(Install), relative))); // integrity findings are never repaired
+        Assert.Contains("not repaired", step.GetProperty("Error").GetString());
+        Assert.EndsWith(" changed while the fake server ran", File.ReadAllText(changed)); // integrity findings are never repaired
     }
 
     // #257: one journal run per run. This machine's world copy is journalled under the run's own id, beside its server's

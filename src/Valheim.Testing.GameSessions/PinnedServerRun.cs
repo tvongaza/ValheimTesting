@@ -513,6 +513,7 @@ public static class PinnedServerRun
             }
             // The leases once their clients are gone, then the campaign's characters and installs under the locks held, then the locks.
             if (actors != null) await actors.ReleaseAccountsAsync(Try).ConfigureAwait(false);
+            actors?.RecordInPlaceSourceVerdicts(report);
             if (prepared != null)
                 foreach (var failure in await new RunRetirement(report, full).CampaignAsync(prepared, actors?.LockedHosts ?? [], cleanup,
                     actors?.PendingMacAgentHosts).ConfigureAwait(false))

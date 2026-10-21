@@ -282,12 +282,22 @@ internal static class RunJournalStatus
                 foreach (var (name, value) in fields) merged[name] = value;
                 left[key] = new(kind, hostName, connection, record.Actor, what, status, kept, was?.SinceUtc ?? record.Utc, merged);
             }
+            // Fields for an open entry that change nothing else about it.
+            void Add(string key)
+            {
+                if (!left.TryGetValue(key, out var was)) return;
+                var merged = was.Fields.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
+                foreach (var (name, value) in fields) merged[name] = value;
+                left[key] = was with { Fields = merged };
+            }
             switch (record.Entry.Kind)
             {
                 case JournalEntry.CopyIntended: Open("copy " + Field("runtime"), "copy", Field("runtime"), "copy started, never finished"); break;
                 case JournalEntry.CopyDone: Open("copy " + Field("runtime"), "copy", Field("runtime"), "copied, not retired"); break;
                 case JournalEntry.CopyKept: Open("copy " + Field("runtime"), "copy", Field("runtime"), "kept: " + Field("why"), kept: true); break;
                 case JournalEntry.CopyRetired: left.Remove("copy " + Field("runtime")); break;
+                // A profile's source settlement belongs to its copy: a recovery settles the source from the baseline before retiring it.
+                case JournalEntry.SourceBaseline or JournalEntry.SourceMoveIntended or JournalEntry.SourceSettled: Add("copy " + Field("runtime")); break;
                 case JournalEntry.UserFilesCaptureIntended: Open("user-files " + Field("backup"), "user-files", Field("saveRoot"), "user-file capture intended; ownership may need settlement"); break;
                 case JournalEntry.UserFilesRestoreIntended: Open("user-files " + Field("backup"), "user-files", Field("saveRoot"), "user-file restore intended; completion may need settlement"); break;
                 case JournalEntry.UserFilesCaptured: Open("user-files " + Field("backup"), "user-files", Field("saveRoot"), "the user's Valheim files moved aside, not restored"); break;

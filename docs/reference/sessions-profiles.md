@@ -68,11 +68,29 @@ A hard link cannot cross a Windows volume or a Linux mount, so a linked profile'
 
 | When | Check |
 |---|---|
-| Before staging | Every supplied pin against the source install; a listing of the install by SHA-256 |
-| Before each launch | The profile's bound pins, and every root file a Windows or Linux profile linked |
-| After the run | The source install against its listing, by size and modified time |
+| Before staging | Every supplied pin against the source install; a listing of the install: each file's SHA-256, size and modified time, and every folder |
+| Before each launch | The profile's bound pins, and every root file a Windows or Linux profile linked. The listing is saved beside the profile as `source-baseline.json` and journalled |
+| After the run | The source install against the listing, by size and modified time; what the game added is moved out |
 
-A changed, missing or added source file fails the run and is never repaired. Set `VALHEIM_TESTING_SOURCE_HASH_AFTER_RUN=1` to compare content hashes after the run. On macOS, preparing a client profile also checks the app bundle's code seal ([Mac session limits](platforms.md#mac-session-limits)).
+Once every process launched from the profile is proven stopped, the run settles the install:
+
+1. It lists the install and compares it with the listing from preparation.
+2. It moves each file the game added out of the install, for example a preloader log beside a macOS executable or a mod's write to the game root. It removes each folder the game made once it is empty, deepest first. It never follows a link and never moves a path outside the install.
+3. It lists the install again. The listing must equal the one from preparation.
+
+| Verdict (`sourceIntegrity.<actor>`) | Meaning | Cleanup step |
+|---|---|---|
+| `unchanged` | The install lists as before | Passes |
+| `restored with a warning` | The game added files or folders. They were moved out, and the install lists as before. The warning names every path | Passes |
+| `failed` | A file changed or went missing, or an added file could not be moved. Each path is named, and the source is not repaired | Fails |
+| `unknown` | A process launched from the profile was not proven stopped, so nothing was checked | Fails |
+| `not applicable` | The client runs its install [in place](#run-an-install-in-place) | Passes |
+
+The moved files go to `source-changes/<actor>/added/` in the actor's evidence. Beside them, `source-changes.json` names each added file (its size, SHA-256 and where it is kept), each changed file (before and after), each missing file, and each file left in place with its reason. Moved files past the failure size limits (1 GB per file, 2 GB in all) stay beside the profile on its host, journalled as kept; `env teardown` removes them.
+
+An interrupted run leaves its listing journalled. `env recover` settles the install from it before it removes the profile ([recovery](sessions-leases-and-recovery.md#env-recover)).
+
+Set `VALHEIM_TESTING_SOURCE_HASH_AFTER_RUN=1` to compare content hashes after the run. Only content hashes find a write through a Windows hard link that keeps the file's size and modified time. On macOS, preparing a client profile also checks the app bundle's code seal ([Mac session limits](platforms.md#mac-session-limits)).
 
 Pins you leave out are observed from the staged profile and recorded as `observed` in `PinOrigins` ([pins](game-actors-and-pins.md#expected-and-observed-pins)).
 
@@ -97,10 +115,12 @@ A clean test runtime is BepInEx core plus your plugins, with an empty `patchers`
 - The install must already hold BepInEx and ValheimCLI; preflight names what is missing.
 - Without a `cliManifest`, `cliPreflight` reads `live only: static check not run: your install, run in place`.
 - Journals, leases and local test characters work as for a profile.
+- Its source verdict is `not applicable`: there is no listing apart from the install it runs.
 
 `--in-place` is for an owned client outside a prepared campaign. It does not apply to a server or a campaign actor. `ClientSession.Launch` refuses an owned plan that is neither bound to a profile nor in place.
 
 ## Limits
 
-- A macOS preloader failure may still write a crash log beside the source executable.
+- A game on macOS runs the install's own executable, so a preloader log, or a mod's write to the game root, lands in the install. The source check moves it into the evidence and names it.
+- The public launch primitives (`GameLaunch.ForServer`, `GameLaunch.ForClient`, `OwnedServerSession`, `HostServer.StartAsync`, `InteractiveClient.StartAsync`) launch the caller's own directory. They have no profile apart from an install, so no source check runs.
 - A profile never takes the install's top-level `logs/` folder.

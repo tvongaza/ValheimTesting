@@ -328,6 +328,9 @@ internal sealed class HostedServerRun : IServerPlacement
         await JournalAsync(Host, Role.Host, "server", JournalEntry.Of(JournalEntry.CopyDone, ("runtime", RuntimeDirectory),
             ("files", profile.Loader.Files.Count.ToString(CultureInfo.InvariantCulture)), ("runtimeKind", "server"),
             ("launchRoot", profile.GameRoot)), cancellation).ConfigureAwait(false);
+        // The baseline an interrupted run's recovery settles the install from, before the server launches; teardown retires the profile.
+        await profile.SourceCheck.PersistAsync(Host, RuntimeDirectory, entry => JournalAsync(Host, Role.Host, "server", entry, cancellation),
+            HostedTimeouts.Long, cancellation).ConfigureAwait(false);
         plan.Runtime = new PinnedDirectory { Source = profile.Game.Root, Sha256 = new Dictionary<string, string>(profile.Game.Files, StringComparer.Ordinal) };
         plan.RuntimePins = _preparedPins = profile.Pins;
         plan.Pins = plan.Pins.Where(pin => Expectations.IsWorldKey(pin.Key)).Concat(stagedPins)
@@ -778,16 +781,15 @@ internal sealed class HostedServerRun : IServerPlacement
         {
             if (!Prepared && _sourceCheck != null)
             {
-                if (serverStopped)
-                    await Try(_sourceCheck.VerdictName("server"),
-                        () => _sourceCheck.VerifyAfterRunAsync(Host, HostedTimeouts.Long, cleanup)).ConfigureAwait(false);
-                else
-                {
-                    const string reason = "Source integrity is unknown because the owned server was not proven stopped.";
-                    report.Provenance["sourceIntegrity.server"] = "unknown: the owned server was not proven stopped";
-                    report.RecordFailure(StepPhase.Cleanup,
-                        _sourceCheck.VerdictName("server") + " (unknown: server not proven stopped)", new IOException(reason));
-                }
+                // The install settled before the profile goes (its run folder holds the baseline and the moved files).
+                var verdict = serverStopped
+                    ? await _sourceCheck.SettleAsync(Host, SourceSettlement.Run("server", RuntimeDirectory, output),
+                        entry => JournalAsync(Host, Role.Host, "server", entry, cleanup), HostedTimeouts.Long, cleanup).ConfigureAwait(false)
+                    : SourceVerdict.Unknown("server", "the owned server was not proven stopped");
+                // An unknown verdict follows from the stop that was not proven, which is the run's unknown outcome already.
+                try { verdict.Record(report); }
+                catch (IOException error) when (verdict.Verdict != SourceVerdictKind.Unknown) { failures.Add(error); Console.Error.WriteLine("Teardown: " + error.Message); }
+                catch (IOException) { }
             }
             try
             {
@@ -859,7 +861,7 @@ internal sealed class HostedServerRun : IServerPlacement
                 !serverStopped ? "its server may still run" : RunRetirement.KeepRequested ? RunRetirement.KeptOnRequest : null, cleanup)).ConfigureAwait(false);
         if (_tunnel != null) await Try("close the CLI tunnel", () => { _tunnel.Dispose(); return Task.CompletedTask; }).ConfigureAwait(false);
         await _clientActors.ReleaseAccountsAsync(Try).ConfigureAwait(false);
-        await _clientActors.RecordInPlaceSourceVerdictsAsync(report, Try).ConfigureAwait(false);
+        _clientActors.RecordInPlaceSourceVerdicts(report);
         // Every process is stopped (or named as possibly running), so the campaign's characters and prepared installs go, under the
         // locks held here; a host whose lock this run never took (a client that never opened) is locked for its retire.
         if (prepared != null)
