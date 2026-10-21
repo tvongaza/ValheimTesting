@@ -243,12 +243,96 @@ public sealed class SessionVariantTests : IDisposable
         Assert.Equal(1, transport.Count("cli_set_player_safety"));
     }
 
+    // #860: a join the game refuses names why, read once at the menu, with what the run read of both installs before staging.
+    private static ClientRunPlan RefusedPlan(GameBuild? client, GameBuild? server, Func<TimeSpan, CancellationToken, string?>? log = null) => new()
+    {
+        Mode = "attached", Install = "", Port = 5556, Join = "127.0.0.1:2456", Character = "Tester",
+        Pins = new() { ["valheimCLI.valheimCLI"] = new string('a', 32) },
+        PreparedBuild = client, PreparedJoinTarget = new JoinTarget("server", server, log),
+    };
+    private static readonly GameBuild V17 = new(40, "1.0.17", null), V20 = new(41, "1.0.20", null);
+    private const string ServerLog = "[Info   : Unity Log] 10/16/2026 12:00:01: Peer 76561190000000000 has incompatible version, mine:1.0.17 (network version 40)   remote 1.0.20 (network version 41)";
+
+    [Fact] public void AJoinRefusedAcrossNetworkVersionsNamesBothInstallsAndTheServersLogLine()
+    {
+        var transport = Client("ErrorVersion");
+        using var actor = transport.Actor("client", Menu);
+        int logReads = 0;
+        var error = Assert.Throws<InvalidOperationException>(() => new SessionControl(actor).JoinWorld(RefusedPlan(V20, V17, (_, _) => { logReads++; return ServerLog; }), "7"));
+        Assert.Equal("valheim.session/join failed: join_failed: The game refused the session transition. The game refused the join with ErrorVersion (3): " +
+            "this client's install is Valheim 1.0.20 (network version 41) and server's is Valheim 1.0.17 (network version 40); Valheim refuses a join across " +
+            "network versions. Update the older install (Steam, or SteamCMD for a dedicated server). server's log refused a peer at 1.0.20 (network version 41) " +
+            "as itself 1.0.17 (network version 40). Nothing was retried; the client is back at its menu.", error.Message);
+        Assert.DoesNotContain("76561190000000000", error.Message); // the peer's endpoint can be a Steam ID
+        Assert.Equal("ErrorVersion", error.Data["connection.status"]);
+        Assert.Equal("join_failed", error.Data["extension.code"]);
+        Assert.Equal(1, transport.Count("cli_extension valheim.session/join")); // nothing retried
+        Assert.Equal(1, transport.Count("cli_connection_status"));
+        Assert.Equal(1, logReads);
+    }
+
+    [Fact] public void AVersionRefusalBetweenInstallsOnOneNetworkVersionPointsAtAModsCheck()
+    {
+        var transport = Client("ErrorVersion");
+        using var actor = transport.Actor("client", Menu);
+        var error = Assert.Throws<InvalidOperationException>(() => new SessionControl(actor).JoinWorld(RefusedPlan(V17, V17 with { GameVersion = "1.0.18" }), "7"));
+        Assert.Contains("both installs are on network version 40 (read before staging), so Valheim's own version check passed; a mod's version check", error.Message);
+        Assert.DoesNotContain("Update the older install", error.Message);
+    }
+
+    [Fact] public void AVersionRefusalWithoutBothBuildsClaimsNoGameMismatchUnlessTheServersLogShowsOne()
+    {
+        var transport = Client("ErrorVersion");
+        using var actor = transport.Actor("client", Menu);
+        var error = Assert.Throws<InvalidOperationException>(() => new SessionControl(actor).JoinWorld(RefusedPlan(null, V17), "7"));
+        Assert.Contains("the network versions of this client and server were not both read before staging, so this is Valheim's network version check or a mod's own", error.Message);
+        // The server's own log line proves a game mismatch; it is this client's when its version is the refused one.
+        Assert.StartsWith("Valheim's network version check refused a peer. server's log refused a peer at 1.0.20",
+            JoinRefusalText.Explain(GameConnectionStatus.ErrorVersion, null, new JoinTarget("server", null), ServerLog).Split(": ", 2)[1]);
+        Assert.StartsWith("Valheim refused this client's network version 41. server's log",
+            JoinRefusalText.Explain(GameConnectionStatus.ErrorVersion, V20 with { NetworkVersion = 41 }, new JoinTarget("server", null), ServerLog).Split(": ", 2)[1]);
+    }
+
+    [Theory]
+    [InlineData("ErrorPassword", "the password did not match; check the plan's passwordVariable")]
+    [InlineData("ErrorFull", "the server is full.")]
+    [InlineData("ErrorBanned", "the ban list or permitted list refused this client.")]
+    public void AnotherRefusalIsExplainedWithoutVersionsOrALogRead(string status, string meaning)
+    {
+        var transport = Client(status);
+        using var actor = transport.Actor("client", Menu);
+        int logReads = 0;
+        var error = Assert.Throws<InvalidOperationException>(() => new SessionControl(actor).JoinWorld(RefusedPlan(V20, V17, (_, _) => { logReads++; return ServerLog; }), "7"));
+        Assert.Contains($"The game refused the join with {status} (", error.Message);
+        Assert.Contains(meaning, error.Message);
+        Assert.DoesNotContain("network version", error.Message);
+        Assert.Equal(0, logReads);
+    }
+
+    [Fact] public void AnUnreadableStatusKeepsTheOriginalFailureAndSaysWhy()
+    {
+        var transport = Client("ErrorVersion").On("cli_connection_status", _ => ScriptedTransport.Ok("ERROR: no status"));
+        using var actor = transport.Actor("client", Menu);
+        var error = Assert.Throws<InvalidOperationException>(() => new SessionControl(actor).JoinWorld(RefusedPlan(V20, V17), "7"));
+        Assert.StartsWith("valheim.session/join failed: join_failed: The game refused the session transition; its connection status was not read: ", error.Message);
+        Assert.Equal(1, transport.Count("cli_extension valheim.session/join"));
+    }
+
+    [Fact] public void AJoinThatEndsAnyOtherWayIsNotReadAsARefusal()
+    {
+        var transport = Client("None", refusalCode: "transition_timeout");
+        using var actor = transport.Actor("client", Menu);
+        var error = Assert.Throws<InvalidOperationException>(() => new SessionControl(actor).JoinWorld(RefusedPlan(V20, V17), "7"));
+        Assert.Equal("valheim.session/join failed: transition_timeout: The game refused the session transition.", error.Message);
+        Assert.Equal(0, transport.Count("cli_connection_status"));
+    }
+
     [Fact] public void ACrossplayJoinThatReturnsToTheMenuWithAnErrorFails()
     {
         var transport = CrossplayClient(failWith: "ErrorConnectFailed");
         using var actor = transport.Actor("client", Menu);
         var error = Assert.Throws<WaitFailedException>(() => new SessionControl(actor).JoinCrossplay("ENTITY42", "Tester", "7", Menu, TimeSpan.FromSeconds(10)));
-        Assert.Contains("ErrorConnectFailed", error.Message);
+        Assert.Contains("the crossplay join failed: the game refused the join with ErrorConnectFailed (5): nothing answered at the join address", error.Message);
         Assert.Equal(1, transport.Count("cli_connect_playfab_user"));
     }
 

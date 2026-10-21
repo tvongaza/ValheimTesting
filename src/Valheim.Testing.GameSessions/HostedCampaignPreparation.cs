@@ -130,6 +130,8 @@ public sealed class PreparedHostedCampaign : IAsyncDisposable
     }
     /// <summary>The campaign as it was read for this preparation: binding uses it, not the file read again later.</summary>
     internal HostedCampaignManifest Manifest { get; }
+    /// <summary>Each actor's install build as the host inspection read and decided it (#860), for the run's ledger.</summary>
+    internal IReadOnlyList<GameVersionAgreement.Side> Builds { get; init; } = [];
     /// <summary>The resolved environment the runner places the server and clients with; never written to a file.</summary>
     internal ResolvedEnvironment Environment => _profile;
     /// <summary>Records, as <c>&lt;actor&gt;ProfileLeftOut</c>, the root files each actor's profile left out of its game install (see <c>HostedRuntimeStage.ProfileLeftOut</c>).</summary>
@@ -329,6 +331,8 @@ public static class HostedCampaignPreparation
     {
         /// <summary>The pinned loader each actor that named none takes (#711), with its pin; its role's input already names it.</summary>
         public IReadOnlyDictionary<string, ShippedLoader.Choice> Loaders { get; init; } = new Dictionary<string, ShippedLoader.Choice>();
+        /// <summary>Each actor's install build as the inspection read and decided it (#860).</summary>
+        public IReadOnlyList<GameVersionAgreement.Side> Builds { get; init; } = [];
     }
 
     // The role's input with this loader package, a copy when it differs: the caller's declaration is never changed.
@@ -643,9 +647,9 @@ public static class HostedCampaignPreparation
             failures.Add(new("clients", "Steam identities", "Clients " + string.Join(", ", shared.Select(account => account.Key).Order(StringComparer.Ordinal)) +
                 " use the same signed-in Steam account; choose different client environments before launch."));
         // Valheim refuses a join across network versions: every actor's install must agree before anything is staged (#860).
-        foreach (var problem in GameVersionAgreement.Decide(inputs.Roles.Select(item => new GameVersionAgreement.Side(item.Name,
-            item.Role.Host, item.Role.Install, builds.GetValueOrDefault(item.Name))).ToArray()))
-            failures.Add(problem);
+        var sides = inputs.Roles.Select(item => new GameVersionAgreement.Side(item.Name,
+            item.Role.Host, item.Role.Install, builds.GetValueOrDefault(item.Name))).ToArray();
+        foreach (var problem in GameVersionAgreement.Decide(sides)) failures.Add(problem);
         // The roles' inputs name the chosen loader from here, so preparation applies it like one the campaign named.
         for (int i = 0; i < inputs.Roles.Count; i++)
             if (loaders.TryGetValue(inputs.Roles[i].Name, out var chosen))
@@ -656,7 +660,7 @@ public static class HostedCampaignPreparation
                 ? actor with { GameVersion = build.GameVersion, NetworkVersion = build.NetworkVersion } : actor).ToArray();
         return new HostInspection(new CampaignPreflightReport(failures.OrderBy(problem => problem.Actor, StringComparer.Ordinal)
             .ThenBy(problem => problem.Input, StringComparer.Ordinal).ToArray()) { Actors = actors, Detected = inspection.Report.Detected },
-            observedSteamIds, sourceListings, characterDirectories) { Loaders = loaders };
+            observedSteamIds, sourceListings, characterDirectories) { Loaders = loaders, Builds = sides };
     }
 
     /// <summary>
@@ -1090,7 +1094,7 @@ public static class HostedCampaignPreparation
                 })).ConfigureAwait(false);
             })).ConfigureAwait(false);
             return new PreparedHostedCampaign(manifest, profile, listings, loaderListings, selections, copies.ToArray(),
-                stagedCharacters.ToArray(), hostFactory, timeout, journal, profileLeftOut, sourceChecks);
+                stagedCharacters.ToArray(), hostFactory, timeout, journal, profileLeftOut, sourceChecks) { Builds = readiness.Builds };
         }
         catch (Exception original)
         {

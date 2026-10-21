@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.RegularExpressions;
 
 namespace Valheim.Testing.Game;
 
@@ -73,4 +74,68 @@ public sealed record JoinRefusal(GameConnectionStatus Status, string Server, Tim
 {
     /// <summary>The game's number for <see cref="Status"/>: 3 for <c>ErrorVersion</c>.</summary>
     public int Code => (int)Status;
+}
+
+/// <summary>
+/// What a client joins, as its run knows it before the join (#860): the server's or hosting client's name, its install's build when
+/// it was read before staging, and, for a game the run owns, a bounded read of its log's version refusal (null when none).
+/// </summary>
+internal sealed record JoinTarget(string Name, GameBuild? Build, Func<TimeSpan, CancellationToken, string?>? RefusalLine = null);
+
+/// <summary>
+/// The one wording of why the game refused a join (#860), shared by every join kind: the status the client is left with, what it
+/// means, and for <see cref="GameConnectionStatus.ErrorVersion"/> what the builds read before staging and the target's log prove.
+/// ErrorVersion is also how a mod's own version check refuses, so a game mismatch is claimed only when the versions show one.
+/// </summary>
+internal static class JoinRefusalText
+{
+    /// <summary>The line Valheim's <c>ZNet.RPC_PeerInfo</c> logs when it refuses a peer's network version (1.0.17).</summary>
+    internal static readonly Regex IncompatibleVersion = new(
+        @"has incompatible version, mine:(?<mine>\S+) \(network version (?<mineNetwork>\d+)\)\s+remote (?<remote>\S+) \(network version (?<remoteNetwork>\d+|unknown)\)",
+        RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// "the game refused the join with ErrorVersion (3): …. Nothing was retried; the client is back at its menu." for a client of
+    /// <paramref name="client"/> joining <paramref name="target"/>. <paramref name="targetLog"/> is the target's own version refusal
+    /// line, quoted by its versions only (the peer's endpoint can be a Steam ID).
+    /// </summary>
+    internal static string Explain(GameConnectionStatus status, GameBuild? client, JoinTarget? target, string? targetLog)
+    {
+        string name = target?.Name ?? "the server";
+        string why = status switch
+        {
+            GameConnectionStatus.ErrorVersion => Version(client, target, name, targetLog),
+            GameConnectionStatus.ErrorDisconnected => "the connection closed before the join completed.",
+            GameConnectionStatus.ErrorConnectFailed => "nothing answered at the join address (not listening, a wrong port or a firewall).",
+            GameConnectionStatus.ErrorPassword => "the password did not match; check the plan's passwordVariable and the server's password.",
+            GameConnectionStatus.ErrorAlreadyConnected => "a peer with the same identity is already connected (one Steam account on two clients).",
+            GameConnectionStatus.ErrorBanned => "the ban list or permitted list refused this client.",
+            GameConnectionStatus.ErrorFull => "the server is full.",
+            GameConnectionStatus.ErrorPlatformExcluded => "the server excludes this client's platform.",
+            GameConnectionStatus.ErrorCrossplayPrivilege => "this client's account has no crossplay privilege.",
+            GameConnectionStatus.ErrorKicked => "the server kicked this client.",
+            _ => "the game names no reason.",
+        };
+        return string.Create(CultureInfo.InvariantCulture, $"the game refused the join with {status} ({(int)status}): {why} Nothing was retried; the client is back at its menu.");
+    }
+
+    private static string Version(GameBuild? client, JoinTarget? target, string name, string? targetLog)
+    {
+        var line = targetLog == null ? null : IncompatibleVersion.Match(targetLog);
+        string logged = line is not { Success: true } ? ""
+            : $" {name}'s log refused a peer at {line.Groups["remote"].Value} (network version {line.Groups["remoteNetwork"].Value}) as itself " +
+              $"{line.Groups["mine"].Value} (network version {line.Groups["mineNetwork"].Value}).";
+        if (client?.NetworkVersion is { } mine && target?.Build?.NetworkVersion is { } theirs)
+            return mine != theirs
+                ? $"this client's install is {client} and {name}'s is {target.Build}; Valheim refuses a join across network versions. " +
+                  "Update the older install (Steam, or SteamCMD for a dedicated server)." + logged
+                : $"both installs are on network version {mine} (read before staging), so Valheim's own version check passed; a mod's version " +
+                  $"check refuses with the same status (for crossplay, so does mismatched lobby data), and {name}'s log names its reason." + logged;
+        if (line is { Success: true })
+            return (client?.NetworkVersion is { } own && line.Groups["remoteNetwork"].Value == own.ToString(CultureInfo.InvariantCulture)
+                ? $"Valheim refused this client's network version {own}." : "Valheim's network version check refused a peer.") + logged +
+                " Update the older install (Steam, or SteamCMD for a dedicated server).";
+        return "the network versions of this client and " + name + " were not both read before staging, so this is Valheim's network " +
+            "version check or a mod's own; a game mismatch shows in " + name + "'s log as \"has incompatible version\".";
+    }
 }

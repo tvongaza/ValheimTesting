@@ -45,6 +45,64 @@ internal static class GameVersionAgreement
         return GameAssemblyVersion.Read(image, $"{path} on {host.Name}");
     }
 
+    /// <summary>The build of the game assembly in a local <paramref name="install"/> that runs in place, never listed: read where it is.</summary>
+    internal static async Task<GameBuild> ReadInPlaceAsync(string install, CancellationToken cancellation)
+    {
+        string assembly;
+        byte[]? bytes;
+        try
+        {
+            assembly = InstallPins.GameAssembly(install);
+            bytes = await ReadHereAsync(assembly, assembly, "this machine", cancellation).ConfigureAwait(false);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            return new(null, null, error.Message);
+        }
+        if (bytes == null) return new(null, null, $"{assembly} on this machine is missing");
+        using var image = new MemoryStream(bytes, writable: false);
+        return GameAssemblyVersion.Read(image, $"{assembly} on this machine");
+    }
+
+    /// <summary>
+    /// One run's builds (#860): each actor's is admitted where its install is listed or run in place, before it is staged, and an
+    /// actor that cannot join the ones already admitted is refused then, by <see cref="Decide"/>, so a standalone run decides as a
+    /// campaign does. A campaign's are seeded from its host inspection. Thread-safe: a session opens clients concurrently.
+    /// </summary>
+    internal sealed class Ledger
+    {
+        private readonly Dictionary<string, Side> _sides = new(StringComparer.Ordinal);
+
+        /// <summary>Admits <paramref name="side"/>, replacing an earlier admission of the same actor; throws naming every problem.</summary>
+        internal GameBuild Admit(Side side)
+        {
+            ArgumentNullException.ThrowIfNull(side.Build);
+            lock (_sides)
+            {
+                var problems = Decide([.. _sides.Values.Where(other => other.Actor != side.Actor), side]);
+                if (problems.Count != 0) throw new InvalidOperationException(string.Join(" ", problems.Select(problem => problem.Message)));
+                _sides[side.Actor] = side;
+                return side.Build;
+            }
+        }
+
+        /// <summary>Admits the build of <paramref name="listing"/>, read on <paramref name="host"/>, as <paramref name="actor"/>'s.</summary>
+        internal async Task<GameBuild> AdmitAsync(string actor, IGameHost host, HostListing listing, TimeSpan timeout, CancellationToken cancellation) =>
+            Admit(new(actor, host.Name, listing.Root, await ReadAsync(host, listing, timeout, cancellation).ConfigureAwait(false)));
+
+        /// <summary>Admits the build of a local <paramref name="install"/> that runs in place as <paramref name="actor"/>'s.</summary>
+        internal async Task<GameBuild> AdmitInPlaceAsync(string actor, string install, CancellationToken cancellation) =>
+            Admit(new(actor, "this machine", install, await ReadInPlaceAsync(install, cancellation).ConfigureAwait(false)));
+
+        /// <summary>Records builds already decided together (a campaign's inspection), without deciding again.</summary>
+        internal void Seed(IEnumerable<Side> sides)
+        {
+            lock (_sides) foreach (var side in sides.Where(side => side.Build != null)) _sides[side.Actor] = side;
+        }
+
+        internal GameBuild? Of(string actor) { lock (_sides) return _sides.GetValueOrDefault(actor)?.Build; }
+    }
+
     // One open file, so its size and bytes are the same file's; null when it is not there.
     private static async Task<byte[]?> ReadHereAsync(string local, string path, string hostName, CancellationToken cancellation)
     {

@@ -123,6 +123,8 @@ internal sealed class HostedServerRun : IServerPlacement
     internal IReadOnlyDictionary<string, string> SourceCliPins => _sourceCliPins;
     /// <summary>Install-relative ValheimCLI paths the standalone profile replaced with its coherent staged set.</summary>
     internal IReadOnlyList<string> ReplacedCliPaths => _replacedCliPaths;
+    /// <summary>The run's builds (#860): the server's install is admitted where its profile's selection lists it.</summary>
+    internal GameVersionAgreement.Ledger? Builds { get; private init; }
 
     /// <summary>Refuses an environment and plan that cannot run a server on the environment's server host, before anything is touched.</summary>
     public static HostedServerRun Create(ResolvedEnvironment profile, ServerRunPlan plan, string runner, IHostedRunHooks? hooks = null) =>
@@ -135,7 +137,7 @@ internal sealed class HostedServerRun : IServerPlacement
     /// </summary>
     internal static HostedServerRun Create(ResolvedEnvironment profile, ServerRunPlan plan, string runner, IHostedRunHooks? hooks, bool prepared,
         string? campaignRunId = null, string? loaderPackage = null,
-        IReadOnlyDictionary<string, ProfileSourceCheck>? sourceChecks = null)
+        IReadOnlyDictionary<string, ProfileSourceCheck>? sourceChecks = null, GameVersionAgreement.Ledger? builds = null)
     {
         var role = profile.Server ?? throw new ArgumentException("The environment places no dedicated server.");
         var hostProfile = profile.Hosts[role.Host];
@@ -146,7 +148,7 @@ internal sealed class HostedServerRun : IServerPlacement
         hooks ??= HostedRunHooks.Production;
         var host = hooks.CreateHost(profile, role.Host);
         return new HostedServerRun(profile, role, hostProfile, host, hooks.RunId(campaignRunId), runner, plan, hooks,
-            prepared ? role.Install : null, loaderPackage, sourceChecks);
+            prepared ? role.Install : null, loaderPackage, sourceChecks) { Builds = builds };
     }
 
     /// <summary>Why a server environment cannot run <paramref name="plan"/>, or null: its host's platform and shell, and the plan's ports.</summary>
@@ -278,7 +280,7 @@ internal sealed class HostedServerRun : IServerPlacement
             loader = BepInExLoaderPackage.Read(choice.Manifest);
         }
         using var selection = await InstallSelection.ReadAsync(Host, HostedRuntimeKind.Server, Role.Install, cli, cliFiles, loader, Role.CliPort,
-            client: null, HostedTimeouts.Long, cancellation).ConfigureAwait(false);
+            client: null, HostedTimeouts.Long, cancellation, Builds, "server").ConfigureAwait(false);
         var source = selection.Source;
         if (verified)
             HostInstall.RequireSame(HostInstall.WithoutSkipped(plan.Runtime.Sha256, HostedRuntimeStage.RuntimeSkips, source.Names), source, "server install",

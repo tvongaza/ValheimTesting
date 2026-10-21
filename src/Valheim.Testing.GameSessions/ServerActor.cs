@@ -195,6 +195,29 @@ public sealed class ServerActor : IOwnedServer, IDisposable
         : (Host == null || Host.Kind == GameHostKind.Local) && RuntimeDirectory.Length != 0 ? Path.Combine(RuntimeDirectory, "BepInEx", "LogOutput.log") : null;
 
     /// <summary>
+    /// The current boot's line where the game refused a peer's network version (#860), from the log the game writes to (the plan's
+    /// <c>-logFile</c> file, otherwise BepInEx's), on this machine or the server's host: one read within <paramref name="within"/>,
+    /// never retried. Null when there is none, or the server is scripted or has no plan. For a refused join's reason.
+    /// </summary>
+    internal string? IncompatibleVersionLine(TimeSpan within, CancellationToken cancellation)
+    {
+        if (_scripted != null || _plan is not { } plan || RuntimeDirectory.Length == 0) return null;
+        if (Host == null || Host.Kind == GameHostKind.Local)
+        {
+            string log = plan.GameLogFile(RuntimeDirectory, WorldDirectory) ?? CrossplayServer.BepInExLog(RuntimeDirectory);
+            if (!File.Exists(log)) return null;
+            using var stream = new FileStream(log, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using var reader = new StreamReader(stream);
+            string? last = null;
+            for (string? line; (line = reader.ReadLine()) != null;) if (JoinRefusalText.IncompatibleVersion.IsMatch(line)) last = line;
+            return last;
+        }
+        var result = Host.WaitForLogAsync(plan.GameLogFile(RuntimeDirectory, WorldDirectory) ?? CrossplayServer.HostBepInExLog(RuntimeDirectory), 0,
+            JoinRefusalText.IncompatibleVersion, [], within, cancellation).GetAwaiter().GetResult();
+        return result.Outcome == HostLogOutcome.Matched ? result.Line : null;
+    }
+
+    /// <summary>
     /// The crossplay server's lobby for its current boot <paramref name="server"/>, read from the log the game writes to (the plan's
     /// <c>-logFile</c> file, otherwise BepInEx's), on this machine or on the server's host, within the plan's startup time
     /// (<see cref="CrossplayServer.WaitForLobby(GameActor, string, TimeSpan, CancellationToken)"/>). A restarted server opens a new one.

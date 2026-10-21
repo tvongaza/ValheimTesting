@@ -156,6 +156,26 @@ public sealed class PinnedServerRunTests : IDisposable
         Assert.Equal(0, await RunHere(["validate", nativePlan, Output], ClientOptions()));
     }
 
+    // #860: a standalone run decides its installs' versions as a campaign does. Its declared client is read in place before the
+    // server's install is listed, and a server the client cannot join is refused there, before its profile is staged.
+    [Fact] public async Task AServerOnAnotherNetworkVersionThanTheDeclaredClientIsRefusedBeforeItsProfileIsStaged()
+    {
+        using var native = ClientLaunchTests.Install.Mac(universalDoorstop: true, core: ClientLaunchTests.NativeDetour);
+        string install = native.Root;
+        var client = MacClient(install, "arm64");
+        File.WriteAllBytes(Path.Combine(install, GameLaunch.ClientMacBundle, "Contents", "Resources", "Data", "Managed", InstallPins.GameAssemblyName),
+            FakeInstalls.GameAssembly("1.0.20", 41));
+        string plan = WritePlan(client: client);
+        Assert.Equal(1, await RunHere(["validate", plan, Output], ClientOptions()));
+        var steps = Result().GetProperty("Steps").EnumerateArray().ToList();
+        Assert.Contains(steps, step => step.GetProperty("Name").GetString() == "read the declared clients' game versions" && step.GetProperty("Passed").GetBoolean());
+        var refused = Assert.Single(steps, step => step.GetProperty("Name").GetString() == "check the server host's install against the pinned runtime and stage its profile");
+        Assert.Contains("client's install " + install + " on this machine is Valheim 1.0.20 (network version 41), but server's install", refused.GetProperty("Error").GetString());
+        Assert.Contains("is Valheim 1.0.17 (network version 40). Valheim refuses a join across network versions", refused.GetProperty("Error").GetString());
+        Assert.DoesNotContain(steps, step => step.GetProperty("Name").GetString() == "copy and verify pinned world");
+        Assert.DoesNotContain(_machine.Host.Scripts, script => script is "profile-seed" or "apply-stage" or "copy");
+    }
+
     [Fact] public async Task AMissingClientJoinPasswordIsRefusedBeforeTheServerOrAnyCopyStarts()
     {
         using var install = PreflightInstall.Create();

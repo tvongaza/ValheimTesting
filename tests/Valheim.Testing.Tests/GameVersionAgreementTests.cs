@@ -94,6 +94,27 @@ public sealed class GameVersionAgreementTests
     }
 
     [Fact]
+    public void TheLedgerAdmitsActorsThatCanJoinAndRefusesOneThatCannotWithTheSameDecision()
+    {
+        var builds = new GameVersionAgreement.Ledger();
+        Assert.Equal(Old, builds.Admit(Side("client", Old)));
+        Assert.Equal(Old, builds.Admit(Side("server", Old)));
+        // A server that cannot take the admitted client: refused naming both, and not admitted.
+        var refused = Assert.Throws<InvalidOperationException>(() => builds.Admit(Side("server", New)));
+        Assert.StartsWith(@"client's install C:\client-client on pc is Valheim 1.0.17 (network version 40), but server's install C:\game on pc is Valheim 1.0.20", refused.Message);
+        Assert.Equal(Old, builds.Of("server"));
+        // One actor alone is never refused; its unknown build is, once another arrives.
+        var alone = new GameVersionAgreement.Ledger();
+        alone.Admit(Side("server", new GameBuild(null, null, "unreadable")));
+        Assert.Contains("is unknown: unreadable", Assert.Throws<InvalidOperationException>(() => alone.Admit(Side("client", Old))).Message);
+        // A campaign's decided builds are recorded as they are.
+        var seeded = new GameVersionAgreement.Ledger();
+        seeded.Seed([Side("server", Old), Side("client", null)]);
+        Assert.Equal(Old, seeded.Of("server"));
+        Assert.Null(seeded.Of("client"));
+    }
+
+    [Fact]
     public void OneActorOrAnActorWhoseInstallCheckFailedAddsNothing()
     {
         Assert.Empty(GameVersionAgreement.Decide([Side("server", new GameBuild(null, null, "x"))]));
@@ -109,6 +130,21 @@ public sealed class GameAssemblyReadShellTests : IDisposable
     private readonly string _root = Directory.CreateTempSubdirectory("game-assembly-read-").FullName;
     public void Dispose() => Directory.Delete(_root, recursive: true);
     public static TheoryData<string> Shells => LocalGameHostShellTests.Shells;
+
+    [Fact]
+    public async Task AnInstallThatRunsInPlaceIsReadWhereItIs()
+    {
+        FakeInstalls.Client(_root);
+        Assert.Equal(new GameBuild(40, "1.0.17", null), await GameVersionAgreement.ReadInPlaceAsync(_root, CancellationToken.None));
+        File.WriteAllBytes(Path.Combine(_root, "valheim_Data", "Managed", InstallPins.GameAssemblyName), FakeInstalls.GameAssembly("1.0.20", 41));
+        var builds = new GameVersionAgreement.Ledger();
+        builds.Admit(new("server", "pc", @"C:\game", new GameBuild(40, "1.0.17", null)));
+        Assert.Contains("is Valheim 1.0.20 (network version 41), but server's install", (await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            builds.AdmitInPlaceAsync("client", _root, CancellationToken.None))).Message);
+        var missing = await GameVersionAgreement.ReadInPlaceAsync(Path.Combine(_root, "missing"), CancellationToken.None);
+        Assert.Null(missing.NetworkVersion);
+        Assert.Contains("missing", missing.Unknown);
+    }
 
     [Theory, MemberData(nameof(Shells))]
     public async Task TheHostReadReturnsTheBytesWithinItsLimitAndRefusesALargerFile(string shell)
