@@ -62,15 +62,20 @@ var character = DefaultSmokeCharacter.Ensure(Path.Combine(runRoot, "character-so
 
 Use a new `world-source` for each preparation. `Ensure` repairs a character only inside its own marked store. The packaged character serves one client at a time, because every copy shares its player ID.
 
-For a mod-specific world, supply your own fixture. It holds exactly one world, as the game saved it:
+For a mod-specific world, supply your own fixture. It holds exactly one Valheim 1.0 world, as the game saved it after it stopped:
 
 ```text
 <fixture root>/
   <WorldName>/
     _main.<n>.fwl2
     _main.<n>.db2
-    ...
+    _main.<n>.chunks
+    _main.<n>.ok
+    *.chunk
+  <WorldName>_backup_auto-<date>/    optional: the game's backups
 ```
+
+A world saved before Valheim 1.0 (`<WorldName>.fwl` and `.db`) is refused: open and save it once in Valheim 1.0 or later.
 
 Read the UID from the world itself, never from its name: `WorldIdentity.Read(root).UidText`. You can also let the preflight report it.
 

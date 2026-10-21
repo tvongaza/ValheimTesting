@@ -19,7 +19,7 @@
     "hostWorld": {
       "world": {
         "source": "<full path of a disposable fixture world>",
-        "sha256": { "HostFixture.fwl": "<sha256>", "HostFixture.db": "<sha256>" }
+        "sha256": { "HostFixture/_main.1.fwl2": "<sha256>", "HostFixture/_main.1.db2": "<sha256>", "HostFixture/_main.1.chunks": "<sha256>", "HostFixture/_main.1.ok": "<sha256>", "HostFixture/00_00__0_1.chunk": "<sha256>" }
       },
       "worldUid": "<the fixture world's UID>",
       "saveSeconds": 120

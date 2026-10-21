@@ -26,8 +26,7 @@ public sealed class HostingClientActorTests : IDisposable
     public HostingClientActorTests()
     {
         Directory.CreateDirectory(Output); Directory.CreateDirectory(Fixture); Directory.CreateDirectory(Worlds);
-        File.WriteAllBytes(Path.Combine(Fixture, Name + ".fwl"), OwnedRunPreflightTests.Metadata(Name, long.Parse(WorldUid)));
-        File.WriteAllText(Path.Combine(Fixture, Name + ".db"), "fixture world");
+        FakeInstalls.World(Fixture, Name, long.Parse(WorldUid));
     }
     public void Dispose() { _install.Dispose(); Directory.Delete(_root, recursive: true); }
 
@@ -77,7 +76,7 @@ public sealed class HostingClientActorTests : IDisposable
             .Extension("valheim.session", "leave", _ =>
             {
                 Note("host", "leave"); _hosting = false; _peerJoined = false; // A host that leaves disconnects its peers.
-                File.WriteAllText(Path.Combine(Worlds, Name + ".db.old"), "backup");
+                File.WriteAllText(Path.Combine(Worlds, Name, "_main.2.ok"), "saved on leave");
                 return new { source = "session-leave", complete = true, action = "leave" };
             }, readOnly: false)
             .On("cli_set_player_safety true", _ => ScriptedTransport.Ok("OK: playerSafety enabled=True god=True ghost=True debugMode=True cheats=True ghostReplicated=True"));
@@ -171,7 +170,7 @@ public sealed class HostingClientActorTests : IDisposable
     [Fact] public async Task AHostWhoseFixtureFailsItsPreflightStopsBeforeAnyPeerStarts()
     {
         var plan = HostPlan();
-        File.WriteAllText(Path.Combine(Fixture, Name + ".db"), "another world"); // No longer the pinned fixture.
+        File.WriteAllText(Path.Combine(Fixture, Name, "_main.1.db2"), "another world"); // No longer the pinned fixture.
         var report = new ScenarioReport("hosted");
         using var data = new FakeClientDataDirectory(Save);
         await using var session = Session(report, plan);
@@ -254,7 +253,7 @@ public sealed class HostingClientActorTests : IDisposable
         {
             await session.StartAsync();
             await session.Join("peer");
-            Assert.Equal(new[] { Name + ".db", Name + ".fwl" }, OurWorldFiles().Order(StringComparer.Ordinal)); // Placed while the host runs.
+            Assert.Equal(new[] { Name }, OurWorldFiles()); // Placed while the host runs.
         }
         Assert.True(report.Passed, string.Join("; ", report.Steps.Where(s => !s.Passed).Select(s => s.Name + ": " + s.Error)));
         Assert.Equal(new[] { "detach from the operator's client peer", "the host leaves its world to its menu", "stop only the owned hosting client host",
@@ -262,7 +261,7 @@ public sealed class HostingClientActorTests : IDisposable
         Assert.Equal(1, _hostProcess.Stops);
         Assert.Empty(OurWorldFiles());
         Assert.Equal("the user's world", File.ReadAllText(Path.Combine(Worlds, "MyWorld.fwl")));
-        foreach (string file in new[] { Name + ".fwl", Name + ".db", Name + ".db.old" }) Assert.True(File.Exists(Path.Combine(report.Provenance["hostWorldEvidence"], file)), file);
+        foreach (string file in new[] { "_main.1.fwl2", "_main.1.db2", "_main.2.ok" }) Assert.True(File.Exists(Path.Combine(report.Provenance["hostWorldEvidence"], Name, file)), file);
     }
 
     [ClientHostFact] public async Task AnOwnedHostThatDoesNotStopLeavesItsWorldInPlace()
@@ -278,7 +277,7 @@ public sealed class HostingClientActorTests : IDisposable
         }
         Assert.Equal(new[] { "the scenario failed", "stop only the owned hosting client host" }, report.Steps.Where(s => !s.Passed).Select(s => s.Name));
         Assert.DoesNotContain(report.Steps, s => s.Name.StartsWith("move the hosted world", StringComparison.Ordinal) || s.Name == "the host leaves its world to its menu");
-        Assert.Equal(new[] { Name + ".db", Name + ".fwl" }, OurWorldFiles().Order(StringComparer.Ordinal));
+        Assert.Equal(new[] { Name }, OurWorldFiles());
         Assert.Equal("this machine: " + Worlds + " (" + Name + ")", report.Provenance["hostWorldLeftInPlace"]);
     }
 

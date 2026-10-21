@@ -1472,9 +1472,7 @@ public sealed class RunRecoveryTests : IDisposable
     public async Task MacServerRecoveryMovesTheUserWorldBeforeRetiringItsCollectedDirectory()
     {
         const string run = "run-mac-evidence", worlds = "/home/p/worlds_local", collected = "/srv/runs/run-mac-evidence/host-world";
-        string fixture = FakeInstalls.World(Path.Combine(_root, "fixture"));
-        Directory.CreateDirectory(_host.Local(worlds));
-        File.Copy(Path.Combine(fixture, "Campaign.fwl"), _host.Local(worlds + "/Campaign.fwl"));
+        FakeInstalls.World(_host.Local(worlds));
         // Deliberately put the collected copy first in the journal: recovery must still move the user's placement first.
         Line(_host, run, "server", Gone, JournalEntry.CopyIntended, ("runtime", collected), ("stage", ""), ("parent", "/srv/runs/" + run), ("retention", "after-fetch"));
         Line(_host, run, "server", Gone, JournalEntry.CopyIntended, ("runtime", worlds + "/Campaign"), ("stage", ""),
@@ -1592,7 +1590,8 @@ public sealed class RunRecoveryTests : IDisposable
     {
         const string Worlds = "/home/p/.config/unity3d/IronGate/Valheim/worlds_local", KeepIn = "/srv/runs/run-host/host-world";
         ChunkedWorld(Worlds, "Campaign", 4242);
-        File.WriteAllText(_host.Local(Worlds + "/Campaign_backup_auto-1.db"), "backup");
+        Directory.CreateDirectory(_host.Local(Worlds + "/Campaign_backup_auto-20261006-120000"));
+        File.WriteAllText(_host.Local(Worlds + "/Campaign_backup_auto-20261006-120000/_main.0.db2"), "backup");
         File.WriteAllText(_host.Local(Worlds + "/MyWorld.fwl"), "the user's world");
         Line(_host, "run-host", "host", Gone, JournalEntry.CopyIntended, ("runtime", Worlds + "/Campaign"), ("stage", ""), ("parent", Worlds),
             ("holds", "hosted-world"), ("world", "Campaign"), ("worldUid", "4242"), ("keepIn", KeepIn));
@@ -1604,7 +1603,7 @@ public sealed class RunRecoveryTests : IDisposable
         Assert.StartsWith("moved out of the client's worlds into " + KeepIn, Assert.Single(recovered.Steps, step => step.What == "copy " + Worlds + "/Campaign").Outcome);
         Assert.Equal(new[] { "MyWorld.fwl" }, Directory.EnumerateFileSystemEntries(_host.Local(Worlds)).Select(Path.GetFileName));
         Assert.Equal("chunk", File.ReadAllText(_host.Local(KeepIn + "/Campaign/0_0.chunk")));
-        Assert.Equal("backup", File.ReadAllText(_host.Local(KeepIn + "/Campaign_backup_auto-1.db")));
+        Assert.Equal("backup", File.ReadAllText(_host.Local(KeepIn + "/Campaign_backup_auto-20261006-120000/_main.0.db2")));
         Assert.All((await StatusAsync()).Runs, run => Assert.Equal(JournalRunState.Ended, run.State));
 
         // Refused: a folder that is not a worlds_local, a line without the world UID, and a keep folder outside the run's directory.
@@ -1691,10 +1690,7 @@ public sealed class RunRecoveryTests : IDisposable
         var character = new HostedCampaignCharacter { FileName = "vt-host", CharactersLocalDirectory = Data + "/characters_local" };
         Directory.CreateDirectory(here.Local(Worlds));
         File.WriteAllText(here.Local(Worlds + "/MyWorld.fwl"), "the user's world");
-        string fixture = Path.Combine(_root, "fixture");
-        Directory.CreateDirectory(Path.Combine(fixture, "Campaign"));
-        File.Copy(Path.Combine(FakeInstalls.World(Path.Combine(_root, "flat")), "Campaign.fwl"), Path.Combine(fixture, "Campaign", "_main.0.fwl2"));
-        File.WriteAllText(Path.Combine(fixture, "Campaign", "_main.0.db2"), "fixture");
+        string fixture = FakeInstalls.World(Path.Combine(_root, "fixture"));
         var plan = new HostWorldPlan { World = new() { Source = fixture, Sha256 = new(WorldFixture.Manifest(fixture)) }, WorldUid = "4242" };
         // The simulated client's data directory is the same one, so a world placed without the campaign's site lands there too.
         using var data = new FakeClientDataDirectory(here.Local(Data));
@@ -1713,9 +1709,9 @@ public sealed class RunRecoveryTests : IDisposable
         }
 
         Place(Run);
-        Assert.True(File.Exists(here.Local(Worlds + "/Campaign/_main.0.fwl2")));
+        Assert.True(File.Exists(here.Local(Worlds + "/Campaign/_main.1.fwl2")));
         // The game hosted it and saved: a newer save beside the fixture's, in Valheim 1.0's chunked folder. Then the runner was killed.
-        File.Copy(here.Local(Worlds + "/Campaign/_main.0.fwl2"), here.Local(Worlds + "/Campaign/_main.1.fwl2"));
+        File.Copy(here.Local(Worlds + "/Campaign/_main.1.fwl2"), here.Local(Worlds + "/Campaign/_main.2.fwl2"));
         File.WriteAllText(here.Local(Worlds + "/Campaign/0_0.chunk"), "saved by the game");
 
         if (oneTeardown)
@@ -1754,7 +1750,7 @@ public sealed class RunRecoveryTests : IDisposable
 
         // The next start places the same fixture: nothing named for it is left to refuse it.
         var next = Place("run-next");
-        Assert.True(File.Exists(here.Local(Worlds + "/Campaign/_main.0.fwl2")));
+        Assert.True(File.Exists(here.Local(Worlds + "/Campaign/_main.1.fwl2")));
         next.Collect();
     }
 
@@ -1763,8 +1759,7 @@ public sealed class RunRecoveryTests : IDisposable
     {
         string folder = _host.Local(worlds + "/" + name);
         Directory.CreateDirectory(folder);
-        string flat = FakeInstalls.World(Path.Combine(_root, "flat-" + name + "-" + uid), name, uid);
-        File.Copy(Path.Combine(flat, name + ".fwl"), Path.Combine(folder, "_main.1.fwl2"), overwrite: true);
+        File.WriteAllBytes(Path.Combine(folder, "_main.1.fwl2"), FakeInstalls.Metadata(name, uid));
         File.WriteAllText(Path.Combine(folder, "_main.1.db2"), "data");
         File.WriteAllText(Path.Combine(folder, "0_0.chunk"), "chunk");
     }
