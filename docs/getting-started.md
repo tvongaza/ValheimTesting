@@ -41,7 +41,7 @@ Copy `MyMod.Tests/` next to your existing mod project. Change its `Compile Inclu
 
 ```xml
 <Compile Include="../YourMod/YourRule.cs" Link="Mod/YourRule.cs" />
-<PackageReference Include="Valheim.Testing.Doubles" Version="[0.1.0]" PrivateAssets="all" />
+<PackageReference Include="Valheim.Testing.Doubles" Version="[0.2.0]" PrivateAssets="all" />
 ```
 
 The test project compiles your production file against the doubles. Reference no game assembly or plugin project: those types would conflict. Keep Harmony patches and `Awake` outside the linked decision file.
@@ -80,7 +80,7 @@ This checks the production decision on declared inputs. [Choose a test layer](gu
 If your code uses no Unity or Valheim type, reference `Valheim.Testing` from your existing test project and pass an `ITerrain` into production code:
 
 ```xml
-<PackageReference Include="Valheim.Testing" Version="[0.1.0]" />
+<PackageReference Include="Valheim.Testing" Version="[0.2.0]" />
 ```
 
 The [package table](package-versions.md) lists every other package and exact version.

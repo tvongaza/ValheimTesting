@@ -13,7 +13,7 @@ Add the package to the unit-test project, not the mod project. It needs C# 10 an
 ```xml
 <PropertyGroup><LangVersion>10</LangVersion></PropertyGroup> <!-- or newer; net48 test legs default to C# 7.3 -->
 <ItemGroup>
-  <PackageReference Include="Valheim.Testing.Doubles" Version="[0.1.0]" PrivateAssets="all" />
+  <PackageReference Include="Valheim.Testing.Doubles" Version="[0.2.0]" PrivateAssets="all" />
   <Compile Include="../MyMod/Src/RoadMath.cs" /> <!-- the mod's pure-logic sources -->
 </ItemGroup>
 ```
