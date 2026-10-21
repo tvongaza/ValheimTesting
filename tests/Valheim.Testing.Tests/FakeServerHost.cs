@@ -369,11 +369,9 @@ internal sealed class FakeServerHost : IGameHost
                 {
                     string relative = Encoding.UTF8.GetString(Convert.FromBase64String(line)), from = Path.Combine(root, relative), to = Path.Combine(keep, relative);
                     if (!File.Exists(from)) { reply.Append("VT-GONE ").Append(line).Append('\n'); continue; }
-                    long size = new FileInfo(from).Length;
-                    string sha = FileHash.Sha256(from);
                     Directory.CreateDirectory(Path.GetDirectoryName(to)!);
                     File.Move(from, to);
-                    reply.Append("VT-MOVED ").Append(line).Append(' ').Append(size).Append(' ').Append(sha).Append('\n');
+                    reply.Append("VT-MOVED ").Append(line).Append('\n');
                 }
                 foreach (string line in v["folders"].Split('\n', StringSplitOptions.RemoveEmptyEntries))
                 {
@@ -390,7 +388,7 @@ internal sealed class FakeServerHost : IGameHost
                 return Ok("VT-SOURCE-WRITTEN\n");
             case "source-evidence":
             {
-                string profileParent = Local(v["parent"]), added = Path.Combine(profileParent, ProfileSourceCheck.AddedFolder);
+                string profileParent = Local(v["parent"]), added = Local(v["keep"]);
                 if (v["recovered"].Length != 0 && Directory.Exists(added))
                 {
                     string to = Path.Combine(Local(v["recovered"]), ProfileSourceCheck.AddedFolder);
@@ -398,7 +396,7 @@ internal sealed class FakeServerHost : IGameHost
                     Directory.CreateDirectory(Local(v["recovered"]));
                     Directory.Move(added, to);
                 }
-                else if (v["added"] == "1" && Directory.Exists(added)) Directory.Delete(added, recursive: true);
+                else if (v["recovered"].Length == 0 && v["added"] == "1" && Directory.Exists(added)) Directory.Delete(added, recursive: true);
                 if (File.Exists(Path.Combine(profileParent, ProfileSourceCheck.BaselineFile))) File.Delete(Path.Combine(profileParent, ProfileSourceCheck.BaselineFile));
                 return Ok("VT-SOURCE-SETTLED\n");
             }

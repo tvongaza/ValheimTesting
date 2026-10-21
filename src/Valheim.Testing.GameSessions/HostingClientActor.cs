@@ -27,7 +27,7 @@ public sealed class HostingClientActor : IOwnedServer, IDisposable
     private readonly ClientActor _client;
     private readonly HostedWorldLifecycle _world;
     private readonly CancellationToken _cancellation;
-    private readonly bool _local, _retiresCopy;
+    private readonly bool _local;
     private readonly IClientPlacement _placement;
 
     /// <param name="site">A campaign client's host, where its world is placed; null for this machine.</param>
@@ -36,9 +36,7 @@ public sealed class HostingClientActor : IOwnedServer, IDisposable
     {
         ArgumentNullException.ThrowIfNull(plan);
         if (plan.HostWorld == null) throw new ArgumentException($"Client {name} hosts a world: give its plan a hostWorld section.", nameof(plan));
-        // A hosting client on this machine has its own placement: closing it removes its disposable copy.
         _client = new ClientActor(name, plan, output, placement, cancellation);
-        _retiresCopy = placement is LocalClientPlacement;
         // On this machine, the same journalled site as a campaign's (#829): env recover moves a world a killed run left.
         _world = site != null ? new HostedWorldLifecycle(plan, output, cancellation, site)
             : new HostedWorldLifecycle(plan, output, cancellation, localSite: HostedWorldOnHost.ThisMachine(output, name));
@@ -53,7 +51,15 @@ public sealed class HostingClientActor : IOwnedServer, IDisposable
     /// plan runs it in place (<see cref="ClientRunPlan.InPlace"/>).
     /// </summary>
     public static HostingClientActor OnThisMachine(string name, ClientRunPlan plan, string output, CancellationToken cancellation = default) =>
-        new(name, plan, output, new LocalClientPlacement(), cancellation);
+        new(name, plan, output, new LocalClientPlacement(), cancellation) { RetiresPlacement = true };
+
+    /// <summary>
+    /// Whether closing it retires its placement's disposable copy: an actor made with <see cref="OnThisMachine"/>. In a session, the
+    /// session settles and retires every placement its actors use, its source verdict in the run's report. Outside one it is not
+    /// recorded in a report: closing throws when the verdict fails.
+    /// </summary>
+    internal bool RetiresPlacement { get; init; }
+    internal IClientPlacement Placement => _placement;
 
     /// <summary>The hosting client's name in the run, for example <c>host</c>.</summary>
     public string Name => _client.Name;
@@ -152,7 +158,7 @@ public sealed class HostingClientActor : IOwnedServer, IDisposable
         _client.Dispose(); // Throws when the owned process could not be stopped.
         if (owned) _world.Stopped();
         // Its disposable copy on this machine, once it stopped; a failure here is the copy's alone (the world is released).
-        if (_retiresCopy && _placement is LocalClientPlacement local) local.RetireAsync().GetAwaiter().GetResult();
+        if (RetiresPlacement && _placement is LocalClientPlacement local) local.RetireAsync().GetAwaiter().GetResult();
     }
 
     /// <summary>Moves the placed world into the evidence once no client can still host it, else names it (a step and provenance in <paramref name="report"/>).</summary>

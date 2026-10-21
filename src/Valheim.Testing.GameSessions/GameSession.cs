@@ -495,19 +495,26 @@ public sealed class GameSession : IAsyncDisposable
         try { await _cancellation.CancelAsync().ConfigureAwait(false); } catch (AggregateException error) { Console.Error.WriteLine("Teardown: " + error.Message); }
         List<ClientActor> opened;
         lock (_opened) opened = [.. _opened];
+        // One report and one evidence folder for every source verdict of this machine's clients, before any of them closes.
+        var placements = new[] { _localPlacement, Host?.Placement }.Concat(_clients.Concat(opened).Select(client => client.Placement))
+            .OfType<LocalClientPlacement>().Distinct().ToList();
+        foreach (var local in placements) { local.Report = Report; local.Evidence = Output; }
         foreach (var client in Enumerable.Reverse(_clients.Concat(opened).ToList()))
             if (client.Session is { } open)
                 try { Report.Step(StepPhase.Cleanup, open.Owned ? $"stop only the owned client {client.Name}" : $"detach from the operator's client {client.Name}", client.Dispose); }
                 catch (Exception error) { TeardownFailures.Add(error); Console.Error.WriteLine("Teardown: " + error.Message); }
             else client.Dispose();
         if (Host is { } host) CloseHost(host);
-        // This machine's owned clients' source verdicts, once their clients are closed; then the disposable client copies (a client
-        // that could not be stopped keeps its copy).
-        if (_localPlacement is { HasSourceVerdicts: true } local)
-            await local.SettleSourcesAsync(Report, error => { TeardownFailures.Add(error); Console.Error.WriteLine("Teardown: " + error.Message); }).ConfigureAwait(false);
-        if (_localPlacement is { HasCopies: true } copies)
-            try { Report.Step(StepPhase.Cleanup, "remove the disposable client copy", () => copies.RetireAsync(verifySource: false).GetAwaiter().GetResult()); }
-            catch (Exception error) { TeardownFailures.Add(error); Console.Error.WriteLine("Teardown: " + error.Message); }
+        // Every placement on this machine its actors used (the session's own, a hosting client's, an actor's): their owned clients'
+        // source verdicts in this report once the clients are closed, then the disposable copies (one that could not be stopped stays).
+        foreach (var local in placements)
+        {
+            if (local.HasSourceVerdicts)
+                await local.SettleSourcesAsync(error => { TeardownFailures.Add(error); Console.Error.WriteLine("Teardown: " + error.Message); }).ConfigureAwait(false);
+            if (local.HasCopies)
+                try { Report.Step(StepPhase.Cleanup, "remove the disposable client copy", () => local.RetireAsync(verifySource: false).GetAwaiter().GetResult()); }
+                catch (Exception error) { TeardownFailures.Add(error); Console.Error.WriteLine("Teardown: " + error.Message); }
+        }
         if (Server is { } server)
             try { Report.Step(StepPhase.Cleanup, "stop only owned server", server.Dispose); }
             catch (Exception error) { ServerStopped = false; TeardownFailures.Add(error); Console.Error.WriteLine("Teardown: " + error.Message); }

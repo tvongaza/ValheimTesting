@@ -107,7 +107,7 @@ A reused process ID is never the run's. Each run that left something is printed 
 `valheim-test env recover --run ID` clears what that one run left, exactly as `env status` judged it; `env status` is its dry run. It refuses a `LIVE`, `UNKNOWN` or `UNRECOVERABLE` run. Otherwise it works in phases:
 
 1. Stops each process of the run whose ID, start time and command line still match. It asks the process to quit first, with the quit budget its own stop had, and kills it only after that. A Windows server's launcher tree and start task go too.
-2. On each host where no process is left, under that host's lock, it retires the characters and removes the profiles and unfinished world ships. Before it removes a profile, it settles its source install from the journalled listing, as the run would have ([source checks](sessions-profiles.md#source-checks)): what the game added goes to `recovered-<actor>/source-added` in the run's folder, beside `source-changes.json`. A listing whose SHA-256 differs from the journal's is refused, and that profile stays. It keeps the game's logs from each profile in `recovered-<actor>` first. A world the run placed in a client's `worlds_local` is moved out to the run's folder, only when its metadata states the journalled world UID. The run's folder itself goes last: when its fetch was journalled or nothing is left in it. One that still holds unfetched evidence, or logs this recovery kept, stays; `env teardown` removes it.
+2. On each host where no process is left, under that host's lock, it retires the characters and removes the profiles and unfinished world ships. Before it removes a profile, it settles its source install from the journalled listing, as the run would have ([source checks](sessions-profiles.md#source-checks)): what the game added goes to `recovered-<actor>/source-added` in the run's folder, beside `source-changes.json` ([source recovery states](#source-recovery-states)). It keeps the game's logs from each profile in `recovered-<actor>` first. A world the run placed in a client's `worlds_local` is moved out to the run's folder, only when its metadata states the journalled world UID. The run's folder itself goes last: when its fetch was journalled or nothing is left in it. One that still holds unfetched evidence, or logs this recovery kept, stays; `env teardown` removes it.
 3. Releases the run's Steam leases, only when no process of the run is left on any host and every host was read.
 4. Releases each host lock once nothing of the run is left on that host.
 
@@ -121,6 +121,17 @@ Each effect is journalled under the actor `recovery`. A step that fails keeps wh
 | `env teardown --run ID --machine-gone` | Releases the leases of a run whose machine is gone for good, and journals its end |
 
 `env teardown --copy` refuses a path that is not a toolkit copy, a copy a running process uses, and a copy an open run's journal still names. Nothing is ever removed because of its age.
+
+### Source recovery states
+
+| Journal and host | Recovery |
+|---|---|
+| A listing, not settled | Settles the install, then removes the profile |
+| A listing whose SHA-256 differs from the journal's | Refuses: the profile stays, and nothing is moved or removed |
+| Settled by the run, its listing gone | Nothing to settle. Moved files the run had not kept yet go to `recovered-<actor>/source-added` |
+| Not settled, its listing gone | Names the install as not compared (`unknown`), keeps any moved files, and removes the profile |
+| The run kept the profile because its settlement did not finish | `env teardown` settles it the same way, then removes it |
+| The settlement does not finish | Keeps the profile for the next recovery |
 
 ## From code
 

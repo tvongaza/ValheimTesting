@@ -68,29 +68,30 @@ A hard link cannot cross a Windows volume or a Linux mount, so a linked profile'
 
 | When | Check |
 |---|---|
-| Before staging | Every supplied pin against the source install; a listing of the install: each file's SHA-256, size and modified time, and every folder |
-| Before each launch | The profile's bound pins, and every root file a Windows or Linux profile linked. The listing is saved beside the profile as `source-baseline.json` and journalled |
-| After the run | The source install against the listing, by size and modified time; what the game added is moved out |
+| Before staging | Every supplied pin against the source install; a listing of the install: each file's SHA-256, size and modified time, and every folder. The listing is saved once beside the profile as `source-baseline.json` and journalled |
+| Before each launch | The profile's bound pins, and every root file a linked profile linked |
+| After the run | The source install against the listing, by size and modified time |
 
-Once every process launched from the profile is proven stopped, the run settles the install:
+Once every process launched from the profile is proven stopped, the run settles the install. It lists the install and compares it with the listing from preparation:
 
-1. It lists the install and compares it with the listing from preparation.
-2. It moves each file the game added out of the install, for example a preloader log beside a macOS executable or a mod's write to the game root. It removes each folder the game made once it is empty, deepest first. It never follows a link and never moves a path outside the install.
-3. It lists the install again. The listing must equal the one from preparation.
+- A changed or missing file fails the run. Each path is named, and the source is never repaired.
+- On a linked profile the game runs from the profile and cannot add a file to the install. A path that appears there anyway came from something else, such as Steam, a mod manager or a person. It is named in a warning and left in place, and fails nothing.
+- On an install the game runs in place (a macOS client), each file the game added is moved out of the install, for example a preloader log beside the executable or a mod's write to the game root. Each folder the game made is removed once it is empty, deepest first. The install is listed again, and it must equal the listing from preparation. The settlement never follows a link, never moves a path outside the install, and never moves a file of the listing. When a file also changed or went missing, nothing is moved, and every path is named.
 
 | Verdict (`sourceIntegrity.<actor>`) | Meaning | Cleanup step |
 |---|---|---|
 | `unchanged` | The install lists as before | Passes |
-| `restored with a warning` | The game added files or folders. They were moved out, and the install lists as before. The warning names every path | Passes |
-| `failed` | A file changed or went missing, or an added file could not be moved. Each path is named, and the source is not repaired | Fails |
+| `restored with a warning` | The game, run in place, added files or folders. They were moved out, and the install lists as before. The warning names every path | Passes |
+| `unchanged by the run, with a warning` | Paths appeared in a linked profile's install during the run. The warning names each one; they are left in place | Passes |
+| `failed` | A file changed or went missing, an added file could not be moved, or the settlement did not finish. Each path is named, and the source is not repaired | Fails |
 | `unknown` | A process launched from the profile was not proven stopped, so nothing was checked | Fails |
 | `not applicable` | The client runs its install [in place](#run-an-install-in-place) | Passes |
 
-The moved files go to `source-changes/<actor>/added/` in the actor's evidence. Beside them, `source-changes.json` names each added file (its size, SHA-256 and where it is kept), each changed file (before and after), each missing file, and each file left in place with its reason. Moved files past the failure size limits (1 GB per file, 2 GB in all) stay beside the profile on its host, journalled as kept; `env teardown` removes them.
+The moved files go to `source-changes/<actor>/added/` in the run's evidence folder (a session's output, a standalone run's or an arm's), whichever process ran from the profile. Beside them, `source-changes.json` names each added file (its size, SHA-256 and where it is kept), each changed file (before and after), each missing file (`missing`) and folder (`missingDirectories`), and each path left in place with its reason. Moved files stay beside the profile on its host, journalled as kept, when they are past the failure size limits (1 GB per file, 2 GB in all) or the run has no evidence folder (a regression profile removed before any arm ran); `env teardown` removes them.
 
-An interrupted run leaves its listing journalled. `env recover` settles the install from it before it removes the profile ([recovery](sessions-leases-and-recovery.md#env-recover)).
+The listing goes last, after the settlement is journalled. A settlement that does not finish (a host that fails, an abandoned cleanup, a journal that refuses its line) keeps the profile, its listing and the moved files, journalled as kept, and fails the cleanup step. An interrupted or unfinished run's listing stays journalled: `env recover` settles the install from it before it removes the profile ([recovery](sessions-leases-and-recovery.md#env-recover)).
 
-Set `VALHEIM_TESTING_SOURCE_HASH_AFTER_RUN=1` to compare content hashes after the run. Only content hashes find a write through a Windows hard link that keeps the file's size and modified time. On macOS, preparing a client profile also checks the app bundle's code seal ([Mac session limits](platforms.md#mac-session-limits)).
+Set `VALHEIM_TESTING_SOURCE_HASH_AFTER_RUN=1` to compare content hashes after the run. A linked profile's game files are hard links: the same file as the install's. Only content hashes find a write through one that keeps the file's size and modified time. On macOS, preparing a client profile also checks the app bundle's code seal ([Mac session limits](platforms.md#mac-session-limits)).
 
 Pins you leave out are observed from the staged profile and recorded as `observed` in `PinOrigins` ([pins](game-actors-and-pins.md#expected-and-observed-pins)).
 
@@ -121,6 +122,6 @@ A clean test runtime is BepInEx core plus your plugins, with an empty `patchers`
 
 ## Limits
 
-- A game on macOS runs the install's own executable, so a preloader log, or a mod's write to the game root, lands in the install. The source check moves it into the evidence and names it.
+- A macOS client runs the install's own executable, so a preloader log, or a mod's write to the game root, lands in the install. The source check moves it into the evidence and names it.
 - The public launch primitives (`GameLaunch.ForServer`, `GameLaunch.ForClient`, `OwnedServerSession`, `HostServer.StartAsync`, `InteractiveClient.StartAsync`) launch the caller's own directory. They have no profile apart from an install, so no source check runs.
 - A profile never takes the install's top-level `logs/` folder.

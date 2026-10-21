@@ -373,7 +373,7 @@ public sealed class RunRecoveryTests : IDisposable
             ("runtimeKind", "server"), ("launchRoot", source));
         Line(_host, run, "server", Gone, JournalEntry.CopyDone, ("runtime", runtime), ("files", "1"));
         var check = ProfileSourceCheck.Prepare(await ProfileSourceCheck.InspectAsync(_host, source, TimeSpan.FromSeconds(5)), []);
-        await check.PersistAsync(_host, runtime, entry =>
+        await check.PersistAsync(_host, runtime, "server", entry =>
         {
             Line(_host, run, "server", Gone, entry.Kind, [.. entry.Fields.Select(field => (field.Key, field.Value))]);
             return Task.CompletedTask;

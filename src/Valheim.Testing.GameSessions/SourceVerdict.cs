@@ -9,11 +9,13 @@ internal enum SourceVerdictKind
 {
     /// <summary>The install lists as it did before the launch.</summary>
     Unchanged,
-    /// <summary>The game added files or folders there; they were moved out (files into the run's evidence) and the install lists as before. Passes with a warning.</summary>
+    /// <summary>The game, run in place, added files or folders there; they were moved out (files into the run's evidence) and the install lists as before. Passes with a warning.</summary>
     Restored,
-    /// <summary>A file changed or went missing, or an added one could not be moved: the source is not repaired. Fails the cleanup step.</summary>
+    /// <summary>Files or folders appeared in the install of a linked profile, which the game cannot write: something else added them. Named, left in place; passes with a warning.</summary>
+    AddedElsewhere,
+    /// <summary>A file changed or went missing, an added one could not be moved, or the settlement did not finish: the source is not repaired. Fails the cleanup step.</summary>
     Failed,
-    /// <summary>Not checked: a process launched from the profile was not proven stopped. Fails the cleanup step.</summary>
+    /// <summary>Not compared: a process launched from the profile was not proven stopped, or a recovery found the baseline gone. Fails the cleanup step.</summary>
     Unknown,
     /// <summary>The actor runs its install in place, so there is no source apart from what it runs.</summary>
     NotApplicable,
@@ -27,19 +29,22 @@ internal sealed record SourceAddedFile(string Path, long Bytes, string Sha256, s
 [ResultShape]
 internal sealed record SourceChangedFile(string Path, string Before, string After);
 
-/// <summary>A path the settlement left in the install, and why.</summary>
+/// <summary>A path the settlement left in the install (a folder ends in <c>/</c>), and why.</summary>
 [ResultShape]
 internal sealed record SourceNotMoved(string Path, string Reason);
 
 /// <summary>
-/// The one source-install verdict of an actor's run (#612), written to <c>source-changes/&lt;actor&gt;/source-changes.json</c> (in a
-/// recovery, <c>recovered-&lt;actor&gt;/source-changes.json</c> on the host). <see cref="Record"/> is the only writer of the
-/// report's <c>sourceIntegrity.&lt;actor&gt;</c> and of the step that names it, for every launch path.
+/// The one source-install verdict of an actor's run (#612), written to <c>source-changes/&lt;actor&gt;/source-changes.json</c> in
+/// the run's evidence (in a recovery, <c>recovered-&lt;actor&gt;/source-changes.json</c> on the host). <see cref="Missing"/> names
+/// files, <see cref="MissingDirectories"/> folders. <see cref="Record"/> is the only writer of the report's
+/// <c>sourceIntegrity.&lt;actor&gt;</c> and of the step that names it, for every launch path; <see cref="KeepsProfile"/> is the one
+/// answer to whether the profile may be retired.
 /// </summary>
 [ResultShape]
 internal sealed record SourceVerdict(string Actor, string Host, string Root, string Mode, SourceVerdictKind Verdict,
     IReadOnlyList<SourceAddedFile> Added, IReadOnlyList<SourceChangedFile> Changed, IReadOnlyList<string> Missing,
-    IReadOnlyList<SourceNotMoved> NotMoved, IReadOnlyList<string> RemovedDirectories, string? Reason = null)
+    IReadOnlyList<string> MissingDirectories, IReadOnlyList<SourceNotMoved> NotMoved, IReadOnlyList<string> RemovedDirectories,
+    string? Reason = null)
 {
     internal const string ContentMode = "content hashes", MetadataMode = "size and modified time";
     private static readonly JsonSerializerOptions s_json = new()
@@ -48,11 +53,23 @@ internal sealed record SourceVerdict(string Actor, string Host, string Root, str
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
     };
 
+    /// <summary>
+    /// False when the settlement did not finish (a host that failed, an abandoned cleanup, a journal that refused its line): the
+    /// profile, its baseline and its moved files stay, journalled kept, for a recovery to settle again.
+    /// </summary>
+    public bool Settled { get; init; } = true;
+
+    /// <summary>Whether the caller must keep the profile instead of retiring it: a settlement that did not finish (<see cref="Settled"/>).</summary>
+    [JsonIgnore] internal bool KeepsProfile => !Settled;
+
     /// <summary>The verdict for an actor that runs its install in place.</summary>
-    internal static SourceVerdict NotApplicable(string actor) => new(actor, "", "", "", SourceVerdictKind.NotApplicable, [], [], [], [], []);
+    internal static SourceVerdict NotApplicable(string actor) => new(actor, "", "", "", SourceVerdictKind.NotApplicable, [], [], [], [], [], []);
 
     /// <summary>The verdict when a process launched from the actor's profile was not proven stopped: nothing was listed or moved.</summary>
-    internal static SourceVerdict Unknown(string actor, string reason) => new(actor, "", "", "", SourceVerdictKind.Unknown, [], [], [], [], [], reason);
+    internal static SourceVerdict Unknown(string actor, string reason) => NotCompared(actor, "stop not proven: " + reason);
+
+    /// <summary>The verdict when the install could not be compared, and why.</summary>
+    internal static SourceVerdict NotCompared(string actor, string reason) => new(actor, "", "", "", SourceVerdictKind.Unknown, [], [], [], [], [], [], reason);
 
     /// <summary>Whether the verdict fails the cleanup step.</summary>
     [JsonIgnore] internal bool Fails => Verdict is SourceVerdictKind.Failed or SourceVerdictKind.Unknown;
@@ -61,7 +78,7 @@ internal sealed record SourceVerdict(string Actor, string Host, string Root, str
     [JsonIgnore] internal string StepName => $"verify {Actor}'s source install after the run ({Verdict switch
     {
         SourceVerdictKind.NotApplicable => "not applicable: runs in place",
-        SourceVerdictKind.Unknown => "unknown: stop not proven",
+        SourceVerdictKind.Unknown => "unknown: " + (Reason ?? "").Split(':')[0],
         _ => Mode,
     }})";
 
@@ -70,17 +87,20 @@ internal sealed record SourceVerdict(string Actor, string Host, string Root, str
     {
         SourceVerdictKind.Unchanged => "unchanged",
         SourceVerdictKind.Restored => "restored with a warning: " + Warning,
+        SourceVerdictKind.AddedElsewhere => "unchanged by the run, with a warning: " + Warning,
         SourceVerdictKind.Failed => "failed: " + Problems + ". The source is not repaired.",
-        SourceVerdictKind.Unknown => "unknown: stop not proven: " + Reason,
+        SourceVerdictKind.Unknown => "unknown: " + Reason,
         _ => "not applicable: runs in place",
     };
 
-    // Every path the game added, by name: what a person checks before trusting the install again.
+    // Every path, by name: what a person checks before trusting the install again.
     private string Warning => string.Join("; ", new[]
     {
         Added.Count == 0 ? null : $"the game added {Added.Count} file(s) to {Root} on {Host}, moved into the run's evidence: " +
             string.Join(", ", Added.Select(file => $"{file.Path} ({file.KeptAs})")),
         RemovedDirectories.Count == 0 ? null : "removed the empty folder(s) it made: " + string.Join(", ", RemovedDirectories),
+        Verdict != SourceVerdictKind.AddedElsewhere ? null : $"{NotMoved.Count} path(s) were added to {Root} on {Host} during the run by something " +
+            "other than the game's profile, and are left in place: " + string.Join(", ", NotMoved.Select(file => file.Path)),
     }.OfType<string>());
 
     private string Problems
@@ -90,6 +110,7 @@ internal sealed record SourceVerdict(string Actor, string Host, string Root, str
             var parts = new List<string>();
             if (Changed.Count != 0) parts.Add((Mode == ContentMode ? "different content: " : "different size or modified time: ") + string.Join(", ", Changed.Select(file => file.Path)));
             if (Missing.Count != 0) parts.Add("missing: " + string.Join(", ", Missing));
+            if (MissingDirectories.Count != 0) parts.Add("missing folders: " + string.Join(", ", MissingDirectories));
             if (NotMoved.Count != 0) parts.Add("added and not moved: " + string.Join(", ", NotMoved.Select(file => $"{file.Path} ({file.Reason})")));
             if (Reason != null) parts.Add(Reason);
             if (Added.Count != 0 || RemovedDirectories.Count != 0) parts.Add(Warning);
@@ -105,13 +126,13 @@ internal sealed record SourceVerdict(string Actor, string Host, string Root, str
 
     /// <summary>
     /// Records the verdict as its <see cref="StepPhase.Cleanup"/> step and <c>sourceIntegrity.&lt;actor&gt;</c>, and prints a
-    /// restored install's warning naming every path. A failed or unknown verdict fails the step and throws, so the caller's
-    /// cleanup goes on and reports it; without a report (an actor made outside a session) it only throws.
+    /// warning naming every path the run moved out or found added. A failed or unknown verdict fails the step and throws, so the
+    /// caller's cleanup goes on and reports it; without a report (an actor made outside a session) it only throws.
     /// </summary>
     internal void Record(ScenarioReport? report)
     {
         if (report != null) lock (report.Provenance) report.Provenance["sourceIntegrity." + Actor] = Text;
-        if (Verdict == SourceVerdictKind.Restored) Console.Error.WriteLine($"WARNING: {Actor}'s source install was restored: {Warning}.");
+        if (Verdict is SourceVerdictKind.Restored or SourceVerdictKind.AddedElsewhere) Console.Error.WriteLine($"WARNING: {Actor}'s source install: {Warning}.");
         void Check()
         {
             if (Verdict == SourceVerdictKind.Unknown) throw new IOException($"Source integrity of {Actor}'s install is unknown: {Reason}.");
@@ -124,13 +145,14 @@ internal sealed record SourceVerdict(string Actor, string Host, string Root, str
 
 /// <summary>
 /// Where one profile's source settlement keeps what the game added to the install: the copy's <see cref="Runtime"/> (as journalled),
-/// whose parent folder on the host holds the persisted baseline and the moved files, and either the run's local
-/// <see cref="Output"/> (they are fetched into <c>source-changes/&lt;actor&gt;/</c> there) or, in a recovery, the host folder
-/// <see cref="RecoveredIn"/> (<c>&lt;runs&gt;/&lt;run&gt;/recovered-&lt;actor&gt;</c>) they are moved into.
+/// whose parent folder on the host holds the persisted baseline and the moved files, and either the run's evidence folder
+/// <see cref="Output"/> (they are fetched into <c>source-changes/&lt;actor&gt;/</c> there; without one they stay on the host,
+/// journalled kept) or, in a recovery, the host folder <see cref="RecoveredIn"/> (<c>&lt;runs&gt;/&lt;run&gt;/recovered-&lt;actor&gt;</c>)
+/// they are moved into. <see cref="Actor"/> is the one name of the verdict and its evidence.
 /// </summary>
 internal sealed record SourceSettlement(string Actor, string Runtime, string? Output, string? RecoveredIn)
 {
-    internal static SourceSettlement Run(string actor, string runtime, string output) => new(actor, runtime, output, null);
+    internal static SourceSettlement Run(string actor, string runtime, string? output) => new(actor, runtime, output, null);
     internal static SourceSettlement Recovery(string actor, string runtime, string recoveredIn) => new(actor, runtime, null, recoveredIn);
     internal string Parent => HostPath.Parent(Runtime);
 }
@@ -138,19 +160,31 @@ internal sealed record SourceSettlement(string Actor, string Runtime, string? Ou
 /// <summary>The host scripts of the source settlement: one per shell for each step, through the toolkit's one link rule.</summary>
 internal static class SourceSettleScripts
 {
-    // Variables: root (the source install), keep (where added files go: <parent>/source-added), files and folders (base64 relative
-    // paths, one per line; folders deepest first). Each added regular file is moved to keep/<relative> (a rename on one volume, a
-    // copy and delete across two) and reported as "VT-MOVED <b64> <bytes> <sha256>", or left with "VT-NOTMOVED <b64> <reason>":
-    // a path outside the root or through a link (never followed), anything but a regular file, a name keep already holds, or a
-    // move the system refused. Then each added folder is removed when it is empty ("VT-RMDIR <b64>"). A path already gone is
-    // "VT-GONE <b64>", so a repeated settlement carries on. The root's listing, not this reply, decides the verdict.
+    /// <summary>The words for a settlement script's reason token (<c>VT-NOTMOVED &lt;b64&gt; &lt;reason&gt;</c>).</summary>
+    internal static string Reason(string token) => token switch
+    {
+        "outside" => "outside the install",
+        "link" => "a link on the way, never followed",
+        "not-a-file" => "not a regular file",
+        "kept-already" => "the moved files already hold that name",
+        "not-empty" => "the folder is not empty",
+        _ => "the move failed",
+    };
+
+    // Variables: root (the source install), keep (where added files go: the profile's moved-files folder), files and folders (base64
+    // relative paths, one per line; folders deepest first). Each added regular file is moved to keep/<relative> (a rename on one
+    // volume, a copy and delete across two) and reported as "VT-MOVED <b64>", or left with "VT-NOTMOVED <b64> <reason>": a path
+    // outside the root or through a link (never followed), anything but a regular file, a name keep already holds, or a move the
+    // system refused. Then each added folder is removed when it is empty ("VT-RMDIR <b64>"). A path already gone is "VT-GONE <b64>",
+    // so a repeated settlement carries on. The root's listing, not this reply, decides the verdict. A decoded name keeps a trailing
+    // line break (the printf x guard); the keep folder is compared with the root ignoring case on macOS, which errs toward a refusal.
     internal static readonly string Bash = "set -u\n" + ProtectedPaths.BashInside + ProtectedPaths.BashUnlinked + """
         [ -n "$root" ] && [ -n "$keep" ] || exit 3
         if [ ! -d "$root" ] || [ -L "$root" ]; then echo 'VT-SETTLE-REFUSED the source install is not a folder'; exit 0; fi
-        vt_inside "$root" "$keep"; case $? in 1) ;; *) echo 'VT-SETTLE-REFUSED the keep folder is not outside the source install'; exit 0;; esac
-        if command -v sha256sum > /dev/null 2>&1; then hasher=(sha256sum); else hasher=(shasum -a 256); fi
+        vt_inside "$root" "$keep" fold; case $? in 1) ;; *) echo 'VT-SETTLE-REFUSED the keep folder is not outside the source install'; exit 0;; esac
         vt_relative() {
-            rel=$(printf '%s' "$1" | base64 -d 2>/dev/null || printf '%s' "$1" | base64 -D) || return 1
+            rel=$({ printf '%s' "$1" | base64 -d 2>/dev/null || printf '%s' "$1" | base64 -D; } && printf x) || return 1
+            rel=${rel%x}
             case "/$rel/" in //|/*//*|*/../*|*/./*) return 1;; esac
             case "$rel" in /*) return 1;; esac
         }
@@ -162,10 +196,7 @@ internal static class SourceSettleScripts
             if [ ! -e "$src" ]; then printf 'VT-GONE %s\n' "$line"; continue; fi
             if [ ! -f "$src" ]; then printf 'VT-NOTMOVED %s not-a-file\n' "$line"; continue; fi
             if [ -e "$target" ] || [ -L "$target" ]; then printf 'VT-NOTMOVED %s kept-already\n' "$line"; continue; fi
-            if [ "$vt_darwin" = 1 ]; then size=$(stat -f %z -- "$src") || exit 3; else size=$(stat -c %s -- "$src") || exit 3; fi
-            sum=$("${hasher[@]}" < "$src") || { printf 'VT-NOTMOVED %s move-failed\n' "$line"; continue; }
-            if mkdir -p -- "$(dirname -- "$target")" 2> /dev/null && mv -- "$src" "$target" 2> /dev/null; then
-                printf 'VT-MOVED %s %s %s\n' "$line" "$size" "${sum%% *}"
+            if mkdir -p -- "$(dirname -- "$target")" 2> /dev/null && mv -- "$src" "$target" 2> /dev/null; then printf 'VT-MOVED %s\n' "$line"
             else printf 'VT-NOTMOVED %s move-failed\n' "$line"; fi
         done <<< "$files"
         while IFS= read -r line; do
@@ -179,49 +210,50 @@ internal static class SourceSettleScripts
         echo 'VT-SETTLED'
         """.ReplaceLineEndings("\n");
 
-    // The bash settlement's PowerShell 7 counterpart, with the same variables and replies.
+    // The bash settlement's PowerShell 7 counterpart, with the same variables and replies. Every file operation uses the \\?\ form
+    // of the path, so a name Windows would trim (a trailing dot or space) is never read as another file.
     internal static readonly string PowerShell = ProtectedPaths.PowerShellInside + ProtectedPaths.PowerShellUnlinked + """
         if (-not $root -or -not $keep) { exit 3 }
+        $root = [IO.Path]::GetFullPath($root).TrimEnd('\', '/')
         if (-not [IO.Directory]::Exists($root) -or ([IO.File]::GetAttributes($root) -band [IO.FileAttributes]::ReparsePoint)) { 'VT-SETTLE-REFUSED the source install is not a folder'; exit 0 }
         $inside = $true
         try { $inside = Test-VtInside $root $keep } catch { }
         if ($inside) { 'VT-SETTLE-REFUSED the keep folder is not outside the source install'; exit 0 }
+        $keep = [IO.Path]::GetFullPath($keep).TrimEnd('\', '/')
         function Get-VtRelative([string]$line) {
             try { $rel = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($line)) } catch { return $null }
             if (-not $rel -or [IO.Path]::IsPathRooted($rel)) { return $null }
             foreach ($part in $rel.Split([char[]]'\/')) { if ($part -eq '' -or $part -eq '.' -or $part -eq '..') { return $null } }
             return $rel.Replace('/', '\')
         }
-        $sha = [Security.Cryptography.SHA256]::Create()
-        try {
-            foreach ($line in ($files -split "`n")) {
-                if (-not $line) { continue }
-                $rel = Get-VtRelative $line
-                if (-not $rel) { 'VT-NOTMOVED ' + $line + ' outside'; continue }
-                $src = Join-Path $root $rel
-                $target = Join-Path $keep $rel
-                if (-not (Test-VtUnlinked $root $src)) { 'VT-NOTMOVED ' + $line + ' link'; continue }
-                if (-not [IO.File]::Exists($src)) { if ([IO.Directory]::Exists($src)) { 'VT-NOTMOVED ' + $line + ' not-a-file' } else { 'VT-GONE ' + $line }; continue }
-                if ([IO.File]::Exists($target) -or [IO.Directory]::Exists($target)) { 'VT-NOTMOVED ' + $line + ' kept-already'; continue }
-                try {
-                    $size = (New-Object IO.FileInfo $src).Length
-                    $stream = [IO.File]::OpenRead($src)
-                    try { $hash = ([BitConverter]::ToString($sha.ComputeHash($stream))).Replace('-', '').ToLowerInvariant() } finally { $stream.Dispose() }
-                    [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($target))
-                    [IO.File]::Move($src, $target)
-                    'VT-MOVED ' + $line + ' ' + $size + ' ' + $hash
-                } catch { 'VT-NOTMOVED ' + $line + ' move-failed' }
-            }
-        } finally { $sha.Dispose() }
+        function Get-VtExact([string]$path) { if ($path.StartsWith('\\')) { return '\\?\UNC\' + $path.Substring(2) } else { return '\\?\' + $path } }
+        foreach ($line in ($files -split "`n")) {
+            if (-not $line) { continue }
+            $rel = Get-VtRelative $line
+            if (-not $rel) { 'VT-NOTMOVED ' + $line + ' outside'; continue }
+            $src = $root + '\' + $rel
+            $target = $keep + '\' + $rel
+            if (-not (Test-VtUnlinked $root $src)) { 'VT-NOTMOVED ' + $line + ' link'; continue }
+            $exactSource = Get-VtExact $src
+            $exactTarget = Get-VtExact $target
+            if (-not [IO.File]::Exists($exactSource)) { if ([IO.Directory]::Exists($exactSource)) { 'VT-NOTMOVED ' + $line + ' not-a-file' } else { 'VT-GONE ' + $line }; continue }
+            if ([IO.File]::Exists($exactTarget) -or [IO.Directory]::Exists($exactTarget)) { 'VT-NOTMOVED ' + $line + ' kept-already'; continue }
+            try {
+                [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($exactTarget))
+                [IO.File]::Move($exactSource, $exactTarget)
+                'VT-MOVED ' + $line
+            } catch { 'VT-NOTMOVED ' + $line + ' move-failed' }
+        }
         foreach ($line in ($folders -split "`n")) {
             if (-not $line) { continue }
             $rel = Get-VtRelative $line
             if (-not $rel) { 'VT-NOTMOVED ' + $line + ' outside'; continue }
-            $dir = Join-Path $root $rel
+            $dir = $root + '\' + $rel
             if (-not (Test-VtUnlinked $root $dir)) { 'VT-NOTMOVED ' + $line + ' link'; continue }
-            if (-not [IO.Directory]::Exists($dir)) { 'VT-GONE ' + $line; continue }
+            $exact = Get-VtExact $dir
+            if (-not [IO.Directory]::Exists($exact)) { 'VT-GONE ' + $line; continue }
             $removed = $false
-            try { if ([IO.Directory]::GetFileSystemEntries($dir).Length -eq 0) { [IO.Directory]::Delete($dir); $removed = $true } } catch { }
+            try { if ([IO.Directory]::GetFileSystemEntries($exact).Length -eq 0) { [IO.Directory]::Delete($exact); $removed = $true } } catch { }
             if ($removed) { 'VT-RMDIR ' + $line } else { 'VT-NOTMOVED ' + $line + ' not-empty' }
         }
         'VT-SETTLED'
@@ -243,38 +275,39 @@ internal static class SourceSettleScripts
         'VT-SOURCE-WRITTEN'
         """.ReplaceLineEndings("\n");
 
-    // Variables: parent (the profile's folder), added (1: remove its fetched source-added folder too), recovered (a recovery's
-    // recovered-<actor> folder: source-added is moved into it, never removed). The baseline goes last, once the moved files are
-    // settled; every delete stays below the parent (ProtectedPaths).
+    // Variables: parent (the profile's folder), keep (its moved-files folder, a source-added-* folder directly in parent), added (1:
+    // remove keep, fetched or holding no file), recovered (a recovery's recovered-<actor> folder: keep is moved into it as
+    // source-added, never removed). The baseline goes last; every delete stays below the parent (ProtectedPaths).
     internal static readonly string BashEvidence = "set -u\n" + ProtectedPaths.BashInside + ProtectedPaths.BashRemove + """
-        [ -n "$parent" ] || exit 3
-        from="$parent/source-added"
+        [ -n "$parent" ] && [ -n "$keep" ] || exit 3
+        [ "$(dirname -- "$keep")" = "$parent" ] || exit 3
+        case "$(basename -- "$keep")" in source-added|source-added-*) ;; *) exit 3;; esac
         if [ -n "$recovered" ]; then
-            if [ -L "$from" ]; then echo 'VT-SOURCE-REFUSED the moved files folder is a link'; exit 0; fi
-            if [ -d "$from" ]; then
+            if [ -L "$keep" ]; then echo 'VT-SOURCE-REFUSED the moved files folder is a link'; exit 0; fi
+            if [ -d "$keep" ]; then
                 to="$recovered/source-added"
                 if [ -e "$to" ] || [ -L "$to" ]; then echo "VT-SOURCE-REFUSED $to already exists"; exit 0; fi
-                mkdir -p -- "$recovered" && mv -- "$from" "$to" || exit 3
+                mkdir -p -- "$recovered" && mv -- "$keep" "$to" || exit 3
             fi
-        elif [ "${added:-}" = 1 ]; then vt_remove "$from" "$parent" || exit 3
+        elif [ "${added:-}" = 1 ]; then vt_remove "$keep" "$parent" || exit 3
         fi
         vt_remove "$parent/source-baseline.json" "$parent" || exit 3
         echo 'VT-SOURCE-SETTLED'
         """.ReplaceLineEndings("\n");
 
     internal static readonly string PowerShellEvidence = ProtectedPaths.PowerShellInside + ProtectedPaths.PowerShellRemove + """
-        if (-not $parent) { exit 3 }
-        $from = Join-Path $parent 'source-added'
+        if (-not $parent -or -not $keep) { exit 3 }
+        if ([IO.Path]::GetDirectoryName($keep) -ne $parent -or -not ([IO.Path]::GetFileName($keep) -like 'source-added*')) { exit 3 }
         if ($recovered) {
-            if (Test-VtLink $from) { 'VT-SOURCE-REFUSED the moved files folder is a link'; exit 0 }
-            if ([IO.Directory]::Exists($from)) {
+            if (Test-VtLink $keep) { 'VT-SOURCE-REFUSED the moved files folder is a link'; exit 0 }
+            if ([IO.Directory]::Exists($keep)) {
                 $to = Join-Path $recovered 'source-added'
                 if ([IO.Directory]::Exists($to) -or [IO.File]::Exists($to)) { 'VT-SOURCE-REFUSED ' + $to + ' already exists'; exit 0 }
                 [void][IO.Directory]::CreateDirectory($recovered)
-                [IO.Directory]::Move($from, $to)
+                [IO.Directory]::Move($keep, $to)
             }
         }
-        elseif ($added -eq '1') { Remove-VtTree $from $parent }
+        elseif ($added -eq '1') { Remove-VtTree $keep $parent }
         Remove-VtTree (Join-Path $parent 'source-baseline.json') $parent
         'VT-SOURCE-SETTLED'
         """.ReplaceLineEndings("\n");

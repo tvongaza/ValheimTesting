@@ -7,15 +7,19 @@ namespace Valheim.Testing.GameSessions;
 
 /// <summary>
 /// The one owner of a disposable profile's source checks: the preparation snapshot, copied-file staging scope,
-/// narrow before-boot scope, and the whole-source settlement after the run (#612): what the game added to the install is moved
-/// out into the run's evidence, the install is listed again against the persisted baseline, and <see cref="SourceVerdict"/> says
-/// what was found. A recovery settles from the journalled baseline (<see cref="FromJournalAsync"/>).
+/// narrow before-boot scope, and the whole-source settlement after the run (#612). It decides what the game left in the install
+/// (moved into the run's evidence, left in place, or a failure), where that evidence goes, and whether the profile may be retired
+/// (<see cref="SourceVerdict"/>). A recovery settles from the journalled baseline (<see cref="RecoverAsync"/>).
 /// </summary>
 internal sealed class ProfileSourceCheck
 {
     internal const string HashAfterRunVariable = "VALHEIM_TESTING_SOURCE_HASH_AFTER_RUN";
     internal static AsyncLocal<bool?> HashAfterRunOverride { get; } = new();
-    /// <summary>The baseline and the moved files, in the profile's parent folder on its host (beside <c>runtime</c> and <c>staging</c>).</summary>
+    /// <summary>
+    /// The baseline and the moved files, in the profile's parent folder on its host (beside <c>runtime</c> and <c>staging</c>): the
+    /// files go to <c>source-added-&lt;id&gt;</c>, one folder per prepared profile, so a later profile in the same folder (the next
+    /// regression arm) never takes an earlier one's as its own.
+    /// </summary>
     internal const string BaselineFile = "source-baseline.json", AddedFolder = "source-added";
     /// <summary>The most a persisted baseline may hold when a recovery reads it back.</summary>
     private const long BaselineLimit = 64L << 20;
@@ -28,8 +32,13 @@ internal sealed class ProfileSourceCheck
     private bool? _contentMode;
 
     private ProfileSourceCheck(HostListing source, IReadOnlyDictionary<string, string> beforeBoot,
-        IReadOnlyDictionary<string, string> linkedRootFiles)
-    { Source = source; _beforeBoot = beforeBoot; _linkedRootFiles = linkedRootFiles; }
+        IReadOnlyDictionary<string, string> linkedRootFiles, bool linked, string id)
+    { Source = source; _beforeBoot = beforeBoot; _linkedRootFiles = linkedRootFiles; Linked = linked; Id = id; }
+
+    /// <summary>Whether the game launches from a linked profile (it hard-links game files), so it cannot add a file to the install.</summary>
+    internal bool Linked { get; }
+    // This prepared profile's own name for its moved files' folder (AddedFolder-<id>).
+    private string Id { get; }
 
     internal HostListing Source { get; }
     internal IReadOnlyDictionary<string, string> BeforeBoot => _beforeBoot;
@@ -50,15 +59,17 @@ internal sealed class ProfileSourceCheck
         ArgumentNullException.ThrowIfNull(source);
         if (!source.Files.Keys.ToHashSet(source.Names).SetEquals(source.States.Keys))
             throw new InvalidDataException($"The preparation listing of {source.Root} on {source.HostName} has no size and modified time for every file.");
-        // Every root file selected by the Windows link plan is a write-through hard link, including the game and crash-handler
-        // executables. Nested game data is covered by the managed-code pins; it is not promoted into this root-file row.
-        string[] rootFiles = linkedFiles.Where(path => !path.Contains('/')).ToArray();
+        // Every root file the link plan selected (any linked layout) is a write-through hard link, including the game and
+        // crash-handler executables. Nested game data is covered by the managed-code pins; it is not promoted into this root-file row.
+        string[] links = linkedFiles.ToArray();
+        string[] rootFiles = links.Where(path => !path.Contains('/')).ToArray();
         string[] paths = [.. InstallPins.ManagedFolders, .. rootFiles.Select(HostInstall.LiteralPathPattern)];
         bool ignoreCase = source.Shell == HostShellKind.PowerShell;
         Dictionary<string, string> Expected(IEnumerable<string> selected) => source.Files
             .Where(file => HostInstall.MatchesAny(file.Key, selected, ignoreCase))
             .ToDictionary(file => file.Key, file => file.Value, source.Names);
-        return new ProfileSourceCheck(source, Expected(paths), Expected(rootFiles.Select(HostInstall.LiteralPathPattern)));
+        return new ProfileSourceCheck(source, Expected(paths), Expected(rootFiles.Select(HostInstall.LiteralPathPattern)), links.Length != 0,
+            Guid.NewGuid().ToString("N")[..8]);
     }
 
     /// <summary>The preparation row's one complete source listing. No stage or launch caller chooses a full-source rule.</summary>
@@ -112,7 +123,7 @@ internal sealed class ProfileSourceCheck
         .Concat((copied ?? []).Select(HostInstall.LiteralPathPattern))
         .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
 
-    /// <summary>The before-boot row: game/loader pin paths plus root files linked into a Windows profile.</summary>
+    /// <summary>The before-boot row: game/loader pin paths plus root files linked into a linked profile.</summary>
     internal string[] ProfileBeforeBootPaths(bool includePlugins) =>
         InstallPins.PinPaths.Concat(_linkedRootFiles.Keys.Select(HostInstall.LiteralPathPattern))
         .Concat(_stagedBeforeBoot.Keys.Select(HostInstall.LiteralPathPattern))
@@ -133,46 +144,67 @@ internal sealed class ProfileSourceCheck
         .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
 
     private sealed record PersistedFile(string Path, long Size, string Modified, string Sha256);
-    private sealed record PersistedBaseline(string Host, string Root, string Mode, IReadOnlyList<PersistedFile> Files, IReadOnlyList<string> Directories);
+    private sealed record PersistedBaseline(string Host, string Root, string Mode, bool Linked, string Id, IReadOnlyList<PersistedFile> Files,
+        IReadOnlyList<string> Directories);
     private static readonly JsonSerializerOptions s_baselineJson = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
     /// <summary>
     /// Writes the preparation listing (every file's size, modified time and SHA-256, and every directory) as
     /// <c>source-baseline.json</c> in the parent folder of the profile <paramref name="runtime"/> on its host, then journals
-    /// <see cref="JournalEntry.SourceBaseline"/> with its path and SHA-256, before anything launches from the profile: an
-    /// interrupted run's recovery settles the install from it.
+    /// <see cref="JournalEntry.SourceBaseline"/> with its path, SHA-256, moved files' folder and <paramref name="actor"/> (the
+    /// one name of the actor's verdict and evidence, in the run and in a recovery). Once, at preparation, before anything launches
+    /// from the profile: an interrupted run's recovery settles the install from it.
     /// </summary>
-    internal async Task PersistAsync(IGameHost host, string runtime, Func<JournalEntry, Task> journal, TimeSpan timeout,
+    internal async Task PersistAsync(IGameHost host, string runtime, string actor, Func<JournalEntry, Task> journal, TimeSpan timeout,
         CancellationToken cancellation = default)
     {
         if (host.Name != Source.HostName) throw new ArgumentException("The source check belongs to another host.", nameof(host));
-        string path = HostPath.Join(HostPath.Parent(runtime), BaselineFile);
-        var baseline = new PersistedBaseline(Source.HostName, Source.Root, HashAfterRun ? SourceVerdict.ContentMode : SourceVerdict.MetadataMode,
+        string parent = HostPath.Parent(runtime), path = HostPath.Join(parent, BaselineFile);
+        var baseline = new PersistedBaseline(Source.HostName, Source.Root, HashAfterRun ? SourceVerdict.ContentMode : SourceVerdict.MetadataMode, Linked, Id,
             Source.Files.OrderBy(file => file.Key, StringComparer.Ordinal)
                 .Select(file => new PersistedFile(file.Key, Source.States[file.Key].Size, Source.States[file.Key].Modified, file.Value)).ToList(),
             Source.Directories.Order(StringComparer.Ordinal).ToList());
         byte[] bytes = JsonSerializer.SerializeToUtf8Bytes(baseline, s_baselineJson);
         await WriteAsync(host, path, bytes, timeout, cancellation).ConfigureAwait(false);
         await journal(JournalEntry.Of(JournalEntry.SourceBaseline, ("runtime", runtime), ("sourceRoot", Source.Root), ("baseline", path),
-            ("baselineSha256", FileHash.Sha256(bytes)))).ConfigureAwait(false);
+            ("baselineSha256", FileHash.Sha256(bytes)), ("sourceAdded", KeepFolder(parent)), ("sourceActor", actor))).ConfigureAwait(false);
     }
 
+    // The moved files' folder of this prepared profile, beside its runtime.
+    private string KeepFolder(string parent) => HostPath.Join(parent, AddedFolder + "-" + Id);
+    /// <summary>The moved files' folder of this prepared profile beside <paramref name="runtime"/>.</summary>
+    internal string MovedFilesFolder(string runtime) => KeepFolder(HostPath.Parent(runtime));
+
     /// <summary>
-    /// The check a recovery settles with, from a copy's journalled fields (<see cref="JournalEntry.SourceBaseline"/>): null when
-    /// none was journalled, or when the run settled the install and its baseline is gone. A baseline whose SHA-256 or root differs
-    /// from the journal's is refused, before anything is moved or removed.
+    /// A recovery's settlement of the profile <paramref name="runtime"/> of a copy whose journalled <paramref name="fields"/> name a
+    /// persisted baseline (<see cref="JournalEntry.SourceBaseline"/>): what the game added goes to <paramref name="recoveredIn"/>
+    /// (<c>recovered-&lt;actor&gt;</c>). Null when none was journalled, or when the run settled the install itself (its
+    /// <see cref="JournalEntry.SourceSettled"/>) and kept everything it moved. A baseline whose SHA-256 or root differs from the
+    /// journal's is refused before anything is moved or removed. A baseline that is gone although no settlement was journalled is
+    /// its own verdict, never a reason to keep the copy: what was moved is kept, and the install is named as not compared.
     /// </summary>
-    internal static async Task<ProfileSourceCheck?> FromJournalAsync(IGameHost host, IReadOnlyDictionary<string, string> fields, TimeSpan timeout,
-        CancellationToken cancellation = default)
+    internal static async Task<SourceVerdict?> RecoverAsync(IGameHost host, string runtime, string actor, IReadOnlyDictionary<string, string> fields,
+        Func<string, string> recoveredIn, Func<JournalEntry, Task> journal, TimeSpan timeout, CancellationToken cancellation = default)
     {
         if (!fields.TryGetValue("baseline", out string? path)) return null;
+        actor = fields.GetValueOrDefault("sourceActor") ?? actor;
         string root = fields.GetValueOrDefault("sourceRoot") ?? "", sha256 = fields.GetValueOrDefault("baselineSha256") ?? "";
+        var where = SourceSettlement.Recovery(actor, runtime, recoveredIn(actor));
         byte[]? bytes = await HostClientPreflight.Read(host, path, timeout, cancellation, BaselineLimit).ConfigureAwait(false);
         if (bytes == null)
         {
-            // The run settled the install and kept what it moved: the baseline goes last.
-            if (fields.ContainsKey("sourceVerdict")) return null;
-            throw new InvalidDataException($"its journalled source baseline {path} is missing on {host.Name}, so the source install cannot be settled; nothing was removed");
+            // The baseline goes only after its settlement was journalled, so without one it was removed by hand or by a run before
+            // that order: keep whatever was moved, and name the install as not compared.
+            var orphan = new ProfileSourceCheck(new HostListing(host.Name, host.Shell.Kind, root, new Dictionary<string, string>(), []),
+                new Dictionary<string, string>(), new Dictionary<string, string>(), linked: false,
+                Leaf(fields.GetValueOrDefault("sourceAdded") ?? AddedFolder)[AddedFolder.Length..].TrimStart('-'));
+            var (kept, _) = await orphan.KeepAsync(host, where, journal, timeout, cancellation).ConfigureAwait(false);
+            await orphan.DropAsync(host, where, kept.Count == 0, timeout, cancellation).ConfigureAwait(false);
+            if (kept.Count == 0 && fields.ContainsKey("sourceVerdict")) return null;
+            var found = new SourceVerdict(actor, host.Name, root, "", SourceVerdictKind.Restored, kept, [], [], [], [], [],
+                "the run settled the install; the files it had moved were not kept yet, and are now");
+            return fields.ContainsKey("sourceVerdict") ? found : SourceVerdict.NotCompared(actor, $"its source baseline {path} is gone, so the install was not compared" +
+                (kept.Count == 0 ? "" : "; the files it had moved are kept in " + where.RecoveredIn)) with { Host = host.Name, Root = root, Added = kept };
         }
         if (!FileHash.Sha256(bytes).Equals(sha256, StringComparison.OrdinalIgnoreCase))
             throw new InvalidDataException($"the source baseline {path} on {host.Name} differs from its journalled SHA-256, so it is refused and nothing was removed");
@@ -184,19 +216,30 @@ internal sealed class ProfileSourceCheck
         var listing = new HostListing(host.Name, host.Shell.Kind, root, baseline.Files.ToDictionary(file => file.Path, file => file.Sha256, names), [],
             baseline.Files.ToDictionary(file => file.Path, file => new HostFileState(file.Size, file.Modified), names),
             baseline.Directories.ToHashSet(names));
-        return new ProfileSourceCheck(listing, new Dictionary<string, string>(), new Dictionary<string, string>())
+        var check = new ProfileSourceCheck(listing, new Dictionary<string, string>(), new Dictionary<string, string>(), baseline.Linked, baseline.Id)
         { _contentMode = baseline.Mode == SourceVerdict.ContentMode };
+        return await check.SettleAsync(host, where, journal, timeout, cancellation).ConfigureAwait(false);
     }
 
+    private static string Leaf(string path) => path.Replace('\\', '/').Split('/').Last();
+
     /// <summary>
-    /// The post-run row, once every process launched from the profile is proven stopped: lists the whole source (metadata; a gate
-    /// run, <see cref="HashAfterRunVariable"/>=1, re-hashes) against the baseline, journals the added paths
-    /// (<see cref="JournalEntry.SourceMoveIntended"/>), moves each added file into the profile's <c>source-added</c> folder and
-    /// removes each added folder once empty, deepest first (<see cref="SourceSettleScripts"/>: links and paths outside the install
-    /// are refused), lists the install again and requires it to equal the baseline, then keeps the moved files where
-    /// <paramref name="where"/> says, writes <c>source-changes.json</c> beside them and journals <see cref="JournalEntry.SourceSettled"/>.
-    /// A changed or missing file is named and left as it is. Repeating it (a recovery after an interrupted one) finds the moved files
-    /// gone and carries on. It never throws for what it finds on the host: a failure is the <see cref="SourceVerdictKind.Failed"/> verdict.
+    /// The post-run row, once every process launched from the profile is proven stopped. It lists the whole source (metadata; a gate
+    /// run, <see cref="HashAfterRunVariable"/>=1, re-hashes) against the baseline and decides, one rule for every launch path:
+    /// <list type="bullet">
+    /// <item>A changed or missing file fails, named and left as it is.</item>
+    /// <item>On a linked profile the game cannot add a file to the install, so an added path came from something else (Steam, a mod
+    /// manager, a person): it is named with a warning and left in place, and fails nothing.</item>
+    /// <item>On an install the game runs in place, each added file is moved into this profile's moved-files folder and each added
+    /// folder removed once empty, deepest first (<see cref="SourceSettleScripts"/>: links, paths outside the install and paths that
+    /// name an install file are refused), and the install is listed again, which must equal the baseline. Nothing is moved when a
+    /// file also changed or went missing: the verdict fails, naming every path.</item>
+    /// </list>
+    /// The moved files are kept where <paramref name="where"/> says, <c>source-changes.json</c> is written beside them,
+    /// <see cref="JournalEntry.SourceSettled"/> is journalled, and only then the baseline goes. A settlement that did not finish
+    /// (a host that failed, an abandoned cleanup, a journal that refused its line) keeps the profile, its baseline and its moved files,
+    /// journalled kept, so <c>env recover</c> settles it again (<see cref="SourceVerdict.KeepsProfile"/>). Repeating it finds the moved
+    /// files gone and carries on. It never throws for what it finds on the host.
     /// </summary>
     internal async Task<SourceVerdict> SettleAsync(IGameHost host, SourceSettlement where, Func<JournalEntry, Task> journal, TimeSpan timeout,
         CancellationToken cancellation = default)
@@ -204,65 +247,74 @@ internal sealed class ProfileSourceCheck
         if (host.Name != Source.HostName) throw new ArgumentException("The source check belongs to another host.", nameof(host));
         bool content = HashAfterRun;
         string mode = content ? SourceVerdict.ContentMode : SourceVerdict.MetadataMode;
-        string keep = HostPath.Join(where.Parent, AddedFolder);
         var notMoved = new Dictionary<string, string>(Source.Names);
         var removed = new List<string>();
-        SourceVerdict Verdict(SourceVerdictKind kind, IReadOnlyList<SourceAddedFile> kept, Differences left, string? reason = null) =>
-            new(where.Actor, host.Name, Source.Root, mode, kind, kept, left.Changed, left.Missing,
-                left.Added.Select(path => new SourceNotMoved(path, notMoved.GetValueOrDefault(path) ?? "still in the install"))
-                    .Concat(left.AddedDirectories.Select(path => new SourceNotMoved(path + "/", notMoved.GetValueOrDefault(path) ?? "still in the install"))).ToList(),
-                removed, reason);
         var found = Differences.None;
-        var added = new List<SourceAddedFile>();
-        string? evidence = null;
+        var kept = new List<SourceAddedFile>();
+        SourceVerdict Verdict(SourceVerdictKind kind, string? reason = null, bool settled = true) =>
+            new(where.Actor, host.Name, Source.Root, mode, kind, kept, found.Changed, found.Missing, found.MissingDirectories,
+                found.Added.Select(path => new SourceNotMoved(path, notMoved.GetValueOrDefault(path) ?? "still in the install"))
+                    .Concat(found.AddedDirectories.Select(path => new SourceNotMoved(path + "/", notMoved.GetValueOrDefault(path) ?? "still in the install"))).ToList(),
+                removed, reason) { Settled = settled };
         SourceVerdict verdict;
+        string? evidence = null;
         try
         {
             found = Compare(await ListAsync(host, Source.Root, content, timeout, cancellation).ConfigureAwait(false), content);
-            if (found.Added.Count + found.AddedDirectories.Count != 0)
+            bool damaged = found.Changed.Count + found.Missing.Count + found.MissingDirectories.Count != 0;
+            if (Linked)
+                foreach (string path in found.Added.Concat(found.AddedDirectories))
+                    notMoved[path] = "added during the run by something other than the game's profile; left in place";
+            else if (damaged)
+                foreach (string path in found.Added.Concat(found.AddedDirectories))
+                    notMoved[path] = "not moved: the install also changed, so nothing was moved";
+            else if (found.Added.Count + found.AddedDirectories.Count != 0)
             {
-                // Journalled before the move: a recovery after an interruption here finds what moved in source-added.
+                // Journalled before the move: a recovery after an interruption here finds what moved in the moved-files folder.
                 await journal(JournalEntry.Of(JournalEntry.SourceMoveIntended, ("runtime", where.Runtime),
                     ("moving", string.Join('\n', found.Added.Concat(found.AddedDirectories.Select(path => path + "/")))))).ConfigureAwait(false);
-                await MoveAsync(host, keep, found, notMoved, removed, timeout, cancellation).ConfigureAwait(false);
+                await MoveAsync(host, KeepFolder(where.Parent), found, notMoved, removed, timeout, cancellation).ConfigureAwait(false);
                 found = Compare(await ListAsync(host, Source.Root, content, timeout, cancellation).ConfigureAwait(false), content);
             }
-            (added, evidence) = await KeepAsync(host, where, keep, journal, timeout, cancellation).ConfigureAwait(false);
-            verdict = Verdict(found.Clean ? added.Count + removed.Count == 0 ? SourceVerdictKind.Unchanged : SourceVerdictKind.Restored : SourceVerdictKind.Failed,
-                added, found);
-        }
-        catch (Exception error)
-        {
-            // An abandoned cleanup included: the install was not settled, and nothing journals that it was, so a recovery settles it.
-            verdict = Verdict(SourceVerdictKind.Failed, added, found, "the settlement did not finish: " + error.Message);
-        }
-        if (verdict.Verdict != SourceVerdictKind.Unchanged)
-            try { await WriteReportAsync(host, where, evidence, verdict, timeout, cancellation).ConfigureAwait(false); }
-            catch (Exception error)
-            { verdict = verdict with { Verdict = SourceVerdictKind.Failed, Reason = "its source-changes.json was not written: " + error.Message }; }
-        if (cancellation.IsCancellationRequested) return verdict;
-        // After the effect a lost line is a warning: the verdict stands, and a recovery would only settle an install that is settled.
-        try
-        {
+            (kept, evidence) = await KeepAsync(host, where, journal, timeout, cancellation).ConfigureAwait(false);
+            verdict = Verdict(
+                found.Changed.Count + found.Missing.Count + found.MissingDirectories.Count != 0 || !Linked && found.Added.Count + found.AddedDirectories.Count != 0
+                    ? SourceVerdictKind.Failed
+                : Linked && found.Added.Count + found.AddedDirectories.Count != 0 ? SourceVerdictKind.AddedElsewhere
+                : kept.Count + removed.Count != 0 ? SourceVerdictKind.Restored : SourceVerdictKind.Unchanged);
+            if (verdict.Verdict != SourceVerdictKind.Unchanged) await WriteReportAsync(host, where, evidence, verdict, timeout, cancellation).ConfigureAwait(false);
+            cancellation.ThrowIfCancellationRequested();
+            // Journalled before the baseline goes: without this line a recovery finds the baseline and settles again.
             await journal(JournalEntry.Of(JournalEntry.SourceSettled, ("runtime", where.Runtime), ("sourceVerdict", verdict.Verdict.ToString()),
                 ("added", verdict.Added.Count.ToString(CultureInfo.InvariantCulture)), ("changed", verdict.Changed.Count.ToString(CultureInfo.InvariantCulture)),
                 ("missing", verdict.Missing.Count.ToString(CultureInfo.InvariantCulture)), ("notMoved", verdict.NotMoved.Count.ToString(CultureInfo.InvariantCulture)))).ConfigureAwait(false);
+            await DropAsync(host, where, evidence != null || kept.Count == 0, timeout, cancellation).ConfigureAwait(false);
         }
         catch (Exception error)
-        { Console.Error.WriteLine($"Warning: could not journal {JournalEntry.SourceSettled} for {where.Actor} on {host.Name}: {error.Message}"); }
+        {
+            // An abandoned cleanup included. The profile, its baseline and its moved files stay, journalled kept, so a recovery settles
+            // them again; the evidence fetched so far is in the run's folder too.
+            verdict = Verdict(SourceVerdictKind.Failed, "the settlement did not finish: " + error.Message, settled: false);
+            if (where.RecoveredIn == null)
+                try
+                {
+                    await journal(JournalEntry.Of(JournalEntry.CopyKept, ("runtime", where.Runtime),
+                        ("why", "its source settlement did not finish; env teardown settles the install again and removes it"))).ConfigureAwait(false);
+                }
+                catch (Exception lost) { Console.Error.WriteLine($"Warning: could not journal {JournalEntry.CopyKept} for {where.Actor} on {host.Name}: {lost.Message}"); }
+        }
         return verdict;
     }
 
-    // What differs from the baseline: changed and missing files (and missing folders, with a trailing /), added files and folders.
-    private sealed record Differences(List<SourceChangedFile> Changed, List<string> Missing, List<string> Added, List<string> AddedDirectories)
+    // What differs from the baseline: changed and missing files, missing folders, added files and added folders (deepest first).
+    private sealed record Differences(List<SourceChangedFile> Changed, List<string> Missing, List<string> MissingDirectories, List<string> Added,
+        List<string> AddedDirectories)
     {
-        internal static Differences None => new([], [], [], []);
-        internal bool Clean => Changed.Count + Missing.Count + Added.Count + AddedDirectories.Count == 0;
+        internal static Differences None => new([], [], [], [], []);
     }
 
     private Differences Compare(HostListing after, bool content)
     {
-        var names = Source.Names;
         var changed = new List<SourceChangedFile>();
         if (content)
             foreach (var (path, hash) in Source.Files)
@@ -273,27 +325,36 @@ internal sealed class ProfileSourceCheck
             foreach (var (path, state) in Source.States)
                 if (after.States.TryGetValue(path, out var now) && now != state)
                     changed.Add(new(path, $"{state.Size} bytes, modified {state.Modified}", $"{now.Size} bytes, modified {now.Modified}"));
-        var listed = content ? after.Files.Keys : after.States.Keys;
-        var missing = Source.Files.Keys.Where(path => !listed.Contains(path, names))
-            .Concat(Source.Directories.Where(path => !after.Directories.Contains(path, names)).Select(path => path + "/")).ToList();
-        var added = listed.Where(path => !Source.Files.ContainsKey(path)).ToList();
-        var addedDirectories = after.Directories.Where(path => !Source.Directories.Contains(path, names)).ToList();
-        return new(changed.OrderBy(file => file.Path, StringComparer.Ordinal).ToList(), missing.Order(StringComparer.Ordinal).ToList(),
-            added.Order(StringComparer.Ordinal).ToList(),
+        var listed = content ? after.Files.Keys.ToHashSet(Source.Names) : after.States.Keys.ToHashSet(Source.Names);
+        var folders = after.Directories.ToHashSet(Source.Names);
+        var baselineFolders = Source.Directories.ToHashSet(Source.Names);
+        return new(changed.OrderBy(file => file.Path, StringComparer.Ordinal).ToList(),
+            Source.Files.Keys.Where(path => !listed.Contains(path)).Order(StringComparer.Ordinal).ToList(),
+            baselineFolders.Where(path => !folders.Contains(path)).Order(StringComparer.Ordinal).ToList(),
+            listed.Where(path => !Source.Files.ContainsKey(path)).Order(StringComparer.Ordinal).ToList(),
             // Deepest first, so a folder is empty by the time it is reached.
-            addedDirectories.OrderByDescending(path => path.Count(c => c == '/')).ThenByDescending(path => path, StringComparer.Ordinal).ToList());
+            folders.Where(path => !baselineFolders.Contains(path))
+                .OrderByDescending(path => path.Count(c => c == '/')).ThenByDescending(path => path, StringComparer.Ordinal).ToList());
     }
 
-    // The host's one settlement script: each added file into keep, then each added folder removed once empty.
+    // The host's one settlement script: each added file into keep, then each added folder removed once empty. A path a Windows host
+    // would read as a file of the install (it trims a trailing dot or space) is never sent: no baseline file is ever moved.
     private async Task MoveAsync(IGameHost host, string keep, Differences found, Dictionary<string, string> notMoved, List<string> removed,
         TimeSpan timeout, CancellationToken cancellation)
     {
         static string Encode(string path) => Convert.ToBase64String(Encoding.UTF8.GetBytes(path));
-        var result = (await host.RunAsync(host.Shell.Kind == HostShellKind.PowerShell ? SourceSettleScripts.PowerShell : SourceSettleScripts.Bash,
+        bool windows = host.Shell.Kind == HostShellKind.PowerShell;
+        string Resolved(string path) => windows ? string.Join('/', path.Split('/').Select(part => part.TrimEnd('.', ' '))) : path;
+        bool NamesInstall(string path) => !Resolved(path).Equals(path, StringComparison.Ordinal) &&
+            (Source.Files.ContainsKey(Resolved(path)) || Source.Directories.Contains(Resolved(path), Source.Names));
+        foreach (string path in found.Added.Concat(found.AddedDirectories).Where(NamesInstall))
+            notMoved[path] = "it would name a file or folder of the install on this host";
+        var result = (await host.RunAsync(windows ? SourceSettleScripts.PowerShell : SourceSettleScripts.Bash,
             new Dictionary<string, string>
             {
                 ["root"] = Source.Root, ["keep"] = keep,
-                ["files"] = string.Join('\n', found.Added.Select(Encode)), ["folders"] = string.Join('\n', found.AddedDirectories.Select(Encode)),
+                ["files"] = string.Join('\n', found.Added.Where(path => !NamesInstall(path)).Select(Encode)),
+                ["folders"] = string.Join('\n', found.AddedDirectories.Where(path => !NamesInstall(path)).Select(Encode)),
             }, timeout, cancellation).ConfigureAwait(false)).EnsureSuccess($"Moving what the run added out of {Source.Root} on {host.Name}");
         if (InteractiveClient.Line(result.Stdout, "VT-SETTLE-REFUSED ") is { } refused)
             throw new IOException($"The source install {Source.Root} on {host.Name} was not settled: {refused}.");
@@ -303,25 +364,18 @@ internal sealed class ProfileSourceCheck
         {
             string[] parts = line.Split(' ');
             if (parts is ["VT-NOTMOVED", var path, var reason])
-                notMoved[Encoding.UTF8.GetString(Convert.FromBase64String(path))] = reason switch
-                {
-                    "outside" => "outside the install",
-                    "link" => "a link on the way, never followed",
-                    "not-a-file" => "not a regular file",
-                    "kept-already" => "the moved files already hold that name",
-                    "not-empty" => "the folder is not empty",
-                    _ => "the move failed",
-                };
+                notMoved[Encoding.UTF8.GetString(Convert.FromBase64String(path))] = SourceSettleScripts.Reason(reason);
             else if (parts is ["VT-RMDIR", var folder]) removed.Add(Encoding.UTF8.GetString(Convert.FromBase64String(folder)) + "/");
         }
     }
 
-    // What the moved files folder holds, kept where the settlement says: in a run fetched to <output>/source-changes/<actor>/added and
-    // dropped on the host (a folder past the size limits stays there, journalled kept for env teardown); in a recovery moved into the
-    // run's recovered-<actor> folder on the host. Either way the baseline goes last. Returns the files and the local evidence folder, if any.
-    private async Task<(List<SourceAddedFile> Added, string? Evidence)> KeepAsync(IGameHost host, SourceSettlement where, string keep,
+    // What the moved-files folder holds, and where it is kept: in a run, fetched to <output>/source-changes/<actor>/added (a run
+    // with no evidence folder, or files past the size limits, leave it on the host, journalled kept for env teardown); in a recovery,
+    // moved into the run's recovered-<actor> folder on the host by DropAsync. Returns the files and the local evidence folder, if any.
+    private async Task<(List<SourceAddedFile> Kept, string? Evidence)> KeepAsync(IGameHost host, SourceSettlement where,
         Func<JournalEntry, Task> journal, TimeSpan timeout, CancellationToken cancellation)
     {
+        string keep = KeepFolder(where.Parent);
         HostListing? moved;
         try { moved = await ListAsync(host, keep, content: true, timeout, cancellation).ConfigureAwait(false); }
         catch (DirectoryNotFoundException) { moved = null; }
@@ -329,33 +383,42 @@ internal sealed class ProfileSourceCheck
         long Bytes(string path) => moved!.States[path].Size;
         string? evidence = null;
         var (perFile, total) = PinnedServerRun.RetainLimits(passed: false);
-        bool kept = where.RecoveredIn == null && files.Count != 0 && (files.Any(file => Bytes(file.Key) > perFile) || files.Sum(file => Bytes(file.Key)) > total);
-        if (kept)
+        string? why = where.RecoveredIn != null || files.Count == 0 ? null
+            : where.Output == null ? "the run kept no evidence folder for what the game added to the source install"
+            : files.Any(file => Bytes(file.Key) > perFile) || files.Sum(file => Bytes(file.Key)) > total
+                ? $"what the game added to the source install is past the size limits ({DiskSpace.Format(perFile)} per file, {DiskSpace.Format(total)} in all)"
+            : null;
+        if (why != null)
             await journal(JournalEntry.Of(JournalEntry.CopyKept, ("runtime", keep), ("stage", ""), ("parent", where.Parent), ("holds", AddedFolder),
-                ("why", $"what the game added to the source install is past the size limits ({DiskSpace.Format(perFile)} per file, {DiskSpace.Format(total)} in all)"))).ConfigureAwait(false);
+                ("why", why))).ConfigureAwait(false);
         else if (where.RecoveredIn == null && files.Count != 0)
         {
             evidence = EvidenceFolder(where);
             await host.FetchDirectoryAsync(keep, Path.Combine(evidence, "added"), timeout, cancellation).ConfigureAwait(false);
         }
-        // A folder that holds no file (only the folders a failed move made) goes: there is nothing to keep.
-        var reply = (await host.RunAsync(host.Shell.Kind == HostShellKind.PowerShell ? SourceSettleScripts.PowerShellEvidence : SourceSettleScripts.BashEvidence,
-            new Dictionary<string, string>
-            {
-                ["parent"] = where.Parent, ["added"] = evidence != null || files.Count == 0 ? "1" : "",
-                ["recovered"] = files.Count == 0 ? "" : where.RecoveredIn ?? "",
-            },
-            timeout, cancellation).ConfigureAwait(false)).EnsureSuccess($"Settling the moved files of {where.Runtime} on {host.Name}");
-        if (InteractiveClient.Line(reply.Stdout, "VT-SOURCE-REFUSED ") is { } refused)
-            throw new IOException($"The files moved out of the source install were not kept: {refused}.");
-        if (InteractiveClient.Line(reply.Stdout, "VT-SOURCE-SETTLED") == null)
-            throw new HostOperationException($"Unexpected reply while settling the moved files of {where.Runtime} on {host.Name}", reply);
         return (files.Select(file => new SourceAddedFile(file.Key, Bytes(file.Key), file.Value,
             where.RecoveredIn != null ? HostPath.Join(where.RecoveredIn, AddedFolder, file.Key)
             : evidence != null ? "added/" + file.Key : host.Name + ":" + HostPath.Join(keep, file.Key))).ToList(), evidence);
     }
 
-    // A run's <output>/source-changes/<actor>, numbered when the actor settled another profile before (two plans of one client).
+    // The host's one evidence step, once the settlement is journalled: the moved-files folder is removed once fetched (or when it holds
+    // no file), or in a recovery moved into recovered-<actor>; the baseline goes last.
+    private async Task DropAsync(IGameHost host, SourceSettlement where, bool dropMoved, TimeSpan timeout, CancellationToken cancellation)
+    {
+        var reply = (await host.RunAsync(host.Shell.Kind == HostShellKind.PowerShell ? SourceSettleScripts.PowerShellEvidence : SourceSettleScripts.BashEvidence,
+            new Dictionary<string, string>
+            {
+                ["parent"] = where.Parent, ["keep"] = KeepFolder(where.Parent), ["added"] = dropMoved && where.RecoveredIn == null ? "1" : "",
+                ["recovered"] = where.RecoveredIn ?? "",
+            }, timeout, cancellation).ConfigureAwait(false)).EnsureSuccess($"Settling the moved files of {where.Runtime} on {host.Name}");
+        if (InteractiveClient.Line(reply.Stdout, "VT-SOURCE-REFUSED ") is { } refused)
+            throw new IOException($"The files moved out of the source install were not kept: {refused}.");
+        if (InteractiveClient.Line(reply.Stdout, "VT-SOURCE-SETTLED") == null)
+            throw new HostOperationException($"Unexpected reply while settling the moved files of {where.Runtime} on {host.Name}", reply);
+    }
+
+    // The one evidence location: <run output>/source-changes/<actor>, numbered when the actor settled another profile before (two
+    // plans of one client).
     private static string EvidenceFolder(SourceSettlement where)
     {
         string folder = Path.Combine(where.Output!, "source-changes", where.Actor);
@@ -363,6 +426,8 @@ internal sealed class ProfileSourceCheck
         return folder;
     }
 
+    // source-changes.json beside the kept files: in the run's evidence, or on the host in a recovery. A run without an evidence folder
+    // has only its verdict.
     private static async Task WriteReportAsync(IGameHost host, SourceSettlement where, string? evidence, SourceVerdict verdict, TimeSpan timeout,
         CancellationToken cancellation)
     {
@@ -371,9 +436,10 @@ internal sealed class ProfileSourceCheck
             await WriteAsync(host, HostPath.Join(where.RecoveredIn, "source-changes.json"), Encoding.UTF8.GetBytes(verdict.ToJson()), timeout, cancellation).ConfigureAwait(false);
             return;
         }
-        string folder = evidence ?? EvidenceFolder(where);
-        Directory.CreateDirectory(folder);
-        File.WriteAllText(Path.Combine(folder, "source-changes.json"), verdict.ToJson());
+        if (where.Output == null) return;
+        string local = evidence ?? EvidenceFolder(where);
+        Directory.CreateDirectory(local);
+        File.WriteAllText(Path.Combine(local, "source-changes.json"), verdict.ToJson());
     }
 
     private static async Task WriteAsync(IGameHost host, string path, byte[] bytes, TimeSpan timeout, CancellationToken cancellation)

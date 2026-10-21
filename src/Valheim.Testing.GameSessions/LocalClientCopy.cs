@@ -45,20 +45,20 @@ internal sealed class LocalClientCopy
     internal string LaunchRoot => _launchRoot;
     /// <summary>The client's name in the journal and in its source verdict.</summary>
     internal string Actor => _actor;
-    /// <summary>The run's evidence folder, where the source settlement keeps what the game added to the install (<c>source-changes/</c>).</summary>
+    /// <summary>The actor's own evidence folder: where its source settlement's evidence goes when no run names one (<see cref="LocalClientPlacement.Evidence"/>).</summary>
     internal string? Output { get; set; }
 
     /// <summary>
     /// Settles the install once every client launched from the profile is stopped (<see cref="ProfileSourceCheck.SettleAsync"/>) and
-    /// records the verdict (<see cref="SourceVerdict.Record"/>; without a report it only throws when it fails). Once only.
+    /// records the verdict in <paramref name="report"/> (<see cref="SourceVerdict.Record"/>; without one it only throws when it
+    /// fails), its evidence under <paramref name="output"/> (else <see cref="Output"/>). Once only.
     /// </summary>
-    internal async Task SettleSourceAsync(ScenarioReport? report)
+    internal async Task SettleSourceAsync(ScenarioReport? report, string? output = null)
     {
         var verdict = Volatile.Read(ref _sourceVerdict);
         if (verdict == null)
         {
-            verdict = await _sourceCheck.SettleAsync(_host, SourceSettlement.Run(_actor, _runtime,
-                Output ?? throw new InvalidOperationException($"The disposable client profile {_runtime} has no evidence folder to settle its source into.")),
+            verdict = await _sourceCheck.SettleAsync(_host, SourceSettlement.Run(_actor, _runtime, output ?? Output),
                 entry => { _journal.AppendLocal(_actor, entry); return Task.CompletedTask; }, StepTimeout).ConfigureAwait(false);
             if (Interlocked.CompareExchange(ref _sourceVerdict, verdict, null) != null) return;
             verdict.Record(report);
@@ -143,7 +143,7 @@ internal sealed class LocalClientCopy
         // The baseline an interrupted run's recovery settles the install from, before anything launches from the profile.
         try
         {
-            await profile.SourceCheck.PersistAsync(host, runtime, entry => { journal.AppendLocal(actor, entry); return Task.CompletedTask; },
+            await profile.SourceCheck.PersistAsync(host, runtime, actor, entry => { journal.AppendLocal(actor, entry); return Task.CompletedTask; },
                 StepTimeout, cancellation).ConfigureAwait(false);
         }
         catch (Exception error) when (error is not OperationCanceledException)
@@ -168,6 +168,9 @@ internal sealed class LocalClientCopy
         Exception? integrity = null;
         try { if (verifySource) await SettleSourceAsync(null).ConfigureAwait(false); }
         catch (Exception error) { integrity = error; }
+        // A settlement that did not finish keeps the profile with its baseline and moved files, journalled kept, for env recover.
+        if (Volatile.Read(ref _sourceVerdict) is { KeepsProfile: true })
+            throw new IOException($"The disposable client profile {_runtime} is kept: its source settlement did not finish. valheim-test env status names it; env teardown settles and removes it.", integrity);
         try
         {
             await HostedRuntimeStage.RetireAsync(_host, _runtime, _stage, StepTimeout).ConfigureAwait(false);

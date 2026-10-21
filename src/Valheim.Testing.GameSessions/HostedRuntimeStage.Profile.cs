@@ -394,7 +394,8 @@ internal static partial class HostedRuntimeStage
         mkdir -p -- "$runtime"
         while IFS= read -r line; do
           [ -n "$line" ] || continue
-          relative=$(printf '%s' "$line" | base64 -D 2>/dev/null || printf '%s' "$line" | base64 -d)
+          # The x keeps a name's trailing line break, which $( ) would strip.
+          relative=$({ printf '%s' "$line" | base64 -D 2>/dev/null || printf '%s' "$line" | base64 -d; } && printf x); relative=${relative%x}
           mkdir -p -- "$(dirname "$runtime/$relative")"
           if ! error=$(ln -- "$source/$relative" "$runtime/$relative" 2>&1); then
             echo "Could not create a hard link in runtime folder $runtime from the install's mount containing $source: $error" >&2
@@ -403,7 +404,8 @@ internal static partial class HostedRuntimeStage
         done <<< "$gameFiles"
         while IFS= read -r line; do
           [ -n "$line" ] || continue
-          relative=$(printf '%s' "$line" | base64 -D 2>/dev/null || printf '%s' "$line" | base64 -d)
+          # The x keeps a name's trailing line break, which $( ) would strip.
+          relative=$({ printf '%s' "$line" | base64 -D 2>/dev/null || printf '%s' "$line" | base64 -d; } && printf x); relative=${relative%x}
           mkdir -p -- "$(dirname "$runtime/$relative")"
           cp "$source/$relative" "$runtime/$relative"
         done <<< "$files"

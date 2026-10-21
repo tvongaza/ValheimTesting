@@ -282,6 +282,19 @@ public sealed class HostingClientActorTests : IDisposable
         Assert.Equal("this machine: " + Worlds + " (" + Name + ")", report.Provenance["hostWorldLeftInPlace"]);
     }
 
+    // #612: a hosting client on this machine has its own placement (a standalone hosting-client run). Its source verdict goes to the
+    // session's report like any other actor's, here the not-applicable one of a host that ran its install in place.
+    [Fact] public async Task AHostingClientsOwnPlacementRecordsItsSourceVerdictInTheSessionsReport()
+    {
+        var report = new ScenarioReport("hosted in place");
+        var placement = new LocalClientPlacement();
+        placement.RanInPlace("host");
+        await using (new GameSession(report, Output, WorldUid, server: null, [], CancellationToken.None,
+            token => new HostingClientActor("host", HostPlan("owned"), Output, placement, token))) { }
+        Assert.Equal("not applicable: runs in place", report.Provenance["sourceIntegrity.host"]);
+        Assert.Contains("verify host's source install after the run (not applicable: runs in place)", Steps(report, StepPhase.Cleanup));
+    }
+
     [Fact] public async Task AJoinRefusesAPeerOfTheWrongKind()
     {
         var report = new ScenarioReport("hosted");

@@ -329,7 +329,7 @@ internal sealed class HostedServerRun : IServerPlacement
             ("files", profile.Loader.Files.Count.ToString(CultureInfo.InvariantCulture)), ("runtimeKind", "server"),
             ("launchRoot", profile.GameRoot)), cancellation).ConfigureAwait(false);
         // The baseline an interrupted run's recovery settles the install from, before the server launches; teardown retires the profile.
-        await profile.SourceCheck.PersistAsync(Host, RuntimeDirectory, entry => JournalAsync(Host, Role.Host, "server", entry, cancellation),
+        await profile.SourceCheck.PersistAsync(Host, RuntimeDirectory, "server", entry => JournalAsync(Host, Role.Host, "server", entry, cancellation),
             HostedTimeouts.Long, cancellation).ConfigureAwait(false);
         plan.Runtime = new PinnedDirectory { Source = profile.Game.Root, Sha256 = new Dictionary<string, string>(profile.Game.Files, StringComparer.Ordinal) };
         plan.RuntimePins = _preparedPins = profile.Pins;
@@ -779,6 +779,7 @@ internal sealed class HostedServerRun : IServerPlacement
         }
         if (_runtime != null)
         {
+            bool keepProfile = false;
             if (!Prepared && _sourceCheck != null)
             {
                 // The install settled before the profile goes (its run folder holds the baseline and the moved files).
@@ -790,9 +791,12 @@ internal sealed class HostedServerRun : IServerPlacement
                 try { verdict.Record(report); }
                 catch (IOException error) when (verdict.Verdict != SourceVerdictKind.Unknown) { failures.Add(error); Console.Error.WriteLine("Teardown: " + error.Message); }
                 catch (IOException) { }
+                // A settlement that did not finish keeps the profile, journalled kept by the settlement, so the run folder stays too.
+                keepProfile = verdict.KeepsProfile;
             }
             try
             {
+                if (keepProfile) throw new IOException($"Kept {Host.Name}:{RuntimeDirectory}: its source settlement did not finish. valheim-test env status names it; env teardown settles and removes it.");
                 await retirement.HostAsync(Role.Host, Host, _loader ?? _runtime, RuntimeDirectory, launched, serverStopped, cleanup).ConfigureAwait(false);
                 // A campaign's prepared profile is journalled by its preparation; a standalone run's own profile here. A failed retire
                 // journals nothing more: the profile stays open in the journal, for env recover.

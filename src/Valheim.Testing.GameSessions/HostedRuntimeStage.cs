@@ -283,14 +283,14 @@ internal static partial class HostedRuntimeStage
     /// run's own folder <c>&lt;runs&gt;/&lt;runId&gt;</c> (<see cref="RunFolder"/>) or, inside it, its <c>runtime</c>, <c>world</c>,
     /// world stage or collected <c>host-world</c>, or numbered <c>boot-N</c> (<see cref="HostedServerRun"/>, a campaign client's hosted
     /// world); beside either runtime, the files a source settlement moved out of the install and kept there
-    /// (<see cref="ProfileSourceCheck.AddedFolder"/>). Returns the copy's parent.
+    /// (a <see cref="ProfileSourceCheck.AddedFolder"/> folder). Returns the copy's parent.
     /// </summary>
     internal static string RequirePrepared(IGameHost host, string destination, string? runId = null)
     {
         int at = destination.LastIndexOfAny(['/', '\\']);
         string parent = at > 0 ? destination[..at] : "";
         string separator = host.Shell.Kind == HostShellKind.PowerShell ? @"\" : "/", parentName = Leaf(parent);
-        bool settled = destination.EndsWith(separator + ProfileSourceCheck.AddedFolder, StringComparison.OrdinalIgnoreCase);
+        bool settled = Leaf(destination) is var leaf && (leaf == ProfileSourceCheck.AddedFolder || leaf.StartsWith(ProfileSourceCheck.AddedFolder + "-", StringComparison.Ordinal));
         if ((destination.EndsWith(separator + "runtime", StringComparison.OrdinalIgnoreCase) || settled) && parentName.StartsWith("vt-prep-", StringComparison.Ordinal))
             return parent;
         if (runId != null && RunJournal.SafeName(runId) && parent.Length != 0 && Leaf(parent).Length != 0 && Leaf(destination) == runId &&
@@ -303,7 +303,7 @@ internal static partial class HostedRuntimeStage
              System.Text.RegularExpressions.Regex.IsMatch(destination[(at + 1)..], @"^boot-[1-9][0-9]*$", System.Text.RegularExpressions.RegexOptions.CultureInvariant)))
             return parent;
         throw new ArgumentException("Only a toolkit-created vt-prep runtime, or a run's own folder or the runtime, world copy or numbered boot directory in it, " +
-            "or the source-added folder beside a runtime, can be retired.", nameof(destination));
+            "or a source-added folder beside a runtime, can be retired.", nameof(destination));
     }
 
     private static string Leaf(string path) => path.Replace('\\', '/').Split('/').Last();

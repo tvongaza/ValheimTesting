@@ -28,7 +28,8 @@ public sealed class ClientActor : IDisposable
     }
 
     /// <summary>
-    /// A client on this machine, its evidence (command record, process record, kept logs) written to <paramref name="output"/>:
+    /// A client on this machine, its evidence (command record, process record, kept logs) written to <paramref name="output"/>.
+    /// Outside a session its source verdict is not recorded in a report: disposing it throws when the verdict fails.
     /// launched (<see cref="ClientSession.Launch(ClientRunPlan, string, CancellationToken)"/>) from a disposable copy of the plan's
     /// install, which the actor makes when it opens and removes when it is disposed, or from the install itself with
     /// <see cref="ClientRunPlan.InPlace"/>; or attached to the operator's client
@@ -125,7 +126,14 @@ internal sealed class LocalClientPlacement : IClientPlacement
     private readonly List<(LocalClientCopy Copy, ClientRunPlan Plan, List<Func<bool>> Stopped)> _copies = [];
     // The owned clients that ran their install in place: each gets the one not-applicable source verdict at teardown.
     private readonly List<string> _inPlace = [];
-    private bool _closed;
+    private bool _closed, _inPlaceRecorded;
+    /// <summary>
+    /// The run report and evidence folder its owned clients' source verdicts go to (<see cref="SourceVerdict.Record"/>,
+    /// <c>source-changes/</c>): a session sets them for every placement its actors use. Without them (an actor made outside a
+    /// session) a verdict is only thrown when it fails, and its evidence goes to the actor's own folder.
+    /// </summary>
+    internal ScenarioReport? Report { get; set; }
+    internal string? Evidence { get; set; }
     // Test seam: the copy, in place of LocalClientCopy.PrepareAsync.
     internal Func<string, ClientRunPlan, CancellationToken, Task<LocalClientCopy>>? PrepareCopy { get; init; }
     /// <summary>The run's builds (#860): an owned client's install is admitted where it is listed for its copy, or read in place.</summary>
@@ -187,28 +195,34 @@ internal sealed class LocalClientPlacement : IClientPlacement
     }
 
     /// <summary>
-    /// Each owned client's source verdict, recorded in <paramref name="report"/> (<see cref="SourceVerdict.Record"/>): a copy whose
+    /// Each owned client's source verdict, recorded in <see cref="Report"/> (<see cref="SourceVerdict.Record"/>): a copy whose
     /// clients were all stopped settles its install (<see cref="LocalClientCopy.SettleSourceAsync"/>), one whose client was not
-    /// proven stopped is unknown, and a client that ran in place is not applicable. Each failed verdict goes to
-    /// <paramref name="failed"/> once all were recorded.
+    /// proven stopped is unknown, and a client that ran in place is not applicable, once. Each failed verdict goes to
+    /// <paramref name="failed"/> once all were recorded. <see cref="RetireAsync"/> settles through here too, so every user of a
+    /// placement reaches one path.
     /// </summary>
-    internal async Task SettleSourcesAsync(ScenarioReport report, Action<Exception> failed)
+    internal async Task SettleSourcesAsync(Action<Exception> failed)
     {
         List<(LocalClientCopy Copy, ClientRunPlan Plan, List<Func<bool>> Stopped)> copies;
-        string[] inPlace;
-        lock (_copies) { copies = [.. _copies]; inPlace = [.. _inPlace]; }
+        string[] inPlace = [];
+        lock (_copies)
+        {
+            copies = [.. _copies];
+            if (Report != null && !_inPlaceRecorded) { inPlace = [.. _inPlace]; _inPlaceRecorded = true; }
+        }
         foreach (var (copy, _, launches) in copies)
         {
             bool stopped;
             lock (_copies) stopped = launches.All(proven => proven());
             try
             {
-                if (stopped) await copy.SettleSourceAsync(report).ConfigureAwait(false);
-                else SourceVerdict.Unknown(copy.Actor, "a client launched from its profile was not proven stopped").Record(report);
+                if (stopped) await copy.SettleSourceAsync(Report, Evidence).ConfigureAwait(false);
+                // Without a report, retiring the copy names it kept instead.
+                else if (Report != null) SourceVerdict.Unknown(copy.Actor, "a client launched from its profile was not proven stopped").Record(Report);
             }
             catch (Exception error) { failed(error); }
         }
-        foreach (string actor in inPlace) SourceVerdict.NotApplicable(actor).Record(report);
+        foreach (string actor in inPlace) SourceVerdict.NotApplicable(actor).Record(Report);
     }
 
     /// <summary>Notes an owned client that runs its install in place, once by name, for its not-applicable source verdict.</summary>
@@ -222,9 +236,10 @@ internal sealed class LocalClientPlacement : IClientPlacement
 
     internal async Task RetireAsync(bool verifySource = true)
     {
+        var failures = new List<Exception>();
+        if (verifySource) await SettleSourcesAsync(failures.Add).ConfigureAwait(false);
         List<(LocalClientCopy Copy, ClientRunPlan Plan, List<Func<bool>> Stopped)> copies;
         lock (_copies) { _closed = true; copies = [.. _copies]; _copies.Clear(); }
-        var failures = new List<Exception>();
         foreach (var (copy, _, launches) in copies)
         {
             bool stopped;
@@ -234,7 +249,7 @@ internal sealed class LocalClientPlacement : IClientPlacement
                 failures.Add(new IOException($"The disposable client copy {copy.Runtime} is kept: a client launched from it was not proven stopped. valheim-test env status names it; env recover removes it."));
                 continue;
             }
-            try { await copy.RetireAsync(verifySource).ConfigureAwait(false); }
+            try { await copy.RetireAsync(verifySource: false).ConfigureAwait(false); }
             catch (Exception error) { failures.Add(new IOException($"The disposable client copy {copy.Runtime} was not removed ({error.Message}); valheim-test env status names it and env recover removes it.", error)); }
         }
         if (failures.Count == 1) throw failures[0];

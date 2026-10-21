@@ -751,8 +751,17 @@ public sealed class TargetedRegressionTests : IDisposable
         Assert.True(report.Passed, string.Join("; ", report.Steps.Where(step => !step.Passed).Select(step => step.Name + ": " + step.Error)));
         Assert.Contains(report.Steps, step => step.Name == "verify client's source install after the run (size and modified time)" && step.Passed);
         Assert.Contains("preloader_20261020.log", report.Provenance["sourceIntegrity.client"]);
-        Assert.Equal("written by the fake game", File.ReadAllText(Path.Combine(output, "source-changes", "client", "added", "preloader_20261020.log")));
-        Assert.Equal(before, Directory.EnumerateFiles(_rig.Game, "*", SearchOption.AllDirectories).Order(StringComparer.Ordinal));
+        if (OperatingSystem.IsWindows())
+        {
+            // A Windows client runs from its linked profile, so the game could not have written this: named, left in place.
+            Assert.StartsWith("unchanged by the run, with a warning: ", report.Provenance["sourceIntegrity.client"]);
+            Assert.True(File.Exists(Path.Combine(_rig.Game, "preloader_20261020.log")));
+        }
+        else
+        {
+            Assert.Equal("written by the fake game", File.ReadAllText(Path.Combine(output, "source-changes", "client", "added", "preloader_20261020.log")));
+            Assert.Equal(before, Directory.EnumerateFiles(_rig.Game, "*", SearchOption.AllDirectories).Order(StringComparer.Ordinal));
+        }
         Assert.Empty(Directory.Exists(_rig.Runtime) ? Directory.EnumerateFileSystemEntries(_rig.Runtime) : []);
     }
 

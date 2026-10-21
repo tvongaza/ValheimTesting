@@ -111,11 +111,21 @@ public sealed class LocalClientCopyTests : IDisposable
         copy.Output = Path.Combine(_rig.Root, "evidence");
         await copy.SettleSourceAsync(report);
         Assert.Contains(report.Steps, step => step.Name == "verify client's source install after the run (size and modified time)" && step.Passed);
-        Assert.StartsWith("restored with a warning: ", report.Provenance["sourceIntegrity.client"]);
         string relative = Path.GetRelativePath(source, preloader).Replace('\\', '/');
         Assert.Contains(relative, report.Provenance["sourceIntegrity.client"]);
-        Assert.Equal("written beside the executable", File.ReadAllText(Path.Combine(_rig.Root, "evidence", "source-changes", "client", "added", relative)));
-        Assert.False(File.Exists(preloader));
+        if (OperatingSystem.IsWindows())
+        {
+            // A Windows client runs from its linked profile, so the game could not have written this: named, left in place.
+            Assert.StartsWith("unchanged by the run, with a warning: ", report.Provenance["sourceIntegrity.client"]);
+            Assert.True(File.Exists(preloader));
+            File.Delete(preloader);
+        }
+        else
+        {
+            Assert.StartsWith("restored with a warning: ", report.Provenance["sourceIntegrity.client"]);
+            Assert.Equal("written beside the executable", File.ReadAllText(Path.Combine(_rig.Root, "evidence", "source-changes", "client", "added", relative)));
+            Assert.False(File.Exists(preloader));
+        }
         await copy.RetireAsync(verifySource: false);
         Assert.False(Directory.Exists(copy.Runtime));
         Assert.False(Directory.Exists(Path.GetDirectoryName(copy.Runtime))); // nothing of the profile is left beside it

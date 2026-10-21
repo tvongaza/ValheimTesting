@@ -52,11 +52,12 @@ Every hosted server boot keeps the process output in `boot-N/stdout.log` and `bo
 
 ### Read what the game wrote into your install
 
-A game can write into the install it runs from: BepInEx's `preloader_*.log` beside a macOS executable, or a mod writing to the game root. After the run, those files are moved out of the install into `source-changes/<actor>/added/` in the actor's evidence, and the run passes with a warning naming each path. `source-changes/<actor>/source-changes.json` lists each added file with its size and SHA-256, and each changed or missing file. A changed or missing file fails the cleanup step and is never repaired ([source checks](../reference/sessions-profiles.md#source-checks)).
+A game can write into the install it runs from: BepInEx's `preloader_*.log` beside a macOS executable, or a mod writing to the game root. After the run, those files are moved out of the install into `source-changes/<actor>/added/` in the run's evidence, and the run passes with a warning naming each path. `source-changes/<actor>/source-changes.json` lists each added file with its size and SHA-256, and each changed or missing file. A changed or missing file fails the cleanup step and is never repaired ([source checks](../reference/sessions-profiles.md#source-checks)).
 
 | `sourceIntegrity.<actor>` in `result.json` | Do |
 |---|---|
 | `restored with a warning` | Read the moved files; a preloader log often explains a failed start |
+| `unchanged by the run, with a warning` | Something else (Steam, a mod manager) wrote into the install during the run; check the named paths |
 | `failed` | Check the named files in your install; verify the game files in Steam if one changed |
 | `unknown` | A process was not proven stopped; run `valheim-test env status` |
 

@@ -102,8 +102,10 @@ public sealed class ClientActorTests : IDisposable
         Assert.True(placement.HasSourceVerdicts);
         var report = new ScenarioReport("in place");
         var failures = new List<Exception>();
+        placement.Report = report;
 
-        await placement.SettleSourcesAsync(report, failures.Add);
+        await placement.SettleSourcesAsync(failures.Add);
+        await placement.SettleSourcesAsync(failures.Add); // a session settles it again after an actor retired it
 
         var step = Assert.Single(report.Steps);
         Assert.Equal(("verify client's source install after the run (not applicable: runs in place)", true, StepPhase.Cleanup), (step.Name, step.Passed, step.Phase));

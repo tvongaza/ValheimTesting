@@ -584,16 +584,17 @@ internal static class RunRecovery
                         // The journalled stage is read from disk: it must be this copy's own before anything runs on the host, logs included.
                         if (stage.Length != 0) HostedRuntimeStage.RequireStaging(host, HostedRuntimeStage.RequirePrepared(host, copy.What, runId), stage);
                         // The profile's source install settled first, from the journalled baseline (#612), as the run would have: what the
-                        // game added is moved into recovered-<actor>/source-added; a refused baseline keeps the copy.
-                        if (await ProfileSourceCheck.FromJournalAsync(host, copy.Fields, timeout, cancellation).ConfigureAwait(false) is { } source)
+                        // game added is moved into recovered-<actor>/source-added; a refused baseline, or a settlement that did not finish,
+                        // keeps the copy.
+                        string? recoveredIn = null;
+                        if (await ProfileSourceCheck.RecoverAsync(host, copy.What, copy.Actor, copy.Fields, actor => recoveredIn = RecoveredFolder(host, copy.What, runId, actor),
+                            entry => journal.AppendAsync(host, RunJournal.DirectoryFor(hosts[group.Key]), Actor, entry, timeout, cancellation),
+                            timeout, cancellation).ConfigureAwait(false) is { } verdict)
                         {
-                            string recoveredIn = RecoveredFolder(host, copy.What, runId, copy.Actor);
-                            var verdict = await source.SettleAsync(host, SourceSettlement.Recovery(copy.Actor, copy.What, recoveredIn),
-                                entry => journal.AppendAsync(host, RunJournal.DirectoryFor(hosts[group.Key]), Actor, entry, timeout, cancellation),
-                                timeout, cancellation).ConfigureAwait(false);
-                            if (verdict.Added.Count != 0 || verdict.Verdict != SourceVerdictKind.Unchanged) leftHere.Add(recoveredIn);
-                            Step(group.Key, $"source install of {copy.Actor} ({source.Source.Root})", verdict.Describe() +
-                                (verdict.Verdict == SourceVerdictKind.Unchanged ? "" : $"; source-changes.json in {recoveredIn}"), failed: verdict.Fails);
+                            if (verdict.Added.Count != 0 || verdict.Verdict != SourceVerdictKind.Unchanged) leftHere.Add(recoveredIn!);
+                            Step(group.Key, $"source install of {verdict.Actor} ({verdict.Root})", verdict.Describe() +
+                                (verdict.Verdict == SourceVerdictKind.Unchanged ? "" : $"; evidence in {recoveredIn}"), failed: verdict.Fails);
+                            if (verdict.KeepsProfile) throw new IOException("its source settlement did not finish, so it stays for the next env recover");
                         }
                         // The game's logs go with the copy: kept first, so a copy whose logs could not be kept stays (#412).
                         RecoveredLogs logs;

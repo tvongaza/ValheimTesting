@@ -469,7 +469,7 @@ public sealed class TargetedRegression
                         RequireStopped([_activeGameRoot ?? Install], clientSession: false);
                         verdict = SettleSource();
                     }
-                    catch (Exception error) { verdict = SourceVerdict.Unknown("client", error.Message); }
+                    catch (Exception error) { verdict = SourceVerdict.Unknown(SourceActor, error.Message); }
                     verdict.Record(report);
                 }
                 catch (Exception error) { Console.Error.WriteLine("Teardown: " + error.Message); }
@@ -626,7 +626,7 @@ public sealed class TargetedRegression
                 ("runtimeKind", "client")));
             _prepared = true;
             // The baseline an interrupted run's recovery settles the install from, before the client launches; Remove retires the profile.
-            profile.SourceCheck.PersistAsync(_host, Install, entry => { _journal.AppendLocal(actor, entry); return Task.CompletedTask; },
+            profile.SourceCheck.PersistAsync(_host, Install, SourceActor, entry => { _journal.AppendLocal(actor, entry); return Task.CompletedTask; },
                 LocalClientCopy.StepTimeout).GetAwaiter().GetResult();
         }
         catch (Exception error) when (error is not AggregateException)
@@ -645,6 +645,9 @@ public sealed class TargetedRegression
         // An arm that recorded its verdict already is not settled or reported a second time.
         try { if (_sourceVerdict == null) SettleSource().Record(null); }
         catch (Exception error) { integrity = error; }
+        // A settlement that did not finish keeps the profile with its baseline and moved files, journalled kept, for env recover.
+        if (_sourceVerdict is { KeepsProfile: true })
+            throw new IOException($"The regression profile {Install} is kept: its source settlement did not finish. valheim-test env status names it; env teardown settles and removes it.", integrity);
         try { HostedRuntimeStage.RetireAsync(_host, Install, _stage, LocalClientCopy.StepTimeout).GetAwaiter().GetResult(); }
         catch (Exception cleanup) when (integrity != null)
         { throw new AggregateException("Source integrity failed and the regression profile was not retired.", integrity, cleanup); }
@@ -657,16 +660,18 @@ public sealed class TargetedRegression
         if (integrity != null) throw integrity;
     }
 
+    // The one name of a regression's verdict and evidence, in the arm's report and in a recovery.
+    private const string SourceActor = "client";
+
     private SourceVerdict SettleSource()
     {
         if (_sourceVerdict is { } settled) return settled;
         var check = _activeSourceCheck ?? throw new InvalidOperationException("The profile source check was not retained.");
         // The report owns this verdict. Cache a failed verdict too, so later copy retirement removes the profile without
-        // listing the same source again or reporting the same integrity finding a second time.
-        // The last arm's evidence; a profile staged and removed without an arm keeps it in the run's own folder beside the profile.
+        // listing the same source again or reporting the same integrity finding a second time. Its evidence goes to the last arm's
+        // folder; a profile staged and removed without an arm keeps what it moved on the host, journalled kept.
         string actor = "regression-" + Inputs.Name;
-        string output = _sourceOutput ?? Path.Combine(Path.GetDirectoryName(Path.GetDirectoryName(Install)!)!, _journal.RunId);
-        return _sourceVerdict = check.SettleAsync(_host, SourceSettlement.Run("client", Install, output),
+        return _sourceVerdict = check.SettleAsync(_host, SourceSettlement.Run(SourceActor, Install, _sourceOutput),
             entry => { _journal.AppendLocal(actor, entry); return Task.CompletedTask; }, LocalClientCopy.StepTimeout).GetAwaiter().GetResult();
     }
 

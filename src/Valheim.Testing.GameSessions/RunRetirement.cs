@@ -226,10 +226,15 @@ internal sealed class RunRetirement(ScenarioReport? report, string output)
             }
             try
             {
-                // Each actor's install settled before its copy goes (the copy's parent holds the baseline and the moved files).
+                // Each actor's install settled before its copy goes (the copy's parent holds the baseline and the moved files). A
+                // settlement that did not finish keeps its copy, journalled kept by the settlement, for env recover.
                 foreach (var copy in verifiableSourceCopies)
-                    Record(await prepared.SourceChecks[copy.Actor].SettleAsync(host, SourceSettlement.Run(copy.Actor, copy.Runtime, output),
-                        entry => prepared.Journal.AppendAsync(host, journal, copy.Actor, entry, prepared.Timeout), prepared.Timeout, cancellation).ConfigureAwait(false), failures);
+                {
+                    var verdict = await prepared.SourceChecks[copy.Actor].SettleAsync(host, SourceSettlement.Run(copy.Actor, copy.Runtime, output),
+                        entry => prepared.Journal.AppendAsync(host, journal, copy.Actor, entry, prepared.Timeout), prepared.Timeout, cancellation).ConfigureAwait(false);
+                    Record(verdict, failures);
+                    if (verdict.KeepsProfile && retired.Remove(copy)) _kept.Add(Key(copy.Host, copy.Runtime));
+                }
                 foreach (var character in hostCharacters)
                     if (await Try($"retire the disposable character {character.Character.FileName} on {name}",
                         () => HostedCharacterStage.RetireAsync(host, character.Character, prepared.Timeout, cancellation), failures).ConfigureAwait(false))

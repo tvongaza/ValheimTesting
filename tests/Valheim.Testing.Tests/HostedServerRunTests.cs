@@ -896,16 +896,16 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.False(provenance.TryGetProperty("outcome", out _));
     }
 
-    // #612: a file the fake server adds to the install is moved into the run's evidence, its new folder removed, and named; the
-    // run passes with the warning and the install is as it was. Nothing of the settlement is left in the run folder on the host.
+    // #612: a Linux server runs from its linked profile, so it cannot add a file to the install: one that appears there during the
+    // run came from something else. It is named with a warning, left in place, and fails nothing; nothing of the settlement is left
+    // in the run folder on the host.
     [Theory]
     [InlineData("run-write.txt")]
     [InlineData("logs/steam-runtime.txt")]
-    public async Task ASourceWriteDuringTheFakeRunIsMovedIntoTheEvidenceAndNamed(string relative)
+    public async Task ASourceWriteDuringALinkedServersRunIsNamedAndLeftInPlace(string relative)
     {
         var server = NewServer(); var host = NewHost(server);
         var (plan, profile) = Write(host);
-        var before = Directory.EnumerateFileSystemEntries(host.Local(Install), "*", SearchOption.AllDirectories).Order(StringComparer.Ordinal).ToList();
         int code = await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["run", plan, Output], Options(host, server, _ =>
         {
             string path = Path.Combine(host.Local(Install), relative);
@@ -919,15 +919,44 @@ public sealed partial class HostedServerRunTests : IDisposable
         var step = result.GetProperty("Steps").EnumerateArray().Single(item =>
             item.GetProperty("Name").GetString()!.StartsWith("verify server's source install after the run", StringComparison.Ordinal));
         Assert.True(step.GetProperty("Passed").GetBoolean());
-        Assert.Contains(relative, result.GetProperty("Provenance").GetProperty("sourceIntegrity.server").GetString());
-        Assert.Equal("written while the fake server ran", File.ReadAllText(Path.Combine(Output, "source-changes", "server", "added", relative)));
+        string verdict = result.GetProperty("Provenance").GetProperty("sourceIntegrity.server").GetString()!;
+        Assert.StartsWith("unchanged by the run, with a warning: ", verdict);
+        Assert.Contains(relative, verdict);
         Assert.Contains(relative, File.ReadAllText(Path.Combine(Output, "source-changes", "server", "source-changes.json")));
-        Assert.Equal(before, Directory.EnumerateFileSystemEntries(host.Local(Install), "*", SearchOption.AllDirectories).Order(StringComparer.Ordinal));
+        Assert.Equal("written while the fake server ran", File.ReadAllText(Path.Combine(host.Local(Install), relative)));
+        Assert.False(Directory.Exists(Path.Combine(Output, "source-changes", "server", "added")));
         Assert.False(Directory.Exists(host.Local(RunDirectory)));
         var journal = await RunJournalOnHost.ReadAsync(host, "/var/tmp/vt/journal", RunId, TimeSpan.FromSeconds(5));
-        Assert.Equal([JournalEntry.SourceBaseline, JournalEntry.SourceMoveIntended, JournalEntry.SourceSettled],
+        Assert.Equal([JournalEntry.SourceBaseline, JournalEntry.SourceSettled],
             journal.Where(record => record.Entry.Kind.StartsWith("source-", StringComparison.Ordinal)).Select(record => record.Entry.Kind));
         Assert.True(JournalIndex(host, JournalEntry.SourceBaseline) < host.Runs.ToList().FindIndex(run => run.Script == "start"));
+    }
+
+    // #612 item 2: a settlement that does not finish (its evidence step is lost) keeps the profile with its baseline and moved files,
+    // journalled kept, so env recover settles it again; the run never retires it.
+    [Fact]
+    public async Task ASettlementThatDoesNotFinishKeepsTheServersProfileForEnvRecover()
+    {
+        var server = NewServer(); var host = NewHost(server);
+        host.Failures["source-evidence"] = FakeServerHost.TransportFailure;
+        var (plan, profile) = Write(host);
+        int code = await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["run", plan, Output], Options(host, server, _ =>
+        {
+            File.WriteAllText(Path.Combine(host.Local(Install), "preloader_1.log"), "written while the fake server ran");
+            return Task.CompletedTask;
+        }));
+
+        Assert.Equal(1, code);
+        var step = Result().GetProperty("Steps").EnumerateArray().Single(item =>
+            item.GetProperty("Name").GetString()!.StartsWith("verify server's source install after the run", StringComparison.Ordinal));
+        Assert.False(step.GetProperty("Passed").GetBoolean());
+        Assert.Contains("did not finish", step.GetProperty("Error").GetString());
+        Assert.True(Directory.Exists(host.Local(RunDirectory + "/runtime")));
+        Assert.True(File.Exists(host.Local(RunDirectory + "/" + ProfileSourceCheck.BaselineFile)));
+        var journal = await RunJournalOnHost.ReadAsync(host, "/var/tmp/vt/journal", RunId, TimeSpan.FromSeconds(5));
+        var kept = journal.Last(record => record.Entry.Fields.GetValueOrDefault("runtime") == RunDirectory + "/runtime");
+        Assert.Equal(JournalEntry.CopyKept, kept.Entry.Kind);
+        Assert.DoesNotContain(journal, record => record.Entry.Kind == JournalEntry.CopyRetired && record.Entry.Fields["runtime"] == RunDirectory + "/runtime");
     }
 
     // A file the fake server changes in the install fails the verdict and is named, never repaired.
