@@ -360,13 +360,20 @@ public static class HostInstall
         return new HostListing(game.HostName, game.Shell, game.Root, files, game.Executables);
     }
 
-    private static InstallPins Pins(HostListing listing, out string managed)
+    /// <summary>The one game assembly in <paramref name="listing"/>: its listed path and the managed folder holding it.</summary>
+    internal static (string Key, string Managed) GameAssemblyEntry(HostListing listing)
     {
-        var assemblies = listing.Files.Keys.Select(key => GameAssembly.Match(key)).Where(match => match.Success).Select(match => match.Groups["managed"].Value).Order(StringComparer.Ordinal).ToList();
+        var assemblies = listing.Files.Keys.Select(key => GameAssembly.Match(key)).Where(match => match.Success)
+            .Select(match => (Key: match.Value, Managed: match.Groups["managed"].Value)).OrderBy(entry => entry.Managed, StringComparer.Ordinal).ToList();
         if (assemblies.Count == 0)
             throw new FileNotFoundException($"No game assembly ({InstallPins.GameAssemblyName} in a *_Data/Managed, macOS client or macOS dedicated-server Managed folder) under {listing.Root} on {listing.HostName}.");
-        if (assemblies.Count > 1) throw new InvalidOperationException($"More than one game assembly under {listing.Root} on {listing.HostName}: {string.Join(", ", assemblies)}; refusing to guess which runs.");
-        managed = assemblies[0];
+        if (assemblies.Count > 1) throw new InvalidOperationException($"More than one game assembly under {listing.Root} on {listing.HostName}: {string.Join(", ", assemblies.Select(entry => entry.Managed))}; refusing to guess which runs.");
+        return assemblies[0];
+    }
+
+    private static InstallPins Pins(HostListing listing, out string managed)
+    {
+        managed = GameAssemblyEntry(listing).Managed;
         string prefix = managed + "/";
         if (!listing.Files.Keys.Any(key => key.StartsWith("BepInEx/core/", StringComparison.OrdinalIgnoreCase)))
             throw new DirectoryNotFoundException($"BepInEx is not installed in {listing.Root} on {listing.HostName} (no BepInEx/core).");

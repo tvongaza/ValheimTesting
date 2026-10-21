@@ -332,7 +332,7 @@ internal sealed class FakeServerHost : IGameHost
                 string file = Local(v["path"]);
                 if (!File.Exists(file)) return Ok("VT-PREFLIGHT missing\n");
                 var bytes = File.ReadAllBytes(file);
-                return Ok(bytes.Length > 4194304 ? "VT-PREFLIGHT too-large\n" : "VT-PREFLIGHT " + Convert.ToBase64String(bytes) + "\n");
+                return Ok(bytes.Length > long.Parse(v["limit"], System.Globalization.CultureInfo.InvariantCulture) ? "VT-PREFLIGHT too-large\n" : "VT-PREFLIGHT " + Convert.ToBase64String(bytes) + "\n");
             }
             case "profile-seed":
             {

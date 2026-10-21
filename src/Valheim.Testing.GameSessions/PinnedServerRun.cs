@@ -481,6 +481,7 @@ public static class PinnedServerRun
                 // A client a scenario opens itself is one of the campaign's, by name, on its host and lease.
                 ResolveClient = (_, name) => (name ?? throw new ArgumentException($"The campaign declares clients {string.Join(", ", named.Keys.Order(StringComparer.Ordinal))}; say which one opens.", nameof(name)), placement),
                 FindClientHost = campaignActors.ClientHost,
+                Builds = Seeded(prepared.Builds),
                 Mod = options.Mod, ServerPinsMod = options.Mod.PinnedIn(hostPlan.Pins),
                 DisposeOnFailedStart = false, // The finally disposes it.
             };
@@ -555,6 +556,14 @@ public static class PinnedServerRun
     private static Action<string, string> ShippedLoaderChosen(ScenarioReport report) =>
         (actor, reason) => { Console.WriteLine($"{actor} loader: {reason}"); report.Provenance[actor + "LoaderShipped"] = reason; };
 
+    // A campaign's builds as its host inspection decided them (#860), for its session's refused-join reasons.
+    private static GameVersionAgreement.Ledger Seeded(IReadOnlyList<GameVersionAgreement.Side> sides)
+    {
+        var builds = new GameVersionAgreement.Ledger();
+        builds.Seed(sides);
+        return builds;
+    }
+
     private static async Task<int> RunAsync<TPlan>(string mode, Func<TPlan> readPlan, Func<string> planHash, string planName, string outputArgument,
         PinnedServerRunOptions<TPlan> options, RunCancellation cancellation, string? inventoryPath,
         (string Manifest, Func<TPlan, IReadOnlyDictionary<string, ClientRunPlan>> Clients)? campaign, ResolvedEnvironment? given = null) where TPlan : ServerRunPlan
@@ -583,6 +592,9 @@ public static class PinnedServerRun
             IReadOnlyDictionary<string, ClientRunPlan>? campaignPlans = campaign is { } declared ? declared.Clients(plan) : null;
             foreach (var client in campaignPlans?.Values ?? options.ClientPlans?.Invoke(plan) ?? [])
                 client.RequirePasswordSource();
+            // The run's builds (#860): a campaign's as its host inspection decided them; a standalone run's admitted where each
+            // install is read, so an actor that cannot join the others is refused before it is staged, as in a campaign.
+            var builds = new GameVersionAgreement.Ledger();
             ResolvedEnvironment? environment = given;
             string? serverLoaderPackage = null; // an inventory recipe's reviewed loader package for a standalone server's profile
             if (campaign is var (manifestFile, bind))
@@ -601,6 +613,7 @@ public static class PinnedServerRun
                     prepared = await HostedCampaignPreparation.PrepareAsync(inspection, Path.Combine(output, "prepared"), CampaignTimeout,
                         name => options.Hooks.CreateHost(inspection.Inputs!.Profile, name), cancellation.Token, campaignPlans, campaignRunId, PreparationCleanup(report), options.Hooks.PinnedLoader, ShippedLoaderChosen(report)).ConfigureAwait(false)).ConfigureAwait(false);
                 prepared!.RecordProfileLeftOut(report.Provenance);
+                builds.Seed(prepared.Builds);
                 if (prepared.Manifest.Server?.SteamRuntimePackage is { } steamPackagePath)
                 {
                     bool remote = prepared.Environment.Hosts[prepared.Environment.Server!.Host].Kind == "ssh";
@@ -635,8 +648,17 @@ public static class PinnedServerRun
             }
             // The runtime is a profile of the server host's install (this machine's too), checked and staged there; nothing else
             // of the install is read here.
+            // A standalone run's declared owned clients, read in place before the server is staged: a server they cannot join is
+            // refused where its install is listed, before its profile is copied.
+            if (prepared == null && options.ClientPlans?.Invoke(plan).Where(client => client.Owned).ToList() is { Count: > 0 } owned)
+                await report.StepAsync(StepPhase.Preflight, "read the declared clients' game versions", async () =>
+                {
+                    for (int i = 0; i < owned.Count; i++)
+                        await builds.AdmitInPlaceAsync(owned.Count == 1 ? "declared client" : "declared client " + (i + 1).ToString(CultureInfo.InvariantCulture),
+                            owned[i].Install, cancellation.Token).ConfigureAwait(false);
+                }).ConfigureAwait(false);
             hosted = HostedServerRun.Create(environment, plan, options.Name, options.Hooks, prepared: prepared != null,
-                prepared?.Journal.RunId, serverLoaderPackage, prepared?.SourceChecks);
+                prepared?.Journal.RunId, serverLoaderPackage, prepared?.SourceChecks, builds);
             if (RunJournal.ThisProcess.RunId != hosted.RunId) hostedRun = RunJournal.UseRun(hosted.RunId);
             report.Provenance.TryAdd("runId", hosted.RunId); // a standalone run's; a campaign's is already there
             hosted.Record(report.Provenance);
@@ -829,6 +851,7 @@ public static class PinnedServerRun
                         hostedRun.ClientPlacement(report))
                     : game!.ThisMachine(client, name), // assigned before any client opens
                 FindClientHost = hostedRun.ClientHost,
+                Builds = hostedRun.Builds,
                 Mod = options.Mod, ServerPinsMod = options.Mod.PinnedIn(plan.Pins),
                 DisposeOnFailedStart = false, // The finally disposes it, on the cleanup's own bounded token.
             };

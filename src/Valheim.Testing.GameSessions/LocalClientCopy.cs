@@ -32,7 +32,7 @@ internal sealed class LocalClientCopy
     private sealed record Unbound(string Install, InstallPins? InstallPins, Dictionary<string, string> Pins, string? CliManifest,
         string? LoaderRoot, string? LaunchMode, string? SourceGameRoot, string? SourceGameHash, string? LeftOut,
         SortedDictionary<string, string> PinOrigins, Dictionary<string, string> SourceCliPins, IReadOnlyList<string> ReplacedCliPaths,
-        Action? SourceCheck);
+        Action? SourceCheck, GameBuild? Build);
 
     private LocalClientCopy(IGameHost host, string actor, string runtime, string stage, string launchRoot, RunJournal journal,
         ClientRunPlan plan, Unbound unbound, ProfileSourceCheck sourceCheck)
@@ -63,7 +63,8 @@ internal sealed class LocalClientCopy
     /// <see cref="ShippedLoader.Local"/>).
     /// </summary>
     internal static async Task<LocalClientCopy> PrepareAsync(string actor, ClientRunPlan plan, CancellationToken cancellation,
-        string? dataRoot = null, IGameHost? host = null, Func<CliBundleSource?>? cliBundle = null, Func<string, string, ShippedLoader.Choice?>? loader = null)
+        string? dataRoot = null, IGameHost? host = null, Func<CliBundleSource?>? cliBundle = null, Func<string, string, ShippedLoader.Choice?>? loader = null,
+        GameVersionAgreement.Ledger? builds = null)
     {
         ArgumentNullException.ThrowIfNull(plan);
         if (!plan.CopySource) throw new InvalidOperationException("Only an owned client that does not run in place, and is not bound to a profile yet, gets a disposable profile.");
@@ -96,7 +97,7 @@ internal sealed class LocalClientCopy
         await HostedRuntimeStage.RequireStoppedAsync(host, StepTimeout, cancellation, clientSession: true).ConfigureAwait(false);
         Console.WriteLine($"Preparing an owned mod profile for {source}; the game install stays in place.");
         using var selection = await InstallSelection.ReadAsync(host, HostedRuntimeKind.Client, source, manifest, location, loaderPackage,
-            plan.Port, plan, StepTimeout, cancellation).ConfigureAwait(false);
+            plan.Port, plan, StepTimeout, cancellation, builds, actor).ConfigureAwait(false);
         if (selection.Replaced.Count != 0)
             Console.WriteLine($"{actor}: the profile stages ValheimCLI {manifest.Build} in place of the install's own {string.Join(", ", selection.Replaced)}.");
         var bound = selection.BindPins(actor, plan.InstallPins, plan.Pins, manifest, setFolder);
@@ -121,7 +122,8 @@ internal sealed class LocalClientCopy
             ("runtimeKind", "client"), ("launchRoot", profile.GameRoot)));
         var unbound = new Unbound(plan.Install, plan.InstallPins, plan.Pins, plan.CliManifest, plan.PreparedLoaderRoot, plan.PreparedLaunchMode,
             plan.PreparedSourceGameRoot, plan.PreparedSourceGameHash, plan.PreparedLeftOut, plan.PreparedPinOrigins,
-            plan.PreparedSourceCliPins, plan.PreparedReplacedCliPaths, plan.PreparedSourceCheck);
+            plan.PreparedSourceCliPins, plan.PreparedReplacedCliPaths, plan.PreparedSourceCheck, plan.PreparedBuild);
+        if (selection.Build != null) plan.PreparedBuild = selection.Build;
         Bind(plan, source, profile, manifestPath, bound, selection.Replaced, host);
         return new LocalClientCopy(host, actor, runtime, stage, profile.GameRoot, journal, plan, unbound, profile.SourceCheck);
     }
@@ -152,6 +154,7 @@ internal sealed class LocalClientCopy
         _plan.PreparedPinOrigins = _unbound.PinOrigins; _plan.PreparedSourceCliPins = _unbound.SourceCliPins;
         _plan.PreparedReplacedCliPaths = _unbound.ReplacedCliPaths;
         _plan.PreparedSourceCheck = _unbound.SourceCheck;
+        _plan.PreparedBuild = _unbound.Build;
         _plan.Prepared = false;
         if (integrity != null) throw integrity;
     }

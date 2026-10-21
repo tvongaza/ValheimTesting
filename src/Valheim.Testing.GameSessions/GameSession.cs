@@ -132,6 +132,7 @@ public sealed class GameSession : IAsyncDisposable
             _opened.Add(actor);
         }
         Directory.CreateDirectory(output); // Once the open is accepted: an open refused at teardown leaves no empty folder.
+        Target(plan, actorName);
         var session = actor.Start();
         Report.RecordPlugins(actorName, plan.Pins);
         RecordInstall(actorName, plan);
@@ -256,6 +257,17 @@ public sealed class GameSession : IAsyncDisposable
     /// <summary>How often a scenario's observation waits re-read: one second; scenario tests over scripted worlds shorten it.</summary>
     public TimeSpan Interval { get; internal init; } = TimeSpan.FromSeconds(1);
 
+    /// <summary>The run's builds (#860): what each actor's install was read as before staging, for the run's version decision and a refused join's reason.</summary>
+    internal GameVersionAgreement.Ledger? Builds { get; init; }
+
+    // What a client joins and its own build, as this run read them before staging, for a refused join's reason (#860).
+    private void Target(ClientRunPlan plan, string actor)
+    {
+        plan.PreparedBuild = Builds?.Of(actor); // never a build an earlier run read; a copy made for this open sets its own
+        plan.PreparedJoinTarget = plan.JoinsHost && Host is { } host ? new JoinTarget(host.Name, Builds?.Of(host.Name))
+            : Server is { } server ? new JoinTarget("server", Builds?.Of("server"), server.IncompatibleVersionLine) : null;
+    }
+
     /// <summary>A campaign's client names (<see cref="PinnedServerRun.RunCampaignAsync{TPlan}"/>), each opened on its assigned host by <see cref="OpenClient"/>; empty when clients open on this machine.</summary>
     public IReadOnlyList<string> CampaignClients { get; internal init; } = [];
 
@@ -264,9 +276,10 @@ public sealed class GameSession : IAsyncDisposable
     private readonly Func<ClientRunPlan, string?, (string Name, IClientPlacement Placement)>? _resolveClient;
     // This machine: one placement for the session, so a client that leaves and rejoins between rounds reruns its one disposable
     // copy, which the session's teardown removes once the client is closed.
-    private readonly LocalClientPlacement _local = new();
+    private LocalClientPlacement LocalPlacement => LazyInitializer.EnsureInitialized(ref _localPlacement, () => new LocalClientPlacement { Builds = Builds });
+    private LocalClientPlacement? _localPlacement;
     internal (string Name, IClientPlacement Placement) ThisMachine(ClientRunPlan plan, string? name) =>
-        name == null ? ("client", _local)
+        name == null ? ("client", LocalPlacement)
         : throw new ArgumentException("A named client opens only in a campaign that declares clients (PinnedServerRun.RunCampaignAsync).", nameof(name));
 
     /// <summary>The host a campaign client runs on, for reading its files or capturing there.</summary>
@@ -327,6 +340,7 @@ public sealed class GameSession : IAsyncDisposable
         foreach (var client in _clients)
             starts.Add(Task.Run(() =>
             {
+                Target(client.Plan, client.Name);
                 Report.Step(StepPhase.Setup, $"client {client.Name} at its menu, plugins pinned", () => client.Start());
                 Report.RecordPlugins(client.Name, client.Plan.Pins);
                 RecordInstall(client.Name, client.Plan);
@@ -488,14 +502,14 @@ public sealed class GameSession : IAsyncDisposable
             else client.Dispose();
         if (Host is { } host) CloseHost(host);
         // This machine's disposable client copies, once their clients are closed (a client that could not be stopped keeps its copy).
-        if (_local.HasCopies)
+        if (_localPlacement is { HasCopies: true } local)
         {
-            await _local.VerifySourcesAsync(async (name, verify) =>
+            await local.VerifySourcesAsync(async (name, verify) =>
             {
                 try { await Report.StepAsync(StepPhase.Cleanup, name, verify).ConfigureAwait(false); }
                 catch (Exception error) { TeardownFailures.Add(error); Console.Error.WriteLine("Teardown: " + error.Message); }
             }).ConfigureAwait(false);
-            try { Report.Step(StepPhase.Cleanup, "remove the disposable client copy", () => _local.RetireAsync(verifySource: false).GetAwaiter().GetResult()); }
+            try { Report.Step(StepPhase.Cleanup, "remove the disposable client copy", () => local.RetireAsync(verifySource: false).GetAwaiter().GetResult()); }
             catch (Exception error) { TeardownFailures.Add(error); Console.Error.WriteLine("Teardown: " + error.Message); }
         }
         if (Server is { } server)

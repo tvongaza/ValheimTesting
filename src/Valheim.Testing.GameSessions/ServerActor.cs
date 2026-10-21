@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Valheim.Testing.Game;
 
 namespace Valheim.Testing.GameSessions;
@@ -193,6 +194,53 @@ public sealed class ServerActor : IOwnedServer, IDisposable
     /// </summary>
     public string? LiveLog => _scripted is { } scripted ? scripted.LiveLog
         : (Host == null || Host.Kind == GameHostKind.Local) && RuntimeDirectory.Length != 0 ? Path.Combine(RuntimeDirectory, "BepInEx", "LogOutput.log") : null;
+
+    /// <summary>
+    /// The current boot's line where the game refused a peer on network version <paramref name="network"/> (#860), from the log the
+    /// game writes to (the plan's <c>-logFile</c> file, otherwise BepInEx's), awaited within <paramref name="within"/> (BepInEx flushes
+    /// its disk log every few seconds): on this machine in the log's last <see cref="RefusalLogTail"/> bytes, on the server's host from
+    /// the log's start. Never retried after <paramref name="within"/>. Null when there is none, or the server is scripted or has no
+    /// plan. For a refused join's reason.
+    /// </summary>
+    internal string? IncompatibleVersionLine(uint network, TimeSpan within, CancellationToken cancellation)
+    {
+        if (_scripted != null || _plan is not { } plan || RuntimeDirectory.Length == 0) return null;
+        var pattern = JoinRefusalText.IncompatibleVersionOf(network);
+        if (Host == null || Host.Kind == GameHostKind.Local)
+        {
+            string log = plan.GameLogFile(RuntimeDirectory, WorldDirectory) ?? CrossplayServer.BepInExLog(RuntimeDirectory);
+            var deadline = DateTime.UtcNow + within;
+            for (;;)
+            {
+                if (LastRefusal(log, pattern, cancellation) is { } line) return line;
+                if (DateTime.UtcNow >= deadline) return null;
+                cancellation.WaitHandle.WaitOne(TimeSpan.FromMilliseconds(250));
+                cancellation.ThrowIfCancellationRequested();
+            }
+        }
+        var result = Host.WaitForLogAsync(plan.GameLogFile(RuntimeDirectory, WorldDirectory) ?? CrossplayServer.HostBepInExLog(RuntimeDirectory), 0,
+            pattern, [], within, cancellation).GetAwaiter().GetResult();
+        return result.Outcome == HostLogOutcome.Matched ? result.Line : null;
+    }
+
+    /// <summary>How much of a local server log's end the refusal read looks at: the refusal is the latest event of a join just refused.</summary>
+    internal const long RefusalLogTail = 4 << 20;
+
+    /// <summary>The last line of <paramref name="log"/>'s last <see cref="RefusalLogTail"/> bytes that <paramref name="pattern"/> matches; the game may still write it.</summary>
+    internal static string? LastRefusal(string log, Regex pattern, CancellationToken cancellation, long tail = RefusalLogTail)
+    {
+        if (!File.Exists(log)) return null;
+        using var stream = new FileStream(log, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        if (stream.Length > tail) stream.Seek(-tail, SeekOrigin.End);
+        using var reader = new StreamReader(stream);
+        string? last = null;
+        for (string? line; (line = reader.ReadLine()) != null;)
+        {
+            cancellation.ThrowIfCancellationRequested();
+            if (pattern.IsMatch(line)) last = line;
+        }
+        return last;
+    }
 
     /// <summary>
     /// The crossplay server's lobby for its current boot <paramref name="server"/>, read from the log the game writes to (the plan's

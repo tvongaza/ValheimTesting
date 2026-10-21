@@ -70,6 +70,10 @@ public sealed class ClientRunPlan
     [JsonIgnore] internal IReadOnlyList<string> PreparedReplacedCliPaths { get; set; } = [];
     /// <summary>The profile owner's narrow source check, run immediately before launch; includes Windows linked native DLLs.</summary>
     [JsonIgnore] internal Action? PreparedSourceCheck { get; set; }
+    /// <summary>This client's install build, read where the install was listed before staging (#860). Never read from a plan file.</summary>
+    [JsonIgnore] internal GameBuild? PreparedBuild { get; set; }
+    /// <summary>What this client joins, as its run knows it, for a refused join's reason (#860). Never read from a plan file.</summary>
+    [JsonIgnore] internal JoinTarget? PreparedJoinTarget { get; set; }
     /// <summary>
     /// The profile owner's static ValheimCLI check of <see cref="LoaderRoot"/> where the profile is (<see cref="CheckCliManifest"/>):
     /// a campaign's profile is on its client's host, which may be another machine than this one (#808). Null for a profile on this

@@ -28,6 +28,8 @@ internal sealed class InstallSelection : IDisposable
 
     /// <summary>The install as <see cref="HostedRuntimeStage.InspectSourceAsync"/> listed it: pass it on as the profile's inspected source.</summary>
     internal HostListing Source { get; }
+    /// <summary>The install's build, as the run's ledger admitted it (#860); null when the selection was read without one.</summary>
+    internal GameBuild? Build { get; private init; }
     /// <summary>The selected files, each a local file: the install's own in place, or fetched with the listing's hash.</summary>
     internal IReadOnlyList<HostedRuntimeFile> Files { get; }
     /// <summary>The install's own ValheimCLI builds that the staged set replaces, kept locally so supplied source pins can be checked.</summary>
@@ -121,11 +123,12 @@ internal sealed class InstallSelection : IDisposable
     /// DLLs); <paramref name="loader"/> the reviewed loader package that replaces the install's loader, or null; <paramref name="cliPort"/>
     /// the port a generated ValheimCLI config listens on. A client's need for ValheimCLI mutation access follows its
     /// <paramref name="client"/> plan (<see cref="CliServerConfig.RequiresClientMutations"/>; null is treated as joined); a dedicated
-    /// server has no client and passes none.
+    /// server has no client and passes none. With <paramref name="builds"/>, the listed install's build is admitted there as
+    /// <paramref name="actor"/>'s before anything is selected or staged, and an install that cannot join the run's others is refused.
     /// </summary>
     internal static async Task<InstallSelection> ReadAsync(IGameHost host, HostedRuntimeKind role, string install,
         CliCapabilityManifest cli, CliSetLocation cliFiles, BepInExLoaderPackage? loader, int cliPort, ClientRunPlan? client,
-        TimeSpan timeout, CancellationToken cancellation = default)
+        TimeSpan timeout, CancellationToken cancellation = default, GameVersionAgreement.Ledger? builds = null, string? actor = null)
     {
         ArgumentNullException.ThrowIfNull(host);
         ArgumentNullException.ThrowIfNull(cli);
@@ -135,6 +138,8 @@ internal sealed class InstallSelection : IDisposable
         if (!Enum.IsDefined(role)) throw new ArgumentOutOfRangeException(nameof(role));
         if (role == HostedRuntimeKind.Server && client != null) throw new ArgumentException("A dedicated server has no client plan.", nameof(client));
         var source = await HostedRuntimeStage.InspectSourceAsync(host, role, install, loader, timeout, cancellation).ConfigureAwait(false);
+        var build = builds == null ? null : await builds.AdmitAsync(actor ?? (role == HostedRuntimeKind.Server ? "server" : "client"),
+            host, source, timeout, cancellation).ConfigureAwait(false);
         string work = Path.Combine(Path.GetTempPath(), "vt-install-selection-" + Guid.NewGuid().ToString("N"));
         try
         {
@@ -143,7 +148,7 @@ internal sealed class InstallSelection : IDisposable
             files = CliServerConfig.Stage(files, role == HostedRuntimeKind.Server ? "Server" : "Client", cliPort,
                 Path.Combine(work, "generated", OwnedClientPreflight.CliConfig),
                 role == HostedRuntimeKind.Client && CliServerConfig.RequiresClientMutations(client));
-            return new InstallSelection(work, source, files, replaced);
+            return new InstallSelection(work, source, files, replaced) { Build = build };
         }
         catch
         {

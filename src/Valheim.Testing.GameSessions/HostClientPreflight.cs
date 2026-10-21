@@ -81,28 +81,34 @@ internal static class HostClientPreflight
         'VT-EXISTS done'
         """.ReplaceLineEndings("\n");
 
-    internal static async Task<byte[]?> Read(IGameHost host, string path, TimeSpan timeout, CancellationToken cancellation)
+    /// <summary>The bytes of the file at <paramref name="path"/> on the host, or null when it is missing; a file over <paramref name="limit"/> bytes is refused.</summary>
+    internal static async Task<byte[]?> Read(IGameHost host, string path, TimeSpan timeout, CancellationToken cancellation, long limit = 4 << 20)
     {
         var result = (await host.RunAsync(host.Shell.Kind == HostShellKind.PowerShell ? PowerShellRead : BashRead,
-            new Dictionary<string, string> { ["path"] = path }, timeout, cancellation).ConfigureAwait(false)).EnsureSuccess($"Reading client preflight file on {host.Name}");
+            new Dictionary<string, string> { ["path"] = path, ["limit"] = limit.ToString(System.Globalization.CultureInfo.InvariantCulture) },
+            timeout, cancellation).ConfigureAwait(false)).EnsureSuccess($"Reading {path} on {host.Name}");
         string line = result.Stdout.Trim();
         if (line == "VT-PREFLIGHT missing") return null;
-        if (line == "VT-PREFLIGHT too-large") throw new IOException($"Client preflight file {path} on {host.Name} exceeds the 4 MiB safety limit.");
-        if (!line.StartsWith("VT-PREFLIGHT ", StringComparison.Ordinal)) throw new HostOperationException($"Unexpected client preflight reply from {host.Name}", result);
+        if (line == "VT-PREFLIGHT too-large") throw TooLarge(path, host.Name, limit);
+        if (!line.StartsWith("VT-PREFLIGHT ", StringComparison.Ordinal)) throw new HostOperationException($"Unexpected reply reading {path} on {host.Name}", result);
         try { return Convert.FromBase64String(line["VT-PREFLIGHT ".Length..]); }
-        catch (FormatException) { throw new HostOperationException($"Malformed client preflight reply from {host.Name}", result); }
+        catch (FormatException) { throw new HostOperationException($"Malformed reply reading {path} on {host.Name}", result); }
     }
+
+    /// <summary>The one refusal of a file over a read's safety limit, on any host.</summary>
+    internal static IOException TooLarge(string path, string hostName, long limit) => new($"{path} on {hostName} exceeds the " +
+        (limit % (1 << 20) == 0 ? $"{limit >> 20} MiB" : $"{limit}-byte") + " safety limit.");
 
     internal static readonly string BashRead = """
         if [ ! -f "$path" ]; then echo 'VT-PREFLIGHT missing'; exit 0; fi
         size=$(wc -c < "$path") || exit 3
-        if [ "$size" -gt 4194304 ]; then echo 'VT-PREFLIGHT too-large'; exit 0; fi
+        if [ "$size" -gt "$limit" ]; then echo 'VT-PREFLIGHT too-large'; exit 0; fi
         printf 'VT-PREFLIGHT '; base64 < "$path" | tr -d '\n'; printf '\n'
         """.ReplaceLineEndings("\n");
     internal static readonly string PowerShellRead = """
         if (-not [IO.File]::Exists($path)) { 'VT-PREFLIGHT missing'; exit 0 }
         $file = New-Object IO.FileInfo $path
-        if ($file.Length -gt 4194304) { 'VT-PREFLIGHT too-large'; exit 0 }
+        if ($file.Length -gt [long]$limit) { 'VT-PREFLIGHT too-large'; exit 0 }
         'VT-PREFLIGHT ' + [Convert]::ToBase64String([IO.File]::ReadAllBytes($path))
         """.ReplaceLineEndings("\n");
 }

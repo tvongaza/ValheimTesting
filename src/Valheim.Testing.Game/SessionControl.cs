@@ -113,9 +113,14 @@ public sealed class SessionControl(GameActor actor)
             throw new ArgumentException(plan.Crossplay ? "A crossplay client joins the server's lobby: pass it (CrossplayServer.WaitForLobby)." : "This client joins by address; a lobby is for a crossplay plan.", nameof(lobby));
         var timeout = TimeSpan.FromSeconds(plan.JoinSeconds);
         if (lobby != null)
-            JoinCrossplay(lobby.RemotePlayerId, plan.Character, worldUid, plan.MenuExpectations, timeout, cancellation: cancellation,
-                worldExpectations: plan.WorldExpectations(worldUid));
-        else Join(plan.Join, plan.Character, plan.PasswordVariable); // Exactly once.
+            Crossplay(lobby.RemotePlayerId, plan.Character, worldUid, plan.MenuExpectations, timeout, true, cancellation,
+                plan.WorldExpectations(worldUid), plan);
+        else
+            try { Join(plan.Join, plan.Character, plan.PasswordVariable); } // Exactly once.
+            catch (InvalidOperationException error) when (error.Data["extension.path"] is "valheim.session/join" && error.Data["extension.code"] is "join_failed")
+            {
+                throw Refused(error, plan, timeout < RefusalReadLimit ? timeout : RefusalReadLimit, cancellation);
+            }
         return Joined(plan, worldUid, timeout, protectPlayer, cancellation);
     }
 
@@ -166,15 +171,68 @@ public sealed class SessionControl(GameActor actor)
         if (ok) throw new InvalidOperationException($"The join succeeded, but a refusal with {expected} ({(int)expected}) was expected. The client is in the server's world: leave it before joining again.");
         if (code != "join_failed")
             throw new InvalidOperationException($"The join ended with ValheimCLI code {code ?? "none"}, not a refusal by the server; {expected} ({(int)expected}) was expected. Nothing was retried.");
+        var (status, elapsed) = ReadRefusal(menuExpectations, timeout, cancellation);
+        if (status.Status != expected)
+            throw new InvalidOperationException($"The join was refused with {status}, not the expected {expected} ({(int)expected}).");
+        return new JoinRefusal(status.Status, status.Server, elapsed);
+    }
+
+    // The longest a refused join's reason is waited for: the client is back at its menu within seconds of a refusal.
+    private static readonly TimeSpan RefusalReadLimit = TimeSpan.FromSeconds(30);
+
+    // The one read of why a join was refused: the client re-pinned at its menu (plugins only), back there within the timeout, then
+    // the connection status the game keeps until the next join. Read-only; nothing is retried.
+    private (ConnectionStatusReading Status, TimeSpan Elapsed) ReadRefusal(string menuExpectations, TimeSpan timeout, CancellationToken cancellation)
+    {
         actor.VerifyEnvironment(menuExpectations);
         var state = actor.RequireCapability("valheim.session/state");
         var back = ObservedWait.RunBlocking("the refused client back at its main menu", _ => Read(state), reading => reading.Phase == "menu" && !reading.WorldPresent,
             timeout, ReadInterval, cancellation, describe: reading => $"phase {reading.Phase}, connection {reading.ConnectionStatus}");
-        var status = ConnectionStatusReading.Read(actor);
-        if (status.Status != expected)
-            throw new InvalidOperationException($"The join was refused with {status}, not the expected {expected} ({(int)expected}).");
-        return new JoinRefusal(status.Status, status.Server, back.Elapsed);
+        return (ConnectionStatusReading.Read(actor), back.Elapsed);
     }
+
+    // A join the game refused (ValheimCLI join_failed), with the reason: its status read once and explained (#860). When the status
+    // cannot be read, the original failure stands with why.
+    private InvalidOperationException Refused(InvalidOperationException error, ClientRunPlan plan, TimeSpan timeout, CancellationToken cancellation)
+    {
+        string reason;
+        GameConnectionStatus? status = null;
+        try
+        {
+            var reading = ReadRefusal(plan.MenuExpectations, timeout, cancellation).Status;
+            status = reading.Status;
+            reason = ". " + Capitalized(JoinRefusalText.Explain(reading.Status, plan.PreparedBuild, plan.PreparedJoinTarget,
+                reading.Status == GameConnectionStatus.ErrorVersion ? TargetLog(plan.PreparedBuild, plan.PreparedJoinTarget, cancellation) : null));
+        }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+        {
+            // The run is being cancelled: a cancellation, still carrying the refusal it interrupted.
+            var cancelled = new OperationCanceledException(error.Message.TrimEnd('.') + "; its connection status was not read: the run was cancelled", error, cancellation);
+            foreach (System.Collections.DictionaryEntry entry in error.Data) cancelled.Data[entry.Key] = entry.Value;
+            throw cancelled;
+        }
+        catch (Exception failure)
+        {
+            // The join itself was refused: that stays the failure, and the reason says why it is missing.
+            reason = "; its connection status was not read: " + failure.Message;
+        }
+        var refused = new InvalidOperationException(error.Message.TrimEnd('.') + reason, error);
+        foreach (System.Collections.DictionaryEntry entry in error.Data) refused.Data[entry.Key] = entry.Value;
+        if (status is { } known) refused.Data["connection.status"] = known.ToString();
+        return refused;
+    }
+
+    // The target's own refusal of a peer on this client's network version, when the run owns the target and read the client's
+    // install: one bounded read, never retried, and never a reason to fail.
+    private static string? TargetLog(GameBuild? client, JoinTarget? target, CancellationToken cancellation)
+    {
+        if (target?.RefusalLine is not { } read || client?.NetworkVersion is not { } network) return null;
+        if (target.Build?.NetworkVersion == network) return null; // the same network version: the game logs no refusal of it
+        try { return read(network, TimeSpan.FromSeconds(5), cancellation); }
+        catch (Exception error) when (error is not OperationCanceledException || !cancellation.IsCancellationRequested) { return null; }
+    }
+
+    private static string Capitalized(string text) => text.Length == 0 ? text : char.ToUpperInvariant(text[0]) + text[1..];
 
     /// <summary>
     /// Joins a crossplay (PlayFab) server's lobby with the given existing character: <c>cli_select_character</c>, then
@@ -194,10 +252,16 @@ public sealed class SessionControl(GameActor actor)
     public SessionState JoinCrossplay(string remotePlayerId, string character, string worldUid, string menuExpectations, TimeSpan timeout,
         bool enableDevcommands = true, CancellationToken cancellation = default, string? worldExpectations = null)
     {
+        return Crossplay(remotePlayerId, character, worldUid, menuExpectations, timeout, enableDevcommands, cancellation, worldExpectations, plan: null);
+    }
+
+    private SessionState Crossplay(string remotePlayerId, string character, string worldUid, string menuExpectations, TimeSpan timeout,
+        bool enableDevcommands, CancellationToken cancellation, string? worldExpectations, ClientRunPlan? plan)
+    {
         foreach (string token in new[] { remotePlayerId, character })
             if (string.IsNullOrEmpty(token) || token.Any(char.IsWhiteSpace)) throw new ArgumentException("The remote player id and character must be single tokens.");
         return JoinUser("cli_connect_playfab_user " + remotePlayerId, $"OK: PlayFab user join started for {remotePlayerId} using ", "crossplay join", character, worldUid,
-            menuExpectations, timeout, enableDevcommands, cancellation, worldExpectations);
+            menuExpectations, timeout, enableDevcommands, cancellation, worldExpectations, plan);
     }
 
     /// <summary>
@@ -227,7 +291,7 @@ public sealed class SessionControl(GameActor actor)
             throw new InvalidOperationException($"The host's Steam ID is {identity.SteamId}, not a signed-in Steam user's, so no peer can join it; sign the host's Steam in.");
         var timeout = TimeSpan.FromSeconds(plan.JoinSeconds);
         JoinUser("cli_connect_steam_user " + identity.SteamId, $"OK: Steam user join started for {identity.SteamId} using ", "host join", plan.Character, worldUid,
-            plan.MenuExpectations, timeout, enableDevcommands: true, cancellation, plan.WorldExpectations(worldUid));
+            plan.MenuExpectations, timeout, enableDevcommands: true, cancellation, plan.WorldExpectations(worldUid), plan);
         return Joined(plan, worldUid, timeout, protectPlayer, cancellation);
     }
 
@@ -251,7 +315,7 @@ public sealed class SessionControl(GameActor actor)
     // A join to another player's game: the character selected, the join command issued exactly once and its start confirmed, then
     // the wait until the client is connected in worldUid with its player (crossplay lobby or Steam host alike).
     private SessionState JoinUser(string command, string started, string what, string character, string worldUid, string menuExpectations, TimeSpan timeout,
-        bool enableDevcommands, CancellationToken cancellation, string? worldExpectations)
+        bool enableDevcommands, CancellationToken cancellation, string? worldExpectations, ClientRunPlan? plan)
     {
         ValidateWorldUid(worldUid);
         if (timeout <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(timeout));
@@ -283,25 +347,46 @@ public sealed class SessionControl(GameActor actor)
             capability = actor.RequireCapability("valheim.session/state");
         }
         bool left = false;
-        return ObservedWait.UntilWithReadBudget("the " + what, () =>
-            {
-                SessionState state;
-                try { state = Read(capability); }
-                catch (Exception error) when (!worldPinned && worldExpectations != null && LoadedButNotListed(error))
+        GameConnectionStatus? refused = null;
+        try
+        {
+            return ObservedWait.UntilWithReadBudget("the " + what, () =>
                 {
-                    actor.VerifyEnvironment(worldExpectations); // Throws for another world than the server's.
-                    worldPinned = true;
-                    state = Read(capability);
-                }
-                // A status left over from an earlier join stays until this one connects, so an error counts only once the menu was left.
-                left |= state.Phase != "menu" || state.ConnectionStatus == "Connecting";
-                return state;
-            },
-            state => state.WorldPresent && state.PlayerReady && state.ConnectionStatus == "Connected", actor.BusyReadTimeLeft("the " + what), ReadInterval, TimeSpan.FromMilliseconds(200), cancellation,
-            fails: state => state.LoadError ? "the game reports a world load error" : state.WorldPresent && state.WorldUid != worldUid ? "a different world is loaded"
-                : left && state.Phase == "menu" && state.ConnectionStatus.StartsWith("Error", StringComparison.Ordinal)
-                    ? $"the {what} failed: the client is back at its menu with {state.ConnectionStatus}. Nothing was retried" : null,
-            describe: state => $"phase {state.Phase}, connection {state.ConnectionStatus}");
+                    SessionState state;
+                    try { state = Read(capability); }
+                    catch (Exception error) when (!worldPinned && worldExpectations != null && LoadedButNotListed(error))
+                    {
+                        actor.VerifyEnvironment(worldExpectations); // Throws for another world than the server's.
+                        worldPinned = true;
+                        state = Read(capability);
+                    }
+                    // A status left over from an earlier join stays until this one connects, so an error counts only once the menu was left.
+                    left |= state.Phase != "menu" || state.ConnectionStatus == "Connecting";
+                    return state;
+                },
+                state => state.WorldPresent && state.PlayerReady && state.ConnectionStatus == "Connected", actor.BusyReadTimeLeft("the " + what), ReadInterval, TimeSpan.FromMilliseconds(200), cancellation,
+                fails: state => state.LoadError ? "the game reports a world load error" : state.WorldPresent && state.WorldUid != worldUid ? "a different world is loaded"
+                    : left && state.Phase == "menu" && state.ConnectionStatus.StartsWith("Error", StringComparison.Ordinal) ? UserJoinRefused(what, state.ConnectionStatus, plan, out refused, cancellation) : null,
+                describe: state => $"phase {state.Phase}, connection {state.ConnectionStatus}");
+        }
+        catch (WaitFailedException error) when (refused is { } status)
+        {
+            error.Data["connection.status"] = status.ToString(); // as an address join's refusal carries it
+            throw;
+        }
+    }
+
+    // A host or crossplay join that ended back at the menu with an error status: the one refusal wording, with the status the state
+    // already carries (#860).
+    private static string UserJoinRefused(string what, string statusName, ClientRunPlan? plan, out GameConnectionStatus? refused, CancellationToken cancellation)
+    {
+        GameConnectionStatus status;
+        refused = null;
+        try { status = ConnectionStatusReading.ParseStatus(statusName); }
+        catch (InvalidOperationException) { return $"the {what} failed: the client is back at its menu with {statusName}. Nothing was retried"; }
+        refused = status;
+        return $"the {what} failed: " + JoinRefusalText.Explain(status, plan?.PreparedBuild, plan?.PreparedJoinTarget,
+            status == GameConnectionStatus.ErrorVersion ? TargetLog(plan?.PreparedBuild, plan?.PreparedJoinTarget, cancellation) : null).TrimEnd('.');
     }
 
     // ValheimCLI's strict cli_expect refusal once a world is loaded that the pins do not list.

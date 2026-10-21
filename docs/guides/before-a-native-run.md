@@ -20,7 +20,7 @@ It checks this machine only and ends with `ELIGIBLE` or `REFUSED` and the reason
 valheim-test session check SESSION --hosts
 ```
 
-It ends with `READY` or a `REFUSED` line per problem.
+It ends with `READY` or a `REFUSED` line per problem. A `game version` refusal names both installs when they are on different Valheim network versions and could not join: update the older one in Steam (or SteamCMD for a dedicated server). When it says a version is unknown, the reason follows: verify the install's files when its `assembly_valheim.dll` is missing or unreadable, check the host link when the read timed out, and run the check again when the file changed while it was read.
 
 ### 2. Leave the runtime to the toolkit
 

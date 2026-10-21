@@ -16,6 +16,10 @@ public sealed record CampaignPreflightActor(string Name, string Kind, string Hos
     public string? CharactersDirectory { get; init; }
     /// <summary>A client's Steam <c>userdata</c> as the host check resolved it on its host; null before the host check.</summary>
     public string? SteamUserDataDirectory { get; init; }
+    /// <summary>The game version the install's <c>assembly_valheim.dll</c> declares, as the host check read it; null before the host check or when unread.</summary>
+    public string? GameVersion { get; init; }
+    /// <summary>The network version Valheim compares when a client joins, as the host check read it; null before the host check or when unknown.</summary>
+    public uint? NetworkVersion { get; init; }
 }
 
 /// <summary>A deterministic, read-only review of the locally selected actors and fixture.</summary>

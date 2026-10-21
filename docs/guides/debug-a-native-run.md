@@ -14,6 +14,8 @@ When a run refuses or fails, a client never reaches its menu or world, or `valhe
 |---|---|
 | `REFUSED: ...` | An input or the machine was refused, usually before the game started; `REFUSED.txt` in the output holds the reason |
 | `REFUSED client ...` | The preflight refused the client; fix it, or add `--server-only` |
+| `REFUSED client game version: ...` | The installs are on different Valheim network versions (update the older one), or a version could not be read (the line says why). A standalone `plan.json` run reports the same text as the error of its install step |
+| `... The game refused the join with ErrorVersion (3): ...` | A join refused at run time; the rest of the line names the versions or a mod's check ([refused joins](../reference/game-joins.md#a-join-the-game-refuses)) |
 | `PASS`, `SERVER_LOAD_PASS`, `SERVER_JOIN_PASS` | The run passed |
 | `FAIL`, `SERVER_LOAD_FAIL`, `SERVER_MODSET_AB_FAIL` | A step failed; read `result.json` |
 | `UNKNOWN (...)`, then `SERVER_LOAD_FAIL`, exit 3 | A host operation's outcome is unknown: neither a pass nor a mod failure |

@@ -25,7 +25,7 @@ internal static class FakeInstalls
     public static void Client(string root) => Write(root, Path.Combine("valheim_Data", "Managed"));
     private static void Write(string root, string managed)
     {
-        Keep(Path.Combine(root, managed, InstallPins.GameAssemblyName), "game build 1");
+        Keep(Path.Combine(root, managed, InstallPins.GameAssemblyName), GameAssembly());
         Keep(Path.Combine(root, managed, "assembly_utils.dll"), "utils build 1");
         Keep(Path.Combine(root, managed, "UnityEngine.dll"), "unity");
         Keep(Path.Combine(root, "BepInEx", "core", "BepInEx.dll"), "bepinex 5.4.23");
@@ -42,11 +42,54 @@ internal static class FakeInstalls
         Write(root, Path.Combine(GameLaunch.ClientMacBundle, "Contents", "Resources", "Data", "Managed"));
         MacLoader(root);
     }
-    private static void Keep(string path, string text)
+    private static void Keep(string path, string text) => Keep(path, System.Text.Encoding.UTF8.GetBytes(text));
+    private static void Keep(string path, byte[] content)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        if (!File.Exists(path)) File.WriteAllText(path, text);
+        if (!File.Exists(path)) File.WriteAllBytes(path, content);
     }
+
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte[]> Assemblies = new();
+    /// <summary>
+    /// A game assembly as Valheim's declares its build, and nothing else: a global <c>Version</c> with <c>const uint c_networkVersion</c>
+    /// and a static constructor that stores a decoy <c>GameVersion(0, 214, 301)</c> before <paramref name="gameVersion"/> in
+    /// <c>CurrentVersion</c>'s backing field, as the game's does, beside a nested decoy type also named <c>Version</c>.
+    /// Defaults to Valheim 1.0.17 (network version 40).
+    /// </summary>
+    public static byte[] GameAssembly(string gameVersion = "1.0.17", uint networkVersion = 40) => Emit(gameVersion, networkVersion);
+    /// <summary>A Valheim 1.0.17 game assembly whose <c>c_networkVersion</c> is <paramref name="networkConstant"/> (any const type), or a plain static field for null.</summary>
+    public static byte[] GameAssembly(object? networkConstant) => Emit("1.0.17", networkConstant);
+    private static byte[] Emit(string gameVersion, object? networkConstant) => Assemblies.GetOrAdd($"{gameVersion}|{networkConstant?.GetType().Name}:{networkConstant}", _ =>
+    {
+        var assembly = new System.Reflection.Emit.PersistedAssemblyBuilder(new System.Reflection.AssemblyName("assembly_valheim"), typeof(object).Assembly);
+        var module = assembly.DefineDynamicModule("assembly_valheim");
+        var gameVersionType = module.DefineType("GameVersion", System.Reflection.TypeAttributes.Public | System.Reflection.TypeAttributes.Sealed |
+            System.Reflection.TypeAttributes.SequentialLayout, typeof(ValueType));
+        var constructor = gameVersionType.DefineConstructor(System.Reflection.MethodAttributes.Public, System.Reflection.CallingConventions.Standard, [typeof(int), typeof(int), typeof(int)]);
+        constructor.GetILGenerator().Emit(System.Reflection.Emit.OpCodes.Ret);
+        var version = module.DefineType("Version", System.Reflection.TypeAttributes.Public | System.Reflection.TypeAttributes.Abstract);
+        if (networkConstant == null) version.DefineField("c_networkVersion", typeof(uint), System.Reflection.FieldAttributes.Public | System.Reflection.FieldAttributes.Static);
+        else version.DefineField("c_networkVersion", networkConstant.GetType(), System.Reflection.FieldAttributes.Public | System.Reflection.FieldAttributes.Static |
+            System.Reflection.FieldAttributes.Literal).SetConstant(networkConstant);
+        var first = version.DefineField("FirstVersionWithNetworkVersion", gameVersionType, System.Reflection.FieldAttributes.Public | System.Reflection.FieldAttributes.Static);
+        var current = version.DefineField("<CurrentVersion>k__BackingField", gameVersionType, System.Reflection.FieldAttributes.Private | System.Reflection.FieldAttributes.Static);
+        var il = version.DefineTypeInitializer().GetILGenerator();
+        foreach (var (field, parts) in new[] { (first, new[] { 0, 214, 301 }), (current, gameVersion.Split('.').Select(int.Parse).ToArray()) })
+        {
+            foreach (int part in parts) il.Emit(System.Reflection.Emit.OpCodes.Ldc_I4, part);
+            il.Emit(System.Reflection.Emit.OpCodes.Newobj, constructor);
+            il.Emit(System.Reflection.Emit.OpCodes.Stsfld, field);
+        }
+        il.Emit(System.Reflection.Emit.OpCodes.Ret);
+        var outer = module.DefineType("Decoys", System.Reflection.TypeAttributes.Public);
+        outer.DefineNestedType("Version", System.Reflection.TypeAttributes.NestedPublic).CreateType();
+        outer.CreateType();
+        gameVersionType.CreateType();
+        version.CreateType();
+        using var image = new MemoryStream();
+        assembly.Save(image);
+        return image.ToArray();
+    });
 }
 
 // Install, plugin and world pins.
@@ -73,7 +116,7 @@ public sealed class PinsTests : IDisposable
         // Neither a different game build nor a different profile loader can pass the same pin.
         File.WriteAllText(Path.Combine(Install, "valheim_Data", "Managed", InstallPins.GameAssemblyName), "changed game");
         Assert.Contains("game build differs", Assert.Throws<InvalidOperationException>(() => expected.Check(Install, profile, "client profile")).Message);
-        File.WriteAllText(Path.Combine(Install, "valheim_Data", "Managed", InstallPins.GameAssemblyName), "game build 1");
+        File.WriteAllBytes(Path.Combine(Install, "valheim_Data", "Managed", InstallPins.GameAssemblyName), FakeInstalls.GameAssembly());
         File.WriteAllText(Path.Combine(profile, "libdoorstop.dylib"), "changed doorstop");
         Assert.Contains("loader differs", Assert.Throws<InvalidOperationException>(() => expected.Check(Install, profile, "client profile")).Message);
     }

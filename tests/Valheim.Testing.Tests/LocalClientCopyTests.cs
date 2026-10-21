@@ -112,6 +112,38 @@ public sealed class LocalClientCopyTests : IDisposable
         Assert.Equal(before, Tree(source));
     }
 
+    // #860: a client a scenario opens on this machine is admitted to the run's builds where its install is listed for the copy:
+    // one the server cannot take is refused before anything is journalled or copied, and one that can carries its build.
+    [ClientHostFact] public async Task AClientTheServerCannotTakeIsRefusedBeforeItsCopyAndOneThatCanCarriesItsBuild()
+    {
+        string source = _rig.Game;
+        string assembly = InstallPins.GameAssembly(source);
+        File.WriteAllBytes(assembly, FakeInstalls.GameAssembly("1.0.20", 41));
+        var plan = Plan(source);
+        plan.CliManifest = CliSet();
+        string data = Path.Combine(_rig.Root, "versions");
+        using var journalDirectory = RunJournal.UseLocalDirectory(Path.Combine(data, "journal"));
+        using var run = RunJournal.UseRun("run-versions-" + Guid.NewGuid().ToString("N")[..8]);
+        var builds = new GameVersionAgreement.Ledger();
+        builds.Admit(new("server", "pc", "/game", new GameBuild(40, "1.0.17", null)));
+
+        var refused = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            LocalClientCopy.PrepareAsync("client", plan, default, data, ThisMachine(), loader: (_, _) => null, builds: builds));
+        Assert.Contains("is Valheim 1.0.20 (network version 41), but server's install /game on pc is Valheim 1.0.17 (network version 40)", refused.Message);
+        Assert.False(Directory.Exists(Path.Combine(data, "runs")));
+        Assert.False(plan.Prepared);
+        Assert.Null(plan.PreparedBuild);
+
+        File.WriteAllBytes(assembly, FakeInstalls.GameAssembly("1.0.17", 40));
+        plan = Plan(source); // pinned to the install as it is now
+        plan.CliManifest = CliSet();
+        var copy = await LocalClientCopy.PrepareAsync("client", plan, default, data, ThisMachine(), loader: (_, _) => null, builds: builds);
+        Assert.Equal(new GameBuild(40, "1.0.17", null), plan.PreparedBuild);
+        Assert.Equal(plan.PreparedBuild, builds.Of("client"));
+        await copy.RetireAsync(verifySource: false);
+        Assert.Null(plan.PreparedBuild); // Restored with the rest of the plan: a reused plan reads its install again.
+    }
+
     [ClientHostFact] public async Task ASuppliedSourceValheimCliPinIsCheckedBeforeReplacement()
     {
         string source = _rig.Game;

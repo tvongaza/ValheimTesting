@@ -39,6 +39,18 @@ Nothing is retried. It returns a `JoinRefusal` with the status, its number (`Cod
 
 **Limit.** The game can overwrite an error with `ErrorDisconnected` when the connection closes after it. Check the status another mod's refusal leaves in a native run before you expect it.
 
+## A join the game refuses
+
+A join that was not meant to be refused names the reason. `JoinWorld` by address, `JoinHost` and a crossplay join all use the same wording. After ValheimCLI's `join_failed`, the address join re-pins the client at its menu, waits there within the plan's `joinSeconds` (at most 30 s) and reads `cli_connection_status` once. A host or crossplay join already reads the status in its wait. Nothing is retried, and an unreadable status keeps the original failure with why. A run cancelled during the read gets an `OperationCanceledException` whose inner exception is the refusal.
+
+```text
+valheim.session/join failed: join_failed: The game refused the session transition. The game refused the join with ErrorVersion (3): this client's install is Valheim 1.0.20 (network version 41) and server's is Valheim 1.0.17 (network version 40); Valheim refuses a join across network versions. Update the older install (Steam, or SteamCMD for a dedicated server). Server's own log refused this client's 1.0.20 (network version 41) as itself 1.0.17 (network version 40). Nothing was retried; the client is back at its menu.
+```
+
+- **Versions.** They come from what the run read of each install before staging. A mod's version check refuses with the same `ErrorVersion`, so a game mismatch is claimed only when the versions show one. Installs on one network version point at a mod's check instead. When a version was not read, for example an attached client's, the message says so. A server the run owns adds its own `has incompatible version` line for this client's network version, quoted by its versions only. It waits at most 5 s for that line, reading the end of a local log or the log on the server's host, and skips the read when both versions are known and equal.
+- **Other statuses.** Each one names its meaning, for example a wrong password (6), a full server (9) or the ban list (8).
+- **Classification.** A refused join's exception carries `connection.status` (for example `ErrorVersion`) whenever the status was read. An address join's also keeps ValheimCLI's `extension.code` (`join_failed`). Classify by those, not by the message.
+
 ## Crossplay (PlayFab)
 
 Clients join a crossplay server by its PlayFab id, not its address.

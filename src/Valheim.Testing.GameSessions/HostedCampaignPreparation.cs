@@ -130,6 +130,8 @@ public sealed class PreparedHostedCampaign : IAsyncDisposable
     }
     /// <summary>The campaign as it was read for this preparation: binding uses it, not the file read again later.</summary>
     internal HostedCampaignManifest Manifest { get; }
+    /// <summary>Each actor's install build as the host inspection read and decided it (#860), for the run's ledger.</summary>
+    internal IReadOnlyList<GameVersionAgreement.Side> Builds { get; init; } = [];
     /// <summary>The resolved environment the runner places the server and clients with; never written to a file.</summary>
     internal ResolvedEnvironment Environment => _profile;
     /// <summary>Records, as <c>&lt;actor&gt;ProfileLeftOut</c>, the root files each actor's profile left out of its game install (see <c>HostedRuntimeStage.ProfileLeftOut</c>).</summary>
@@ -329,6 +331,8 @@ public static class HostedCampaignPreparation
     {
         /// <summary>The pinned loader each actor that named none takes (#711), with its pin; its role's input already names it.</summary>
         public IReadOnlyDictionary<string, ShippedLoader.Choice> Loaders { get; init; } = new Dictionary<string, ShippedLoader.Choice>();
+        /// <summary>Each actor's install build as the inspection read and decided it (#860).</summary>
+        public IReadOnlyList<GameVersionAgreement.Side> Builds { get; init; } = [];
     }
 
     // The role's input with this loader package, a copy when it differs: the caller's declaration is never changed.
@@ -456,6 +460,7 @@ public static class HostedCampaignPreparation
         var sourceListings = new ConcurrentDictionary<string, HostListing>(StringComparer.Ordinal);
         var characterDirectories = new ConcurrentDictionary<string, CharacterDirectories>(StringComparer.Ordinal);
         var loaders = new ConcurrentDictionary<string, ShippedLoader.Choice>(StringComparer.Ordinal);
+        var builds = new ConcurrentDictionary<string, GameBuild>(StringComparer.Ordinal);
         // The run journal of every host the campaign touches (#257): no other run is going there or left something it owns.
         var owners = await InspectJournalsAsync(inputs, failures, timeout, hostFactory, cancellation,
             skipLocal: skipLocalChecks).ConfigureAwait(false);
@@ -528,92 +533,109 @@ public static class HostedCampaignPreparation
             }
             await Task.WhenAll(group.Select(async item =>
             {
-                if (!localHost)
-                    try
-                    {
-                        await HostInstall.RequirePortFreeAsync(host, item.Role.CliPort, timeout, cancellation).ConfigureAwait(false);
-                    }
-                    catch (Exception error) when (HostCheckRefusal(error))
-                    { failures.Add(new(item.Name, "ValheimCLI port", error.Message)); }
-                if (!inspection.Report.Problems.Any(problem => problem.Actor == item.Name && problem.Input == "loader"))
+                // The build the listed install runs, for the one cross-actor version decision below (#860): read from the moment the
+                // install is listed, beside this actor's other checks, and always awaited before the actor's check ends. A failure of
+                // the checks themselves is the one reported: the read is then only waited for.
+                Task build = Task.CompletedTask;
+                async Task ReadBuildAsync(HostListing listing) =>
+                    builds[item.Name] = await GameVersionAgreement.ReadAsync(host, listing, timeout, cancellation).ConfigureAwait(false);
+                try { await CheckActorAsync().ConfigureAwait(false); }
+                catch
                 {
-                    try
-                    {
-                        // An actor that names no loader package runs on the pinned one on Windows and Linux, as server-load's do (#711);
-                        // its install's own loader is never read.
-                        string? loaderPackage = item.Input.LoaderPackage;
-                        if (loaderPackage == null && shippedLoader != null &&
-                            shippedLoader(item.Name, $"{group.Key}:{item.Role.Install}", inputs.Profile.Hosts[group.Key].Platform) is { } choice)
-                        {
-                            loaders[item.Name] = choice;
-                            loaderPackage = choice.Manifest;
-                        }
-                        var loader = loaderPackage == null ? null : BepInExLoaderPackage.Read(loaderPackage);
-                        if (item.Name == "server" && inputs.Profile.Hosts[group.Key] is { Kind: "ssh", Platform: "macos" })
-                        {
-                            if (loader == null) throw new InvalidDataException("A remote Mac server needs one pinned native arm64 loader package.");
-                            loader.RequireNativeMacServer();
-                            if (item.Input.SteamRuntimePackage == null)
-                                throw new InvalidDataException("A remote Mac server needs a pinned SteamCMD runtime package from #495.");
-                        }
-                        sourceListings[item.Name] = await HostedRuntimeStage.InspectSourceAsync(host,
-                            item.Name == "server" ? HostedRuntimeKind.Server : HostedRuntimeKind.Client,
-                            item.Role.Install, loader, timeout, cancellation).ConfigureAwait(false);
-                        // Use the same slice check as one-shot start/server-load, with the loader the host
-                        // inspection actually selected. Session check --hosts must refuse before any copy.
-                        if (item.Name != "server" && inputs.Profile.Hosts[group.Key] is { Kind: "local", Platform: "macos" } && hostFactory == null)
-                            RequireLocalMacClientArchitecture(item.Input, item.Role, loaderPackage);
-                        if (item.Name != "server" && inputs.Profile.Hosts[group.Key] is { Kind: "ssh", Platform: "macos" })
-                        {
-                            string selected = ClientArchitectureChoice.Select(item.Input.Architecture, item.Role.Architecture,
-                                "macos", null);
-                            var architecture = selected == "arm64" ? ClientArchitecture.Arm64 : ClientArchitecture.X64;
-                            await RemoteMacClientPreflight.RequireGameAsync(host, item.Role.Install, architecture, timeout, cancellation).ConfigureAwait(false);
-                            if (loader != null) RemoteMacClientPreflight.SelectPackage(loader, architecture);
-                            else await RemoteMacClientPreflight.SelectLoaderAsync(host, item.Role.Install, architecture, timeout, cancellation).ConfigureAwait(false);
-                        }
-                    }
-                    catch (Exception error) when (HostCheckRefusal(error))
-                    { failures.Add(new(item.Name, "game and loader", error.Message)); }
-                    // A run never makes macOS show a dialog: a bundle macOS would call damaged is refused here, read only.
-                    if (item.Name != "server" && sourceListings.TryGetValue(item.Name, out var listed) && MacAppBundle.IsMacClient(listed))
+                    await build.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+                    throw;
+                }
+                await build.ConfigureAwait(false);
+                async Task CheckActorAsync()
+                {
+                    if (!localHost)
                         try
                         {
-                            // Bundle assessment can take longer than an ordinary host probe. Use the same
-                            // default client-start budget as the local one-shot path.
-                            var bundle = await MacAppBundle.InspectAsync(host, item.Role.Install,
-                                HostedTimeouts.MacBundleAssessment(timeout), cancellation).ConfigureAwait(false);
-                            if (MacBundleInspection.SourceRefusal(bundle) is { } refusal) failures.Add(new(item.Name, "macOS app bundle", refusal));
+                            await HostInstall.RequirePortFreeAsync(host, item.Role.CliPort, timeout, cancellation).ConfigureAwait(false);
                         }
                         catch (Exception error) when (HostCheckRefusal(error))
-                        { failures.Add(new(item.Name, "macOS app bundle", error.Message)); }
-                }
-                if (item.Name == "server") return;
-                var folders = inputs.Characters.TryGetValue(item.Name, out var character) ? ResolveFoldersAsync(character) : Task.CompletedTask;
-                async Task ResolveFoldersAsync(HostedCharacterSelection selection)
-                {
+                        { failures.Add(new(item.Name, "ValheimCLI port", error.Message)); }
+                    if (!inspection.Report.Problems.Any(problem => problem.Actor == item.Name && problem.Input == "loader"))
+                    {
+                        try
+                        {
+                            // An actor that names no loader package runs on the pinned one on Windows and Linux, as server-load's do (#711);
+                            // its install's own loader is never read.
+                            string? loaderPackage = item.Input.LoaderPackage;
+                            if (loaderPackage == null && shippedLoader != null &&
+                                shippedLoader(item.Name, $"{group.Key}:{item.Role.Install}", inputs.Profile.Hosts[group.Key].Platform) is { } choice)
+                            {
+                                loaders[item.Name] = choice;
+                                loaderPackage = choice.Manifest;
+                            }
+                            var loader = loaderPackage == null ? null : BepInExLoaderPackage.Read(loaderPackage);
+                            if (item.Name == "server" && inputs.Profile.Hosts[group.Key] is { Kind: "ssh", Platform: "macos" })
+                            {
+                                if (loader == null) throw new InvalidDataException("A remote Mac server needs one pinned native arm64 loader package.");
+                                loader.RequireNativeMacServer();
+                                if (item.Input.SteamRuntimePackage == null)
+                                    throw new InvalidDataException("A remote Mac server needs a pinned SteamCMD runtime package from #495.");
+                            }
+                            sourceListings[item.Name] = await HostedRuntimeStage.InspectSourceAsync(host,
+                                item.Name == "server" ? HostedRuntimeKind.Server : HostedRuntimeKind.Client,
+                                item.Role.Install, loader, timeout, cancellation).ConfigureAwait(false);
+                            build = ReadBuildAsync(sourceListings[item.Name]);
+                            // Use the same slice check as one-shot start/server-load, with the loader the host
+                            // inspection actually selected. Session check --hosts must refuse before any copy.
+                            if (item.Name != "server" && inputs.Profile.Hosts[group.Key] is { Kind: "local", Platform: "macos" } && hostFactory == null)
+                                RequireLocalMacClientArchitecture(item.Input, item.Role, loaderPackage);
+                            if (item.Name != "server" && inputs.Profile.Hosts[group.Key] is { Kind: "ssh", Platform: "macos" })
+                            {
+                                string selected = ClientArchitectureChoice.Select(item.Input.Architecture, item.Role.Architecture,
+                                    "macos", null);
+                                var architecture = selected == "arm64" ? ClientArchitecture.Arm64 : ClientArchitecture.X64;
+                                await RemoteMacClientPreflight.RequireGameAsync(host, item.Role.Install, architecture, timeout, cancellation).ConfigureAwait(false);
+                                if (loader != null) RemoteMacClientPreflight.SelectPackage(loader, architecture);
+                                else await RemoteMacClientPreflight.SelectLoaderAsync(host, item.Role.Install, architecture, timeout, cancellation).ConfigureAwait(false);
+                            }
+                        }
+                        catch (Exception error) when (HostCheckRefusal(error))
+                        { failures.Add(new(item.Name, "game and loader", error.Message)); }
+                        // A run never makes macOS show a dialog: a bundle macOS would call damaged is refused here, read only.
+                        if (item.Name != "server" && sourceListings.TryGetValue(item.Name, out var listed) && MacAppBundle.IsMacClient(listed))
+                            try
+                            {
+                                // Bundle assessment can take longer than an ordinary host probe. Use the same
+                                // default client-start budget as the local one-shot path.
+                                var bundle = await MacAppBundle.InspectAsync(host, item.Role.Install,
+                                    HostedTimeouts.MacBundleAssessment(timeout), cancellation).ConfigureAwait(false);
+                                if (MacBundleInspection.SourceRefusal(bundle) is { } refusal) failures.Add(new(item.Name, "macOS app bundle", refusal));
+                            }
+                            catch (Exception error) when (HostCheckRefusal(error))
+                            { failures.Add(new(item.Name, "macOS app bundle", error.Message)); }
+                    }
+                    if (item.Name == "server") return;
+                    var folders = inputs.Characters.TryGetValue(item.Name, out var character) ? ResolveFoldersAsync(character) : Task.CompletedTask;
+                    async Task ResolveFoldersAsync(HostedCharacterSelection selection)
+                    {
+                        try
+                        {
+                            // Given folders are checked, left-out ones resolved, on the client's own host.
+                            var directories = await HostedCharacterStage.ResolveDirectoriesAsync(host,
+                                selection.Input, timeout, cancellation).ConfigureAwait(false);
+                            if (directories.Missing != null) failures.Add(new(item.Name, "character folders", directories.Missing));
+                            else characterDirectories[item.Name] = directories;
+                        }
+                        catch (Exception error) when (HostCheckRefusal(error))
+                        { failures.Add(new(item.Name, "character folders", error.Message)); }
+                    }
                     try
                     {
-                        // Given folders are checked, left-out ones resolved, on the client's own host.
-                        var directories = await HostedCharacterStage.ResolveDirectoriesAsync(host,
-                            selection.Input, timeout, cancellation).ConfigureAwait(false);
-                        if (directories.Missing != null) failures.Add(new(item.Name, "character folders", directories.Missing));
-                        else characterDirectories[item.Name] = directories;
+                        // The client's Steam identity is the one signed in on its host, never one written in a file.
+                        var observed = await SteamSignedInUsers.ReadAsync(host, timeout, cancellation).ConfigureAwait(false);
+                        if (observed.State != SteamSignedInState.Matches || observed.AccountId is not { } id)
+                            throw new InvalidOperationException($"Client {item.Name} has no verifiable signed-in Steam identity on {host.Name}.");
+                        observedSteamIds[item.Name] = SteamPoolAccount.SteamId64(id);
                     }
                     catch (Exception error) when (HostCheckRefusal(error))
-                    { failures.Add(new(item.Name, "character folders", error.Message)); }
+                    { failures.Add(new(item.Name, "Steam identity", error.Message)); }
+                    finally { await folders.ConfigureAwait(false); }
                 }
-                try
-                {
-                    // The client's Steam identity is the one signed in on its host, never one written in a file.
-                    var observed = await SteamSignedInUsers.ReadAsync(host, timeout, cancellation).ConfigureAwait(false);
-                    if (observed.State != SteamSignedInState.Matches || observed.AccountId is not { } id)
-                        throw new InvalidOperationException($"Client {item.Name} has no verifiable signed-in Steam identity on {host.Name}.");
-                    observedSteamIds[item.Name] = SteamPoolAccount.SteamId64(id);
-                }
-                catch (Exception error) when (HostCheckRefusal(error))
-                { failures.Add(new(item.Name, "Steam identity", error.Message)); }
-                await folders.ConfigureAwait(false);
             })).ConfigureAwait(false);
         });
         var hostsChecked = Task.WhenAll(hostChecks);
@@ -624,15 +646,21 @@ public static class HostedCampaignPreparation
         foreach (var shared in observedSteamIds.GroupBy(account => account.Value, StringComparer.Ordinal).Where(group => group.Count() > 1))
             failures.Add(new("clients", "Steam identities", "Clients " + string.Join(", ", shared.Select(account => account.Key).Order(StringComparer.Ordinal)) +
                 " use the same signed-in Steam account; choose different client environments before launch."));
+        // Valheim refuses a join across network versions: every actor's install must agree before anything is staged (#860).
+        var sides = inputs.Roles.Select(item => new GameVersionAgreement.Side(item.Name,
+            item.Role.Host, item.Role.Install, builds.GetValueOrDefault(item.Name))).ToArray();
+        foreach (var problem in GameVersionAgreement.Decide(sides)) failures.Add(problem);
         // The roles' inputs name the chosen loader from here, so preparation applies it like one the campaign named.
         for (int i = 0; i < inputs.Roles.Count; i++)
             if (loaders.TryGetValue(inputs.Roles[i].Name, out var chosen))
                 inputs.Roles[i] = (inputs.Roles[i].Name, inputs.Roles[i].Role, WithLoader(inputs.Roles[i].Input, chosen.Manifest));
         var actors = inspection.Report.Actors.Select(actor => characterDirectories.TryGetValue(actor.Name, out var directories)
-            ? actor with { CharactersDirectory = directories.Characters, SteamUserDataDirectory = directories.UserData } : actor).ToArray();
+            ? actor with { CharactersDirectory = directories.Characters, SteamUserDataDirectory = directories.UserData } : actor)
+            .Select(actor => builds.TryGetValue(actor.Name, out var build)
+                ? actor with { GameVersion = build.GameVersion, NetworkVersion = build.NetworkVersion } : actor).ToArray();
         return new HostInspection(new CampaignPreflightReport(failures.OrderBy(problem => problem.Actor, StringComparer.Ordinal)
             .ThenBy(problem => problem.Input, StringComparer.Ordinal).ToArray()) { Actors = actors, Detected = inspection.Report.Detected },
-            observedSteamIds, sourceListings, characterDirectories) { Loaders = loaders };
+            observedSteamIds, sourceListings, characterDirectories) { Loaders = loaders, Builds = sides };
     }
 
     /// <summary>
@@ -1066,7 +1094,7 @@ public static class HostedCampaignPreparation
                 })).ConfigureAwait(false);
             })).ConfigureAwait(false);
             return new PreparedHostedCampaign(manifest, profile, listings, loaderListings, selections, copies.ToArray(),
-                stagedCharacters.ToArray(), hostFactory, timeout, journal, profileLeftOut, sourceChecks);
+                stagedCharacters.ToArray(), hostFactory, timeout, journal, profileLeftOut, sourceChecks) { Builds = readiness.Builds };
         }
         catch (Exception original)
         {

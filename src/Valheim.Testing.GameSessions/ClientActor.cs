@@ -126,16 +126,21 @@ internal sealed class LocalClientPlacement : IClientPlacement
     private bool _closed;
     // Test seam: the copy, in place of LocalClientCopy.PrepareAsync.
     internal Func<string, ClientRunPlan, CancellationToken, Task<LocalClientCopy>>? PrepareCopy { get; init; }
+    /// <summary>The run's builds (#860): an owned client's install is admitted where it is listed for its copy, or read in place.</summary>
+    internal GameVersionAgreement.Ledger? Builds { get; init; }
 
     public ClientSession Open(string name, ClientRunPlan plan, string output, CancellationToken cancellation)
     {
         if (plan.Owned && plan.InPlace)
+        {
             // Run in place: nothing is staged, so the only conflict to rule out first is a Valheim that already runs here.
             HostedRuntimeStage.RequireStoppedAsync(new LocalGameHost("this machine", HostShell.ThisMachine),
                 LocalClientCopy.StepTimeout, cancellation, clientSession: true).GetAwaiter().GetResult();
+            if (Builds != null) plan.PreparedBuild = Builds.AdmitInPlaceAsync(name, plan.Install, cancellation).GetAwaiter().GetResult();
+        }
         else if (plan.CopySource)
         {
-            var made = (PrepareCopy ?? ((actor, client, token) => LocalClientCopy.PrepareAsync(actor, client, token)))(name, plan, cancellation).GetAwaiter().GetResult();
+            var made = (PrepareCopy ?? ((actor, client, token) => LocalClientCopy.PrepareAsync(actor, client, token, builds: Builds)))(name, plan, cancellation).GetAwaiter().GetResult();
             bool closed;
             lock (_copies) { closed = _closed; if (!closed) _copies.Add((made, plan, [])); }
             if (closed)

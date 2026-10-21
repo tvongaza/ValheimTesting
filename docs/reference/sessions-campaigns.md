@@ -56,11 +56,14 @@ valheim-test session check SESSION [--hosts] [--json]
 | Manifest, locks, characters, fixture, inventory | Yes | Yes |
 | Actor placement | Yes | Yes |
 | Installs, loaders, ports and free space on each host | | Yes |
+| Every actor's install on one Valheim network version | | Yes |
 | Signed-in Steam accounts, and the account playing elsewhere | | Yes |
 | Every host's run journal, the lease host's included | | Yes |
 | Conflicting games | | Yes |
 
 It reports every independent problem in one pass and never copies or launches anything. It refuses while another run is `LIVE` on one of the campaign's hosts, left something there or on the lease host, or may still run elsewhere. A Valheim client already running where a campaign client needs the desktop session is a conflict.
+
+With `--hosts`, each actor's line shows the game and network version its install's `assembly_valheim.dll` declares, read on its host. Valheim refuses a join when the network versions differ, so a mismatch is a `REFUSED ... game version` line naming both installs. That often happens when Steam updates the client before the dedicated server. When two or more actors run, a version it cannot read is refused too: Steam app or build IDs never stand in for it. Campaign preparation and `server-load` refuse the same way before anything is staged. A standalone `plan.json` run makes the same decision where it reads each install: its declared owned clients first, in place, then the server's install before its profile is staged, and a client a scenario opens where its install is listed for its copy. A refused join names the reason anyway ([refused joins](game-joins.md#a-join-the-game-refuses)).
 
 <!-- TODO(docs): capture output of `valheim-test session check SESSION --hosts` -->
 
