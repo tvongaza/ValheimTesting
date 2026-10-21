@@ -32,14 +32,13 @@ try
     switch (args[0])
     {
         case "preflight":
-            try
-            {
-                foreach (var arm in regression.Preflight())
-                    foreach (string line in arm.Describe()) Console.WriteLine(line);
-                Console.WriteLine("PREFLIGHT PASSED; nothing was launched. Review the arms' commits and hashes above before the run.");
-                return 0;
-            }
-            finally { regression.Remove(); }
+            var arms = regression.Preflight();
+            // Preflight retires a failed stage itself. Retire a successful one before printing its snapshots.
+            regression.Remove();
+            foreach (var arm in arms)
+                foreach (string line in arm.Describe()) Console.WriteLine(line);
+            Console.WriteLine("PREFLIGHT PASSED; nothing was launched. Review the arms' commits and hashes above before the run.");
+            return 0;
         default:
             var report = regression.Run(args[2], args[3], Scenario.Name, Scenario.Rounds, Scenario.Measure, cancel.Token);
             regression.Remove(report, args[3]);
@@ -47,9 +46,10 @@ try
             return report.Passed ? 0 : 1;
     }
 }
-catch (Exception error) when (error is ArgumentException or InvalidOperationException or IOException or InvalidDataException or System.Text.Json.JsonException)
+catch (Exception error) when (error is ArgumentException or InvalidOperationException or IOException or InvalidDataException or System.Text.Json.JsonException or AggregateException)
 {
     // Refused before anything launched: the message names what to change.
-    Console.Error.WriteLine("REFUSED: " + error.Message);
+    Console.Error.WriteLine("REFUSED: " + (error is AggregateException aggregate
+        ? string.Join(Environment.NewLine, aggregate.Flatten().InnerExceptions.Select(failure => failure.Message)) : error.Message));
     return 3;
 }

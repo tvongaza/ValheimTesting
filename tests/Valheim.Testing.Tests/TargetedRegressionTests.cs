@@ -460,6 +460,190 @@ public sealed class TargetedRegressionTests : IDisposable
         Directory.Delete(_rig.Install);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ACompletedArmRetainsItsProfileUntilTheConsumerRecordsRetirement(bool scenarioFails)
+    {
+        var (host, scope) = InProcess(); using var _ = scope;
+        var regression = _rig.Regression(_rig.Manifest(), skipHostLock: false);
+        string output = Path.Combine(_rig.Root, "consumer-arm");
+        var report = RunConsumer(regression, output, round => round.Step("the mod behavior", () =>
+        {
+            if (scenarioFails) throw new InvalidDataException("deliberate behavior failure");
+        }));
+
+        Assert.True(report.ScenarioPassed == !scenarioFails, string.Join("; ", report.Steps.Where(step => !step.Passed).Select(step => step.Name + ": " + step.Error)));
+        Assert.Contains(report.Steps, step => step.Name.EndsWith("the mod behavior", StringComparison.Ordinal) && step.Passed == !scenarioFails);
+        Assert.True(Directory.Exists(regression.Install));
+        Assert.NotEmpty(host.Claims.Except(host.Releases));
+        regression.Remove(report, output);
+        Assert.Equal(!scenarioFails, report.Passed);
+        Assert.True(report.CleanupVerified);
+        Assert.Equal("removed", report.Provenance["disposableInstall"]);
+        Assert.False(Directory.Exists(regression.Install));
+        Assert.Empty(host.Claims.Except(host.Releases));
+        int retired = host.Runs.Count(run => run.Script == "cleanup-stage");
+        regression.Remove();
+        Assert.Equal(retired, host.Runs.Count(run => run.Script == "cleanup-stage"));
+    }
+
+    [Fact] public void AReportWriteFailureStillRetiresTheProfileAndReleasesTheLock()
+    {
+        var (host, scope) = InProcess(); using var _ = scope;
+        var regression = _rig.Regression(_rig.Manifest(), skipHostLock: false);
+        string output = Path.Combine(_rig.Root, "blocked-report");
+        var error = Record.Exception(() => RunConsumer(regression, output, _ => { },
+            () => Directory.CreateDirectory(Path.Combine(output, "result.json"))));
+
+        Assert.NotNull(error);
+        Assert.True(error is IOException or UnauthorizedAccessException, error.ToString());
+        Assert.Contains("result.json", error.Message);
+        Assert.False(Directory.Exists(regression.Install));
+        Assert.Empty(host.Claims.Except(host.Releases));
+        regression.Remove();
+    }
+
+    [Fact] public void ReportWriteAndRetirementFailuresAreBothKeptWithoutAnAutomaticRetry()
+    {
+        var (host, scope) = InProcess(); using var _ = scope;
+        var regression = _rig.Regression(_rig.Manifest(), skipHostLock: false);
+        string output = Path.Combine(_rig.Root, "blocked-report-and-cleanup");
+        var error = Assert.Throws<AggregateException>(() => RunConsumer(regression, output, _ => { }, () =>
+        {
+            Directory.CreateDirectory(Path.Combine(output, "result.json"));
+            host.Failures["cleanup-stage"] = FakeServerHost.TransportFailure;
+        }));
+
+        Assert.Contains(error.InnerExceptions, failure => failure.Message.Contains("result.json", StringComparison.Ordinal));
+        Assert.Contains(error.InnerExceptions, failure => failure.Message.Contains("Connection refused", StringComparison.Ordinal));
+        Assert.Single(host.Runs.Where(run => run.Script == "cleanup-stage"));
+        Assert.True(Directory.Exists(regression.Install));
+        Assert.NotEmpty(host.Claims.Except(host.Releases));
+        // An explicit later cleanup can proceed after the injected fault is resolved; the failed attempt kept ownership.
+        host.Failures.Clear();
+        regression.Remove();
+        Assert.False(Directory.Exists(regression.Install));
+        Assert.Empty(host.Claims.Except(host.Releases));
+    }
+
+    [Fact] public void PreflightAndRetirementFailuresKeepTheOriginalRefusalAndAttemptCleanupOnce()
+    {
+        var (host, scope) = InProcess(); using var _ = scope;
+        var inputs = _rig.Manifest();
+        inputs.Client.Character = "missing-character";
+        var regression = _rig.Regression(inputs, skipHostLock: false);
+        host.Failures["cleanup-stage"] = FakeServerHost.TransportFailure;
+
+        var error = Assert.Throws<AggregateException>(() => regression.Preflight());
+
+        Assert.Contains(error.InnerExceptions, failure => failure.Message.Contains("missing-character", StringComparison.Ordinal));
+        Assert.Contains(error.InnerExceptions, failure => failure.Message.Contains("Connection refused", StringComparison.Ordinal));
+        Assert.Single(host.Runs.Where(run => run.Script == "cleanup-stage"));
+        Assert.True(Directory.Exists(regression.Install));
+        Assert.NotEmpty(host.Claims.Except(host.Releases));
+        host.Failures.Clear();
+        regression.Remove();
+    }
+
+    [Fact] public void AFailedRetirementWhileReplacingAnArmIsNotRetriedByTheStageFailureGuard()
+    {
+        var (host, scope) = InProcess(); using var _ = scope;
+        var regression = _rig.Regression(_rig.Manifest(), skipHostLock: false);
+        regression.Stage("parent");
+        host.Failures["cleanup-stage"] = FakeServerHost.TransportFailure;
+
+        var error = Assert.Throws<HostOperationException>(() => regression.Stage("candidate"));
+
+        Assert.Contains("Connection refused", error.Message);
+        Assert.Single(host.Runs.Where(run => run.Script == "cleanup-stage"));
+        Assert.True(Directory.Exists(regression.Install));
+        Assert.NotEmpty(host.Claims.Except(host.Releases));
+        host.Failures.Clear();
+        regression.Remove();
+        Assert.False(Directory.Exists(regression.Install));
+        Assert.Empty(host.Claims.Except(host.Releases));
+    }
+
+    [Fact] public void SuccessfulReplacementDoesNotSuppressCleanupOfTheNewFailedStage()
+    {
+        var (host, scope) = InProcess(); using var _ = scope;
+        var inputs = _rig.Manifest();
+        var regression = _rig.Regression(inputs, skipHostLock: false);
+        regression.Stage("parent");
+        inputs.Client.Character = "missing-after-replacement";
+
+        var error = Assert.Throws<InvalidOperationException>(() => regression.Stage("candidate"));
+
+        Assert.Contains("missing-after-replacement", error.Message);
+        Assert.Equal(2, host.Runs.Count(run => run.Script == "cleanup-stage"));
+        Assert.False(Directory.Exists(regression.Install));
+        Assert.Empty(host.Claims.Except(host.Releases));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ReplacementIntegrityFailureReleasesTheRetiredProfilesLockOrPreservesItsReleaseFailure(bool releaseFails)
+    {
+        var (host, scope) = InProcess(); using var _ = scope;
+        string source = Path.Combine(_rig.Game, "notice.txt");
+        File.WriteAllText(source, "source baseline");
+        var regression = _rig.Regression(_rig.Manifest(), skipHostLock: false);
+        regression.Stage("parent");
+        File.AppendAllText(source, " changed during the arm");
+        if (releaseFails)
+            host.ReleaseLockResults.Enqueue(new HostLockResult(HostLockState.Unknown, null, "deliberate lock-release failure"));
+
+        var error = Record.Exception(() => regression.Stage("candidate"));
+
+        Assert.NotNull(error);
+        Assert.Contains("Source integrity failed", error.ToString());
+        Assert.Single(host.Runs.Where(run => run.Script == "cleanup-stage"));
+        Assert.False(Directory.Exists(regression.Install));
+        if (releaseFails)
+        {
+            Assert.IsType<AggregateException>(error);
+            Assert.Contains("deliberate lock-release failure", error.ToString());
+            Assert.NotEmpty(host.Claims.Except(host.Releases));
+            Assert.Empty(host.Releases); // The operation did not retry the failed release.
+            regression.Remove();
+        }
+        else Assert.IsType<IOException>(error);
+        Assert.Empty(host.Claims.Except(host.Releases));
+    }
+
+    [Fact] public void TheReportingRemovePreservesCleanupAndWriteFailuresTogether()
+    {
+        var (host, scope) = InProcess(); using var _ = scope;
+        var regression = _rig.Regression(_rig.Manifest(), skipHostLock: false);
+        regression.Stage("parent");
+        string output = Path.Combine(_rig.Root, "reporting-remove");
+        Directory.CreateDirectory(Path.Combine(output, "result.json"));
+        host.Failures["cleanup-stage"] = FakeServerHost.TransportFailure;
+        var report = new ScenarioReport("last arm");
+        report.Step("the behavior", () => { });
+
+        var error = Assert.Throws<AggregateException>(() => regression.Remove(report, output));
+
+        Assert.Contains(error.InnerExceptions, failure => failure.Message.Contains("Connection refused", StringComparison.Ordinal));
+        Assert.Contains(error.InnerExceptions, failure => failure.Message.Contains("result.json", StringComparison.Ordinal));
+        Assert.False(report.CleanupVerified);
+        Assert.StartsWith("kept, removal refused", report.Provenance["disposableInstall"]);
+        Assert.Single(host.Runs.Where(run => run.Script == "cleanup-stage"));
+        Assert.True(Directory.Exists(regression.Install));
+        host.Failures.Clear();
+        regression.Remove();
+    }
+
+    private ScenarioReport RunConsumer(TargetedRegression regression, string output, Action<ClientRound> measure, Action? afterStaged = null)
+    {
+        using var data = new FakeClientDataDirectory(_rig.Save);
+        return regression.Run("parent", output, "consumer", ["first"], measure, default, null,
+            (plan, directory, _, _) => ClientSession.Launch(plan, directory, () => new LocalFakeOwnedProcess(93), HostingClient,
+                (_, _) => Task.CompletedTask), afterStaged);
+    }
+
     [Fact] public void AnArmsCommitIsOptionalButNeverBlank()
     {
         var arm = new RegressionArm { File = Path.GetFullPath("/mods/My.dll"), Sha256 = new string('a', 64) };
@@ -1022,7 +1206,7 @@ internal sealed class RegressionRig : IDisposable
     };
 
     /// <summary>The regression of <paramref name="inputs"/> on the rig's client environment, with the rig's save folder.</summary>
-    public TargetedRegression Regression(RegressionInputs inputs, IEnumerable<string>? scenarioCapabilities = null) =>
+    public TargetedRegression Regression(RegressionInputs inputs, IEnumerable<string>? scenarioCapabilities = null, bool skipHostLock = true) =>
         new(inputs, scenarioCapabilities, Inventory())
         {
             SaveDirectory = Save, SteamUserData = SteamUserData,
@@ -1030,7 +1214,7 @@ internal sealed class RegressionRig : IDisposable
             DirectClientSession = () => (OperatingSystem.IsWindows(), 1),
             BundleInspection = (_, _) => new(MacBundleInspection.State.Accepted, 0, "synthetic test install"),
             ProcessCheck = (_, _) => Task.CompletedTask,
-            SkipHostLockForTest = true,
+            SkipHostLockForTest = skipHostLock,
             // The rig's fake installs keep their fake loader; the pinned pack's rule has its own tests (ShippedLoaderTests).
             PinnedLoader = (_, _) => null,
         };
