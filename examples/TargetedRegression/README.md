@@ -12,7 +12,7 @@ One owned client hosts one disposable fixture world with one mod under test. You
 | [Scenario.cs](Scenario.cs) | The rounds and assertions, the same on every machine | Yes: your mod's steps |
 | [regression.sample.json](regression.sample.json) | The files to stage, the fixture and the character | Yes: copy it outside the repository |
 
-The sample scenario tests FullLifecycle's ExampleMod and uses its test adapter as the probe. It checks that the mod's Harmony patch is applied. It also checks that `examplemod_mark` leaves exactly one pole where the host stands. Keep paths, ports and names out of `Scenario.cs`, so the source you ran is the source you can share.
+The sample scenario tests FullLifecycle's ExampleMod through ValheimCLI's own observations, so it stages no probe. It checks that the mod's Harmony patch is applied. It also checks that `examplemod_mark` leaves exactly one pole where the host stands. Keep paths, ports and names out of `Scenario.cs`, so the source you ran is the source you can share.
 
 **The machine is not in the file.** The client environment supplies three things: the game install (only read), the disposable profile folder and the client's ValheimCLI port. By default, that environment is this machine's detected Valheim. To pick another, add `--inventory environments.json --client-env NAME` after the command; see [this machine, with no file](../../docs/reference/game-inventory.md#this-machine-with-no-file). If you leave out `--inventory` and an `environments.json` sits beside `regression.json`, the tool uses that file. `valheim-test start` writes the same `regression.json`.
 
