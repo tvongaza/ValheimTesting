@@ -133,7 +133,9 @@ Recovery ends for every journal state of a profile's source install:
 | Settled by the run, its listing gone | Nothing to settle. Moved files the run had not kept yet go to `recovered-<actor>/source-changes-<id>/added` | The same |
 | Not settled, its listing gone | Names the install as not compared (`unknown`), keeps any moved files, and removes the profile | The same |
 | A listing whose SHA-256 or install differs from the journal's | Refuses: the profile stays, nothing is moved or removed. Check the install, then run `env teardown` | Names the install as not compared (`unknown`), keeps any moved files, and removes the profile |
-| The install is gone, now holds a link, or a settlement step is refused (a runtime inside the install, a recovered folder already there) | A finished `failed` verdict naming it and what to fix; the profile is removed, and moved files stay journalled kept | The same, and the kept moved files go |
+| The install is not reachable (an offline NAS, an unplugged volume) | Keeps the profile open: reconnect the install and recover again | Names the install as gone (a finished `failed` verdict) and removes the profile |
+| The install now holds a link, or a settlement step is refused (a runtime inside the install, a recovered folder already there) | A finished `failed` verdict naming it and what to fix; the profile is removed, and moved files stay journalled kept | The same, and the kept moved files go in the same pass |
+| A listing whose SHA-256 or install differs from the journal's, or that cannot be read (too large, unreadable) under `env teardown` | — | Names the install as not compared (`unknown`), keeps any moved files, and removes the profile |
 | A moved-files folder the run kept on purpose (past the size limits, or no evidence folder) | Left alone: it has its own kept entry | Removed |
 | The run kept the profile because its settlement did not finish | Refuses the run as kept | Settles the install, then removes the profile |
 | The settlement does not finish (a host fails or times out) | Keeps the profile open for the next `env recover` | The same |

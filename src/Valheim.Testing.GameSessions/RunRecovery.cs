@@ -596,6 +596,14 @@ internal static class RunRecovery
                             if (verdict.Added.Count != 0 || verdict.Verdict != SourceVerdictKind.Unchanged) leftHere.Add(recoveredIn);
                             Step(group.Key, $"source install of {verdict.Actor} ({verdict.Root})", verdict.Describe() +
                                 (verdict.Verdict == SourceVerdictKind.Unchanged ? "" : $"; evidence in {recoveredIn}"), failed: verdict.Fails);
+                            // A teardown removes what its own refused settlement journalled kept, in this pass: no second teardown.
+                            if (teardown)
+                                foreach (string folder in verdict.KeptFolders)
+                                {
+                                    await HostedRuntimeStage.RetireAsync(host, folder, "", timeout, cancellation, runId).ConfigureAwait(false);
+                                    await Note(group.Key, JournalEntry.Of(JournalEntry.CopyRetired, ("runtime", folder))).ConfigureAwait(false);
+                                    Step(group.Key, "copy " + folder, "removed (teardown requested)");
+                                }
                             verdict.RequireRetirable();
                         }
                         // The game's logs go with the copy: kept first, so a copy whose logs could not be kept stays (#412).

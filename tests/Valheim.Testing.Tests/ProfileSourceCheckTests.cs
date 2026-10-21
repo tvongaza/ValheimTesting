@@ -402,12 +402,58 @@ public sealed class ProfileSourceCheckTests : IDisposable
         Assert.Contains("now holds a link", linked.Reason);
         DirectoryLinks.Remove(Path.Combine(_root, "linked"));
 
+        // r4 item 0: an install that is not there may be an offline NAS or an unplugged volume: kept for a later settlement, except
+        // under env teardown, which removes the profile and names the install gone.
         Directory.Delete(_root, recursive: true);
-        var gone = await SettleAsync(check, Output + "-again");
+        var unreachable = await SettleAsync(check, Output + "-again");
+        Assert.Equal((SourceVerdictKind.Unknown, false), (unreachable.Verdict, unreachable.Settled));
+        Assert.Contains("not reachable", unreachable.Reason);
+        Assert.Throws<SourceProfileKeptException>(() => unreachable.RequireRetirable());
+        var gone = await check.SettleAsync(_host, SourceSettlement.Run("client", Runtime, Output + "-content") with { Teardown = true },
+            entry => { _journal.Add(entry); return Task.CompletedTask; }, TimeSpan.FromSeconds(60));
         Assert.Equal((SourceVerdictKind.Failed, true), (gone.Verdict, gone.Settled));
         Assert.Contains("is gone", gone.Reason);
         gone.RequireRetirable();
         Directory.CreateDirectory(_root);
+    }
+
+    // r4 item 6: any other listing failure (here the host times out) may pass: not compared, the profile kept, never a finished verdict.
+    [Fact]
+    public async Task AnInstallListingThatTimesOutKeepsTheProfile()
+    {
+        var host = new FakeServerHost("server-host", Path.Combine(_root + "-runs", "mirror"));
+        Directory.CreateDirectory(host.Local("/srv/game"));
+        File.WriteAllText(Path.Combine(host.Local("/srv/game"), "game.bin"), "game");
+        var check = ProfileSourceCheck.Prepare(await ProfileSourceCheck.InspectAsync(host, "/srv/game", TimeSpan.FromSeconds(30)), [], ProfileLayout.SourceExecutable);
+        host.Failures["list"] = new HostResult(HostOutcome.Unknown, null, "", "", TimeSpan.FromSeconds(30), true);
+
+        var verdict = await check.SettleAsync(host, SourceSettlement.Run("server", "/srv/runs/vt-prep-x/runtime", Output), _ => Task.CompletedTask, TimeSpan.FromSeconds(30));
+
+        Assert.Equal((SourceVerdictKind.Unknown, false), (verdict.Verdict, verdict.Settled));
+        Assert.Contains("before it compared", verdict.Reason);
+    }
+
+    // r4 item 3: under env teardown a baseline it cannot read (unreadable here; also one over the read limit) is not compared, and
+    // the teardown ends; env recover still stops on it.
+    [UnixFact]
+    public async Task AnUnreadableBaselineIsNotComparedByTeardown()
+    {
+        if (OperatingSystem.IsWindows() || Environment.UserName == "root") return; // root reads a mode 000 file
+        Write("game.bin", "game");
+        Directory.CreateDirectory(Parent);
+        var check = await PrepareAsync();
+        await PersistAsync(check);
+        var fields = _journal[0].Fields;
+        File.SetUnixFileMode(fields["baseline"], UnixFileMode.None);
+        try
+        {
+            await Assert.ThrowsAnyAsync<Exception>(() => RecoverAsync(fields));
+            var verdict = await RecoverAsync(fields, teardown: true);
+            Assert.Equal(SourceVerdictKind.Unknown, verdict!.Verdict);
+            Assert.Contains("cannot be read", verdict.Reason);
+            verdict.RequireRetirable();
+        }
+        finally { File.SetUnixFileMode(fields["baseline"], UnixFileMode.UserRead | UnixFileMode.UserWrite); }
     }
 
     // r3 item 2: a baseline that does not match its journal stays refused by env recover; env teardown finishes it, not compared,
@@ -437,14 +483,17 @@ public sealed class ProfileSourceCheckTests : IDisposable
 
     // r3 item 6: when the baseline is gone and adopting the moved files is refused, the recovery still ends: not compared, the
     // files named where they are.
-    [Fact]
-    public async Task ARefusedAdoptionOfAGoneBaselineStillEnds()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ARefusedAdoptionOfAGoneBaselineStillEnds(bool settledByTheRun)
     {
         Write("game.bin", "game");
         Directory.CreateDirectory(Parent);
         var check = await PrepareAsync();
         await PersistAsync(check);
-        var fields = _journal[0].Fields;
+        var fields = new Dictionary<string, string>(_journal[0].Fields);
+        if (settledByTheRun) fields["sourceVerdict"] = "Restored";
         File.Delete(fields["baseline"]);
         string id = Path.GetFileName(fields["sourceAdded"])[(ProfileSourceCheck.AddedFolder.Length + 1)..];
         Directory.CreateDirectory(Path.Combine(Recovered, "source-changes-" + id, "added"));
@@ -453,9 +502,12 @@ public sealed class ProfileSourceCheckTests : IDisposable
 
         var verdict = await RecoverAsync(fields);
 
-        Assert.Equal(SourceVerdictKind.Unknown, verdict!.Verdict);
+        // r4 item 2: a finished failure on either branch, never a Restored that did not happen; the folder stays, journalled kept.
+        Assert.Equal((SourceVerdictKind.Failed, true), (verdict!.Verdict, verdict.Settled));
         Assert.Contains("already exists", verdict.Reason);
         Assert.Equal(_host.Name + ":" + Path.Combine(check.MovedFilesFolder(Runtime), "preloader_1.log"), Assert.Single(verdict.Added).KeptAs);
+        Assert.Contains(_journal, entry => entry.Kind == JournalEntry.CopyKept && entry.Fields["runtime"] == check.MovedFilesFolder(Runtime));
+        Assert.Equal([check.MovedFilesFolder(Runtime)], verdict.KeptFolders);
     }
 
     // #612 r2 item 3: a moved-files folder the run kept on purpose (past the size limits, or no evidence folder) has its own kept

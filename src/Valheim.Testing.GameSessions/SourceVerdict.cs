@@ -64,6 +64,8 @@ internal sealed record SourceVerdict(string Actor, string Host, string Root, str
     [JsonIgnore] internal string? Profile { get; init; }
     /// <summary>Whether a recovery settled it: its kept profile stays open in the journal for the next <c>env recover</c>, not journalled kept.</summary>
     [JsonIgnore] internal bool InRecovery { get; init; }
+    /// <summary>The moved-files folders this settlement journalled kept, for a teardown to remove in the same pass.</summary>
+    [JsonIgnore] internal IReadOnlyList<string> KeptFolders { get; init; } = [];
 
     /// <summary>Whether the caller must keep the profile instead of retiring it: a settlement that did not finish (<see cref="Settled"/>).</summary>
     [JsonIgnore] internal bool KeepsProfile => !Settled;
@@ -172,6 +174,8 @@ internal sealed record SourceSettlement(string Actor, string Runtime, string? Ou
 {
     /// <summary>In a recovery: whether a moved-files folder has its own kept journal entry, so it is left to <c>env teardown</c>.</summary>
     internal Func<string, bool>? KeptApart { get; init; }
+    /// <summary>Under <c>env teardown</c>: an install that is not there is gone for good, a finished failure, not one to wait for.</summary>
+    internal bool Teardown { get; init; }
     internal static SourceSettlement Run(string actor, string runtime, string? output) => new(actor, runtime, output, null);
     internal static SourceSettlement Recovery(string actor, string runtime, string recoveredIn) => new(actor, runtime, null, recoveredIn);
     internal string Parent => HostPath.Parent(Runtime);

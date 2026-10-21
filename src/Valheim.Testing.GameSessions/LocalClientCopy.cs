@@ -58,20 +58,9 @@ internal sealed class LocalClientCopy
         var verdict = Volatile.Read(ref _sourceVerdict);
         if (verdict == null)
         {
-            try
-            {
-                verdict = await _sourceCheck.SettleAsync(_host, SourceSettlement.Run(_actor, _runtime, output ?? Output),
-                    entry => { _journal.AppendLocal(_actor, entry); return Task.CompletedTask; }, StepTimeout).ConfigureAwait(false);
-            }
-            catch (Exception error)
-            {
-                // Never retired without a recorded verdict: a settlement that threw before it compared anything is unknown, and its
-                // profile stays, journalled kept, for env teardown.
-                verdict = SourceVerdict.NotCompared(_actor, "the settlement failed before it compared the install: " + error.Message) with
-                { Settled = false, Profile = _runtime };
-                try { _journal.AppendLocal(_actor, JournalEntry.Of(JournalEntry.CopyKept, ("runtime", _runtime), ("why", "its source settlement did not finish"))); }
-                catch (Exception lost) { Console.Error.WriteLine($"Warning: could not journal {JournalEntry.CopyKept} for {_actor}: {lost.Message}"); }
-            }
+            // The owner never throws: a settlement that fails before it compares is an unknown verdict that keeps the profile.
+            verdict = await _sourceCheck.SettleAsync(_host, SourceSettlement.Run(_actor, _runtime, output ?? Output),
+                entry => { _journal.AppendLocal(_actor, entry); return Task.CompletedTask; }, StepTimeout).ConfigureAwait(false);
             if (Interlocked.CompareExchange(ref _sourceVerdict, verdict, null) != null) return;
             verdict.Record(report);
         }

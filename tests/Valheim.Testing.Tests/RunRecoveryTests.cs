@@ -456,6 +456,26 @@ public sealed class RunRecoveryTests : IDisposable
         Assert.False(Directory.Exists(_host.Local(moved)));
     }
 
+    // #612 r4 item 5: under env teardown the same refusal ends in one pass: the folder the refused settlement kept goes too.
+    [Fact]
+    public async Task ATeardownRemovesWhatItsOwnRefusedSettlementKeptInOnePass()
+    {
+        const string run = "run-refused-teardown", source = "/srv/game";
+        var check = await KilledWithBaselineAsync(run, source);
+        string moved = check.MovedFilesFolder(Prep + "/runtime");
+        Directory.CreateDirectory(_host.Local(moved));
+        File.WriteAllText(Path.Combine(_host.Local(moved), "preloader_1.log"), "moved before the kill");
+        string id = moved[(moved.LastIndexOf('/') + 1 + ProfileSourceCheck.AddedFolder.Length + 1)..];
+        Directory.CreateDirectory(_host.Local("/srv/runs/server/" + run + "/recovered-server/source-changes-" + id + "/added"));
+
+        var teardown = await RecoverAsync(run, teardown: true);
+
+        Assert.Contains(teardown.Steps, step => step.What == "copy " + moved && !step.Failed);
+        Assert.False(Directory.Exists(_host.Local(moved)));
+        Assert.False(Directory.Exists(_host.Local(Prep + "/runtime")));
+        Assert.Empty(Assert.Single((await StatusAsync()).Runs).Items);
+    }
+
     // #612 r3: a moved-files folder the run kept on purpose has its own kept entry. The recovery finds it by that entry, never adopts
     // it, and env teardown removes it.
     [Fact]
