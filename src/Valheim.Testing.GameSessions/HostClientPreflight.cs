@@ -113,16 +113,22 @@ internal static class HostClientPreflight
         printf 'VT-PREFLIGHT '; base64 < "$path" | tr -d '\n'; printf '\n'
         """.ReplaceLineEndings("\n");
     internal static readonly string PowerShellRead = """
-        # As the bash read: missing, then unreadable (or held open by another process), then too large.
+        # As the bash read: missing, then unreadable (or held open by another process: a sharing or lock violation, HResult
+        # 0x80070020 or 0x80070021), then too large. Any other I/O error fails as it is.
+        function Test-VtLocked($record) {
+            $e = $record.Exception
+            if ($e.InnerException) { $e = $e.InnerException }
+            return ($e.HResult -band 0xFFFF) -in 32, 33
+        }
         if (-not [IO.File]::Exists($path)) { 'VT-PREFLIGHT missing'; exit 0 }
         try { $stream = [IO.File]::OpenRead($path); $stream.Dispose() }
         catch [UnauthorizedAccessException] { 'VT-PREFLIGHT unreadable'; exit 0 }
-        catch [IO.IOException] { 'VT-PREFLIGHT locked'; exit 0 }
+        catch [IO.IOException] { if (Test-VtLocked $_) { 'VT-PREFLIGHT locked'; exit 0 } else { throw } }
         $file = New-Object IO.FileInfo $path
         if ($file.Length -gt [long]$limit) { 'VT-PREFLIGHT too-large'; exit 0 }
         try { $bytes = [IO.File]::ReadAllBytes($path) }
         catch [UnauthorizedAccessException] { 'VT-PREFLIGHT unreadable'; exit 0 }
-        catch [IO.IOException] { 'VT-PREFLIGHT locked'; exit 0 }
+        catch [IO.IOException] { if (Test-VtLocked $_) { 'VT-PREFLIGHT locked'; exit 0 } else { throw } }
         'VT-PREFLIGHT ' + [Convert]::ToBase64String($bytes)
         """.ReplaceLineEndings("\n");
 }
