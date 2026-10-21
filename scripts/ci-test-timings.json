@@ -20,6 +20,7 @@
   {"Name": "HostedServerRunTests.WindowsPwshReadsTheRemoteLoaderFilesForPreflight", "Seconds": {"Windows": 5.97}},
   {"Name": "InteractiveClientShellTests.AWindowsClientStartsThroughATaskInTheRunnersDesktopSession", "Seconds": {"Windows": 6.48}},
   {"Name": "LinkRuleTests.TheHostDecidesContainmentWithLinksResolved", "Seconds": {"Windows": 7.72}},
+  {"Name": "LocalClientCopyTests.AClientTheServerCannotTakeIsRefusedBeforeItsCopyAndOneThatCanCarriesItsBuild", "Seconds": {"Windows": 43.56}},
   {"Name": "LocalClientCopyTests.AShippedLoaderReplacesTheInstallsLoaderFilesInTheProfile", "Seconds": {"Windows": 9.71}},
   {"Name": "LocalClientCopyTests.AnExplicitClientConfigWithMutationAccessIsStagedUnchanged", "Seconds": {"Windows": 11.31}},
   {"Name": "LocalClientCopyTests.AnExplicitConfigWithoutMutationAccessRunsForAClientThatHostsItsOwnWorld", "Seconds": {"Windows": 11.73}},
