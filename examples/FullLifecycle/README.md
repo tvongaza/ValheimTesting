@@ -12,7 +12,7 @@ This example takes the mod from [ModWithTests](../ModWithTests/README.md) and te
 | Controlled integration | [ExampleMod.Tests](ExampleMod.Tests/) (`MarkerScenarioTests`) | The real scenario and client lifecycle code against scripted game replies: lost replies, save failure, a marker the client cannot see, the declared patch, cleanup | .NET 10 SDK |
 | Native system | [ExampleMod.Tests](ExampleMod.Tests/) (`ExampleSession`) with [ExampleMod](ExampleMod/) and [ExampleMod.TestAdapter](ExampleMod.TestAdapter/) | Disposable server and client profiles: check the mod's Harmony patch, join, enforce pins, protect and place the player, measure, save, restart, rejoin, measure again, stop owned processes, and report | A game install, Steam, a machine you may use |
 
-`dotnet run scripts/validate.cs` runs the scripted tests on every platform. The mod and the adapter build only where you have a game install. Set `ValheimPath` (or `VALHEIM_PATH`) to the game folder, and [tools/game-references](../../tools/game-references/README.md) supplies the references or names what is missing. Outside this repository, build the test project from the published package with `-p:GameSessionsPackageVersion=<version>` ([package table](../../docs/package-versions.md)).
+`dotnet run scripts/validate.cs` runs the scripted tests on every platform. The mod and the adapter build only where you have a game install. Set `ValheimPath` (or `VALHEIM_PATH`) to the game folder, and [tools/game-references](../../tools/game-references/README.md) supplies the references or names what is missing. For an independent mod folder, use the [package-only file maps](consumer/README.md).
 
 ## What belongs to the mod, and what to the toolkit
 
@@ -70,7 +70,7 @@ Set `hostDirectory` to a fresh, private, absolute path without spaces **on the c
 
 ## The native session
 
-[Test that a change survives a save, restart and rejoin](../../docs/guides/test-save-restart-rejoin.md) walks through the native layer: the dependency locks, `session.json`, the plan and the run. The test finds two private files beside the test project, `session.json` and `dry-site-lifecycle.plan.json`, which `.gitignore` lists. Without them, the native test is skipped with that reason, so `dotnet test` stays offline.
+[Test that a change survives a save, restart and rejoin](../../docs/guides/test-save-restart-rejoin.md) walks through a package-only consumer: generated dependency locks, campaign inputs, feature expectations and the run. The test finds two private files beside the test project, `session.json` and `dry-site-lifecycle.plan.json`, which `.gitignore` lists. Without them, the native test is skipped with that reason, so `dotnet test` stays offline.
 
 [GameSessionFixture.cs](ExampleMod.Tests/GameSessionFixture.cs) runs one session per test class and hands the started session and plan to the tests. Copy it as it is:
 
