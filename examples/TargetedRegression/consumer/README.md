@@ -1,6 +1,6 @@
 # Standalone marker consumer
 
-Copy these seven files into a new directory outside the ValheimTesting checkout. Select one repository revision before downloading the files. The relative source links follow that revision.
+Copy these seven files into a new directory outside the ValheimTesting checkout. Select the latest release tag on the repository's Releases page before downloading the files, so they match the pinned packages. The relative source links follow that revision.
 
 | Source | Destination | Purpose |
 |---|---|---|
@@ -18,7 +18,7 @@ Follow [Your first gameplay assertion](../../../docs/tutorials/first-gameplay-as
 
 ## A/B regression consumer
 
-For two builds of the same mod, copy these four files into a separate `MarkerRegression` directory. Use one repository revision for all four.
+For two builds of the same mod, copy these four files into a separate `MarkerRegression` directory. Download all four from the revision that holds this section; until a release tag includes it, that is `main`.
 
 | Source | Destination | Purpose |
 |---|---|---|

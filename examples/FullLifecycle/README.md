@@ -42,7 +42,7 @@ Set `hostDirectory` to a fresh, private, absolute path without spaces **on the c
 
 ## The native session
 
-The [persistence guide](../../docs/guides/test-save-restart-rejoin.md) uses the thin package-only entry. To use xUnit instead, copy the complete [scripted/native test map](consumer/README.md#scripted-lifecycle-tests).
+The [persistence guide](../../docs/guides/test-save-restart-rejoin.md) uses the thin package-only entry. To use xUnit instead, copy the complete [scripted/native test map](consumer/README.md#scripted-lifecycle-tests). This checkout's native test instead finds two private files beside the test project, `session.json` ([the session manifest](../../docs/reference/sessions-campaigns.md#the-session-manifest), with one [dependency lock](../../docs/reference/game-run-inputs.md#resolve-mod-dependencies) per role) and `dry-site-lifecycle.plan.json`, which `.gitignore` lists. Without them, the native test is skipped with that reason, so `dotnet test` stays offline; each run writes its [evidence](../../docs/reference/evidence.md) under `session-runs/` in the test output.
 
 The xUnit entry reads private `session.json` and `dry-site-lifecycle.plan.json` beside the test project. Without them, it skips the native test. [ExampleSession](ExampleMod.Tests/ExampleSession.cs) reads the declared mode from that plan; the filename remains the same for either mode.
 

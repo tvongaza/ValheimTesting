@@ -42,7 +42,7 @@ public sealed partial class HostedServerRunTests
             return Task.CompletedTask;
         }, plain.Client, new ScriptedTransport())));
         // Today's steps, exactly: nothing is leased and no account is recorded.
-        Assert.Equal(new[] { "enough free disk space for the copies", "check the Linux profile storage", "take the server host's lock", "check the server host's install against the pinned runtime and stage its profile", "copy and verify pinned world", "ship and verify the world copy on the server host",
+        Assert.Equal(new[] { "the world fixture is one complete world", "enough free disk space for the copies", "check the Linux profile storage", "take the server host's lock", "check the server host's install against the pinned runtime and stage its profile", "copy and verify pinned world", "ship and verify the world copy on the server host",
                 "server runtime has the plan's server executable", "server runtime is the pinned game build, loader and patchers",
                 "CLI port is free on the server host", "open the loopback CLI tunnel to the server host", "start and verify owned dedicated fixture", "stop only owned server",
                 "fetch the server host's world copy", "verify server's source install after the run (size and modified time)",

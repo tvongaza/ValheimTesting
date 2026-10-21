@@ -42,16 +42,16 @@ Complete [Your first gameplay assertion](../tutorials/first-gameplay-assertion.m
 
 ### 1. Copy the example
 
-Download the [four-file package consumer](../../examples/TargetedRegression/consumer/README.md#ab-regression-consumer) into `MarkerRegression`, outside the toolkit checkout. Choose one source revision. Keep `Program.cs` and `Scenario.cs` unchanged.
+Download the [four-file package consumer](../../examples/TargetedRegression/consumer/README.md#ab-regression-consumer) into `MarkerRegression`, outside the toolkit checkout. Download all four from the same revision as that page. Keep `Program.cs` and `Scenario.cs` unchanged.
 
-The project builds with published `0.1.0`. Reliable retirement after report-write failure requires an unreleased correction. Native excerpts use candidate packages; published release verification remains pending. <!-- TODO(docs): refresh against published 0.2 after #899 -->
+The project builds with the published packages it pins.
 
 ### 2. Fill in regression.json
 
-From your independent mod directory, build each real source commit:
+From the directory where you ran [Your first gameplay assertion](../tutorials/first-gameplay-assertion.md) (it holds `tools/` and `MarkerMod/`), build each real source commit:
 
-```sh
-valheim-test build --project MarkerMod/MarkerMod.csproj
+```powershell
+.\tools\valheim-test.exe build --project MarkerMod/MarkerMod.csproj
 ```
 
 Each build prints `Built mod:` and `Build inputs:` paths. Retain both output directories. Use the [deliberately buggy parent](../../examples/TargetedRegression/consumer/README.md#deliberately-buggy-parent), then restore the production line and build the candidate. Record both source commits and each build's `ModSha256` from `build-inputs.json`.
@@ -122,7 +122,7 @@ Keep full logs, plans and saves private. [Regression bundle](../../tools/regress
 
 ## Limits
 
-Native excerpts use `0.1.0-candidate.9b409d3f735a` from [this source revision](https://github.com/tvongaza/ValheimTesting/blob/364d1b63d5e52d430c5cdf736da64bbf46df5923/examples/TargetedRegression/Program.cs), on Mac.
+Native excerpts use candidate packages built from [this source revision](https://github.com/tvongaza/ValheimTesting/blob/364d1b63d5e52d430c5cdf736da64bbf46df5923/examples/TargetedRegression/Program.cs), on Mac.
 
 Run the direct Windows consumer from an interactive desktop terminal. It has no SSH/session-0 desktop launch route.
 

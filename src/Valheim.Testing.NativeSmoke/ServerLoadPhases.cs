@@ -60,6 +60,7 @@ internal static class ServerLoadPhases
             if (!packaged)
             {
                 if (!Directory.Exists(fixture)) throw new DirectoryNotFoundException("The source world fixture is missing: " + fixture);
+                _ = FixtureBake.Inspect(fixture); // one complete world before any phase stages or copies anything
                 FixtureBake.RefuseOutput(output, fixture);
             }
             var phases = plan.Phases.Select((phase, index) =>

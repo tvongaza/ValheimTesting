@@ -9,8 +9,11 @@
   "world": {
     "source": "<full path of the fixture world>",
     "sha256": {
-      "worlds_local/Fixture.db": "<sha256>",
-      "worlds_local/Fixture.fwl": "<sha256>",
+      "worlds_local/Fixture/_main.1.fwl2": "<sha256>",
+      "worlds_local/Fixture/_main.1.db2": "<sha256>",
+      "worlds_local/Fixture/_main.1.chunks": "<sha256>",
+      "worlds_local/Fixture/_main.1.ok": "<sha256>",
+      "worlds_local/Fixture/00_00__0_1.chunk": "<sha256>",
       "adminlist.txt": "<sha256>"
     }
   },

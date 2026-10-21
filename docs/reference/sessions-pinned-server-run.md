@@ -63,7 +63,7 @@ A join password never goes in the plan. Set the variable that `passwordVariable`
 
 ## What a run does
 
-1. Refuses an existing output directory, checks the host, and checks the output drive has room for the world copy plus headroom (2 GB, or a tenth of the copy when that is larger). `freeBytesBeforeCopies` records what it saw.
+1. Refuses an existing output directory and a world fixture that is not one complete world in `worlds_local/` ([world fixture](game-preflight.md#what-the-preflight-catches)), checks the host, and checks the output drive has room for the world copy plus headroom (2 GB, or a tenth of the copy when that is larger). `freeBytesBeforeCopies` records what it saw.
 2. Takes the server host's lock, checks every supplied pin against the install, stages the server's [disposable profile](sessions-profiles.md), and binds the omitted pins from it. It then copies the world and checks it.
 3. Stops here for `validate`.
 4. Checks the CLI port, starts the server from the profile on the world copy, establishes test access on every boot, and runs the scenario.

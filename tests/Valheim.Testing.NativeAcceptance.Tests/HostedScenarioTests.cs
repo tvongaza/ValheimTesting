@@ -31,8 +31,12 @@ public sealed class HostedScenarioTests : IDisposable
     public HostedScenarioTests()
     {
         Directory.CreateDirectory(Fixture); Directory.CreateDirectory(Output); Directory.CreateDirectory(Path.Combine(Save, "worlds_local"));
-        File.WriteAllBytes(Path.Combine(Fixture, Name + ".fwl"), Metadata(Name, long.Parse(WorldUid, CultureInfo.InvariantCulture)));
-        File.WriteAllText(Path.Combine(Fixture, Name + ".db"), "fixture world");
+        // A Valheim 1.0 world folder as the game saves one: its save set (a chunk list of no chunks).
+        string world = Directory.CreateDirectory(Path.Combine(Fixture, Name)).FullName;
+        File.WriteAllBytes(Path.Combine(world, "_main.1.fwl2"), Metadata(Name, long.Parse(WorldUid, CultureInfo.InvariantCulture)));
+        File.WriteAllText(Path.Combine(world, "_main.1.db2"), "fixture world");
+        File.WriteAllBytes(Path.Combine(world, "_main.1.chunks"), [41, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        File.WriteAllBytes(Path.Combine(world, "_main.1.ok"), BitConverter.GetBytes(41));
         File.WriteAllText(HostLog, "[Info   :   BepInEx] Chainloader startup complete\n");
     }
 
@@ -174,7 +178,7 @@ public sealed class HostedScenarioTests : IDisposable
         Assert.Equal(2, _greetings); // Changed once for the check and set back once.
         Assert.Equal("hello", _greeting);
         Assert.Equal(Name, report.Provenance["hostWorld"]);
-        Assert.True(File.Exists(Path.Combine(report.Provenance["hostWorldEvidence"], Name + ".fwl")));
+        Assert.True(File.Exists(Path.Combine(report.Provenance["hostWorldEvidence"], Name, "_main.1.fwl2")));
         Assert.Empty(Directory.EnumerateFileSystemEntries(Path.Combine(Save, "worlds_local")));
     }
 

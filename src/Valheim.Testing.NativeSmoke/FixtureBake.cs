@@ -48,6 +48,18 @@ internal static class FixtureBake
         }
     }
 
+    /// <summary>
+    /// A <c>--world-fixture</c> as every route reads it before anything is staged: the world directory (the fixture itself, or its
+    /// <c>worlds_local/</c>), its baked manifest's path, and the one complete world in it (<see cref="WorldIdentity.Read"/>).
+    /// </summary>
+    internal static (string Worlds, string ManifestFile, WorldIdentity Identity) Inspect(string source)
+    {
+        source = Path.TrimEndingDirectorySeparator(Path.GetFullPath(source)); // C:\x\worlds_local\ is worlds_local too
+        string manifestFile = Path.Combine(Path.GetFileName(source) == "worlds_local" ? Path.GetDirectoryName(source)! : source, "fixture-manifest.json");
+        if (Directory.Exists(Path.Combine(source, "worlds_local"))) source = Path.Combine(source, "worlds_local");
+        return (source, manifestFile, WorldIdentity.Read(source));
+    }
+
     internal static Input Prepare(string? source, string outputRoot)
     {
         string target = Path.Combine(outputRoot, "world-source", "worlds_local");
@@ -56,12 +68,9 @@ internal static class FixtureBake
             DefaultSmokeWorld.PrepareServerSaveRoot(Path.Combine(outputRoot, "world-source"));
             return new Input(target, "packaged VTDefaultSmoke", WorldIdentity.Read(target), WorldFixture.Manifest(target));
         }
-        source = Path.GetFullPath(source);
-        string manifestFile = Path.Combine(Path.GetFileName(source) == "worlds_local" ? Path.GetDirectoryName(source)! : source, "fixture-manifest.json");
-        if (Directory.Exists(Path.Combine(source, "worlds_local"))) source = Path.Combine(source, "worlds_local");
+        (source, string manifestFile, var identity) = Inspect(source);
         if (ProtectedPaths.Contains(source, target) || ProtectedPaths.Contains(target, source))
             throw new IOException("The world fixture source and disposable run copy must be separate.");
-        var identity = WorldIdentity.Read(source);
         var manifest = WorldFixture.Manifest(source);
         if (File.Exists(manifestFile)) VerifyBakedManifest(manifestFile, identity, manifest);
         Directory.CreateDirectory(target);

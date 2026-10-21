@@ -12,7 +12,7 @@ Follow [Run an A/B regression](../../docs/guides/run-an-ab-regression.md) for th
 | [regression.sample.json](regression.sample.json) | Input shape | Your frozen inputs and mod builds |
 | [Package consumers](consumer/README.md) | Complete standalone file maps | One source revision per map |
 
-The marker scenario requires zero markers before `examplemod_mark`, then exactly one pole in the host's saved objects. It uses ValheimCLI's Harmony and object observations; it needs no ExampleMod.TestAdapter.
+The marker scenario checks that the mod's Harmony patch is applied, requires zero markers before `examplemod_mark`, then exactly one pole in the host's saved objects. It uses ValheimCLI's Harmony and object observations; it needs no ExampleMod.TestAdapter. If your mod has several dependencies, run the [dependency resolver](../../docs/reference/game-run-inputs.md#resolve-mod-dependencies) before you fill in `regression.json`.
 
 ## Which files come from where
 

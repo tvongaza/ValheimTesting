@@ -65,8 +65,7 @@ public sealed class CrossplayPlanTests : IDisposable
         {
             var machine = new LocalServerMachine(Path.Combine(root, "local-host"));
             string runtime = machine.InstallDirectory, world = Path.Combine(root, "world");
-            Directory.CreateDirectory(world);
-            File.WriteAllText(Path.Combine(world, "Test.db"), "world");
+            FakeInstalls.World(Path.Combine(world, "worlds_local"), "Test", 1);
             // The game's PlayFab library: Party.dll on Windows, libparty.so on Linux, which the host's ldd checks.
             string party = LocalServerMachine.Windows ? Path.Combine(runtime, "valheim_server_Data", "Plugins", "x86_64", "Party.dll")
                 : Path.Combine(runtime, "valheim_server_Data", "Plugins", "libparty.so");
@@ -135,7 +134,11 @@ public sealed class CrossplayPlanTests : IDisposable
 
     private static HostWorldPlan Host() => new()
     {
-        World = new() { Source = Path.GetFullPath("host-fixture"), Sha256 = new() { ["HostFixture.fwl"] = new string('a', 64), ["HostFixture.db"] = new string('b', 64) } },
+        World = new() { Source = Path.GetFullPath("host-fixture"), Sha256 = new()
+        {
+            ["HostFixture/_main.1.fwl2"] = new string('a', 64), ["HostFixture/_main.1.db2"] = new string('b', 64),
+            ["HostFixture/_main.1.chunks"] = new string('c', 64), ["HostFixture/_main.1.ok"] = new string('d', 64),
+        } },
         WorldUid = "4242",
     };
     private static ClientRunPlan HostingClient(Action<ClientRunPlan>? change = null)
@@ -152,7 +155,7 @@ public sealed class CrossplayPlanTests : IDisposable
         {
             p => p.Join = "127.0.0.1:2456", p => p.PasswordVariable = "SERVER_PASSWORD", p => p.Crossplay = true, p => p.Host = "client.example",
             p => p.HostWorld!.WorldUid = "", p => p.HostWorld!.WorldUid = "fixture", p => p.HostWorld!.World.Sha256.Clear(),
-            p => p.HostWorld!.World.Sha256["Other.fwl"] = new string('c', 64), p => p.HostWorld!.World.Source = "host-fixture",
+            p => p.HostWorld!.World.Sha256["Other/_main.0.fwl2"] = new string('c', 64), p => p.HostWorld!.World.Sha256.Remove("HostFixture/_main.1.ok"), p => p.HostWorld!.World.Source = "host-fixture",
             p => p.HostWorld!.SaveDirectory = "client-data", p => p.HostWorld!.SaveSeconds = 0, p => p.HostWorld!.SaveSeconds = 601,
             p => p.Pins.Remove("valheimCLI.valheimCLI"),
         })
