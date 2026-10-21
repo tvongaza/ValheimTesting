@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using System.Globalization;
-using System.Text.RegularExpressions;
 
 namespace Valheim.Testing.Game;
 
@@ -13,9 +12,9 @@ namespace Valheim.Testing.Game;
 public sealed class HostWorldPlan
 {
     /// <summary>
-    /// The fixture, in either layout the game (1.0.16) loads: a chunked save as Valheim 1.0 writes it, one directory
-    /// <c>&lt;name&gt;/</c> at the root holding <c>_main.&lt;n&gt;.fwl2</c> and its chunks; or the older pair, one
-    /// <c>&lt;name&gt;.fwl</c> at the root with its data beside it (<c>&lt;name&gt;.db</c>). Every entry is named for the world and pinned by SHA256 (<see cref="WorldFixture.Manifest"/>).
+    /// The fixture: one Valheim 1.0 world folder <c>&lt;name&gt;/</c> at the root, exactly as the game saved it (its
+    /// <c>_main.&lt;n&gt;</c> save set and chunk files), optionally with the game's <c>_backup_auto-</c> copies of it
+    /// (<see cref="WorldIdentity.Read"/>). Every file is pinned by SHA256 (<see cref="WorldFixture.Manifest"/>).
     /// </summary>
     public PinnedDirectory World { get; set; } = new();
     /// <summary>
@@ -35,8 +34,8 @@ public sealed class HostWorldPlan
     public int SaveSeconds { get; set; } = 120;
 
     /// <summary>
-    /// Refuses the section before anything is copied: a fixture without a manifest or name, no exact world UID, a relative save
-    /// directory or a save timeout out of range.
+    /// Refuses the section before anything is copied: a fixture without a manifest, a manifest that is not one complete world
+    /// by its file names (<see cref="HostedWorld.NameOf"/>), no exact world UID, a relative save directory or a save timeout out of range.
     /// </summary>
     public void Validate()
     {
@@ -50,8 +49,8 @@ public sealed class HostWorldPlan
     }
 
     /// <summary>
-    /// Before the fixture is copied: its files must still be the pinned ones (when the plan lists hashes), and the world its
-    /// own metadata states (<see cref="WorldIdentity.Read"/>) must have <see cref="WorldUid"/>. A world name reused for
+    /// Before the fixture is copied: its files must still be the pinned ones (when the plan lists hashes), they must be one
+    /// complete world as the game loads it, and the world its own metadata states (<see cref="WorldIdentity.Read"/>) must have <see cref="WorldUid"/>. A world name reused for
     /// another snapshot has another UID, and is refused here as the wrong fixture, naming the UID it holds, instead of after
     /// the game loaded it. Returns that identity.
     /// </summary>
@@ -81,7 +80,7 @@ public sealed class HostedWorld : IDisposable
     private readonly string _output;
     private string? _target;
 
-    /// <summary>The world's name, the stem of the fixture's <c>.fwl</c>: what <c>cli_start_host_world</c> starts.</summary>
+    /// <summary>The world's name, the fixture's world folder: what <c>cli_start_host_world</c> starts.</summary>
     public string Name { get; }
     public string WorldUid { get; }
     /// <summary>The client's <c>worlds_local</c> directory, a path on the client's host (<see cref="Host"/>).</summary>
@@ -103,31 +102,14 @@ public sealed class HostedWorld : IDisposable
         new(name, worldUid, worlds, copy, output, host, collect);
 
     /// <summary>
-    /// The world's name from a fixture's relative paths, in either layout the game loads: a chunked save (exactly one
-    /// directory <c>&lt;name&gt;/</c> at the root with a <c>_main.&lt;n&gt;.fwl2</c> in it, as Valheim 1.0 writes worlds) or the
-    /// older pair (exactly one <c>&lt;name&gt;.fwl</c> at the root). The name is at least 3 characters and a valid file name,
-    /// and every other entry is inside <c>&lt;name&gt;/</c> or named for it (<see cref="IsNamedFor"/>), so the placement's move-out
-    /// takes back everything it placed.
+    /// The world's name from a fixture's relative paths (a pinned manifest's keys, before any file is read): the one folder
+    /// <c>&lt;name&gt;/</c> at the root, as Valheim 1.0 saves a world. The paths follow <see cref="WorldIdentity.Read"/>'s layout
+    /// rules, which this applies by name alone: one complete save set and its chunk files in <c>&lt;name&gt;/</c>, optionally the
+    /// game's backup folders (<c>&lt;name&gt;_backup_auto-&lt;date&gt;/</c> and the like), and nothing else (so the placement's move-out takes back
+    /// everything it placed). A pre-1.0 <c>&lt;name&gt;.fwl</c> and <c>&lt;name&gt;.db</c> is refused. The name is at least 3
+    /// characters and a valid file name.
     /// </summary>
-    public static string NameOf(IEnumerable<string> relativePaths)
-    {
-        var paths = relativePaths.ToArray();
-        var worlds = paths.Where(path => path.IndexOfAny(['/', '\\']) < 0 && path.EndsWith(".fwl", StringComparison.OrdinalIgnoreCase)).ToArray();
-        var chunked = paths.Where(path => path.Split('/', '\\') is [_, var file] && Regex.IsMatch(file, @"^_main\.\d+\.fwl2$", RegexOptions.CultureInvariant))
-            .Select(path => path.Split('/', '\\')[0]).Distinct(StringComparer.Ordinal).ToArray();
-        if (worlds.Length + chunked.Length != 1)
-            throw new ArgumentException($"A host fixture holds exactly one world: one <name>/ directory with _main.<n>.fwl2 (Valheim 1.0's chunked save) or one <name>.fwl at its root, not {worlds.Length + chunked.Length}.");
-        string name = chunked.Length == 1 ? chunked[0] : worlds[0][..^".fwl".Length];
-        if (name.Length < 3 || name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 || name.IndexOfAny(['/', '\\', ':', '*', '?', '"', '<', '>', '|']) >= 0 || name.Any(char.IsWhiteSpace))
-            throw new ArgumentException($"The fixture world's name \"{name}\" must be at least 3 characters, one token and a valid file name on every platform.");
-        foreach (string path in paths)
-        {
-            string first = path.Split('/', '\\')[0];
-            if (!IsNamedFor(first, name)) throw new ArgumentException($"The host fixture holds {path}, which is not named for its world {name}; keep only the world's files.");
-        }
-        if (chunked.Length == 0 && paths.Length < 2) throw new ArgumentException($"The host fixture holds only {worlds[0]}: add the world's data ({name}.db), or the game generates the world afresh.");
-        return name;
-    }
+    public static string NameOf(IEnumerable<string> relativePaths) => WorldIdentity.Layout(relativePaths).Name;
 
     // Set only by Fakes.FakeClientDataDirectory: the innermost open scope, whose directory a no-game test's simulated client keeps.
     internal static readonly AsyncLocal<Fakes.FakeClientDataDirectory?> SimulatedClientData = new();
@@ -193,10 +175,10 @@ public sealed class HostedWorld : IDisposable
 
     /// <summary>
     /// Whether a <c>worlds_local</c> entry is one the game reads or writes for world <paramref name="name"/>: <c>&lt;name&gt;</c> (Valheim
-    /// 1.0's chunked save folder), <c>&lt;name&gt;.*</c> (<c>.fwl</c>, <c>.db</c> and their <c>.old</c> copies) or the game's backups
-    /// <c>&lt;name&gt;_backup*</c>, in any case: a hosting client runs on Windows or macOS, whose folders ignore case, so to the game
-    /// <c>campaign.fwl</c> is <c>Campaign.fwl</c>. A fixture holds only such entries; the hosting layer's placement refuses any of them
-    /// already there and its move-out takes exactly them (its host scripts select by this same rule).
+    /// 1.0's save folder), the game's backups <c>&lt;name&gt;_backup*</c>, or <c>&lt;name&gt;.*</c> (a world of that name the user still
+    /// holds from before Valheim 1.0, which a run never places), in any case: a hosting client runs on Windows or macOS, whose folders
+    /// ignore case, so to the game <c>campaign</c> is <c>Campaign</c>. The hosting layer's placement refuses any of them already there,
+    /// so a user's world is never used, and its move-out takes exactly them (its host scripts select by this same rule).
     /// </summary>
     internal static bool IsNamedFor(string entry, string name)
     {

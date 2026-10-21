@@ -74,7 +74,7 @@ public sealed partial class HostedServerRunTests
             host.JournalFailsFor = JournalEntry.CopyDone;
             return Task.CompletedTask;
         })));
-        Assert.True(File.Exists(Path.Combine(Output, "host-world", "worlds_local", "Test.db")));
+        Assert.True(File.Exists(Path.Combine(Output, "host-world", "worlds_local", "Test", "_main.1.db2")));
         Assert.True(File.Exists(Path.Combine(Output, "boot-1", "game-0.log")));
         foreach (string name in new[] { "world", "boot-1" })
         {

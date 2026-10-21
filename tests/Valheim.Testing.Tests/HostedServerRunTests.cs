@@ -441,8 +441,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         }
         File.WriteAllText(Path.Combine(install, "BepInEx", "core", "BepInEx.Preloader.dll"), "preloader");
         string world = Path.Combine(_root, "world");
-        Directory.CreateDirectory(Path.Combine(world, "worlds_local"));
-        File.WriteAllText(Path.Combine(world, "worlds_local", "Test.db"), "world");
+        FakeInstalls.World(Path.Combine(world, "worlds_local"), "Test", 1);
         var plan = new Dictionary<string, object>
         {
             ["scenario"] = "smoke",
@@ -815,7 +814,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.Equal(["devcommands", "confirmcheats", "devcommands", "confirmcheats"],
             server.Events.Where(e => e.StartsWith("devcommands") || e.StartsWith("confirmcheats")).Select(e => e.TrimEnd("0123456789".ToCharArray())));
         Assert.Same(host, seenHost); Assert.Equal(RunDirectory + "/runtime", seenRuntime);
-        Assert.Equal(new[] { "enough free disk space for the copies", "check the Linux profile storage", "take the server host's lock", StageStep, "copy and verify pinned world", "ship and verify the world copy on the server host",
+        Assert.Equal(new[] { "the world fixture is one complete world", "enough free disk space for the copies", "check the Linux profile storage", "take the server host's lock", StageStep, "copy and verify pinned world", "ship and verify the world copy on the server host",
                 "server runtime has the plan's server executable", "server runtime is the pinned game build, loader and patchers",
                 "CLI port is free on the server host", "open the loopback CLI tunnel to the server host", "start and verify owned dedicated fixture", "stop only owned server",
                 "fetch the server host's world copy", "verify server's source install after the run (size and modified time)",
@@ -874,7 +873,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.Equal(new[] { "launch1", "stop1", "launch2", "stop2" }, server.Events.Where(e => e.StartsWith("launch") || e.StartsWith("stop")));
         Assert.Contains("fake boot 1", File.ReadAllText(Path.Combine(Output, "boot-1", "game-0.log")));
         Assert.Contains("fake boot 2", File.ReadAllText(Path.Combine(Output, "boot-2", "game-0.log")));
-        Assert.True(File.Exists(Path.Combine(Output, "host-world", "worlds_local", "Test.db")));
+        Assert.True(File.Exists(Path.Combine(Output, "host-world", "worlds_local", "Test", "_main.1.db2")));
         // #194: the host's runtime copy went at teardown, under the lock; what the run changed in it came back.
         Assert.False(Directory.Exists(host.Local(RunDirectory + "/runtime")));
         Assert.False(Directory.Exists(host.Local(RunDirectory))); // fetched world and every boot retired under the same lock

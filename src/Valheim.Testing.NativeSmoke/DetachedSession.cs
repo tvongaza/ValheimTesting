@@ -77,6 +77,15 @@ internal static class DetachedSession
         if (!TryServerArgs(serverArgs, out string selectedOutput, out string reason))
         { error.WriteLine("Usage: " + Usage + "\nREFUSED: " + reason); return 2; }
 
+        // A world fixture is one complete world before anything is staged for the detached run (up to 4 GB of it).
+        int worldFixture = Array.IndexOf(serverArgs, "--world-fixture");
+        if (worldFixture >= 0)
+        {
+            try { _ = FixtureBake.Inspect(serverArgs[worldFixture + 1]); }
+            catch (Exception failure) when (failure is ArgumentException or IOException or InvalidDataException or UnauthorizedAccessException)
+            { error.WriteLine("REFUSED: " + failure.Message + " Nothing was staged."); return 3; }
+        }
+
         string run = RunJournal.NewRunId();
         try
         {

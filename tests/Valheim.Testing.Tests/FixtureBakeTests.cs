@@ -188,7 +188,6 @@ public sealed class FixtureBakeTests : IDisposable
         string world = Path.Combine(evidence, "host-world", "worlds_local", DefaultSmokeWorld.Name);
         byte[] other = OwnedRunPreflightTests.Metadata(changeUid ? input.Identity.Name : "AnotherWorld",
             changeUid ? input.Identity.Uid + 1 : input.Identity.Uid);
-        File.WriteAllBytes(Path.Combine(world, "_main.1.fwl2"), other);
         File.WriteAllBytes(Path.Combine(world, "_main.2.fwl2"), other);
         Assert.Throws<InvalidDataException>(() => FixtureBake.Export(evidence, Path.Combine(root, "baked"), input, EmptyBuild()));
     }
@@ -291,7 +290,9 @@ public sealed class FixtureBakeTests : IDisposable
         string host = mac ? Path.Combine(evidence, "mac-world-input", "host-world") : Path.Combine(evidence, "host-world");
         DefaultSmokeWorld.PrepareServerSaveRoot(host);
         string world = Path.Combine(host, "worlds_local", DefaultSmokeWorld.Name);
-        File.Copy(Path.Combine(world, "_main.1.fwl2"), Path.Combine(world, $"_main.{finalSave}.fwl2"));
+        // The game saved: its new set replaces the old one, as the game deletes the previous set once the new one is complete.
+        foreach (string part in new[] { "fwl2", "db2", "chunks", "ok" })
+            File.Move(Path.Combine(world, "_main.1." + part), Path.Combine(world, $"_main.{finalSave}.{part}"));
         var provenance = new Dictionary<string, string> { ["runId"] = "run-test", ["serverStopsClean"] = clean };
         if (saved != null) provenance["bakeSaveNumber"] = saved;
         File.WriteAllText(Path.Combine(evidence, "result.json"), JsonSerializer.Serialize(new { Passed = passed, CleanupVerified = cleanup, Provenance = provenance }));

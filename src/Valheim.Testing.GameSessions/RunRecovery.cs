@@ -476,8 +476,12 @@ internal static class RunRecovery
                     }
                     catch (Exception error) when (error is not OperationCanceledException) { Step(group.Key, what, "not retired: " + error.Message, failed: true); }
                 }
-                // What this recovery left in place on the host (a copy kept or not removed, logs it kept): a run folder holding one stays.
+                // What this recovery left in place on the host (a copy kept or not removed): a run folder holding one stays.
                 var leftHere = new List<string>();
+                // The evidence this recovery wrote into the run's folder on this host (game logs, a source settlement's moved files, a world
+                // moved out of a client's worlds). A recover leaves the folder holding it; a teardown retires the folder whole in this same pass,
+                // and the evidence with it, so it never keeps the folder open (#881).
+                var evidenceHere = new List<string>();
                 // What a source settlement moved out of an install and kept (ProfileSourceCheck): only teardown reaches it, and it goes whole.
                 async Task RemoveKeptMovedFilesAsync(string folder)
                 {
@@ -486,6 +490,12 @@ internal static class RunRecovery
                     await Note(group.Key, JournalEntry.Of(JournalEntry.CopyRetired, ("runtime", folder))).ConfigureAwait(false);
                     Step(group.Key, "copy " + folder, "removed (teardown requested)");
                 }
+                // What a step says of evidence it kept at path: under a teardown, a run folder of this host that holds it is removed
+                // with it, in this pass, unless something of the run stays in that folder.
+                string Fate(string path) => teardown && copies.Any(candidate => candidate.Fields.GetValueOrDefault("holds") == RunFolder.Holds &&
+                    new RunFolder(host, group.Key, RunJournal.DirectoryFor(hosts[group.Key]), candidate.Fields.GetValueOrDefault("parent") ?? "", runId,
+                        (_, _) => Task.CompletedTask).Contains(path))
+                    ? "; the run's folder holding it is removed in this teardown unless something of the run stays in it" : "";
                 foreach (var copy in copies)
                 {
                     string what = $"copy {copy.What}";
@@ -503,7 +513,8 @@ internal static class RunRecovery
                             if (folder.Path != copy.What) throw new InvalidDataException("its journalled parent is not the folder's own");
                             // While what it holds is not settled it stays open in the journal, for a later recovery.
                             string? openFor = Failed(group.Key) ? "an earlier recovery step on this host failed"
-                                : leftHere.FirstOrDefault(folder.Contains) is { } inside ? "this recovery left " + inside + " in it" : null;
+                                : leftHere.FirstOrDefault(folder.Contains) is { } inside ? "this recovery left " + inside + " in it"
+                                : !teardown && evidenceHere.FirstOrDefault(folder.Contains) is { } evidence ? "this recovery left " + evidence + " in it" : null;
                             if (openFor != null)
                             {
                                 Step(group.Key, what, "not removed: " + openFor);
@@ -525,9 +536,10 @@ internal static class RunRecovery
                                 }
                                 removed = "nothing was left in it";
                             }
+                            var withIt = teardown ? evidenceHere.Where(folder.Contains).Distinct(StringComparer.Ordinal).ToList() : [];
                             await HostedRuntimeStage.RetireAsync(host, copy.What, "", timeout, cancellation, runId).ConfigureAwait(false);
                             await Note(group.Key, JournalEntry.Of(JournalEntry.CopyRetired, ("runtime", copy.What))).ConfigureAwait(false);
-                            Step(group.Key, what, $"removed ({removed})");
+                            Step(group.Key, what, $"removed ({removed})" + (withIt.Count == 0 ? "" : $", with the evidence this teardown kept in it: {string.Join(", ", withIt)}"));
                             continue;
                         }
                         // A hosted world in a campaign client's own worlds (#258 step 8b; this machine's too, #807): moved out into the run's
@@ -536,9 +548,9 @@ internal static class RunRecovery
                         {
                             string keepIn = copy.Fields["keepIn"];
                             var moved = await HostedWorldOnHost.RecoverAsync(host, copy.Fields, copy.What, runId, timeout, cancellation).ConfigureAwait(false);
-                            if (moved.Count != 0) leftHere.Add(keepIn);
+                            if (moved.Count != 0) evidenceHere.Add(keepIn);
                             Step(group.Key, what, moved.Count == 0 ? "nothing left in the client's worlds"
-                                : $"moved out of the client's worlds into {keepIn} (the run's confirmed placement, world UID {copy.Fields["worldUid"]} as journalled, handed over): {string.Join(", ", moved)}");
+                                : $"moved out of the client's worlds into {keepIn} (the run's confirmed placement, world UID {copy.Fields["worldUid"]} as journalled, handed over): {string.Join(", ", moved)}{Fate(keepIn)}");
                             await Note(group.Key, JournalEntry.Of(JournalEntry.CopyRetired, ("runtime", copy.What), ("handedOver", "true"), ("keptIn", keepIn))).ConfigureAwait(false);
                             continue;
                         }
@@ -598,9 +610,9 @@ internal static class RunRecovery
                             entry => journal.AppendAsync(host, RunJournal.DirectoryFor(hosts[group.Key]), Actor, entry, timeout, cancellation),
                             timeout, cancellation).ConfigureAwait(false) is { } verdict)
                         {
-                            if (verdict.Added.Count != 0 || verdict.Verdict != SourceVerdictKind.Unchanged) leftHere.Add(recoveredIn);
+                            if (verdict.Added.Count != 0 || verdict.Verdict != SourceVerdictKind.Unchanged) evidenceHere.Add(recoveredIn);
                             Step(group.Key, $"source install of {verdict.Actor} ({verdict.Root})", verdict.Describe() +
-                                (verdict.Verdict == SourceVerdictKind.Unchanged ? "" : $"; evidence in {recoveredIn}"), failed: verdict.Fails);
+                                (verdict.Verdict == SourceVerdictKind.Unchanged ? "" : $"; evidence in {recoveredIn}" + Fate(recoveredIn)), failed: verdict.Fails);
                             verdict.RequireRetirable();
                             // A teardown removes what its own refused settlement journalled kept, in this pass: no second teardown.
                             if (teardown) foreach (string folder in verdict.KeptFolders) await RemoveKeptMovedFilesAsync(folder).ConfigureAwait(false);
@@ -612,9 +624,9 @@ internal static class RunRecovery
                         {
                             throw new IOException($"its game logs could not be kept, so it stays ({error.Message}); recover again once they can be, or remove it by hand", error);
                         }
-                        if (logs.Kept.Count != 0) leftHere.Add(logs.Folder);
+                        if (logs.Kept.Count != 0) evidenceHere.Add(logs.Folder);
                         await HostedRuntimeStage.RetireAsync(host, copy.What, stage, timeout, runId: runId).ConfigureAwait(false);
-                        Step(group.Key, what, logs.Describe());
+                        Step(group.Key, what, logs.Describe() + (logs.Kept.Count == 0 ? "" : Fate(logs.Folder)));
                         await Note(group.Key, JournalEntry.Of(JournalEntry.CopyRetired,
                             [("runtime", copy.What), .. logs.Kept.Count == 0 ? Array.Empty<(string, string)>() : [("logsKeptIn", logs.Folder)]])).ConfigureAwait(false);
                     }

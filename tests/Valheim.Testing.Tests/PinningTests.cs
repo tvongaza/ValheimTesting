@@ -11,16 +11,56 @@ using Valheim.Testing.GameSessions;
 internal static class FakeInstalls
 {
     public static void Server(string root) => Write(root, Path.Combine("valheim_server_Data", "Managed"));
-    /// <summary>A world fixture directory with one .fwl header (version 41, the name, seed and UID the campaign reviews) and a .db.</summary>
-    public static string World(string directory, string name = "Campaign", long uid = 4242L, string seed = "AbCdEf1234")
+    /// <summary>
+    /// A complete Valheim 1.0 world <c>&lt;name&gt;/</c> in <paramref name="directory"/>, as the game saves one: save
+    /// <paramref name="save"/>'s <c>_main.&lt;n&gt;.fwl2</c> (version 41, the name, seed and UID the campaign reviews), <c>.db2</c>,
+    /// <c>.chunks</c> listing one chunk, <c>.ok</c> and that chunk file.
+    /// </summary>
+    public static string World(string directory, string name = "Campaign", long uid = 4242L, string seed = "AbCdEf1234", int save = 1)
     {
-        Directory.CreateDirectory(directory);
+        string world = Path.Combine(directory, name);
+        Directory.CreateDirectory(world);
+        File.WriteAllBytes(Path.Combine(world, $"_main.{save}.fwl2"), Metadata(name, uid, seed));
+        File.WriteAllText(Path.Combine(world, $"_main.{save}.db2"), "fixture");
+        File.WriteAllBytes(Path.Combine(world, $"_main.{save}.chunks"), ChunkList((0, 0, 1)));
+        File.WriteAllBytes(Path.Combine(world, $"_main.{save}.ok"), BitConverter.GetBytes(41));
+        File.WriteAllText(Path.Combine(world, ChunkFile), "chunk");
+        return directory;
+    }
+    /// <summary>The game's automatic backup of the world <see cref="World"/> wrote, beside it: <c>&lt;name&gt;_backup_auto-&lt;stamp&gt;/</c> holding save 0.</summary>
+    public static string Backup(string directory, string name = "Campaign", long uid = 4242L, string stamp = "20261020-120000")
+    {
+        string backup = Path.Combine(directory, name + "_backup_auto-" + stamp);
+        Directory.CreateDirectory(backup);
+        File.WriteAllBytes(Path.Combine(backup, "_main.0.fwl2"), Metadata(name, uid));
+        File.WriteAllText(Path.Combine(backup, "_main.0.db2"), "backup");
+        File.WriteAllBytes(Path.Combine(backup, "_main.0.chunks"), ChunkList());
+        File.WriteAllBytes(Path.Combine(backup, "_main.0.ok"), BitConverter.GetBytes(41));
+        return directory;
+    }
+    /// <summary>The chunk file <see cref="World"/> writes and its <c>.chunks</c> lists.</summary>
+    public const string ChunkFile = "00_00__0_1.chunk";
+    /// <summary>
+    /// World metadata (<c>.fwl2</c>) as the game's package writes it (BinaryWriter): version 41, name, seed name, seed, UID, the
+    /// world-generation version and whether the world has saved data (false only for a world never saved).
+    /// </summary>
+    public static byte[] Metadata(string name, long uid, string seed = "AbCdEf1234", bool needsDb = true)
+    {
         using var payload = new MemoryStream();
         using (var writer = new BinaryWriter(payload, System.Text.Encoding.UTF8, leaveOpen: true))
-        { writer.Write(41); writer.Write(name); writer.Write(seed); writer.Write(1234); writer.Write(uid); }
-        File.WriteAllBytes(Path.Combine(directory, name + ".fwl"), [.. BitConverter.GetBytes((int)payload.Length), .. payload.ToArray()]);
-        File.WriteAllText(Path.Combine(directory, name + ".db"), "fixture");
-        return directory;
+        { writer.Write(41); writer.Write(name); writer.Write(seed); writer.Write(1234); writer.Write(uid); writer.Write(2); writer.Write(needsDb); writer.Write(0); writer.Write(0); }
+        return [.. BitConverter.GetBytes((int)payload.Length), .. payload.ToArray()];
+    }
+    /// <summary>A <c>_main.&lt;n&gt;.chunks</c> listing these chunks (index, size, version), as the game writes one.</summary>
+    public static byte[] ChunkList(params (ushort Chunk, byte Size, uint Version)[] chunks)
+    {
+        using var payload = new MemoryStream();
+        using (var writer = new BinaryWriter(payload))
+        {
+            writer.Write((short)41); writer.Write(chunks.Length * 3); writer.Write(chunks.Length);
+            foreach (var (chunk, size, version) in chunks) { writer.Write(chunk); writer.Write(size); writer.Write(version); writer.Write(3); }
+        }
+        return payload.ToArray();
     }
     public static void Client(string root) => Write(root, Path.Combine("valheim_Data", "Managed"));
     private static void Write(string root, string managed)
@@ -326,8 +366,7 @@ public sealed class PinsTests : IDisposable
     }
     private string WritePlan(InstallPins? runtimePins = null, bool manifests = true)
     {
-        Directory.CreateDirectory(Path.Combine(World, "worlds_local"));
-        File.WriteAllText(Path.Combine(World, "worlds_local", "Test.db"), "world");
+        FakeInstalls.World(Path.Combine(World, "worlds_local"), "Test", 1);
         var plan = new Dictionary<string, object>
         {
             ["runtime"] = new { source = LocalServerMachine.Install, sha256 = manifests ? WorldFixture.Manifest(Runtime) : new Dictionary<string, string>() },

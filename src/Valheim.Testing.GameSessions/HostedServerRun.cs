@@ -379,10 +379,9 @@ internal sealed class HostedServerRun : IServerPlacement
         MacServer ? report.StepAsync(StepPhase.Setup, "place the pinned world in the Mac's default worlds", async () =>
         {
             await _runFolder.MakeAsync(cancellation).ConfigureAwait(false); // the world's stage and collection go in it
-            // A campaign's prepared server save root contains worlds_local; HostedWorldOnHost takes the
-            // contents of that folder, with the named world at its root.
-            string sourceWorlds = Directory.Exists(Path.Combine(localWorld, "worlds_local"))
-                ? Path.Combine(localWorld, "worlds_local") : localWorld;
+            // A server's world copy is its save root (ServerRunPlan.PreflightWorld; a campaign's prepared one too): HostedWorldOnHost
+            // takes the contents of its worlds_local, with the named world at its root.
+            string sourceWorlds = Path.Combine(localWorld, "worlds_local");
             var manifest = WorldFixture.Manifest(sourceWorlds);
             var identity = WorldIdentity.Read(sourceWorlds);
             var fixture = new HostWorldPlan
