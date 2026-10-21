@@ -2,6 +2,8 @@
   href: getting-started.md
 - name: Tutorials
   items:
+  - name: Your first gameplay assertion
+    href: tutorials/first-gameplay-assertion.md
   - name: Your first server load check
     href: tutorials/first-server-load-check.md
 - name: Guides

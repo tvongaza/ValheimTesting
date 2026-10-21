@@ -1,5 +1,7 @@
 # Targeted native regression
 
+For one assertion before an A/B comparison, use [Your first gameplay assertion](../../docs/tutorials/first-gameplay-assertion.md). It runs the same `Scenario.cs` through `MarkerOneShot.cs`.
+
 Check one fix in the real game. You run the same scenario on a parent build and a candidate build of your mod, then compare the two results.
 
 One owned client hosts one disposable fixture world with one mod under test. You fill in a short `regression.json` and run a preflight that never opens the game. Then you run each arm through the toolkit's strict-pinned hosted [`ClientRounds`](../../docs/reference/game-joins.md#hosted-listen-server-worlds) runner. For restarts, dedicated servers or several clients, use [FullLifecycle](../FullLifecycle/README.md).

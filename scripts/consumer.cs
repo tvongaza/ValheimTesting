@@ -258,6 +258,7 @@ try
     if (wrong > 0) return 1;
 
     TargetedRegression(config, cache, env);
+    MarkerOneShot(config, cache, env);
     Console.WriteLine($"A fresh consumer restored, built and ran this checkout's packages from {(local ? "the local feed" : "NuGet.org")} only.");
     return 0;
 }
@@ -296,6 +297,42 @@ void TargetedRegression(string config, string cache, Dictionary<string, string> 
         throw new InvalidOperationException($"TargetedRegression did not restore Valheim.Testing.GameSessions {version} from {expected} ({metadata}).");
     Run(env, directory, "dotnet", "build", "TargetedRegression.csproj", "-c", "Release", "--no-restore");
     Console.WriteLine($"ok   TargetedRegression builds outside the checkout from Valheim.Testing.GameSessions {version} on {(local ? "the local candidate feed" : "NuGet.org")}.");
+}
+
+// The tutorial's exact standalone file map: no repository imports or toolkit project references.
+// The marker builds only on a native host with the tool's staged game references; this no-game check builds its scenario.
+void MarkerOneShot(string config, string cache, Dictionary<string, string> env)
+{
+    string directory = Path.Combine(work, "marker-one-shot");
+    foreach (var (from, to) in new[]
+    {
+        ("examples/FullLifecycle/ExampleMod/Plugin.cs", "MarkerMod/Plugin.cs"),
+        ("examples/ModWithTests/MyMod/DrySiteRule.cs", "MarkerMod/DrySiteRule.cs"),
+        ("examples/TargetedRegression/Scenario.cs", "MarkerScenario/Scenario.cs"),
+        ("examples/TargetedRegression/MarkerOneShot.cs", "MarkerScenario/MarkerOneShot.cs"),
+        ("examples/TargetedRegression/consumer/MarkerMod/MarkerMod.csproj", "MarkerMod/MarkerMod.csproj"),
+        ("examples/TargetedRegression/consumer/MarkerScenario/MarkerScenario.csproj", "MarkerScenario/MarkerScenario.csproj"),
+        ("examples/TargetedRegression/consumer/NuGet.Config", "NuGet.Config"),
+    })
+    {
+        string destination = Path.Combine(directory, to);
+        Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+        File.Copy(Path.Combine(root, from), destination);
+    }
+    string project = Path.Combine(directory, "MarkerScenario", "MarkerScenario.csproj");
+    // Release builds use the copyable pin; local validation substitutes only its exact candidate package identity.
+    string version = manifest["Valheim.Testing.GameSessions"];
+    var document = System.Xml.Linq.XDocument.Load(project);
+    document.Descendants("PackageReference").Single(reference =>
+        (string?)reference.Attribute("Include") == "Valheim.Testing.GameSessions").SetAttributeValue("Version", "[" + version + "]");
+    document.Save(project);
+    Run(env, directory, "dotnet", "restore", project, "--configfile", config);
+    Run(env, directory, "dotnet", "build", project, "-c", "Release", "--no-restore");
+    string metadata = Path.Combine(cache, "valheim.testing.gamesessions", version.ToLowerInvariant());
+    string expected = local ? Path.GetFullPath(localFeed) : NuGetOrg;
+    if (!string.Equals(Metadata(metadata, "source"), expected, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+        throw new InvalidOperationException("The standalone marker scenario did not restore its pinned GameSessions package from " + expected);
+    Console.WriteLine($"ok   The standalone marker scenario builds outside the checkout from Valheim.Testing.GameSessions {version}.");
 }
 
 async Task<bool> WaitUntilServed()
