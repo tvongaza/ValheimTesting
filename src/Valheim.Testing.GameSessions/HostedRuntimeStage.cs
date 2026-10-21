@@ -184,6 +184,31 @@ internal static partial class HostedRuntimeStage
         return selected.Values.ToArray();
     }
 
+    /// <summary>
+    /// Where a profile's game will start from, journalled before it is staged so that recovery of an interrupted staging looks
+    /// for the run's processes there: a linked profile's game folder (<see cref="ProfileLayouts.GameFolder"/>), or the source
+    /// install that a macOS client starts in place.
+    /// </summary>
+    internal static string LaunchRoot(string platform, HostedRuntimeKind kind, string source, string runtime)
+    {
+        bool server = kind == HostedRuntimeKind.Server;
+        if (ProfileLayouts.For(platform, server) == ProfileLayout.SourceExecutable) return source;
+        string folder = ProfileLayouts.GameFolder(platform, server);
+        return folder.Length == 0 ? runtime : HostPath.Join(runtime, folder);
+    }
+
+    /// <summary>The operating system of an inspected source install: a server's by its executable, a client's by its host's shell.</summary>
+    internal static ClientPlatform SourcePlatform(IGameHost host, HostedRuntimeKind kind, HostListing source) =>
+        kind == HostedRuntimeKind.Server
+            ? HostInstall.DetectServer(source) switch
+            {
+                ServerPlatform.Windows => ClientPlatform.Windows,
+                ServerPlatform.MacOS => ClientPlatform.MacOS,
+                _ => ClientPlatform.Linux,
+            }
+            : host.Shell.Kind == HostShellKind.PowerShell ? ClientPlatform.Windows
+            : ClientPlatform.MacOS;
+
     /// <summary>Read-only source-install eligibility, shared by campaign preflight and the later profile staging.</summary>
     internal static async Task<HostListing> InspectSourceAsync(IGameHost host, HostedRuntimeKind kind, string source,
         BepInExLoaderPackage? loaderPackage, TimeSpan timeout, CancellationToken cancellation = default)
@@ -205,15 +230,7 @@ internal static partial class HostedRuntimeStage
             if (windows != (host.Shell.Kind == HostShellKind.PowerShell))
                 throw new InvalidOperationException($"The client install on {host.Name} does not match its host platform.");
         }
-        var platform = kind == HostedRuntimeKind.Server
-            ? HostInstall.DetectServer(sourceListing) switch
-            {
-                ServerPlatform.Windows => ClientPlatform.Windows,
-                ServerPlatform.MacOS => ClientPlatform.MacOS,
-                _ => ClientPlatform.Linux,
-            }
-            : host.Shell.Kind == HostShellKind.PowerShell ? ClientPlatform.Windows
-            : ClientPlatform.MacOS;
+        var platform = SourcePlatform(host, kind, sourceListing);
         // A reviewed package replaces the source loader, so it, not the source, must be this platform's complete loader.
         if (loaderPackage != null) loaderPackage.RequireFor(platform, $"reviewed loader package for {host.Name}");
         else
@@ -227,8 +244,8 @@ internal static partial class HostedRuntimeStage
         return sourceListing;
     }
 
-    private static async Task RequireStagePathsAsync(IGameHost host, HostedRuntimeKind kind, string source, string destination,
-        string staging, IReadOnlyList<HostedRuntimeFile> files, TimeSpan timeout, CancellationToken cancellation)
+    private static void RequireStagePaths(IGameHost host, HostedRuntimeKind kind, string source, string destination,
+        string staging, IReadOnlyList<HostedRuntimeFile> files)
     {
         ArgumentNullException.ThrowIfNull(host);
         ArgumentNullException.ThrowIfNull(files);
@@ -243,9 +260,7 @@ internal static partial class HostedRuntimeStage
             throw new PlatformNotSupportedException("Runtime preparation needs a bash or PowerShell host.");
         if (files.Count == 0) throw new ArgumentException("Select at least one pinned plugin file.", nameof(files));
         RequireStaging(host, HostPath.Parent(destination), staging);
-        // Whether the disposable runtime and its staging lie outside the install that runs never change is decided on the host,
-        // with links resolved there: a runtime directory reached through a link into the install is inside it.
-        await HostInstall.RequireApartAsync(host, source, [destination, staging], "the source install", timeout, cancellation).ConfigureAwait(false);
+        // Whether the runtime and its staging lie outside the install is the storage check's first step (RequireProfileStorageAsync).
     }
 
     // For a toolkit-created copy (RequirePrepared) and its own staging folder (RequireStaging), whether the caller still holds it in memory or
@@ -282,25 +297,28 @@ internal static partial class HostedRuntimeStage
     /// Refuses anything but a toolkit-created <c>&lt;runs&gt;/vt-prep-*/runtime</c>, or, with <paramref name="runId"/>, that
     /// run's own folder <c>&lt;runs&gt;/&lt;runId&gt;</c> (<see cref="RunFolder"/>) or, inside it, its <c>runtime</c>, <c>world</c>,
     /// world stage or collected <c>host-world</c>, or numbered <c>boot-N</c> (<see cref="HostedServerRun"/>, a campaign client's hosted
-    /// world); returns the copy's parent.
+    /// world); beside either runtime, the files a source settlement moved out of the install and kept there
+    /// (a <see cref="ProfileSourceCheck.AddedFolder"/> folder). Returns the copy's parent.
     /// </summary>
     internal static string RequirePrepared(IGameHost host, string destination, string? runId = null)
     {
         int at = destination.LastIndexOfAny(['/', '\\']);
         string parent = at > 0 ? destination[..at] : "";
         string separator = host.Shell.Kind == HostShellKind.PowerShell ? @"\" : "/", parentName = Leaf(parent);
-        if (destination.EndsWith(separator + "runtime", StringComparison.OrdinalIgnoreCase) && parentName.StartsWith("vt-prep-", StringComparison.Ordinal))
+        bool settled = Leaf(destination) is var leaf && (leaf == ProfileSourceCheck.AddedFolder || leaf.StartsWith(ProfileSourceCheck.AddedFolder + "-", StringComparison.Ordinal));
+        if ((destination.EndsWith(separator + "runtime", StringComparison.OrdinalIgnoreCase) || settled) && parentName.StartsWith("vt-prep-", StringComparison.Ordinal))
             return parent;
         if (runId != null && RunJournal.SafeName(runId) && parent.Length != 0 && Leaf(parent).Length != 0 && Leaf(destination) == runId &&
             destination.EndsWith(separator + runId, StringComparison.Ordinal))
             return parent;
         if (runId != null && RunJournal.SafeName(runId) && parentName == runId &&
-            (destination.EndsWith(separator + "runtime", StringComparison.OrdinalIgnoreCase) || destination.EndsWith(separator + "world", StringComparison.OrdinalIgnoreCase) ||
+            (destination.EndsWith(separator + "runtime", StringComparison.OrdinalIgnoreCase) || settled || destination.EndsWith(separator + "world", StringComparison.OrdinalIgnoreCase) ||
              destination.EndsWith(separator + "host-world", StringComparison.OrdinalIgnoreCase) || destination.EndsWith(separator + "world-stage", StringComparison.OrdinalIgnoreCase) ||
              destination.EndsWith(separator + "host-world-stage", StringComparison.OrdinalIgnoreCase) ||
              System.Text.RegularExpressions.Regex.IsMatch(destination[(at + 1)..], @"^boot-[1-9][0-9]*$", System.Text.RegularExpressions.RegexOptions.CultureInvariant)))
             return parent;
-        throw new ArgumentException("Only a toolkit-created vt-prep runtime, or a run's own folder or the runtime, world copy or numbered boot directory in it, can be retired.", nameof(destination));
+        throw new ArgumentException("Only a toolkit-created vt-prep runtime, or a run's own folder or the runtime, world copy or numbered boot directory in it, " +
+            "or a source-added folder beside a runtime, can be retired.", nameof(destination));
     }
 
     private static string Leaf(string path) => path.Replace('\\', '/').Split('/').Last();
@@ -427,7 +445,9 @@ internal static partial class HostedRuntimeStage
         """.ReplaceLineEndings("\n");
 
     // Only the runtime and its staging folder, each below the run's own parent, through the one remover (ProtectedPaths): a link is
-    // unlinked, never emptied, and a path that resolves outside the parent is refused with nothing deleted. Variables: runtime, stage, parent.
+    // unlinked, never emptied, and a path that resolves outside the parent is refused with nothing deleted. A profile's source
+    // baseline (ProfileSourceCheck) goes with its runtime: a settled profile dropped it already, one that never launched has nothing
+    // to settle. Variables: runtime, stage, parent.
     internal static readonly string WindowsCleanup = ProtectedPaths.PowerShellInside + ProtectedPaths.PowerShellRemove + """
         foreach ($path in @($runtime, $stage)) {
             if ($path) { Remove-VtTree $path $parent -Check }
@@ -435,6 +455,7 @@ internal static partial class HostedRuntimeStage
         foreach ($path in @($runtime, $stage)) {
             if ($path) { Remove-VtTree $path $parent }
         }
+        if ($runtime -and $parent -and [IO.Path]::GetFileName($runtime) -eq 'runtime') { Remove-VtTree (Join-Path $parent 'source-baseline.json') $parent }
         if (-not $keepparent -and $parent -and [IO.Directory]::Exists($parent) -and [IO.Directory]::GetFileSystemEntries($parent).Length -eq 0) {
             [IO.Directory]::Delete($parent)
         }
@@ -450,6 +471,7 @@ internal static partial class HostedRuntimeStage
         for path in "$runtime" "$stage"; do
           if [ -n "$path" ]; then vt_remove "$path" "$parent" || { echo "vt: could not remove $path" >&2; exit 3; }; fi
         done
+        if [ "${runtime##*/}" = runtime ]; then vt_remove "$parent/source-baseline.json" "$parent" || { echo "vt: could not remove the source baseline" >&2; exit 3; }; fi
         if [ -z "${keepparent:-}" ] && [ -d "$parent" ]; then rmdir "$parent" 2>/dev/null || true; fi
         echo 'VT-STAGE-CLEANED'
         """.ReplaceLineEndings("\n");

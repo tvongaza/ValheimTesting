@@ -205,7 +205,7 @@ public sealed class DetachedModSwapTests : IDisposable
         var files = new Dictionary<string, string> { ["BepInEx/plugins/Mod.dll"] = "before", ["BepInEx/plugins/Companion.dll"] = "fixed" };
         var states = files.ToDictionary(file => file.Key, _ => new HostFileState(1, "time"));
         var source = new HostListing("local", HostShellKind.PowerShell, "source", files, [], states);
-        var check = ProfileSourceCheck.Prepare(source, []);
+        var check = ProfileSourceCheck.Prepare(source, [], ProfileLayout.SourceExecutable);
         var profile = new HostListing("local", HostShellKind.PowerShell, "owned", files, [], states);
         check.RecordPreparedProfile(profile, profile, []);
         Assert.Throws<InvalidOperationException>(() => check.ReplacePreparedPlugin("BepInEx/plugins/Mod.dll", "wrong", "after"));

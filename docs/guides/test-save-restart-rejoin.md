@@ -69,7 +69,7 @@ valheim-test session check examples/FullLifecycle/ExampleMod.Tests/session.json 
 dotnet test examples/FullLifecycle/ExampleMod.Tests/ExampleMod.Tests.csproj -c Release --filter "Category=Native"
 ```
 
-`session check` changes nothing. The test passes only when the run passed. Without the two private files, the native test is skipped with the reason.
+`session check` changes nothing, apart from one trial hard link for a Linux or Mac server's profile, made and removed under its runtime root. The test passes only when the run passed. Without the two private files, the native test is skipped with the reason.
 
 <!-- TODO(docs): capture output of `valheim-test session check ... --hosts` -->
 

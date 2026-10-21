@@ -299,7 +299,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         environment.Server.PreparedLoaderRoot = owned;
         environment.Server.PreparedSourceRoot = Install;
         var preparedListing = await ProfileSourceCheck.InspectAsync(host, Install, TimeSpan.FromSeconds(30));
-        var sourceCheck = ProfileSourceCheck.Prepare(preparedListing, [GameLaunch.ServerLinuxExecutable]);
+        var sourceCheck = ProfileSourceCheck.Prepare(preparedListing, [GameLaunch.ServerLinuxExecutable], ProfileLayout.Linked);
         sourceCheck.RecordPreparedProfile(preparedListing,
             await HostInstall.ListAsync(host, owned, TimeSpan.FromSeconds(30), cancellation: CancellationToken.None), []);
         var hosted = HostedServerRun.Create(environment, plan, "test", new FakeRunHooks { Host = _ => host, RunId = RunId }, prepared: true,
@@ -330,7 +330,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         environment.Server.PreparedGameRoot = Install;
         environment.Server.PreparedLoaderRoot = owned;
         environment.Server.PreparedSourceRoot = Install;
-        var sourceCheck = ProfileSourceCheck.Prepare(await ProfileSourceCheck.InspectAsync(host, Install, TimeSpan.FromSeconds(30)), []);
+        var sourceCheck = ProfileSourceCheck.Prepare(await ProfileSourceCheck.InspectAsync(host, Install, TimeSpan.FromSeconds(30)), [], ProfileLayout.SourceExecutable);
         sourceCheck.RecordPreparedProfile(sourceCheck.Source,
             await HostInstall.ListAsync(host, owned, TimeSpan.FromSeconds(30), cancellation: CancellationToken.None), []);
         var hosted = HostedServerRun.Create(environment, plan, "test", new FakeRunHooks { Host = _ => host, RunId = RunId }, prepared: true,
@@ -358,7 +358,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         environment.Server.PreparedGameRoot = owned;
         environment.Server.PreparedLoaderRoot = owned;
         environment.Server.PreparedSourceRoot = source;
-        var sourceCheck = ProfileSourceCheck.Prepare(await ProfileSourceCheck.InspectAsync(host, source, TimeSpan.FromSeconds(30)), ["UnityPlayer.dll"]);
+        var sourceCheck = ProfileSourceCheck.Prepare(await ProfileSourceCheck.InspectAsync(host, source, TimeSpan.FromSeconds(30)), ["UnityPlayer.dll"], ProfileLayout.Linked);
         var ownedListing = await HostInstall.ListAsync(host, owned, TimeSpan.FromSeconds(30), cancellation: CancellationToken.None);
         sourceCheck.RecordPreparedProfile(ownedListing, ownedListing, []);
         var hosted = HostedServerRun.Create(environment, plan, "test", new FakeRunHooks { Host = _ => host, RunId = RunId }, prepared: true,
@@ -815,7 +815,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.Equal(["devcommands", "confirmcheats", "devcommands", "confirmcheats"],
             server.Events.Where(e => e.StartsWith("devcommands") || e.StartsWith("confirmcheats")).Select(e => e.TrimEnd("0123456789".ToCharArray())));
         Assert.Same(host, seenHost); Assert.Equal(RunDirectory + "/runtime", seenRuntime);
-        Assert.Equal(new[] { "enough free disk space for the copies", "take the server host's lock", StageStep, "copy and verify pinned world", "ship and verify the world copy on the server host",
+        Assert.Equal(new[] { "enough free disk space for the copies", "check the Linux profile storage", "take the server host's lock", StageStep, "copy and verify pinned world", "ship and verify the world copy on the server host",
                 "server runtime has the plan's server executable", "server runtime is the pinned game build, loader and patchers",
                 "CLI port is free on the server host", "open the loopback CLI tunnel to the server host", "start and verify owned dedicated fixture", "stop only owned server",
                 "fetch the server host's world copy", "verify server's source install after the run (size and modified time)",
@@ -823,15 +823,18 @@ public sealed partial class HostedServerRunTests : IDisposable
                 "remove the fetched boot files on the server host", "remove the fetched boot files on the server host", "fetch and remove the server host's run folder",
                 "close the CLI tunnel", "release the server host's lock", "scan run logs" }, StepNames());
 
-        // #730: nothing of the install is copied. Its profile is staged in this run's own directory (the loader seeded from the install,
-        // never its game files on Linux), and journalled before it is made and once made; the world copy is shipped beside it.
+        // #730: nothing of the install is copied. Its profile is staged in this run's own directory (#612: the game's files hard-linked
+        // into it, the loader seeded from the install), and journalled before it is made and once made; the world copy is shipped beside it.
         Assert.DoesNotContain("copy", host.Scripts);
         var seed = Assert.Single(host.Runs, run => run.Script == "profile-seed");
         Assert.Equal(Install, seed.Variables["source"]); Assert.Equal(RunDirectory + "/runtime", seed.Variables["runtime"]);
+        Assert.Contains(Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(GameLaunch.ServerLinuxExecutable)), seed.Variables["gameFiles"].Split('\n'));
         Assert.Equal(new[] { RunDirectory + "/staging", RunDirectory + "/world" }, host.Runs.Where(run => run.Script == "ship").Select(run => run.Variables["dest"]));
         var profileEntries = journal.Where(record => record.Actor == "server" && record.Entry.Fields.GetValueOrDefault("runtime") == RunDirectory + "/runtime").ToList();
-        Assert.Equal([JournalEntry.CopyIntended, JournalEntry.CopyDone, JournalEntry.CopyRetired], profileEntries.Select(record => record.Entry.Kind));
-        Assert.Equal((RunDirectory + "/staging", RunDirectory, "server", Install), (profileEntries[0].Entry.Fields["stage"], profileEntries[0].Entry.Fields["parent"],
+        Assert.Equal([JournalEntry.CopyIntended, JournalEntry.CopyDone, JournalEntry.SourceBaseline, JournalEntry.SourceSettled, JournalEntry.CopyRetired],
+            profileEntries.Select(record => record.Entry.Kind));
+        // #612 review 9: the linked server starts from its profile, so recovery of an interrupted staging looks there, not in the install.
+        Assert.Equal((RunDirectory + "/staging", RunDirectory, "server", RunDirectory + "/runtime"), (profileEntries[0].Entry.Fields["stage"], profileEntries[0].Entry.Fields["parent"],
             profileEntries[0].Entry.Fields["runtimeKind"], profileEntries[0].Entry.Fields["launchRoot"]));
         Assert.True(JournalIndex(host, JournalEntry.CopyIntended) < host.Runs.FindIndex(run => run.Script == "profile-seed"));
         // Each boot starts with the plan's arguments on the host's paths, its own boot directory and the logs moved aside.
@@ -846,8 +849,11 @@ public sealed partial class HostedServerRunTests : IDisposable
             Assert.Equal("1", run.Variables["content"]);
             Assert.Equal("0", run.Variables["metadata"]);
         });
+        // #612: the linked profile is the game root too, so its before-boot listing also covers the root files it linked.
+        string[] profilePatterns = HostInstall.ListingPatterns(HostInstall.ProfilePinPaths
+            .Concat([HostInstall.LiteralPathPattern(GameLaunch.ServerLinuxExecutable)])).ToArray();
         var prebootLoader = host.Runs.Where(run => run.Script == "list" && run.Variables["root"] == RunDirectory + "/runtime" &&
-            run.Variables["dirs"] == string.Join('\n', HostInstall.ListingPatterns(HostInstall.ProfilePinPaths))).ToList();
+            run.Variables["dirs"].Split('\n').ToHashSet().SetEquals(profilePatterns)).ToList();
         Assert.Equal(2, prebootLoader.Count);
         Assert.All(prebootLoader, run => Assert.Equal(("1", "0"), (run.Variables["content"], run.Variables["metadata"])));
         Assert.Equal("BepInEx/LogOutput.log\ntoolkit-unity.log", starts[0].Variables["logs"]);
@@ -855,9 +861,12 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.Equal(new[] { "-batchmode", "-nographics", "-savedir", RunDirectory + "/world", "-port", "2456", "-logFile", RunDirectory + "/runtime/toolkit-unity.log" },
             spec.Where(line => line.Kind == "arg").Select(line => line.Text));
         Assert.Contains(("env", "DOORSTOP_TARGET_ASSEMBLY=" + RunDirectory + "/runtime/BepInEx/core/BepInEx.Preloader.dll"), spec);
-        // The game runs from its install, never changed; BepInEx from the profile.
-        Assert.Equal((Install, RunDirectory + "/runtime"), (starts[0].Variables["runtime"], starts[0].Variables["logroot"]));
-        Assert.Contains(("prepend", "LD_LIBRARY_PATH=" + Install + "/linux64:" + RunDirectory + "/runtime/doorstop_libs"), spec);
+        // #612: the game runs from its profile, the install's files linked into it, and so does BepInEx; the install is never changed.
+        Assert.Equal((RunDirectory + "/runtime", RunDirectory + "/runtime"), (starts[0].Variables["runtime"], starts[0].Variables["logroot"]));
+        Assert.Contains(("exe", RunDirectory + "/runtime/" + GameLaunch.ServerLinuxExecutable), spec);
+        Assert.Contains(("dir", RunDirectory + "/runtime"), spec);
+        Assert.Contains(("prepend", "LD_LIBRARY_PATH=" + RunDirectory + "/runtime/linux64:" + RunDirectory + "/runtime/doorstop_libs"), spec);
+        Assert.Contains(("unset", "LD_PRELOAD"), spec);
         // The listening line is awaited in this boot's log on the host, from its start.
         Assert.All(host.Runs.Where(run => run.Script == "follow"), run => { Assert.Equal(RunDirectory + "/runtime/BepInEx/LogOutput.log", run.Variables["log"]); Assert.Equal("0", run.Variables["offset"]); });
         // Only the two processes this run started were stopped, each by its own identity, and each boot's evidence came back.
@@ -888,10 +897,13 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.False(provenance.TryGetProperty("outcome", out _));
     }
 
+    // #612: a Linux server runs from its linked profile, so it cannot add a file to the install: one that appears there during the
+    // run came from something else. It is named with a warning, left in place, and fails nothing; nothing of the settlement is left
+    // in the run folder on the host.
     [Theory]
     [InlineData("run-write.txt")]
     [InlineData("logs/steam-runtime.txt")]
-    public async Task ASourceWriteDuringTheFakeRunFailsTheRecordedPostRunVerdictAndNamesTheFile(string relative)
+    public async Task ASourceWriteDuringALinkedServersRunIsNamedAndLeftInPlace(string relative)
     {
         var server = NewServer(); var host = NewHost(server);
         var (plan, profile) = Write(host);
@@ -903,13 +915,72 @@ public sealed partial class HostedServerRunTests : IDisposable
             return Task.CompletedTask;
         }));
 
-        Assert.Equal(1, code);
+        Assert.Equal(0, code);
         var result = Result();
         var step = result.GetProperty("Steps").EnumerateArray().Single(item =>
             item.GetProperty("Name").GetString()!.StartsWith("verify server's source install after the run", StringComparison.Ordinal));
+        Assert.True(step.GetProperty("Passed").GetBoolean());
+        string verdict = result.GetProperty("Provenance").GetProperty("sourceIntegrity.server").GetString()!;
+        Assert.StartsWith("unchanged by the run, with a warning: ", verdict);
+        Assert.Contains(relative, verdict);
+        Assert.Contains(relative, File.ReadAllText(Path.Combine(Output, "source-changes", "server", "source-changes.json")));
+        Assert.Equal("written while the fake server ran", File.ReadAllText(Path.Combine(host.Local(Install), relative)));
+        Assert.False(Directory.Exists(Path.Combine(Output, "source-changes", "server", "added")));
+        Assert.False(Directory.Exists(host.Local(RunDirectory)));
+        var journal = await RunJournalOnHost.ReadAsync(host, "/var/tmp/vt/journal", RunId, TimeSpan.FromSeconds(5));
+        Assert.Equal([JournalEntry.SourceBaseline, JournalEntry.SourceSettled],
+            journal.Where(record => record.Entry.Kind.StartsWith("source-", StringComparison.Ordinal)).Select(record => record.Entry.Kind));
+        Assert.True(JournalIndex(host, JournalEntry.SourceBaseline) < host.Runs.ToList().FindIndex(run => run.Script == "start"));
+    }
+
+    // #612 item 2: a settlement that does not finish (its evidence step is lost) keeps the profile with its baseline and moved files,
+    // journalled kept, so env recover settles it again; the run never retires it.
+    [Fact]
+    public async Task ASettlementThatDoesNotFinishKeepsTheServersProfileForEnvRecover()
+    {
+        var server = NewServer(); var host = NewHost(server);
+        host.Failures["source-evidence"] = FakeServerHost.TransportFailure;
+        var (plan, profile) = Write(host);
+        int code = await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["run", plan, Output], Options(host, server, _ =>
+        {
+            File.WriteAllText(Path.Combine(host.Local(Install), "preloader_1.log"), "written while the fake server ran");
+            return Task.CompletedTask;
+        }));
+
+        Assert.Equal(1, code);
+        var step = Result().GetProperty("Steps").EnumerateArray().Single(item =>
+            item.GetProperty("Name").GetString()!.StartsWith("verify server's source install after the run", StringComparison.Ordinal));
+        Assert.False(step.GetProperty("Passed").GetBoolean());
+        Assert.Contains("did not finish", step.GetProperty("Error").GetString());
+        Assert.True(Directory.Exists(host.Local(RunDirectory + "/runtime")));
+        Assert.True(File.Exists(host.Local(RunDirectory + "/" + ProfileSourceCheck.BaselineFile)));
+        var journal = await RunJournalOnHost.ReadAsync(host, "/var/tmp/vt/journal", RunId, TimeSpan.FromSeconds(5));
+        var kept = journal.Last(record => record.Entry.Fields.GetValueOrDefault("runtime") == RunDirectory + "/runtime");
+        Assert.Equal(JournalEntry.CopyKept, kept.Entry.Kind);
+        Assert.DoesNotContain(journal, record => record.Entry.Kind == JournalEntry.CopyRetired && record.Entry.Fields["runtime"] == RunDirectory + "/runtime");
+    }
+
+    // A file the fake server changes in the install fails the verdict and is named, never repaired.
+    [Fact]
+    public async Task ASourceFileTheFakeRunChangesFailsTheRecordedVerdictAndIsLeftAsItIs()
+    {
+        var server = NewServer(); var host = NewHost(server);
+        var (plan, profile) = Write(host);
+        string changed = Directory.EnumerateFiles(host.Local(Install), "*", SearchOption.AllDirectories).Order(StringComparer.Ordinal).First();
+        string relative = Path.GetRelativePath(host.Local(Install), changed).Replace('\\', '/');
+        int code = await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["run", plan, Output], Options(host, server, _ =>
+        {
+            File.AppendAllText(changed, " changed while the fake server ran");
+            return Task.CompletedTask;
+        }));
+
+        Assert.Equal(1, code);
+        var step = Result().GetProperty("Steps").EnumerateArray().Single(item =>
+            item.GetProperty("Name").GetString()!.StartsWith("verify server's source install after the run", StringComparison.Ordinal));
         Assert.False(step.GetProperty("Passed").GetBoolean());
         Assert.Contains(relative, step.GetProperty("Error").GetString());
-        Assert.True(File.Exists(Path.Combine(host.Local(Install), relative))); // integrity findings are never repaired
+        Assert.Contains("not repaired", step.GetProperty("Error").GetString());
+        Assert.EndsWith(" changed while the fake server ran", File.ReadAllText(changed)); // integrity findings are never repaired
     }
 
     // #257: one journal run per run. This machine's world copy is journalled under the run's own id, beside its server's
@@ -999,8 +1070,11 @@ public sealed partial class HostedServerRunTests : IDisposable
         var step = Step("the server host can load crossplay's libraries");
         Assert.False(step.GetProperty("Passed").GetBoolean());
         Assert.Contains("libpulse.so.0 (package libpulse0) is missing", step.GetProperty("Error").GetString());
-        // libparty.so is the game's: read where the profile's game runs from, the install itself on Linux.
-        Assert.Equal(Install, Assert.Single(host.Runs, run => run.Script == "party").Variables["runtime"]);
+        // libparty.so is the game's: read where the profile's game runs from, the linked profile on Linux (#612).
+        var party = Assert.Single(host.Runs, run => run.Script == "party");
+        Assert.Equal(RunDirectory + "/runtime", party.Variables["runtime"]);
+        // The linked launch drops the session's LD_LIBRARY_PATH, so the check resolves the library without it too (#612 review).
+        Assert.Equal("", party.Variables["inheritlibs"]);
         Assert.DoesNotContain(host.Runs, run => run.Script == "start");
     }
 
@@ -1076,6 +1150,70 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.Equal(host.Claims, host.Releases);
     }
 
+    // #612: a standalone Linux server's own preflight runs the host's storage probe before the lock or any journal: a runtime
+    // on another mount than the install is refused with nothing written on the host.
+    [Fact] public async Task ALinuxRuntimeOnAnotherMountIsRefusedBeforeTheLockOrAnyHostWrite()
+    {
+        var host = NewHost(NewServer());
+        host.UnixVolumes["/opt"] = new UnixStorageVolume("/opt", "2065", "xfs", Writable: true);
+        var (plan, profile) = Write(host);
+        Assert.Equal(1, await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["run", plan, Output], Options(host, NewServer())));
+        var step = Step("check the Linux profile storage");
+        Assert.False(step.GetProperty("Passed").GetBoolean());
+        Assert.StartsWith("the explicit inventory runtime folder " + Runs, step.GetProperty("Error").GetString());
+        Assert.Contains("not the source install's mount /opt (xfs, device 2065). A Linux profile hard-links the install's game files, " +
+            "and a hard link cannot cross mounts. Put the inventory runtime on the install's mount /opt.", step.GetProperty("Error").GetString());
+        Assert.Equal(["apart", "profile-storage"], host.Scripts); // the trial link's runtime is proven apart from the install first
+        Assert.Empty(host.Claims);
+    }
+
+    // #612 review 2: placement does not judge a Unix environment's storage (its verdict needs the trial link); the run's own
+    // storage preflight refuses it before the lock or staging, naming the environment it placed the server on and its runtime.
+    [Fact] public async Task AnInventoryLinuxEnvironmentOnAnotherMountIsRefusedByNameAtTheStoragePreflight()
+    {
+        var server = NewServer(); var host = NewHost(server);
+        host.UnixVolumes["/opt"] = new UnixStorageVolume("/opt", "2065", "xfs", Writable: true);
+        var (plan, _) = Write(host);
+        string inventory = Path.Combine(_root, "environments.json");
+        File.WriteAllText(inventory, JsonSerializer.Serialize(new
+        {
+            hosts = new Dictionary<string, object> { ["linux-box"] = new { kind = "ssh", platform = "linux", shell = "bash", destination = "tester@linux-box.example", @lock = "/var/tmp/vt/lock" } },
+            environments = new object[] { new { name = "box-server", host = "linux-box", roles = new[] { "server" }, install = Install, runtime = Runs, cliPort = 5577, gamePort = 2456 } },
+        }));
+        Assert.Equal(1, await PinnedServerRun.MainAsync(["--inventory", inventory, "run", plan, Output], Options(host, server)));
+        Assert.StartsWith("box-server: ", Result().GetProperty("Provenance").GetProperty("serverEnvironment").GetString());
+        var step = Step("check the Linux profile storage");
+        Assert.False(step.GetProperty("Passed").GetBoolean());
+        Assert.StartsWith($"server environment box-server (runtime {Runs}): the explicit inventory runtime folder {Runs} is on / (ext4, device 2049), " +
+            "not the source install's mount /opt (xfs, device 2065).", step.GetProperty("Error").GetString());
+        Assert.Equal(["apart", "profile-storage"], host.Scripts);
+    }
+
+    // #612 review 4: every refusal of the storage preflight names the environment, not only its verdict: a runtime inside the
+    // install (the apart check) and a host that cannot answer the probe.
+    [Theory]
+    [InlineData("inside")]
+    [InlineData("transport")]
+    public async Task EveryStoragePreflightRefusalNamesTheInventoryEnvironment(string fault)
+    {
+        var server = NewServer(); var host = NewHost(server);
+        string runtime = fault == "inside" ? Install + "/runs" : Runs;
+        if (fault == "transport") host.Failures["profile-storage"] = FakeServerHost.TransportFailure;
+        var (plan, _) = Write(host);
+        string inventory = Path.Combine(_root, "environments.json");
+        File.WriteAllText(inventory, JsonSerializer.Serialize(new
+        {
+            hosts = new Dictionary<string, object> { ["linux-box"] = new { kind = "ssh", platform = "linux", shell = "bash", destination = "tester@linux-box.example", @lock = "/var/tmp/vt/lock" } },
+            environments = new object[] { new { name = "box-server", host = "linux-box", roles = new[] { "server" }, install = Install, runtime, cliPort = 5577, gamePort = 2456 } },
+        }));
+        // A refusal fails the run (1); a probe whose reply was lost leaves its outcome unknown (3).
+        Assert.Equal(fault == "transport" ? 3 : 1, await PinnedServerRun.MainAsync(["--inventory", inventory, "run", plan, Output], Options(host, server)));
+        var step = Step("check the Linux profile storage");
+        Assert.False(step.GetProperty("Passed").GetBoolean());
+        Assert.StartsWith($"server environment box-server (runtime {runtime}): ", step.GetProperty("Error").GetString());
+        Assert.DoesNotContain(host.Scripts, script => script is "lock" or "profile-seed" or "ship");
+    }
+
     [Fact] public async Task AnotherRunsLockRefusesAfterOnlyTheExactClaimIntentAndAtomicClaimAttempt()
     {
         var host = NewHost(NewServer()); host.HeldBy = "other-runner run-x [0123]";
@@ -1083,7 +1221,8 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.Equal(1, await PinnedServerRun.MainAsync(TestEnvironment.Read(profile), ["run", plan, Output], Options(host, NewServer())));
         var step = Step("take the server host's lock");
         Assert.False(step.GetProperty("Passed").GetBoolean()); Assert.Contains("other-runner run-x [0123]", step.GetProperty("Error").GetString());
-        Assert.Equal(["journal", "lock", "journal"], host.Scripts);
+        // Only the apart check and the profile-storage probe (its one trial link, removed at once) run before the claim.
+        Assert.Equal(["apart", "profile-storage", "journal", "lock", "journal"], host.Scripts);
         var journal = await RunJournalOnHost.ReadAsync(host, "/var/tmp/vt/journal", RunId, TimeSpan.FromSeconds(5));
         Assert.Equal([JournalEntry.LockIntended, JournalEntry.RunEnded], journal.Where(record => record.Actor == "run").Select(record => record.Entry.Kind));
         Assert.DoesNotContain(journal, record => record.Entry.Kind == JournalEntry.LockHeld);
@@ -1384,12 +1523,14 @@ public sealed partial class HostedServerRunTests : IDisposable
         var report = new ScenarioReport("bind");
         await hosted.LockAndPrepareRuntimeAsync(report, plan, CancellationToken.None);
 
-        Assert.Equal((Install, RunDirectory + "/runtime"), (hosted.GameDirectory, hosted.LoaderDirectory));
+        Assert.Equal((RunDirectory + "/runtime", RunDirectory + "/runtime"), (hosted.GameDirectory, hosted.LoaderDirectory));
         string profile = host.Local(RunDirectory + "/runtime");
         Assert.Equal(BepInExLoaderPackage.Read(package).Loader, plan.RuntimePins.Loader);
         Assert.NotEqual(installPins.Loader, plan.RuntimePins.Loader);
         Assert.Equal(installPins.Game, plan.RuntimePins.Game);
-        Assert.Equal((Install, before.Count), (plan.Runtime.Source, plan.Runtime.Sha256.Count)); // the profile's game is the install, on Linux
+        // #612: the profile's game is the linked profile on Linux, with the install's bytes.
+        Assert.Equal(RunDirectory + "/runtime", plan.Runtime.Source);
+        Assert.Equal(before[GameLaunch.ServerLinuxExecutable], plan.Runtime.Sha256[GameLaunch.ServerLinuxExecutable]);
         Assert.Equal(TestCliSet.CorePin, plan.Pins["valheimCLI.valheimCLI"]);
         Assert.Equal(sourceCliPin, hosted.SourceCliPins["valheimCLI.valheimCLI"]);
         Assert.Equal("observed", hosted.PinOrigins["plugins.valheimCLI.valheimCLI"]);

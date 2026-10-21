@@ -41,6 +41,35 @@ jobs:
           docker cp smoke:/opt/valheim/server-buildid.txt smoke-out/ || true
           # Logs and reports only; the generated world stays behind.
           rm -rf smoke-out/savedir
+      # #612: the product path on Linux. server-load stages a linked profile of the image's install (hard links, its own
+      # loader), boots the server with a control plugin that writes into BepInEx's game root, config and working directory,
+      # and retires the profile. The install must hash the same before and after, and the plugin's files must be in the
+      # profile's evidence, never in the install.
+      - name: Boot the server through a linked profile (server-load)
+        timeout-minutes: 25
+        run: |
+          docker run --init --name profile -v "$GITHUB_WORKSPACE:/src:ro" valheimtesting-linux-server:ci \
+            bash -euo pipefail -c 'cp -r /src "$HOME/repo" && cd "$HOME/repo"
+              dotnet build tests/Valheim.Testing.NativeAcceptance/Controls/GameRootWriter -c Release -o "$HOME/grw" -p:ValheimPath=/opt/valheim/server
+              digest() { (cd /opt/valheim/server && find . -print0 | sort -z | xargs -0 stat -c "%n %s %Y" && find . -type f -print0 | sort -z | xargs -0 sha256sum) | sha256sum; }
+              before=$(digest)
+              printf "%s\n" "{\"environments\": [{\"name\": \"image-server\", \"roles\": [\"server\"], \"install\": \"/opt/valheim/server\"}]}" > "$HOME/inventory.json"
+              status=0
+              dotnet run --project src/Valheim.Testing.NativeSmoke -c Release -- server-load --server-only --inventory "$HOME/inventory.json" \
+                --mod "$HOME/grw/AcceptanceMod.Control.GameRootWriter.dll" --output "$HOME/profile-out" || status=$?
+              after=$(digest)
+              grep -rh "vt612 wrote" "$HOME/profile-out" | sort -u || true
+              find "$HOME/profile-out" -name "vt612-*" || true
+              if [ "$before" != "$after" ]; then echo "FAIL: the image install changed during the run"; exit 1; fi
+              echo "The image install is unchanged."
+              exit "$status"'
+      - name: Copy the profile run's evidence out of the container
+        if: always()
+        run: |
+          mkdir -p smoke-out/profile
+          docker cp profile:/home/valheim/profile-out/. smoke-out/profile/ || echo "No profile output to copy."
+          # Evidence only; no world or game files.
+          find smoke-out/profile -type d \( -name savedir -o -name worlds_local -o -name world \) -prune -exec rm -rf {} + || true
       - uses: actions/upload-artifact@v7
         if: always()
         with:
@@ -48,6 +77,6 @@ jobs:
           path: smoke-out/
           if-no-files-found: warn
           retention-days: 14
-      - name: Remove the container
+      - name: Remove the containers
         if: always()
-        run: docker rm -f smoke || true
+        run: docker rm -f smoke profile || true

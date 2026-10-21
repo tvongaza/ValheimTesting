@@ -109,11 +109,13 @@ internal sealed class HostedServerRun : IServerPlacement
     public string RuntimeDirectory { get; }
     // A standalone profile's staging folder (HostedRuntimeStage.RequireStaging's rule: a sibling named staging).
     private string StagingDirectory { get; }
-    // The owned runtime remains the log and retirement root. A Unix profile starts the executable
-    // from this read-only game root while Doorstop and BepInEx remain under RuntimeDirectory.
+    // The owned runtime remains the log and retirement root. A Windows or Linux profile is linked, so it is the game root too;
+    // a macOS profile starts the executable from this read-only game root while Doorstop and BepInEx remain under RuntimeDirectory.
     public string GameDirectory => Role.PreparedGameRoot ?? RuntimeDirectory;
     public string LoaderDirectory => RuntimeDirectory;
     public string? MacSteamRuntimeDirectory => Role.PreparedSteamRuntimeRoot;
+    // Every server's profile is linked (ProfileLayouts.For).
+    bool IServerPlacement.Linked => ProfileLayouts.For(HostProfile.Platform, server: true) == ProfileLayout.Linked;
     public string WorldDirectory { get; private set; }
     /// <summary>The profile's game files on the host (the listing a campaign's server profile records too), once staged.</summary>
     public IReadOnlyDictionary<string, string> RuntimeHashes => _runtime?.Files ?? new Dictionary<string, string>();
@@ -191,10 +193,13 @@ internal sealed class HostedServerRun : IServerPlacement
         provenance["runtimeSource"] = Role.Host + ":" + (Role.PreparedSourceRoot ?? Role.Install);
     }
 
-    /// <summary>The read-only Windows hard-link storage check, before this run takes a lock or stages its profile.</summary>
-    internal Task<string?> PreflightProfileStorageAsync(CancellationToken cancellation) =>
-        HostedRuntimeStage.RequireProfileStorageAsync(Host, Role.Install, Role.Runtime, HostedTimeouts.Quick, cancellation,
-            explicitRuntime: Role.RuntimeExplicit);
+    /// <summary>
+    /// The hard-link storage check of a linked profile, before this run takes a lock or stages its profile. On a Linux or Mac
+    /// host it writes one trial link in a new folder under the runtime root and removes both (<see cref="HostedRuntimeStage.RequireProfileStorageAsync"/>).
+    /// </summary>
+    internal async Task<string?> PreflightProfileStorageAsync(CancellationToken cancellation) =>
+        (await HostedRuntimeStage.RequireProfileStorageAsync(Host, HostedRuntimeKind.Server, Role.Install, Role.Runtime,
+            HostedTimeouts.Quick, cancellation, explicitRuntime: Role.RuntimeExplicit).ConfigureAwait(false)).Description;
 
     /// <summary>
     /// Takes the server host's lock, then readies the server's profile: a campaign's prepared one is verified where it is; a
@@ -300,7 +305,8 @@ internal sealed class HostedServerRun : IServerPlacement
         // Journalled before the profile: an interrupted preparation leaves a record of every path it may own.
         await _runFolder.MakeAsync(cancellation).ConfigureAwait(false);
         await JournalAsync(Host, Role.Host, "server", JournalEntry.Of(JournalEntry.CopyIntended, ("runtime", RuntimeDirectory), ("stage", StagingDirectory),
-            ("parent", RunDirectory), ("runtimeKind", "server"), ("launchRoot", Role.Install)), cancellation).ConfigureAwait(false);
+            ("parent", RunDirectory), ("runtimeKind", "server"),
+            ("launchRoot", HostedRuntimeStage.LaunchRoot(HostProfile.Platform, HostedRuntimeKind.Server, Role.Install, RuntimeDirectory))), cancellation).ConfigureAwait(false);
         _runtimeIntended = true;
         HostedRuntimeStage.PreparedProfile profile;
         try
@@ -328,6 +334,9 @@ internal sealed class HostedServerRun : IServerPlacement
         await JournalAsync(Host, Role.Host, "server", JournalEntry.Of(JournalEntry.CopyDone, ("runtime", RuntimeDirectory),
             ("files", profile.Loader.Files.Count.ToString(CultureInfo.InvariantCulture)), ("runtimeKind", "server"),
             ("launchRoot", profile.GameRoot)), cancellation).ConfigureAwait(false);
+        // The baseline an interrupted run's recovery settles the install from, before the server launches; teardown retires the profile.
+        await profile.SourceCheck.PersistAsync(Host, RuntimeDirectory, "server", entry => JournalAsync(Host, Role.Host, "server", entry, cancellation),
+            HostedTimeouts.Long, cancellation).ConfigureAwait(false);
         plan.Runtime = new PinnedDirectory { Source = profile.Game.Root, Sha256 = new Dictionary<string, string>(profile.Game.Files, StringComparer.Ordinal) };
         plan.RuntimePins = _preparedPins = profile.Pins;
         plan.Pins = plan.Pins.Where(pin => Expectations.IsWorldKey(pin.Key)).Concat(stagedPins)
@@ -359,7 +368,10 @@ internal sealed class HostedServerRun : IServerPlacement
             return Task.CompletedTask;
         }
         return report.StepAsync(StepPhase.Setup, "the server host can load crossplay's libraries", async () =>
-            report.Provenance["crossplayLibraries"] = await CrossplayLibraries.RequireAsync(Host, GameDirectory, HostedTimeouts.Quick, cancellation).ConfigureAwait(false) + " loads on " + Host.Name);
+            report.Provenance["crossplayLibraries"] = await CrossplayLibraries.RequireAsync(Host,
+                // The launch every boot builds (ServerActor.Launch), without the plan's arguments: libparty.so loads with its environment.
+                ServerActor.Launch(this, [], new Dictionary<string, string>()),
+                HostedTimeouts.Quick, cancellation).ConfigureAwait(false) + " loads on " + Host.Name);
     }
 
     /// <summary>Ships the verified local world copy to the host and verifies every file there.</summary>
@@ -776,21 +788,24 @@ internal sealed class HostedServerRun : IServerPlacement
         }
         if (_runtime != null)
         {
+            SourceVerdict? settled = null;
             if (!Prepared && _sourceCheck != null)
             {
-                if (serverStopped)
-                    await Try(_sourceCheck.VerdictName("server"),
-                        () => _sourceCheck.VerifyAfterRunAsync(Host, HostedTimeouts.Long, cleanup)).ConfigureAwait(false);
-                else
-                {
-                    const string reason = "Source integrity is unknown because the owned server was not proven stopped.";
-                    report.Provenance["sourceIntegrity.server"] = "unknown: the owned server was not proven stopped";
-                    report.RecordFailure(StepPhase.Cleanup,
-                        _sourceCheck.VerdictName("server") + " (unknown: server not proven stopped)", new IOException(reason));
-                }
+                // The install settled before the profile goes (its run folder holds the baseline and the moved files).
+                var verdict = serverStopped
+                    ? await _sourceCheck.SettleAsync(Host, SourceSettlement.Run("server", RuntimeDirectory, output),
+                        entry => JournalAsync(Host, Role.Host, "server", entry, cleanup), HostedTimeouts.Long, cleanup).ConfigureAwait(false)
+                    : SourceVerdict.Unknown("server", "the owned server was not proven stopped");
+                // A verdict of a stop that was not proven is the run's unknown outcome already; any other failing verdict is a failure.
+                try { verdict.Record(report); }
+                catch (IOException error) when (serverStopped) { failures.Add(error); Console.Error.WriteLine("Teardown: " + error.Message); }
+                catch (IOException) { }
+                // A settlement that did not finish keeps the profile, journalled kept by the settlement, so the run folder stays too.
+                settled = verdict;
             }
             try
             {
+                settled?.RequireRetirable();
                 await retirement.HostAsync(Role.Host, Host, _loader ?? _runtime, RuntimeDirectory, launched, serverStopped, cleanup).ConfigureAwait(false);
                 // A campaign's prepared profile is journalled by its preparation; a standalone run's own profile here. A failed retire
                 // journals nothing more: the profile stays open in the journal, for env recover.
@@ -859,7 +874,7 @@ internal sealed class HostedServerRun : IServerPlacement
                 !serverStopped ? "its server may still run" : RunRetirement.KeepRequested ? RunRetirement.KeptOnRequest : null, cleanup)).ConfigureAwait(false);
         if (_tunnel != null) await Try("close the CLI tunnel", () => { _tunnel.Dispose(); return Task.CompletedTask; }).ConfigureAwait(false);
         await _clientActors.ReleaseAccountsAsync(Try).ConfigureAwait(false);
-        await _clientActors.RecordInPlaceSourceVerdictsAsync(report, Try).ConfigureAwait(false);
+        _clientActors.RecordInPlaceSourceVerdicts(report);
         // Every process is stopped (or named as possibly running), so the campaign's characters and prepared installs go, under the
         // locks held here; a host whose lock this run never took (a client that never opened) is locked for its retire.
         if (prepared != null)

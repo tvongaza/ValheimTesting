@@ -105,7 +105,9 @@ public sealed class TargetedRegression
     private string? _activeGameRoot;
     private InstallPins? _activePins;
     private ProfileSourceCheck? _activeSourceCheck;
-    private bool _sourceVerified;
+    // The active profile's settled source verdict, once; and the arm evidence folder its settlement keeps what the game added in.
+    private SourceVerdict? _sourceVerdict;
+    private string? _sourceOutput;
     private string? _activeLeftOut; // the profile's left-out root files, as run evidence
 
     public RegressionInputs Inputs { get; }
@@ -230,7 +232,7 @@ public sealed class TargetedRegression
         var env = Inputs;
         if (!env.Mod.Arms.TryGetValue(arm, out var chosen))
             throw new ArgumentException($"There is no arm \"{arm}\"; the manifest names {string.Join(", ", env.Mod.Arms.Keys)}.");
-        _ = HostedRuntimeStage.RequireProfileStorageAsync(_host, Game, Install, LocalClientCopy.StepTimeout,
+        _ = HostedRuntimeStage.RequireProfileStorageAsync(_host, HostedRuntimeKind.Client, Game, Install, LocalClientCopy.StepTimeout,
             explicitRuntime: _runtimeExplicit, inPlaceAvailable: false).GetAwaiter().GetResult();
         var identity = FixtureLayout.Discover(env.Fixture.Root, env.Fixture.WorldUid);
         var fixture = WorldFixture.Manifest(env.Fixture.Root);
@@ -390,6 +392,7 @@ public sealed class TargetedRegression
         output = Path.GetFullPath(output);
         if (Path.Exists(output)) throw new IOException($"{output} already exists; give every run a new evidence directory.");
         Directory.CreateDirectory(output);
+        _sourceOutput = output;
         var report = new ScenarioReport(scenario);
         var logs = new List<RunLog>();
         RegisteredCharacterStage? characterStage = null;
@@ -460,11 +463,14 @@ public sealed class TargetedRegression
             if (_activeSourceCheck != null)
                 try
                 {
-                    report.Step(StepPhase.Cleanup, _activeSourceCheck.VerdictName("client"), () =>
+                    SourceVerdict verdict;
+                    try
                     {
                         RequireStopped([_activeGameRoot ?? Install], clientSession: false);
-                        VerifySource();
-                    });
+                        verdict = SettleSource();
+                    }
+                    catch (Exception error) { verdict = SourceVerdict.Unknown(SourceActor, error.Message); }
+                    verdict.Record(report);
                 }
                 catch (Exception error) { Console.Error.WriteLine("Teardown: " + error.Message); }
             if (characterStage != null)
@@ -612,13 +618,16 @@ public sealed class TargetedRegression
             _activeGameRoot = profile.GameRoot;
             _activePins = profile.Pins;
             _activeSourceCheck = profile.SourceCheck;
-            _sourceVerified = false;
+            _sourceVerdict = null;
             _activeLeftOut = HostedRuntimeStage.ProfileLeftOut.Describe(profile.LeftOut);
             _lastStageSeconds = stageClock.Elapsed.TotalSeconds;
             _journal.AppendLocal(actor, JournalEntry.Of(JournalEntry.CopyDone, ("runtime", Install),
                 ("files", profile.Loader.Files.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)), ("source", source),
                 ("runtimeKind", "client")));
             _prepared = true;
+            // The baseline an interrupted run's recovery settles the install from, before the client launches; Remove retires the profile.
+            profile.SourceCheck.PersistAsync(_host, Install, SourceActor, entry => { _journal.AppendLocal(actor, entry); return Task.CompletedTask; },
+                LocalClientCopy.StepTimeout).GetAwaiter().GetResult();
         }
         catch (Exception error) when (error is not AggregateException)
         {
@@ -633,8 +642,11 @@ public sealed class TargetedRegression
     {
         RequireStopped([_activeGameRoot ?? Install], clientSession: false);
         Exception? integrity = null;
-        try { VerifySource(); }
+        // An arm that recorded its verdict already is not settled or reported a second time.
+        try { if (_sourceVerdict == null) SettleSource().Record(null); }
         catch (Exception error) { integrity = error; }
+        // A settlement that did not finish keeps the profile with its baseline and moved files, journalled kept, for env teardown.
+        _sourceVerdict?.RequireRetirable(integrity);
         try { HostedRuntimeStage.RetireAsync(_host, Install, _stage, LocalClientCopy.StepTimeout).GetAwaiter().GetResult(); }
         catch (Exception cleanup) when (integrity != null)
         { throw new AggregateException("Source integrity failed and the regression profile was not retired.", integrity, cleanup); }
@@ -647,14 +659,19 @@ public sealed class TargetedRegression
         if (integrity != null) throw integrity;
     }
 
-    private void VerifySource()
+    // The one name of a regression's verdict and evidence, in the arm's report and in a recovery.
+    private const string SourceActor = "client";
+
+    private SourceVerdict SettleSource()
     {
-        if (_sourceVerified) return;
+        if (_sourceVerdict is { } settled) return settled;
         var check = _activeSourceCheck ?? throw new InvalidOperationException("The profile source check was not retained.");
         // The report owns this verdict. Cache a failed verdict too, so later copy retirement removes the profile without
-        // listing the same source again or reporting the same integrity finding a second time.
-        _sourceVerified = true;
-        check.VerifyAfterRunAsync(_host, LocalClientCopy.StepTimeout).GetAwaiter().GetResult();
+        // listing the same source again or reporting the same integrity finding a second time. Its evidence goes to the last arm's
+        // folder; a profile staged and removed without an arm keeps what it moved on the host, journalled kept.
+        string actor = "regression-" + Inputs.Name;
+        return _sourceVerdict = check.SettleAsync(_host, SourceSettlement.Run(SourceActor, Install, _sourceOutput),
+            entry => { _journal.AppendLocal(actor, entry); return Task.CompletedTask; }, LocalClientCopy.StepTimeout).GetAwaiter().GetResult();
     }
 
     private void RequireStopped(IReadOnlyCollection<string>? runtimes, bool clientSession)

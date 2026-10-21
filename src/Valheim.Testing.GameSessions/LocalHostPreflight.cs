@@ -3,9 +3,10 @@ using Valheim.Testing.Game;
 namespace Valheim.Testing.GameSessions;
 
 /// <summary>
-/// Read-only checks shared by local one-shot commands and inventory preflight. A caller supplies only the roles it will
-/// actually use; a server-only run need not have a client desktop or Steam account. No check creates run evidence or copies
-/// game files. Campaigns use the same individual checks for their local actors and add their remote-host checks.
+/// Read-only checks shared by local one-shot commands and inventory preflight, but for the profile-storage check's one trial
+/// hard link for a Linux or Mac server, made and removed under the runtime root (HostedRuntimeStage.RequireProfileStorageAsync).
+/// A caller supplies only the roles it will actually use; a server-only run need not have a client desktop or Steam account.
+/// No check creates run evidence or copies game files. Campaigns use the same individual checks for their local actors and add their remote-host checks.
 /// </summary>
 internal static class LocalHostPreflight
 {
@@ -69,18 +70,20 @@ internal static class LocalHostPreflight
                 continue;
             }
             bool client = group.Any(actor => actor.Recipe.Roles.Contains("client"));
-            if (inventory.Hosts[group.Key].Platform == "windows")
-                foreach (var actor in group)
-                    try
-                    {
-                        if (probes.ProfileStorage is { } profileStorage)
-                            _ = await profileStorage(host, actor.Recipe.Install, actor.Recipe.Runtime, actor.Recipe.RuntimeExplicit,
-                                timeout, cancellation).ConfigureAwait(false);
-                        else
-                            _ = await HostedRuntimeStage.RequireProfileStorageAsync(host, actor.Recipe.Install, actor.Recipe.Runtime,
-                                timeout, cancellation, explicitRuntime: actor.Recipe.RuntimeExplicit).ConfigureAwait(false);
-                    }
-                    catch (Exception error) when (Refusal(error)) { problems.Add(new(actor.Name, "profile storage", error.Message)); }
+            foreach (var actor in group.Where(actor => ProfileLayouts.For(inventory.Hosts[group.Key].Platform,
+                actor.Recipe.Roles.Contains("server")) == ProfileLayout.Linked))
+                try
+                {
+                    if (probes.ProfileStorage is { } profileStorage)
+                        _ = await profileStorage(host, actor.Recipe.Install, actor.Recipe.Runtime, actor.Recipe.RuntimeExplicit,
+                            timeout, cancellation).ConfigureAwait(false);
+                    else
+                        _ = await HostedRuntimeStage.RequireProfileStorageAsync(host,
+                            actor.Recipe.Roles.Contains("server") ? HostedRuntimeKind.Server : HostedRuntimeKind.Client,
+                            actor.Recipe.Install, actor.Recipe.Runtime, timeout, cancellation,
+                            explicitRuntime: actor.Recipe.RuntimeExplicit).ConfigureAwait(false);
+                }
+                catch (Exception error) when (Refusal(error)) { problems.Add(new(actor.Name, "profile storage", error.Message)); }
             try
             {
                 var claim = probes.Lock is { } lockProbe

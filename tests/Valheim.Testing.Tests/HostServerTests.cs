@@ -498,11 +498,31 @@ public sealed class HostServerTests : IDisposable
         Assert.Same(CrossplayLibraryScripts.Check, run.Script);
         Assert.Equal("/srv/rt", run.Variables["runtime"]);
         Assert.Equal(string.Join('\n', CrossplayLibraries.PartyLibraries), run.Variables["libraries"]);
+        Assert.Equal("1", run.Variables["inheritlibs"]); // a public check keeps the session's library path, as a public launch does
         var unexpected = new QueueHost(); unexpected.Replies.Enqueue(Reply("hello\n"));
         await Assert.ThrowsAsync<HostOperationException>(() => CrossplayLibraries.RequireAsync(unexpected, "/srv/rt", TimeSpan.FromSeconds(30)));
         var windows = new QueueHost(HostShell.Pwsh);
         await Assert.ThrowsAsync<PlatformNotSupportedException>(() => CrossplayLibraries.RequireAsync(windows, "/srv/rt", TimeSpan.FromSeconds(30)));
         Assert.Empty(windows.Runs);
+    }
+
+    // #612 review: the crossplay check resolves libparty.so with the launch's own library path: the session's LD_LIBRARY_PATH
+    // behind the runtime's for a launch that keeps it (a public launch), none of it for a linked profile's, which unsets it.
+    [Fact] public async Task TheCrossplayCheckKeepsTheSessionLibraryPathOnlyWhenTheLaunchDoes()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+        using var root = new TempDirectory();
+        string bin = Directory.CreateDirectory(Path.Combine(root.Path, "bin")).FullName, runtime = Path.Combine(root.Path, "runtime");
+        File.WriteAllText(Path.Combine(bin, "ldd"), "#!/bin/sh\necho \"LD=$LD_LIBRARY_PATH\"\n");
+        File.SetUnixFileMode(Path.Combine(bin, "ldd"), UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        Directory.CreateDirectory(Path.Combine(runtime, "valheim_server_Data", "Plugins"));
+        File.WriteAllText(Path.Combine(runtime, CrossplayLibraries.PartyLibraries[0]), "");
+        var host = new LocalGameHost("local-party", HostShell.Bash);
+        async Task<string> Checked(string inherit) => (await host.RunAsync("export LD_LIBRARY_PATH=/session PATH=\"$bin:$PATH\"\n" + CrossplayLibraryScripts.Check,
+            new Dictionary<string, string> { ["bin"] = bin, ["runtime"] = runtime, ["libraries"] = CrossplayLibraries.PartyLibraries[0], ["inheritlibs"] = inherit },
+            TimeSpan.FromSeconds(30))).EnsureSuccess("Checking crossplay's libraries").Stdout;
+        Assert.Contains($"VT-LDD LD={runtime}/linux64:{runtime}/doorstop_libs:/session\n", await Checked("1"));
+        Assert.Contains($"VT-LDD LD={runtime}/linux64:{runtime}/doorstop_libs\n", await Checked(""));
     }
 
     [Fact] public async Task ACrossplayStartChecksTheLibrariesFirstAndRefusesWithTheirNames()
@@ -518,6 +538,7 @@ public sealed class HostServerTests : IDisposable
         var run = Assert.Single(host.Runs);
         Assert.Equal("1", run.Variables["crossplay"]);
         Assert.Equal(string.Join('\n', CrossplayLibraries.PartyLibraries), run.Variables["libraries"]);
+        Assert.Equal("1", run.Variables["inheritlibs"]); // a public launch keeps the session's LD_LIBRARY_PATH, so its check does too
         var plain = new QueueHost(); plain.Replies.Enqueue(Reply("VT-SERVER started 12 34\n"));
         await HostServer.StartAsync(plain, GameLaunch.ForServer("/srv/rt", ["-batchmode"], hostPlatform: ServerPlatform.Linux), "/srv/boot", TimeSpan.FromSeconds(30));
         Assert.Equal("", Assert.Single(plain.Runs).Variables["crossplay"]);

@@ -41,6 +41,8 @@ internal interface ISteamLocator
     string? LinkTarget(string path);
     /// <summary>Windows: the actual volume and filesystem containing the path or its nearest existing parent.</summary>
     WindowsStorageVolume StorageVolume(string path);
+    /// <summary>Linux and macOS: the mount, device and filesystem containing each path or its nearest existing parent, in one probe (<see cref="UnixStorageProbe"/>).</summary>
+    IReadOnlyList<UnixStorageVolume> UnixStorageVolumes(IReadOnlyList<string> paths);
 }
 
 /// <summary>This machine, read through the file system and (on Windows) the current user's registry.</summary>
@@ -108,6 +110,7 @@ internal sealed class LocalSteamLocator : ISteamLocator
         return full;
     }
     public WindowsStorageVolume StorageVolume(string path) => WindowsStorageProbe.Inspect(path);
+    public IReadOnlyList<UnixStorageVolume> UnixStorageVolumes(IReadOnlyList<string> paths) => UnixStorageProbe.Inspect(paths);
     public string OnDiskPath(string path)
     {
         if (!Path.Exists(path)) return path;

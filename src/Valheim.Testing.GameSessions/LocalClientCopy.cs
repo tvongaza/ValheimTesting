@@ -26,7 +26,8 @@ internal sealed class LocalClientCopy
     private readonly ClientRunPlan _plan;
     private readonly Unbound _unbound;
     private readonly ProfileSourceCheck _sourceCheck;
-    private int _retired, _sourceVerified;
+    private int _retired;
+    private SourceVerdict? _sourceVerdict;
 
     // The plan as it was before it was bound, restored when the profile is retired: a plan reused later makes a new profile.
     private sealed record Unbound(string Install, InstallPins? InstallPins, Dictionary<string, string> Pins, string? CliManifest,
@@ -42,13 +43,27 @@ internal sealed class LocalClientCopy
     internal string Runtime => _runtime;
     /// <summary>The game root used to prove the launched process has stopped before retiring the owned folder.</summary>
     internal string LaunchRoot => _launchRoot;
-    internal string SourceVerdictName => _sourceCheck.VerdictName(_actor);
+    /// <summary>The client's name in the journal and in its source verdict.</summary>
+    internal string Actor => _actor;
+    /// <summary>The actor's own evidence folder: where its source settlement's evidence goes when no run names one (<see cref="LocalClientPlacement.Evidence"/>).</summary>
+    internal string? Output { get; set; }
 
-    internal async Task VerifySourceAsync()
+    /// <summary>
+    /// Settles the install once every client launched from the profile is stopped (<see cref="ProfileSourceCheck.SettleAsync"/>) and
+    /// records the verdict in <paramref name="report"/> (<see cref="SourceVerdict.Record"/>; without one it only throws when it
+    /// fails), its evidence under <paramref name="output"/> (else <see cref="Output"/>). Once only.
+    /// </summary>
+    internal async Task SettleSourceAsync(ScenarioReport? report, string? output = null)
     {
-        if (Volatile.Read(ref _sourceVerified) != 0) return;
-        await _sourceCheck.VerifyAfterRunAsync(_host, StepTimeout).ConfigureAwait(false);
-        Interlocked.Exchange(ref _sourceVerified, 1);
+        var verdict = Volatile.Read(ref _sourceVerdict);
+        if (verdict == null)
+        {
+            // The owner never throws: a settlement that fails before it compares is an unknown verdict that keeps the profile.
+            verdict = await _sourceCheck.SettleAsync(_host, SourceSettlement.Run(_actor, _runtime, output ?? Output),
+                entry => { _journal.AppendLocal(_actor, entry); return Task.CompletedTask; }, StepTimeout).ConfigureAwait(false);
+            if (Interlocked.CompareExchange(ref _sourceVerdict, verdict, null) != null) return;
+            verdict.Record(report);
+        }
     }
 
     /// <summary>
@@ -81,10 +96,10 @@ internal sealed class LocalClientCopy
         string data = dataRoot ?? CliBundle.DataRoot;
         host ??= new LocalGameHost("this machine", HostShell.ThisMachine);
         var journal = RunJournal.ThisProcess;
-        var runtimeRoot = await HostedRuntimeStage.DefaultProfileRootAsync(host, source, data, StepTimeout, cancellation).ConfigureAwait(false);
+        var runtimeRoot = await HostedRuntimeStage.DefaultProfileRootAsync(host, HostedRuntimeKind.Client, source, data, StepTimeout, cancellation).ConfigureAwait(false);
         string root = HostPath.Join(runtimeRoot.Path, "local-clients");
         Console.WriteLine($"profile runtime root: {root} ({runtimeRoot.Reason}).");
-        await HostedRuntimeStage.RequireProfileStorageAsync(host, source, root, StepTimeout, cancellation,
+        var storage = await HostedRuntimeStage.RequireProfileStorageAsync(host, HostedRuntimeKind.Client, source, root, StepTimeout, cancellation,
             explicitRuntime: false).ConfigureAwait(false);
         // One folder per profile: a run may prepare two plans for one client name (a client opened without its mod, then with it).
         string parent = Path.Combine(root, "vt-prep-" + journal.RunId + "-" + actor + "-" + Guid.NewGuid().ToString("N")[..8]);
@@ -104,7 +119,7 @@ internal sealed class LocalClientCopy
         Directory.CreateDirectory(root);
         // Journalled before the profile: an interrupted preparation leaves a record of every path it may own.
         journal.AppendLocal(actor, JournalEntry.Of(JournalEntry.CopyIntended, ("runtime", runtime), ("stage", stage), ("parent", parent),
-            ("runtimeKind", "client"), ("launchRoot", source)));
+            ("runtimeKind", "client"), ("launchRoot", HostedRuntimeStage.LaunchRoot(storage.Platform, HostedRuntimeKind.Client, source, runtime))));
         HostedRuntimeStage.PreparedProfile profile;
         try
         {
@@ -125,21 +140,37 @@ internal sealed class LocalClientCopy
             plan.PreparedSourceCliPins, plan.PreparedReplacedCliPaths, plan.PreparedSourceCheck, plan.PreparedBuild);
         if (selection.Build != null) plan.PreparedBuild = selection.Build;
         Bind(plan, source, profile, manifestPath, bound, selection.Replaced, host);
-        return new LocalClientCopy(host, actor, runtime, stage, profile.GameRoot, journal, plan, unbound, profile.SourceCheck);
+        var copy = new LocalClientCopy(host, actor, runtime, stage, profile.GameRoot, journal, plan, unbound, profile.SourceCheck);
+        // The baseline an interrupted run's recovery settles the install from, before anything launches from the profile.
+        try
+        {
+            await profile.SourceCheck.PersistAsync(host, runtime, actor, entry => { journal.AppendLocal(actor, entry); return Task.CompletedTask; },
+                StepTimeout, cancellation).ConfigureAwait(false);
+        }
+        catch (Exception error) when (error is not OperationCanceledException)
+        {
+            try { await copy.RetireAsync(verifySource: false).ConfigureAwait(false); }
+            catch (Exception cleanup) { throw new AggregateException("The source baseline was not persisted and the disposable client profile was not retired.", error, cleanup); }
+            throw;
+        }
+        return copy;
     }
 
     /// <summary>
     /// Removes the profile once every client launched from it was stopped (the game's logs were kept beside the evidence then),
     /// journals it retired and restores the plan as it was before it was bound. Once only. A game still running from the
-    /// profile's launch root is refused first, which leaves it to <c>env recover</c>.
+    /// profile's launch root is refused first, which leaves it to <c>env recover</c>. With <paramref name="verifySource"/> the install
+    /// is settled first (<see cref="SettleSourceAsync"/>, without a report), unless it was already.
     /// </summary>
     internal async Task RetireAsync(bool verifySource = true)
     {
         if (Interlocked.Exchange(ref _retired, 1) != 0) return;
         await HostedRuntimeStage.RequireStoppedAsync(_host, StepTimeout, runtimes: [_launchRoot], clientSession: false).ConfigureAwait(false);
         Exception? integrity = null;
-        try { if (verifySource) await VerifySourceAsync().ConfigureAwait(false); }
+        try { if (verifySource) await SettleSourceAsync(null).ConfigureAwait(false); }
         catch (Exception error) { integrity = error; }
+        // A settlement that did not finish keeps the profile with its baseline and moved files, journalled kept, for env teardown.
+        Volatile.Read(ref _sourceVerdict)?.RequireRetirable(integrity);
         try
         {
             await HostedRuntimeStage.RetireAsync(_host, _runtime, _stage, StepTimeout).ConfigureAwait(false);

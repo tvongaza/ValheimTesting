@@ -90,4 +90,26 @@ public sealed class ClientActorTests : IDisposable
         Assert.Equal(1, placement.Processes[0].Stops); // The failed startup stopped its own process.
         Assert.Equal(new[] { "client-1 BepInEx log" }, actor.Logs.Select(log => log.Role));
     }
+
+    // #612: an owned client on this machine that runs its install in place gets the one not-applicable source verdict at teardown,
+    // once however often it opened; a placement with nothing owned records none.
+    [Fact] public async Task AnInPlaceClientIsRecordedOnceAsNotApplicable()
+    {
+        var placement = new LocalClientPlacement();
+        Assert.False(placement.HasSourceVerdicts);
+        placement.RanInPlace("client");
+        placement.RanInPlace("client"); // it left and rejoined
+        Assert.True(placement.HasSourceVerdicts);
+        var report = new ScenarioReport("in place");
+        var failures = new List<Exception>();
+        placement.Report = report;
+
+        await placement.SettleSourcesAsync(failures.Add);
+        await placement.SettleSourcesAsync(failures.Add); // a session settles it again after an actor retired it
+
+        var step = Assert.Single(report.Steps);
+        Assert.Equal(("verify client's source install after the run (not applicable: runs in place)", true, StepPhase.Cleanup), (step.Name, step.Passed, step.Phase));
+        Assert.Equal("not applicable: runs in place", report.Provenance["sourceIntegrity.client"]);
+        Assert.Empty(failures);
+    }
 }

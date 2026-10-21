@@ -418,6 +418,36 @@ public sealed class CampaignPreflightTests : IDisposable
         Assert.DoesNotContain(host.Scripts, script => script is "profile-seed" or "apply-stage");
     }
 
+    // #612: a Linux server's profile is linked too, so `session check --hosts` asks the host's own probe and refuses a runtime on
+    // another mount before anything is staged, in the Windows refusal's words.
+    [Fact]
+    public async Task RemoteLinuxProfileStorageOnAnotherMountIsRefusedBeforeStaging()
+    {
+        string inventory = Write("linux-inventory.json", new
+        {
+            hosts = new { box = new { kind = "ssh", platform = "linux", shell = "bash", @lock = "/vt/lock", destination = "test@box" } },
+            environments = new object[]
+            {
+                new { name = "box-server", host = "box", roles = new[] { "server" }, install = "/srv/valheim", runtime = "/home/test/runs", cliPort = 5577, localCliPort = 6577, gamePort = 2456 },
+            },
+        });
+        string file = Write("campaign.json", new
+        {
+            inventory, server = new { dependencyLock = "missing-lock.json" }, clients = new Dictionary<string, object>(),
+        });
+        var host = new FakeServerHost("box", Path.Combine(_root, "linux-storage-mirror"));
+        host.UnixVolumes["/srv"] = new UnixStorageVolume("/srv", "2065", "ext4", Writable: true);
+
+        var report = await HostedCampaignPreparation.InspectAsync(file, TimeSpan.FromSeconds(2), _ => host, pinnedLoader: null);
+
+        var problem = Assert.Single(report.Problems, problem => problem.Actor == "server" && problem.Input == "profile storage");
+        Assert.Equal("the explicit inventory runtime folder /home/test/runs is on / (ext4, device 2049), not the source install's mount " +
+            "/srv (ext4, device 2065). A Linux profile hard-links the install's game files, and a hard link cannot cross mounts. " +
+            "Put the inventory runtime on the install's mount /srv.", problem.Message);
+        Assert.Equal("/srv/valheim\n/home/test/runs", Assert.Single(host.Runs, run => run.Script == "profile-storage").Variables["paths"]);
+        Assert.DoesNotContain(host.Scripts, script => script is "profile-seed" or "apply-stage" or "ship");
+    }
+
     // Stage 2's journal item (#257): a run another process left on a campaign host refuses the preflight and names the command;
     // a live run's client is named as that run's in the conflicting-use refusal, an unknown one as the user's own.
     [Fact]

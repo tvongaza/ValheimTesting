@@ -33,8 +33,12 @@ public sealed class LocalHostPreflightTests : IDisposable
         var ports = new List<int>();
         var processKinds = new List<bool>();
         int steam = 0, desktop = 0, journal = 0;
+        var storage = new List<string>();
         var probes = new LocalHostPreflight.Probes(
             Processes: (_, client, _, _) => { processKinds.Add(client); return Task.CompletedTask; },
+            // Every linked profile's storage is asked once (the real probe is the storage owner's tests'): on this macOS host the
+            // server's, never the in-place client's.
+            ProfileStorage: (_, source, _, _, _, _) => { storage.Add(source); return Task.FromResult<string?>(null); },
             Port: (_, port, _, _) => { ports.Add(port); return Task.CompletedTask; },
             Lock: (_, _, _, _) => Task.FromResult(new HostLockResult(HostLockState.Free, null, "free")),
             MacDesktop: () => desktop++, SteamRunning: () => { steam++; return true; },
@@ -46,6 +50,7 @@ public sealed class LocalHostPreflightTests : IDisposable
             TimeSpan.FromSeconds(1), hostFactory: _ => host, probes: probes);
 
         Assert.Empty(problems);
+        Assert.Equal(Path.Combine(_root, "server"), Assert.Single(storage));
         Assert.Equal(withClient ? [5551, 5552] : [5551], ports);
         Assert.Equal([withClient], processKinds); // one process scan for the shared host
         Assert.Equal(withClient ? 1 : 0, steam);
@@ -62,6 +67,7 @@ public sealed class LocalHostPreflightTests : IDisposable
             Processes: (_, _, _, _) => throw new InvalidOperationException("client already active"),
             Port: (_, port, _, _) => port == 5552 ? throw new InvalidOperationException("port busy") : Task.CompletedTask,
             Lock: (_, _, _, _) => Task.FromResult(new HostLockResult(HostLockState.HeldByOther, "another", "held by another run")),
+            ProfileStorage: (_, _, _, _, _, _) => Task.FromResult<string?>(null),
             MacDesktop: () => throw new InvalidOperationException("screen locked"),
             SteamRunning: () => false,
             Journals: (_, _) => Task.FromResult<IReadOnlyList<CampaignPreflightProblem>>([new("here", "run journal", "run not recovered")]),
@@ -115,6 +121,41 @@ public sealed class LocalHostPreflightTests : IDisposable
             problem => problem.Input == "profile storage");
         Assert.Contains("cannot hold the hard links", unsupported.Message);
         Assert.DoesNotContain(host.Scripts, script => script is "profile-seed" or "apply-stage");
+    }
+
+    // #612: `env preflight` on a Linux machine checks its server's linked profile through the one storage owner, the bash probe
+    // on this machine's host; a Mac client's profile launches its source bundle, so a Mac is asked nothing about it.
+    [Fact]
+    public async Task ALinuxServerProfileOnAnotherMountIsRefusedAndAMacClientIsNotProbed()
+    {
+        EnvironmentInventory Inventory(string platform, string role = "server") => new()
+        {
+            Hosts = new() { ["box"] = new HostProfile { Kind = "local", Platform = platform, Shell = "bash", Lock = "/vt/lock" } },
+            Environments = [new EnvironmentRecipe { Name = role, Host = "box", Roles = [role],
+                Install = "/srv/valheim", Runtime = "/home/tester/runs", CliPort = 5551 }],
+        };
+        var probes = new LocalHostPreflight.Probes(
+            Processes: (_, _, _, _) => Task.CompletedTask,
+            Port: (_, _, _, _) => Task.CompletedTask,
+            Lock: (_, _, _, _) => Task.FromResult(new HostLockResult(HostLockState.Free, null, "free")),
+            MacDesktop: () => { }, SteamRunning: () => true,
+            Journals: (_, _) => Task.FromResult<IReadOnlyList<CampaignPreflightProblem>>([]), Packaged: () => null);
+        var host = new FakeServerHost("box", Path.Combine(_root, "linux-storage-mirror"), kind: GameHostKind.Local);
+        host.UnixVolumes["/srv"] = new UnixStorageVolume("/srv", "2065", "ext4", Writable: true);
+
+        var linux = Inventory("linux");
+        var refused = Assert.Single(await LocalHostPreflight.InspectAsync(linux, linux.Environments.Select(recipe => new LocalHostPreflight.Actor(recipe.Name, recipe)),
+            TimeSpan.FromSeconds(1), hostFactory: _ => host, probes: probes));
+        Assert.Equal(("server", "profile storage"), (refused.Actor, refused.Input));
+        Assert.Contains("A Linux profile hard-links the install's game files, and a hard link cannot cross mounts. " +
+            "Put the inventory runtime on the install's mount /srv.", refused.Message);
+        Assert.Single(host.Runs, run => run.Script == "profile-storage");
+        Assert.DoesNotContain(host.Scripts, script => script is "profile-seed" or "apply-stage" or "ship");
+
+        var mac = Inventory("macos", "client");
+        Assert.Empty(await LocalHostPreflight.InspectAsync(mac, mac.Environments.Select(recipe => new LocalHostPreflight.Actor(recipe.Name, recipe)),
+            TimeSpan.FromSeconds(1), hostFactory: _ => host, probes: probes));
+        Assert.Single(host.Runs, run => run.Script == "profile-storage");
     }
 
     // #821: a client's profile is staged under the environment's own runtime folder (a regression, a campaign), so preflight

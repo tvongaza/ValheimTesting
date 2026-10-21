@@ -15,8 +15,11 @@ namespace Valheim.Testing.GameSessions;
 public sealed class HostListing
 {
     internal HostListing(string hostName, HostShellKind shell, string root, IReadOnlyDictionary<string, string> files,
-        IReadOnlyList<string> executables, IReadOnlyDictionary<string, HostFileState>? states = null)
-    { HostName = hostName; Shell = shell; Root = root; Files = files; Executables = executables; States = states ?? new Dictionary<string, HostFileState>(); }
+        IReadOnlyList<string> executables, IReadOnlyDictionary<string, HostFileState>? states = null, IReadOnlyCollection<string>? directories = null)
+    {
+        HostName = hostName; Shell = shell; Root = root; Files = files; Executables = executables; States = states ?? new Dictionary<string, HostFileState>();
+        Directories = directories ?? [];
+    }
     public string HostName { get; }
     public HostShellKind Shell { get; }
     /// <summary>The listed directory on the host.</summary>
@@ -27,6 +30,8 @@ public sealed class HostListing
     public IReadOnlyList<string> Executables { get; }
     /// <summary>The size and host-native modified-time token captured beside each hash, for the profile source integrity check.</summary>
     internal IReadOnlyDictionary<string, HostFileState> States { get; }
+    /// <summary>A whole-root metadata listing's every directory below the root (relative, <c>/</c> separators), so the profile source check sees an empty one the game made.</summary>
+    internal IReadOnlyCollection<string> Directories { get; }
     /// <summary>Paths compare ignoring case on a Windows (PowerShell) host.</summary>
     internal StringComparer Names => Shell == HostShellKind.PowerShell ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
 }
@@ -61,12 +66,12 @@ public static class HostInstall
         CancellationToken cancellation = default) => ListCoreAsync(host, root, timeout, paths, cancellation,
             ignoreCase: false, content: true, metadata: false);
 
-    /// <summary>The preparation row's one full content listing, with metadata retained for the post-run comparison.</summary>
+    /// <summary>The preparation row's one full content listing, with metadata and directories retained for the post-run comparison.</summary>
     internal static Task<HostListing> ListProfileSourceAsync(IGameHost host, string root, TimeSpan timeout,
         CancellationToken cancellation = default) => ListCoreAsync(host, root, timeout, null, cancellation,
             ignoreCase: false, content: true, metadata: true);
 
-    /// <summary>Lists names, sizes and modified times without reading file contents.</summary>
+    /// <summary>Lists names, sizes and modified times, and every directory, without reading file contents.</summary>
     internal static Task<HostListing> ListMetadataAsync(IGameHost host, string root, TimeSpan timeout,
         CancellationToken cancellation = default) => ListCoreAsync(host, root, timeout, null, cancellation,
             ignoreCase: false, content: false, metadata: true);
@@ -149,17 +154,23 @@ public static class HostInstall
         });
     }
 
+    /// <summary>The <see cref="Exception.Data"/> key a listing's refusal of links carries: the folder holds a link, which no retry changes.</summary>
+    internal const string LinksFound = "vt-links-found";
+
     internal static HostListing ReadListing(string hostName, HostShellKind shell, string root, HostResult result)
     {
         var lines = result.Stdout.Split('\n');
         if (lines.Length > 0 && lines[0] == "VT-LIST missing") throw new DirectoryNotFoundException($"{root} does not exist on {hostName}.");
         if (lines.Length > 0 && lines[0] == "VT-LIST links")
-            throw new IOException($"{root} on {hostName} holds links, which are unsupported in a fixture: {string.Join(", ", lines.Skip(1).Where(line => line.Length > 0).Take(5))}.");
+            // Marked as a state of the host (LinksFound), not a passing failure.
+            throw new IOException($"{root} on {hostName} holds links, which are unsupported in a fixture: {string.Join(", ", lines.Skip(1).Where(line => line.Length > 0).Take(5))}.")
+                { Data = { [LinksFound] = true } };
         if (!lines.Contains("VT-LIST done")) throw new HostOperationException($"Unexpected reply while listing {root} on {hostName}", result);
         var names = shell == HostShellKind.PowerShell ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
         var files = new Dictionary<string, string>(names);
         var states = new Dictionary<string, HostFileState>(names);
         var executables = new List<string>();
+        var directories = new HashSet<string>(names);
         foreach (string line in lines)
         {
             if (line.Length == 0 || line == "VT-LIST done") continue;
@@ -196,6 +207,13 @@ public static class HostInstall
                 }
                 continue;
             }
+            else if (line.StartsWith("VT-DIRS ", StringComparison.Ordinal))
+            {
+                string packed = Encoding.UTF8.GetString(Convert.FromBase64String(line["VT-DIRS ".Length..]));
+                foreach (string directory in packed.Split('\0', StringSplitOptions.RemoveEmptyEntries)) directories.Add(directory.Replace('\\', '/'));
+                continue;
+            }
+            else if (line.StartsWith("VT-DIR ", StringComparison.Ordinal)) { directories.Add(Decode(line["VT-DIR ".Length..]).Replace('\\', '/')); continue; }
             else if (line.StartsWith("VT-EXEC ", StringComparison.Ordinal)) { executables.Add(line["VT-EXEC ".Length..]); continue; }
             else throw new HostOperationException($"Unexpected line while listing {root} on {hostName}: {line}", result);
             relative = relative.Replace('\\', '/');
@@ -205,7 +223,7 @@ public static class HostInstall
         }
         if (files.Count != 0 && states.Count != 0 && !files.Keys.ToHashSet(names).SetEquals(states.Keys))
             throw new HostOperationException($"The content and metadata listings of {root} on {hostName} named different files", result);
-        return new HostListing(hostName, shell, root, files, executables, states);
+        return new HostListing(hostName, shell, root, files, executables, states, directories);
     }
 
     /// <summary><paramref name="files"/> (a manifest or listing) without what lies under a skipped top-level directory.</summary>
@@ -322,12 +340,12 @@ public static class HostInstall
             RequireSame(sourceCheck.StagedBeforeBoot, new HostListing(loader.HostName, loader.Shell, loader.Root, staged, []),
                 kind + " staged files");
         }
-        if (sourceCheck.LinkedRootFiles.Count != 0)
+        if (sourceCheck.LinkedNativeFiles.Count != 0)
         {
-            var native = game.Files.Where(file => sourceCheck.LinkedRootFiles.ContainsKey(file.Key))
+            var native = game.Files.Where(file => sourceCheck.LinkedNativeFiles.ContainsKey(file.Key))
                 .ToDictionary(file => file.Key, file => file.Value, game.Names);
-            RequireSame(sourceCheck.LinkedRootFiles, new HostListing(game.HostName, game.Shell, game.Root, native, []),
-                kind + " linked root files");
+            RequireSame(sourceCheck.LinkedNativeFiles, new HostListing(game.HostName, game.Shell, game.Root, native, []),
+                kind + " linked native files");
         }
         if (!Pins(source, loader).Game.Equals(pinned.Game, StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException($"The source game changed after its loader profile was staged for {kind}; refuse this launch and prepare a new profile.");
@@ -476,7 +494,7 @@ internal static class HostInstallScripts
 
     // Variables: root, dirs (relative directory patterns and file names with "/" separators, one per line, as
     // HostInstall.ListingPatterns checked them; none lists everything), nocase (1: compare every segment ignoring case),
-    // content (1 hashes contents) and metadata (1 records size and modified time for the profile source check).
+    // content (1 hashes contents) and metadata (1 records size and modified time, and every directory, for the profile source check).
     // sha256sum prints each file as "<hash>  ./<path>", escaping a name with a backslash or line break. Links are refused before
     // anything is hashed, whether a link is listed itself or lies on the way to a named path.
     public static readonly string BashList = """
@@ -556,11 +574,19 @@ internal static class HostInstallScripts
                         files+=("$file")
                         if [ "${#files[@]}" -eq 200 ]; then vt_bsd_states "${files[@]}" || return 3; files=(); fi
                     done < <(find . -type f -print0)
-                    vt_bsd_states "${files[@]}" || return 3
+                    # bash 3.2 (macOS) calls an empty array unbound under set -u: an empty folder has no files.
+                    vt_bsd_states ${files[@]+"${files[@]}"} || return 3
                 }
                 packed=$(vt_all_bsd_states | /usr/bin/base64 -b 0) || exit 3
             fi
             printf 'VT-STATES %s\n' "$packed"
+            # Every directory too, so the profile source check finds an empty one the game made (find never enters a link).
+            if [ "$host_os" != Darwin ]; then
+                folders=$(find . -mindepth 1 -type d -printf '%P\0' | base64 -w 0) || exit 3
+            else
+                folders=$(find . -mindepth 1 -type d -print0 | while IFS= read -r -d '' folder; do printf '%s\0' "${folder#./}"; done | /usr/bin/base64 -b 0) || exit 3
+            fi
+            printf 'VT-DIRS %s\n' "$folders"
         fi
         for e in valheim_server.x86_64 valheim.x86_64 valheim_server/Valheim; do if [ -f "$e" ] && [ -x "$e" ]; then echo "VT-EXEC $e"; fi; done
         echo "VT-LIST done"
@@ -619,13 +645,14 @@ internal static class HostInstallScripts
             }
         }
         $files = New-Object 'Collections.Generic.List[string]'
+        $folders = New-Object 'Collections.Generic.List[string]'
         $pending = New-Object 'Collections.Generic.Stack[string]'
         foreach ($r in $roots) { if ([IO.File]::GetAttributes($r) -band [IO.FileAttributes]::Directory) { $pending.Push($r) } else { $files.Add($r) } }
         while ($pending.Count -gt 0) {
             foreach ($entry in [IO.Directory]::GetFileSystemEntries($pending.Pop())) {
                 $attributes = [IO.File]::GetAttributes($entry)
                 if ($attributes -band [IO.FileAttributes]::ReparsePoint) { $links.Add($entry) }
-                elseif ($attributes -band [IO.FileAttributes]::Directory) { $pending.Push($entry) }
+                elseif ($attributes -band [IO.FileAttributes]::Directory) { $pending.Push($entry); $folders.Add($entry) }
                 else { $files.Add($entry) }
             }
         }
@@ -646,6 +673,10 @@ internal static class HostInstallScripts
                 }
             }
         } finally { $sha.Dispose() }
+        # Every directory too, so the profile source check finds an empty one the game made.
+        if ($metadata -eq '1') {
+            foreach ($folder in $folders) { 'VT-DIR ' + [Convert]::ToBase64String($utf8.GetBytes($folder.Substring($full.Length + 1).Replace('\', '/'))) }
+        }
         'VT-LIST done'
         """.ReplaceLineEndings("\n");
 

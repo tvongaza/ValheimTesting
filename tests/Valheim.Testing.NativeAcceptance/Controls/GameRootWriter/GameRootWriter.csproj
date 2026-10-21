@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    A native control for #612, never part of a normal runtime: a plugin that writes into the game root, as a preloader failure
+    log or a careless mod does. Install it on an owned run's client or server; a linked profile (Windows, a Linux or macOS
+    dedicated server) must hold its files, a macOS client's source check must move them out of the install, and the install
+    must end unchanged.
+    It compiles against your game install like AcceptanceMod (-p:ValheimPath=), never in this repository or its CI.
+  -->
+  <Import Project="../../../../tools/game-references/Valheim.GameReferences.props" />
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework><LangVersion>10</LangVersion><Nullable>enable</Nullable>
+    <DebugType>embedded</DebugType><CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+    <AssemblyName>AcceptanceMod.Control.GameRootWriter</AssemblyName><Version>0.1.0</Version>
+  </PropertyGroup>
+  <Import Project="../../../../tools/game-references/Valheim.GameReferences.targets" />
+</Project>

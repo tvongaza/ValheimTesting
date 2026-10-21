@@ -496,12 +496,14 @@ public static class HostedCampaignPreparation
                 return;
             }
             bool localHost = inputs.Profile.Hosts[group.Key].Kind == "local";
-            if (!localHost && inputs.Profile.Hosts[group.Key].Platform == "windows")
-                foreach (var item in group)
+            if (!localHost)
+                foreach (var item in group.Where(item => ProfileLayouts.For(inputs.Profile.Hosts[group.Key].Platform,
+                    item.Name == "server") == ProfileLayout.Linked))
                     try
                     {
-                        await HostedRuntimeStage.RequireProfileStorageAsync(host, item.Role.Install, item.Role.Runtime,
-                            timeout, cancellation, explicitRuntime: item.Role.RuntimeExplicit).ConfigureAwait(false);
+                        await HostedRuntimeStage.RequireProfileStorageAsync(host,
+                            item.Name == "server" ? HostedRuntimeKind.Server : HostedRuntimeKind.Client, item.Role.Install,
+                            item.Role.Runtime, timeout, cancellation, explicitRuntime: item.Role.RuntimeExplicit).ConfigureAwait(false);
                     }
                     catch (Exception error) when (HostCheckRefusal(error))
                     { failures.Add(new(item.Name, "profile storage", error.Message)); }
@@ -1050,7 +1052,8 @@ public static class HostedCampaignPreparation
                     await journal.AppendAsync(host, journalDirectory, name, JournalEntry.Of(JournalEntry.CopyIntended,
                         ("runtime", runtime), ("stage", stage), ("parent", parent),
                         ("runtimeKind", kind == HostedRuntimeKind.Server ? "server" : "client"),
-                        ("launchRoot", role.Install)), timeout, cancellation).ConfigureAwait(false);
+                        ("launchRoot", HostedRuntimeStage.LaunchRoot(profile.Hosts[hostName].Platform, kind, role.Install, runtime))),
+                        timeout, cancellation).ConfigureAwait(false);
                     // Owned from here: a failed preparation retires a partial copy too (idempotent where nothing was made), so its
                     // run-ended entry says cleanup was verified only when no copy of it remains, not when the copy's own cleanup failed.
                     copies.Add((hostName, name, runtime, stage));
@@ -1077,6 +1080,9 @@ public static class HostedCampaignPreparation
                         ("runtime", runtime), ("files", listings[name].Files.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)),
                         ("runtimeKind", kind == HostedRuntimeKind.Server ? "server" : "client"),
                         ("launchRoot", role.PreparedGameRoot ?? runtime)), timeout, cancellation).ConfigureAwait(false);
+                    // The baseline an interrupted run's recovery settles the install from, before anything launches from the profile.
+                    await prepared.SourceCheck.PersistAsync(host, runtime, name, entry => journal.AppendAsync(host, journalDirectory, name, entry, timeout, cancellation),
+                        timeout, cancellation).ConfigureAwait(false);
                     if (characters.TryGetValue(name, out var selected))
                     {
                         // The folders the host check resolved, never the manifest's object.

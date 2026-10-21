@@ -453,17 +453,12 @@ internal sealed class CampaignClients
         }
     }
 
-    /// <summary>Records why standalone inventory clients have no post-run source-integrity check: they run in place.</summary>
-    public async Task RecordInPlaceSourceVerdictsAsync(ScenarioReport report, Func<string, Func<Task>, Task> step)
+    /// <summary>Records why standalone inventory clients have no post-run source settlement: they run in place (<see cref="SourceVerdict.NotApplicable"/>).</summary>
+    public void RecordInPlaceSourceVerdicts(ScenarioReport report)
     {
         string[] actors;
         lock (_clientState) actors = _inPlaceSourceActors.Order(StringComparer.Ordinal).ToArray();
-        foreach (string actor in actors)
-        {
-            const string verdict = "not applicable: runs in place";
-            report.Provenance["sourceIntegrity." + actor] = verdict;
-            await step($"verify {actor}'s source install after the run ({verdict})", () => Task.CompletedTask).ConfigureAwait(false);
-        }
+        foreach (string actor in actors) SourceVerdict.NotApplicable(actor).Record(report);
     }
 
     /// <summary>Releases each client host's lock this run took, as its own step; a host where an owned local Mac client may still run keeps it.</summary>

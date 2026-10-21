@@ -40,25 +40,28 @@ public sealed partial class GameLaunch
 
     private GameLaunch(bool server, ClientPlatform platform, bool forHost, string gameDirectory, string loaderDirectory, string executable, IReadOnlyList<string> arguments,
         IReadOnlyDictionary<string, string> environment, IReadOnlyDictionary<string, string> prepended, IReadOnlyList<string> requiredFiles,
-        bool separateRoots, ClientArchitecture macArchitecture = ClientArchitecture.X64, IEnumerable<string>? secretVariables = null, string? unityLog = null)
+        bool separateRoots, bool linked, ClientArchitecture macArchitecture = ClientArchitecture.X64, IEnumerable<string>? secretVariables = null,
+        string? unityLog = null)
     {
         IsServer = server; Platform = platform; ForHost = forHost; GameDirectory = gameDirectory; UnityLog = unityLog;
-        // Windows profiles own the launch folder beside their executable. A Unix profile keeps the game in its source install,
-        // but every relative runtime write belongs under the owned loader profile.
+        // Windows profiles and a Linux server's own the launch folder beside their hard-linked executable (ProfileLayout.Linked).
+        // A Mac server's linked game lies two folders below its loader (ProfileLayouts.GameFolder), and a macOS client's profile
+        // keeps the game in its source install (Gatekeeper); either way every relative runtime write belongs under the loader.
         WorkingDirectory = separateRoots ? loaderDirectory : gameDirectory;
         Executable = executable; Arguments = arguments;
         Environment = environment; Prepended = prepended; RequiredFiles = requiredFiles; MacArchitecture = macArchitecture;
         var unset = BepInExLoader.Variables.Where(name => !environment.ContainsKey(name)).ToList();
-        // A profile must not inherit a mod manager's injected libraries from the runner's shell. The profile's
-        // own Doorstop paths are prepended after these names are cleared in ToStartInfo.
-        if (separateRoots)
+        // A profile launch, linked or with its loader apart from the game, must not inherit a mod manager's injected libraries
+        // from the runner's shell. The profile's own Doorstop paths are prepended after these names are cleared in ToStartInfo.
+        // A public launch of the caller's own folder keeps them.
+        if (separateRoots || linked)
             unset.AddRange(platform == ClientPlatform.Linux ? ["LD_LIBRARY_PATH", "LD_PRELOAD"]
                 : platform == ClientPlatform.MacOS ? ["DYLD_LIBRARY_PATH", "DYLD_INSERT_LIBRARIES"] : []);
         Unset = unset;
         SecretVariables = Secrets(secretVariables, environment, prepended, Unset, platform == ClientPlatform.Windows ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
     }
 
-    /// <summary>The directory the process starts in: its game directory, or an owned loader profile for a Unix profile launch.</summary>
+    /// <summary>The directory the process starts in: its game directory (a linked profile's own folder), or an owned loader profile for a macOS profile launch.</summary>
     public string WorkingDirectory { get; }
     /// <summary>
     /// The game executable's full path. On macOS, <see cref="ToStartInfo"/> starts it through <c>/usr/bin/arch</c>, so the start
@@ -88,7 +91,8 @@ public sealed partial class GameLaunch
     /// built without a launch folder (<see cref="ForClient"/>), which leaves Unity's default log.
     /// </summary>
     internal string? UnityLog { get; }
-    // The source game root. A Unix profile's WorkingDirectory is its separate owned loader root.
+    // The game root the executable starts from: a linked profile's own folder, or a macOS profile's source install, whose
+    // WorkingDirectory is its separate owned loader root.
     internal string GameDirectory { get; }
     // The operating system the launch runs on (ClientPlatform is also the host type).
     internal ClientPlatform Platform { get; }
@@ -120,20 +124,24 @@ public sealed partial class GameLaunch
         ServerPlatform? hostPlatform = null) =>
         hostPlatform is { } platform ? ServerOnHost(platform, runtime, arguments, environment) : LocalServer(runtime, arguments, environment, CurrentServerHost, MacServerArchitecture);
 
-    /// <summary>Build a server launch whose reviewed loader lives in a separate disposable profile.</summary>
+    /// <summary>
+    /// Build a server launch whose reviewed loader lives in a disposable profile; <paramref name="linked"/> when the profile
+    /// holds the game's linked files too (<see cref="ProfileLayout.Linked"/>), so it inherits no injected libraries.
+    /// </summary>
     internal static GameLaunch ForServerWithLoader(string runtime, string loader, IEnumerable<string> arguments,
-        IReadOnlyDictionary<string, string>? environment, ServerPlatform? hostPlatform, string? macSteamRuntimeDirectory = null)
+        IReadOnlyDictionary<string, string>? environment, ServerPlatform? hostPlatform, string? macSteamRuntimeDirectory = null,
+        bool linked = false)
     {
         if (hostPlatform is { } platform)
         {
-            return ServerOnHost(platform, runtime, arguments, environment, loader, macSteamRuntimeDirectory);
+            return ServerOnHost(platform, runtime, arguments, environment, loader, macSteamRuntimeDirectory, linked);
         }
-        return LocalServer(runtime, arguments, environment, CurrentServerHost, MacServerArchitecture, loader, macSteamRuntimeDirectory);
+        return LocalServer(runtime, arguments, environment, CurrentServerHost, MacServerArchitecture, loader, macSteamRuntimeDirectory, linked);
     }
 
     // A launch for this machine, built as if on builtOn (so every machine's branches are tested on any OS).
     internal static GameLaunch LocalServer(string runtimeDirectory, IEnumerable<string> arguments, IReadOnlyDictionary<string, string>? environment, ServerHost builtOn,
-        ClientArchitecture macArchitecture, string? loaderDirectory = null, string? macSteamRuntimeDirectory = null)
+        ClientArchitecture macArchitecture, string? loaderDirectory = null, string? macSteamRuntimeDirectory = null, bool linked = false)
     {
         ArgumentNullException.ThrowIfNull(arguments);
         string runtime = FullRuntime(runtimeDirectory);
@@ -181,11 +189,11 @@ public sealed partial class GameLaunch
             required = [.. required, clientLibrary];
         }
         return new GameLaunch(server: true, os, forHost: false, runtime, loader, executable, passed, set, prepended, required,
-            separateRoots, macArchitecture);
+            separateRoots, linked, macArchitecture);
     }
 
     private static GameLaunch ServerOnHost(ServerPlatform platform, string runtime, IEnumerable<string> arguments,
-        IReadOnlyDictionary<string, string>? environment, string? loaderDirectory = null, string? macSteamRuntimeDirectory = null)
+        IReadOnlyDictionary<string, string>? environment, string? loaderDirectory = null, string? macSteamRuntimeDirectory = null, bool linked = false)
     {
         ArgumentNullException.ThrowIfNull(arguments);
         bool windows = platform == ServerPlatform.Windows;
@@ -214,7 +222,7 @@ public sealed partial class GameLaunch
             required = [.. required, HostJoin(steam, false, "steamclient.dylib")];
         }
         return new GameLaunch(server: true, os, forHost: true, root, loader, HostJoin(root, windows, executable), passed, set, prepended, required,
-            separateRoots, macArchitecture: platform == ServerPlatform.MacOS ? ClientArchitecture.Arm64 : ClientArchitecture.X64);
+            separateRoots, linked, macArchitecture: platform == ServerPlatform.MacOS ? ClientArchitecture.Arm64 : ClientArchitecture.X64);
     }
 
     /// <summary>
@@ -299,7 +307,7 @@ public sealed partial class GameLaunch
         var (set, prepended, required) = Loader(server: false, platform, environment, names, LocalJoin(install), LocalJoin(loader),
             separateRoots, Relative(install, executable), macDoorstop == null ? null : Relative(loader, macDoorstop));
         return new GameLaunch(server: false, platform, forHost: false, install, loader, executable, passed, set, prepended, required,
-            separateRoots, architecture, unityLog: unityLog);
+            separateRoots, linked: false, architecture, unityLog: unityLog);
     }
 
     private static GameLaunch ClientOnHost(ClientPlatform platform, string install, IEnumerable<string> arguments, IReadOnlyDictionary<string, string>? environment,
@@ -332,7 +340,7 @@ public sealed partial class GameLaunch
         var loaderJoin = (string relative) => HostJoin(loader, windows, relative);
         var (set, prepended, required) = Loader(server: false, platform, environment, names, join, loaderJoin, separateRoots, executable, macDoorstop);
         return new GameLaunch(server: false, platform, forHost: true, root, loader, HostJoin(root, windows, executable), passed, set, prepended, required,
-            separateRoots, macArchitecture: architecture, secretVariables: secretVariables, unityLog: unityLog);
+            separateRoots, linked: false, macArchitecture: architecture, secretVariables: secretVariables, unityLog: unityLog);
     }
 
     // The loader's part of every launch, one rule set for both roles, here and on a host: the caller's variables first, then

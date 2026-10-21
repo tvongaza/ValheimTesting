@@ -355,6 +355,204 @@ public sealed class RunRecoveryTests : IDisposable
         Assert.Empty(Assert.Single((await StatusAsync()).Runs).Items);
     }
 
+    // #612: a run killed after its server launched leaves its profile and the journalled source baseline. Recovery settles the
+    // install from that baseline before it retires the copy: what the game added is moved into the run's recovered-<actor> folder
+    // with its source-changes.json, the install lists as before, and the step names it. A baseline whose hash differs from the
+    // journal's is refused, and nothing is moved or removed.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RecoverySettlesTheSourceInstallFromItsJournalledBaseline(bool tampered)
+    {
+        const string run = "run-src", source = "/srv/game", runtime = Prep + "/runtime";
+        Directory.CreateDirectory(_host.Local(source));
+        File.WriteAllText(Path.Combine(_host.Local(source), "valheim_server.x86_64"), "game");
+        Directory.CreateDirectory(Path.Combine(_host.Local(runtime), "BepInEx"));
+        Directory.CreateDirectory(_host.Local(Prep + "/staging"));
+        Line(_host, run, "server", Gone, JournalEntry.CopyIntended, ("runtime", runtime), ("stage", Prep + "/staging"), ("parent", Prep),
+            ("runtimeKind", "server"), ("launchRoot", source));
+        Line(_host, run, "server", Gone, JournalEntry.CopyDone, ("runtime", runtime), ("files", "1"));
+        var check = ProfileSourceCheck.Prepare(await ProfileSourceCheck.InspectAsync(_host, source, TimeSpan.FromSeconds(5)), [], ProfileLayout.SourceExecutable);
+        await check.PersistAsync(_host, runtime, "server", entry =>
+        {
+            Line(_host, run, "server", Gone, entry.Kind, [.. entry.Fields.Select(field => (field.Key, field.Value))]);
+            return Task.CompletedTask;
+        }, TimeSpan.FromSeconds(5));
+        // The killed game wrote beside its executable and made a folder.
+        File.WriteAllText(Path.Combine(_host.Local(source), "preloader_20261020.log"), "the game's preloader log");
+        Directory.CreateDirectory(Path.Combine(_host.Local(source), "logs"));
+        File.WriteAllText(Path.Combine(_host.Local(source), "logs", "stats.txt"), "written by the game");
+        if (tampered) File.AppendAllText(_host.Local(Prep + "/" + ProfileSourceCheck.BaselineFile), " ");
+
+        var recovered = await RecoverAsync(run);
+
+        string recoveredIn = "/srv/runs/server/" + run + "/recovered-server";
+        if (tampered)
+        {
+            Assert.False(recovered.Recovered);
+            Assert.Contains("differs from its journalled SHA-256", Assert.Single(recovered.Steps, step => step.What == "copy " + runtime).Outcome);
+            Assert.True(File.Exists(Path.Combine(_host.Local(source), "preloader_20261020.log")));
+            Assert.True(Directory.Exists(_host.Local(runtime)));
+            Assert.False(Directory.Exists(_host.Local(recoveredIn)));
+            Assert.DoesNotContain(_host.Runs, call => call.Script is "source-settle" or "cleanup-stage");
+            return;
+        }
+        Assert.True(recovered.Recovered, string.Join("\n", recovered.Steps));
+        var settled = Assert.Single(recovered.Steps, step => step.What.StartsWith("source install of server", StringComparison.Ordinal));
+        Assert.Contains("preloader_20261020.log", settled.Outcome);
+        Assert.Contains(recoveredIn, settled.Outcome);
+        Assert.Equal("the game's preloader log", File.ReadAllText(Path.Combine(Assert.Single(Directory.GetDirectories(_host.Local(recoveredIn), "source-changes-*")), "added", "preloader_20261020.log")));
+        Assert.Equal("written by the game", File.ReadAllText(Path.Combine(Assert.Single(Directory.GetDirectories(_host.Local(recoveredIn), "source-changes-*")), "added", "logs", "stats.txt")));
+        Assert.Contains("\"verdict\": \"restored\"", File.ReadAllText(Path.Combine(Assert.Single(Directory.GetDirectories(_host.Local(recoveredIn), "source-changes-*")), "source-changes.json")));
+        Assert.Equal(["valheim_server.x86_64"], Directory.EnumerateFileSystemEntries(_host.Local(source)).Select(Path.GetFileName));
+        Assert.False(Directory.Exists(_host.Local(Prep))); // the copy, its baseline and the moved files' folder are gone
+        Assert.Empty(Assert.Single((await StatusAsync()).Runs).Items);
+    }
+
+    // A run killed after its server launched from a profile whose baseline it journalled; returns the source check.
+    private async Task<ProfileSourceCheck> KilledWithBaselineAsync(string run, string source)
+    {
+        string runtime = Prep + "/runtime";
+        Directory.CreateDirectory(_host.Local(source));
+        File.WriteAllText(Path.Combine(_host.Local(source), "valheim_server.x86_64"), "game");
+        Directory.CreateDirectory(Path.Combine(_host.Local(runtime), "BepInEx"));
+        Directory.CreateDirectory(_host.Local(Prep + "/staging"));
+        Line(_host, run, "server", Gone, JournalEntry.CopyIntended, ("runtime", runtime), ("stage", Prep + "/staging"), ("parent", Prep),
+            ("runtimeKind", "server"), ("launchRoot", source));
+        Line(_host, run, "server", Gone, JournalEntry.CopyDone, ("runtime", runtime), ("files", "1"));
+        var check = ProfileSourceCheck.Prepare(await ProfileSourceCheck.InspectAsync(_host, source, TimeSpan.FromSeconds(5)), [], ProfileLayout.SourceExecutable);
+        await check.PersistAsync(_host, runtime, "server", entry =>
+        {
+            Line(_host, run, "server", Gone, entry.Kind, [.. entry.Fields.Select(field => (field.Key, field.Value))]);
+            return Task.CompletedTask;
+        }, TimeSpan.FromSeconds(5));
+        return check;
+    }
+
+    // #612 r3: a settlement step the host refuses (here, the recovered folder is already there) ends the recovery of the source: a
+    // finished failure, the profile removed, and the moved files left journalled kept, which env teardown then removes.
+    [Fact]
+    public async Task ARefusedSettlementInARecoveryRetiresTheProfileAndLeavesItsMovedFilesForTeardown()
+    {
+        const string run = "run-refused", source = "/srv/game";
+        var check = await KilledWithBaselineAsync(run, source);
+        string moved = check.MovedFilesFolder(Prep + "/runtime");
+        Directory.CreateDirectory(_host.Local(moved));
+        File.WriteAllText(Path.Combine(_host.Local(moved), "preloader_1.log"), "moved before the kill");
+        string id = moved[(moved.LastIndexOf('/') + 1 + ProfileSourceCheck.AddedFolder.Length + 1)..];
+        Directory.CreateDirectory(_host.Local("/srv/runs/server/" + run + "/recovered-server/source-changes-" + id + "/added"));
+
+        var recovered = await RecoverAsync(run);
+
+        var settled = Assert.Single(recovered.Steps, step => step.What.StartsWith("source install of server", StringComparison.Ordinal));
+        Assert.True(settled.Failed);
+        Assert.Contains("already exists", settled.Outcome);
+        Assert.False(Directory.Exists(_host.Local(Prep + "/runtime"))); // the profile retired
+        var left = Assert.Single((await StatusAsync()).Runs).Items;
+        Assert.Equal(moved, Assert.Single(left, item => item.Kind == "copy").What);
+
+        var teardown = await RecoverAsync(run, teardown: true);
+        Assert.True(teardown.Recovered, string.Join("\n", teardown.Steps));
+        Assert.False(Directory.Exists(_host.Local(moved)));
+    }
+
+    // #612 r4 item 5: under env teardown the same refusal ends in one pass: the folder the refused settlement kept goes too.
+    [Fact]
+    public async Task ATeardownRemovesWhatItsOwnRefusedSettlementKeptInOnePass()
+    {
+        const string run = "run-refused-teardown", source = "/srv/game";
+        var check = await KilledWithBaselineAsync(run, source);
+        string moved = check.MovedFilesFolder(Prep + "/runtime");
+        Directory.CreateDirectory(_host.Local(moved));
+        File.WriteAllText(Path.Combine(_host.Local(moved), "preloader_1.log"), "moved before the kill");
+        string id = moved[(moved.LastIndexOf('/') + 1 + ProfileSourceCheck.AddedFolder.Length + 1)..];
+        Directory.CreateDirectory(_host.Local("/srv/runs/server/" + run + "/recovered-server/source-changes-" + id + "/added"));
+
+        var teardown = await RecoverAsync(run, teardown: true);
+
+        Assert.Contains(teardown.Steps, step => step.What == "copy " + moved && !step.Failed);
+        Assert.False(Directory.Exists(_host.Local(moved)));
+        Assert.False(Directory.Exists(_host.Local(Prep + "/runtime")));
+        Assert.Empty(Assert.Single((await StatusAsync()).Runs).Items);
+    }
+
+    // #612 r6 item 1: a linked profile lies on the install's volume. With that volume offline the baseline is not found, which is not a
+    // baseline that is gone: env recover keeps the profile open, and env teardown finishes it, not compared.
+    [Fact]
+    public async Task AnOfflineInstallVolumeKeepsTheProfileUntilTeardown()
+    {
+        const string run = "run-offline", source = "/srv/game";
+        await KilledWithBaselineAsync(run, source);
+        Directory.Delete(_host.Local(source), recursive: true);
+        Directory.Delete(_host.Local(Prep), recursive: true); // the profile on the same volume
+
+        var recovered = await RecoverAsync(run);
+        var settled = Assert.Single(recovered.Steps, step => step.What.StartsWith("source install of server", StringComparison.Ordinal));
+        Assert.True(settled.Failed);
+        Assert.Contains("is not reachable, or gone", settled.Outcome);
+        Assert.Contains("reconnect it", Assert.Single(recovered.Steps, step => step.What == "copy " + Prep + "/runtime").Outcome);
+        Assert.Contains(Assert.Single((await StatusAsync()).Runs).Items, item => item.Kind == "copy" && item.What == Prep + "/runtime");
+
+        var teardown = await RecoverAsync(run, teardown: true);
+        Assert.Contains("was not compared", Assert.Single(teardown.Steps, step => step.What.StartsWith("source install of", StringComparison.Ordinal)).Outcome);
+        Assert.Empty(Assert.Single((await StatusAsync()).Runs).Items);
+    }
+
+    // #612 r6 item 2: under env teardown only a baseline the host says it cannot read is not compared; a host that does not answer
+    // the read keeps the profile open.
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ATeardownComparesNothingOnlyWhenTheHostSaysTheBaselineCannotBeRead(bool unreadable)
+    {
+        const string run = "run-unread", source = "/srv/game";
+        await KilledWithBaselineAsync(run, source);
+        if (unreadable) _host.UnreadableFiles.Add(Prep + "/" + ProfileSourceCheck.BaselineFile);
+        else _host.Failures["preflight-read"] = FakeServerHost.TransportFailure;
+
+        var teardown = await RecoverAsync(run, teardown: true);
+
+        if (unreadable)
+        {
+            Assert.Contains("cannot be read", Assert.Single(teardown.Steps, step => step.What.StartsWith("source install of", StringComparison.Ordinal)).Outcome);
+            Assert.Empty(Assert.Single((await StatusAsync()).Runs).Items);
+        }
+        else
+        {
+            Assert.True(Assert.Single(teardown.Steps, step => step.What == "copy " + Prep + "/runtime").Failed);
+            Assert.True(Directory.Exists(_host.Local(Prep + "/runtime")));
+            Assert.DoesNotContain(teardown.Steps, step => step.What.StartsWith("source install of", StringComparison.Ordinal) &&
+                (step.Outcome.Contains("cannot be read", StringComparison.Ordinal) || step.Outcome.Contains("was not compared", StringComparison.Ordinal)));
+        }
+    }
+
+    // #612 r3: a moved-files folder the run kept on purpose has its own kept entry. The recovery finds it by that entry, never adopts
+    // it, and env teardown removes it.
+    [Fact]
+    public async Task ARecoveryLeavesAMovedFilesFolderWithItsOwnKeptEntryToTeardown()
+    {
+        const string run = "run-kept-apart", source = "/srv/game";
+        var check = await KilledWithBaselineAsync(run, source);
+        string moved = check.MovedFilesFolder(Prep + "/runtime");
+        Directory.CreateDirectory(_host.Local(moved));
+        File.WriteAllText(Path.Combine(_host.Local(moved), "crash.dmp"), "past the size limits");
+        Line(_host, run, "server", Gone, JournalEntry.SourceSettled, ("runtime", Prep + "/runtime"), ("sourceVerdict", "Restored"));
+        Line(_host, run, "server", Gone, JournalEntry.CopyKept, ("runtime", moved), ("stage", ""), ("parent", Prep), ("holds", ProfileSourceCheck.AddedFolder),
+            ("why", "past the size limits"));
+        File.Delete(_host.Local(Prep + "/" + ProfileSourceCheck.BaselineFile));
+
+        var recovered = await RecoverAsync(run);
+
+        Assert.True(recovered.Recovered, string.Join("\n", recovered.Steps));
+        Assert.DoesNotContain(recovered.Steps, step => step.What.StartsWith("source install of", StringComparison.Ordinal));
+        Assert.False(Directory.Exists(_host.Local("/srv/runs/server/" + run + "/recovered-server")));
+        Assert.True(File.Exists(Path.Combine(_host.Local(moved), "crash.dmp"))); // not adopted
+        Assert.False(Directory.Exists(_host.Local(Prep + "/runtime")));
+
+        Assert.True((await RecoverAsync(run, teardown: true)).Recovered);
+        Assert.False(Directory.Exists(_host.Local(moved))); // removed through its own kept entry
+    }
+
     [Fact]
     public async Task InterruptedPlainStartRecoversItsPartialHostedCopy()
     {

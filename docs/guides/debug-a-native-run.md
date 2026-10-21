@@ -50,6 +50,19 @@ Each owned process's logs are copied into its evidence when it stops:
 
 Every hosted server boot keeps the process output in `boot-N/stdout.log` and `boot-N/stderr.log` (`boot-N/game.stdout.log` on this Mac). A client started directly keeps `client-boot.stdout.log` and `client-boot.stderr.log`. An owned client writes Unity's log to `toolkit-unity.log` in the run's launch folder, never to your `Player.log`.
 
+### Read what the game wrote into your install
+
+A game can write into the install it runs from: BepInEx's `preloader_*.log` beside a macOS executable, or a mod writing to the game root. After the run, those files are moved out of the install into `source-changes/<actor>/added/` in the run's evidence, and the run passes with a warning naming each path. `source-changes/<actor>/source-changes.json` lists each added file with its size and SHA-256, and each changed or missing file. A changed or missing file fails the cleanup step and is never repaired ([source checks](../reference/sessions-profiles.md#source-checks)).
+
+| `sourceIntegrity.<actor>` in `result.json` | Do |
+|---|---|
+| `restored with a warning` | Read the moved files; a preloader log often explains a failed start |
+| `unchanged by the run, with a warning` | Something else (Steam, a mod manager) wrote into the install during the run; check the named paths |
+| `failed` | Check the named files in your install; verify the game files in Steam if one changed |
+| `unknown` | A process was not proven stopped; run `valheim-test env status` |
+
+After an interrupted run, `env recover` moves the added files into `recovered-<actor>/source-changes-<id>/added` in the run's folder on that host, one folder per profile, beside its `source-changes.json`.
+
 ### Diagnose an owned game that does not reach its menu or world
 
 Before it stops a failed owned client, the run writes `client-failure-diagnostic.json` into the client's evidence and prints `Client diagnosis before teardown:`. The file records the process state, its `sessionId`, window and responding state, and `client-failure-bepinex-tail.log` and `client-failure-player-tail.log`, the last 80 lines of each log. It also records one screenshot, attempted only after the client passed its strict pin check, or the reason there is none.

@@ -107,7 +107,7 @@ A reused process ID is never the run's. Each run that left something is printed 
 `valheim-test env recover --run ID` clears what that one run left, exactly as `env status` judged it; `env status` is its dry run. It refuses a `LIVE`, `UNKNOWN` or `UNRECOVERABLE` run. Otherwise it works in phases:
 
 1. Stops each process of the run whose ID, start time and command line still match. It asks the process to quit first, with the quit budget its own stop had, and kills it only after that. A Windows server's launcher tree and start task go too.
-2. On each host where no process is left, under that host's lock, it retires the characters and removes the profiles and unfinished world ships. It keeps the game's logs from each profile in `recovered-<actor>` in the run's folder first. A world the run placed in a client's `worlds_local` is moved out to the run's folder, only when its metadata states the journalled world UID. The run's folder itself goes last: when its fetch was journalled or nothing is left in it. One that still holds unfetched evidence, or logs this recovery kept, stays; `env teardown` removes it.
+2. On each host where no process is left, under that host's lock, it retires the characters and removes the profiles and unfinished world ships. Before it removes a profile, it settles its source install from the journalled listing, as the run would have ([source checks](sessions-profiles.md#source-checks)): what the game added goes to `recovered-<actor>/source-changes-<id>/added` in the run's folder, beside that profile's `source-changes.json` ([source recovery states](#source-recovery-states)). It keeps the game's logs from each profile in the same `recovered-<actor>` first. A world the run placed in a client's `worlds_local` is moved out to the run's folder, only when its metadata states the journalled world UID. The run's folder itself goes last: when its fetch was journalled or nothing is left in it. One that still holds unfetched evidence, or logs this recovery kept, stays; `env teardown` removes it.
 3. Releases the run's Steam leases, only when no process of the run is left on any host and every host was read.
 4. Releases each host lock once nothing of the run is left on that host.
 
@@ -121,6 +121,24 @@ Each effect is journalled under the actor `recovery`. A step that fails keeps wh
 | `env teardown --run ID --machine-gone` | Releases the leases of a run whose machine is gone for good, and journals its end |
 
 `env teardown --copy` refuses a path that is not a toolkit copy, a copy a running process uses, and a copy an open run's journal still names. Nothing is ever removed because of its age.
+
+### Source recovery states
+
+Recovery ends for every journal state of a profile's source install:
+
+| Journal and host | `env recover` | `env teardown` |
+|---|---|---|
+| No listing journalled | Removes the profile | Removes the profile |
+| A listing, not settled | Settles the install, then removes the profile | The same |
+| Settled by the run, its listing gone | Nothing to settle. Moved files the run had not kept yet go to `recovered-<actor>/source-changes-<id>/added` | The same |
+| Not settled, its listing not found, and the install or the profile's folder does not answer (an offline NAS, an unplugged volume, or a folder that is gone: the host cannot tell them apart) | Keeps the profile open, saying "not reachable, or gone": reconnect it and recover again, or run `env teardown` | Names the install as not compared (`unknown`), keeps any moved files, and removes the profile |
+| Not settled, its listing gone, the install and the profile's folder there | Names the install as not compared (`unknown`), keeps any moved files, and removes the profile | The same |
+| A listing whose SHA-256 or install differs from the journal's, or that cannot be read (over the read limit, unreadable by the host user) | Refuses: the profile stays, nothing is moved or removed. Check the install, then run `env teardown` | Names the install as not compared (`unknown`), keeps any moved files, and removes the profile |
+| The install is not reachable, or gone (an offline NAS, an unplugged volume) | Keeps the profile open: reconnect the install and recover again, or run `env teardown` | Names the install as gone (a finished `failed` verdict) and removes the profile |
+| The install now holds a link, or a settlement step is refused (a runtime inside the install, a recovered folder already there) | A finished `failed` verdict naming it and what to fix; the profile is removed, and moved files stay journalled kept | The same, and the kept moved files go in the same pass |
+| A moved-files folder the run kept on purpose (past the size limits, or no evidence folder) | Left alone: it has its own kept entry | Removed |
+| The run kept the profile because its settlement did not finish | Refuses the run as kept | Settles the install, then removes the profile |
+| The settlement does not finish (a host that fails or times out, the listing's read included) | Keeps the profile open for the next `env recover` | The same |
 
 ## From code
 

@@ -219,7 +219,7 @@ public sealed class TargetedRegressionTests : IDisposable
         };
         string lockPath = inventory.Hosts["local"].Lock;
         runner.Stage("parent");
-        File.WriteAllText(Path.Combine(_rig.Game, "written-during-run.txt"), "integrity failure");
+        File.AppendAllText(Directory.EnumerateFiles(_rig.Game, "*", SearchOption.AllDirectories).Order(StringComparer.Ordinal).First(), "changed during the run");
 
         var error = Assert.Throws<IOException>(runner.Remove);
 
@@ -242,7 +242,7 @@ public sealed class TargetedRegressionTests : IDisposable
         };
         string lockPath = inventory.Hosts["local"].Lock;
         runner.Stage("parent");
-        File.WriteAllText(Path.Combine(_rig.Game, "written-during-run.txt"), "integrity failure");
+        File.AppendAllText(Directory.EnumerateFiles(_rig.Game, "*", SearchOption.AllDirectories).Order(StringComparer.Ordinal).First(), "changed during the run");
         File.WriteAllText(Path.Combine(lockPath, "owner"), "another run");
 
         var error = Assert.Throws<AggregateException>(runner.Remove);
@@ -736,6 +736,33 @@ public sealed class TargetedRegressionTests : IDisposable
         Assert.Equal(new[] { "MyWorld.fwl" }, Directory.EnumerateFileSystemEntries(Worlds).Select(Path.GetFileName));
         Assert.False(Path.Exists(Path.Combine(_rig.Runtime, nextRun)));
         Assert.Equal(JournalRunState.Ended, Status(nextRun).State);
+    }
+
+    // #612: a file the game writes into the install during an arm (a preloader log beside the executable on macOS, a mod writing
+    // to the game root) is moved into that arm's evidence and named; the arm passes with the warning, and the install is as it was.
+    [ClientHostFact] public void AFileTheGameAddsToTheInstallIsMovedIntoTheArmsEvidence()
+    {
+        using var data = new FakeClientDataDirectory(_rig.Save);
+        Directory.CreateDirectory(Worlds);
+        var before = Directory.EnumerateFiles(_rig.Game, "*", SearchOption.AllDirectories).Order(StringComparer.Ordinal).ToList();
+        var (report, output, _) = Start(() => new LocalFakeOwnedProcess(61), round => round.Step("the game writes beside its executable",
+            () => File.WriteAllText(Path.Combine(_rig.Game, "preloader_20261020.log"), "written by the fake game")));
+
+        Assert.True(report.Passed, string.Join("; ", report.Steps.Where(step => !step.Passed).Select(step => step.Name + ": " + step.Error)));
+        Assert.Contains(report.Steps, step => step.Name == "verify client's source install after the run (size and modified time)" && step.Passed);
+        Assert.Contains("preloader_20261020.log", report.Provenance["sourceIntegrity.client"]);
+        if (OperatingSystem.IsWindows())
+        {
+            // A Windows client runs from its linked profile, so the game could not have written this: named, left in place.
+            Assert.StartsWith("unchanged by the run, with a warning: ", report.Provenance["sourceIntegrity.client"]);
+            Assert.True(File.Exists(Path.Combine(_rig.Game, "preloader_20261020.log")));
+        }
+        else
+        {
+            Assert.Equal("written by the fake game", File.ReadAllText(Path.Combine(output, "source-changes", "client", "added", "preloader_20261020.log")));
+            Assert.Equal(before, Directory.EnumerateFiles(_rig.Game, "*", SearchOption.AllDirectories).Order(StringComparer.Ordinal));
+        }
+        Assert.Empty(Directory.Exists(_rig.Runtime) ? Directory.EnumerateFileSystemEntries(_rig.Runtime) : []);
     }
 
     // #791: a passing start leaves nothing in the client environment's runtime folder (its disposable profile retired, its hosted

@@ -99,17 +99,139 @@ public sealed class LocalClientCopyTests : IDisposable
         Assert.Contains("\"copy-intended\"", journal);
         Assert.Contains("\"copy-done\"", journal);
 
+        // The baseline a recovery would settle from is beside the profile, journalled before any launch.
+        Assert.True(File.Exists(Path.Combine(Path.GetDirectoryName(copy.Runtime)!, ProfileSourceCheck.BaselineFile)));
+        Assert.Contains("\"source-baseline\"", string.Concat(Directory.EnumerateFiles(Path.Combine(data, "journal"), "client.jsonl", SearchOption.AllDirectories).Select(File.ReadAllText)));
+        // #612: what the game writes into the install while it runs (BepInEx's preloader log beside a macOS executable) is moved into
+        // the run's evidence and named; the verdict passes with the warning, and the install is as it was.
+        string preloader = Path.Combine(OperatingSystem.IsMacOS() ? Path.Combine(source, "Valheim.app", "Contents", "MacOS") : source, "preloader_20261020.log");
+        Directory.CreateDirectory(Path.GetDirectoryName(preloader)!);
+        File.WriteAllText(preloader, "written beside the executable");
         var report = new ScenarioReport("local client evidence");
-        await report.StepAsync(StepPhase.Cleanup, copy.SourceVerdictName, copy.VerifySourceAsync);
+        copy.Output = Path.Combine(_rig.Root, "evidence");
+        await copy.SettleSourceAsync(report);
         Assert.Contains(report.Steps, step => step.Name == "verify client's source install after the run (size and modified time)" && step.Passed);
+        string relative = Path.GetRelativePath(source, preloader).Replace('\\', '/');
+        Assert.Contains(relative, report.Provenance["sourceIntegrity.client"]);
+        if (OperatingSystem.IsWindows())
+        {
+            // A Windows client runs from its linked profile, so the game could not have written this: named, left in place.
+            Assert.StartsWith("unchanged by the run, with a warning: ", report.Provenance["sourceIntegrity.client"]);
+            Assert.True(File.Exists(preloader));
+            File.Delete(preloader);
+        }
+        else
+        {
+            Assert.StartsWith("restored with a warning: ", report.Provenance["sourceIntegrity.client"]);
+            Assert.Equal("written beside the executable", File.ReadAllText(Path.Combine(_rig.Root, "evidence", "source-changes", "client", "added", relative)));
+            Assert.False(File.Exists(preloader));
+        }
         await copy.RetireAsync(verifySource: false);
         Assert.False(Directory.Exists(copy.Runtime));
+        Assert.False(Directory.Exists(Path.GetDirectoryName(copy.Runtime))); // nothing of the profile is left beside it
         // The plan is as it was: a run that reuses it makes a new profile.
         Assert.True(plan.CopySource);
         Assert.Equal(source, plan.Install);
         Assert.Equal(manifest, plan.CliManifest);
         Assert.Contains("\"copy-retired\"", string.Concat(Directory.EnumerateFiles(Path.Combine(data, "journal"), "client.jsonl", SearchOption.AllDirectories).Select(File.ReadAllText)));
         Assert.Equal(before, Tree(source));
+    }
+
+    // #612: a hosting client on this machine has its own placement (a standalone hosting-client run, PinnedServerRun's host mode).
+    // Its copy is settled by the session into the session's report and evidence folder, in its own step; a failing verdict never
+    // fails the retirement, and the copy is removed. Outside a session the same failure is thrown.
+    [ClientHostFact] public async Task AHostingClientsCopyIsSettledByTheSessionInItsOwnStep()
+    {
+        var plan = Plan(_rig.Game);
+        plan.CliManifest = CliSet();
+        string fixture = Path.Combine(_rig.Root, "fixture");
+        Directory.CreateDirectory(fixture);
+        plan.HostWorld = new() { World = new() { Source = fixture, Sha256 = new() }, WorldUid = "4242", SaveDirectory = Path.Combine(_rig.Root, "save") };
+        string data = Path.Combine(_rig.Root, "data");
+        using var journalDirectory = RunJournal.UseLocalDirectory(Path.Combine(data, "journal"));
+        var copy = await LocalClientCopy.PrepareAsync("host", plan, default, data, ThisMachine(), loader: (_, _) => null);
+        var placement = new LocalClientPlacement();
+        Assert.True(placement.Add(copy, plan));
+        string changed = Directory.EnumerateFiles(_rig.Game, "*", SearchOption.AllDirectories).Order(StringComparer.Ordinal).First();
+        File.AppendAllText(changed, " changed during the run");
+        var report = new ScenarioReport("hosted copy");
+        string output = Path.Combine(_rig.Root, "session");
+        Directory.CreateDirectory(output);
+
+        await using (new GameSession(report, output, "4242", server: null, [], CancellationToken.None,
+            token => new HostingClientActor("host", plan, output, placement, token))) { }
+
+        var step = Assert.Single(report.Steps, step => step.Name == "verify host's source install after the run (size and modified time)");
+        Assert.False(step.Passed);
+        Assert.Contains(Path.GetRelativePath(_rig.Game, changed).Replace('\\', '/'), step.Error);
+        Assert.StartsWith("failed: ", report.Provenance["sourceIntegrity.host"]);
+        Assert.True(File.Exists(Path.Combine(output, "source-changes", "host", "source-changes.json")));
+        Assert.True(Assert.Single(report.Steps, step => step.Name == "remove the disposable client copy").Passed);
+        Assert.False(Directory.Exists(copy.Runtime));
+    }
+
+    // #612 r2 item 8: an actor that retires its own placement in a session (ClientActor.OnThisMachine) records a failing verdict in its
+    // own step of the report; the retirement, which runs inside the actor's stop step, fails only for what it could not remove.
+    [ClientHostFact] public async Task ARetiringPlacementInASessionRecordsAFailingVerdictInItsOwnStep()
+    {
+        var plan = Plan(_rig.Game);
+        plan.CliManifest = CliSet();
+        string data = Path.Combine(_rig.Root, "data");
+        using var journalDirectory = RunJournal.UseLocalDirectory(Path.Combine(data, "journal"));
+        var copy = await LocalClientCopy.PrepareAsync("client", plan, default, data, ThisMachine(), loader: (_, _) => null);
+        var report = new ScenarioReport("retiring placement");
+        var placement = new LocalClientPlacement { Report = report, Evidence = Path.Combine(_rig.Root, "session") };
+        Assert.True(placement.Add(copy, plan));
+        File.AppendAllText(Directory.EnumerateFiles(_rig.Game, "*", SearchOption.AllDirectories).Order(StringComparer.Ordinal).First(), " changed");
+
+        await placement.RetireAsync();
+
+        Assert.False(Assert.Single(report.Steps, step => step.Name.StartsWith("verify client's source install", StringComparison.Ordinal)).Passed);
+        Assert.False(Directory.Exists(copy.Runtime));
+    }
+
+    // #612 r3 item 7: a settlement that throws before it compares anything (here the host the copy was prepared on is renamed) never
+    // lets the copy retire without a verdict: the session records it unknown, in its own step, and the copy stays, journalled kept.
+    [ClientHostFact] public async Task ASettlementThatThrowsBeforeItComparesIsRecordedUnknownAndKeepsTheCopy()
+    {
+        var plan = Plan(_rig.Game);
+        plan.CliManifest = CliSet();
+        string data = Path.Combine(_rig.Root, "data");
+        using var journalDirectory = RunJournal.UseLocalDirectory(Path.Combine(data, "journal"));
+        var host = new RenamedHost(ThisMachine());
+        var copy = await LocalClientCopy.PrepareAsync("client", plan, default, data, host, loader: (_, _) => null);
+        var report = new ScenarioReport("thrown settlement");
+        var placement = new LocalClientPlacement { Report = report, Evidence = Path.Combine(_rig.Root, "session") };
+        Assert.True(placement.Add(copy, plan));
+        host.Name = "another name";
+
+        await placement.SettleSourcesAsync(_ => { });
+        var kept = await Assert.ThrowsAsync<SourceProfileKeptException>(() => placement.RetireAsync(verifySource: false));
+
+        var step = Assert.Single(report.Steps, step => step.Name == "verify client's source install after the run (unknown: not compared)");
+        Assert.False(step.Passed);
+        Assert.Contains("before it compared", report.Provenance["sourceIntegrity.client"]);
+        Assert.Contains("journalled kept", kept.Message);
+        Assert.True(Directory.Exists(copy.Runtime));
+        Assert.Contains("\"copy-kept\"", string.Concat(Directory.EnumerateFiles(Path.Combine(data, "journal"), "client.jsonl", SearchOption.AllDirectories).Select(File.ReadAllText)));
+    }
+
+    // A host whose name a test changes after a copy was prepared on it.
+    private sealed class RenamedHost(IGameHost inner) : IGameHost
+    {
+        public string Name { get; set; } = inner.Name;
+        public GameHostKind Kind => inner.Kind;
+        public HostShell Shell => inner.Shell;
+        public Task<HostResult> RunAsync(string script, IReadOnlyDictionary<string, string>? variables, TimeSpan timeout, CancellationToken cancellation = default) => inner.RunAsync(script, variables, timeout, cancellation);
+        public Task<HostLock> AcquireLockAsync(string lockPath, string owner, TimeSpan timeout, CancellationToken cancellation = default) => inner.AcquireLockAsync(lockPath, owner, timeout, cancellation);
+        public Task<HostLockResult> CheckLockAsync(string lockPath, string owner, TimeSpan timeout, CancellationToken cancellation = default) => inner.CheckLockAsync(lockPath, owner, timeout, cancellation);
+        public Task<HostLockResult> ReleaseLockAsync(string lockPath, string owner, TimeSpan timeout, CancellationToken cancellation = default) => inner.ReleaseLockAsync(lockPath, owner, timeout, cancellation);
+        public Task<Shipment> ShipRevisionAsync(string repository, string revision, string hostDirectory, TimeSpan timeout, CancellationToken cancellation = default) => inner.ShipRevisionAsync(repository, revision, hostDirectory, timeout, cancellation);
+        public Task<Shipment> ShipFilesAsync(string localDirectory, string hostDirectory, TimeSpan timeout, CancellationToken cancellation = default) => inner.ShipFilesAsync(localDirectory, hostDirectory, timeout, cancellation);
+        public Task<long> LogOffsetAsync(string logPath, TimeSpan timeout, CancellationToken cancellation = default) => inner.LogOffsetAsync(logPath, timeout, cancellation);
+        public Task<HostLogResult> WaitForLogAsync(string logPath, long fromOffset, System.Text.RegularExpressions.Regex success, IReadOnlyList<System.Text.RegularExpressions.Regex>? failures, TimeSpan timeout, CancellationToken cancellation = default) => inner.WaitForLogAsync(logPath, fromOffset, success, failures, timeout, cancellation);
+        public Task<FetchedDirectory> FetchDirectoryAsync(string hostDirectory, string localDirectory, TimeSpan timeout, CancellationToken cancellation = default) => inner.FetchDirectoryAsync(hostDirectory, localDirectory, timeout, cancellation);
+        public Task<CliTunnel> OpenCliTunnelAsync(int hostPort, TimeSpan readyTimeout, int localPort = 0, CancellationToken cancellation = default) => inner.OpenCliTunnelAsync(hostPort, readyTimeout, localPort, cancellation);
     }
 
     // #860: a client a scenario opens on this machine is admitted to the run's builds where its install is listed for the copy:
@@ -175,6 +297,7 @@ public sealed class LocalClientCopyTests : IDisposable
         var failure = await Record.ExceptionAsync(async () =>
         {
             var copy = await LocalClientCopy.PrepareAsync("client", plan, default, data, ThisMachine(), loader: (_, _) => null);
+            copy.Output = Path.Combine(_rig.Root, "evidence");
             await copy.RetireAsync();
         });
 
@@ -217,7 +340,7 @@ public sealed class LocalClientCopyTests : IDisposable
             Assert.Equal(2, transport.Commands.Count(command => command.StartsWith("cli_expect --strict", StringComparison.Ordinal)));
             Assert.Equal(before, Tree(source));
         }
-        finally { await profile.RetireAsync(); }
+        finally { profile.Output = Path.Combine(_rig.Root, "evidence"); await profile.RetireAsync(); }
         Assert.False(Directory.Exists(profile.Runtime));
         Assert.Equal(before, Tree(source));
         Assert.Null(plan.PreparedLaunchMode);
@@ -267,6 +390,7 @@ public sealed class LocalClientCopyTests : IDisposable
         var copy = await LocalClientCopy.PrepareAsync("client", plan, default, data, ThisMachine(), loader: (_, _) => null);
         Assert.Equal(chosen, File.ReadAllText(Path.Combine(copy.Runtime, "BepInEx", "config", "valheimCLI.valheimCLI.cfg")));
         Assert.Equal(before, Tree(_rig.Game));
+        copy.Output = Path.Combine(_rig.Root, "evidence");
         await copy.RetireAsync();
     }
 
@@ -316,6 +440,7 @@ public sealed class LocalClientCopyTests : IDisposable
         var copy = await LocalClientCopy.PrepareAsync("client", plan, default, data, ThisMachine(), loader: (_, _) => null);
         Assert.Equal(chosen, File.ReadAllText(Path.Combine(copy.Runtime, "BepInEx", "config", "valheimCLI.valheimCLI.cfg")));
         Assert.Equal(before, Tree(_rig.Game));
+        copy.Output = Path.Combine(_rig.Root, "evidence");
         await copy.RetireAsync();
     }
 
@@ -342,6 +467,7 @@ public sealed class LocalClientCopyTests : IDisposable
         Assert.Contains("shipped = true", File.ReadAllText(Path.Combine(copy.Runtime, "BepInEx", "config", "BepInEx.cfg")));
         Assert.Equal(BepInExLoaderPackage.Read(package).Loader, plan.InstallPins!.Loader);
         Assert.Equal(before, Tree(_rig.Game));
+        copy.Output = Path.Combine(_rig.Root, "evidence");
         await copy.RetireAsync();
     }
 

@@ -188,8 +188,7 @@ internal sealed class RunRetirement(ScenarioReport? report, string output)
                         ("why", KeepRequested ? KeptOnRequest : "its server may still run, or its retire failed"))).ConfigureAwait(false);
             }
             foreach (var copy in unstoppedSourceCopies)
-                Incomplete(prepared.SourceChecks[copy.Actor].VerdictName(copy.Actor), copy.Actor,
-                    "the owned server may still run from its kept copy");
+                Record(SourceVerdict.Unknown(copy.Actor, "the owned server may still run from its kept copy"), failures: null);
             if (hostCharacters.Count == 0 && retired.Count == 0 && sourceCopies.Count == 0) continue;
             IGameHost host;
             HostLock? claim = null;
@@ -217,10 +216,7 @@ internal sealed class RunRetirement(ScenarioReport? report, string output)
                     _done.Remove("character " + Key(character.Host, character.Character.FileName)); // not attempted: a later retire tries again
                 }
                 foreach (var copy in verifiableSourceCopies)
-                {
-                    if (prepared.SourceChecks.TryGetValue(copy.Actor, out var sourceCheck))
-                        Incomplete(sourceCheck.VerdictName(copy.Actor), copy.Actor, error);
-                }
+                    Record(SourceVerdict.Unknown(copy.Actor, error.Message), failures: null);
                 foreach (var copy in retired)
                 {
                     Fail($"remove the prepared install {name}:{copy.Runtime}", error);
@@ -230,11 +226,14 @@ internal sealed class RunRetirement(ScenarioReport? report, string output)
             }
             try
             {
+                // Each actor's install settled before its copy goes (the copy's parent holds the baseline and the moved files). A
+                // settlement that did not finish keeps its copy, journalled kept by the settlement, for env recover.
                 foreach (var copy in verifiableSourceCopies)
                 {
-                    var sourceCheck = prepared.SourceChecks[copy.Actor];
-                    await Try(sourceCheck.VerdictName(copy.Actor),
-                        () => sourceCheck.VerifyAfterRunAsync(host, prepared.Timeout, cancellation), failures).ConfigureAwait(false);
+                    var verdict = await prepared.SourceChecks[copy.Actor].SettleAsync(host, SourceSettlement.Run(copy.Actor, copy.Runtime, output),
+                        entry => prepared.Journal.AppendAsync(host, journal, copy.Actor, entry, prepared.Timeout), prepared.Timeout, cancellation).ConfigureAwait(false);
+                    Record(verdict, failures);
+                    if (verdict.KeepsProfile && retired.Remove(copy)) _kept.Add(Key(copy.Host, copy.Runtime));
                 }
                 foreach (var character in hostCharacters)
                     if (await Try($"retire the disposable character {character.Character.FileName} on {name}",
@@ -268,13 +267,11 @@ internal sealed class RunRetirement(ScenarioReport? report, string output)
         catch (IOException) { } // Recorded as the failed step; the failure itself is returned once per host.
     }
 
-    private void Incomplete(string name, string actor, Exception error) => Incomplete(name, actor, error.Message);
-
-    private void Incomplete(string name, string actor, string reason)
+    // The verdict's own step (SourceVerdict.Record); a failure goes to failures, when the caller returns them for this host. An unknown
+    // verdict follows from a stop or host failure that is reported already.
+    private void Record(SourceVerdict verdict, List<Exception>? failures)
     {
-        string incomplete = "incomplete: actor stop not proven: " + reason;
-        if (report != null) report.Provenance["sourceIntegrity." + actor] = incomplete;
-        try { Step(name + " (incomplete: actor stop not proven)", () => throw new IOException(incomplete)); }
-        catch (IOException) { }
+        try { verdict.Record(report); }
+        catch (IOException error) { failures?.Add(error); }
     }
 }

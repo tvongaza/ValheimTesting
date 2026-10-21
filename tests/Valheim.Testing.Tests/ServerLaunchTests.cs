@@ -62,6 +62,21 @@ public class ServerLaunchTests
         Assert.Contains("LD_PRELOAD", launch.Unset);
     }
 
+    // #612 review: only a linked profile's launch (or one whose loader is apart from the game) drops the runner's injected
+    // libraries; a launch of the caller's own folder with the same roots keeps them, as the public primitives do.
+    [Fact] public void OnlyALinkedProfileLaunchDropsTheSessionsInjectedLibraries()
+    {
+        var linked = GameLaunch.ForServerWithLoader("/runs/r/runtime", "/runs/r/runtime", [], null, ServerPlatform.Linux, linked: true);
+        Assert.Contains("LD_PRELOAD", linked.Unset);
+        Assert.Contains("LD_LIBRARY_PATH", linked.Unset);
+        var own = GameLaunch.ForServerWithLoader("/srv/valheim", "/srv/valheim", [], null, ServerPlatform.Linux);
+        Assert.DoesNotContain("LD_PRELOAD", own.Unset);
+        Assert.DoesNotContain("LD_LIBRARY_PATH", own.Unset);
+        Assert.DoesNotContain("LD_PRELOAD", GameLaunch.ForServer("/srv/valheim", [], hostPlatform: ServerPlatform.Linux).Unset);
+        var mac = GameLaunch.ForServerWithLoader("/runs/r/runtime/game/server", "/runs/r/runtime", [], null, ServerPlatform.MacOS, linked: true);
+        Assert.Contains("DYLD_INSERT_LIBRARIES", mac.Unset);
+    }
+
     [Fact] public void WindowsHostServerProfileRequiresTheProxyBesideTheExecutable()
     {
         var error = Assert.Throws<ArgumentException>(() => GameLaunch.ForServerWithLoader(

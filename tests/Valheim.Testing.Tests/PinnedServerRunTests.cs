@@ -113,7 +113,8 @@ public sealed class PinnedServerRunTests : IDisposable
         var result = Result();
         Assert.True(result.GetProperty("Passed").GetBoolean());
         // A Windows host first shows it can start a server task.
-        string[] storage = LocalServerMachine.Windows ? ["check the Windows profile storage"] : [];
+        // #612: a Linux server's profile is linked too, so its storage is checked first.
+        string[] storage = [LocalServerMachine.Windows ? "check the Windows profile storage" : "check the Linux profile storage"];
         string[] task = LocalServerMachine.Windows ? ["the server host can start a server task"] : [];
         Assert.Equal([ "enough free disk space for the copies", .. storage, .. task, "take the server host's lock",
                 "check the server host's install against the pinned runtime and stage its profile", "copy and verify pinned world",

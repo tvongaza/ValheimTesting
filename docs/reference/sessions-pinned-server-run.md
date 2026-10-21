@@ -131,7 +131,7 @@ If the server did not stop cleanly, the profile and the host lock stay. The repo
 
 ## A server on another host
 
-With `--inventory`, the runner places the server on the first server environment, in inventory order, that fits the plan. It records the choice and every skipped environment as `serverEnvironment` in `result.json`, beside `inventorySha256`. When none fits, the run is refused before anything is written.
+With `--inventory`, the runner places the server on the first server environment, in inventory order, that fits the plan. It records the choice and every skipped environment as `serverEnvironment` in `result.json`, beside `inventorySha256`. When none fits, the run is refused before anything is written. A Linux or macOS environment's profile storage is not judged at placement, because its verdict needs a trial link: the run's own storage preflight ("check the Linux profile storage") refuses it before the lock or staging, naming the environment and its `runtime`, and that trial link under the runtime root, made and removed at once, is the only write before the refusal ([where a profile lives](sessions-profiles.md#where-a-profile-lives)).
 
 An environment fits when its `cliPort` is the plan's `port` and its `gamePort` matches any `-port` in the plan's arguments. On the host, the runner then:
 
@@ -140,7 +140,7 @@ An environment fits when its `cliPort` is the plan's `port` and its `gamePort` m
 3. ships the verified world copy to `<runtime>/<runId>/world` and verifies it there;
 4. opens a loopback tunnel to ValheimCLI and starts each boot in `<runtime>/<runId>/boot-N` with `HostServer.StartAsync`;
 5. stops only the process it started, by process ID and start time, and fetches `boot-N/` and `host-world/`; after each verified fetch, records its receipt in the journal and removes the corresponding host directory under the host lock. A failed fetch or receipt keeps the directory visible to `env status`; recovery keeps evidence without a proven fetch, and explicit `env teardown --run ID` removes it. Last, whatever is left in `<runtime>/<runId>` is fetched into `host-runs/<host>/` in the output and the folder is removed, under the same rules. A client's `<runtime>/<runId>` on its host goes the same way;
-6. compares the source install with its listing from preparation. A changed, missing or added file fails the run and is never repaired.
+6. settles the source install against its listing from preparation ([source checks](sessions-profiles.md#source-checks)): a file the game added is moved into `source-changes/server/` and named, and the run passes with a warning; a changed or missing file fails the run and is never repaired.
 
 Set `VALHEIM_TESTING_SOURCE_HASH_AFTER_RUN=1` to compare content hashes instead of sizes and times. [Game hosts](sessions-hosts.md) describes each host kind, and [run on another machine](../guides/run-on-another-machine.md) walks through it.
 

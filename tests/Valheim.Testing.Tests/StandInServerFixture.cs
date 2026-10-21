@@ -718,7 +718,12 @@ internal sealed class MacIdentityFailingHost(IGameHost inner) : DelegatingGameHo
 /// <summary>Builds and ships the one native macOS server stand-in used by every real Mac HostServer lifecycle test.</summary>
 internal static class MacServerStandIn
 {
-    internal static async Task<(GameLaunch Launch, string Install)> PrepareAsync(IGameHost host, string root, TimeSpan timeout)
+    // A Mac dedicated server's install (the stand-in executable in valheim_server/, the loader beside it) and its profile, made
+    // as a run makes it (#612): the game linked two folders down (ProfileLayouts.GameFolder) by the profile seed, the loader
+    // copied. The stand-in writes a marker where BepInEx puts Paths.GameRootPath on macOS, its executable's fourth parent.
+    internal const string GameRootMarker = "vt-game-root-marker";
+
+    internal static async Task<(GameLaunch Launch, string Install, string Profile)> PrepareAsync(IGameHost host, string root, TimeSpan timeout)
     {
         using var source = new TempDirectory();
         string game = Path.Combine(source.Path, "valheim_server", "Valheim");
@@ -726,12 +731,20 @@ internal static class MacServerStandIn
         string code = Path.Combine(source.Path, "stand-in.c");
         Directory.CreateDirectory(Path.GetDirectoryName(game)!);
         File.WriteAllText(code, """
+            #include <mach-o/dyld.h>
             #include <signal.h>
             #include <stdio.h>
+            #include <string.h>
             #include <unistd.h>
             static volatile sig_atomic_t stop;
             static void on_stop(int signal) { (void)signal; stop = 1; }
             int main(void) {
+              char path[4096]; uint32_t size = sizeof path;
+              if (_NSGetExecutablePath(path, &size) == 0) {
+                for (int up = 0; up < 4; up++) { char *slash = strrchr(path, '/'); if (slash) *slash = 0; }
+                char marker[4200]; snprintf(marker, sizeof marker, "%s/vt-game-root-marker", path);
+                FILE *file = fopen(marker, "w"); if (file) { fputs("game root\n", file); fclose(file); }
+              }
               signal(SIGINT, on_stop);
               puts("native server running"); fflush(stdout);
               while (!stop) usleep(10000);
@@ -742,14 +755,22 @@ internal static class MacServerStandIn
         Compile(game, code, library: false);
         File.WriteAllText(code, "void vt_doorstop_stand_in(void) {}\n");
         Compile(library, code, library: true);
+        File.Delete(code);
         string core = Path.Combine(source.Path, "BepInEx", "core");
         Directory.CreateDirectory(core);
         File.WriteAllText(Path.Combine(core, "BepInEx.Preloader.dll"), "test preloader");
         File.WriteAllText(Path.Combine(core, "BepInEx.dll"), "test core");
-        string install = root + "/install", profile = root + "/profile";
-        await host.ShipFilesAsync(Path.Combine(source.Path, "valheim_server"), install + "/valheim_server", timeout);
-        await host.ShipFilesAsync(source.Path, profile, timeout);
-        return (GameLaunch.ForServerWithLoader(install, profile, ["-nographics"], null, ServerPlatform.MacOS), install);
+        string install = root + "/install", profile = root + "/profile", gameRoot = profile + "/" + ProfileLayouts.MacServerGameFolder;
+        await host.ShipFilesAsync(source.Path, install, timeout);
+        var listing = await HostInstall.ListAsync(host, install, timeout);
+        static string Encode(string relative) => Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(relative));
+        (await host.RunAsync(HostedRuntimeStage.BashProfileSeed, new Dictionary<string, string>
+        {
+            ["source"] = install, ["runtime"] = profile, ["game"] = gameRoot,
+            ["gameFiles"] = string.Join('\n', HostedRuntimeStage.PlanLinkedProfile(ClientPlatform.MacOS, listing.Files.Keys).Links.Select(Encode)),
+            ["files"] = string.Join('\n', listing.Files.Keys.Where(path => InstallPins.IsLoaderFile(path)).Select(Encode)),
+        }, timeout)).EnsureSuccess("Seeding the Mac server stand-in's profile");
+        return (GameLaunch.ForServerWithLoader(gameRoot, profile, ["-nographics"], null, ServerPlatform.MacOS, linked: true), install, profile);
     }
 
     private static void Compile(string output, string input, bool library)

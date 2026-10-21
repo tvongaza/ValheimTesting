@@ -56,6 +56,8 @@ internal sealed class FakeServerHost : IGameHost
     /// <summary>The port check's whole reply when set; else free or busy by <see cref="PortBusy"/>.</summary>
     public string? PortReply { get; set; }
     public bool GameActive { get; set; }
+    /// <summary>Host paths the preflight read answers as unreadable by the host user.</summary>
+    public HashSet<string> UnreadableFiles { get; } = [];
     /// <summary>The conflicting processes' IDs the game-process check names when <see cref="GameActive"/> (comma separated), or none.</summary>
     public string GameProcessIds { get; set; } = "";
     /// <summary>The server ignores the clean stop's SIGINT, so it is killed after the wait.</summary>
@@ -106,6 +108,15 @@ internal sealed class FakeServerHost : IGameHost
     /// <summary>The Windows profile-storage probe's source and runtime volumes.</summary>
     public WindowsStorageVolume ProfileSourceVolume { get; set; } = new(@"C:\", "volume-c", "NTFS", false);
     public WindowsStorageVolume ProfileRuntimeVolume { get; set; } = new(@"C:\", "volume-c", "NTFS", false);
+    /// <summary>
+    /// The system a bash host's profile-storage probe names (uname -s); by default a Mac's when the probed source holds a Mac
+    /// dedicated server, else Linux, as only a real host of that system could hold it.
+    /// </summary>
+    public string? HostSystem { get; set; }
+    /// <summary>The Unix profile-storage probe's mount for each probed path, by path prefix; by default the root's ext4 (APFS on a Mac).</summary>
+    public Dictionary<string, UnixStorageVolume> UnixVolumes { get; } = new(StringComparer.Ordinal);
+    /// <summary>The probe's trial link: its error when it fails (fs.protected_hardlinks), or null when it links.</summary>
+    public string? LinkError { get; set; }
     /// <summary>A process this host reports as running until it is stopped; for journal tests.</summary>
     public void Running(int pid, string start)
     {
@@ -142,7 +153,7 @@ internal sealed class FakeServerHost : IGameHost
         ("drop-kept", [HostedRunScripts.DropKept, HostedRunScripts.WindowsDropKept]),
         ("apply-stage", [HostedRuntimeStage.WindowsApply, HostedRuntimeStage.BashApply]),
         ("profile-seed", [HostedRuntimeStage.WindowsProfileSeed, HostedRuntimeStage.BashProfileSeed]),
-        ("profile-storage", [HostedRuntimeStage.WindowsProfileStorage]),
+        ("profile-storage", [HostedRuntimeStage.WindowsProfileStorage, UnixStorageProbe.Script]),
         ("steam-runtime-verify", [MacSteamRuntimePackage.VerificationScript]),
         ("steam-runtime-stage", [MacSteamRuntimeOnHost.Stage]),
         ("keep-logs", [RunRecovery.BashKeepLogs, RunRecovery.WindowsKeepLogs]),
@@ -182,6 +193,10 @@ internal sealed class FakeServerHost : IGameHost
         ("launcher-inspect", [HostServerLauncher.UnixInspect, HostServerLauncher.WindowsInspect]),
         ("launcher-retire", [HostServerLauncher.UnixRetire, HostServerLauncher.WindowsRetire]),
         ("mac-bundle", [MacAppBundle.Bash]),
+        ("source-settle", [SourceSettleScripts.Bash, SourceSettleScripts.PowerShell]),
+        ("source-write", [SourceSettleScripts.BashWrite, SourceSettleScripts.PowerShellWrite]),
+        ("source-evidence", [SourceSettleScripts.BashEvidence, SourceSettleScripts.PowerShellEvidence]),
+        ("source-reachable", [SourceSettleScripts.BashReachable, SourceSettleScripts.PowerShellReachable]),
         ("machine-name", [RunJournalStatus.WindowsMachineName]),
         ("lock", [HostScripts.Lock(HostShellKind.Bash), HostScripts.Lock(HostShellKind.PowerShell)]),
         ("scheduled-task-register", [WindowsScheduledTask.RegisterScript]),
@@ -214,6 +229,24 @@ internal sealed class FakeServerHost : IGameHost
         if (Failures.TryGetValue(name, out var failure)) return failure;
         switch (name)
         {
+            case "profile-storage" when !Windows:
+            {
+                string[] paths = v["paths"].Split('\n', StringSplitOptions.RemoveEmptyEntries);
+                string system = HostSystem ?? (File.Exists(Path.Combine(Local(paths[0]), GameLaunch.ServerMacExecutable)) ? "Darwin" : "Linux");
+                var text = new StringBuilder("VT-PROFILE-OS " + system + "\n");
+                if (system is not ("Linux" or "Darwin")) return Ok(text.ToString());
+                for (int i = 0; i < paths.Length; i++)
+                {
+                    var volume = UnixVolumes.Where(item => paths[i] == item.Key || paths[i].StartsWith(item.Key.TrimEnd('/') + "/", StringComparison.Ordinal))
+                        .OrderByDescending(item => item.Key.Length).Select(item => item.Value).FirstOrDefault()
+                        ?? new UnixStorageVolume("/", "2049", system == "Linux" ? "ext4" : "apfs", Writable: true);
+                    text.Append($"VT-PROFILE-VOLUME {i} {volume.Device} {(volume.Writable ? 1 : 0)} {(volume.AtMountPoint ? 1 : 0)} {volume.FileSystem} ")
+                        .Append(Convert.ToBase64String(Encoding.UTF8.GetBytes(volume.MountPoint))).Append('\n');
+                }
+                if (v.GetValueOrDefault("linktest") == "1")
+                    text.Append(LinkError == null ? "VT-PROFILE-LINK ok\n" : "VT-PROFILE-LINK refused " + Convert.ToBase64String(Encoding.UTF8.GetBytes(LinkError)) + "\n");
+                return Ok(text.Append("VT-PROFILE-VOLUMES\n").ToString());
+            }
             case "profile-storage":
             {
                 object Item(WindowsStorageVolume volume) => new
@@ -331,8 +364,54 @@ internal sealed class FakeServerHost : IGameHost
             {
                 string file = Local(v["path"]);
                 if (!File.Exists(file)) return Ok("VT-PREFLIGHT missing\n");
+                if (UnreadableFiles.Contains(v["path"])) return Ok("VT-PREFLIGHT unreadable\n");
                 var bytes = File.ReadAllBytes(file);
                 return Ok(bytes.Length > long.Parse(v["limit"], System.Globalization.CultureInfo.InvariantCulture) ? "VT-PREFLIGHT too-large\n" : "VT-PREFLIGHT " + Convert.ToBase64String(bytes) + "\n");
+            }
+            // As the real scripts do (ProfileSourceCheckTests runs them): each added file moved into keep, each added folder removed once empty.
+            case "source-settle":
+            {
+                var reply = new StringBuilder();
+                string root = Local(v["root"]), keep = Local(v["keep"]);
+                foreach (string line in v["files"].Split('\n', StringSplitOptions.RemoveEmptyEntries))
+                {
+                    string relative = Encoding.UTF8.GetString(Convert.FromBase64String(line)), from = Path.Combine(root, relative), to = Path.Combine(keep, relative);
+                    if (!File.Exists(from)) { reply.Append("VT-GONE ").Append(line).Append('\n'); continue; }
+                    Directory.CreateDirectory(Path.GetDirectoryName(to)!);
+                    File.Move(from, to);
+                    reply.Append("VT-MOVED ").Append(line).Append('\n');
+                }
+                foreach (string line in v["folders"].Split('\n', StringSplitOptions.RemoveEmptyEntries))
+                {
+                    string folder = Path.Combine(root, Encoding.UTF8.GetString(Convert.FromBase64String(line)));
+                    if (!Directory.Exists(folder)) reply.Append("VT-GONE ").Append(line).Append('\n');
+                    else if (Directory.EnumerateFileSystemEntries(folder).Any()) reply.Append("VT-NOTMOVED ").Append(line).Append(" not-empty\n");
+                    else { Directory.Delete(folder); reply.Append("VT-RMDIR ").Append(line).Append('\n'); }
+                }
+                return Ok(reply + "VT-SETTLED\n");
+            }
+            case "source-reachable":
+                foreach (string path in new[] { v["root"], v["parent"] })
+                    if (!Directory.Exists(Local(path))) return Ok("VT-REACHABLE no " + path + "\n");
+                return Ok("VT-REACHABLE yes\n");
+            case "source-write":
+                Directory.CreateDirectory(Path.GetDirectoryName(Local(v["path"]))!);
+                File.WriteAllBytes(Local(v["path"]), Convert.FromBase64String(v["content"]));
+                return Ok("VT-SOURCE-WRITTEN\n");
+            case "source-evidence":
+            {
+                string profileParent = Local(v["parent"]), added = Local(v["keep"]);
+                if (v["recovered"].Length != 0 && Directory.Exists(added))
+                {
+                    string to = Path.Combine(Local(v["recovered"]), "added");
+                    if (Directory.Exists(to)) return Ok("VT-SOURCE-REFUSED " + v["recovered"] + "/added already exists\n");
+                    Directory.CreateDirectory(Local(v["recovered"]));
+                    Directory.Move(added, to);
+                }
+                else if (v["recovered"].Length == 0 && v["added"] == "1" && Directory.Exists(added)) Directory.Delete(added, recursive: true);
+                if (v.GetValueOrDefault("baseline") == "1" && File.Exists(Path.Combine(profileParent, ProfileSourceCheck.BaselineFile)))
+                    File.Delete(Path.Combine(profileParent, ProfileSourceCheck.BaselineFile));
+                return Ok("VT-SOURCE-SETTLED\n");
             }
             case "profile-seed":
             {
@@ -343,7 +422,9 @@ internal sealed class FakeServerHost : IGameHost
                     .Concat(v["files"].Split('\n', StringSplitOptions.RemoveEmptyEntries)))
                 {
                     string relative = Encoding.UTF8.GetString(Convert.FromBase64String(encoded));
-                    string target = Path.Combine(destination, relative);
+                    // As the seed: a game file goes to the game folder (a Mac server's lies below the profile), a loader file to the profile.
+                    bool gameFile = v["gameFiles"].Split('\n').Contains(encoded);
+                    string target = Path.Combine(gameFile && v.TryGetValue("game", out string? game) ? Local(game) : destination, relative);
                     Directory.CreateDirectory(Path.GetDirectoryName(target)!);
                     File.Copy(Path.Combine(Local(v["source"]), relative), target);
                 }
@@ -410,6 +491,8 @@ internal sealed class FakeServerHost : IGameHost
             case "cleanup-stage":
                 foreach (string path in new[] { v["runtime"], v["stage"] }.Where(path => path.Length != 0))
                     if (Directory.Exists(Local(path))) Directory.Delete(Local(path), recursive: true);
+                if (v["runtime"].Split('/', '\\').Last() == "runtime" && File.Exists(Path.Combine(Local(v["parent"]), ProfileSourceCheck.BaselineFile)))
+                    File.Delete(Path.Combine(Local(v["parent"]), ProfileSourceCheck.BaselineFile));
                 if (v.GetValueOrDefault("keepparent", "").Length == 0 && v.TryGetValue("parent", out string? parent) && Directory.Exists(Local(parent)) &&
                     !Directory.EnumerateFileSystemEntries(Local(parent)).Any())
                     Directory.Delete(Local(parent));
@@ -589,6 +672,9 @@ internal sealed class FakeServerHost : IGameHost
                     if (v.GetValueOrDefault("content") != "0")
                         text.Append(FileHash.Sha256(file)).Append("  ./").Append(relative).Append('\n');
                 }
+                if (v.GetValueOrDefault("metadata") == "1")
+                    foreach (string folder in Directory.EnumerateDirectories(root, "*", SearchOption.AllDirectories))
+                        text.Append("VT-DIR ").Append(Convert.ToBase64String(Encoding.UTF8.GetBytes(Path.GetRelativePath(root, folder).Replace('\\', '/')))).Append('\n');
                 if (File.Exists(Path.Combine(root, GameLaunch.ServerLinuxExecutable))) text.Append("VT-EXEC ").Append(GameLaunch.ServerLinuxExecutable).Append('\n');
                 return Ok(text.Append("VT-LIST done\n").ToString());
             }

@@ -513,6 +513,7 @@ public static class PinnedServerRun
             }
             // The leases once their clients are gone, then the campaign's characters and installs under the locks held, then the locks.
             if (actors != null) await actors.ReleaseAccountsAsync(Try).ConfigureAwait(false);
+            actors?.RecordInPlaceSourceVerdicts(report);
             if (prepared != null)
                 foreach (var failure in await new RunRetirement(report, full).CampaignAsync(prepared, actors?.LockedHosts ?? [], cleanup,
                     actors?.PendingMacAgentHosts).ConfigureAwait(false))
@@ -631,6 +632,8 @@ public static class PinnedServerRun
                 });
                 environment = prepared!.Environment;
             }
+            // The inventory environment this run placed its server on; null when the caller resolved it.
+            string? placedEnvironment = null;
             if (environment == null)
             {
                 // A standalone run has one actor to place: its dedicated server, on the inventory's first environment that fits,
@@ -638,6 +641,7 @@ public static class PinnedServerRun
                 var inventory = inventoryPath != null ? EnvironmentInventory.Read(inventoryPath) : EnvironmentInventory.ThisMachineServer(
                     plan.Runtime.Source, plan.Port, HostedServerRun.GamePort(plan) ?? 2456); // the game's own port when the plan names none
                 var (placed, assignment, loaderPackage) = inventory.PlaceServer(plan);
+                placedEnvironment = assignment.Environment;
                 serverLoaderPackage = loaderPackage;
                 if (inventory.Detected.Count != 0) report.Provenance["inventoryDetected"] = string.Join("; ", inventory.Detected);
                 environment = placed;
@@ -679,10 +683,20 @@ public static class PinnedServerRun
                 if (DiskSpace.Require(output, DiskSpace.DirectoryBytes(plan.World.Source), "this run's world copy") is { } free)
                     report.Provenance["freeBytesBeforeCopies"] = free.ToString(CultureInfo.InvariantCulture);
             });
-            if (prepared == null && hosted.HostProfile.Platform == "windows")
-                await report.StepAsync(StepPhase.Preflight, "check the Windows profile storage", async () =>
+            if (prepared == null && ProfileLayouts.For(hosted.HostProfile.Platform, server: true) == ProfileLayout.Linked)
+                await report.StepAsync(StepPhase.Preflight, $"check the {ProfileLinkRules.For(hosted.HostProfile.Platform).Platform} profile storage", async () =>
                 {
-                    string? storage = await hosted.PreflightProfileStorageAsync(cancellation.Token).ConfigureAwait(false);
+                    // A Unix environment's storage is judged here, not at placement (EnvironmentRuns.PlaceServer): its verdict
+                    // needs the trial link, so a refusal names the environment it chose.
+                    string? storage;
+                    try { storage = await hosted.PreflightProfileStorageAsync(cancellation.Token).ConfigureAwait(false); }
+                    // Every refusal of the storage owner: its verdict, the apart check's overlap (ArgumentException), a link it could not
+                    // resolve (IOException) or a host that could not answer (HostOperationException, an InvalidOperationException).
+                    catch (Exception refusal) when (placedEnvironment != null && refusal is InvalidOperationException or ArgumentException or
+                        IOException or PlatformNotSupportedException or UnauthorizedAccessException)
+                    {
+                        throw new InvalidOperationException($"server environment {placedEnvironment} (runtime {hosted.Role.Runtime}): {refusal.Message}", refusal);
+                    }
                     if (storage != null) Console.WriteLine("profile storage: " + storage);
                 }).ConfigureAwait(false);
             phase = StepPhase.Setup;

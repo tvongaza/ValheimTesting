@@ -234,12 +234,13 @@ public sealed class EnvironmentInventory
             }
             if (string.IsNullOrEmpty(recipe.Runtime))
             {
-                var runtime = ProfileRuntimeStorage.DefaultRoot(machine, recipe.Install);
+                var runtime = ProfileRuntimeStorage.DefaultRoot(machine, recipe.Install, server: serves);
                 recipe.Runtime = HostPath.Join(runtime.Path, recipe.Name ?? "");
                 recipe.RuntimeExplicit = false;
                 recipe.RuntimeReason = runtime.Reason;
                 assumed.Add($"runtime {recipe.Runtime} ({runtime.Reason})");
             }
+            // A Unix verdict needs the storage probe's trial link, which only a preflight makes: reading the inventory writes nothing.
             if (windows && recipe.Install.Length != 0)
                 recipe.ProfileStorage = ProfileRuntimeStorage.Inspect(machine, recipe.Install, recipe.Runtime, explicitRuntime);
             if (recipe.CliPort == 0)
