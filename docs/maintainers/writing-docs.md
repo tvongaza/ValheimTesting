@@ -108,7 +108,7 @@ Keep released, candidate and pending evidence distinct:
 
 | Toolkit | What it establishes | Refresh gate |
 |---|---|---|
-| Published `0.1.0` | Only the recorded commands and platforms | Preserve actual capture attribution |
+| The latest published release | Only the recorded commands and platforms | Preserve actual capture attribution |
 | Candidate packages | Only the named candidate source | Do not describe them as a release |
 | Release candidate | Candidate behavior on recorded inputs | Published-package verification remains separate |
 | Published release | The journeys actually rerun from that feed | Update claims only after matching evidence |

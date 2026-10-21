@@ -10,7 +10,30 @@ Use this when a coding agent works in your mod's repository and you want it to a
 
 ### 1. Copy the skill into your mod repository
 
-You need GitHub CLI access and `curl`. From your mod repository's root, resolve the latest stable release once and download its skill:
+You need the GitHub CLI (`gh`), signed in. From your mod repository's root, resolve the latest stable release once and download its skill.
+
+In PowerShell 7 (the Windows default):
+
+```powershell
+& {
+  $ErrorActionPreference = 'Stop'
+  $vtReleaseTag = gh api repos/tvongaza/ValheimTesting/releases/latest --jq .tag_name
+  if ($LASTEXITCODE -ne 0 -or -not $vtReleaseTag) { throw 'Could not resolve the latest ValheimTesting release.' }
+  $vtReleaseSource = gh api "repos/tvongaza/ValheimTesting/commits/$vtReleaseTag" --jq .sha
+  if ($LASTEXITCODE -ne 0 -or $vtReleaseSource -notmatch '^[0-9a-f]{40}$') { throw "Could not resolve $vtReleaseTag to a commit." }
+  $vtSkillDownload = New-TemporaryFile
+  try {
+    Invoke-WebRequest -OutFile $vtSkillDownload.FullName "https://raw.githubusercontent.com/tvongaza/ValheimTesting/$vtReleaseSource/.agents/skills/valheim-mod-testing/SKILL.md"
+    foreach ($vtSkillDir in '.agents/skills/valheim-mod-testing', '.claude/skills/valheim-mod-testing') {
+      New-Item -ItemType Directory -Force $vtSkillDir | Out-Null
+      Copy-Item $vtSkillDownload.FullName (Join-Path $vtSkillDir 'SKILL.md') -Force
+    }
+    "$vtReleaseTag $vtReleaseSource"
+  } finally { Remove-Item $vtSkillDownload.FullName -ErrorAction SilentlyContinue }
+}
+```
+
+In bash or zsh (macOS, Linux or Git Bash), which also needs `curl`:
 
 ```sh
 (
