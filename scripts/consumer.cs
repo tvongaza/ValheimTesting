@@ -466,7 +466,7 @@ void MarkerPersistence(string directory, Dictionary<string, string> env)
         ("examples/FullLifecycle/ExampleMod.Tests/MarkerPlan.cs", "MarkerPlan.cs"),
         ("examples/FullLifecycle/ExampleMod.Tests/MarkerScenario.cs", "MarkerScenario.cs"),
     }) File.Copy(Path.Combine(root, from), Path.Combine(directory, to), overwrite: true);
-    Run(env, directory, "dotnet", "build", "SmokeCheck.csproj", "-c", "Release", "--no-restore");
+    Run(env, directory, "dotnet", "build", "SmokeCheck.csproj", "-c", "Release");
     Console.WriteLine("ok   The generated server consumer delegates to the canonical persistence scenario outside the checkout.");
 }
 
