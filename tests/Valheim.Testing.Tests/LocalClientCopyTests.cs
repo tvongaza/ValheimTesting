@@ -190,6 +190,50 @@ public sealed class LocalClientCopyTests : IDisposable
         Assert.False(Directory.Exists(copy.Runtime));
     }
 
+    // #612 r3 item 7: a settlement that throws before it compares anything (here the host the copy was prepared on is renamed) never
+    // lets the copy retire without a verdict: the session records it unknown, in its own step, and the copy stays, journalled kept.
+    [ClientHostFact] public async Task ASettlementThatThrowsBeforeItComparesIsRecordedUnknownAndKeepsTheCopy()
+    {
+        var plan = Plan(_rig.Game);
+        plan.CliManifest = CliSet();
+        string data = Path.Combine(_rig.Root, "data");
+        using var journalDirectory = RunJournal.UseLocalDirectory(Path.Combine(data, "journal"));
+        var host = new RenamedHost(ThisMachine());
+        var copy = await LocalClientCopy.PrepareAsync("client", plan, default, data, host, loader: (_, _) => null);
+        var report = new ScenarioReport("thrown settlement");
+        var placement = new LocalClientPlacement { Report = report, Evidence = Path.Combine(_rig.Root, "session") };
+        Assert.True(placement.Add(copy, plan));
+        host.Name = "another name";
+
+        await placement.SettleSourcesAsync(_ => { });
+        var kept = await Assert.ThrowsAsync<SourceProfileKeptException>(() => placement.RetireAsync(verifySource: false));
+
+        var step = Assert.Single(report.Steps, step => step.Name == "verify client's source install after the run (unknown: not compared)");
+        Assert.False(step.Passed);
+        Assert.Contains("before it compared", report.Provenance["sourceIntegrity.client"]);
+        Assert.Contains("journalled kept", kept.Message);
+        Assert.True(Directory.Exists(copy.Runtime));
+        Assert.Contains("\"copy-kept\"", string.Concat(Directory.EnumerateFiles(Path.Combine(data, "journal"), "client.jsonl", SearchOption.AllDirectories).Select(File.ReadAllText)));
+    }
+
+    // A host whose name a test changes after a copy was prepared on it.
+    private sealed class RenamedHost(IGameHost inner) : IGameHost
+    {
+        public string Name { get; set; } = inner.Name;
+        public GameHostKind Kind => inner.Kind;
+        public HostShell Shell => inner.Shell;
+        public Task<HostResult> RunAsync(string script, IReadOnlyDictionary<string, string>? variables, TimeSpan timeout, CancellationToken cancellation = default) => inner.RunAsync(script, variables, timeout, cancellation);
+        public Task<HostLock> AcquireLockAsync(string lockPath, string owner, TimeSpan timeout, CancellationToken cancellation = default) => inner.AcquireLockAsync(lockPath, owner, timeout, cancellation);
+        public Task<HostLockResult> CheckLockAsync(string lockPath, string owner, TimeSpan timeout, CancellationToken cancellation = default) => inner.CheckLockAsync(lockPath, owner, timeout, cancellation);
+        public Task<HostLockResult> ReleaseLockAsync(string lockPath, string owner, TimeSpan timeout, CancellationToken cancellation = default) => inner.ReleaseLockAsync(lockPath, owner, timeout, cancellation);
+        public Task<Shipment> ShipRevisionAsync(string repository, string revision, string hostDirectory, TimeSpan timeout, CancellationToken cancellation = default) => inner.ShipRevisionAsync(repository, revision, hostDirectory, timeout, cancellation);
+        public Task<Shipment> ShipFilesAsync(string localDirectory, string hostDirectory, TimeSpan timeout, CancellationToken cancellation = default) => inner.ShipFilesAsync(localDirectory, hostDirectory, timeout, cancellation);
+        public Task<long> LogOffsetAsync(string logPath, TimeSpan timeout, CancellationToken cancellation = default) => inner.LogOffsetAsync(logPath, timeout, cancellation);
+        public Task<HostLogResult> WaitForLogAsync(string logPath, long fromOffset, System.Text.RegularExpressions.Regex success, IReadOnlyList<System.Text.RegularExpressions.Regex>? failures, TimeSpan timeout, CancellationToken cancellation = default) => inner.WaitForLogAsync(logPath, fromOffset, success, failures, timeout, cancellation);
+        public Task<FetchedDirectory> FetchDirectoryAsync(string hostDirectory, string localDirectory, TimeSpan timeout, CancellationToken cancellation = default) => inner.FetchDirectoryAsync(hostDirectory, localDirectory, timeout, cancellation);
+        public Task<CliTunnel> OpenCliTunnelAsync(int hostPort, TimeSpan readyTimeout, int localPort = 0, CancellationToken cancellation = default) => inner.OpenCliTunnelAsync(hostPort, readyTimeout, localPort, cancellation);
+    }
+
     // #860: a client a scenario opens on this machine is admitted to the run's builds where its install is listed for the copy:
     // one the server cannot take is refused before anything is journalled or copied, and one that can carries its build.
     [ClientHostFact] public async Task AClientTheServerCannotTakeIsRefusedBeforeItsCopyAndOneThatCanCarriesItsBuild()

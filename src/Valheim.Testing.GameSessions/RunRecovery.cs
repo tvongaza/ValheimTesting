@@ -584,11 +584,12 @@ internal static class RunRecovery
                         // The journalled stage is read from disk: it must be this copy's own before anything runs on the host, logs included.
                         if (stage.Length != 0) HostedRuntimeStage.RequireStaging(host, HostedRuntimeStage.RequirePrepared(host, copy.What, runId), stage);
                         // The profile's source install settled first, from the journalled baseline (#612), as the run would have: what the
-                        // game added is moved into recovered-<actor>/source-added; a refused baseline, or a settlement that did not finish,
-                        // keeps the copy.
+                        // game added goes to recovered-<actor>/source-changes-<id>/added, one folder per profile beside the copy's logs. A
+                        // moved-files folder with its own kept entry is env teardown's. A baseline that does not match its journal keeps the
+                        // copy for env recover and is not compared by env teardown; a settlement that did not finish keeps the copy.
                         string recoveredIn = RecoveredFolder(host, copy.What, runId, copy.Actor);
                         if (await ProfileSourceCheck.RecoverAsync(host, copy.What, copy.Actor, copy.Fields, recoveredIn,
-                            path => run.Items.Any(item => item.Kind == "copy" && item.Host == group.Key && item.What == path),
+                            path => run.Items.Any(item => item.Kind == "copy" && item.Host == group.Key && item.What == path), teardown,
                             entry => journal.AppendAsync(host, RunJournal.DirectoryFor(hosts[group.Key]), Actor, entry, timeout, cancellation),
                             timeout, cancellation).ConfigureAwait(false) is { } verdict)
                         {

@@ -124,15 +124,19 @@ Each effect is journalled under the actor `recovery`. A step that fails keeps wh
 
 ### Source recovery states
 
-| Journal and host | Recovery |
-|---|---|
-| A listing, not settled | Settles the install, then removes the profile |
-| A listing whose SHA-256 differs from the journal's | Refuses: the profile stays, and nothing is moved or removed |
-| Settled by the run, its listing gone | Nothing to settle. Moved files the run had not kept yet go to `recovered-<actor>/source-changes-<id>/added`; a folder the run kept on purpose (past the size limits, or no evidence folder) has its own kept entry and is left to `env teardown` |
-| A settlement step the host refuses (an install that is not a folder, a runtime inside the install, a recovered folder already there) | A finished `failed` verdict naming the refusal and what to fix; the profile is removed, and moved files stay journalled kept for `env teardown` |
-| Not settled, its listing gone | Names the install as not compared (`unknown`), keeps any moved files, and removes the profile |
-| The run kept the profile because its settlement did not finish | `env teardown` settles it the same way, then removes it |
-| The settlement does not finish | Keeps the profile for the next recovery |
+Recovery ends for every journal state of a profile's source install:
+
+| Journal and host | `env recover` | `env teardown` |
+|---|---|---|
+| No listing journalled | Removes the profile | Removes the profile |
+| A listing, not settled | Settles the install, then removes the profile | The same |
+| Settled by the run, its listing gone | Nothing to settle. Moved files the run had not kept yet go to `recovered-<actor>/source-changes-<id>/added` | The same |
+| Not settled, its listing gone | Names the install as not compared (`unknown`), keeps any moved files, and removes the profile | The same |
+| A listing whose SHA-256 or install differs from the journal's | Refuses: the profile stays, nothing is moved or removed. Check the install, then run `env teardown` | Names the install as not compared (`unknown`), keeps any moved files, and removes the profile |
+| The install is gone, now holds a link, or a settlement step is refused (a runtime inside the install, a recovered folder already there) | A finished `failed` verdict naming it and what to fix; the profile is removed, and moved files stay journalled kept | The same, and the kept moved files go |
+| A moved-files folder the run kept on purpose (past the size limits, or no evidence folder) | Left alone: it has its own kept entry | Removed |
+| The run kept the profile because its settlement did not finish | Refuses the run as kept | Settles the install, then removes the profile |
+| The settlement does not finish (a host fails or times out) | Keeps the profile open for the next `env recover` | The same |
 
 ## From code
 

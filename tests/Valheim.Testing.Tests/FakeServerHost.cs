@@ -396,12 +396,13 @@ internal sealed class FakeServerHost : IGameHost
                 if (v["recovered"].Length != 0 && Directory.Exists(added))
                 {
                     string to = Path.Combine(Local(v["recovered"]), "added");
-                    if (Directory.Exists(to)) return Ok("VT-SOURCE-REFUSED " + v["recovered"] + " already holds added\n");
+                    if (Directory.Exists(to)) return Ok("VT-SOURCE-REFUSED " + v["recovered"] + "/added already exists\n");
                     Directory.CreateDirectory(Local(v["recovered"]));
                     Directory.Move(added, to);
                 }
                 else if (v["recovered"].Length == 0 && v["added"] == "1" && Directory.Exists(added)) Directory.Delete(added, recursive: true);
-                if (File.Exists(Path.Combine(profileParent, ProfileSourceCheck.BaselineFile))) File.Delete(Path.Combine(profileParent, ProfileSourceCheck.BaselineFile));
+                if (v.GetValueOrDefault("baseline") == "1" && File.Exists(Path.Combine(profileParent, ProfileSourceCheck.BaselineFile)))
+                    File.Delete(Path.Combine(profileParent, ProfileSourceCheck.BaselineFile));
                 return Ok("VT-SOURCE-SETTLED\n");
             }
             case "profile-seed":

@@ -62,6 +62,8 @@ internal sealed record SourceVerdict(string Actor, string Host, string Root, str
 
     /// <summary>The profile the verdict is about (its journalled runtime), for the one kept-profile message.</summary>
     [JsonIgnore] internal string? Profile { get; init; }
+    /// <summary>Whether a recovery settled it: its kept profile stays open in the journal for the next <c>env recover</c>, not journalled kept.</summary>
+    [JsonIgnore] internal bool InRecovery { get; init; }
 
     /// <summary>Whether the caller must keep the profile instead of retiring it: a settlement that did not finish (<see cref="Settled"/>).</summary>
     [JsonIgnore] internal bool KeepsProfile => !Settled;
@@ -70,10 +72,11 @@ internal sealed record SourceVerdict(string Actor, string Host, string Root, str
     /// The one answer to a caller about to retire the profile: nothing when it may, else the owner's kept-profile refusal (the
     /// settlement journalled it kept already), which the caller reports instead of retiring.
     /// </summary>
-    internal void RequireRetirable()
+    internal void RequireRetirable(Exception? cause = null)
     {
         if (KeepsProfile) throw new SourceProfileKeptException($"{Actor}'s profile {Profile} is kept: its source settlement did not finish ({Reason}). " +
-            "valheim-test env status names it; env teardown settles the install again and removes it.");
+            (InRecovery ? "It stays open in the journal: the next env recover settles the install again and removes it."
+                : "It is journalled kept: valheim-test env status names it, and env teardown settles the install again and removes it."), cause);
     }
 
     /// <summary>The verdict for an actor that runs its install in place.</summary>
@@ -296,7 +299,7 @@ internal static class SourceSettleScripts
 
     // Variables: parent (the profile's folder), keep (its moved-files folder, a source-added-* folder directly in parent), added (1:
     // remove keep, fetched or holding no file), recovered (a recovery's per-profile folder in recovered-<actor>: keep is moved into it
-    // as added, never removed). The baseline goes last; every delete stays below the parent (ProtectedPaths). A path that breaks
+    // as added, never removed), baseline (1: remove the baseline, last). Every delete stays below the parent (ProtectedPaths). A path that breaks
     // these rules is refused ("VT-SOURCE-REFUSED <why>"), never retried: it cannot change.
     internal static readonly string BashEvidence = "set -u\n" + ProtectedPaths.BashInside + ProtectedPaths.BashRemove + """
         if [ -z "$parent" ] || [ -z "$keep" ]; then echo 'VT-SOURCE-REFUSED no profile folder or moved files folder was named'; exit 0; fi
@@ -311,7 +314,7 @@ internal static class SourceSettleScripts
             fi
         elif [ "${added:-}" = 1 ]; then vt_remove "$keep" "$parent" || exit 3
         fi
-        vt_remove "$parent/source-baseline.json" "$parent" || exit 3
+        if [ "${baseline:-}" = 1 ]; then vt_remove "$parent/source-baseline.json" "$parent" || exit 3; fi
         echo 'VT-SOURCE-SETTLED'
         """.ReplaceLineEndings("\n");
 
@@ -333,13 +336,13 @@ internal static class SourceSettleScripts
             }
         }
         elseif ($added -eq '1') { Remove-VtTree $keep $parent }
-        Remove-VtTree (Join-Path $parent 'source-baseline.json') $parent
+        if ($baseline -eq '1') { Remove-VtTree (Join-Path $parent 'source-baseline.json') $parent }
         'VT-SOURCE-SETTLED'
         """.ReplaceLineEndings("\n");
 }
 
 /// <summary>A profile kept because its source settlement did not finish (<see cref="SourceVerdict.RequireRetirable"/>): the owner's one message.</summary>
-internal sealed class SourceProfileKeptException(string message) : IOException(message);
+internal sealed class SourceProfileKeptException(string message, Exception? inner = null) : IOException(message, inner);
 
 /// <summary>
 /// A settlement step refused on the host for a reason that cannot change (a source install that is not a folder, a keep folder

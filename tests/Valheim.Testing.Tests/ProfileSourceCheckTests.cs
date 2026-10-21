@@ -246,8 +246,8 @@ public sealed class ProfileSourceCheckTests : IDisposable
     private string RecoveredProfile => Assert.Single(Directory.GetDirectories(Recovered, "source-changes-*"));
     private Task PersistAsync(ProfileSourceCheck check) =>
         check.PersistAsync(_host, Path.GetFullPath(Runtime), "client", entry => { _journal.Add(entry); return Task.CompletedTask; }, TimeSpan.FromSeconds(30));
-    private Task<SourceVerdict?> RecoverAsync(IReadOnlyDictionary<string, string> fields, Func<string, bool>? keptApart = null) =>
-        ProfileSourceCheck.RecoverAsync(_host, Path.GetFullPath(Runtime), "regression-test", fields, Recovered, keptApart ?? (_ => false),
+    private Task<SourceVerdict?> RecoverAsync(IReadOnlyDictionary<string, string> fields, Func<string, bool>? keptApart = null, bool teardown = false) =>
+        ProfileSourceCheck.RecoverAsync(_host, Path.GetFullPath(Runtime), "regression-test", fields, Recovered, keptApart ?? (_ => false), teardown,
             entry => { _journal.Add(entry); return Task.CompletedTask; }, TimeSpan.FromSeconds(60));
 
     // #612 item 1: the baseline goes only after source-settled is journalled. One gone without that line is an explicit verdict,
@@ -354,8 +354,9 @@ public sealed class ProfileSourceCheckTests : IDisposable
         Assert.Contains("refused", verdict.Reason);
         Assert.Contains("Resolve it by hand", verdict.Reason);
         Assert.True(File.Exists(Path.Combine(_root, "preloader_1.log")));
-        Assert.Equal([JournalEntry.SourceMoveIntended, JournalEntry.CopyKept, JournalEntry.SourceSettled], _journal.Select(entry => entry.Kind));
-        Assert.Equal(check.MovedFilesFolder(inside), _journal[1].Fields["runtime"]);
+        // Nothing moved, and the folder would lie inside the install: nothing is journalled kept; the settlement once.
+        Assert.Equal([JournalEntry.SourceMoveIntended, JournalEntry.SourceSettled], _journal.Select(entry => entry.Kind));
+        Assert.Empty(verdict.Added);
     }
 
     // #612 r2 item 2: each recovered profile has its own folder, and a folder already there is a finished refusal, never a retry.
@@ -369,7 +370,9 @@ public sealed class ProfileSourceCheckTests : IDisposable
         var fields = _journal[0].Fields;
         string id = Path.GetFileName(fields["sourceAdded"])[(ProfileSourceCheck.AddedFolder.Length + 1)..];
         Directory.CreateDirectory(Path.Combine(Recovered, "source-changes-" + id, "added"));
-        Write("preloader_1.log", "the game's");
+        // What an interrupted run moved, which the recovery adopts first.
+        Directory.CreateDirectory(check.MovedFilesFolder(Runtime));
+        File.WriteAllText(Path.Combine(check.MovedFilesFolder(Runtime), "preloader_1.log"), "the game's");
 
         var verdict = await RecoverAsync(fields);
 
@@ -377,7 +380,82 @@ public sealed class ProfileSourceCheckTests : IDisposable
         Assert.True(verdict.Settled);
         Assert.Contains("already exists", verdict.Reason);
         Assert.True(File.Exists(Path.Combine(check.MovedFilesFolder(Runtime), "preloader_1.log"))); // kept where it was, journalled
+        // r3 item 4: named where it is, not where it would have gone.
+        Assert.Equal(_host.Name + ":" + Path.Combine(check.MovedFilesFolder(Runtime), "preloader_1.log"), Assert.Single(verdict.Added).KeptAs);
         Assert.Contains(_journal, entry => entry.Kind == JournalEntry.CopyKept && entry.Fields["runtime"] == check.MovedFilesFolder(Runtime));
+        Assert.Single(_journal, entry => entry.Kind == JournalEntry.SourceSettled);
+    }
+
+    // r3 item 1: an install that is gone, or that now holds a link, is a state of the host: a finished failure naming it, so the
+    // profile retires instead of waiting on a recovery that can never settle it.
+    [Fact]
+    public async Task AnInstallThatIsGoneOrHoldsALinkIsAFinishedFailure()
+    {
+        Write("game.bin", "game");
+        Directory.CreateDirectory(Parent);
+        var check = await PrepareAsync();
+        string outside = _root + "-runs";
+        DirectoryLinks.Create(Path.Combine(_root, "linked"), outside);
+
+        var linked = await SettleAsync(check);
+        Assert.Equal((SourceVerdictKind.Failed, true), (linked.Verdict, linked.Settled));
+        Assert.Contains("now holds a link", linked.Reason);
+        DirectoryLinks.Remove(Path.Combine(_root, "linked"));
+
+        Directory.Delete(_root, recursive: true);
+        var gone = await SettleAsync(check, Output + "-again");
+        Assert.Equal((SourceVerdictKind.Failed, true), (gone.Verdict, gone.Settled));
+        Assert.Contains("is gone", gone.Reason);
+        gone.RequireRetirable();
+        Directory.CreateDirectory(_root);
+    }
+
+    // r3 item 2: a baseline that does not match its journal stays refused by env recover; env teardown finishes it, not compared,
+    // keeping what the run had moved.
+    [Fact]
+    public async Task ATamperedBaselineIsNotComparedByTeardownAndItsMovedFilesAreKept()
+    {
+        Write("game.bin", "game");
+        Directory.CreateDirectory(Parent);
+        var check = await PrepareAsync();
+        await PersistAsync(check);
+        var fields = _journal[0].Fields;
+        File.AppendAllText(fields["baseline"], " ");
+        Directory.CreateDirectory(check.MovedFilesFolder(Runtime));
+        File.WriteAllText(Path.Combine(check.MovedFilesFolder(Runtime), "preloader_1.log"), "the game's");
+
+        await Assert.ThrowsAsync<InvalidDataException>(() => RecoverAsync(fields));
+        Assert.True(File.Exists(Path.Combine(check.MovedFilesFolder(Runtime), "preloader_1.log")));
+
+        var verdict = await RecoverAsync(fields, teardown: true);
+        Assert.Equal(SourceVerdictKind.Unknown, verdict!.Verdict);
+        Assert.Contains("not compared", verdict.Reason);
+        Assert.Contains("differs from its journalled SHA-256", verdict.Reason);
+        Assert.Equal("the game's", File.ReadAllText(Path.Combine(RecoveredProfile, "added", "preloader_1.log")));
+        verdict.RequireRetirable();
+    }
+
+    // r3 item 6: when the baseline is gone and adopting the moved files is refused, the recovery still ends: not compared, the
+    // files named where they are.
+    [Fact]
+    public async Task ARefusedAdoptionOfAGoneBaselineStillEnds()
+    {
+        Write("game.bin", "game");
+        Directory.CreateDirectory(Parent);
+        var check = await PrepareAsync();
+        await PersistAsync(check);
+        var fields = _journal[0].Fields;
+        File.Delete(fields["baseline"]);
+        string id = Path.GetFileName(fields["sourceAdded"])[(ProfileSourceCheck.AddedFolder.Length + 1)..];
+        Directory.CreateDirectory(Path.Combine(Recovered, "source-changes-" + id, "added"));
+        Directory.CreateDirectory(check.MovedFilesFolder(Runtime));
+        File.WriteAllText(Path.Combine(check.MovedFilesFolder(Runtime), "preloader_1.log"), "the game's");
+
+        var verdict = await RecoverAsync(fields);
+
+        Assert.Equal(SourceVerdictKind.Unknown, verdict!.Verdict);
+        Assert.Contains("already exists", verdict.Reason);
+        Assert.Equal(_host.Name + ":" + Path.Combine(check.MovedFilesFolder(Runtime), "preloader_1.log"), Assert.Single(verdict.Added).KeptAs);
     }
 
     // #612 r2 item 3: a moved-files folder the run kept on purpose (past the size limits, or no evidence folder) has its own kept

@@ -154,12 +154,17 @@ public static class HostInstall
         });
     }
 
+    /// <summary>The <see cref="Exception.Data"/> key a listing's refusal of links carries: the folder holds a link, which no retry changes.</summary>
+    internal const string LinksFound = "vt-links-found";
+
     internal static HostListing ReadListing(string hostName, HostShellKind shell, string root, HostResult result)
     {
         var lines = result.Stdout.Split('\n');
         if (lines.Length > 0 && lines[0] == "VT-LIST missing") throw new DirectoryNotFoundException($"{root} does not exist on {hostName}.");
         if (lines.Length > 0 && lines[0] == "VT-LIST links")
-            throw new IOException($"{root} on {hostName} holds links, which are unsupported in a fixture: {string.Join(", ", lines.Skip(1).Where(line => line.Length > 0).Take(5))}.");
+            // Marked as a state of the host (LinksFound), not a passing failure.
+            throw new IOException($"{root} on {hostName} holds links, which are unsupported in a fixture: {string.Join(", ", lines.Skip(1).Where(line => line.Length > 0).Take(5))}.")
+                { Data = { [LinksFound] = true } };
         if (!lines.Contains("VT-LIST done")) throw new HostOperationException($"Unexpected reply while listing {root} on {hostName}", result);
         var names = shell == HostShellKind.PowerShell ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
         var files = new Dictionary<string, string>(names);
@@ -569,7 +574,8 @@ internal static class HostInstallScripts
                         files+=("$file")
                         if [ "${#files[@]}" -eq 200 ]; then vt_bsd_states "${files[@]}" || return 3; files=(); fi
                     done < <(find . -type f -print0)
-                    vt_bsd_states "${files[@]}" || return 3
+                    # bash 3.2 (macOS) calls an empty array unbound under set -u: an empty folder has no files.
+                    vt_bsd_states ${files[@]+"${files[@]}"} || return 3
                 }
                 packed=$(vt_all_bsd_states | /usr/bin/base64 -b 0) || exit 3
             fi

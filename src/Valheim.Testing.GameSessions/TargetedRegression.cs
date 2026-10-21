@@ -646,7 +646,7 @@ public sealed class TargetedRegression
         try { if (_sourceVerdict == null) SettleSource().Record(null); }
         catch (Exception error) { integrity = error; }
         // A settlement that did not finish keeps the profile with its baseline and moved files, journalled kept, for env teardown.
-        _sourceVerdict?.RequireRetirable();
+        _sourceVerdict?.RequireRetirable(integrity);
         try { HostedRuntimeStage.RetireAsync(_host, Install, _stage, LocalClientCopy.StepTimeout).GetAwaiter().GetResult(); }
         catch (Exception cleanup) when (integrity != null)
         { throw new AggregateException("Source integrity failed and the regression profile was not retired.", integrity, cleanup); }
