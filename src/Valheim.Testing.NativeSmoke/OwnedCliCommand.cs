@@ -41,31 +41,9 @@ internal static class OwnedCliCommand
             if (File.Exists(Path.Combine(evidence, DetachedCommandQueue.RouteFile)))
                 return DetachedCommandQueue.Submit(evidence, values, output, error);
             string role = values.TryGetValue("--role", out string? chosen) ? chosen : DefaultRole(evidence);
-            string leaseFile = Path.Combine(evidence, OwnedClientCommandLease.LeaseFile(role));
-            string leaseJson;
-            try { leaseJson = OperatingSystem.IsWindows() ? File.ReadAllText(leaseFile) : ReadPrivateUnixLease(leaseFile, role); }
-            catch (Exception missing) when (missing is FileNotFoundException or DirectoryNotFoundException)
-            { throw new FileNotFoundException(MissingLease(role, evidence), leaseFile, missing); }
-            var lease = JsonSerializer.Deserialize<OwnedClientCommandLease>(leaseJson)
-                ?? throw new InvalidDataException($"The owned {role} identity file is empty.");
-            if (lease.Pid <= 0 || lease.Port is < 1 or > 65535 || lease.StartFileTimeUtc.Length == 0 ||
-                !Path.IsPathFullyQualified(lease.Install) || lease.Role != role)
-                throw new InvalidDataException($"The owned {role} identity file is incomplete or names another role.");
-            using var process = Process.GetProcessById(lease.Pid);
-            if (!IsExactProcess(process, lease))
-                throw new InvalidOperationException($"The exact {role} this run started is no longer running; a reused PID is never contacted.");
-            RequirePortOwner(lease.Port, lease.Pid, role);
-            string pins = values.TryGetValue("--expect-strict", out string? supplied) ? supplied :
-                Path.Combine(evidence, OwnedClientCommandLease.PhasePins(role, values["--phase"]));
-            if (supplied == null && !File.Exists(pins)) throw new FileNotFoundException(MissingPhasePins(role, values["--phase"], pins), pins);
-            string expected = StrictExpectations.Load(pins);
-            // A separate invocation is outside the runner's connection log. Open its own create-new record before
-            // any pin check or game command, so a mutating diagnostic cannot succeed without private evidence.
-            string commandLog = Path.Combine(evidence, "owned-cli-command-" + Guid.NewGuid().ToString("N") + ".jsonl");
-            var recording = new RecordingTransport(new CliTransport("127.0.0.1", lease.Port), commandLog);
-            using var actor = new GameActor("owned diagnostic " + role, recording)
-            { CommandTimeout = TimeSpan.FromSeconds(values.TryGetValue("--timeout-seconds", out string? limit) ? int.Parse(limit, CultureInfo.InvariantCulture) : 5) };
-            actor.VerifyEnvironment(expected);
+            using var actor = Connect(evidence, role, values.GetValueOrDefault("--phase"), values.GetValueOrDefault("--expect-strict"),
+                TimeSpan.FromSeconds(values.TryGetValue("--timeout-seconds", out string? limit) ? int.Parse(limit, CultureInfo.InvariantCulture) : 5),
+                out var recording, out string commandLog);
             if (ScreenshotSupersize(values["--command"]) is { } supersize)
             {
                 var capture = OwnedScreenshot.Capture(actor, evidence, values["--command"], supersize,
@@ -87,6 +65,41 @@ internal static class OwnedCliCommand
         }
         catch (Exception failure) when (failure is IOException or InvalidDataException or ArgumentException or InvalidOperationException or JsonException or TimeoutException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
         { error.WriteLine("REFUSED: " + failure.Message); return 3; }
+    }
+
+    /// <summary>
+    /// A strictly pinned actor for the exact <paramref name="role"/> process the run behind <paramref name="evidence"/> owns: its
+    /// lease names a live process (never a reused PID) that alone holds its CLI port, and the phase's pins (or
+    /// <paramref name="expectStrict"/>) are verified before it is returned. Every command goes to a new create-new record in the evidence.
+    /// </summary>
+    internal static GameActor Connect(string evidence, string role, string? phase, string? expectStrict, TimeSpan timeout,
+        out RecordingTransport recording, out string commandLog)
+    {
+        string leaseFile = Path.Combine(evidence, OwnedClientCommandLease.LeaseFile(role));
+        string leaseJson;
+        try { leaseJson = OperatingSystem.IsWindows() ? File.ReadAllText(leaseFile) : ReadPrivateUnixLease(leaseFile, role); }
+        catch (Exception missing) when (missing is FileNotFoundException or DirectoryNotFoundException)
+        { throw new FileNotFoundException(MissingLease(role, evidence), leaseFile, missing); }
+        var lease = JsonSerializer.Deserialize<OwnedClientCommandLease>(leaseJson)
+            ?? throw new InvalidDataException($"The owned {role} identity file is empty.");
+        if (lease.Pid <= 0 || lease.Port is < 1 or > 65535 || lease.StartFileTimeUtc.Length == 0 ||
+            !Path.IsPathFullyQualified(lease.Install) || lease.Role != role)
+            throw new InvalidDataException($"The owned {role} identity file is incomplete or names another role.");
+        using var process = Process.GetProcessById(lease.Pid);
+        if (!IsExactProcess(process, lease))
+            throw new InvalidOperationException($"The exact {role} this run started is no longer running; a reused PID is never contacted.");
+        RequirePortOwner(lease.Port, lease.Pid, role);
+        string pins = expectStrict ?? Path.Combine(evidence, OwnedClientCommandLease.PhasePins(role, phase ?? throw new ArgumentNullException(nameof(phase))));
+        if (expectStrict == null && !File.Exists(pins)) throw new FileNotFoundException(MissingPhasePins(role, phase!, pins), pins);
+        string expected = StrictExpectations.Load(pins);
+        // A separate invocation is outside the runner's connection log. Open its own create-new record before
+        // any pin check or game command, so a mutating diagnostic cannot succeed without private evidence.
+        commandLog = Path.Combine(evidence, "owned-cli-command-" + Guid.NewGuid().ToString("N") + ".jsonl");
+        recording = new RecordingTransport(new CliTransport("127.0.0.1", lease.Port), commandLog);
+        var actor = new GameActor("owned diagnostic " + role, recording) { CommandTimeout = timeout };
+        try { actor.VerifyEnvironment(expected); }
+        catch { actor.Dispose(); throw; }
+        return actor;
     }
 
     // The refusal for an evidence folder without the role's lease. A lease exists only while an owned game this machine's run

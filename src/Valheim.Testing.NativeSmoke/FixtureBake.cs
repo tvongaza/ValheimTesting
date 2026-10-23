@@ -6,6 +6,8 @@ using Valheim.Testing.Game;
 /// <summary>One-phase fixture input and export for an owned, server-only smoke run.</summary>
 internal static class FixtureBake
 {
+    /// <summary>A baked or saved fixture's manifest, beside its <c>worlds_local/</c>.</summary>
+    internal const string ManifestFile = "fixture-manifest.json";
     internal sealed record Input(string Source, string Origin, WorldIdentity Identity, IReadOnlyDictionary<string, string> Files);
     internal sealed record SelectedMod(string Path, string Name, string Sha256);
     internal sealed record BuildInputs(IReadOnlyList<SelectedMod> Mods, string DependencyLock, string DependencyLockSha256);
@@ -55,9 +57,20 @@ internal static class FixtureBake
     internal static (string Worlds, string ManifestFile, WorldIdentity Identity) Inspect(string source)
     {
         source = Path.TrimEndingDirectorySeparator(Path.GetFullPath(source)); // C:\x\worlds_local\ is worlds_local too
-        string manifestFile = Path.Combine(Path.GetFileName(source) == "worlds_local" ? Path.GetDirectoryName(source)! : source, "fixture-manifest.json");
+        string manifestFile = Path.Combine(Path.GetFileName(source) == "worlds_local" ? Path.GetDirectoryName(source)! : source, ManifestFile);
         if (Directory.Exists(Path.Combine(source, "worlds_local"))) source = Path.Combine(source, "worlds_local");
         return (source, manifestFile, WorldIdentity.Read(source));
+    }
+
+    /// <summary>
+    /// <see cref="Inspect"/>, and when the fixture has a <see cref="ManifestFile"/>, its files checked against it: a chosen world
+    /// refused before a run builds or stages anything. <see cref="Prepare"/> checks again as it copies.
+    /// </summary>
+    internal static WorldIdentity Check(string source)
+    {
+        var (worlds, manifestFile, identity) = Inspect(source);
+        if (File.Exists(manifestFile)) VerifyBakedManifest(manifestFile, identity, WorldFixture.Manifest(worlds));
+        return identity;
     }
 
     internal static Input Prepare(string? source, string outputRoot)
@@ -81,6 +94,8 @@ internal static class FixtureBake
             WorldFixture.Verify(target, manifest);
             if (WorldIdentity.Read(target).Uid != identity.Uid)
                 throw new InvalidDataException("The disposable world has a different UID from its source fixture.");
+            // The manifest it was checked against stays beside the copy as input evidence (and names a saved world's run).
+            if (File.Exists(manifestFile)) File.Copy(manifestFile, Path.Combine(outputRoot, "world-source", ManifestFile));
             string label = Path.GetFileName(source.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
             if (label == "worlds_local")
                 label = Path.GetFileName(Path.GetDirectoryName(source)!);
@@ -181,7 +196,7 @@ internal static class FixtureBake
                     runId = provenance.GetProperty("runId").GetString(), confirmedSaveNumber = saveNumber, saveNumber = exportedSaveNumber },
                 filesSha256 = Sorted(files),
             };
-            File.WriteAllText(Path.Combine(temporary, "fixture-manifest.json"),
+            File.WriteAllText(Path.Combine(temporary, ManifestFile),
                 JsonSerializer.Serialize(manifest, new JsonSerializerOptions { WriteIndented = true }) + "\n");
             cancellation.ThrowIfCancellationRequested();
             RefuseOutput(destination, new[] { input.Source, evidence }.Concat(protectedPaths).ToArray());

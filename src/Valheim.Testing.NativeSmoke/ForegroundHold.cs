@@ -167,16 +167,38 @@ internal sealed class ForegroundHold : IDisposable
 
     internal static void Request(string run, string? directory = null)
     {
-        if (!RunJournal.SafeName(run) || run == "-") throw new ArgumentException("Invalid run ID.", nameof(run));
         directory ??= DirectoryForThisMachine;
+        _ = LiveMarker(run, directory);
+        using var request = new FileStream(Path.Combine(directory, run + ".finish"), FileMode.CreateNew, FileAccess.Write, FileShare.None);
+    }
+
+    /// <summary>
+    /// The evidence folder of run <paramref name="run"/>, held on this machine by its exact live runner, with no finish requested:
+    /// where its owned game's command lease and pins are. Refuses a run that is not held here, has ended or is finishing.
+    /// </summary>
+    internal static string HeldEvidence(string run, string? directory = null)
+    {
+        directory ??= DirectoryForThisMachine;
+        var identity = LiveMarker(run, directory);
+        if (File.Exists(Path.Combine(directory, run + ".finish")))
+            throw new InvalidOperationException("Run " + run + " is finishing (a finish was requested); its world is being moved out.");
+        return identity.Evidence;
+    }
+
+    // The hold marker of a run whose exact runner is still alive.
+    private static Marker LiveMarker(string run, string directory)
+    {
+        if (!RunJournal.SafeName(run) || run == "-") throw new ArgumentException("Invalid run ID.", nameof(run));
         string marker = Path.Combine(directory, run + ".json");
+        if (!File.Exists(marker))
+            throw new FileNotFoundException("Run " + run + " is not held on this machine (no hold marker " + marker + "); valheim-test env status lists the runs here.", marker);
         var identity = JsonSerializer.Deserialize<Marker>(File.ReadAllText(marker))
             ?? throw new InvalidDataException("The hold marker is empty.");
         if (identity.Run != run || identity.Pid <= 0 || identity.Started.Length == 0)
             throw new InvalidDataException("The hold marker has an invalid owner.");
         if (!ExactOwner(identity.Pid, identity.Started))
             throw new InvalidOperationException("The holding runner is gone; use valheim-test env status and env recover for its run.");
-        using var request = new FileStream(Path.Combine(directory, run + ".finish"), FileMode.CreateNew, FileAccess.Write, FileShare.None);
+        return identity;
     }
 
     // Whether the hold's recorded runner is still that exact live process. finish runs in another shell, so the marker and

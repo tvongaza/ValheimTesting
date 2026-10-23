@@ -23,6 +23,7 @@ The tool needs the .NET 10 SDK. If a Homebrew .NET on macOS cannot start the too
 | [`build`](#build) | Builds a mod against the selected install's publicized assemblies, privately |
 | [`init`](#init) | Creates an editable test project that reruns a `start` or `server-load` run |
 | [`finish`](#hold-and-finish) | Asks a held run to finish and clean up |
+| [`save-world`](#save-world) | Saves a held `start` run's world and copies it out, for a later `start --world-fixture` |
 | [`cli`](#cli) | Sends one strictly pinned command to a running owned client or server |
 | [`env`](#env) | Lists this machine's environments, checks it, and clears what runs left |
 | [`session check`](#session-check) | Checks a session file and, with `--hosts`, its hosts |
@@ -40,7 +41,7 @@ The tool needs the .NET 10 SDK. If a Homebrew .NET on macOS cannot start the too
 | 2 | Usage error (not `server-load-ab`) | Usage error | Usage error |
 | 3 | Refused, or the outcome is unknown | Something refused or left to recover | Refused; no command sent |
 
-`server-load-ab` reports a usage error, `--hold` and `--preflight-only` included, as `REFUSED:` without a usage line, and exits 3. `build`, `init` and `finish` exit 0 when done, 2 on a usage error and 3 when refused.
+`server-load-ab` reports a usage error, `--hold` and `--preflight-only` included, as `REFUSED:` without a usage line, and exits 3. `build`, `init` and `finish` exit 0 when done, 2 on a usage error and 3 when refused. `save-world` exits 0 when the world is saved and copied, 1 when the game was asked to save but no copy was made, 2 on a usage error and 3 when refused before anything was sent.
 
 ## Run options
 
@@ -102,6 +103,7 @@ valheim-test start --mod /path/to/MyMod.dll
 
 | Option | Does |
 |---|---|
+| `--world-fixture DIR` | Hosts this world instead of the packaged one: a folder [`save-world`](#save-world) or a [bake](../reference/fixture-authoring.md) wrote, or any one complete Valheim 1.0 world, directly or under `worlds_local/`. It is checked before anything is built or staged, and against its `fixture-manifest.json` when it has one |
 | `--source COMMIT` | Records the mod build's source commit |
 | `--compare-mod DLL --compare-source COMMIT` | Runs a second build of the first mod against the same world, as arms `before` and `after` |
 
@@ -208,6 +210,23 @@ valheim-test finish --run ID
 ```
 
 `--hold` keeps the owned game running after the checks pass; a failing run is never held. It prints `HELD run` with the run ID and the `cli` commands that reach the game. `finish --run ID`, or Ctrl+C on the runner, stops and cleans up. If a held game exits, the run fails.
+
+## save-world
+
+```sh
+valheim-test start --mod /path/to/MyMod.dll --hold
+valheim-test save-world --run ID --output /path/to/saved-world
+valheim-test start --mod /path/to/MyMod.dll --world-fixture /path/to/saved-world --hold
+```
+
+`save-world` keeps what a held `start` run generated in play, so a later run starts from it instead of generating it again. Give the run ID that `HELD run` printed and a new folder. The run must be held on this machine with its client in its world.
+
+1. It finds the world the run placed in the client's `worlds_local`, from this machine's run journal.
+2. It asks the game to save once (`valheim.session/save`) through the client's strict world pins, and waits up to two minutes for the game to confirm a completed save of that world.
+3. It copies the newest save, the four `_main.<n>` files and the chunk files that save lists, into `NEW_DIR/worlds_local/<world>/`. Older chunk files and the minimap cache stay behind. Each file is hashed as it is read and read again afterwards; a save the game replaced meanwhile refuses the copy.
+4. It writes `fixture-manifest.json`: the world's name, seed and UID, every file's SHA-256, and `savedFrom` (the run ID, the confirmed and copied save numbers, the time, the client's world pins, and from the run's `regression.json` the mod arms with their SHA-256 and `--source` commit, the other plugins, the ValheimCLI core and the world the run started from).
+
+The folder appears complete or not at all. The run stays held: nothing else of it changes, and `finish` cleans it up as usual. The world keeps its UID and the run stages the packaged character fresh, so the character arrives where it does in the packaged world, not where the held run left it. A server's world is not saved this way: bake it with [`server-load --bake-fixture`](../reference/fixture-authoring.md).
 
 ## cli
 

@@ -4,7 +4,7 @@ using Valheim.Testing.GameSessions;
 
 if (args is ["help" or "--help"])
 {
-    Console.WriteLine("valheim-test start [--mod DLL ...] [--output NEW_DIR] [--inventory FILE | --game DIR] [--client-env NAME] [--client-architecture x64|arm64] [setup options] (with no --mod, the current project's one built plugin)");
+    Console.WriteLine("valheim-test start [--mod DLL ...] [--output NEW_DIR] [--world-fixture DIR] [--inventory FILE | --game DIR] [--client-env NAME] [--client-architecture x64|arm64] [setup options] (with no --mod, the current project's one built plugin)");
     Console.WriteLine(ServerLoad.Usage + " (a server and one clean client from the inventory; this machine when no --inventory)");
     Console.WriteLine(ServerLoadPhases.Usage + " (ordered disposable server-only saves)");
     Console.WriteLine("valheim-test server-load-ab --mod DLL --mod DLL --remove-mod DLL --output NEW_DIR [server-load options except --hold and --preflight-only]");
@@ -14,6 +14,7 @@ if (args is ["help" or "--help"])
     Console.WriteLine(ForegroundHold.FinishUsage + " (asks the live owner of a held run to finish and clean up)");
     Console.WriteLine(DetachedSession.Usage + " (experimental local detached dedicated server; Task Scheduler on Windows)");
     Console.WriteLine(OwnedCliCommand.Usage + " (one strictly pinned command to a running owned local client or server)");
+    Console.WriteLine(WorldSave.Usage + " (saves a held start run's hosted world and copies it out for start --world-fixture)");
     Console.WriteLine(SessionCommand.Usage + " (read only; --hosts adds the host checks)");
     Console.WriteLine(MacSteamRuntimeCommand.Usage + " (review and pin SteamCMD's Mac server libraries)");
     return 0;
@@ -24,6 +25,7 @@ if (args.Length != 0 && args[0] == "env") return await EnvCommand.RunAsync(args[
 if (args.Length != 0 && args[0] == "finish") return ForegroundHold.FinishCommand(args[1..]);
 if (args.Length != 0 && args[0] == "detach") return await DetachedSession.RunAsync(args[1..]);
 if (args.Length != 0 && args[0] == "cli") return OwnedCliCommand.Run(args[1..]);
+if (args.Length != 0 && args[0] == "save-world") return WorldSave.Run(args[1..]);
 if (args.Length != 0 && args[0] == "session") return await SessionCommand.RunAsync(args[1..]);
 if (args.Length != 0 && args[0] == "steam-runtime") return MacSteamRuntimeCommand.Run(args[1..]);
 if (args.Length != 0 && args[0] == "server-load-phases") return await ServerLoadPhases.RunAsync(args[1..]);
@@ -39,7 +41,7 @@ if (args.Length != 0 && args[0] is "server-load" or "server-load-ab")
 if (!StartArguments.TryRead(args, out var options, out var mods, out var roots, out var optionalReferences, out var buildDependencies, out var error, allowImplicitMod: true))
 {
     Console.Error.WriteLine(error);
-    Console.Error.WriteLine("Usage: valheim-test start [--mod DLL ... | --project MOD.csproj] [--scenario TEST.dll | --scenario-project TEST.csproj] [--dependency NAME=DLL ...] [--build-inputs FILE] [--output NEW_DIR] [--inventory FILE | --game DIR] [--client-env NAME] [--client-architecture x64|arm64] [--join-seconds 10..900] [--hold] [--source COMMIT] [--cli-manifest FILE --cli-files DIR] [--compare-mod DLL --compare-source COMMIT] [--search-root DIR|DLL ...] [--optional-reference ASSEMBLY ...] [--client-loader-package FILE] [--expected-log-error EXACT_HEADER --expected-log-reason REASON]");
+    Console.Error.WriteLine("Usage: valheim-test start [--mod DLL ... | --project MOD.csproj] [--scenario TEST.dll | --scenario-project TEST.csproj] [--dependency NAME=DLL ...] [--build-inputs FILE] [--output NEW_DIR] [--world-fixture DIR] [--inventory FILE | --game DIR] [--client-env NAME] [--client-architecture x64|arm64] [--join-seconds 10..900] [--hold] [--source COMMIT] [--cli-manifest FILE --cli-files DIR] [--compare-mod DLL --compare-source COMMIT] [--search-root DIR|DLL ...] [--optional-reference ASSEMBLY ...] [--client-loader-package FILE] [--expected-log-error EXACT_HEADER --expected-log-reason REASON]");
     return 2;
 }
 
@@ -60,6 +62,9 @@ var progress = new ModInputStage.Progress();
 try
 {
     output = SmokeCommandOptions.Output(options!);
+    // A chosen world is one complete world, matching its manifest, before anything is built or staged; it is copied and checked again below.
+    string? worldFixture = options!.TryGetValue("--world-fixture", out string? requestedWorld) ? Path.GetFullPath(requestedWorld) : null;
+    if (worldFixture != null) _ = FixtureBake.Check(worldFixture);
     // The client (the inventory's; this machine's Valheim with no --inventory), its loader, the mod, its build inputs,
     // the scenario and the dependency lock: one stage, shared with build and server-load.
     var stage = await ModInputStage.RunAsync(new ModInputStage.Request(ModInputStage.Route.Hosted, output, options!,
@@ -87,13 +92,15 @@ try
         dependencies.RequireSameFixedInputs(comparison);
     }
 
-    var world = DefaultSmokeWorld.Prepare(Path.Combine(output, "world-source"));
+    // The bundled world, or a saved one (save-world, server-load --bake-fixture): copied into the run's output and verified first.
+    var world = FixtureBake.Prepare(worldFixture, output).Identity;
+    string worldRoot = Path.Combine(output, "world-source", "worlds_local");
     var character = DefaultSmokeCharacter.Prepare(Path.Combine(output, "character-source"));
     var inputs = new RegressionInputs
     {
         // A name per run: its shared hosted-runtime copy is never shared with another start.
         Name = "native-smoke-" + DateTime.UtcNow.ToString("yyyyMMdd-HHmmss-fff", System.Globalization.CultureInfo.InvariantCulture),
-        Fixture = new RegressionFixture { Root = Path.Combine(output, "world-source"), WorldUid = world.UidText },
+        Fixture = new RegressionFixture { Root = worldRoot, WorldUid = world.UidText },
         Client = new RegressionClient { Character = DefaultSmokeCharacter.Name, CharacterStore = character.Root, Architecture = architecture },
         Mod = new RegressionMod { InstallAs = Path.GetFileName(mod), Arms = new Dictionary<string, RegressionArm>
             { [comparison == null ? "smoke" : "before"] = new() { File = mod, Sha256 = FileHash.Sha256(mod),
