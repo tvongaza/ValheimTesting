@@ -76,7 +76,7 @@ public sealed record WorldIdentity(string Name, string SeedName, int Seed, long 
     // The world's files by name alone: what Read checks, and what a pinned manifest (HostedWorld.NameOf) must already hold.
     internal sealed record WorldFiles(string Name, string Metadata, bool Lone, string? ChunkList, IReadOnlyList<string> Chunks, IReadOnlyList<string> BackupMetadata);
 
-    private static readonly Regex SaveFile = new(@"^_main\.(0|[1-9][0-9]*)\.(fwl2|db2|chunks|ok)$", RegexOptions.CultureInvariant);
+    internal static readonly Regex SaveFile = new(@"^_main\.(0|[1-9][0-9]*)\.(fwl2|db2|chunks|ok)$", RegexOptions.CultureInvariant);
     private static readonly Regex Timestamp = new(@".+(\d{4})-*(\d{2})-*(\d{2})-*(\d{2})-*(\d{2})-*(\d{2})");
 
     /// <summary>
@@ -92,7 +92,7 @@ public sealed record WorldIdentity(string Name, string SeedName, int Seed, long 
         int second = last > 0 ? folder.LastIndexOf('_', last - 1) : -1;
         return second > 0 && string.CompareOrdinal(folder, second, "_backup_", 0, "_backup_".Length) == 0 ? folder[..second] : null;
     }
-    private static readonly string[] SetParts = ["fwl2", "db2", "chunks", "ok"];
+    internal static readonly string[] SetParts = ["fwl2", "db2", "chunks", "ok"];
     // What a client writes beside a world it opens (Minimap.cs, 1.0.17): its minimap cache, which the game reads or rebuilds.
     private static readonly HashSet<string> MinimapCache = new(["cacheMinimapMask", "cacheMinimapBiome", "cacheMinimapHeight", "cacheMinimapMeta"], StringComparer.Ordinal);
 
@@ -196,7 +196,7 @@ public sealed record WorldIdentity(string Name, string SeedName, int Seed, long 
 
     // The chunk files a _main.<n>.chunks lists, named as the game names them (ChunkSaveMapping, 1.0.17): a short version, the
     // ZDO count and the chunk count, then per chunk its index (ushort), size (byte), version (uint) and ZDO count (int).
-    private static HashSet<string> ChunkFiles(byte[] bytes, string file)
+    internal static HashSet<string> ChunkFiles(byte[] bytes, string file)
     {
         try
         {

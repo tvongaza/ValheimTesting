@@ -99,6 +99,15 @@ valheim-test finish --run ID
 
 The original runner stops the game and cleans up ([`cli` options](../packages/Valheim.Testing.NativeSmoke.md#cli)).
 
+To keep what the held run generated before you finish it, save its world, and start the next run from that copy:
+
+```sh
+valheim-test save-world --run ID --output /path/to/saved-world
+valheim-test start --mod /path/to/MyMod.dll --world-fixture /path/to/saved-world
+```
+
+[`save-world`](../packages/Valheim.Testing.NativeSmoke.md#save-world) has the game save first, then copies that save out; the run stays held.
+
 ### Clean up what a run left
 
 ```sh

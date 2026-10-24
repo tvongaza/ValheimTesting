@@ -39,7 +39,7 @@ internal static class SmokeCommandOptions
         ["--config"] = new(Kind.Repeat, Start: false), ["--plugin-file"] = new(Kind.Repeat, Start: false),
         ["--plugin-dir"] = new(Kind.Repeat, Start: false),
         ["--server-only"] = new(Kind.Switch, Start: false),
-        ["--world-fixture"] = new(Kind.Single, Start: false, ServerLoadAb: false),
+        ["--world-fixture"] = new(Kind.Single, ServerLoadAb: false),
         ["--bake-fixture"] = new(Kind.Single, Start: false, ServerLoadAb: false),
         ["--before-save-command"] = new(Kind.Single, Start: false, ServerLoadAb: false),
         ["--before-save-line"] = new(Kind.Single, Start: false, ServerLoadAb: false),

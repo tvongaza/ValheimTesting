@@ -47,7 +47,7 @@ The parser refuses these combinations:
 - A `--before-save-command` or `--assert-command` that holds control characters. Each must be one game command.
 - `--scenario` or `--scenario-project` with `--bake-fixture` or `--assert-command`. The scenario owns its assertions.
 
-`start` and `server-load-ab` accept neither `--world-fixture` nor `--bake-fixture`.
+`start` accepts `--world-fixture` but not `--bake-fixture`: a held `start` run's world is saved with [`save-world`](../packages/Valheim.Testing.NativeSmoke.md#save-world). `server-load-ab` accepts neither.
 
 ### What a bake does
 
@@ -90,7 +90,7 @@ valheim-test server-load --server-only \
   --assert-line 'EXTENSION_RESULT mymod.testing/generated-state sites=12'
 ```
 
-The run verifies `fixture-manifest.json` before it loads the world.
+The run verifies `fixture-manifest.json` before it loads the world. `start --world-fixture` loads a bake the same way, hosted in its owned client.
 
 To check for an object such as the [FullLifecycle marker](../../examples/FullLifecycle/README.md), assert with `cli_zdos_at X Z 8`. Match its specific `ZDO <prefab>` line.
 
