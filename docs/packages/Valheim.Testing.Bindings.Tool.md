@@ -9,7 +9,7 @@
 Point `--game-dir` at the game assemblies that match your mod build:
 
 ```sh
-dotnet tool install Valheim.Testing.Bindings.Tool --version 0.2.0 --tool-path .tools
+dotnet tool install Valheim.Testing.Bindings.Tool --version 0.3.0 --tool-path .tools
 .tools/valheim-bindings path/to/MyMod.dll --game-dir path/to/valheim_Data/Managed
 ```
 

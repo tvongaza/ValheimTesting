@@ -17,8 +17,8 @@
 Add both packages to a separate system-test project, never to the mod. It targets net10.0.
 
 ```xml
-<PackageReference Include="Valheim.Testing.Game" Version="[0.2.0]" />
-<PackageReference Include="Valheim.Testing.GameSessions" Version="[0.2.0]" />
+<PackageReference Include="Valheim.Testing.Game" Version="[0.3.0]" />
+<PackageReference Include="Valheim.Testing.GameSessions" Version="[0.3.0]" />
 ```
 
 Brackets pin an exact version; the released versions are in the [package table](../package-versions.md). This package depends on exactly the `Valheim.Testing.Game` version it was built with, so the two always restore as the pair that was tested together.
