@@ -20,7 +20,7 @@ Read [Before a native run](../guides/before-a-native-run.md) once before your fi
 1. Install the tool:
 
    ```sh
-   dotnet tool install Valheim.Testing.NativeSmoke --version 0.2.0 --global
+   dotnet tool install Valheim.Testing.NativeSmoke --version 0.3.0 --global
    ```
 
    This installs `valheim-test`.

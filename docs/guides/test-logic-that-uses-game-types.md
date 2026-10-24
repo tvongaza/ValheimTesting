@@ -44,7 +44,7 @@ Add these lines to the test project. The [full file](../../examples/ModWithTests
 <ItemGroup>
   <!-- No game assemblies or reference to the production plugin project. -->
   <Compile Include="../MyMod/DrySiteRule.cs" Link="Mod/DrySiteRule.cs" />
-  <PackageReference Include="Valheim.Testing.Doubles" Version="[0.2.0]" PrivateAssets="all" />
+  <PackageReference Include="Valheim.Testing.Doubles" Version="[0.3.0]" PrivateAssets="all" />
 </ItemGroup>
 ```
 
@@ -165,7 +165,7 @@ Some mod code asks where a type comes from, for example `type.Assembly.GetName()
 ```xml
 <!-- MyMod.Doubles/MyMod.Doubles.csproj -->
 <PropertyGroup><AssemblyName>assembly_valheim</AssemblyName><RootNamespace></RootNamespace><LangVersion>10</LangVersion></PropertyGroup>
-<ItemGroup><PackageReference Include="Valheim.Testing.Doubles" Version="[0.2.0]" /></ItemGroup>
+<ItemGroup><PackageReference Include="Valheim.Testing.Doubles" Version="[0.3.0]" /></ItemGroup>
 ```
 
 ```csharp

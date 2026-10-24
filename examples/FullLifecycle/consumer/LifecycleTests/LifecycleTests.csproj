@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup><TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable><IsPackable>false</IsPackable><IsTestProject>true</IsTestProject></PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="Valheim.Testing.GameSessions" Version="[0.2.0]" />
+    <PackageReference Include="Valheim.Testing.GameSessions" Version="[0.3.0]" />
     <AssemblyMetadata Include="SessionDirectory" Value="$(MSBuildProjectDirectory)" />
     <None Include="sample-plan.json" CopyToOutputDirectory="PreserveNewest" />
     <None Include="sample-hosted-plan.json" CopyToOutputDirectory="PreserveNewest" />
