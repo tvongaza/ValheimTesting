@@ -79,12 +79,16 @@ internal static class DetachedSession
 
         // A world fixture is one complete world before anything is staged for the detached run (up to 4 GB of it).
         int worldFixture = Array.IndexOf(serverArgs, "--world-fixture");
-        if (worldFixture >= 0)
+        try
         {
-            try { _ = FixtureBake.Inspect(serverArgs[worldFixture + 1]); }
-            catch (Exception failure) when (failure is ArgumentException or IOException or InvalidDataException or UnauthorizedAccessException)
-            { error.WriteLine("REFUSED: " + failure.Message + " Nothing was staged."); return 3; }
+            if (worldFixture >= 0) _ = FixtureBake.Check(serverArgs[worldFixture + 1]);
+            if (!ServerLoad.TryRead(serverArgs, out var parsed, out string parseError, allowImplicitMod: false))
+                throw new ArgumentException(parseError);
+            _ = ModInputStage.Inspect(new ModInputStage.Request(ModInputStage.Route.Dedicated, selectedOutput, parsed!.Options,
+                parsed.Switches, parsed.Mods, parsed.Roots, parsed.Optional, parsed.BuildDependencies));
         }
+        catch (Exception failure) when (failure is ArgumentException or IOException or InvalidDataException or InvalidOperationException or UnauthorizedAccessException)
+        { error.WriteLine("REFUSED: " + failure.Message + " Nothing was staged."); return 3; }
 
         string run = RunJournal.NewRunId();
         try
@@ -196,7 +200,12 @@ internal static class DetachedSession
         return true;
     }
 
-    internal sealed record StagedInput(string Source, string Staged, IReadOnlyDictionary<string, string> Hashes);
+    internal sealed record StagedInput(string Source, string Staged, IReadOnlyDictionary<string, string> Hashes)
+    {
+        public string? SourceManifest { get; init; }
+        public string? StagedManifest { get; init; }
+        public string? ManifestSha256 { get; init; }
+    }
     internal static string[] StageInputsOwned(string[] args, string parent, string control)
     {
         int output = Array.IndexOf(args, "--output");
@@ -218,7 +227,35 @@ internal static class DetachedSession
         }
         string[] staged = CopyMods(args, source => Stage(source, "detached mod input", 512L << 20));
         int fixture = Array.IndexOf(staged, "--world-fixture");
-        if (fixture >= 0) staged[fixture + 1] = Stage(args[fixture + 1], "detached world input", 4L << 30);
+        if (fixture >= 0)
+        {
+            string original = args[fixture + 1];
+            var (worlds, manifestFile, _) = FixtureBake.Inspect(original);
+            _ = FixtureBake.Check(original);
+            string? manifestHash = File.Exists(manifestFile) ? FileHash.Sha256(manifestFile) : null;
+            var hashes = WorldFixture.Manifest(worlds);
+            string payload = "";
+            JournalOwnedDirectory.Create(parent, Actor, "detached world input", owned =>
+            {
+                payload = Path.Combine(owned, "payload");
+                string copy = Path.Combine(payload, "worlds_local");
+                Directory.CreateDirectory(copy);
+                CopyDirectory(worlds, copy, 10000, 4L << 30, "A detached world is too large to stage");
+                WorldFixture.Verify(worlds, hashes);
+                WorldFixture.Verify(copy, hashes);
+                string stagedManifest = Path.Combine(payload, FixtureBake.ManifestFile);
+                if (manifestHash != null)
+                {
+                    File.Copy(manifestFile, stagedManifest);
+                    if (FileHash.Sha256(stagedManifest) != manifestHash || FileHash.Sha256(manifestFile) != manifestHash)
+                        throw new InvalidDataException("The baked fixture manifest changed during detached staging.");
+                }
+                _ = FixtureBake.Check(payload);
+            });
+            inputs.Add(new(worlds, Path.Combine(payload, "worlds_local"), hashes)
+            { SourceManifest = manifestFile, StagedManifest = Path.Combine(payload, FixtureBake.ManifestFile), ManifestSha256 = manifestHash });
+            staged[fixture + 1] = payload;
+        }
         DetachedCommandQueue.WriteNew(Path.Combine(control, "input-manifests.json"), inputs, bounded: false);
         return staged;
     }
@@ -232,6 +269,13 @@ internal static class DetachedSession
             foreach (string destination in destinations)
                 if (ProtectedPaths.Contains(source, destination))
                     throw new InvalidOperationException("Detached output and staging must be outside each original input directory: " + source);
+            if (args[i - 1] == "--world-fixture")
+            {
+                var (_, manifest, _) = FixtureBake.Inspect(source);
+                foreach (string destination in destinations)
+                    if (ProtectedPaths.Contains(destination, manifest))
+                        throw new InvalidOperationException("Detached staging must be separate from the baked manifest: " + manifest);
+            }
         }
     }
 
@@ -245,6 +289,14 @@ internal static class DetachedSession
         {
             WorldFixture.Verify(input.Source, input.Hashes);
             WorldFixture.Verify(input.Staged, input.Hashes);
+            if (input.SourceManifest != null)
+            {
+                if (input.ManifestSha256 != (File.Exists(input.SourceManifest) ? FileHash.Sha256(input.SourceManifest) : null) ||
+                    input.ManifestSha256 != (File.Exists(input.StagedManifest) ? FileHash.Sha256(input.StagedManifest!) : null))
+                    throw new InvalidDataException("A detached baked fixture manifest changed after staging.");
+                _ = FixtureBake.Check(input.Source);
+                _ = FixtureBake.Check(input.Staged);
+            }
         }
     }
 

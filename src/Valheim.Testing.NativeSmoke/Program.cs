@@ -93,7 +93,7 @@ try
     }
 
     // The bundled world, or a saved one (save-world, server-load --bake-fixture): copied into the run's output and verified first.
-    var world = FixtureBake.Prepare(worldFixture, output).Identity;
+    var world = FixtureBake.Prepare(worldFixture, output, stage.WorldAdmission).Identity;
     string worldRoot = Path.Combine(output, "world-source", "worlds_local");
     var character = DefaultSmokeCharacter.Prepare(Path.Combine(output, "character-source"));
     var inputs = new RegressionInputs

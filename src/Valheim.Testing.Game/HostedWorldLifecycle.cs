@@ -48,6 +48,14 @@ internal sealed class HostedWorldLifecycle
     /// </summary>
     public void Preflight()
     {
+        var target = plan.Owned
+            ? plan.PreparedBuild ?? GameAssemblyVersion.ReadInstallAsync(plan.Install, cancellation).GetAwaiter().GetResult()
+            : new GameBuild(null, null, "the running host's build is unknown") { WorldUnknown = "an attached client's operator-owned install is not inspected" };
+        Section.AdmittedIdentity = Section.Preflight(target, Section.World.Source);
+        Section.AdmittedBuild = target;
+        if (plan.Owned) plan.PreparedSourceCheck?.Invoke();
+        if (Section.World.Sha256.Count == 0)
+            Section.World.Sha256 = new Dictionary<string, string>(WorldFixture.Manifest(Section.World.Source), StringComparer.Ordinal);
         if (site == null) { plan.Preflight(CliCapabilities.HostedRounds); return; }
         plan.HostWorld!.Preflight();
         // The staged set (bound by the campaign) must offer the session commands hosting uses; its files are read on the host.
@@ -71,6 +79,12 @@ internal sealed class HostedWorldLifecycle
     /// <summary>Copies the fixture into the output (verified) and into the client's local worlds, refusing a world already named for it.</summary>
     public void PlaceWorld()
     {
+        if (plan.Owned && site == null && Section.AdmittedBuild?.WorldSupport is { } admitted)
+        {
+            var current = GameAssemblyVersion.ReadInstallAsync(plan.Install, cancellation).GetAwaiter().GetResult();
+            if (current.WorldSupport?.AssemblySha256 != admitted.AssemblySha256)
+                throw new InvalidOperationException("The hosting game assembly changed after world-format admission; inspect the selected host again.");
+        }
         string saveDirectory;
         lock (_state)
         {

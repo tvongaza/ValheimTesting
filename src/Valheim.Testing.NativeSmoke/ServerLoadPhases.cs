@@ -60,7 +60,7 @@ internal static class ServerLoadPhases
             if (!packaged)
             {
                 if (!Directory.Exists(fixture)) throw new DirectoryNotFoundException("The source world fixture is missing: " + fixture);
-                _ = FixtureBake.Inspect(fixture); // one complete world before any phase stages or copies anything
+                _ = FixtureBake.Check(fixture); // one complete world before any phase stages or copies anything
                 FixtureBake.RefuseOutput(output, fixture);
             }
             var phases = plan.Phases.Select((phase, index) =>
@@ -78,7 +78,8 @@ internal static class ServerLoadPhases
             // each phase, under this output, and the output itself is what the stage guards.
             if (!ServerLoad.TryRead([.. plan.CommonArgs, .. phases[0].phase.Args, "--server-only"], out var parsed, out string parseError, allowImplicitMod: false))
                 throw new InvalidDataException("Invalid first server-load phase: " + parseError);
-            _ = ModInputStage.Choose(new ModInputStage.Request(ModInputStage.Route.Dedicated, output, parsed!.Options, parsed.Switches,
+            if (!packaged) parsed!.Options["--world-fixture"] = fixture;
+            var selection = ModInputStage.Choose(new ModInputStage.Request(ModInputStage.Route.Dedicated, output, parsed!.Options, parsed.Switches,
                 parsed.Mods, parsed.Roots, parsed.Optional, parsed.BuildDependencies) { Shipped = shippedLoader });
             var inputs = CaptureInputs(planFile, plan);
             FixtureBake.RefuseOutput(output, inputs.Where(input => input.Files != null).Select(input => input.Path).ToArray());
@@ -95,6 +96,7 @@ internal static class ServerLoadPhases
                     if (started) WriteState(output, name, "failed", fixture, checkpoint);
                     throw;
                 }
+                _ = ModInputStage.AdmitCheckpoint(selection, fixture);
                 string[] phaseArgs = BuildArgs(plan.CommonArgs, phase.Args, fixture, evidence, checkpoint);
                 WriteState(output, name, "starting", fixture, checkpoint);
                 started = true;

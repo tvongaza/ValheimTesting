@@ -120,9 +120,11 @@ public partial class ServerRunPlan
     /// <c>world=any</c> whose fixture has no world (no file in <c>worlds_local/</c>, or none), which the game fills with a new world on
     /// its first boot.
     /// </summary>
-    public WorldIdentity? PreflightWorld()
+    public WorldIdentity? PreflightWorld() => PreflightWorld(null, World.Source);
+
+    internal WorldIdentity? PreflightWorld(GameBuild? target, string source)
     {
-        string source = Path.GetFullPath(World.Source);
+        source = Path.GetFullPath(source);
         if (!Directory.Exists(source)) throw new DirectoryNotFoundException("The world fixture does not exist: " + source);
         string worlds = Path.Combine(source, "worlds_local");
         bool empty = !Directory.Exists(worlds) || !Directory.EnumerateFiles(worlds, "*", SearchOption.AllDirectories).Any();
@@ -131,10 +133,12 @@ public partial class ServerRunPlan
             throw new ArgumentException($"The world fixture {source} has no worlds_local/. A dedicated server's world fixture is its -savedir: a directory holding " +
                 "worlds_local/<name>/, the world exactly as the game saved it; the server makes a fresh world when it finds none there. " +
                 "Move the world folder into worlds_local/, or pin world=any for a fixture that is meant to start without a world.");
-        var identity = WorldIdentity.Read(worlds);
+        var identity = target == null ? WorldIdentity.Read(worlds) : WorldIdentity.Read(worlds, target);
         if (Pins.TryGetValue("worlduid", out string? uid) && uid != identity.UidText)
             throw new InvalidOperationException($"The plan pins worlduid={uid}, but the fixture {worlds} holds world {identity.Name} with UID {identity.UidText} ({identity.File}): " +
                 "the same name, another world. Pin the UID of this exact fixture (WorldIdentity.Read(fixture).UidText), or point world.source at the fixture the UID belongs to.");
+        if (Pins.TryGetValue("world", out string? name) && name != "any" && name != identity.Name)
+            throw new InvalidOperationException($"The plan pins world={name}, but the fixture holds world {identity.Name} ({identity.File}).");
         return identity;
     }
     private IReadOnlyList<string> _requiredPlugins = [];

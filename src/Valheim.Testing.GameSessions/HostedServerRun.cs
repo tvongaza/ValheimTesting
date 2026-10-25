@@ -201,6 +201,18 @@ internal sealed class HostedServerRun : IServerPlacement
         (await HostedRuntimeStage.RequireProfileStorageAsync(Host, HostedRuntimeKind.Server, Role.Install, Role.Runtime,
             HostedTimeouts.Quick, cancellation, explicitRuntime: Role.RuntimeExplicit).ConfigureAwait(false)).Description;
 
+    internal GameBuild? WorldBuild { get; private set; }
+    internal WorldIdentity? AdmittedWorld { get; private set; }
+    internal async Task AdmitWorldAsync(ServerRunPlan plan, CancellationToken cancellation)
+    {
+        if (plan.PreflightWorld() == null) return;
+        var listing = Prepared && _sourceCheck != null ? _sourceCheck.PreparedGame
+            : await HostInstall.ListAsync(Host, Role.Install, HostedTimeouts.Long, null, cancellation).ConfigureAwait(false);
+        WorldBuild = await GameVersionAgreement.ReadAsync(Host, listing, HostedTimeouts.Long, cancellation).ConfigureAwait(false);
+        if (Builds != null) WorldBuild = Builds.Admit(new("server", Host.Name, listing.Root, WorldBuild));
+        AdmittedWorld = plan.PreflightWorld(WorldBuild, plan.World.Source);
+    }
+
     /// <summary>
     /// Takes the server host's lock, then readies the server's profile: a campaign's prepared one is verified where it is; a
     /// standalone run stages its own from the host's install (<see cref="StageProfileAsync"/>).
@@ -287,6 +299,9 @@ internal sealed class HostedServerRun : IServerPlacement
         using var selection = await InstallSelection.ReadAsync(Host, HostedRuntimeKind.Server, Role.Install, cli, cliFiles, loader, Role.CliPort,
             client: null, HostedTimeouts.Long, cancellation, Builds, "server").ConfigureAwait(false);
         var source = selection.Source;
+        if (WorldBuild?.WorldSupport is { } admitted && selection.Build?.WorldSupport?.AssemblySha256 != admitted.AssemblySha256)
+            throw new InvalidOperationException("The hosting game assembly changed after world-format admission; inspect the selected host again.");
+
         if (verified)
             HostInstall.RequireSame(HostInstall.WithoutSkipped(plan.Runtime.Sha256, HostedRuntimeStage.RuntimeSkips, source.Names), source, "server install",
                 source.Files.Keys.Where(path => HostInstall.Skipped(path, HostedRuntimeStage.RuntimeSkips, source.Names)));

@@ -79,7 +79,7 @@ internal static class ServerLoad
             if (supervisor != null) DetachedSession.VerifyStagedInputs();
             output = Output(parsed!);
             // A world fixture is one complete world before the mod, its dependencies or either game actor is staged.
-            if (parsed.Options.TryGetValue("--world-fixture", out string? worldFixture)) _ = FixtureBake.Inspect(worldFixture);
+            if (parsed.Options.TryGetValue("--world-fixture", out string? worldFixture)) _ = FixtureBake.Check(worldFixture);
             if (parsed.Options.TryGetValue("--adapter", out string? adapterFile) && !File.Exists(Path.GetFullPath(adapterFile)))
                 throw new FileNotFoundException("A selected file is missing: " + Path.GetFullPath(adapterFile), Path.GetFullPath(adapterFile));
             // The server and client, their loaders, the mod, its build inputs, the scenario and the dependency lock: one
@@ -142,7 +142,7 @@ internal static class ServerLoad
         string serverLock = Path.Combine(output, "dependencies.lock.json");
         var bakedBuild = bakeDestination != null ? FixtureBake.CaptureBuild(mods, serverLock, dependencies) : null;
         // Reject a bad or changed world before building an adapter or staging either game actor.
-        var fixture = FixtureBake.Prepare(fixtureSource, output);
+        var fixture = FixtureBake.Prepare(fixtureSource, output, inputs.WorldAdmission);
         if (parsed.Options.TryGetValue("--adapter-project", out string? adapterProject))
         {
             string cliCore = dependencies.CliPlugin.File;

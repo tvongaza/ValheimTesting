@@ -161,6 +161,14 @@ internal static class HostedWorldOnHost
         copy.Preserve = true;
         try
         {
+            if (plan.AdmittedBuild is { } target)
+            {
+                var identity = plan.Preflight(target, copy.DirectoryPath);
+                if (plan.AdmittedIdentity is { } admitted && identity != admitted)
+                    throw new InvalidDataException("The copied hosted world differs from the admitted fixture identity.");
+            }
+            WorldFixture.Verify(plan.World.Source, plan.World.Sha256);
+
             // Journalled before the ship: no journal line, no world in the user's worlds.
             site.Journal(JournalEntry.Of(JournalEntry.CopyIntended, ("runtime", world), ("stage", ""), ("parent", site.WorldsDirectory), ("holds", Holds),
                 ("world", name), ("worldUid", plan.WorldUid), ("keepIn", site.KeepIn), ("placementState", "intended")), cancellation).GetAwaiter().GetResult();

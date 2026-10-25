@@ -49,6 +49,9 @@ public sealed class HostedCampaignManifest
     /// The dedicated server. Left out, the campaign has none: one client hosts the world (its plan section's <c>hostWorld</c>,
     /// with the campaign's <see cref="World"/> as its fixture) and the others are its peers (<c>joinsHost</c>).
     /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore] internal IReadOnlyDictionary<string, string>? AdmittedWorldFiles { get; set; }
+    [System.Text.Json.Serialization.JsonIgnore] internal WorldIdentity? AdmittedWorldIdentity { get; set; }
+    [System.Text.Json.Serialization.JsonIgnore] internal GameBuild? AdmittedWorldBuild { get; set; }
     public HostedCampaignRole? Server { get; set; }
     public Dictionary<string, HostedCampaignRole> Clients { get; set; } = [];
 
@@ -160,18 +163,21 @@ public sealed class PreparedHostedCampaign : IAsyncDisposable
         IReadOnlyDictionary<string, ClientRunPlan> clients, string outputDirectory)
     {
         ArgumentNullException.ThrowIfNull(plan);
+        if (manifest.World != Manifest.World) throw new ArgumentException("Bind the world admitted by this campaign preparation.");
+        manifest = Manifest;
         if (_profile.Server == null) throw new ArgumentException("This campaign has no dedicated server; bind a hosted plan with ApplyToHosted.");
         if (!clients.Keys.ToHashSet(StringComparer.Ordinal).SetEquals(_profile.Clients.Keys))
             throw new ArgumentException("Bind exactly the prepared named clients to the plan.", nameof(clients));
         if (manifest.World.Length == 0 || manifest.Join.Length == 0)
             throw new ArgumentException("A direct-join campaign needs a fixture world and join address.");
-        var identity = WorldIdentity.Read(manifest.World);
+        WorldFixture.Verify(manifest.World, manifest.AdmittedWorldFiles ?? throw new InvalidOperationException("The campaign world was not admitted."));
+        var identity = WorldIdentity.Read(manifest.World, manifest.AdmittedWorldBuild ?? new GameBuild(null, null, "the selected host is unknown"));
         // The dedicated server's -savedir points at the directory containing worlds_local. A bare
         // <name>/ chunked fixture beside that directory makes Valheim silently create a new world.
         // Keep the user's fixture read-only and build the exact server layout in this private output.
         string serverWorld = Path.Combine(Path.GetFullPath(outputDirectory), "server-world");
         if (Path.Exists(serverWorld)) throw new IOException("The campaign's server-world layout already exists; use a new output directory.");
-        var sourceWorld = WorldFixture.Manifest(manifest.World);
+        var sourceWorld = manifest.AdmittedWorldFiles;
         var serverHashes = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var (relative, hash) in sourceWorld)
         {
@@ -185,6 +191,9 @@ public sealed class PreparedHostedCampaign : IAsyncDisposable
             // Keep its native separator so a Windows-run campaign can verify the copy.
             serverHashes.Add(targetRelative, hash);
         }
+        WorldFixture.Verify(manifest.World, sourceWorld);
+        if (WorldIdentity.Read(Path.Combine(serverWorld, "worlds_local"), manifest.AdmittedWorldBuild!) != identity)
+            throw new InvalidDataException("The staged campaign world differs from its admitted identity.");
         plan.World = new PinnedDirectory { Source = serverWorld, Sha256 = serverHashes };
         plan.Runtime = new PinnedDirectory { Source = Listings["server"].Root,
             Sha256 = new Dictionary<string, string>(Listings["server"].Files, StringComparer.Ordinal) };
@@ -208,11 +217,14 @@ public sealed class PreparedHostedCampaign : IAsyncDisposable
     /// </summary>
     internal string ApplyToHosted(HostedCampaignManifest manifest, IReadOnlyDictionary<string, ClientRunPlan> clients, string outputDirectory)
     {
+        if (manifest.World != Manifest.World) throw new ArgumentException("Bind the world admitted by this campaign preparation.");
+        manifest = Manifest;
         if (_profile.Server != null) throw new ArgumentException("This campaign has a dedicated server; bind it with ApplyTo.");
         if (!clients.Keys.ToHashSet(StringComparer.Ordinal).SetEquals(_profile.Clients.Keys))
             throw new ArgumentException("Bind exactly the prepared named clients to the plan.", nameof(clients));
         string host = HostedCampaignPreparation.HostOf(clients);
-        var identity = WorldIdentity.Read(manifest.World);
+        WorldFixture.Verify(manifest.World, manifest.AdmittedWorldFiles ?? throw new InvalidOperationException("The hosted campaign world was not admitted."));
+        var identity = WorldIdentity.Read(manifest.World, manifest.AdmittedWorldBuild ?? new GameBuild(null, null, "the hosting client is unknown"));
         foreach (var (name, client) in clients)
         {
             Bind(name, client, manifest, outputDirectory);
@@ -230,6 +242,7 @@ public sealed class PreparedHostedCampaign : IAsyncDisposable
         if (client.InPlaceGiven) throw new ArgumentException($"Client {name} runs from the campaign's prepared copy on its host; leave out inPlace.");
         client.InPlace = false;
         client.Mode = "owned";
+        client.PreparedBuild = Builds.FirstOrDefault(side => side.Actor == name)?.Build;
         client.Install = Listings[name].Root;
         client.PreparedLoaderRoot = LoaderListings[name].Root == client.Install ? null : LoaderListings[name].Root;
         if (client.Architecture.Length == 0)
@@ -450,7 +463,7 @@ public static class HostedCampaignPreparation
 
     private static async Task<HostInspection> InspectHostsAsync(Inspection inspection, TimeSpan timeout,
         Func<string, IGameHost>? hostFactory, CancellationToken cancellation, ShippedLoader.Rule? shippedLoader = null,
-        bool skipLocalChecks = false)
+        bool skipLocalChecks = false, string? hostingActor = null)
     {
         if (inspection.Inputs == null) return new HostInspection(inspection.Report,
             new Dictionary<string, string>(), new Dictionary<string, HostListing>(), new Dictionary<string, CharacterDirectories>());
@@ -652,6 +665,21 @@ public static class HostedCampaignPreparation
         var sides = inputs.Roles.Select(item => new GameVersionAgreement.Side(item.Name,
             item.Role.Host, item.Role.Install, builds.GetValueOrDefault(item.Name))).ToArray();
         foreach (var problem in GameVersionAgreement.Decide(sides)) failures.Add(problem);
+        string? worldHost = inputs.Manifest.Server != null ? "server" : hostingActor;
+        if (worldHost != null && inputs.Manifest.World.Length != 0)
+        {
+            try
+            {
+                var target = builds.GetValueOrDefault(worldHost) ?? new GameBuild(null, null, "the selected host assembly is unavailable");
+                var identity = WorldIdentity.Read(inputs.Manifest.World, target);
+                if (inputs.Manifest.AdmittedWorldFiles != null) WorldFixture.Verify(inputs.Manifest.World, inputs.Manifest.AdmittedWorldFiles);
+                if (identity != inputs.Manifest.AdmittedWorldIdentity) throw new InvalidDataException("The campaign world changed during admission.");
+                inputs.Manifest.AdmittedWorldBuild = target;
+            }
+            catch (Exception error) when (error is ArgumentException or IOException or InvalidDataException or InvalidOperationException)
+            { failures.Add(new(worldHost, "world fixture", error.Message)); }
+        }
+
         // The roles' inputs name the chosen loader from here, so preparation applies it like one the campaign named.
         for (int i = 0; i < inputs.Roles.Count; i++)
             if (loaders.TryGetValue(inputs.Roles[i].Name, out var chosen))
@@ -918,7 +946,10 @@ public static class HostedCampaignPreparation
         if (manifest.World.Length != 0)
             Try("server", "world fixture", () =>
             {
+                manifest.AdmittedWorldFiles = WorldFixture.Manifest(manifest.World);
                 var identity = WorldIdentity.Read(manifest.World);
+                manifest.AdmittedWorldIdentity = identity;
+                WorldFixture.Verify(manifest.World, manifest.AdmittedWorldFiles);
                 if (manifest.WorldUid.Length > 0 && !identity.UidText.Equals(manifest.WorldUid, StringComparison.Ordinal))
                     throw new InvalidDataException("The fixture world UID does not match the campaign's reviewed worldUid.");
                 _ = WorldFixture.Manifest(manifest.World);
@@ -998,7 +1029,8 @@ public static class HostedCampaignPreparation
         ShippedLoader.Rule? shippedLoader = null, Action<string, string>? loaderChosen = null)
     {
         inspection.Report.RequireReady();
-        var readiness = await InspectHostsAsync(inspection, timeout, hostFactory, cancellation, shippedLoader).ConfigureAwait(false);
+        var readiness = await InspectHostsAsync(inspection, timeout, hostFactory, cancellation, shippedLoader,
+            hostingActor: inspection.Inputs?.Manifest.Server == null && plans != null ? HostOf(plans) : null).ConfigureAwait(false);
         foreach (var (actor, choice) in readiness.Loaders.OrderBy(pair => pair.Key, StringComparer.Ordinal)) loaderChosen?.Invoke(actor, choice.Reason);
         readiness.Report.RequireReady();
         var inputs = inspection.Inputs!;
@@ -1007,6 +1039,7 @@ public static class HostedCampaignPreparation
         profile.Validate();
         string output = Path.GetFullPath(outputDirectory);
         if (Directory.Exists(output) || File.Exists(output)) throw new InvalidOperationException("Use a new private campaign output directory: " + output);
+        if (manifest.AdmittedWorldFiles != null) WorldFixture.Verify(manifest.World, manifest.AdmittedWorldFiles);
         Directory.CreateDirectory(output);
         File.WriteAllText(Path.Combine(output, "environment-assignments.json"),
             JsonSerializer.Serialize(readiness.Report.Actors, new JsonSerializerOptions { WriteIndented = true }) + "\n");
