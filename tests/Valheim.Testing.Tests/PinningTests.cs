@@ -44,11 +44,11 @@ internal static class FakeInstalls
     /// World metadata (<c>.fwl2</c>) as the game's package writes it (BinaryWriter): version 41, name, seed name, seed, UID, the
     /// world-generation version and whether the world has saved data (false only for a world never saved).
     /// </summary>
-    public static byte[] Metadata(string name, long uid, string seed = "AbCdEf1234", bool needsDb = true)
+    public static byte[] Metadata(string name, long uid, string seed = "AbCdEf1234", bool needsDb = true, int version = 41)
     {
         using var payload = new MemoryStream();
         using (var writer = new BinaryWriter(payload, System.Text.Encoding.UTF8, leaveOpen: true))
-        { writer.Write(41); writer.Write(name); writer.Write(seed); writer.Write(1234); writer.Write(uid); writer.Write(2); writer.Write(needsDb); writer.Write(0); writer.Write(0); }
+        { writer.Write(version); writer.Write(name); writer.Write(seed); writer.Write(1234); writer.Write(uid); if (version >= 26) writer.Write(2); if (version >= 30) writer.Write(needsDb); writer.Write(0); writer.Write(0); }
         return [.. BitConverter.GetBytes((int)payload.Length), .. payload.ToArray()];
     }
     /// <summary>A <c>_main.&lt;n&gt;.chunks</c> listing these chunks (index, size, version), as the game writes one.</summary>
@@ -89,47 +89,16 @@ internal static class FakeInstalls
         if (!File.Exists(path)) File.WriteAllBytes(path, content);
     }
 
-    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte[]> Assemblies = new();
     /// <summary>
     /// A game assembly as Valheim's declares its build, and nothing else: a global <c>Version</c> with <c>const uint c_networkVersion</c>
     /// and a static constructor that stores a decoy <c>GameVersion(0, 214, 301)</c> before <paramref name="gameVersion"/> in
     /// <c>CurrentVersion</c>'s backing field, as the game's does, beside a nested decoy type also named <c>Version</c>.
     /// Defaults to Valheim 1.0.17 (network version 40).
     /// </summary>
-    public static byte[] GameAssembly(string gameVersion = "1.0.17", uint networkVersion = 40) => Emit(gameVersion, networkVersion);
+    public static byte[] GameAssembly(string gameVersion = "1.0.17", uint networkVersion = 40, int minimum = 9, int maximum = 42, int chunked = 40, string shape = "interval") => GameAssemblyFixture.Create(gameVersion, networkVersion, minimum, maximum, chunked, shape);
     /// <summary>A Valheim 1.0.17 game assembly whose <c>c_networkVersion</c> is <paramref name="networkConstant"/> (any const type), or a plain static field for null.</summary>
-    public static byte[] GameAssembly(object? networkConstant) => Emit("1.0.17", networkConstant);
-    private static byte[] Emit(string gameVersion, object? networkConstant) => Assemblies.GetOrAdd($"{gameVersion}|{networkConstant?.GetType().Name}:{networkConstant}", _ =>
-    {
-        var assembly = new System.Reflection.Emit.PersistedAssemblyBuilder(new System.Reflection.AssemblyName("assembly_valheim"), typeof(object).Assembly);
-        var module = assembly.DefineDynamicModule("assembly_valheim");
-        var gameVersionType = module.DefineType("GameVersion", System.Reflection.TypeAttributes.Public | System.Reflection.TypeAttributes.Sealed |
-            System.Reflection.TypeAttributes.SequentialLayout, typeof(ValueType));
-        var constructor = gameVersionType.DefineConstructor(System.Reflection.MethodAttributes.Public, System.Reflection.CallingConventions.Standard, [typeof(int), typeof(int), typeof(int)]);
-        constructor.GetILGenerator().Emit(System.Reflection.Emit.OpCodes.Ret);
-        var version = module.DefineType("Version", System.Reflection.TypeAttributes.Public | System.Reflection.TypeAttributes.Abstract);
-        if (networkConstant == null) version.DefineField("c_networkVersion", typeof(uint), System.Reflection.FieldAttributes.Public | System.Reflection.FieldAttributes.Static);
-        else version.DefineField("c_networkVersion", networkConstant.GetType(), System.Reflection.FieldAttributes.Public | System.Reflection.FieldAttributes.Static |
-            System.Reflection.FieldAttributes.Literal).SetConstant(networkConstant);
-        var first = version.DefineField("FirstVersionWithNetworkVersion", gameVersionType, System.Reflection.FieldAttributes.Public | System.Reflection.FieldAttributes.Static);
-        var current = version.DefineField("<CurrentVersion>k__BackingField", gameVersionType, System.Reflection.FieldAttributes.Private | System.Reflection.FieldAttributes.Static);
-        var il = version.DefineTypeInitializer().GetILGenerator();
-        foreach (var (field, parts) in new[] { (first, new[] { 0, 214, 301 }), (current, gameVersion.Split('.').Select(int.Parse).ToArray()) })
-        {
-            foreach (int part in parts) il.Emit(System.Reflection.Emit.OpCodes.Ldc_I4, part);
-            il.Emit(System.Reflection.Emit.OpCodes.Newobj, constructor);
-            il.Emit(System.Reflection.Emit.OpCodes.Stsfld, field);
-        }
-        il.Emit(System.Reflection.Emit.OpCodes.Ret);
-        var outer = module.DefineType("Decoys", System.Reflection.TypeAttributes.Public);
-        outer.DefineNestedType("Version", System.Reflection.TypeAttributes.NestedPublic).CreateType();
-        outer.CreateType();
-        gameVersionType.CreateType();
-        version.CreateType();
-        using var image = new MemoryStream();
-        assembly.Save(image);
-        return image.ToArray();
-    });
+    public static byte[] GameAssembly(object? networkConstant) => GameAssemblyFixture.Create("1.0.17", networkConstant);
+
 }
 
 // Install, plugin and world pins.
@@ -406,7 +375,7 @@ public sealed class PinsTests : IDisposable
         WritePlan(); var pinned = InstallPins.Of(Runtime);
         switch (change)
         {
-            case "game": File.WriteAllText(Path.Combine(Runtime, "valheim_server_Data", "Managed", "assembly_valheim.dll"), "game build 2"); break;
+            case "game": File.WriteAllBytes(Path.Combine(Runtime, "valheim_server_Data", "Managed", "assembly_valheim.dll"), FakeInstalls.GameAssembly("1.0.18")); break;
             case "core": File.WriteAllText(Path.Combine(Runtime, "BepInEx", "core", "BepInEx.dll"), "bepinex 5.4.24"); break;
             case "patcher": Directory.CreateDirectory(Path.Combine(Runtime, "BepInEx", "patchers")); File.WriteAllText(Path.Combine(Runtime, "BepInEx", "patchers", "Hooks.dll"), "hooks"); break;
         }

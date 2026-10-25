@@ -17,6 +17,53 @@ public sealed class WorldFixtureLayoutTests : IDisposable
         Assert.Equal(("Campaign", 4242L, "Campaign/_main.1.fwl2", 41), (identity.Name, identity.Uid, identity.File, identity.WorldVersion));
     }
 
+    [Theory]
+    [InlineData(39, false)]
+    [InlineData(40, true)]
+    [InlineData(42, true)]
+    [InlineData(43, false)]
+    [InlineData(1001, false)]
+    public void AdmissionUsesTheActualHostsInclusiveBoundsAndChunkedThreshold(int version, bool accepted)
+    {
+        string fixture = Fixture();
+        File.WriteAllBytes(World(fixture, "_main.1.fwl2"), FakeInstalls.Metadata("Campaign", 4242, version: version));
+        Assert.Equal(version, WorldIdentity.Read(fixture).WorldVersion); // inspection is structural, even for future versions
+        var build = GameAssemblyVersion.Read(new MemoryStream(FakeInstalls.GameAssembly(minimum: 40, maximum: 42, chunked: 40)), "selected host");
+        if (accepted) Assert.Equal(version, WorldIdentity.Read(fixture, build).WorldVersion);
+        else
+        {
+            string error = Assert.Throws<InvalidDataException>(() => WorldIdentity.Read(fixture, build)).Message;
+            Assert.Contains("Campaign/_main.1.fwl2", error);
+            Assert.Contains("world version " + version, error);
+            Assert.Contains("40 through 42 inclusive", error);
+            Assert.Contains("selected host", error);
+        }
+    }
+
+    [Fact]
+    public void MatchingNetworkVersionsDoNotEstablishWorldSupportAndUnknownSingleHostsRefuse()
+    {
+        string fixture = Fixture();
+        GameBuild Read(int maximum) => GameAssemblyVersion.Read(new MemoryStream(FakeInstalls.GameAssembly(maximum: maximum)), "host");
+        var accepting = Read(42); var refusing = Read(40);
+        Assert.Equal(accepting.NetworkVersion, refusing.NetworkVersion);
+        Assert.Equal(4242, WorldIdentity.Read(fixture, accepting).Uid);
+        Assert.Throws<InvalidDataException>(() => WorldIdentity.Read(fixture, refusing));
+        Assert.Contains("Cannot establish world-format", Assert.Throws<InvalidOperationException>(() => WorldIdentity.Read(fixture, new GameBuild(40, "1.0.17", null))).Message);
+    }
+
+    [Fact]
+    public void ConversionLeftoversAndAnUnderscoreOnlyAtTheStartHaveDistinctRules()
+    {
+        string fixture = Fixture();
+        File.WriteAllText(Path.Combine(fixture, "Campaign.fwl.old"), "old");
+        Assert.Contains("conversion leftovers", Assert.Throws<ArgumentException>(() => WorldIdentity.Read(fixture)).Message);
+        string named = FakeInstalls.World(Path.Combine(_root, "named"), "_Base20261021120000");
+        Assert.Equal("_Base20261021120000", WorldIdentity.Read(named).Name);
+        Assert.Equal("_Base20261021120000", HostedWorld.NameOf(WorldFixture.Manifest(named).Keys));
+        Assert.Throws<ArgumentException>(() => WorldIdentity.RequireName("Base_20261021120000"));
+    }
+
     [Fact] public void ThePackagedSmokeWorldIsComplete()
     {
         string root = Path.Combine(_root, "smoke");
