@@ -48,7 +48,8 @@ internal static class ServerLoad
         // still names the package, while this carries the reason into each arm's evidence.
         ShippedLoader.Choice? FrozenServerLoader = null,
         string? SummaryLabel = null,
-        TextWriter? SummaryOutput = null);
+        TextWriter? SummaryOutput = null,
+        GameBuild? InitialHostingBuild = null, FixtureBake.Admission? InitialWorldAdmission = null);
 
     public static async Task<int> RunAsync(string[] args, Seams? seams = null)
     {
@@ -87,7 +88,7 @@ internal static class ServerLoad
             var inputs = await ModInputStage.RunAsync(new ModInputStage.Request(ModInputStage.Route.Dedicated, output, parsed.Options,
                 parsed.Switches, parsed.Mods, parsed.Roots, parsed.Optional, parsed.BuildDependencies)
             {
-                Shipped = seams.Loader, FrozenServerLoader = seams.FrozenServerLoader, ClientArchitecture = seams.ClientArchitecture, Progress = state,
+                InitialHostingBuild = seams.InitialHostingBuild ?? DetachedSession.PinnedHostingBuild(), InitialWorldAdmission = seams.InitialWorldAdmission, Shipped = seams.Loader, FrozenServerLoader = seams.FrozenServerLoader, ClientArchitecture = seams.ClientArchitecture, Progress = state,
             }, cancel.Token).ConfigureAwait(false);
             return await RunCampaignAsync(parsed, inputs, output, clock, seams, state, cancel.Token).ConfigureAwait(false);
         }
@@ -142,6 +143,7 @@ internal static class ServerLoad
         string serverLock = Path.Combine(output, "dependencies.lock.json");
         var bakedBuild = bakeDestination != null ? FixtureBake.CaptureBuild(mods, serverLock, dependencies) : null;
         // Reject a bad or changed world before building an adapter or staging either game actor.
+        _ = ModInputStage.VerifyAdmission(inputs.Admission!);
         var fixture = FixtureBake.Prepare(fixtureSource, output, inputs.WorldAdmission);
         if (parsed.Options.TryGetValue("--adapter-project", out string? adapterProject))
         {
@@ -302,6 +304,7 @@ internal static class ServerLoad
             SmokeOutput.MarkRefused(output, "server-load", lines);
             return 3;
         }
+        _ = ModInputStage.VerifyAdmission(inputs.Admission!);
         // Only once the preflight passed: the unbound plans beside campaign.json, for an editable consumer (`valheim-test init server`) to run the same campaign.
         // Private: plan.json holds the server's password.
         File.WriteAllText(Path.Combine(output, "plan.json"), JsonSerializer.Serialize(plan, new JsonSerializerOptions { WriteIndented = true }));
@@ -320,6 +323,7 @@ internal static class ServerLoad
                 new PinnedServerRunOptions<ServerRunPlan>
                 {
                     Name = "native-smoke-server-load",
+                    InitialHostingBuild = inputs.HostingBuild,
                     RunId = DetachedSession.ConfiguredRun,
                     CheckpointFixture = DetachedSession.ConfiguredRun != null,
                     CleanupBudget = bakeDestination == null ? null : TimeSpan.FromMinutes(10),

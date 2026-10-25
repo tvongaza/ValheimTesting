@@ -79,12 +79,13 @@ internal static class DetachedSession
 
         // A world fixture is one complete world before anything is staged for the detached run (up to 4 GB of it).
         int worldFixture = Array.IndexOf(serverArgs, "--world-fixture");
+        ModInputStage.Inspection admission;
         try
         {
             if (worldFixture >= 0) _ = FixtureBake.Check(serverArgs[worldFixture + 1]);
             if (!ServerLoad.TryRead(serverArgs, out var parsed, out string parseError, allowImplicitMod: false))
                 throw new ArgumentException(parseError);
-            _ = ModInputStage.Inspect(new ModInputStage.Request(ModInputStage.Route.Dedicated, selectedOutput, parsed!.Options,
+            admission = ModInputStage.Inspect(new ModInputStage.Request(ModInputStage.Route.Dedicated, selectedOutput, parsed!.Options,
                 parsed.Switches, parsed.Mods, parsed.Roots, parsed.Optional, parsed.BuildDependencies));
         }
         catch (Exception failure) when (failure is ArgumentException or IOException or InvalidDataException or InvalidOperationException or UnauthorizedAccessException)
@@ -110,13 +111,15 @@ internal static class DetachedSession
                 taskUser = registration.PrincipalUserId;
             }
 
+            _ = ModInputStage.VerifyAdmission(admission);
             RequireInputSeparation(serverArgs, RunsRoot, selectedOutput);
             Directory.CreateDirectory(RunsRoot);
             using var runScope = RunJournal.UseRun(run);
             string control = JournalOwnedDirectory.Create(RunsRoot, Actor, "detached control and startup logs", _ => { },
                 ("keepIn", RecoveryLogs(run)), ("keepFiles", "stdout.log\nstderr.log"));
             string tool = seams?.StageTool?.Invoke(RunsRoot) ?? StageTool(RunsRoot);
-            string[] stagedArgs = StageInputsOwned(serverArgs, RunsRoot, control);
+            string[] stagedArgs = StageInputsOwned(serverArgs, RunsRoot, control, admission);
+            _ = ModInputStage.VerifyAdmission(admission);
             string label = WindowsScheduledTask.Prefix + run;
             var launch = new Launch(run, label, selectedOutput, Path.Combine(control, "ready.json"),
                 Path.Combine(control, "stdout.log"), Path.Combine(control, "stderr.log"), control, tool, Path.Combine(control, "launcher.ps1"), taskExecutable, taskUser);
@@ -202,12 +205,15 @@ internal static class DetachedSession
 
     internal sealed record StagedInput(string Source, string Staged, IReadOnlyDictionary<string, string> Hashes)
     {
+        public string? TargetInstall { get; init; }
+        public string? TargetAssemblySha256 { get; init; }
         public string? SourceManifest { get; init; }
         public string? StagedManifest { get; init; }
         public string? ManifestSha256 { get; init; }
     }
-    internal static string[] StageInputsOwned(string[] args, string parent, string control)
+    internal static string[] StageInputsOwned(string[] args, string parent, string control, ModInputStage.Inspection? admission = null)
     {
+        if (admission != null) _ = ModInputStage.VerifyAdmission(admission);
         int output = Array.IndexOf(args, "--output");
         RequireInputSeparation(args, parent, control, output >= 0 ? args[output + 1] : parent);
         var inputs = new List<StagedInput>();
@@ -232,8 +238,9 @@ internal static class DetachedSession
             string original = args[fixture + 1];
             var (worlds, manifestFile, _) = FixtureBake.Inspect(original);
             _ = FixtureBake.Check(original);
-            string? manifestHash = File.Exists(manifestFile) ? FileHash.Sha256(manifestFile) : null;
-            var hashes = WorldFixture.Manifest(worlds);
+            var worldAdmission = admission?.WorldAdmission;
+            string? manifestHash = worldAdmission != null ? worldAdmission.ManifestSha256 : File.Exists(manifestFile) ? FileHash.Sha256(manifestFile) : null;
+            var hashes = worldAdmission?.Files ?? WorldFixture.Manifest(worlds);
             string payload = "";
             JournalOwnedDirectory.Create(parent, Actor, "detached world input", owned =>
             {
@@ -251,10 +258,21 @@ internal static class DetachedSession
                         throw new InvalidDataException("The baked fixture manifest changed during detached staging.");
                 }
                 _ = FixtureBake.Check(payload);
+                worldAdmission?.World.Verify(copy);
+                if (worldAdmission != null) FixtureBake.VerifyAdmission(worldAdmission);
             });
             inputs.Add(new(worlds, Path.Combine(payload, "worlds_local"), hashes)
             { SourceManifest = manifestFile, StagedManifest = Path.Combine(payload, FixtureBake.ManifestFile), ManifestSha256 = manifestHash });
             staged[fixture + 1] = payload;
+        }
+        if (admission != null)
+        {
+            _ = ModInputStage.VerifyAdmission(admission);
+            inputs[0] = inputs[0] with
+            {
+                TargetInstall = (admission.Choice.Server ?? admission.Choice.Client!).Install,
+                TargetAssemblySha256 = admission.HostingBuild!.WorldSupport!.AssemblySha256,
+            };
         }
         DetachedCommandQueue.WriteNew(Path.Combine(control, "input-manifests.json"), inputs, bounded: false);
         return staged;
@@ -287,6 +305,7 @@ internal static class DetachedSession
         if (inputs.Length == 0) throw new InvalidDataException("No pinned detached inputs.");
         foreach (var input in inputs)
         {
+            if (input.TargetInstall != null) _ = ReadPinnedTarget(input);
             WorldFixture.Verify(input.Source, input.Hashes);
             WorldFixture.Verify(input.Staged, input.Hashes);
             if (input.SourceManifest != null)
@@ -298,6 +317,21 @@ internal static class DetachedSession
                 _ = FixtureBake.Check(input.Staged);
             }
         }
+    }
+
+    private static GameBuild ReadPinnedTarget(StagedInput input)
+    {
+        var current = GameVersionAgreement.ReadInPlaceAsync(input.TargetInstall!, CancellationToken.None).GetAwaiter().GetResult();
+        WorldIdentity.RequireSameTarget(input.TargetAssemblySha256, current);
+        return current;
+    }
+
+    internal static GameBuild? PinnedHostingBuild()
+    {
+        if (ConfiguredControlDirectory is not { } control) return null;
+        var inputs = JsonSerializer.Deserialize<StagedInput[]>(File.ReadAllText(Path.Combine(control, "input-manifests.json")));
+        var target = inputs?.FirstOrDefault(input => input.TargetInstall != null);
+        return target == null ? null : ReadPinnedTarget(target);
     }
 
     private static string[] CopyMods(string[] args, Func<string, string> stage)

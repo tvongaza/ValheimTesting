@@ -81,12 +81,13 @@ internal static class ServerLoadPhases
             if (!packaged) parsed!.Options["--world-fixture"] = fixture;
             var selection = ModInputStage.Choose(new ModInputStage.Request(ModInputStage.Route.Dedicated, output, parsed!.Options, parsed.Switches,
                 parsed.Mods, parsed.Roots, parsed.Optional, parsed.BuildDependencies) { Shipped = shippedLoader });
+            _ = ModInputStage.VerifyAdmission(selection.Admission!);
             var inputs = CaptureInputs(planFile, plan);
             FixtureBake.RefuseOutput(output, inputs.Where(input => input.Files != null).Select(input => input.Path).ToArray());
             Directory.CreateDirectory(output);
             File.Copy(planFile, Path.Combine(output, "phase-plan.json"));
             if (generatedSource != null) DefaultSmokeWorld.PrepareServerSaveRoot(generatedSource);
-            runPhase ??= phaseArgs => ServerLoad.RunAsync(phaseArgs);
+
             int completed = 0;
             foreach (var (phase, name, evidence, checkpoint) in phases)
             {
@@ -96,12 +97,17 @@ internal static class ServerLoadPhases
                     if (started) WriteState(output, name, "failed", fixture, checkpoint);
                     throw;
                 }
-                _ = ModInputStage.AdmitCheckpoint(selection, fixture);
+                var checkpointAdmission = ModInputStage.AdmitCheckpoint(selection, fixture, original: completed == 0);
                 string[] phaseArgs = BuildArgs(plan.CommonArgs, phase.Args, fixture, evidence, checkpoint);
                 WriteState(output, name, "starting", fixture, checkpoint);
                 started = true;
                 int result;
-                try { result = await runPhase(phaseArgs).ConfigureAwait(false); }
+                try
+                {
+                    result = await (runPhase != null ? runPhase(phaseArgs) : ServerLoad.RunAsync(phaseArgs,
+                        new ServerLoad.Seams(Loader: shippedLoader ?? ShippedLoader.Choose, InitialHostingBuild: selection.HostingBuild,
+                            InitialWorldAdmission: checkpointAdmission))).ConfigureAwait(false);
+                }
                 catch
                 {
                     WriteState(output, name, "failed", fixture, checkpoint);

@@ -95,12 +95,16 @@ public sealed class WorldFixture : IDisposable
     /// Refuses <paramref name="source"/> unless its files are exactly <paramref name="expectedHashes"/> (relative path to
     /// SHA256), naming each missing, unexpected or changed file: the check <see cref="Copy"/> makes, without copying.
     /// </summary>
-    public static void Verify(string source, IReadOnlyDictionary<string, string> expectedHashes)
+    public static void Verify(string source, IReadOnlyDictionary<string, string> expectedHashes) => Verify(source, expectedHashes, copied: false);
+
+    // A disposable copy adds only our own provenance record; it is not a game/world input.
+    internal static void Verify(string source, IReadOnlyDictionary<string, string> expectedHashes, bool copied)
     {
         if (expectedHashes.Count == 0) throw new ArgumentException("A pinned fixture manifest is required.");
         source = Path.GetFullPath(source);
         if (!Directory.Exists(source)) throw new DirectoryNotFoundException("Fixture source does not exist: " + source);
         var actual = Hashes(source, []);
+        if (copied && !expectedHashes.ContainsKey(ProvenanceFile)) actual.Remove(ProvenanceFile);
         var problems = expectedHashes.Keys.Where(key => !actual.ContainsKey(key)).Order(StringComparer.Ordinal).Select(key => key + " is missing")
             .Concat(actual.Keys.Where(key => !expectedHashes.ContainsKey(key)).Order(StringComparer.Ordinal).Select(key => key + " is not in the manifest"))
             .Concat(actual.Where(item => expectedHashes.TryGetValue(item.Key, out var hash) && !string.Equals(item.Value, hash, StringComparison.OrdinalIgnoreCase))

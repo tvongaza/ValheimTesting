@@ -119,6 +119,7 @@ public sealed class TargetedRegressionTests : IDisposable
     {
         if (!OperatingSystem.IsMacOS()) return;
         using var native = ClientLaunchTests.Install.Mac(packDoorstop: false, arm64Doorstop: true, core: new Version(25, 3, 4));
+        native.Add("Valheim.app/Contents/Resources/Data/Managed/assembly_valheim.dll", FakeInstalls.GameAssembly());
         var inventory = _rig.Inventory();
         inventory.Environments[0].Install = native.Root;
         inventory.Environments[0].Architecture = "x64";
@@ -307,6 +308,35 @@ public sealed class TargetedRegressionTests : IDisposable
         inputs.Client.Environment[name] = "1";
         Assert.Throws<ArgumentException>(() => _rig.Regression(inputs));
         Assert.False(Directory.Exists(_rig.Install));
+    }
+
+    [ClientHostTheory]
+    [InlineData("range", "parent")]
+    [InlineData("unknown", "candidate")]
+    [InlineData("chunked", "parent")]
+    public void DirectStageAdmitsTheTargetBeforeLoaderConfigOrProfileWork(string fault, string arm)
+    {
+        File.WriteAllBytes(InstallPins.GameAssembly(_rig.Game), FakeInstalls.GameAssembly(maximum: fault == "range" ? 40 : 42, shape: fault == "unknown" ? "missing" : "interval"));
+        if (fault == "chunked") File.WriteAllBytes(Path.Combine(_rig.Fixture, "SealFixture", "_main.1.fwl2"), FakeInstalls.Metadata("SealFixture", long.Parse(_rig.Uid), version: 39));
+        int loaders = 0;
+        var runner = new TargetedRegression(_rig.Manifest(), inventory: _rig.Inventory())
+        {
+            SaveDirectory = _rig.Save,
+            PinnedLoader = (_, _) => { loaders++; throw new Xunit.Sdk.XunitException("Loader ran before admission"); },
+        };
+        if (fault == "unknown") Assert.Throws<InvalidOperationException>(() => runner.Stage(arm));
+        else Assert.Throws<InvalidDataException>(() => runner.Stage(arm));
+        Assert.Equal(0, loaders); Assert.False(Directory.Exists(runner.Install));
+        Assert.False(Directory.Exists(Path.Combine(_rig.Runtime, "config")));
+    }
+
+    [ClientHostFact] public void DirectStageRetainsAnEarlierCompatibleHostHash()
+    {
+        var runner = _rig.Regression(_rig.Manifest());
+        runner.InitialHostingBuild = GameVersionAgreement.ReadInPlaceAsync(_rig.Game, default).GetAwaiter().GetResult();
+        File.WriteAllBytes(InstallPins.GameAssembly(_rig.Game), FakeInstalls.GameAssembly(maximum: 43));
+        Assert.Contains("assembly changed", Assert.Throws<InvalidOperationException>(() => runner.Stage("parent")).Message);
+        Assert.False(Directory.Exists(runner.Install));
     }
 
     // ---- the fixture: nesting and identity ----

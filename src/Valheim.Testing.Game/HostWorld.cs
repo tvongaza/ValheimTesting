@@ -54,19 +54,23 @@ public sealed class HostWorldPlan
     /// another snapshot has another UID, and is refused here as the wrong fixture, naming the UID it holds, instead of after
     /// the game loaded it. Returns that identity.
     /// </summary>
-    internal GameBuild? AdmittedBuild { get; set; }
-    internal WorldIdentity? AdmittedIdentity { get; set; }
-
     public WorldIdentity Preflight() => Preflight(null, World.Source);
+
+    internal WorldIdentity.Admission? Admission { get; set; }
 
     internal WorldIdentity Preflight(GameBuild? target, string source)
     {
         if (World.Sha256.Count != 0 && source == World.Source) WorldFixture.Verify(source, World.Sha256);
         var identity = target == null ? WorldIdentity.Read(source) : WorldIdentity.Read(source, target);
+        RequireUid(identity);
+        return identity;
+    }
+
+    internal void RequireUid(WorldIdentity identity)
+    {
         if (identity.UidText != WorldUid)
             throw new InvalidOperationException($"hostWorld.worldUid is {WorldUid}, but the fixture {World.Source} holds world {identity.Name} with UID {identity.UidText} ({identity.File}): " +
                 "the same name, another world. Pin the UID of this exact fixture (WorldIdentity.Read(fixture).UidText), or point hostWorld.world at the fixture the UID belongs to.");
-        return identity;
     }
 }
 

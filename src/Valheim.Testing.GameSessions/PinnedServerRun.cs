@@ -49,6 +49,7 @@ public sealed class PinnedServerRunOptions<TPlan> where TPlan : ServerRunPlan
     }
     // Detached checkpoints pin the already-owned immutable fixture before the first boot.
     internal bool CheckpointFixture { get; init; }
+    internal GameBuild? InitialHostingBuild { get; init; }
     /// <summary>Test seam: the owned server's session (scripted) instead of launching the server from its profile.</summary>
     internal Func<TPlan, OwnedServerSession>? SessionOverride { get; init; }
     /// <summary>What a run on other hosts reaches outside this process (<see cref="IHostedRunHooks"/>); tests pass fakes.</summary>
@@ -614,6 +615,7 @@ public static class PinnedServerRun
                 report.Provenance["runId"] = campaignRunId;
                 journalRun = RunJournal.UseRun(campaignRunId);
                 var inspection = InspectCampaign(report, manifestFile);
+                inspection.Inputs!.Manifest.InitialHostingBuild = options.InitialHostingBuild;
                 report.Step(StepPhase.Preflight, "the plan agrees with the campaign", () => HostedCampaignPreparation.CheckPlan(inspection, plan, campaignPlans!));
                 phase = StepPhase.Setup; // From here the hosts are written to.
                 await report.StepAsync(StepPhase.Setup, "check the hosts and prepare every actor's disposable install", async () =>
@@ -689,7 +691,7 @@ public static class PinnedServerRun
             // the end, after a clean stop, keeping what the run changed in it.
             if (!ownOutput) { Directory.CreateDirectory(output); ownOutput = true; }
             var admittedHashes = plan.World.Sha256.Count != 0 ? plan.World.Sha256 : new Dictionary<string, string>(WorldFixture.Manifest(plan.World.Source), StringComparer.Ordinal);
-            await report.StepAsync(StepPhase.Preflight, "admit the fixture against the actual hosting install", () => hosted.AdmitWorldAsync(plan, cancellation.Token)).ConfigureAwait(false);
+            await report.StepAsync(StepPhase.Preflight, "admit the fixture against the actual hosting install", () => hosted.AdmitWorldAsync(plan, cancellation.Token, admittedHashes)).ConfigureAwait(false);
             WorldFixture.Verify(plan.World.Source, admittedHashes);
             // Before copying: a drive that fills part-way through a copy leaves a broken world behind.
             report.Step(StepPhase.Preflight, "enough free disk space for the copies", () =>
@@ -724,6 +726,7 @@ public static class PinnedServerRun
             {
                 world = WorldFixture.Copy(plan.World.Source, output, admittedHashes); world.Preserve = true;
                 WorldFixture.Verify(plan.World.Source, admittedHashes);
+                hosted.WorldAdmission?.Verify(Path.Combine(world.DirectoryPath, "worlds_local"));
                 var copiedIdentity = plan.PreflightWorld(hosted.WorldBuild, world.DirectoryPath);
                 if (copiedIdentity != hosted.AdmittedWorld)
                     throw new InvalidDataException("The copied world differs from the fixture admitted before staging.");

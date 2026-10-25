@@ -45,6 +45,24 @@ public sealed class ModInputStageTests : IDisposable
         return inventory;
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void UnsupportedDefaultOrExplicitWorldStopsBeforeTheLoaderAndCliBundles(bool explicitFixture)
+    {
+        using var data = new FakeDataRoot(Path.Combine(_rig.Root, "early-data"));
+        File.WriteAllBytes(InstallPins.GameAssembly(_rig.Game), FakeInstalls.GameAssembly(maximum: 40));
+        string output = Path.Combine(_rig.Root, "refused"); int loaders = 0;
+        var options = new Dictionary<string, string> { ["--server"] = _rig.Game };
+        if (explicitFixture) options["--world-fixture"] = _rig.Fixture;
+        var request = new ModInputStage.Request(ModInputStage.Route.Dedicated, output, options, new HashSet<string> { "--server-only" }, [], [], [], [])
+        {
+            Shipped = (_, _, _) => { loaders++; throw new Xunit.Sdk.XunitException("Loader extracted before admission"); },
+        };
+        Assert.Throws<InvalidDataException>(() => ModInputStage.Choose(request));
+        Assert.Equal(0, loaders); Assert.False(Directory.Exists(output)); Assert.False(Directory.Exists(CliBundle.DataRoot));
+    }
+
     // Acceptance 2. On main before #673, build chose the first server install and compiled against its own BepInEx:
     // with a vanilla install it refused ("selected loader lacks BepInEx core") where start and server-load used the
     // environment's loader package. Now the same environment choice gives build that package.

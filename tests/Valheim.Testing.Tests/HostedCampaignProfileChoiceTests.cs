@@ -27,7 +27,7 @@ public sealed class HostedCampaignProfileChoiceTests
             };
             var manifest = new HostedCampaignManifest { World = world, Join = "127.0.0.1:2456",
                 AdmittedWorldFiles = WorldFixture.Manifest(world), AdmittedWorldIdentity = WorldIdentity.Read(world),
-                AdmittedWorldBuild = GameAssemblyVersion.Read(new MemoryStream(FakeInstalls.GameAssembly()), "synthetic selected host") };
+                WorldAdmission = WorldIdentity.Capture(world, GameAssemblyVersion.Read(new MemoryStream(FakeInstalls.GameAssembly()), "synthetic selected host")) };
             var campaign = new PreparedHostedCampaign(manifest, environment,
                 new Dictionary<string, HostListing> { ["server"] = game },
                 new Dictionary<string, HostListing> { ["server"] = profile },

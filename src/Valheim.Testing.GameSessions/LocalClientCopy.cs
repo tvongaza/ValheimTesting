@@ -113,11 +113,10 @@ internal sealed class LocalClientCopy
         Console.WriteLine($"Preparing an owned mod profile for {source}; the game install stays in place.");
         using var selection = await InstallSelection.ReadAsync(host, HostedRuntimeKind.Client, source, manifest, location, loaderPackage,
             plan.Port, plan, StepTimeout, cancellation, builds, actor).ConfigureAwait(false);
-        if (plan.HostWorld?.AdmittedBuild?.WorldSupport is { } admitted)
+        if (plan.HostWorld?.Admission is { } admitted)
         {
             var currentBuild = selection.Build ?? await GameVersionAgreement.ReadAsync(host, selection.Source, StepTimeout, cancellation).ConfigureAwait(false);
-            if (currentBuild.WorldSupport?.AssemblySha256 != admitted.AssemblySha256)
-                throw new InvalidOperationException("The hosting game assembly changed after world-format admission.");
+            admitted.VerifyTarget(currentBuild);
         }
         if (selection.Replaced.Count != 0)
             Console.WriteLine($"{actor}: the profile stages ValheimCLI {manifest.Build} in place of the install's own {string.Join(", ", selection.Replaced)}.");

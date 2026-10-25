@@ -775,6 +775,16 @@ public sealed class ClientRoundsTests : IDisposable
         Assert.False(Directory.Exists(plan.Install));
     }
 
+    [ClientHostFact] public void APreparedSourceCheckCannotRepinAnUnmanifestedWorld()
+    {
+        var plan = HostPlan(); plan.HostWorld!.World.Sha256.Clear();
+        plan.PreparedSourceCheck = () => File.WriteAllText(Path.Combine(Fixture, Name, "_main.1.db2"), "changed only data");
+        var game = new Game(Worlds); var report = new ScenarioReport("host");
+        Assert.Contains("changed", Assert.Throws<InvalidOperationException>(() => RunHosted(report, plan, game, Measure())).Message);
+        Assert.Equal(0, _opens); Assert.Empty(game.Transport.Commands); Assert.Empty(OurWorldFiles());
+        Assert.Empty(Directory.GetDirectories(Output, "valheim-test-*"));
+    }
+
     // The preflight (#117): a wrong fixture or install stops the run before the fixture is copied or the client opened.
     [ClientHostFact] public void AFixtureWithAnotherUidStopsBeforeItIsCopiedOrTheClientOpens()
     {

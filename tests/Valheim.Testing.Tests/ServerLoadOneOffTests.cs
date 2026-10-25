@@ -763,6 +763,20 @@ public sealed class ServerLoadOneOffTests : IDisposable
         Assert.False(File.Exists(Path.Combine(output, "dependencies.lock.json")));
     }
 
+    [Fact] public async Task TheDefaultWorldRetainsItsOriginalHostAcrossCampaignInspection()
+    {
+        string output = Path.Combine(_rig.Root, "changed-default-host"); int campaigns = 0;
+        int result = await ServerLoad.RunAsync(Arguments(output, "--server-only"), new ServerLoad.Seams(
+            Inspect: _ =>
+            {
+                File.WriteAllBytes(InstallPins.GameAssembly(_rig.Game), FakeInstalls.GameAssembly(maximum: 43));
+                return Task.FromResult(Ready);
+            },
+            Campaign: (_, _, _, _, _) => { campaigns++; return Task.FromResult(0); }));
+        Assert.Equal(3, result); Assert.Equal(0, campaigns);
+        Assert.False(File.Exists(Path.Combine(output, "plan.json")));
+    }
+
     [Fact] public async Task ALocalHostRefusalStopsBeforeAnyAdapterOrFixtureIsWritten()
     {
         string output = Path.Combine(_rig.Root, "local-preflight-refused");

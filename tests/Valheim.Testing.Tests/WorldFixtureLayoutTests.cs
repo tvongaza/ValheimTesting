@@ -40,6 +40,40 @@ public sealed class WorldFixtureLayoutTests : IDisposable
         }
     }
 
+    [Theory]
+    [InlineData(39, false)]
+    [InlineData(40, true)]
+    public void ARangeCompatibleVersionStillRequiresTheChunkedLayoutThreshold(int version, bool accepted)
+    {
+        string fixture = Fixture();
+        File.WriteAllBytes(World(fixture, "_main.1.fwl2"), FakeInstalls.Metadata("Campaign", 4242, version: version));
+        var target = GameAssemblyVersion.Read(new MemoryStream(FakeInstalls.GameAssembly(minimum: 9, maximum: 42, chunked: 40)), "selected host");
+        Assert.InRange(version, target.WorldSupport!.Minimum, target.WorldSupport.Maximum);
+        if (accepted) Assert.Equal(version, WorldIdentity.Capture(fixture, target).Identity.WorldVersion);
+        else Assert.Contains("chunked .fwl2 saves require version 40", Assert.Throws<InvalidDataException>(() => WorldIdentity.Capture(fixture, target)).Message);
+    }
+
+    [Theory]
+    [InlineData("extra")]
+    [InlineData("metadata")]
+    [InlineData("data")]
+    public void AVerifiedCopyIgnoresOnlyItsGeneratedRecordAndRetainsEveryWorldPin(string drift)
+    {
+        using var journal = RunJournal.UseLocalDirectory(Path.Combine(_root, "journal"));
+        string fixture = Fixture();
+        var target = GameAssemblyVersion.Read(new MemoryStream(FakeInstalls.GameAssembly()), "host");
+        var admission = WorldIdentity.Capture(fixture, target);
+        using var copy = WorldFixture.Copy(fixture, Path.Combine(_root, "output"), admission.Files);
+        Assert.True(File.Exists(Path.Combine(copy.DirectoryPath, WorldFixture.ProvenanceFile)));
+        admission.Verify(copy.DirectoryPath); // the generated record is the only extra file
+        Assert.Throws<InvalidOperationException>(() => WorldFixture.Verify(copy.DirectoryPath, admission.Files)); // source contract stays exact
+        if (drift == "extra") File.WriteAllText(Path.Combine(copy.DirectoryPath, "Campaign", "unexpected.chunk"), "extra");
+        else if (drift == "metadata") File.WriteAllBytes(Path.Combine(copy.DirectoryPath, "Campaign", "_main.1.fwl2"), FakeInstalls.Metadata("Campaign", 4242, version: 40));
+        else File.WriteAllText(Path.Combine(copy.DirectoryPath, "Campaign", "_main.1.db2"), "changed");
+        Assert.Throws<InvalidOperationException>(() => admission.Verify(copy.DirectoryPath));
+        admission.Verify();
+    }
+
     [Fact]
     public void MatchingNetworkVersionsDoNotEstablishWorldSupportAndUnknownSingleHostsRefuse()
     {

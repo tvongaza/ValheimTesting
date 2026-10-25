@@ -9,28 +9,32 @@ internal static class FixtureBake
     /// <summary>A baked or saved fixture's manifest, beside its <c>worlds_local/</c>.</summary>
     internal const string ManifestFile = "fixture-manifest.json";
     internal sealed record Input(string Source, string Origin, WorldIdentity Identity, IReadOnlyDictionary<string, string> Files);
-    internal sealed record Admission(string Source, WorldIdentity Identity, IReadOnlyDictionary<string, string> Files, string ManifestFile, string? ManifestSha256, GameBuild Target);
+    internal sealed record Admission(WorldIdentity.Admission World, string ManifestFile, string? ManifestSha256)
+    {
+        internal string Source => World.Source;
+        internal WorldIdentity Identity => World.Identity;
+        internal IReadOnlyDictionary<string, string> Files => World.Files;
+        internal GameBuild Target => World.Target;
+    }
 
     internal static Admission Admit(string source, GameBuild target)
     {
         var (worlds, manifestFile, _) = Inspect(source);
-        var files = WorldFixture.Manifest(worlds);
-        var identity = WorldIdentity.Read(worlds, target);
-        WorldFixture.Verify(worlds, files);
         string? manifestHash = File.Exists(manifestFile) ? Sha256(manifestFile) : null;
+        var world = WorldIdentity.Capture(worlds, target);
+        var files = world.Files;
+        var identity = world.Identity;
         if (manifestHash != null) VerifyBakedManifest(manifestFile, identity, files);
         if (manifestHash != (File.Exists(manifestFile) ? Sha256(manifestFile) : null))
             throw new InvalidDataException("The baked fixture manifest changed during admission.");
-        return new(worlds, identity, files, manifestFile, manifestHash, target);
+        return new(world, manifestFile, manifestHash);
     }
 
-    private static void VerifyAdmission(Admission admission)
+    internal static void VerifyAdmission(Admission admission)
     {
-        WorldFixture.Verify(admission.Source, admission.Files);
+        admission.World.Verify();
         if (admission.ManifestSha256 != (File.Exists(admission.ManifestFile) ? Sha256(admission.ManifestFile) : null))
             throw new InvalidDataException("The baked fixture manifest changed after admission: " + admission.ManifestFile);
-        if (WorldIdentity.Read(admission.Source, admission.Target) != admission.Identity)
-            throw new InvalidDataException("The fixture identity changed after admission.");
         if (admission.ManifestSha256 != null) VerifyBakedManifest(admission.ManifestFile, admission.Identity, admission.Files);
     }
 
@@ -118,8 +122,9 @@ internal static class FixtureBake
             CopyFiles(source, target, manifest);
             WorldFixture.Verify(source, manifest); // source may have changed while being copied
             WorldFixture.Verify(target, manifest);
-            var copied = admission == null ? WorldIdentity.Read(target) : WorldIdentity.Read(target, admission.Target);
-            if (copied != identity || (admission != null && copied != admission.Identity))
+            admission?.World.Verify(target);
+            var copied = admission?.Identity ?? WorldIdentity.Read(target);
+            if (copied != identity)
                 throw new InvalidDataException("The disposable world differs from its admitted source fixture identity.");
             if (admission != null) VerifyAdmission(admission);
             // The manifest it was checked against stays beside the copy as input evidence (and names a saved world's run).

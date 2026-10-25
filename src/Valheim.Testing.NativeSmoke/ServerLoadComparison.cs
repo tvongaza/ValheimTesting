@@ -37,13 +37,16 @@ internal static class ServerLoadComparison
             // guard and the ValheimCLI inputs. The dependency locks and both arms use it even if the inventory changes before launch.
             var stage = ModInputStage.Choose(new ModInputStage.Request(ModInputStage.Route.Dedicated, output, options, parsed.Switches,
                 parsed.Mods, parsed.Roots, parsed.Optional, parsed.BuildDependencies) { Shipped = shippedLoader, ClientArchitecture = clientArchitecture, Progress = progress });
+            _ = ModInputStage.VerifyAdmission(stage.Admission!);
             var server = stage.Server!;
             string serverInstall = server.Recipe.Install, serverCore = stage.Core;
             Task<int> RunArm(string name, string[] arm)
             {
+                _ = ModInputStage.VerifyAdmission(stage.Admission!);
                 if (runArm != null) return runArm(arm);
                 var armSeams = new ServerLoad.Seams(Loader: ShippedLoader.Choose,
-                    FrozenServerLoader: server.Shipped, SummaryLabel: name);
+                    FrozenServerLoader: server.Shipped, SummaryLabel: name,
+                    InitialHostingBuild: stage.HostingBuild, InitialWorldAdmission: stage.WorldAdmission);
                 return runArmWithSeams == null
                     ? ServerLoad.RunAsync(arm, armSeams) : runArmWithSeams(arm, armSeams);
             }
@@ -60,6 +63,7 @@ internal static class ServerLoadComparison
             before.RequireSameExceptRemovedMod(after, removed);
 
             // Both arms read one frozen copy of the chosen environments.
+            _ = ModInputStage.VerifyAdmission(stage.Admission!);
             string frozenInventory = SmokeInputResolver.RecordSelected(stage.Inventory, Path.Combine(output, "selection"),
                 stage.Actors.Select(actor => actor.Recipe));
             Directory.CreateDirectory(output);

@@ -161,11 +161,10 @@ internal static class HostedWorldOnHost
         copy.Preserve = true;
         try
         {
-            if (plan.AdmittedBuild is { } target)
+            if (plan.Admission is { } admitted)
             {
-                var identity = plan.Preflight(target, copy.DirectoryPath);
-                if (plan.AdmittedIdentity is { } admitted && identity != admitted)
-                    throw new InvalidDataException("The copied hosted world differs from the admitted fixture identity.");
+                admitted.Verify(copy.DirectoryPath);
+                plan.RequireUid(admitted.Identity);
             }
             WorldFixture.Verify(plan.World.Source, plan.World.Sha256);
 

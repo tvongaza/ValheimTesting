@@ -511,6 +511,32 @@ public sealed class NativeDependencyResolverTests : IDisposable
         Assert.True((await Inspect()).Ready); // The joiner's world range is irrelevant; network versions still agree.
     }
 
+    [Fact] public async Task DirectCampaignAdmissionPrecedesEveryShippedLoaderCallback()
+    {
+        var (file, hosts, _) = TwoHostCampaign("early-world");
+        string assembly = Path.Combine(hosts["server"].Local(@"C:\game\source"), "valheim_server_Data", "Managed", InstallPins.GameAssemblyName);
+        File.WriteAllBytes(assembly, FakeInstalls.GameAssembly(maximum: 40));
+        int loaders = 0;
+        var report = await HostedCampaignPreparation.InspectAsync(file, TimeSpan.FromSeconds(30), name => hosts[name],
+            pinnedLoader: (_, _, _) => { loaders++; throw new Xunit.Sdk.XunitException("Loader extracted before world admission"); });
+        Assert.Contains(report.Problems, problem => problem.Input == "world fixture"); Assert.Equal(0, loaders);
+        Assert.All(hosts.Values, host => Assert.DoesNotContain(host.Scripts, script => script is "profile-seed" or "apply-stage" or "copy" or "ship"));
+    }
+
+    [Fact] public async Task DirectCampaignRetainsTheInitialHostHashAcrossLoaderSelection()
+    {
+        var (file, hosts, _) = TwoHostCampaign("host-replacement");
+        string assembly = Path.Combine(hosts["server"].Local(@"C:\game\source"), "valheim_server_Data", "Managed", InstallPins.GameAssemblyName);
+        int loaders = 0;
+        await Assert.ThrowsAsync<ArgumentException>(() => HostedCampaignPreparation.PrepareAsync(file, Path.Combine(_rig.Root, "changed-host"),
+            TimeSpan.FromSeconds(30), name => hosts[name], pinnedLoader: (_, _, _) =>
+            {
+                loaders++; File.WriteAllBytes(assembly, FakeInstalls.GameAssembly(maximum: 43)); return null;
+            }));
+        Assert.True(loaders > 0);
+        Assert.All(hosts.Values, host => Assert.DoesNotContain(host.Scripts, script => script is "profile-seed" or "apply-stage" or "copy" or "ship"));
+    }
+
     // #256's acceptance in one preflight: six independent faults, each refused under its own actor and input, all in one
     // report, before any host is written to. A bad account (an unreadable signed-in Steam identity), a loader mix (a Doorstop 4
     // proxy beside a Doorstop 3 file), a missing pack (a lock whose ValheimCLI set lacks one), a wrong package (a client's

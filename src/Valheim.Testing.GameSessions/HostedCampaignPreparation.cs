@@ -49,11 +49,13 @@ public sealed class HostedCampaignManifest
     /// The dedicated server. Left out, the campaign has none: one client hosts the world (its plan section's <c>hostWorld</c>,
     /// with the campaign's <see cref="World"/> as its fixture) and the others are its peers (<c>joinsHost</c>).
     /// </summary>
-    [System.Text.Json.Serialization.JsonIgnore] internal IReadOnlyDictionary<string, string>? AdmittedWorldFiles { get; set; }
-    [System.Text.Json.Serialization.JsonIgnore] internal WorldIdentity? AdmittedWorldIdentity { get; set; }
-    [System.Text.Json.Serialization.JsonIgnore] internal GameBuild? AdmittedWorldBuild { get; set; }
     public HostedCampaignRole? Server { get; set; }
     public Dictionary<string, HostedCampaignRole> Clients { get; set; } = [];
+
+    [System.Text.Json.Serialization.JsonIgnore] internal IReadOnlyDictionary<string, string>? AdmittedWorldFiles { get; set; }
+    [System.Text.Json.Serialization.JsonIgnore] internal WorldIdentity? AdmittedWorldIdentity { get; set; }
+    [JsonIgnore] internal WorldIdentity.Admission? WorldAdmission { get; set; }
+    [JsonIgnore] internal GameBuild? InitialHostingBuild { get; set; }
 
     private static readonly JsonSerializerOptions Json = new()
     {
@@ -170,14 +172,15 @@ public sealed class PreparedHostedCampaign : IAsyncDisposable
             throw new ArgumentException("Bind exactly the prepared named clients to the plan.", nameof(clients));
         if (manifest.World.Length == 0 || manifest.Join.Length == 0)
             throw new ArgumentException("A direct-join campaign needs a fixture world and join address.");
-        WorldFixture.Verify(manifest.World, manifest.AdmittedWorldFiles ?? throw new InvalidOperationException("The campaign world was not admitted."));
-        var identity = WorldIdentity.Read(manifest.World, manifest.AdmittedWorldBuild ?? new GameBuild(null, null, "the selected host is unknown"));
+        var admission = manifest.WorldAdmission ?? throw new InvalidOperationException("The campaign world was not admitted.");
+        admission.Verify();
+        var identity = admission.Identity;
         // The dedicated server's -savedir points at the directory containing worlds_local. A bare
         // <name>/ chunked fixture beside that directory makes Valheim silently create a new world.
         // Keep the user's fixture read-only and build the exact server layout in this private output.
         string serverWorld = Path.Combine(Path.GetFullPath(outputDirectory), "server-world");
         if (Path.Exists(serverWorld)) throw new IOException("The campaign's server-world layout already exists; use a new output directory.");
-        var sourceWorld = manifest.AdmittedWorldFiles;
+        var sourceWorld = admission.Files;
         var serverHashes = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var (relative, hash) in sourceWorld)
         {
@@ -191,9 +194,8 @@ public sealed class PreparedHostedCampaign : IAsyncDisposable
             // Keep its native separator so a Windows-run campaign can verify the copy.
             serverHashes.Add(targetRelative, hash);
         }
-        WorldFixture.Verify(manifest.World, sourceWorld);
-        if (WorldIdentity.Read(Path.Combine(serverWorld, "worlds_local"), manifest.AdmittedWorldBuild!) != identity)
-            throw new InvalidDataException("The staged campaign world differs from its admitted identity.");
+        admission.Verify();
+        admission.Verify(Path.Combine(serverWorld, "worlds_local"));
         plan.World = new PinnedDirectory { Source = serverWorld, Sha256 = serverHashes };
         plan.Runtime = new PinnedDirectory { Source = Listings["server"].Root,
             Sha256 = new Dictionary<string, string>(Listings["server"].Files, StringComparer.Ordinal) };
@@ -223,14 +225,17 @@ public sealed class PreparedHostedCampaign : IAsyncDisposable
         if (!clients.Keys.ToHashSet(StringComparer.Ordinal).SetEquals(_profile.Clients.Keys))
             throw new ArgumentException("Bind exactly the prepared named clients to the plan.", nameof(clients));
         string host = HostedCampaignPreparation.HostOf(clients);
-        WorldFixture.Verify(manifest.World, manifest.AdmittedWorldFiles ?? throw new InvalidOperationException("The hosted campaign world was not admitted."));
-        var identity = WorldIdentity.Read(manifest.World, manifest.AdmittedWorldBuild ?? new GameBuild(null, null, "the hosting client is unknown"));
+        var admission = manifest.WorldAdmission ?? throw new InvalidOperationException("Cannot establish world-format support: the hosted campaign world was not admitted to an actual host.");
+        admission.Verify();
+        admission.VerifyTarget(Builds.Single(side => side.Actor == host).Build ?? new GameBuild(null, null, "the hosting client is unknown"));
+        var identity = admission.Identity;
         foreach (var (name, client) in clients)
         {
             Bind(name, client, manifest, outputDirectory);
             if (client.HostWorld is not { } world) continue;
-            world.World = new PinnedDirectory { Source = manifest.World, Sha256 = new Dictionary<string, string>(WorldFixture.Manifest(manifest.World), StringComparer.Ordinal) };
+            world.World = new PinnedDirectory { Source = manifest.World, Sha256 = new Dictionary<string, string>(manifest.WorldAdmission!.Files, StringComparer.Ordinal) };
             world.WorldUid = identity.UidText;
+            world.Admission = admission;
         }
         return host;
     }
@@ -474,6 +479,34 @@ public static class HostedCampaignPreparation
         var characterDirectories = new ConcurrentDictionary<string, CharacterDirectories>(StringComparer.Ordinal);
         var loaders = new ConcurrentDictionary<string, ShippedLoader.Choice>(StringComparer.Ordinal);
         var builds = new ConcurrentDictionary<string, GameBuild>(StringComparer.Ordinal);
+        string? worldHost = inputs.Manifest.Server != null ? "server" : hostingActor;
+        bool worldReady = true;
+        // Admit the actual hosting installation before any actor can materialize a shipped loader.
+        if (worldHost != null && inputs.Manifest.World.Length != 0)
+        {
+            try
+            {
+                var item = inputs.Roles.Single(role => role.Name == worldHost);
+                var host = hostFactory?.Invoke(item.Role.Host) ?? inputs.Profile.CreateHost(item.Role.Host);
+                var game = await HostInstall.ListAsync(host, item.Role.Install, timeout, null, cancellation).ConfigureAwait(false);
+                var target = await GameVersionAgreement.ReadAsync(host, game, timeout, cancellation).ConfigureAwait(false);
+                builds[worldHost] = target;
+                if (inputs.Manifest.InitialHostingBuild is { } initial) WorldIdentity.RequireSameTarget(initial, target);
+                if (inputs.Manifest.WorldAdmission is { } prior)
+                {
+                    prior.VerifyTarget(target);
+                    prior.Verify();
+                }
+                else inputs.Manifest.WorldAdmission = WorldIdentity.Capture(inputs.Manifest.World, target, inputs.Manifest.AdmittedWorldFiles);
+                if (inputs.Manifest.WorldAdmission.Identity != inputs.Manifest.AdmittedWorldIdentity)
+                    throw new InvalidDataException("The campaign world changed during admission.");
+            }
+            catch (Exception error) when (HostCheckRefusal(error))
+            {
+                failures.Add(new(worldHost, "world fixture", error.Message));
+                worldReady = false;
+            }
+        }
         // The run journal of every host the campaign touches (#257): no other run is going there or left something it owns.
         var owners = await InspectJournalsAsync(inputs, failures, timeout, hostFactory, cancellation,
             skipLocal: skipLocalChecks).ConfigureAwait(false);
@@ -552,8 +585,14 @@ public static class HostedCampaignPreparation
                 // install is listed, beside this actor's other checks, and always awaited before the actor's check ends. A failure of
                 // the checks themselves is the one reported: the read is then only waited for.
                 Task build = Task.CompletedTask;
-                async Task ReadBuildAsync(HostListing listing) =>
-                    builds[item.Name] = await GameVersionAgreement.ReadAsync(host, listing, timeout, cancellation).ConfigureAwait(false);
+                async Task ReadBuildAsync(HostListing listing)
+                {
+                    var current = await GameVersionAgreement.ReadAsync(host, listing, timeout, cancellation).ConfigureAwait(false);
+                    if (item.Name == worldHost && inputs.Manifest.WorldAdmission is { } admitted)
+                        try { admitted.VerifyTarget(current); }
+                        catch (InvalidOperationException error) { failures.Add(new(item.Name, "world fixture", error.Message)); }
+                    if (item.Name != worldHost || worldReady || !builds.ContainsKey(item.Name)) builds[item.Name] = current;
+                }
                 try { await CheckActorAsync().ConfigureAwait(false); }
                 catch
                 {
@@ -570,7 +609,17 @@ public static class HostedCampaignPreparation
                         }
                         catch (Exception error) when (HostCheckRefusal(error))
                         { failures.Add(new(item.Name, "ValheimCLI port", error.Message)); }
-                    if (!inspection.Report.Problems.Any(problem => problem.Actor == item.Name && problem.Input == "loader"))
+                    if (!worldReady)
+                    {
+                        // Keep independent build/network facts readable without invoking a materializing loader rule.
+                        try
+                        {
+                            var game = await HostInstall.ListAsync(host, item.Role.Install, timeout, null, cancellation).ConfigureAwait(false);
+                            build = ReadBuildAsync(game);
+                        }
+                        catch (Exception error) when (HostCheckRefusal(error)) { failures.Add(new(item.Name, "game and loader", error.Message)); }
+                    }
+                    if (worldReady && !inspection.Report.Problems.Any(problem => problem.Actor == item.Name && problem.Input == "loader"))
                     {
                         try
                         {
@@ -665,16 +714,14 @@ public static class HostedCampaignPreparation
         var sides = inputs.Roles.Select(item => new GameVersionAgreement.Side(item.Name,
             item.Role.Host, item.Role.Install, builds.GetValueOrDefault(item.Name))).ToArray();
         foreach (var problem in GameVersionAgreement.Decide(sides)) failures.Add(problem);
-        string? worldHost = inputs.Manifest.Server != null ? "server" : hostingActor;
         if (worldHost != null && inputs.Manifest.World.Length != 0)
         {
             try
             {
                 var target = builds.GetValueOrDefault(worldHost) ?? new GameBuild(null, null, "the selected host assembly is unavailable");
-                var identity = WorldIdentity.Read(inputs.Manifest.World, target);
-                if (inputs.Manifest.AdmittedWorldFiles != null) WorldFixture.Verify(inputs.Manifest.World, inputs.Manifest.AdmittedWorldFiles);
-                if (identity != inputs.Manifest.AdmittedWorldIdentity) throw new InvalidDataException("The campaign world changed during admission.");
-                inputs.Manifest.AdmittedWorldBuild = target;
+                var admitted = inputs.Manifest.WorldAdmission ?? throw new InvalidOperationException("The campaign world was not admitted.");
+                admitted.VerifyTarget(target);
+                admitted.Verify();
             }
             catch (Exception error) when (error is ArgumentException or IOException or InvalidDataException or InvalidOperationException)
             { failures.Add(new(worldHost, "world fixture", error.Message)); }

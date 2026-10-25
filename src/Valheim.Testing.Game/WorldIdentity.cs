@@ -76,6 +76,39 @@ public sealed record WorldIdentity(string Name, string SeedName, int Seed, long 
         return identity;
     }
 
+    // One retained admission: hash before parsing, verify afterwards, and never derive replacement pins.
+    internal sealed record Admission(string Source, WorldIdentity Identity, IReadOnlyDictionary<string, string> Files, GameBuild Target)
+    {
+        internal void Verify(string? copy = null)
+        {
+            string source = copy ?? Source;
+            WorldFixture.Verify(source, Files, copied: copy != null);
+            if (Read(source, Target) != Identity) throw new InvalidDataException("The fixture identity changed after admission.");
+            WorldFixture.Verify(source, Files, copied: copy != null);
+        }
+
+        internal void VerifyTarget(GameBuild current) => RequireSameTarget(Target, current);
+    }
+
+    internal static Admission Capture(string source, GameBuild target, IReadOnlyDictionary<string, string>? pinned = null)
+    {
+        source = Path.GetFullPath(source);
+        var files = new Dictionary<string, string>(pinned is { Count: > 0 } ? pinned : WorldFixture.Manifest(source), StringComparer.Ordinal);
+        var identity = Read(source, target);
+        var admitted = new Admission(source, identity, files, target);
+        admitted.Verify();
+        return admitted;
+    }
+
+    internal static void RequireSameTarget(GameBuild original, GameBuild current)
+        => RequireSameTarget(original.WorldSupport?.AssemblySha256, current);
+
+    internal static void RequireSameTarget(string? originalSha256, GameBuild current)
+    {
+        if (originalSha256 == null || current.WorldSupport?.AssemblySha256 != originalSha256)
+            throw new InvalidOperationException("The hosting game assembly changed after world-format admission; inspect the selected host again.");
+    }
+
     internal void Admit(GameBuild target)
     {
         if (target.WorldSupport is not { } support)

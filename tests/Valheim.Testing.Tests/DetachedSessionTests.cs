@@ -108,6 +108,33 @@ public sealed class DetachedSessionTests : IDisposable
     }
 
     [Theory]
+    [InlineData("data", true)]
+    [InlineData("version", true)]
+    [InlineData("host", true)]
+    [InlineData("host", false)]
+    public async Task InitialAdmissionSurvivesTheDesktopCheckBeforeAnyToolOrTaskStaging(string change, bool explicitFixture)
+    {
+        using var data = new FakeDataRoot(Path.Combine(_root, "mutated-data"));
+        string server = Path.Combine(_root, "server"); FakeInstalls.Server(server);
+        string source = FakeInstalls.World(Path.Combine(_root, "world"));
+        string mod = Path.Combine(_root, "Mod.dll"); File.WriteAllText(mod, "mod");
+        string output = Path.Combine(_root, "refused");
+        var args = new List<string> { "server-load", "--server", server, "--server-only", "--mod", mod, "--output", output };
+        if (explicitFixture) args.AddRange(["--world-fixture", source]);
+        int effects = 0; var error = new StringWriter();
+        int result = await DetachedSession.RunAsync(args.ToArray(), new StringWriter(), error,
+            new DetachedSession.Seams(Windows: true, TaskExecutable: "powershell.exe", TaskUser: "tester", RequireDesktop: () =>
+            {
+                if (change == "host") File.WriteAllBytes(InstallPins.GameAssembly(server), FakeInstalls.GameAssembly(maximum: 43)); // still supports the fixture
+                else if (change == "version") File.WriteAllBytes(Path.Combine(source, "Campaign", "_main.1.fwl2"), FakeInstalls.Metadata("Campaign", 4242, version: 43));
+                else File.WriteAllText(Path.Combine(source, "Campaign", "_main.1.db2"), "changed data, same identity");
+                return Task.CompletedTask;
+            }, Register: _ => { effects++; return Task.CompletedTask; }, StageTool: _ => { effects++; return _root; }));
+        Assert.Equal(3, result); Assert.Equal(0, effects); Assert.Contains("changed", error.ToString());
+        Assert.False(Directory.Exists(output)); Assert.False(Directory.Exists(Path.Combine(CliBundle.DataRoot, "runs")));
+    }
+
+    [Theory]
     [InlineData("output")]
     [InlineData("staging")]
     [InlineData("control")]
