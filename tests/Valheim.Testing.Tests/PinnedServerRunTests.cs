@@ -115,8 +115,8 @@ public sealed class PinnedServerRunTests : IDisposable
         // #612: a Linux server's profile is linked too, so its storage is checked first.
         string[] storage = [LocalServerMachine.Windows ? "check the Windows profile storage" : "check the Linux profile storage"];
         string[] task = LocalServerMachine.Windows ? ["the server host can start a server task"] : [];
-        Assert.Equal([ "the world fixture is one complete world", "enough free disk space for the copies", .. storage, .. task, "take the server host's lock",
-                "check the server host's install against the pinned runtime and stage its profile", "copy and verify pinned world",
+        Assert.Equal([ "the world fixture is one complete world", "admit the fixture against the actual hosting install", "enough free disk space for the copies", .. storage, "copy and verify pinned world", .. task, "take the server host's lock",
+                "check the server host's install against the pinned runtime and stage its profile",
                 "ship and verify the world copy on the server host", "server runtime has the plan's server executable",
                 "server runtime is the pinned game build, loader and patchers", "prepared only; no game launched",
                 "verify server's source install after the run (size and modified time)",
@@ -126,7 +126,7 @@ public sealed class PinnedServerRunTests : IDisposable
         // Validate prepares and cleans up; it runs no scenario, so the scenario state is not reported as passed.
         Assert.Equal((true, true, false, true), (result.GetProperty("PreflightPassed").GetBoolean(), result.GetProperty("RuntimeReady").GetBoolean(),
             result.GetProperty("ScenarioPassed").GetBoolean(), result.GetProperty("CleanupVerified").GetBoolean()));
-        Assert.Equal([ "Preflight", "Preflight", .. storage.Select(_ => "Preflight"), .. task.Select(_ => "Setup"), "Setup", "Setup", "Setup", "Setup", "Setup", "Setup", "Setup", "Cleanup", "Cleanup", "Cleanup", "Cleanup", "Cleanup" ],
+        Assert.Equal([ "Preflight", "Preflight", "Preflight", .. storage.Select(_ => "Preflight"), .. task.Select(_ => "Setup"), "Setup", "Setup", "Setup", "Setup", "Setup", "Setup", "Setup", "Cleanup", "Cleanup", "Cleanup", "Cleanup", "Cleanup" ],
             result.GetProperty("Steps").EnumerateArray().Select(s => s.GetProperty("Phase").GetString()));
         var provenance = result.GetProperty("Provenance");
         Assert.Equal(("this machine", EnvironmentInventory.LocalHost, EnvironmentInventory.LocalHost + ":" + LocalServerMachine.Install),
@@ -158,6 +158,66 @@ public sealed class PinnedServerRunTests : IDisposable
 
     // #860: a standalone run decides its installs' versions as a campaign does. Its declared client is read in place before the
     // server's install is listed, and a server the client cannot join is refused there, before its profile is staged.
+    [Theory]
+    [InlineData("range")]
+    [InlineData("unknown")]
+    public async Task TheSelectedHostsWorldSupportRefusesBeforeProfileShipOrLaunch(string kind)
+    {
+        string assembly = Path.Combine(Runtime, "valheim_server_Data", "Managed", InstallPins.GameAssemblyName);
+        File.WriteAllBytes(assembly, FakeInstalls.GameAssembly(maximum: 40, shape: kind == "unknown" ? "missing" : "interval"));
+        string plan = WritePlan();
+        var before = WorldFixture.Manifest(Runtime);
+        Assert.Equal(1, await RunHere(["validate", plan, Output], Options()));
+        Assert.DoesNotContain(_machine.Host.Scripts, script => script is "profile-seed" or "apply-stage" or "ship" or "server-start" or "copy");
+        WorldFixture.Verify(Runtime, before);
+        var failed = Assert.Single(Result().GetProperty("Steps").EnumerateArray(), step => step.GetProperty("Name").GetString() == "admit the fixture against the actual hosting install");
+        Assert.Contains(kind == "unknown" ? "Cannot establish world-format" : "world version 41", failed.GetProperty("Error").GetString());
+    }
+
+    [Theory]
+    [InlineData("worlduid", "version", false)]
+    [InlineData("world", "version", false)]
+    [InlineData("any", "version", false)]
+    [InlineData("none", "version", false)]
+    [InlineData("worlduid", "uid", false)]
+    [InlineData("world", "broken", false)]
+    [InlineData("any", "bytes", false)]
+    [InlineData("none", "name", false)]
+    [InlineData("worlduid", "bytes", true)]
+    [InlineData("world", "bytes", true)]
+    [InlineData("any", "bytes", true)]
+    [InlineData("none", "bytes", true)]
+    public async Task AnInputChangedDuringHostInspectionIsRefusedBeforeAnyRuntimeProfile(string pin, string change, bool manifest)
+    {
+        string path = WritePlan();
+        var node = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(path))!;
+        node["pins"] = pin switch
+        {
+            "worlduid" => System.Text.Json.Nodes.JsonNode.Parse("{\"worlduid\":\"1\"}"),
+            "world" => System.Text.Json.Nodes.JsonNode.Parse("{\"world\":\"Test\"}"),
+            "any" => System.Text.Json.Nodes.JsonNode.Parse("{\"world\":\"any\"}"),
+            _ => new System.Text.Json.Nodes.JsonObject(),
+        };
+        if (!manifest) node["world"]!["sha256"] = new System.Text.Json.Nodes.JsonObject();
+        File.WriteAllText(path, node.ToJsonString());
+        bool changed = false;
+        _machine.Host.BeforeScript = script =>
+        {
+            if (script != "preflight-read" || changed) return;
+            changed = true;
+            string world = Path.Combine(World, "worlds_local", "Test");
+            switch (change)
+            {
+                case "broken": File.Delete(Path.Combine(world, "_main.1.db2")); break;
+                case "bytes": File.AppendAllText(Path.Combine(world, "_main.1.db2"), "drift"); break;
+                default: File.WriteAllBytes(Path.Combine(world, "_main.1.fwl2"), FakeInstalls.Metadata(change == "name" ? "Other" : "Test", change == "uid" ? 2 : 1, version: change == "version" ? 42 : 41)); break;
+            }
+        };
+        Assert.Equal(1, await RunHere(["validate", path, Output], Options()));
+        Assert.True(changed);
+        Assert.DoesNotContain(_machine.Host.Scripts, script => script is "profile-seed" or "apply-stage" or "ship" or "server-start" or "copy");
+    }
+
     [Fact] public async Task AServerOnAnotherNetworkVersionThanTheDeclaredClientIsRefusedBeforeItsProfileIsStaged()
     {
         using var native = ClientLaunchTests.Install.Mac(universalDoorstop: true, core: ClientLaunchTests.NativeDetour);
@@ -173,7 +233,7 @@ public sealed class PinnedServerRunTests : IDisposable
         Assert.Equal(1, await RunHere(["validate", plan, Output], ClientOptions()));
         var steps = Result().GetProperty("Steps").EnumerateArray().ToList();
         Assert.Contains(steps, step => step.GetProperty("Name").GetString() == "read the declared clients' game versions" && step.GetProperty("Passed").GetBoolean());
-        var refused = Assert.Single(steps, step => step.GetProperty("Name").GetString() == "check the server host's install against the pinned runtime and stage its profile");
+        var refused = Assert.Single(steps, step => step.GetProperty("Name").GetString() == "admit the fixture against the actual hosting install");
         Assert.Contains("declared client's install " + install + " on this machine is Valheim 1.0.20 (network version 41), but server's install", refused.GetProperty("Error").GetString());
         Assert.Contains("is Valheim 1.0.17 (network version 40). Valheim refuses a join across network versions", refused.GetProperty("Error").GetString());
         Assert.DoesNotContain(steps, step => step.GetProperty("Name").GetString() == "copy and verify pinned world");

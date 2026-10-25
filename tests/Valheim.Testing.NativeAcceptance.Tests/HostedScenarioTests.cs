@@ -47,7 +47,7 @@ public sealed class HostedScenarioTests : IDisposable
         using var package = new MemoryStream();
         using (var writer = new BinaryWriter(package, System.Text.Encoding.UTF8, leaveOpen: true))
         {
-            writer.Write(41); writer.Write(name); writer.Write("AbCdEf1234"); writer.Write(1234); writer.Write(uid); writer.Write(2);
+            writer.Write(41); writer.Write(name); writer.Write("AbCdEf1234"); writer.Write(1234); writer.Write(uid); writer.Write(2); writer.Write(true); writer.Write(0); writer.Write(0);
         }
         return [.. BitConverter.GetBytes((int)package.Length), .. package.ToArray()];
     }
@@ -137,6 +137,7 @@ public sealed class HostedScenarioTests : IDisposable
     private async Task<ScenarioReport> Run(HostedPlan plan, string? hostLog)
     {
         var report = new ScenarioReport("acceptancemod-hosted-test");
+        SyntheticWorldHost.Prepare(plan.Client, Path.Combine(_root, "synthetic-host"));
         var host = Host();
         // The scripted host keeps its data in the temporary folder, as a real client keeps it in its user's own directory.
         using var data = new FakeClientDataDirectory(Save);
@@ -144,7 +145,7 @@ public sealed class HostedScenarioTests : IDisposable
         // valheim-test env status reads and a killed test would leave a run in.
         using var machine = new FakeDataRoot(Path.Combine(_root, "valheim-testing"));
         // As the runner's host mode builds it: AcceptanceMod's declaration, so its Harmony patches are checked on the host.
-        await using var session = FakeGameSession.Hosted(report, Output, plan.Client, (client, _, output) => ClientSession.Attach(client, output, host),
+        await using var session = FakeGameSession.Hosted(report, Output, plan.Client, (client, _, output) => ClientSession.Launch(client, output, () => new FakeOwnedProcess(77), () => host, (_, _) => Task.CompletedTask),
             hostLog: hostLog, mod: AcceptancePlan.Mod);
         try
         {
@@ -163,15 +164,15 @@ public sealed class HostedScenarioTests : IDisposable
         Assert.True(report.Passed, string.Join("; ", report.Steps.Where(s => !s.Passed).Select(s => s.Name + ": " + s.Error)));
         Assert.Equal(new[]
         {
-            "preflight the fixture world, before it is copied", "preflight the native client's hosted-world save directory",
+            "preflight the fixture world and the owned client's install, before anything is copied or started", "preflight the native client's hosted-world save directory",
             "place the disposable fixture world in the client's local worlds", "hosting client host at its menu, plugins pinned",
             "hosting client host's ValheimCLI offers the hosted-world session commands", "host: the mod's Harmony patches are applied",
-            "host the fixture world with the disposable character, protected",
+            "host the fixture world with the disposable character, protected", "establish test access on the owned host",
             "no marker at either site before the mod acts", "the mod marks the dry site", "the mod refuses the wet site",
             "host: one marker at the dry site, none at the wet site",
             "the mod's greeting broadcast runs its handler on the host, which is server and client at once",
             "confirmed world save", "restart the hosted world, protected", "host: the marker is still at the dry site after the restart, none at the wet site",
-            "the host leaves its world to its menu", "detach from the operator's hosting client host",
+            "the host leaves its world to its menu", "stop only the owned hosting client host",
             "move the hosted world from the client's local worlds into the evidence",
         }, report.Steps.Select(s => s.Name));
         Assert.Contains("(host)", report.Provenance["hostBroadcastLine"]);
@@ -188,10 +189,10 @@ public sealed class HostedScenarioTests : IDisposable
         var report = await Run(Plan(), HostLog);
         Assert.Equal(new[] { "the mod's greeting broadcast runs its handler on the host, which is server and client at once" }, Failed(report));
         Assert.Equal("hello", _greeting);
-        Assert.True(report.Steps.Single(s => s.Name == "detach from the operator's hosting client host").Passed);
-        // A failed run leaves the operator's client as it is: no leave, and its world stays in place, named.
+        Assert.True(report.Steps.Single(s => s.Name == "stop only the owned hosting client host").Passed);
+        // A failed owned host is stopped and its world is collected; no leave command is needed after the stop.
         Assert.DoesNotContain(report.Steps, s => s.Name == "the host leaves its world to its menu");
-        Assert.Contains(Name, report.Provenance["hostWorldLeftInPlace"]);
+        Assert.True(File.Exists(Path.Combine(report.Provenance["hostWorldEvidence"], Name, "_main.1.fwl2")));
     }
 
     [Fact] public async Task AMarkerTheHostDoesNotKeepFailsAfterTheRestart()
@@ -209,6 +210,7 @@ public sealed class HostedScenarioTests : IDisposable
         string Validate(string worldUid, string output)
         {
             var plan = Plan();
+            SyntheticWorldHost.Prepare(plan.Client, Path.Combine(_root, "validate-install-" + worldUid));
             var pins = new System.Text.Json.Nodes.JsonObject();
             foreach (var pin in plan.Client.Pins) pins[pin.Key] = pin.Value;
             var sha256 = new System.Text.Json.Nodes.JsonObject();
@@ -219,16 +221,17 @@ public sealed class HostedScenarioTests : IDisposable
                 ["scenario"] = plan.Scenario, ["newGreeting"] = plan.NewGreeting, ["drySite"] = Point(plan.DrySite), ["wetSite"] = Point(plan.WetSite),
                 ["client"] = new System.Text.Json.Nodes.JsonObject
                 {
-                    ["mode"] = plan.Client.Mode, ["port"] = plan.Client.Port, ["character"] = plan.Client.Character, ["pins"] = pins,
+                    ["mode"] = plan.Client.Mode, ["install"] = plan.Client.Install, ["port"] = plan.Client.Port, ["character"] = plan.Client.Character, ["pins"] = pins,
                     ["hostWorld"] = new System.Text.Json.Nodes.JsonObject { ["world"] = new System.Text.Json.Nodes.JsonObject { ["source"] = Fixture, ["sha256"] = sha256 }, ["worldUid"] = worldUid },
                 },
             };
             string path = Path.Combine(_root, "hosted-" + worldUid + ".json");
             File.WriteAllText(path, json.ToJsonString());
-            Assert.Equal(worldUid == WorldUid ? 0 : 1, PinnedServerRun.MainAsync([PinnedServerRun.ValidateHostMode, path, output], HostedScenario.RunnerOptions()).GetAwaiter().GetResult());
+            int code = PinnedServerRun.MainAsync([PinnedServerRun.ValidateHostMode, path, output], HostedScenario.RunnerOptions()).GetAwaiter().GetResult();
+            Assert.True(code == (worldUid == WorldUid ? 0 : 1), File.Exists(Path.Combine(output, "result.json")) ? File.ReadAllText(Path.Combine(output, "result.json")) : "no result.json");
             return File.ReadAllText(Path.Combine(output, "result.json"));
         }
-        Assert.Contains("preflight the fixture world, before it is copied", Validate(WorldUid, Path.Combine(_root, "validate-right")));
+        Assert.Contains("preflight the fixture world and the owned client", Validate(WorldUid, Path.Combine(_root, "validate-right")));
         string wrong = Validate("4243", Path.Combine(_root, "validate-wrong"));
         Assert.Contains("hostWorld.worldUid is 4243", wrong); Assert.Contains("with UID 4242", wrong);
         Assert.Empty(Directory.EnumerateFileSystemEntries(Path.Combine(Save, "worlds_local")));

@@ -1181,7 +1181,7 @@ internal sealed class RegressionRig : IDisposable
         CopyTree(game.Root, Game);
         game.Dispose();
         string managed = platform == ClientPlatform.MacOS ? "Valheim.app/Contents/Resources/Data/Managed" : "valheim_Data/Managed";
-        Write($"game/{managed}/assembly_valheim.dll", Encoding.UTF8.GetBytes("game"));
+        Write($"game/{managed}/assembly_valheim.dll", FakeInstalls.GameAssembly());
         Write($"game/{managed}/System.Private.CoreLib.dll", Encoding.UTF8.GetBytes("the emitted plugins' core library, as mscorlib is the game's"));
         Write("game/BepInEx/config/BepInEx.cfg", Encoding.UTF8.GetBytes("[Chainloader]\nHideManagerGameObject = true\n"));
         Write("game/BepInEx/plugins/Unrelated.dll", Encoding.UTF8.GetBytes("a plugin of the prepared game, never staged"));

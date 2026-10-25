@@ -22,7 +22,7 @@ public sealed class ClientRoundsTests : IDisposable
     private string Worlds => Path.Combine(Save, "worlds_local");
     private readonly List<ScriptedTransport> _servers = [];
     private ScriptedTransport _client;
-    private readonly LocalFakeOwnedProcess _process = new(77);
+    private LocalFakeOwnedProcess _process = new(77);
     private readonly PreflightInstall _install = PreflightInstall.Create(); // An owned hosting client's install that passes the preflight.
     private bool _saves = true;
     private int _restarts, _opens;
@@ -628,7 +628,8 @@ public sealed class ClientRoundsTests : IDisposable
         using (RunJournal.UseRun(runId))
         {
             var report = new ScenarioReport("host");
-            Assert.Throws<OperationCanceledException>(() => RunHosted(report, HostPlan("attach"), new Game(Worlds), round => round.Step("hold until the runner is killed", () =>
+            _process.StopFailure = () => new IOException("the runner was killed before it stopped its owned host");
+            Assert.Throws<OperationCanceledException>(() => RunHosted(report, HostPlan(), new Game(Worlds), round => round.Step("hold until the runner is killed", () =>
             {
                 File.WriteAllText(Path.Combine(Worlds, Name, "_main.2.db2"), "saved by the game");
                 throw new OperationCanceledException("the runner was killed");
@@ -673,7 +674,8 @@ public sealed class ClientRoundsTests : IDisposable
         using (RunJournal.UseRun(runId))
             foreach (string run in new[] { "first", "second" })
             {
-                var report = new ScenarioReport(run); var plan = HostPlan("attach");
+                var report = new ScenarioReport(run); var plan = HostPlan();
+                _process = new LocalFakeOwnedProcess(run == "first" ? 77 : 78);
                 using (new FakeClientDataDirectory(Save)) // its own round name, as evidence is never overwritten
                     new ClientRounds { Client = plan, Report = report, Output = Output, Rounds = [run] }.Run(Open(plan, new Game(Worlds)), Measure());
                 Assert.True(report.Passed, run + ": " + string.Join("; ", report.Steps.Where(s => !s.Passed).Select(s => s.Name + ": " + s.Error)));
@@ -763,26 +765,14 @@ public sealed class ClientRoundsTests : IDisposable
         Assert.Equal(0, game.Transport.Count("cli_set_player_safety"));
     }
 
-    [Fact] public void AnAttachedHostThatFailsLeavesItsWorldInPlaceAndIsOnlyDetached()
+    [Fact] public void AnAttachedHostRefusesBeforeTheWorldIsPlacedOrTheClientOpens()
     {
         var game = new Game(Worlds); var report = new ScenarioReport("host");
-        Assert.Throws<InvalidOperationException>(() => RunHosted(report, HostPlan("attach"), game, Measure(failIn: "first")));
-        Assert.Equal(new[] { "first: measure" }, Failed(report));
-        Assert.Equal("detach from the operator's client", report.Steps[^1].Name);
-        Assert.True(game.Transport.Disposed); Assert.Equal(0, _process.Stops);
-        // The operator's client may still host it, so the world stays and the report names it.
-        Assert.Contains(Name, OurWorldFiles());
-        Assert.Contains(Name, report.Provenance["hostWorldLeftInPlace"]);
-        Assert.False(report.Provenance.ContainsKey("hostWorldEvidence"));
-    }
-
-    [Fact] public void AnAttachedHostThatPassesHasLeftItsWorldSoTheWorldIsMoved()
-    {
-        var game = new Game(Worlds); var report = new ScenarioReport("host");
-        RunHosted(report, HostPlan("attach"), game, Measure());
-        Assert.True(report.Passed);
-        Assert.Empty(OurWorldFiles());
-        Assert.Equal(0, _process.Stops);
+        var plan = HostPlan("attach"); plan.Install = Path.Combine(_root, "operator-install");
+        Assert.Contains("Cannot establish world-format", Assert.Throws<InvalidOperationException>(() => RunHosted(report, plan, game, Measure())).Message);
+        Assert.Equal(0, _opens); Assert.Equal(0, _process.Stops);
+        Assert.Empty(OurWorldFiles()); Assert.Empty(game.Transport.Commands);
+        Assert.False(Directory.Exists(plan.Install));
     }
 
     // The preflight (#117): a wrong fixture or install stops the run before the fixture is copied or the client opened.
@@ -810,12 +800,12 @@ public sealed class ClientRoundsTests : IDisposable
         using (simulated ? new FakeClientDataDirectory(Path.Combine(_root, "another-client-data")) : null)
         {
             var error = Assert.Throws<InvalidOperationException>(() => Hosted(report, plan).Run(Open(plan, game), Measure()));
-            Assert.Contains("hostWorld.saveDirectory", error.Message);
+            Assert.Contains(mode == "attach" ? "Cannot establish world-format" : "hostWorld.saveDirectory", error.Message);
         }
         Assert.Equal(0, _opens);
         Assert.Empty(OurWorldFiles());
         Assert.Empty(game.Transport.Commands);
-        Assert.Equal("preflight the native client's hosted-world save directory", report.Steps[^1].Name);
+        Assert.Equal(mode == "attach" ? "preflight the fixture world, before it is copied" : "preflight the native client's hosted-world save directory", report.Steps[^1].Name);
     }
 
     [Fact] public void MacNativeSavePreflightRefusesCustomPathsAndSavedirArguments()
@@ -855,8 +845,8 @@ public sealed class ClientRoundsTests : IDisposable
         Assert.Equal(0, _opens); Assert.Empty(OurWorldFiles()); Assert.Empty(Directory.GetDirectories(Output, "valheim-test-*"));
         // An attached client's install is its operator's: only the fixture is preflighted.
         var attached = new ScenarioReport("host");
-        RunHosted(attached, HostPlan("attach"), new Game(Worlds), Measure());
-        Assert.True(attached.Passed);
+        Assert.Throws<InvalidOperationException>(() => RunHosted(attached, HostPlan("attach"), new Game(Worlds), Measure()));
+        Assert.False(attached.Passed);
         Assert.Equal("preflight the fixture world, before it is copied", attached.Steps[0].Name);
     }
 

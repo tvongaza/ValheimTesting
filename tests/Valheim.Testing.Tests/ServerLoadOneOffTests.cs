@@ -273,6 +273,24 @@ public sealed class ServerLoadOneOffTests : IDisposable
     }
 
     [Fact]
+    public async Task AnUnsupportedWorldRefusesBeforeLoaderExtractionBuildOrCampaignStaging()
+    {
+        string source = FakeInstalls.World(Path.Combine(_rig.Root, "unsupported-world"));
+        File.WriteAllBytes(Path.Combine(source, "Campaign", "_main.1.fwl2"), FakeInstalls.Metadata("Campaign", 4242, version: 1001));
+        string output = Path.Combine(_rig.Root, "unsupported-run");
+        var args = Arguments(output, "--server-only", "--world-fixture", source);
+        var before = WorldFixture.Manifest(_rig.Game);
+        int loader = 0, campaign = 0;
+        int result = await ServerLoad.RunAsync(args, new ServerLoad.Seams(
+            Loader: (_, _, _) => { loader++; throw new InvalidOperationException("loader extraction must not run"); },
+            Campaign: (_, _, _, _, _) => { campaign++; return Task.FromResult(0); }));
+        Assert.Equal(3, result);
+        Assert.Equal(0, loader); Assert.Equal(0, campaign);
+        Assert.False(Directory.Exists(output));
+        WorldFixture.Verify(_rig.Game, before);
+    }
+
+    [Fact]
     public async Task ServerOnlyCanPrepareACustomPinnedWorldWithoutChangingItsSource()
     {
         string source = Path.Combine(_rig.Root, "chosen-world");

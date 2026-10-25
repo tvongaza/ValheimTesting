@@ -275,6 +275,26 @@ public sealed class FixtureBakeTests : IDisposable
         WorldFixture.Verify(Path.Combine(root, "run", "world-source", "worlds_local"), before);
     }
 
+    [Theory]
+    [InlineData("version")]
+    [InlineData("uid")]
+    [InlineData("name")]
+    [InlineData("broken")]
+    [InlineData("bytes")]
+    public void AdmissionPinsTheSourceBeforeTheDisposableCopy(string change)
+    {
+        string source = FakeInstalls.World(Path.Combine(root, "source"));
+        var target = GameAssemblyVersion.Read(new MemoryStream(FakeInstalls.GameAssembly()), "selected host");
+        var admission = FixtureBake.Admit(source, target);
+        string world = Path.Combine(source, "Campaign");
+        if (change == "broken") File.Delete(Path.Combine(world, "_main.1.db2"));
+        else if (change == "bytes") File.AppendAllText(Path.Combine(world, "_main.1.db2"), "drift");
+        else File.WriteAllBytes(Path.Combine(world, "_main.1.fwl2"), FakeInstalls.Metadata(change == "name" ? "Other" : "Campaign", change == "uid" ? 999 : 4242, version: change == "version" ? 42 : 41));
+        string output = Path.Combine(root, "copy-refused");
+        Assert.Throws<InvalidOperationException>(() => FixtureBake.Prepare(source, output, admission));
+        Assert.False(Directory.Exists(output));
+    }
+
     private FixtureBake.Input Source() => FixtureBake.Prepare(null, Path.Combine(root, "run"));
 
     private FixtureBake.BuildInputs EmptyBuild()

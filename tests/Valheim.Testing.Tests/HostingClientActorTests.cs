@@ -30,7 +30,7 @@ public sealed class HostingClientActorTests : IDisposable
     }
     public void Dispose() { _install.Dispose(); Directory.Delete(_root, recursive: true); }
 
-    private ClientRunPlan HostPlan(string mode = "attach") => new()
+    private ClientRunPlan HostPlan(string mode = "owned") => new()
     {
         Mode = mode, Install = mode == "owned" ? _install.Root : "", Port = 5556, Character = "Tester",
         Pins = new() { ["valheimCLI.valheimCLI"] = mode == "owned" ? _install.CliMd5 : new string('a', 32), ["my.mod"] = "absent" },
@@ -120,6 +120,18 @@ public sealed class HostingClientActorTests : IDisposable
     private static List<string> Steps(ScenarioReport report, StepPhase phase) => report.Steps.Where(step => step.Phase == phase).Select(step => step.Name).ToList();
     private string[] OurWorldFiles() => Directory.EnumerateFileSystemEntries(Worlds).Select(Path.GetFileName).Where(f => f!.StartsWith(Name, StringComparison.Ordinal)).Select(f => f!).ToArray();
 
+    [Fact] public void AttachedFixturePlacementRefusesBeforeInstallReadWorldWritesOrCommands()
+    {
+        var plan = HostPlan("attach");
+        plan.Install = Path.Combine(_root, "operator-install-must-not-be-read");
+        using var actor = HostingClientActor.OnThisMachine("host", plan, Output);
+        var report = new ScenarioReport("attached-refusal");
+        Assert.Contains("Cannot establish world-format", Assert.Throws<InvalidOperationException>(() => actor.Prepare(report)).Message);
+        Assert.Empty(OurWorldFiles()); Assert.Empty(_commands);
+        Assert.False(Directory.Exists(plan.Install));
+        Assert.Null(actor.World);
+    }
+
     [Fact] public async Task TheHostsWorldIsJoinableBeforeItsPeerJoinsItBySteamId()
     {
         var report = new ScenarioReport("hosted");
@@ -175,7 +187,7 @@ public sealed class HostingClientActorTests : IDisposable
         using var data = new FakeClientDataDirectory(Save);
         await using var session = Session(report, plan);
         await Assert.ThrowsAnyAsync<Exception>(() => session.StartAsync());
-        Assert.Equal(new[] { "preflight the fixture world, before it is copied" }, report.Steps.Where(s => !s.Passed).Select(s => s.Name));
+        Assert.Equal(new[] { "preflight the fixture world and the owned client's install, before anything is copied or started" }, report.Steps.Where(s => !s.Passed).Select(s => s.Name));
         Assert.Equal(0, Volatile.Read(ref _peerOpens));
         Assert.Empty(OurWorldFiles());
     }
@@ -304,7 +316,7 @@ public sealed class HostingClientActorTests : IDisposable
         using var data = new FakeClientDataDirectory(Save);
         var notAPeer = PeerPlan(); notAPeer.JoinsHost = false; notAPeer.Join = "127.0.0.1:2456";
         await using var session = FakeGameSession.Hosted(report, Output, HostPlan(), (plan, name, output) =>
-            plan.HostWorld != null ? ClientSession.Attach(plan, output, HostTransport()) : ClientSession.Attach(plan, output, PeerTransport()),
+            plan.HostWorld != null ? ClientSession.Launch(plan, output, () => _hostProcess, HostTransport, (_, _) => Task.CompletedTask) : ClientSession.Attach(plan, output, PeerTransport()),
             peers: new Dictionary<string, ClientRunPlan> { ["other"] = notAPeer });
         await session.StartAsync();
         var error = await Assert.ThrowsAsync<ArgumentException>(() => session.Join("other"));

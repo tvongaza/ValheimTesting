@@ -12,6 +12,7 @@ public sealed class ServerLoadPhasesTests : IDisposable
     {
         string fixture = FakeInstalls.World(Path.Combine(_root, "source-fixture"));
         string server = Path.Combine(_root, "server");
+        FakeInstalls.Server(server);
         Directory.CreateDirectory(Path.Combine(server, InstallPins.CoreDirectory)); // the core the mod resolves against
         File.WriteAllText(Path.Combine(server, "server-marker"), "source server");
         File.WriteAllText(Path.Combine(_root, "first.dll"), "first plugin");
@@ -49,7 +50,7 @@ public sealed class ServerLoadPhasesTests : IDisposable
             calls.Add(args);
             string checkpoint = args[Array.IndexOf(args, "--bake-fixture") + 1];
             Directory.CreateDirectory(checkpoint);
-            File.WriteAllText(Path.Combine(checkpoint, "world.fwl"), "saved phase " + calls.Count);
+            FakeInstalls.World(Path.Combine(checkpoint, "worlds_local"));
             return Task.FromResult(0);
         });
 
@@ -72,7 +73,7 @@ public sealed class ServerLoadPhasesTests : IDisposable
         int result = await ServerLoadPhases.RunAsync(["--plan", Plan(), "--output", output], args =>
         {
             calls++;
-            if (calls == 1) Directory.CreateDirectory(args[Array.IndexOf(args, "--bake-fixture") + 1]);
+            if (calls == 1) FakeInstalls.World(Path.Combine(args[Array.IndexOf(args, "--bake-fixture") + 1], "worlds_local"));
             return Task.FromResult(calls == 1 ? 0 : 1);
         });
         Assert.Equal(1, result);
@@ -218,7 +219,7 @@ public sealed class ServerLoadPhasesTests : IDisposable
             firstInput ??= source;
             string checkpoint = args[Array.IndexOf(args, "--bake-fixture") + 1];
             Directory.CreateDirectory(checkpoint);
-            File.WriteAllText(Path.Combine(checkpoint, "world.fwl"), "saved");
+            FakeInstalls.World(Path.Combine(checkpoint, "worlds_local"));
             return Task.FromResult(0);
         });
         Assert.Equal(0, result);
@@ -237,7 +238,7 @@ public sealed class ServerLoadPhasesTests : IDisposable
             calls++;
             string checkpoint = args[Array.IndexOf(args, "--bake-fixture") + 1];
             Directory.CreateDirectory(checkpoint);
-            File.WriteAllText(Path.Combine(checkpoint, "world.fwl"), "saved first phase");
+            FakeInstalls.World(Path.Combine(checkpoint, "worlds_local"));
             File.WriteAllText(Path.Combine(_root, "second.dll"), "changed plugin");
             return Task.FromResult(0);
         });
@@ -259,7 +260,7 @@ public sealed class ServerLoadPhasesTests : IDisposable
             calls++;
             string checkpoint = args[Array.IndexOf(args, "--bake-fixture") + 1];
             Directory.CreateDirectory(checkpoint);
-            File.WriteAllText(Path.Combine(checkpoint, "world.fwl"), "saved " + calls);
+            FakeInstalls.World(Path.Combine(checkpoint, "worlds_local"));
             if (calls == 1)
             {
                 string log = Path.Combine(_root, "server", "logs", "connection_log.txt");

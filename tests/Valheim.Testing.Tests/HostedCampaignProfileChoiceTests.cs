@@ -25,7 +25,9 @@ public sealed class HostedCampaignProfileChoiceTests
                 Server = new GameRole { Host = "local", Install = loader, Runtime = "/owned", CliPort = 5577,
                     GamePort = 2456, PreparedGameRoot = source, PreparedLoaderRoot = loader },
             };
-            var manifest = new HostedCampaignManifest { World = world, Join = "127.0.0.1:2456" };
+            var manifest = new HostedCampaignManifest { World = world, Join = "127.0.0.1:2456",
+                AdmittedWorldFiles = WorldFixture.Manifest(world), AdmittedWorldIdentity = WorldIdentity.Read(world),
+                AdmittedWorldBuild = GameAssemblyVersion.Read(new MemoryStream(FakeInstalls.GameAssembly()), "synthetic selected host") };
             var campaign = new PreparedHostedCampaign(manifest, environment,
                 new Dictionary<string, HostListing> { ["server"] = game },
                 new Dictionary<string, HostListing> { ["server"] = profile },

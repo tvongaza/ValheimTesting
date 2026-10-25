@@ -25,15 +25,86 @@ public sealed class DetachedSessionTests : IDisposable
         string fixture = Directory.CreateDirectory(Path.Combine(_root, "world-source")).FullName;
         string control = Directory.CreateDirectory(Path.Combine(_root, "control-input")).FullName;
         File.WriteAllText(Path.Combine(mod, "Mod.dll"), "pinned mod");
-        File.WriteAllText(Path.Combine(fixture, "World.db"), "original fixture");
+        FakeInstalls.World(fixture);
         string[] args = ["--mod", Path.Combine(mod, "Mod.dll"), "--world-fixture", fixture];
         using var run = RunJournal.UseRun("run-stage-fixture");
         var staged = DetachedSession.StageInputsOwned(args, Path.Combine(_root, "inputs"), control);
         Assert.NotEqual(fixture, staged[3]);
         DetachedSession.VerifyStagedInputs(control);
-        File.WriteAllText(Path.Combine(stagedDrift ? staged[3] : fixture, "World.db"), "changed");
+        File.WriteAllText(Path.Combine(stagedDrift ? Path.Combine(staged[3], "worlds_local") : fixture, "Campaign", "_main.1.db2"), "changed");
         Assert.Throws<InvalidOperationException>(() => DetachedSession.VerifyStagedInputs(control));
         Assert.Equal("pinned mod", File.ReadAllText(staged[1]));
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void BothBakedInputSpellingsRetainAndBytePinTheExternalManifest(bool worldsSpelling, bool stagedDrift)
+    {
+        using var data = new FakeDataRoot(Path.Combine(_root, "baked-data"));
+        string baked = Path.Combine(_root, "baked"), worlds = FakeInstalls.World(Path.Combine(baked, "worlds_local"));
+        string manifest = Path.Combine(baked, FixtureBake.ManifestFile);
+        File.WriteAllText(manifest, JsonSerializer.Serialize(new { schemaVersion = 1, world = new { Name = "Campaign", Uid = 4242L }, filesSha256 = WorldFixture.Manifest(worlds) }));
+        File.WriteAllText(Path.Combine(baked, "unrelated.txt"), "must not copy");
+        string mod = Directory.CreateDirectory(Path.Combine(_root, "mod")).FullName;
+        File.WriteAllText(Path.Combine(mod, "Mod.dll"), "mod");
+        string control = Directory.CreateDirectory(Path.Combine(_root, "control")).FullName;
+        using var run = RunJournal.UseRun("run-baked-world");
+        string[] args = ["--mod", Path.Combine(mod, "Mod.dll"), "--world-fixture", (worldsSpelling ? worlds : baked) + Path.DirectorySeparatorChar];
+        var staged = DetachedSession.StageInputsOwned(args, Path.Combine(_root, "copies"), control);
+        Assert.True(File.Exists(Path.Combine(staged[3], FixtureBake.ManifestFile)));
+        Assert.True(Directory.Exists(Path.Combine(staged[3], "worlds_local", "Campaign")));
+        Assert.False(File.Exists(Path.Combine(staged[3], "unrelated.txt")));
+        DetachedSession.VerifyStagedInputs(control);
+        File.AppendAllText(stagedDrift ? Path.Combine(staged[3], FixtureBake.ManifestFile) : manifest, " "); // same JSON semantics, changed bytes
+        Assert.Contains("manifest changed", Assert.Throws<InvalidDataException>(() => DetachedSession.VerifyStagedInputs(control)).Message);
+    }
+
+    [Theory]
+    [InlineData("malformed", false)]
+    [InlineData("schema", true)]
+    [InlineData("world", false)]
+    [InlineData("hashes", true)]
+    public async Task ACorruptBakedManifestRefusesBeforeAnyDetachedStartupEffect(string fault, bool worldsSpelling)
+    {
+        using var data = new FakeDataRoot(Path.Combine(_root, "invalid-data"));
+        string baked = Path.Combine(_root, "invalid-baked"), worlds = FakeInstalls.World(Path.Combine(baked, "worlds_local"));
+        string manifest = Path.Combine(baked, FixtureBake.ManifestFile);
+        File.WriteAllText(manifest, fault == "malformed" ? "{broken" : JsonSerializer.Serialize(new
+        { schemaVersion = fault == "schema" ? 2 : 1, world = new { Name = "Campaign", Uid = fault == "world" ? 999L : 4242L },
+            filesSha256 = fault == "hashes" ? new Dictionary<string, string>() : WorldFixture.Manifest(worlds) }));
+        string output = Path.Combine(_root, "refused-output");
+        int effects = 0;
+        int result = await DetachedSession.RunAsync(["server-load", "--server", Path.Combine(_root, "unused-server"), "--server-only", "--mod", Path.Combine(_root, "unused.dll"),
+            "--world-fixture", worldsSpelling ? worlds + Path.DirectorySeparatorChar : baked, "--output", output], new StringWriter(), new StringWriter(),
+            new DetachedSession.Seams(Windows: true, RequireDesktop: () => { effects++; return Task.CompletedTask; },
+                Register: _ => { effects++; return Task.CompletedTask; }, StageTool: _ => { effects++; return _root; }));
+        Assert.Equal(3, result); Assert.Equal(0, effects);
+        Assert.False(Directory.Exists(output));
+        Assert.False(Directory.Exists(Path.Combine(CliBundle.DataRoot, "runs")));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DefaultAndExplicitFixturesRefuseUnsupportedHostsBeforeToolOrTaskStaging(bool explicitFixture)
+    {
+        using var data = new FakeDataRoot(Path.Combine(_root, "unsupported-data"));
+        string server = Path.Combine(_root, "server"); FakeInstalls.Server(server);
+        File.WriteAllBytes(InstallPins.GameAssembly(server), FakeInstalls.GameAssembly(maximum: 40));
+        string source = FakeInstalls.World(Path.Combine(_root, "world"));
+        string mod = Path.Combine(_root, "Mod.dll"); File.WriteAllText(mod, "mod");
+        string output = Path.Combine(_root, "refused");
+        var args = new List<string> { "server-load", "--server", server, "--server-only", "--mod", mod, "--output", output };
+        if (explicitFixture) args.AddRange(["--world-fixture", source]);
+        int effects = 0;
+        int result = await DetachedSession.RunAsync(args.ToArray(), new StringWriter(), new StringWriter(),
+            new DetachedSession.Seams(Windows: true, RequireDesktop: () => { effects++; return Task.CompletedTask; }, Register: _ => { effects++; return Task.CompletedTask; }, StageTool: _ => { effects++; return _root; }));
+        Assert.Equal(3, result); Assert.Equal(0, effects);
+        Assert.False(Directory.Exists(output));
+        Assert.False(Directory.Exists(Path.Combine(CliBundle.DataRoot, "runs")));
     }
 
     [Theory]
@@ -89,6 +160,7 @@ public sealed class DetachedSessionTests : IDisposable
     [InlineData(true)]
     public async Task DesktopAndRegistrationContextFailuresReportARecoverableRunId(bool timeout)
     {
+        FakeInstalls.Server(Path.Combine(_root, "server"));
         string outputPath = Path.Combine(_root, "context-refusal-" + timeout);
         Exception failure = timeout
             ? new TimeoutException("registration context timed out")
@@ -134,7 +206,7 @@ public sealed class DetachedSessionTests : IDisposable
     public async Task RegistrationTimeoutReportsTheJournalledRunAsRecoverable()
     {
         string data = Path.Combine(_root, "registration-timeout-data"), server = Path.Combine(_root, "server"), source = Path.Combine(_root, "mod");
-        Directory.CreateDirectory(server); Directory.CreateDirectory(source);
+        FakeInstalls.Server(server); Directory.CreateDirectory(source);
         string mod = Path.Combine(source, "Mod.dll"); File.WriteAllText(mod, "mod");
         using var machine = new FakeDataRoot(data);
         using var output = new StringWriter(); using var error = new StringWriter();
@@ -355,7 +427,7 @@ public sealed class DetachedSessionTests : IDisposable
     public async Task DetachedStartJournalsCopiesAndTaskBeforeTheFakeSchedulerCreatesAnything()
     {
         string data = Path.Combine(_root, "data"), source = Path.Combine(_root, "mod"), server = Path.Combine(_root, "server"), result = Path.Combine(_root, "result");
-        Directory.CreateDirectory(source); Directory.CreateDirectory(server);
+        Directory.CreateDirectory(source); FakeInstalls.Server(server);
         string mod = Path.Combine(source, "Mod.dll"), dependency = Path.Combine(source, "Dependency.dll");
         File.WriteAllText(mod, "pinned mod"); File.WriteAllText(dependency, "adjacent dependency");
         using var machine = new FakeDataRoot(data);

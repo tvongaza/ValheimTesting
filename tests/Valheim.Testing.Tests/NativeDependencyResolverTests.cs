@@ -486,14 +486,29 @@ public sealed class NativeDependencyResolverTests : IDisposable
 
         // A server assembly that is not the game's: unknown, refused, never inferred.
         File.WriteAllText(serverAssembly, "game build 1");
-        var unknown = Assert.Single((await Inspect()).Problems);
+        var unknown = Assert.Single((await Inspect()).Problems, problem => problem.Input == "game version");
         Assert.Equal(("server", "game version"), (unknown.Actor, unknown.Input));
         Assert.Contains(@"is unknown: C:\game\source\valheim_server_Data\Managed\assembly_valheim.dll on server is not a readable .NET assembly", unknown.Message);
 
         // A file that changed after the install was listed is not the listed build.
         File.WriteAllBytes(serverAssembly, FakeInstalls.GameAssembly());
         hosts["server"].BeforeScript = script => { if (script == "preflight-read") File.WriteAllBytes(serverAssembly, FakeInstalls.GameAssembly("1.0.20", 41)); };
-        Assert.Contains("changed after the install was listed", Assert.Single((await Inspect()).Problems).Message);
+        Assert.Contains("changed after the install was listed", Assert.Single((await Inspect()).Problems, problem => problem.Input == "game version").Message);
+    }
+
+    [Fact] public async Task WorldSupportComesFromTheSelectedServerAndNotItsJoiningClient()
+    {
+        var (file, hosts, clientSource) = TwoHostCampaign("world-bounds");
+        string serverAssembly = Path.Combine(hosts["server"].Local(@"C:\game\source"), "valheim_server_Data", "Managed", InstallPins.GameAssemblyName);
+        string clientAssembly = Path.Combine(clientSource, "Valheim.app", "Contents", "Resources", "Data", "Managed", InstallPins.GameAssemblyName);
+        Task<CampaignPreflightReport> Inspect() => HostedCampaignPreparation.InspectAsync(file, TimeSpan.FromSeconds(30), name => hosts[name], pinnedLoader: null);
+        File.WriteAllBytes(serverAssembly, FakeInstalls.GameAssembly(maximum: 40));
+        Assert.Contains((await Inspect()).Problems, problem => problem.Actor == "server" && problem.Input == "world fixture" && problem.Message.Contains("world version 41", StringComparison.Ordinal));
+        await Assert.ThrowsAsync<ArgumentException>(() => HostedCampaignPreparation.PrepareAsync(file, Path.Combine(_rig.Root, "refused-world"), TimeSpan.FromSeconds(30), name => hosts[name], pinnedLoader: null));
+        Assert.All(hosts.Values, host => Assert.DoesNotContain(host.Scripts, script => script is "profile-seed" or "apply-stage" or "copy"));
+        File.WriteAllBytes(serverAssembly, FakeInstalls.GameAssembly());
+        File.WriteAllBytes(clientAssembly, FakeInstalls.GameAssembly(maximum: 40));
+        Assert.True((await Inspect()).Ready); // The joiner's world range is irrelevant; network versions still agree.
     }
 
     // #256's acceptance in one preflight: six independent faults, each refused under its own actor and input, all in one
@@ -646,6 +661,28 @@ public sealed class NativeDependencyResolverTests : IDisposable
             HostWorld = new() { World = new() { Source = world }, WorldUid = "4242" } };
         ClientRunPlan PeerSection() => new() { Mode = "owned", Install = @"C:\bound", Port = 5579, Character = "y", JoinsHost = true, Pins = new() { ["example.mymod"] = "absent" } };
         HostedCampaignPreparation.CheckHostedPlan(serverless, new Dictionary<string, ClientRunPlan> { ["client-a"] = HostSection(), ["client-b"] = PeerSection() });
+        // The manifest cannot invent a hosting client; the actual HostWorld plan supplies that decision before profiles.
+        string pcAssembly = Path.Combine(hosts["pc"].Local(@"C:\game\client"), "valheim_Data", "Managed", InstallPins.GameAssemblyName);
+        File.WriteAllBytes(pcAssembly, FakeInstalls.GameAssembly(maximum: 40));
+        Assert.True((await HostedCampaignPreparation.InspectAsync(serverless, TimeSpan.FromSeconds(30), name => hosts[name], pinnedLoader: null)).Ready);
+        var incompatiblePlans = new Dictionary<string, ClientRunPlan> { ["client-a"] = HostSection(), ["client-b"] = PeerSection() };
+        var incompatibleInput = HostedCampaignPreparation.InspectInputs(serverless);
+        HostedCampaignPreparation.CheckHostedPlan(incompatibleInput, incompatiblePlans);
+        await Assert.ThrowsAsync<ArgumentException>(() => HostedCampaignPreparation.PrepareAsync(incompatibleInput, Path.Combine(_rig.Root, "bad-host-client"),
+            TimeSpan.FromSeconds(30), name => hosts[name], default, incompatiblePlans));
+        Assert.All(hosts.Values, host => Assert.DoesNotContain(host.Scripts, script => script is "profile-seed" or "apply-stage" or "copy"));
+        var compatiblePlans = new Dictionary<string, ClientRunPlan> { ["client-a"] = PeerSection(), ["client-b"] = HostSection() };
+        var compatibleInput = HostedCampaignPreparation.InspectInputs(serverless);
+        HostedCampaignPreparation.CheckHostedPlan(compatibleInput, compatiblePlans);
+        await using (var compatible = await HostedCampaignPreparation.PrepareAsync(compatibleInput, Path.Combine(_rig.Root, "good-host-client"),
+            TimeSpan.FromSeconds(30), name => hosts[name], default, compatiblePlans))
+            Assert.Equal("client-b", compatible.ApplyToHosted(compatible.Manifest, compatiblePlans, Path.Combine(_rig.Root, "good-host-client")));
+        await using (var manifestOnly = await HostedCampaignPreparation.PrepareAsync(serverless, Path.Combine(_rig.Root, "manifest-only"),
+            TimeSpan.FromSeconds(30), name => hosts[name], pinnedLoader: null))
+            Assert.Contains("Cannot establish world-format", Assert.Throws<InvalidOperationException>(() => manifestOnly.ApplyToHosted(manifestOnly.Manifest, compatiblePlans,
+                Path.Combine(_rig.Root, "manifest-only"))).Message);
+        File.WriteAllBytes(pcAssembly, FakeInstalls.GameAssembly());
+
         Assert.Contains("exactly one hosting client", Assert.Throws<ArgumentException>(() => HostedCampaignPreparation.CheckHostedPlan(serverless,
             new Dictionary<string, ClientRunPlan> { ["client-a"] = HostSection(), ["client-b"] = HostSection() })).Message);
         Assert.Contains("set joinsHost", Assert.Throws<ArgumentException>(() => HostedCampaignPreparation.CheckHostedPlan(serverless,
