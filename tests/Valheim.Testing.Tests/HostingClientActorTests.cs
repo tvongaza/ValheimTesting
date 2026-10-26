@@ -132,7 +132,7 @@ public sealed class HostingClientActorTests : IDisposable
         Assert.Null(actor.World);
     }
 
-    [Fact] public async Task TheHostsWorldIsJoinableBeforeItsPeerJoinsItBySteamId()
+    [ClientHostFact] public async Task TheHostsWorldIsJoinableBeforeItsPeerJoinsItBySteamId()
     {
         var report = new ScenarioReport("hosted");
         using var data = new FakeClientDataDirectory(Save);
@@ -153,7 +153,7 @@ public sealed class HostingClientActorTests : IDisposable
         Assert.Equal(new[] { "host: start", "host: identity", "host: identity", $"peer: cli_connect_steam_user {HostSteamId}", "host: leave" }, commands);
     }
 
-    [Fact] public async Task APeerNeverJoinsAHostWhoseWorldIsNotOpen()
+    [ClientHostFact] public async Task APeerNeverJoinsAHostWhoseWorldIsNotOpen()
     {
         _openServer = false; // Negative control of the test above: the same session, the host not an open server.
         var report = new ScenarioReport("hosted");
@@ -166,7 +166,7 @@ public sealed class HostingClientActorTests : IDisposable
         lock (_commands) Assert.DoesNotContain(_commands, c => c.StartsWith("peer: ", StringComparison.Ordinal));
     }
 
-    [Theory] [InlineData("0")] [InlineData("unavailable [InvalidOperationException]")]
+    [ClientHostTheory] [InlineData("0")] [InlineData("unavailable [InvalidOperationException]")]
     public async Task APeerNeverJoinsAHostWithoutASignedInSteamUser(string steamId)
     {
         _hostSteamId = steamId;
@@ -194,7 +194,7 @@ public sealed class HostingClientActorTests : IDisposable
 
     // Native run B (6 Oct): the host's restart drops its peer to the menu, so the peer's rejoin must not issue a leave from there
     // (the strict pins refused it: "no world loaded"). A peer still in the world leaves first, as before.
-    [Fact] public async Task APeerTheHostsRestartDroppedRejoinsWithoutALeave()
+    [ClientHostFact] public async Task APeerTheHostsRestartDroppedRejoinsWithoutALeave()
     {
         var report = new ScenarioReport("hosted");
         using var data = new FakeClientDataDirectory(Save);
@@ -306,7 +306,7 @@ public sealed class HostingClientActorTests : IDisposable
         Assert.Contains("verify host's source install after the run (not applicable: runs in place)", Steps(report, StepPhase.Cleanup));
     }
 
-    [Fact] public async Task AJoinRefusesAPeerOfTheWrongKind()
+    [ClientHostFact] public async Task AJoinRefusesAPeerOfTheWrongKind()
     {
         // Which peer a join takes is the session's decision: this machine's world scripts answer in process (SourceScriptShellTests
         // and HostedWorldOnHostShellTests run the real ones), so no step starts a shell.

@@ -619,7 +619,7 @@ public sealed class ClientRoundsTests : IDisposable
     // the client's worlds_local where env status listed nothing and env recover moved nothing. They now place it through the one
     // journalled site: the runner is killed while the operator's client still hosts the world the game saved, env status lists the
     // world, env recover moves it (proven by its world UID) into the run's folder in the output, and the user's own world stays.
-    [Fact] public async Task AKilledDirectHostedRunsWorldIsListedAndRecovered()
+    [ClientHostFact] public async Task AKilledDirectHostedRunsWorldIsListedAndRecovered()
     {
         string journal = Path.Combine(_root, "journal"), runId = RunJournal.NewRunId();
         var hosts = new Dictionary<string, HostProfile> { ["local"] = new HostProfile { Kind = "local", Lock = Path.Combine(_root, "lock") } };
@@ -667,7 +667,7 @@ public sealed class ClientRoundsTests : IDisposable
     // #829 review: hosted rounds on this machine name their stage and keep folders after the run they journal, and one process is
     // one run outside a run scope. Two hosted runs into one output in that run each get their own folder: the second is not refused
     // after its placement was journalled, both move their world out, and the evidence goes to host-world and host-world-2.
-    [Fact] public void TwoHostedRunsIntoOneOutputInOneRunEachPlaceAndMoveOutTheirWorld()
+    [ClientHostFact] public void TwoHostedRunsIntoOneOutputInOneRunEachPlaceAndMoveOutTheirWorld()
     {
         string runId = RunJournal.NewRunId();
         using (RunJournal.UseLocalDirectory(Path.Combine(_root, "journal")))

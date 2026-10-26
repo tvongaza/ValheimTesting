@@ -1207,14 +1207,20 @@ public sealed class NativeDependencyResolverTests : IDisposable
         string world = Path.Combine(_rig.Root, "this-machine-world");
         FakeInstalls.World(world);
         // This machine, as the detection reads it: Steam with Valheim Dedicated Server installed.
-        var machine = new FakeMachine(windows ? "windows" : "linux") { SteamPath = windows ? @"C:\Steam" : null };
-        string steam = windows ? @"C:\Steam" : "/home/tester/.steam/steam";
+        // A local metadata read opens the actual listed path. Keep this synthetic Steam tree on disk,
+        // and answer local scripts without a virtual-path mirror, as the real local host does.
+        string home = Path.Combine(_rig.Root, "this-machine-home");
+        string steam = windows ? Path.Combine(_rig.Root, "this-machine-steam") : Path.Combine(home, ".steam", "steam");
+        var machine = new FakeMachine(windows ? "windows" : "linux")
+        {
+            Home = home, DataRoot = Path.Combine(_rig.Root, "this-machine-data"), SteamPath = windows ? steam : null,
+        };
         machine.Directories.Add(steam);
         string install = machine.App(steam, "896660", "Valheim dedicated server", windows ? GameLaunch.ServerWindowsExecutable : GameLaunch.ServerLinuxExecutable);
         string runs = HostPath.Join(machine.DataRoot, "runs", "local-server");
         var server = new FakeOwnedServer("test.mod", saveRoot: HostPath.Join(runs, "run-test", "world"));
-        var host = new FakeServerHost("local", Path.Combine(_rig.Root, "this-machine-host"), server, kind: GameHostKind.Local, windows: windows);
-        string source = host.Local(install);
+        var host = FakeServerHost.ThisMachine("local", server);
+        string source = install;
         FakeInstalls.Server(source);
         File.WriteAllText(Path.Combine(source, windows ? GameLaunch.ServerWindowsExecutable : GameLaunch.ServerLinuxExecutable), "server");
         if (windows)
