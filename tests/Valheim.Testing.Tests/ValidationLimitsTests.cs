@@ -503,13 +503,24 @@ public sealed class ValidationLimitsTests : IClassFixture<ValidationLimitsTests.
                     if (process.ExitCode != 0) throw new Exception("fixture snapshot exit " + process.ExitCode);
                     string text = output.GetAwaiter().GetResult();
                     var table = new Dictionary<int, int>();
+                    string rootRow = null;
                     foreach (string line in text.Split('\n', StringSplitOptions.RemoveEmptyEntries)) {
                         var fields = line.Trim().Split(' ', 3, StringSplitOptions.RemoveEmptyEntries);
-                        if (fields.Length >= 2 && int.TryParse(fields[0], out int pid) && int.TryParse(fields[1], out int parent)) table[pid] = parent;
+                        if (fields.Length >= 2 && int.TryParse(fields[0], out int pid) && int.TryParse(fields[1], out int parent)) {
+                            table[pid] = parent;
+                            if (pid == rootPid) rootRow = line;
+                        }
                     }
                     using var root = Process.GetProcessById(rootPid);
-                    if (root.HasExited || root.StartTime.ToUniversalTime().Ticks != rootStart || !table.ContainsKey(rootPid))
-                        throw new Exception("fixture snapshot root is not the live expected identity");
+                    bool rootExited = root.HasExited;
+                    long? observedStart = null;
+                    bool? tableContainsRoot = null;
+                    if (rootExited || (observedStart = root.StartTime.ToUniversalTime().Ticks) != rootStart ||
+                        !(tableContainsRoot = table.ContainsKey(rootPid)).Value)
+                        throw new Exception("fixture snapshot root is not the live expected identity; " +
+                            FormattableString.Invariant($"mode={mode}; name={name}; RootPid={rootPid}; SuppliedStartUtcTicks={rootStart}; HasExited={rootExited}; ") +
+                            $"ObservedStartUtcTicks={observedStart?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unevaluated"}; " +
+                            FormattableString.Invariant($"TableContainsRoot={tableContainsRoot?.ToString() ?? "unevaluated"}; TableCount={table.Count}; RootRow={rootRow ?? "absent"}"));
                     var below = new HashSet<int> { rootPid };
                     for (bool grew = true; grew;) {
                         grew = false;
@@ -546,16 +557,29 @@ public sealed class ValidationLimitsTests : IClassFixture<ValidationLimitsTests.
                 if (mode == "listing-root-exit") {
                     int rootPid = int.Parse(args[2]);
                     long rootStart = long.Parse(args[3]);
+                    void Stage(string stage) => Console.Error.WriteLine(FormattableString.Invariant(
+                        $"PREPARATION_STAGE mode={mode}; stage={stage}; RootPid={rootPid}; RootStartUtcTicks={rootStart}; UtcTicks={DateTime.UtcNow.Ticks}"));
                     // Capture a nonempty REAL graph before allowing the root to exit; return that same table afterward.
                     string snapshot = Snapshot(rootPid, rootStart, "listing-graph");
+                    Stage("graph-written");
                     using var root = Process.GetProcessById(rootPid);
-                    if (root.HasExited || root.StartTime.ToUniversalTime().Ticks != rootStart) throw new Exception("root lost before exit handshake");
+                    bool recheckExited = root.HasExited;
+                    long? recheckStart = null;
+                    bool rootLost = recheckExited || (recheckStart = root.StartTime.ToUniversalTime().Ticks) != rootStart;
+                    Stage(FormattableString.Invariant($"root-recheck HasExited={recheckExited}; ObservedStartUtcTicks={recheckStart?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unevaluated"}; Lost={rootLost}"));
+                    if (rootLost) throw new Exception("root lost before exit handshake");
                     Ready("listing.started");
-                    if (!root.WaitForExit(TimeSpan.FromSeconds(2))) throw new Exception("fixture root did not exit during listing");
+                    Stage("listing-started-written");
+                    Stage("root-wait-entered");
+                    bool rootWaitExited = root.WaitForExit(TimeSpan.FromSeconds(2));
+                    Stage("root-wait-completed result=" + rootWaitExited);
+                    if (!rootWaitExited) throw new Exception("fixture root did not exit during listing");
                     Write("root-exit.observed.json", new { Pid = rootPid, StartUtcTicks = rootStart, UtcTicks = DateTime.UtcNow.Ticks, ExitObserved = root.HasExited });
+                    Stage("exit-receipt-written");
                     Console.Write(snapshot);
                     Console.Out.Flush();
                     Ready("graph.returned.json");
+                    Stage("graph-returned");
                     return 0;
                 }
                 if (mode == "listing-fail") { Write("listing.exit.json", new { ExitCode = 7 }); return 7; }
