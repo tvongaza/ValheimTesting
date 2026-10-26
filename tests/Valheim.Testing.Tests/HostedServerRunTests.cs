@@ -839,8 +839,11 @@ public sealed partial class HostedServerRunTests : IDisposable
         // Each boot starts with the plan's arguments on the host's paths, its own boot directory and the logs moved aside.
         var starts = host.Runs.Where(run => run.Script == "start").ToList();
         Assert.Equal(new[] { RunDirectory + "/boot-1", RunDirectory + "/boot-2" }, starts.Select(start => start.Variables["dir"]));
-        var prebootSource = host.Runs.Where(run => run.Script == "list" && run.Variables["root"] == Install && run.Variables["dirs"].Length != 0).ToList();
-        Assert.Equal(2, prebootSource.Count); // initial boot and restart, neither a full source re-hash
+        string earlyAssemblyPatterns = string.Join('\n', InstallPins.ManagedFolders.Select(folder => folder + "/" + InstallPins.GameAssemblyName));
+        Assert.Single(host.Runs, run => run.Script == "list" && run.Variables["root"] == Install && run.Variables["dirs"] == earlyAssemblyPatterns);
+        var prebootSource = host.Runs.Where(run => run.Script == "list" && run.Variables["root"] == Install &&
+            run.Variables["dirs"].Length != 0 && run.Variables["dirs"] != earlyAssemblyPatterns).ToList();
+        Assert.Equal(2, prebootSource.Count); // initial boot and restart, in addition to the early assembly-only admission
         Assert.All(prebootSource, run =>
         {
             Assert.Equal(string.Join('\n', HostInstall.ListingPatterns(InstallPins.ManagedFolders

@@ -44,6 +44,27 @@ public sealed class WorldFixture : IDisposable
         if (expectedHashes.Count == 0) throw new ArgumentException("A pinned fixture manifest is required.");
         return CopyFixture(source, outputParent, expectedHashes);
     }
+    // Per-call copying seam for deterministic corruption controls; public callers use File.Copy.
+    internal static WorldFixture Copy(string source, string outputParent, IReadOnlyDictionary<string, string> expectedHashes,
+        Action<string, string> copyFile)
+    {
+        if (expectedHashes.Count == 0) throw new ArgumentException("A pinned fixture manifest is required.");
+        return CopyFixture(source, outputParent, expectedHashes, copyFile: copyFile);
+    }
+
+    // One copy transaction: the complete parent remains pinned, while WorldIdentity owns its admitted world subtree.
+    internal static WorldFixture CopyAdmitted(string source, string outputParent, IReadOnlyDictionary<string, string> expectedHashes,
+        WorldIdentity.Admission admission, string worldRoot, Action<string, string>? copyFile = null, Action<string>? afterSourceVerification = null)
+    {
+        if (expectedHashes.Count == 0) throw new ArgumentException("A pinned fixture manifest is required.");
+        if (worldRoot is not ("" or "worlds_local")) throw new ArgumentException("The admitted world must be at the fixture root or worlds_local.");
+        string worldSource = Path.TrimEndingDirectorySeparator(Path.GetFullPath(Path.Combine(source, worldRoot)));
+        if (!worldSource.Equals(Path.TrimEndingDirectorySeparator(admission.Source),
+                OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+            throw new InvalidOperationException("Copy the original fixture path retained by world-format admission.");
+        return CopyFixture(source, outputParent, expectedHashes, admission, worldRoot, copyFile, afterSourceVerification);
+    }
+
     /// <summary>
     /// Copies a fixture that has no expected manifest: every file's SHA256 is recorded in
     /// <see cref="SourceHashes"/> and <c>fixture-provenance.json</c> and the copy is verified against it, but nothing says
@@ -52,7 +73,9 @@ public sealed class WorldFixture : IDisposable
     /// expected manifest is known.
     /// </summary>
     public static WorldFixture CopyAsFound(string source, string outputParent) => CopyFixture(source, outputParent, null);
-    private static WorldFixture CopyFixture(string source, string outputParent, IReadOnlyDictionary<string, string>? expectedHashes)
+    private static WorldFixture CopyFixture(string source, string outputParent, IReadOnlyDictionary<string, string>? expectedHashes,
+        WorldIdentity.Admission? admission = null, string worldRoot = "", Action<string, string>? copyFile = null,
+        Action<string>? afterSourceVerification = null)
     {
         source = Path.GetFullPath(source); outputParent = Path.GetFullPath(outputParent);
         if (ProtectedPaths.Contains(source, outputParent)) throw new ArgumentException("Output must be outside source.");
@@ -82,8 +105,20 @@ public sealed class WorldFixture : IDisposable
             foreach (var item in actual)
             {
                 string destination = Path.Combine(target, item.Key); Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
-                File.Copy(Path.Combine(source, item.Key), destination);
-                if (FileHash.Sha256(destination) != item.Value) throw new IOException("Fixture changed while copying: " + item.Key);
+                (copyFile ?? ((from, to) => File.Copy(from, to)))(Path.Combine(source, item.Key), destination);
+            }
+            if (admission != null)
+            {
+                Verify(source, actual); // an earlier source file may change while a later file is copied
+                afterSourceVerification?.Invoke(target);
+            }
+            var observed = VerifyObserved(target, actual);
+            if (admission != null)
+            {
+                string prefix = worldRoot.Length == 0 ? "" : worldRoot + Path.DirectorySeparatorChar;
+                var worldFiles = observed.Where(file => file.Key.StartsWith(prefix, StringComparison.Ordinal))
+                    .ToDictionary(file => file.Key[prefix.Length..], file => file.Value, StringComparer.Ordinal);
+                _ = admission.ForObservedCopy(Path.Combine(target, worldRoot), worldFiles);
             }
             File.WriteAllText(Path.Combine(target, ProvenanceFile), JsonSerializer.Serialize(actual));
             Note(journal, journalDirectory, JournalEntry.CopyDone, target);
@@ -98,13 +133,22 @@ public sealed class WorldFixture : IDisposable
     public static void Verify(string source, IReadOnlyDictionary<string, string> expectedHashes) => Verify(source, expectedHashes, copied: false);
 
     // A disposable copy adds only our own provenance record; it is not a game/world input.
-    internal static void Verify(string source, IReadOnlyDictionary<string, string> expectedHashes, bool copied)
+    internal static void Verify(string source, IReadOnlyDictionary<string, string> expectedHashes, bool copied) =>
+        _ = VerifyObserved(source, expectedHashes, copied);
+
+    internal static Dictionary<string, string> VerifyObserved(string source, IReadOnlyDictionary<string, string> expectedHashes, bool copied = false)
     {
         if (expectedHashes.Count == 0) throw new ArgumentException("A pinned fixture manifest is required.");
         source = Path.GetFullPath(source);
         if (!Directory.Exists(source)) throw new DirectoryNotFoundException("Fixture source does not exist: " + source);
         var actual = Hashes(source, []);
         if (copied && !expectedHashes.ContainsKey(ProvenanceFile)) actual.Remove(ProvenanceFile);
+        RequireHashes(source, actual, expectedHashes);
+        return actual;
+    }
+
+    internal static void RequireHashes(string source, IReadOnlyDictionary<string, string> actual, IReadOnlyDictionary<string, string> expectedHashes)
+    {
         var problems = expectedHashes.Keys.Where(key => !actual.ContainsKey(key)).Order(StringComparer.Ordinal).Select(key => key + " is missing")
             .Concat(actual.Keys.Where(key => !expectedHashes.ContainsKey(key)).Order(StringComparer.Ordinal).Select(key => key + " is not in the manifest"))
             .Concat(actual.Where(item => expectedHashes.TryGetValue(item.Key, out var hash) && !string.Equals(item.Value, hash, StringComparison.OrdinalIgnoreCase))

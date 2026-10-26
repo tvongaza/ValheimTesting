@@ -22,7 +22,7 @@ internal static class FixtureBake
 
     internal static Admission Admit(string source, GameBuild target)
     {
-        var (worlds, manifestFile, _) = Inspect(source);
+        var (worlds, manifestFile) = Paths(source);
         string? manifestHash = File.Exists(manifestFile) ? Sha256(manifestFile) : null;
         var world = WorldIdentity.Capture(worlds, target);
         var files = world.Files;
@@ -36,6 +36,11 @@ internal static class FixtureBake
     internal static void VerifyAdmission(Admission admission)
     {
         admission.World.Verify();
+        VerifyManifestAdmission(admission);
+    }
+
+    internal static void VerifyManifestAdmission(Admission admission)
+    {
         if (admission.ManifestSha256 != (File.Exists(admission.ManifestFile) ? Sha256(admission.ManifestFile) : null))
             throw new InvalidDataException("The baked fixture manifest changed after admission: " + admission.ManifestFile);
         if (admission.ManifestSha256 != null) VerifyBakedManifest(admission.ManifestFile, admission.Identity, admission.Files);
@@ -88,10 +93,16 @@ internal static class FixtureBake
     /// </summary>
     internal static (string Worlds, string ManifestFile, WorldIdentity Identity) Inspect(string source)
     {
+        var (worlds, manifestFile) = Paths(source);
+        return (worlds, manifestFile, WorldIdentity.Read(worlds));
+    }
+
+    internal static (string Worlds, string ManifestFile) Paths(string source)
+    {
         source = Path.TrimEndingDirectorySeparator(Path.GetFullPath(source)); // C:\x\worlds_local\ is worlds_local too
         string manifestFile = Path.Combine(Path.GetFileName(source) == "worlds_local" ? Path.GetDirectoryName(source)! : source, ManifestFile);
         if (Directory.Exists(Path.Combine(source, "worlds_local"))) source = Path.Combine(source, "worlds_local");
-        return (source, manifestFile, WorldIdentity.Read(source));
+        return (source, manifestFile);
     }
 
     /// <summary>
@@ -100,12 +111,16 @@ internal static class FixtureBake
     /// </summary>
     internal static WorldIdentity Check(string source)
     {
-        var (worlds, manifestFile, identity) = Inspect(source);
-        if (File.Exists(manifestFile)) VerifyBakedManifest(manifestFile, identity, WorldFixture.Manifest(worlds));
+        var (worlds, manifestFile) = Paths(source);
+        if (!File.Exists(manifestFile)) return WorldIdentity.Read(worlds);
+        var files = WorldFixture.Manifest(worlds);
+        var identity = WorldIdentity.ReadObserved(worlds, files);
+        VerifyBakedManifest(manifestFile, identity, files);
         return identity;
     }
 
-    internal static Input Prepare(string? source, string outputRoot, Admission? admission = null, GameBuild? targetBuild = null)
+    internal static Input Prepare(string? source, string outputRoot, Admission? admission = null, GameBuild? targetBuild = null,
+        Action<string, string>? copyFile = null, Action<string>? afterSourceVerification = null)
     {
         string target = Path.Combine(outputRoot, "world-source", "worlds_local");
         if (source == null)
@@ -116,37 +131,41 @@ internal static class FixtureBake
             { CopyAdmission = packaged };
         }
         if (admission != null) VerifyAdmission(admission);
-        (source, string manifestFile, var identity) = Inspect(source);
+        (source, string manifestFile) = Paths(source);
+        var manifest = admission?.Files ?? WorldFixture.Manifest(source);
+        var identity = admission?.Identity ?? WorldIdentity.ReadObserved(source, manifest);
         if (ProtectedPaths.Contains(source, target) || ProtectedPaths.Contains(target, source))
             throw new IOException("The world fixture source and disposable run copy must be separate.");
-        var manifest = admission?.Files ?? WorldFixture.Manifest(source);
         var worldAdmission = admission?.World ?? (targetBuild == null ? null : WorldIdentity.Capture(source, targetBuild, manifest));
         if (File.Exists(manifestFile)) VerifyBakedManifest(manifestFile, identity, manifest);
         Directory.CreateDirectory(target);
         try
         {
-            CopyFiles(source, target, manifest);
-            WorldFixture.Verify(source, manifest); // source may have changed while being copied
-            WorldFixture.Verify(target, manifest);
-            worldAdmission?.Verify(target);
-            var copied = worldAdmission?.Identity ?? WorldIdentity.Read(target);
-            if (copied != identity)
-                throw new InvalidDataException("The disposable world differs from its admitted source fixture identity.");
-            if (admission != null) VerifyAdmission(admission);
-            // The manifest it was checked against stays beside the copy as input evidence (and names a saved world's run).
+            CopyFiles(source, target, manifest, copyFile: copyFile);
+            if (admission != null) VerifyManifestAdmission(admission);
+            // Keep manifest copying inside the final source/destination boundary, before either final payload observation.
+            string? copiedManifest = null;
             if (File.Exists(manifestFile))
             {
-                string copiedManifest = Path.Combine(outputRoot, "world-source", ManifestFile);
+                copiedManifest = Path.Combine(outputRoot, "world-source", ManifestFile);
                 File.Copy(manifestFile, copiedManifest);
                 if (admission != null && Sha256(copiedManifest) != admission.ManifestSha256)
                     throw new InvalidDataException("The baked fixture manifest changed while copying.");
-                VerifyBakedManifest(copiedManifest, copied, manifest);
+                VerifyBakedManifest(copiedManifest, identity, manifest);
             }
-            if (admission != null) VerifyAdmission(admission);
+            WorldFixture.Verify(source, manifest); // a file already copied may change while later files are copied
+            if (admission != null) VerifyManifestAdmission(admission);
+            afterSourceVerification?.Invoke(target);
+            var observedCopy = WorldFixture.VerifyObserved(target, manifest);
+            var copyAdmission = worldAdmission?.ForObservedCopy(target, observedCopy);
+            var copied = copyAdmission?.Identity ?? WorldIdentity.ReadObserved(target, observedCopy);
+            if (copied != identity)
+                throw new InvalidDataException("The disposable world differs from its admitted source fixture identity.");
+            if (copiedManifest != null) VerifyBakedManifest(copiedManifest, copied, observedCopy);
             string label = Path.GetFileName(source.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
             if (label == "worlds_local")
                 label = Path.GetFileName(Path.GetDirectoryName(source)!);
-            return new Input(source, label, identity, manifest) { CopyAdmission = worldAdmission?.ForVerifiedCopy(target) };
+            return new Input(source, label, identity, manifest) { CopyAdmission = copyAdmission };
         }
         catch
         {
@@ -155,7 +174,7 @@ internal static class FixtureBake
         }
     }
 
-    private static void VerifyBakedManifest(string path, WorldIdentity identity, IReadOnlyDictionary<string, string> actual)
+    internal static void VerifyBakedManifest(string path, WorldIdentity identity, IReadOnlyDictionary<string, string> actual)
     {
         try
         {
@@ -265,16 +284,14 @@ internal static class FixtureBake
         => FileHash.Sha256(file);
 
     private static void CopyFiles(string source, string target, IReadOnlyDictionary<string, string> expected,
-        CancellationToken cancellation = default)
+        CancellationToken cancellation = default, Action<string, string>? copyFile = null)
     {
         foreach (var (relative, hash) in expected.OrderBy(file => file.Key, StringComparer.Ordinal))
         {
             cancellation.ThrowIfCancellationRequested();
             string destination = Path.Combine(target, relative);
             Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
-            File.Copy(Path.Combine(source, relative), destination);
-            if (!Sha256(destination).Equals(hash, StringComparison.OrdinalIgnoreCase))
-                throw new IOException("World fixture changed while copying: " + relative);
+            (copyFile ?? ((from, to) => File.Copy(from, to)))(Path.Combine(source, relative), destination);
         }
     }
 }

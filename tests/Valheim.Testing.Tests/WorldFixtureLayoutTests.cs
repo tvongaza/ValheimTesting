@@ -74,6 +74,169 @@ public sealed class WorldFixtureLayoutTests : IDisposable
         admission.Verify();
     }
 
+    [Theory]
+    [InlineData("_main.1.fwl2")]
+    [InlineData("_main.1.chunks")]
+    [InlineData("backup")]
+    public void ParsedMetadataMustBeTheBytesOfTheContentObservation(string changed)
+    {
+        string fixture = FakeInstalls.Backup(Fixture());
+        var observed = WorldFixture.Manifest(fixture);
+        string file = changed == "backup"
+            ? Path.Combine(fixture, "Campaign_backup_auto-20261020-120000", "_main.0.fwl2") : World(fixture, changed);
+        byte[] bytes = File.ReadAllBytes(file);
+        bytes[^1] ^= 1;
+        File.WriteAllBytes(file, bytes);
+        Assert.Contains("changed after its content was observed", Assert.Throws<InvalidDataException>(() => WorldIdentity.ReadObserved(fixture, observed)).Message);
+    }
+
+    [Fact]
+    public void NativeManifestKeysBindMainChunkListAndBackupMetadata()
+    {
+        string fixture = FakeInstalls.Backup(Fixture());
+        var observed = WorldFixture.Manifest(fixture);
+        Assert.Contains(Path.Combine("Campaign", "_main.1.fwl2"), observed.Keys);
+        Assert.Contains(Path.Combine("Campaign", "_main.1.chunks"), observed.Keys);
+        Assert.Contains(Path.Combine("Campaign_backup_auto-20261020-120000", "_main.0.fwl2"), observed.Keys);
+        var identity = WorldIdentity.ReadObserved(fixture, observed);
+        Assert.Equal("Campaign/_main.1.fwl2", identity.File);
+        var target = GameAssemblyVersion.Read(new MemoryStream(FakeInstalls.GameAssembly()), "host");
+        var pinned = WorldIdentity.Capture(fixture, target, observed);
+        Assert.Equal(identity, pinned.Identity);
+        pinned.Verify();
+        var unpinned = WorldIdentity.Capture(fixture, target);
+        Assert.Equal(identity, unpinned.Identity);
+        unpinned.Verify();
+    }
+
+    [Fact]
+    public void OnlyACopiedObservationMayAddItsGeneratedProvenanceRecord()
+    {
+        string fixture = Fixture();
+        var observed = WorldFixture.Manifest(fixture);
+        File.WriteAllText(Path.Combine(fixture, WorldFixture.ProvenanceFile), "generated record");
+        Assert.Throws<InvalidOperationException>(() => WorldIdentity.ReadObserved(fixture, observed));
+        Assert.Equal(4242, WorldIdentity.ReadObserved(fixture, observed, copied: true).Uid);
+        File.WriteAllText(Path.Combine(fixture, "unexpected.txt"), "not generated provenance");
+        Assert.Throws<InvalidOperationException>(() => WorldIdentity.ReadObserved(fixture, observed, copied: true));
+    }
+
+    [Theory]
+    [InlineData("_main.1.db2")]
+    [InlineData("00_00__0_1.chunk")]
+    public void AdmissionRejectsContentDriftWithTheSameSizeAndRestoredTimestamp(string relative)
+    {
+        string fixture = Fixture();
+        var target = GameAssemblyVersion.Read(new MemoryStream(FakeInstalls.GameAssembly()), "host");
+        var admission = WorldIdentity.Capture(fixture, target);
+        string file = World(fixture, relative);
+        DateTime modified = File.GetLastWriteTimeUtc(file);
+        byte[] bytes = File.ReadAllBytes(file);
+        bytes[0] ^= 1;
+        File.WriteAllBytes(file, bytes);
+        File.SetLastWriteTimeUtc(file, modified);
+        Assert.Throws<InvalidOperationException>(() => admission.Verify());
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("worlds_local")]
+    public void AdmittedCopyMapsTheWorldAndRetainsEveryParentPin(string worldRoot)
+    {
+        using var journal = RunJournal.UseLocalDirectory(Path.Combine(_root, "journal"));
+        string source = Path.Combine(_root, "source"), worlds = FakeInstalls.World(Path.Combine(source, worldRoot));
+        if (worldRoot.Length != 0) File.WriteAllText(Path.Combine(source, "server.cfg"), "parent pin");
+        var target = GameAssemblyVersion.Read(new MemoryStream(FakeInstalls.GameAssembly()), "host");
+        var admission = WorldIdentity.Capture(worlds, target); var parentPins = WorldFixture.Manifest(source);
+        using var copy = WorldFixture.CopyAdmitted(source, Path.Combine(_root, "output"), parentPins, admission, worldRoot);
+        Assert.Equal(parentPins, copy.SourceHashes);
+        Assert.Equal(admission.Identity, WorldIdentity.Read(Path.Combine(copy.DirectoryPath, worldRoot)));
+        Assert.True(File.Exists(Path.Combine(copy.DirectoryPath, WorldFixture.ProvenanceFile)));
+        if (worldRoot.Length != 0) Assert.Equal("parent pin", File.ReadAllText(Path.Combine(copy.DirectoryPath, "server.cfg")));
+        admission.Verify();
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("worlds_local")]
+    public void AdmittedCopyRefusesAnEarlierOriginalChangedDuringALaterCopy(string worldRoot)
+    {
+        using var journal = RunJournal.UseLocalDirectory(Path.Combine(_root, "journal"));
+        string source = Path.Combine(_root, "source"), worlds = FakeInstalls.World(Path.Combine(source, worldRoot));
+        var target = GameAssemblyVersion.Read(new MemoryStream(FakeInstalls.GameAssembly()), "host");
+        var admission = WorldIdentity.Capture(worlds, target); var pins = WorldFixture.Manifest(source);
+        string output = Directory.CreateDirectory(Path.Combine(_root, "output")).FullName;
+        string keep = Path.Combine(output, "unrelated.txt"); File.WriteAllText(keep, "keep");
+        string? earlier = null; int copies = 0;
+        Assert.Throws<InvalidOperationException>(() => WorldFixture.CopyAdmitted(source, output, pins, admission, worldRoot, copyFile: (from, to) =>
+        {
+            File.Copy(from, to);
+            if (++copies == 1) earlier = from;
+            else if (copies == 2) ChangeByte(earlier!);
+        }));
+        Assert.True(copies > 1); Assert.Empty(Directory.GetDirectories(output));
+        Assert.True(Directory.Exists(source)); Assert.Equal("keep", File.ReadAllText(keep));
+        Assert.DoesNotContain(Directory.EnumerateFiles(Path.Combine(_root, "journal"), "*.jsonl", SearchOption.AllDirectories)
+            .SelectMany(File.ReadAllLines).Select(RunJournal.ParseLine), record => record.Entry.Kind == JournalEntry.CopyDone);
+    }
+
+    [Theory]
+    [InlineData("", "world")]
+    [InlineData("worlds_local", "world")]
+    [InlineData("worlds_local", "parent")]
+    [InlineData("worlds_local", "extra")]
+    public void AdmittedCopyChecksTheWholeDestinationAfterFinalSourceVerification(string worldRoot, string fault)
+    {
+        using var journal = RunJournal.UseLocalDirectory(Path.Combine(_root, "journal"));
+        string source = Path.Combine(_root, "source"), worlds = FakeInstalls.World(Path.Combine(source, worldRoot));
+        if (worldRoot.Length != 0) File.WriteAllText(Path.Combine(source, "server.cfg"), "parent pin");
+        var target = GameAssemblyVersion.Read(new MemoryStream(FakeInstalls.GameAssembly()), "host");
+        var admission = WorldIdentity.Capture(worlds, target); var pins = WorldFixture.Manifest(source);
+        string output = Directory.CreateDirectory(Path.Combine(_root, "output")).FullName;
+        string keep = Path.Combine(output, "unrelated.txt"); File.WriteAllText(keep, "keep");
+        Assert.Throws<InvalidOperationException>(() => WorldFixture.CopyAdmitted(source, output, pins, admission, worldRoot,
+            afterSourceVerification: copy =>
+            {
+                if (fault == "extra") File.WriteAllText(Path.Combine(copy, "extra.cfg"), "outside world");
+                else ChangeByte(fault == "parent" ? Path.Combine(copy, "server.cfg") : Path.Combine(copy, worldRoot, "Campaign", FakeInstalls.ChunkFile));
+            }));
+        Assert.Empty(Directory.GetDirectories(output)); Assert.Equal("keep", File.ReadAllText(keep));
+        WorldFixture.Verify(source, pins); admission.Verify(); // corruption was destination-only
+    }
+
+    [Theory]
+    [InlineData("../worlds_local")]
+    [InlineData("/worlds_local")]
+    [InlineData("other")]
+    public void AdmittedCopyRefusesAnUnsupportedWorldRoot(string worldRoot)
+    {
+        string fixture = Fixture();
+        var target = GameAssemblyVersion.Read(new MemoryStream(FakeInstalls.GameAssembly()), "host");
+        var admission = WorldIdentity.Capture(fixture, target);
+        Assert.Throws<ArgumentException>(() => WorldFixture.CopyAdmitted(fixture, Path.Combine(_root, "output"), admission.Files, admission, worldRoot));
+        Assert.False(Directory.Exists(Path.Combine(_root, "output")));
+    }
+
+    [Fact]
+    public void AdmittedCopyRefusesAnotherIdenticalSourceAndWrongIdentity()
+    {
+        using var journal = RunJournal.UseLocalDirectory(Path.Combine(_root, "journal"));
+        string fixture = Fixture(), other = Fixture("other");
+        var target = GameAssemblyVersion.Read(new MemoryStream(FakeInstalls.GameAssembly()), "host");
+        var admission = WorldIdentity.Capture(fixture, target); string output = Path.Combine(_root, "output");
+        Assert.Throws<InvalidOperationException>(() => WorldFixture.CopyAdmitted(other, output, admission.Files, admission, ""));
+        Assert.False(Directory.Exists(output));
+        var wrong = admission with { Identity = admission.Identity with { Uid = 999 } };
+        Assert.Throws<InvalidDataException>(() => WorldFixture.CopyAdmitted(fixture, output, admission.Files, wrong, ""));
+        Assert.Empty(Directory.GetDirectories(output)); admission.Verify();
+    }
+
+    private static void ChangeByte(string path)
+    {
+        DateTime modified = File.GetLastWriteTimeUtc(path); byte[] bytes = File.ReadAllBytes(path); bytes[0] ^= 1;
+        File.WriteAllBytes(path, bytes); File.SetLastWriteTimeUtc(path, modified);
+    }
+
     [Fact]
     public void MatchingNetworkVersionsDoNotEstablishWorldSupportAndUnknownSingleHostsRefuse()
     {
@@ -106,6 +269,29 @@ public sealed class WorldFixtureLayoutTests : IDisposable
     }
 
     // The issue's case: metadata alone, with every companion of the save named.
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void ObservationDoesNotHideAddedOrMissingPayloadNames(bool added)
+    {
+        string fixture = Fixture();
+        var observed = WorldFixture.Manifest(fixture);
+        if (added) File.WriteAllText(World(fixture, "01_01__0_1.chunk"), "extra");
+        else File.Delete(World(fixture, FakeInstalls.ChunkFile));
+        Assert.Throws<InvalidOperationException>(() => WorldIdentity.ReadObserved(fixture, observed));
+    }
+
+    [UnixFact]
+    public void ObservationDoesNotAllowAPayloadToBecomeALink()
+    {
+        string fixture = Fixture();
+        var observed = WorldFixture.Manifest(fixture);
+        string chunk = World(fixture, FakeInstalls.ChunkFile), outside = Path.Combine(_root, "outside.chunk");
+        File.Move(chunk, outside);
+        File.CreateSymbolicLink(chunk, outside);
+        Assert.Contains("Links are unsupported", Assert.Throws<IOException>(() => WorldIdentity.ReadObserved(fixture, observed)).Message);
+    }
+
     [Theory]
     [InlineData("_main.1.db2")]
     [InlineData("_main.1.chunks")]
