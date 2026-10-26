@@ -43,6 +43,7 @@ using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Xml.Linq;
+using Valheim.Testing.Game;
 
 ValidationInvocation invocation = ValidationInvocation.Parse(args);
 bool split = invocation.Split;
@@ -317,7 +318,7 @@ void Execute(string file, string[] arguments, ValidationCommandPhase phase, stri
     var clock = Stopwatch.StartNew();
     long? rootStart = null;
     if (phase != ValidationCommandPhase.Ordinary)
-        try { rootStart = process.StartTime.ToUniversalTime().Ticks; }
+        try { rootStart = OwnedClientCommandLease.LocalStartUtcTicks(process); }
         catch (Exception error) when (ProcessObservationError(error)) { /* A quick exit still keeps its actual exit code. */ }
     TimeSpan cap = phase == ValidationCommandPhase.Preparation ? preparationLimit : hardLimit;
     bool overHardLimit = false;
@@ -421,7 +422,7 @@ void Execute(string file, string[] arguments, ValidationCommandPhase phase, stri
 static TimeSpan Remaining(Stopwatch clock, TimeSpan deadline) => TimeSpan.FromTicks(Math.Max(0, (deadline - clock.Elapsed).Ticks));
 static TimeSpan Earlier(TimeSpan first, TimeSpan second) => first <= second ? first : second;
 static bool ProcessObservationError(Exception error) => error is System.ComponentModel.Win32Exception or InvalidOperationException
-    or AggregateException or IOException or ArgumentException;
+    or AggregateException or IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException;
 
 // Run potentially blocking OS signals off-thread, within this same absolute cleanup deadline. A timeout is not a stopped claim.
 static void RequestStop(ValidationOwnedProcess owned, Stopwatch clock, TimeSpan deadline)
@@ -432,7 +433,7 @@ static void RequestStop(ValidationOwnedProcess owned, Stopwatch clock, TimeSpan 
     {
         if (Remaining(clock, deadline) == TimeSpan.Zero) throw new TimeoutException("no time remains to request stop");
         using var current = Process.GetProcessById(pid);
-        if (current.StartTime.ToUniversalTime().Ticks != identity)
+        if (OwnedClientCommandLease.LocalStartUtcTicks(current) != identity)
             throw new InvalidOperationException("PID start identity changed; no signal sent");
         current.Kill();
     });
@@ -487,7 +488,7 @@ void StopTestHosts(Process rootProcess, long? rootStart, Stopwatch clock, TimeSp
     DateTime beforeListing = DateTime.UtcNow;
     Process listing = Process.Start(start) ?? throw new InvalidOperationException("Could not list processes.");
     long? listingStart = null;
-    try { listingStart = listing.StartTime.ToUniversalTime().Ticks; }
+    try { listingStart = OwnedClientCommandLease.LocalStartUtcTicks(listing); }
     catch (Exception error) when (ProcessObservationError(error)) { /* A quick exited listing still has its output and exit code. */ }
     using var cancellation = new CancellationTokenSource();
     Task<string> read = listing.StandardOutput.ReadToEndAsync(cancellation.Token);
@@ -536,7 +537,7 @@ void StopTestHosts(Process rootProcess, long? rootStart, Stopwatch clock, TimeSp
     try
     {
         using var currentRoot = Process.GetProcessById(rootPid);
-        if (currentRoot.HasExited || currentRoot.StartTime.ToUniversalTime().Ticks != rootStart || !table.ContainsKey(rootPid))
+        if (currentRoot.HasExited || OwnedClientCommandLease.LocalStartUtcTicks(currentRoot) != rootStart || !table.ContainsKey(rootPid))
             throw new InvalidOperationException("root exited or changed identity before ancestry was established");
     }
     catch (ArgumentException error)
@@ -569,7 +570,7 @@ void StopTestHosts(Process rootProcess, long? rootStart, Stopwatch clock, TimeSp
         try
         {
             child = Process.GetProcessById(pid);
-            long identity = child.StartTime.ToUniversalTime().Ticks;
+            long identity = OwnedClientCommandLease.LocalStartUtcTicks(child);
             // A reused PID or a process born during this non-atomic snapshot cannot be safely attached to this graph.
             if (identity < parent.StartUtcTicks || identity > beforeListing.Ticks)
                 throw new InvalidOperationException($"PID {pid} start identity does not establish snapshot ancestry");

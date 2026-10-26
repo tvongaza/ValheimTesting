@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using System.Xml.Linq;
 using Xunit;
+using Valheim.Testing.Game;
 
 // #719: every test command scripts/validate.cs starts has a soft limit (a warning) and a hard limit (stopped, failed, the tests in
 // flight named). The process-level checks run the real script against one built fixture, including one hard-limit run; message
@@ -446,8 +447,10 @@ public sealed class ValidationLimitsTests : IClassFixture<ValidationLimitsTests.
             Directory.CreateDirectory(Path.GetDirectoryName(_script)!);
             File.Copy(Path.Combine(FixtureProjects.RepositoryRoot(), "scripts", "validate.cs"), _script, overwrite: true);
             File.Copy(Path.Combine(FixtureProjects.RepositoryRoot(), "scripts", "Shared", "ValidationSupport.cs"), Path.Combine(Path.GetDirectoryName(_script)!, "ValidationSupport.cs"), overwrite: true);
+            string identitySource = Path.Combine(FixtureProjects.RepositoryRoot(), "src", "Valheim.Testing.Game", "OwnedClientCommandLease.Identity.cs");
+            File.Copy(identitySource, Path.Combine(Path.GetDirectoryName(_script)!, "OwnedClientCommandLease.Identity.cs"));
             File.WriteAllText(Path.Combine(Path.GetDirectoryName(_script)!, "Directory.Build.props"),
-                "<Project><ItemGroup><Compile Include=\"ValidationSupport.cs\" /></ItemGroup></Project>");
+                "<Project><ItemGroup><Compile Include=\"ValidationSupport.cs\" /><Compile Include=\"OwnedClientCommandLease.Identity.cs\" /></ItemGroup></Project>");
             // Restore and compile now, so the scaled limits below measure the test run and not the first build. The project is
             // named by the very path validate.cs will pass to dotnet test (not found from the working directory, which a temp
             // folder behind a symbolic link such as macOS's /var spells differently): another spelling is another project to
@@ -455,17 +458,19 @@ public sealed class ValidationLimitsTests : IClassFixture<ValidationLimitsTests.
             (await FixtureProjects.Dotnet(project, ["build", _project, "-c", "Release", "-m:1"], timeoutMinutes: 4)).AssertSucceeded();
             string helperDirectory = Path.Combine(_directory, "preparation-helper");
             Directory.CreateDirectory(helperDirectory);
+            File.Copy(identitySource, Path.Combine(helperDirectory, "OwnedClientCommandLease.Identity.cs"));
             File.WriteAllText(Path.Combine(helperDirectory, "PreparationHelper.csproj"),
                 "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings></PropertyGroup></Project>");
             File.WriteAllText(Path.Combine(helperDirectory, "Program.cs"), """
                 using System.Diagnostics;
                 using System.Text.Json;
+                using Valheim.Testing.Game;
                 string mode = args[0], directory = args[1];
                 string assembly = typeof(Program).Assembly.Location;
                 void Write(string name, object value) => File.WriteAllText(Path.Combine(directory, name), JsonSerializer.Serialize(value));
                 void Record(string name) {
                     using var self = Process.GetCurrentProcess();
-                    Write(name + ".json", new { Pid = self.Id, StartUtcTicks = self.StartTime.ToUniversalTime().Ticks });
+                    Write(name + ".json", new { Pid = self.Id, StartUtcTicks = OwnedClientCommandLease.LocalStartUtcTicks(self) });
                 }
                 void Ready(string name) => Write(name, new { UtcTicks = DateTime.UtcNow.Ticks });
                 void WaitFor(string file) {
@@ -483,6 +488,26 @@ public sealed class ValidationLimitsTests : IClassFixture<ValidationLimitsTests.
                 }
                 // Physical fixture evidence, independent of the production owner's parsed table. The root-exit wrapper
                 // receives the original listing command verbatim; the independent observer uses the same OS command.
+                (Dictionary<int, int> Table, string RootRow) ParseTable(string text, int rootPid) {
+                    var table = new Dictionary<int, int>();
+                    string rootRow = null;
+                    foreach (string line in text.Split('\n', StringSplitOptions.RemoveEmptyEntries)) {
+                        var fields = line.Trim().Split(' ', 3, StringSplitOptions.RemoveEmptyEntries);
+                        if (fields.Length >= 2 && int.TryParse(fields[0], out int pid) && int.TryParse(fields[1], out int parent)) {
+                            table[pid] = parent;
+                            if (pid == rootPid) rootRow = line;
+                        }
+                    }
+                    return (table, rootRow);
+                }
+                HashSet<int> Below(Dictionary<int, int> table, int rootPid) {
+                    var below = new HashSet<int> { rootPid };
+                    for (bool grew = true; grew;) {
+                        grew = false;
+                        foreach (var (pid, parent) in table) if (below.Contains(parent) && below.Add(pid)) grew = true;
+                    }
+                    return below;
+                }
                 string Snapshot(int rootPid, long rootStart, string name) {
                     var start = args.Length > 4 ? new ProcessStartInfo(args[4], args.Skip(5))
                         : OperatingSystem.IsWindows()
@@ -502,33 +527,20 @@ public sealed class ValidationLimitsTests : IClassFixture<ValidationLimitsTests.
                     }
                     if (process.ExitCode != 0) throw new Exception("fixture snapshot exit " + process.ExitCode);
                     string text = output.GetAwaiter().GetResult();
-                    var table = new Dictionary<int, int>();
-                    string rootRow = null;
-                    foreach (string line in text.Split('\n', StringSplitOptions.RemoveEmptyEntries)) {
-                        var fields = line.Trim().Split(' ', 3, StringSplitOptions.RemoveEmptyEntries);
-                        if (fields.Length >= 2 && int.TryParse(fields[0], out int pid) && int.TryParse(fields[1], out int parent)) {
-                            table[pid] = parent;
-                            if (pid == rootPid) rootRow = line;
-                        }
-                    }
+                    var (table, rootRow) = ParseTable(text, rootPid);
                     using var root = Process.GetProcessById(rootPid);
                     bool rootExited = root.HasExited;
                     long? observedStart = null;
                     bool? tableContainsRoot = null;
-                    if (rootExited || (observedStart = root.StartTime.ToUniversalTime().Ticks) != rootStart ||
+                    if (rootExited || (observedStart = OwnedClientCommandLease.LocalStartUtcTicks(root)) != rootStart ||
                         !(tableContainsRoot = table.ContainsKey(rootPid)).Value)
                         throw new Exception("fixture snapshot root is not the live expected identity; " +
                             FormattableString.Invariant($"mode={mode}; name={name}; RootPid={rootPid}; SuppliedStartUtcTicks={rootStart}; HasExited={rootExited}; ") +
                             $"ObservedStartUtcTicks={observedStart?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unevaluated"}; " +
                             FormattableString.Invariant($"TableContainsRoot={tableContainsRoot?.ToString() ?? "unevaluated"}; TableCount={table.Count}; RootRow={rootRow ?? "absent"}"));
-                    var below = new HashSet<int> { rootPid };
-                    for (bool grew = true; grew;) {
-                        grew = false;
-                        foreach (var (pid, parent) in table) if (below.Contains(parent) && below.Add(pid)) grew = true;
-                    }
-                    var owned = below.Select(pid => {
+                    var owned = Below(table, rootPid).Select(pid => {
                         using var child = Process.GetProcessById(pid);
-                        return new { Pid = pid, Parent = table[pid], StartUtcTicks = child.StartTime.ToUniversalTime().Ticks };
+                        return new { Pid = pid, Parent = table[pid], StartUtcTicks = OwnedClientCommandLease.LocalStartUtcTicks(child) };
                     }).ToArray();
                     Write(name + ".json", new { RootPid = rootPid, RootStartUtcTicks = rootStart,
                         CapturedUtcTicks = DateTime.UtcNow.Ticks, Owned = owned });
@@ -559,13 +571,36 @@ public sealed class ValidationLimitsTests : IClassFixture<ValidationLimitsTests.
                     long rootStart = long.Parse(args[3]);
                     void Stage(string stage) => Console.Error.WriteLine(FormattableString.Invariant(
                         $"PREPARATION_STAGE mode={mode}; stage={stage}; RootPid={rootPid}; RootStartUtcTicks={rootStart}; UtcTicks={DateTime.UtcNow.Ticks}"));
-                    // Capture a nonempty REAL graph before allowing the root to exit; return that same table afterward.
-                    string snapshot = Snapshot(rootPid, rootStart, "listing-graph");
+                    // Reuse this case's completed physical capture, before the root-exit handshake. No second OS listing.
+                    string snapshot = File.ReadAllText(Path.Combine(directory, "observed-graph.txt"));
+                    var (table, _) = ParseTable(snapshot, rootPid);
+                    using var capture = JsonDocument.Parse(File.ReadAllText(Path.Combine(directory, "observed-graph.json")));
+                    var captured = capture.RootElement;
+                    int capturedRootPid = captured.GetProperty("RootPid").GetInt32();
+                    long capturedRootStart = captured.GetProperty("RootStartUtcTicks").GetInt64();
+                    long capturedUtcTicks = captured.GetProperty("CapturedUtcTicks").GetInt64();
+                    var recorded = captured.GetProperty("Owned").EnumerateArray().ToDictionary(
+                        item => item.GetProperty("Pid").GetInt32(),
+                        item => new { Pid = item.GetProperty("Pid").GetInt32(), Parent = item.GetProperty("Parent").GetInt32(),
+                            StartUtcTicks = item.GetProperty("StartUtcTicks").GetInt64() });
+                    if (!recorded.TryGetValue(capturedRootPid, out var capturedRoot) || capturedRoot.StartUtcTicks != capturedRootStart ||
+                        !table.ContainsKey(capturedRootPid) || capturedRoot.Parent != table[capturedRootPid] ||
+                        !Below(table, capturedRootPid).Contains(rootPid) || !table.ContainsKey(rootPid) ||
+                        !recorded.TryGetValue(rootPid, out var recordedRoot) || recordedRoot.StartUtcTicks != rootStart)
+                        throw new Exception("recorded snapshot does not contain the expected root identity");
+                    var owned = Below(table, rootPid).Select(pid => {
+                        if (!recorded.TryGetValue(pid, out var identity) || identity.Parent != table[pid])
+                            throw new Exception("recorded snapshot subtree identity or parent is missing");
+                        return identity;
+                    }).ToArray();
+                    Write("listing-graph.json", new { RootPid = rootPid, RootStartUtcTicks = rootStart,
+                        CapturedUtcTicks = capturedUtcTicks, Owned = owned });
+                    File.WriteAllText(Path.Combine(directory, "listing-graph.txt"), snapshot);
                     Stage("graph-written");
                     using var root = Process.GetProcessById(rootPid);
                     bool recheckExited = root.HasExited;
                     long? recheckStart = null;
-                    bool rootLost = recheckExited || (recheckStart = root.StartTime.ToUniversalTime().Ticks) != rootStart;
+                    bool rootLost = recheckExited || (recheckStart = OwnedClientCommandLease.LocalStartUtcTicks(root)) != rootStart;
                     Stage(FormattableString.Invariant($"root-recheck HasExited={recheckExited}; ObservedStartUtcTicks={recheckStart?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unevaluated"}; Lost={rootLost}"));
                     if (rootLost) throw new Exception("root lost before exit handshake");
                     Ready("listing.started");
@@ -737,7 +772,7 @@ public sealed class ValidationLimitsTests : IClassFixture<ValidationLimitsTests.
                     "    }\n" + admission,
                     StringComparison.Ordinal);
                 File.WriteAllText(Path.Combine(copied, "validate.cs"), source);
-                foreach (string file in new[] { "ValidationSupport.cs", "Directory.Build.props" })
+                foreach (string file in new[] { "ValidationSupport.cs", "OwnedClientCommandLease.Identity.cs", "Directory.Build.props" })
                     File.Copy(Path.Combine(Path.GetDirectoryName(_script)!, file), Path.Combine(copied, file));
                 string output = Path.Combine(directory, "compiled");
                 (await FixtureProjects.Dotnet(directory, ["build", Path.Combine(copied, "validate.cs"), "-c", "Release", "-o", output], timeoutMinutes: 4)).AssertSucceeded();
@@ -751,7 +786,7 @@ public sealed class ValidationLimitsTests : IClassFixture<ValidationLimitsTests.
             string unrelated = Path.Combine(directory, "unrelated");
             Directory.CreateDirectory(unrelated);
             using var unrelatedProcess = Process.Start(StartHelper("child", unrelated))!;
-            long unrelatedStart = unrelatedProcess.StartTime.ToUniversalTime().Ticks;
+            long unrelatedStart = OwnedClientCommandLease.LocalStartUtcTicks(unrelatedProcess);
             try
             {
                 var readiness = Stopwatch.StartNew();
@@ -767,7 +802,7 @@ public sealed class ValidationLimitsTests : IClassFixture<ValidationLimitsTests.
                 start.Environment["VT_VALIDATE_PROCESS_LIST_LIMIT_SECONDS"] = "2";
                 using var command = Process.Start(start)!;
                 var elapsed = Stopwatch.StartNew();
-                long commandStart = command.StartTime.ToUniversalTime().Ticks;
+                long commandStart = OwnedClientCommandLease.LocalStartUtcTicks(command);
                 ObservedProcess[] graph = [];
                 var captured = new StringBuilder();
                 async Task Drain(StreamReader reader)
@@ -789,7 +824,7 @@ public sealed class ValidationLimitsTests : IClassFixture<ValidationLimitsTests.
                         observerStart.ArgumentList.Add(command.Id.ToString());
                         observerStart.ArgumentList.Add(commandStart.ToString());
                         using var observer = Process.Start(observerStart)!;
-                        long observerIdentity = observer.StartTime.ToUniversalTime().Ticks;
+                        long observerIdentity = OwnedClientCommandLease.LocalStartUtcTicks(observer);
                         try { await observer.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(3)); Assert.Equal(0, observer.ExitCode); }
                         finally { StopIdentity(observer.Id, observerIdentity); }
                         graph = ReadGraph(Path.Combine(directory, "observed-graph.json"));
@@ -868,35 +903,41 @@ public sealed class ValidationLimitsTests : IClassFixture<ValidationLimitsTests.
 
         private static bool RecordedAlive(ObservedProcess identity)
         {
-            try
-            {
-                using var process = Process.GetProcessById(identity.Pid);
-                return process.StartTime.ToUniversalTime().Ticks == identity.StartUtcTicks && !process.HasExited;
-            }
+            Process process;
+            try { process = Process.GetProcessById(identity.Pid); }
             catch (ArgumentException) { return false; }
+            using (process)
+            {
+                if (process.HasExited) return false;
+                long start;
+                try { start = OwnedClientCommandLease.LocalStartUtcTicks(process); }
+                catch (IOException) when (process.HasExited) { return false; }
+                return start == identity.StartUtcTicks && !process.HasExited;
+            }
         }
 
         private static void StopRecorded(string record)
         {
             if (!File.Exists(record)) return;
             using var identity = JsonDocument.Parse(File.ReadAllText(record));
-            try
-            {
-                StopIdentity(identity.RootElement.GetProperty("Pid").GetInt32(), identity.RootElement.GetProperty("StartUtcTicks").GetInt64());
-            }
-            catch (ArgumentException) { /* It already exited. */ }
+            StopIdentity(identity.RootElement.GetProperty("Pid").GetInt32(), identity.RootElement.GetProperty("StartUtcTicks").GetInt64());
         }
 
         private static void StopIdentity(int pid, long start)
         {
-            try
+            Process process;
+            try { process = Process.GetProcessById(pid); }
+            catch (ArgumentException) { return; /* It already exited. */ }
+            using (process)
             {
-                using var process = Process.GetProcessById(pid);
-                if (process.StartTime.ToUniversalTime().Ticks != start || process.HasExited) return;
+                if (process.HasExited) return;
+                long observed;
+                try { observed = OwnedClientCommandLease.LocalStartUtcTicks(process); }
+                catch (IOException) when (process.HasExited) { return; }
+                if (observed != start || process.HasExited) return;
                 process.Kill(entireProcessTree: true);
                 Assert.True(process.WaitForExit(TimeSpan.FromSeconds(3)), "fixture process did not exit");
             }
-            catch (ArgumentException) { /* It already exited. */ }
         }
 
         /// <summary>The tests a run passed, by name, from the TRX validate.cs keeps for it.</summary>

@@ -1,9 +1,10 @@
 <Project>
   <Import Project="../Directory.Build.props" />
-  <!-- The SDK's file-based-app cache does not notice edits to Shared/*.cs. After editing one,
+  <!-- The SDK's file-based-app cache does not notice edits to linked shared sources. After editing one,
        rebuild each script with `dotnet run`, passing the `no-cache` flag with its two leading hyphens. -->
   <ItemGroup>
     <Compile Include="$(MSBuildThisFileDirectory)Shared/RepositoryPaths.cs" Link="RepositoryPaths.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Shared/ValidationSupport.cs" Link="ValidationSupport.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../src/Valheim.Testing.Game/OwnedClientCommandLease.Identity.cs" Link="OwnedClientCommandLease.Identity.cs" />
   </ItemGroup>
 </Project>
