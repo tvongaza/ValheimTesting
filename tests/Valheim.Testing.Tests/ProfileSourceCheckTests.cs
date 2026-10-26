@@ -238,7 +238,7 @@ public sealed class ProfileSourceCheckTests : IDisposable
         Assert.Equal("after the run", File.ReadAllText(Path.Combine(RecoveredProfile, "added", "preloader_1.log")));
         Assert.Contains("\"verdict\": \"restored\"", File.ReadAllText(Path.Combine(RecoveredProfile, "source-changes.json")));
         Assert.False(File.Exists(baseline.Fields["baseline"])); // settled and journalled: the baseline went last
-        Assert.Equal([JournalEntry.SourceBaseline, JournalEntry.SourceMoveIntended, JournalEntry.SourceSettled], _journal.Select(entry => entry.Kind));
+        Assert.Equal([JournalEntry.SourceBaseline, JournalEntry.SourceMoveIntended, JournalEntry.SourceMoveIntended, JournalEntry.SourceSettled], _journal.Select(entry => entry.Kind));
 
         await PersistAsync(check, _fake);
         File.AppendAllText(baseline.Fields["baseline"], " ");
@@ -248,7 +248,7 @@ public sealed class ProfileSourceCheckTests : IDisposable
 
     // The copy's one recovered folder (its journal actor's, beside its logs), and in it this profile's own source-changes-<id>.
     private string Recovered => Path.Combine(_root + "-runs", "run", "recovered-regression-test");
-    private string RecoveredProfile => Assert.Single(Directory.GetDirectories(Recovered, "source-changes-*"));
+    private string RecoveredProfile => _journal.Last(entry => entry.Fields.ContainsKey("sourceRecoveryAttempt")).Fields["sourceRecoveryAttempt"];
     private Task PersistAsync(ProfileSourceCheck check, IGameHost? host = null) =>
         check.PersistAsync(host ?? _host, Path.GetFullPath(Runtime), "client", entry => { _journal.Add(entry); return Task.CompletedTask; }, TimeSpan.FromSeconds(30));
     private Task<SourceVerdict?> RecoverAsync(IReadOnlyDictionary<string, string> fields, Func<string, bool>? keptApart = null, bool teardown = false, IGameHost? host = null) =>
@@ -374,9 +374,10 @@ public sealed class ProfileSourceCheckTests : IDisposable
         Directory.CreateDirectory(Parent);
         var check = await PrepareAsync();
         await PersistAsync(check);
-        var fields = _journal[0].Fields;
+        var fields = new Dictionary<string, string>(_journal[0].Fields);
         string id = Path.GetFileName(fields["sourceAdded"])[(ProfileSourceCheck.AddedFolder.Length + 1)..];
-        Directory.CreateDirectory(Path.Combine(Recovered, "source-changes-" + id, "added"));
+        fields["sourceRecoveryAttempt"] = Path.Combine(Recovered, "source-changes-" + id);
+        Directory.CreateDirectory(Path.Combine(fields["sourceRecoveryAttempt"], "added"));
         // What an interrupted run moved, which the recovery adopts first.
         Directory.CreateDirectory(check.MovedFilesFolder(Runtime));
         File.WriteAllText(Path.Combine(check.MovedFilesFolder(Runtime), "preloader_1.log"), "the game's");
@@ -390,7 +391,8 @@ public sealed class ProfileSourceCheckTests : IDisposable
         // r3 item 4: named where it is, not where it would have gone.
         Assert.Equal(_host.Name + ":" + Path.Combine(check.MovedFilesFolder(Runtime), "preloader_1.log"), Assert.Single(verdict.Added).KeptAs);
         Assert.Contains(_journal, entry => entry.Kind == JournalEntry.CopyKept && entry.Fields["runtime"] == check.MovedFilesFolder(Runtime));
-        Assert.Single(_journal, entry => entry.Kind == JournalEntry.SourceSettled);
+        Assert.DoesNotContain(_journal, entry => entry.Kind == JournalEntry.SourceSettled);
+        Assert.Contains(_journal, entry => entry.Fields.ContainsKey("sourceAdoptionRefused"));
     }
 
     // r3 item 1: an install that is gone, or that now holds a link, is a state of the host: a finished failure naming it, so the
@@ -463,7 +465,7 @@ public sealed class ProfileSourceCheckTests : IDisposable
             Assert.Contains("cannot be read", verdict.Reason);
             verdict.RequireRetirable();
         }
-        finally { File.SetUnixFileMode(fields["baseline"], UnixFileMode.UserRead | UnixFileMode.UserWrite); }
+        finally { if (File.Exists(fields["baseline"])) File.SetUnixFileMode(fields["baseline"], UnixFileMode.UserRead | UnixFileMode.UserWrite); }
     }
 
     // r3 item 2: a baseline that does not match its journal stays refused by env recover; env teardown finishes it, not compared,
@@ -509,6 +511,8 @@ public sealed class ProfileSourceCheckTests : IDisposable
         Directory.CreateDirectory(Path.Combine(Recovered, "source-changes-" + id, "added"));
         string earlierReport = Path.Combine(Recovered, "source-changes-" + id, "source-changes.json");
         File.WriteAllText(earlierReport, "an earlier recovery's report");
+        fields["sourceRecoveryAttempt"] = Path.Combine(Recovered, "source-changes-" + id + "-pending");
+        Directory.CreateDirectory(Path.Combine(fields["sourceRecoveryAttempt"], "added"));
         Directory.CreateDirectory(check.MovedFilesFolder(Runtime));
         File.WriteAllText(Path.Combine(check.MovedFilesFolder(Runtime), "preloader_1.log"), "the game's");
 

@@ -83,6 +83,36 @@ public sealed class SourceScriptShellTests : IDisposable
             ["root"] = root(dir), ["keep"] = keep(dir), ["files"] = Files(files), ["folders"] = Files(folders),
         }, real);
 
+    [Theory, MemberData(nameof(LocalGameHostShellTests.Shells), MemberType = typeof(LocalGameHostShellTests))]
+    public async Task RecoveryMoveBoundaryAllowsOwnedChildrenButRefusesOutsideAndLinkedDestinations(string shell)
+    {
+        foreach (string kind in new[] { "owned", "outside", "linked" })
+        {
+            string Keep(string dir) => Path.Combine(dir, kind == "outside" ? "foreign" : "evidence", kind == "linked" ? "linked" : "attempt", "added");
+            string reply = await RunBoth(shell, SourceSettleScripts.Bash, SourceSettleScripts.PowerShell,
+                dir =>
+                {
+                    Write(Path.Combine(dir, "install", "new.log"), "source addition");
+                    Write(Path.Combine(dir, "foreign", "sentinel.txt"), "foreign sentinel");
+                    Directory.CreateDirectory(Path.Combine(dir, "evidence"));
+                    if (kind == "linked") DirectoryLinks.Create(Path.Combine(dir, "evidence", "linked"), Path.Combine(dir, "foreign"));
+                    return null;
+                },
+                dir => new()
+                {
+                    ["root"] = Path.Combine(dir, "install"), ["keep"] = Keep(dir), ["keepRoot"] = Path.Combine(dir, "evidence"),
+                    ["files"] = Files("new.log"), ["folders"] = "",
+                }, real: dir =>
+                {
+                    Assert.Equal("foreign sentinel", File.ReadAllText(Path.Combine(dir, "foreign", "sentinel.txt")));
+                    Assert.Equal(kind != "owned", File.Exists(Path.Combine(dir, "install", "new.log")));
+                    if (kind == "owned") Assert.Equal("source addition", File.ReadAllText(Path.Combine(Keep(dir), "new.log")));
+                    else Assert.False(File.Exists(Path.Combine(Keep(dir), "new.log")));
+                });
+            Assert.Contains((kind == "owned" ? "VT-MOVED " : "VT-NOTMOVED ") + B64("new.log") + (kind == "owned" ? "" : " link"), reply);
+        }
+    }
+
     // Each refusal of one path, and folders removed deepest first.
     [Theory, MemberData(nameof(LocalGameHostShellTests.Shells), MemberType = typeof(LocalGameHostShellTests))]
     public async Task TheSettleScriptRefusesLinksEscapesNonFilesAndKeptNamesAndRemovesFoldersDeepestFirst(string shell)
@@ -312,6 +342,89 @@ public sealed class SourceScriptShellTests : IDisposable
             real: dir => Assert.Equal(content, File.ReadAllBytes(Path.Combine(dir, name))));
         Assert.Equal("VT-SOURCE-WRITTEN\n", await Written(Path.Combine("profile", "source-baseline.json")));
         Assert.Equal("VT-SOURCE-WRITTEN\n", await Written(Path.Combine("recovered-client", "source-changes-1234", "source-changes.json")));
+    }
+
+    [Theory, MemberData(nameof(LocalGameHostShellTests.Shells), MemberType = typeof(LocalGameHostShellTests))]
+    public async Task ARecoveryReportWriteNeverOverwritesAnEarlierReport(string shell)
+    {
+        await RunBoth(shell, SourceSettleScripts.BashWrite, SourceSettleScripts.PowerShellWrite,
+            dir => { Write(Path.Combine(dir, "evidence", "attempt", "source-changes.json"), "immutable report"); return null; },
+            dir => new() { ["path"] = Path.Combine(dir, "evidence", "attempt", "source-changes.json"), ["root"] = Path.Combine(dir, "evidence"),
+                ["exclusive"] = "1", ["content"] = B64("replacement") },
+            real: dir => Assert.Equal("immutable report", File.ReadAllText(Path.Combine(dir, "evidence", "attempt", "source-changes.json"))));
+    }
+
+    [Theory, MemberData(nameof(LocalGameHostShellTests.Shells), MemberType = typeof(LocalGameHostShellTests))]
+    public async Task ARecoveryReportPublisherNeverReplacesADestinationThatAppearsAfterItsCheck(string shell)
+    {
+        foreach (string kind in new[] { "file", "directory", "link" })
+        {
+            if (kind == "link" && OperatingSystem.IsWindows()) continue;
+            string dir = Directory.CreateDirectory(Path.Combine(_root, "publication-" + kind)).FullName;
+            string path = Path.Combine(dir, "source-changes.json"), target = Path.Combine(dir, "winner.txt");
+            File.WriteAllText(target, "complete winner");
+            string script = shell == "pwsh" ? SourceSettleScripts.PowerShellWrite : SourceSettleScripts.BashWrite;
+            // An independently completed writer appears at the publication boundary, after the initial guard. Inject at either
+            // publication shape so this same control also exposes the old precheck-then-overwrite implementation.
+            string inject = shell == "pwsh" ? """
+                if ($kind -eq 'directory') { [void][IO.Directory]::CreateDirectory($path) }
+                elseif ($kind -eq 'link') { [void][IO.File]::CreateSymbolicLink($path, $target) }
+                else { [IO.File]::Copy($target, $path) }
+                """ : """
+                if [ "$kind" = directory ]; then mkdir -- "$path"
+                elif [ "$kind" = link ]; then ln -s -- "$target" "$path"
+                else cp -- "$target" "$path"; fi
+                """;
+            string publication = shell == "pwsh" ? @"(?m)^(\s*)(?=\[IO\.File\]::Move\()" : @"(?m)^(\s*)(?=(?:if ! link|mv -f --))";
+            string controlled = System.Text.RegularExpressions.Regex.Replace(script, publication, match => inject + "\n" + match.Value);
+            Assert.NotEqual(script, controlled);
+            var host = new LocalGameHost("late-publish", HostShell.Parse(shell));
+            var result = await host.RunAsync(controlled, new Dictionary<string, string>
+            {
+                ["path"] = path, ["root"] = dir, ["exclusive"] = "1", ["content"] = B64("late losing writer"), ["kind"] = kind, ["target"] = target,
+            }, TimeSpan.FromSeconds(30));
+            Assert.False(result.Succeeded, "A losing report writer replaced the completed destination: " + kind);
+            Assert.Equal("complete winner", File.ReadAllText(target));
+            if (kind == "directory") Assert.Empty(Directory.EnumerateFileSystemEntries(path));
+            else Assert.Equal("complete winner", File.ReadAllText(path));
+            Assert.Empty(Directory.GetFiles(dir, "*.vt-tmp*"));
+        }
+    }
+
+    [Theory, MemberData(nameof(LocalGameHostShellTests.Shells), MemberType = typeof(LocalGameHostShellTests))]
+    public async Task ExclusiveReportWritersDoNotShareAnEarlierWritersTemporaryFile(string shell)
+    {
+        await RunBoth(shell, SourceSettleScripts.BashWrite, SourceSettleScripts.PowerShellWrite,
+            dir => { Write(Path.Combine(dir, "report.json.vt-tmp"), "an earlier writer's temporary bytes"); return null; },
+            dir => new() { ["path"] = Path.Combine(dir, "report.json"), ["root"] = dir, ["exclusive"] = "1", ["content"] = B64("completed report") },
+            real: dir =>
+            {
+                Assert.True(File.Exists(Path.Combine(dir, "report.json.vt-tmp")), "The exclusive writer consumed an earlier writer's temporary file.");
+                Assert.Equal("an earlier writer's temporary bytes", File.ReadAllText(Path.Combine(dir, "report.json.vt-tmp")));
+                Assert.Equal("completed report", File.ReadAllText(Path.Combine(dir, "report.json")));
+            });
+    }
+
+    [Theory, MemberData(nameof(LocalGameHostShellTests.Shells), MemberType = typeof(LocalGameHostShellTests))]
+    public async Task ARecoveryReportOrAdoptionNeverTraversesALink(string shell)
+    {
+        if (OperatingSystem.IsWindows()) return;
+        IDisposable? Arrange(string dir)
+        {
+            Directory.CreateDirectory(Path.Combine(dir, "evidence"));
+            Directory.CreateDirectory(Path.Combine(dir, "foreign"));
+            Write(Path.Combine(dir, "foreign", "sentinel.txt"), "foreign");
+            Directory.CreateSymbolicLink(Path.Combine(dir, "evidence", "attempt"), Path.Combine(dir, "foreign"));
+            Write(Path.Combine(dir, "profile", "source-added-id", "added.log"), "added");
+            return null;
+        }
+        await RunBoth(shell, SourceSettleScripts.BashWrite, SourceSettleScripts.PowerShellWrite, Arrange,
+            dir => new() { ["path"] = Path.Combine(dir, "evidence", "attempt", "source-changes.json"), ["root"] = Path.Combine(dir, "evidence"),
+                ["exclusive"] = "1", ["content"] = B64("report") });
+        string refused = await RunBoth(shell, SourceSettleScripts.BashEvidence, SourceSettleScripts.PowerShellEvidence, Arrange,
+            dir => new() { ["parent"] = Path.Combine(dir, "profile"), ["keep"] = Path.Combine(dir, "profile", "source-added-id"),
+                ["recovered"] = Path.Combine(dir, "evidence", "attempt"), ["recoveredRoot"] = Path.Combine(dir, "evidence"), ["added"] = "", ["baseline"] = "" });
+        Assert.Contains("destination passes through a link", refused);
     }
 
     // ---- the install listing the settlement compares (HostInstallScripts.BashList, .PowerShellList) ----

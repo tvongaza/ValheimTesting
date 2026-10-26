@@ -178,7 +178,7 @@ internal sealed class ProfileSourceCheck
     /// <summary>
     /// A recovery's settlement of the profile <paramref name="runtime"/> of a copy whose journalled <paramref name="fields"/> name a
     /// persisted baseline (<see cref="JournalEntry.SourceBaseline"/>): what the game added goes to this profile's own
-    /// <c>source-changes-&lt;id&gt;</c> folder in <paramref name="recoveredIn"/> (the copy's <c>recovered-&lt;actor&gt;</c>, beside its logs),
+    /// <c>source-changes-&lt;id&gt;-&lt;attempt&gt;</c> folder in <paramref name="recoveredIn"/> (the copy's <c>recovered-&lt;actor&gt;</c>, beside its logs),
     /// with its <c>source-changes.json</c>. A moved-files folder <paramref name="keptApart"/> names (journalled kept on its own entry)
     /// is never adopted: it is <c>env teardown</c>'s. It ends for every journal state:
     /// <list type="bullet">
@@ -191,7 +191,7 @@ internal sealed class ProfileSourceCheck
     /// <item>A baseline that does not match its journal: refused by <c>env recover</c>, nothing moved or removed; with
     /// <paramref name="teardown"/>, <see cref="SourceVerdictKind.Unknown"/>, not compared; what was moved is kept. Under teardown a
     /// baseline over the read limit or that the host user cannot read is the same; a host that does not answer keeps the copy.</item>
-    /// <item>A refused adoption of what was moved: a finished <see cref="SourceVerdictKind.Failed"/>, the folder journalled kept.</item>
+    /// <item>A refused adoption of what was moved: a durable refusal separate from a compared settlement, the moved folder journalled kept.</item>
     /// </list>
     /// </summary>
     internal static async Task<SourceVerdict?> RecoverAsync(IGameHost host, string runtime, string actor, IReadOnlyDictionary<string, string> fields,
@@ -204,6 +204,25 @@ internal sealed class ProfileSourceCheck
         string id = Leaf(fields.GetValueOrDefault("sourceAdded") ?? AddedFolder)[AddedFolder.Length..].TrimStart('-');
         var where = SourceSettlement.Recovery(actor, runtime, HostPath.Join(recoveredIn, "source-changes-" + (id.Length == 0 ? "profile" : id))) with
         { KeptApart = keptApart, Teardown = teardown };
+        // Completion belongs to this exact attempt, never a stale verdict merged from an earlier settlement.
+        string? attempt = fields.GetValueOrDefault("sourceRecoveryAttempt");
+        string prefix = HostPath.Join(recoveredIn, "source-changes-" + (id.Length == 0 ? "profile" : id));
+        if (attempt != null && attempt != prefix &&
+            !(attempt.StartsWith(prefix + "-", StringComparison.Ordinal) && RunJournal.SafeName(attempt[(prefix.Length + 1)..])))
+            throw new InvalidDataException("The journalled source recovery attempt is outside this profile's evidence.");
+        if (attempt != null && (fields.GetValueOrDefault("sourceRecoveryCompleted") == attempt ||
+            fields.GetValueOrDefault("sourceAdoptionRefusedAttempt") == attempt))
+        {
+            var completed = new ProfileSourceCheck(new HostListing(host.Name, host.Shell.Kind, root, new Dictionary<string, string>(), []),
+                new Dictionary<string, string>(), new Dictionary<string, string>(), linked: false, id);
+            if (fields.GetValueOrDefault("sourceAdoptionRefusedAttempt") == attempt &&
+                await HostClientPreflight.Read(host, HostPath.Join(attempt, "source-refusal.json"), timeout, cancellation, BaselineLimit).ConfigureAwait(false) == null)
+                await WriteAsync(host, HostPath.Join(attempt, "source-refusal.json"), Encoding.UTF8.GetBytes(
+                    SourceVerdict.NotCompared(actor, "adoption was refused: " + fields.GetValueOrDefault("sourceAdoptionRefused")).ToJson()),
+                    timeout, cancellation, root: recoveredIn, exclusive: true).ConfigureAwait(false);
+            await completed.DropAsync(host, where, dropMoved: false, timeout, cancellation).ConfigureAwait(false);
+            return null;
+        }
         string? mismatch = null;
         PersistedBaseline? baseline = null;
         byte[]? bytes;
@@ -224,20 +243,42 @@ internal sealed class ProfileSourceCheck
                 catch (JsonException) { baseline = null; }
                 if (baseline == null) mismatch = "cannot be read";
                 else if (baseline.Root != root || baseline.Host != host.Name) mismatch = "names another install than its journal";
+                else if (baseline.Id != id) mismatch = "names another prepared profile than its journal";
             }
             if (mismatch != null && !teardown)
                 throw new InvalidDataException($"the source baseline {path} on {host.Name} {mismatch}, so it is refused and nothing was removed; " +
                     "check the install, then env teardown removes the profile without comparing it");
         }
         // A linked profile lies on the install's volume: a baseline not found while that volume is offline is not a baseline that is gone.
-        if (bytes == null && !teardown && !fields.ContainsKey("sourceVerdict") &&
+        if (bytes == null && root.Length != 0 && !teardown && !fields.ContainsKey("sourceVerdict") &&
             await UnreachableAsync(host, root, HostPath.Parent(runtime), timeout, cancellation).ConfigureAwait(false) is { } offline)
             return SourceVerdict.NotCompared(actor, $"its source baseline {path} was not found, and {offline} on {host.Name} is not reachable, or gone") with
             { Settled = false, Unreachable = true, Host = host.Name, Root = root, Profile = runtime, InRecovery = true };
         // No baseline to compare with: keep what was moved, and name the install as not compared (or, settled by the run, nothing is due).
         var unread = new ProfileSourceCheck(new HostListing(host.Name, host.Shell.Kind, root, new Dictionary<string, string>(), []),
             new Dictionary<string, string>(), new Dictionary<string, string>(), linked: false, id);
-        if (bytes == null || mismatch != null)
+        if (bytes == null && fields.ContainsKey("sourceVerdict") && keptApart(fields.GetValueOrDefault("sourceAdded") ?? "")) return null;
+        if (attempt == null)
+        {
+            // Old fixed-path evidence is preserved. Only unfinished files at this profile's exact old location are resumed;
+            // a completed report is never scratch space for a later invocation.
+            var legacy = await ListFolderAsync(host, prefix, timeout, cancellation).ConfigureAwait(false);
+            attempt = legacy is { Files.Count: > 0 } && !legacy.Files.ContainsKey("source-changes.json")
+                ? prefix : prefix + "-" + Guid.NewGuid().ToString("N");
+            await journal(JournalEntry.Of(JournalEntry.SourceMoveIntended, ("runtime", runtime), ("sourceRecoveryAttempt", attempt))).ConfigureAwait(false);
+        }
+        where = where with { RecoveredIn = attempt };
+        // A report whose completion append was lost is reconciled before any further adoption, comparison or report write.
+        if (await HostClientPreflight.Read(host, HostPath.Join(attempt, "source-changes.json"), timeout, cancellation, BaselineLimit).ConfigureAwait(false) is { } prior)
+        {
+            var verdict = SourceVerdict.FromJson(Encoding.UTF8.GetString(prior)) with { Profile = runtime, InRecovery = true };
+            if (verdict.Actor != actor || verdict.Host != host.Name || verdict.Root != root)
+                throw new InvalidDataException("The unfinished recovery report names another profile's source install.");
+            await JournalSettledAsync(journal, where, verdict).ConfigureAwait(false);
+            await unread.DropAsync(host, where, dropMoved: false, timeout, cancellation).ConfigureAwait(false);
+            return verdict;
+        }
+        if (bytes == null || mismatch != null || root.Length == 0)
         {
             string reason = bytes == null ? $"its source baseline {path} is gone, so the install was not compared"
                 : $"not compared: its source baseline {path} {mismatch}";
@@ -255,11 +296,23 @@ internal sealed class ProfileSourceCheck
                     refused.Message + ". Resolve it by hand; env teardown removes the moved files it kept") { Profile = runtime, InRecovery = true };
                 return await unread.RefusedAsync(host, where, failed, refused, journal, null, journalled: false, timeout, cancellation, adoption: true).ConfigureAwait(false);
             }
+            SourceVerdict verdict;
             if (bytes == null && fields.ContainsKey("sourceVerdict"))
-                return kept.Count == 0 ? null : new SourceVerdict(actor, host.Name, root, "", SourceVerdictKind.Restored, kept, [], [], [], [], [],
+            {
+                if (kept.Count == 0) return null;
+                verdict = new SourceVerdict(actor, host.Name, root, "", SourceVerdictKind.Restored, kept, [], [], [], [], [],
                     "the run settled the install; the files it had moved were not kept yet, and are now") { Profile = runtime, InRecovery = true };
-            if (kept.Count != 0) reason += "; the files it had moved are kept: " + string.Join(", ", kept.Select(file => file.KeptAs));
-            return SourceVerdict.NotCompared(actor, reason) with { Host = host.Name, Root = root, Added = kept, Profile = runtime, InRecovery = true };
+            }
+            else
+            {
+                if (root.Length == 0) reason = "not compared: its journal names no source install";
+                if (kept.Count != 0) reason += "; the files it had moved are kept: " + string.Join(", ", kept.Select(file => file.KeptAs));
+                verdict = SourceVerdict.NotCompared(actor, reason) with { Host = host.Name, Root = root, Added = kept, Profile = runtime, InRecovery = true };
+            }
+            await WriteReportAsync(host, where, null, verdict, timeout, cancellation).ConfigureAwait(false);
+            await JournalSettledAsync(journal, where, verdict).ConfigureAwait(false);
+            await unread.DropAsync(host, where, dropMoved: false, timeout, cancellation).ConfigureAwait(false);
+            return verdict;
         }
         var names = host.Shell.Kind == HostShellKind.PowerShell ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
         var listing = new HostListing(host.Name, host.Shell.Kind, root, baseline!.Files.ToDictionary(file => file.Path, file => file.Sha256, names), [],
@@ -297,7 +350,7 @@ internal sealed class ProfileSourceCheck
     internal async Task<SourceVerdict> SettleAsync(IGameHost host, SourceSettlement where, Func<JournalEntry, Task> journal, TimeSpan timeout,
         CancellationToken cancellation = default)
     {
-        bool content = HashAfterRun, recovery = where.RecoveredIn != null, compared = false;
+        bool content = HashAfterRun, recovery = where.RecoveredIn != null, compared = false, adopting = recovery;
         string mode = content ? SourceVerdict.ContentMode : SourceVerdict.MetadataMode;
         // Where the moved files go: this profile's moved-files folder in a run, its recovered folder in a recovery (never a folder kept
         // on its own entry, which is env teardown's).
@@ -320,6 +373,7 @@ internal sealed class ProfileSourceCheck
             // Inside the try, so even a caller's mistake ends as a verdict that keeps the profile: never retired without one.
             if (host.Name != Source.HostName) throw new ArgumentException($"The source check belongs to {Source.HostName}, not {host.Name}.", nameof(host));
             if (recovery) await AdoptAsync(host, where, timeout, cancellation).ConfigureAwait(false);
+            adopting = false;
             found = Compare(await ListSourceAsync(host, where, content, timeout, cancellation).ConfigureAwait(false), content);
             compared = true;
             bool damaged = found.Changed.Count + found.Missing.Count + found.MissingDirectories.Count != 0;
@@ -334,7 +388,7 @@ internal sealed class ProfileSourceCheck
                 // Journalled before the move: a recovery after an interruption here finds what moved in the moved-files folder.
                 await journal(JournalEntry.Of(JournalEntry.SourceMoveIntended, ("runtime", where.Runtime),
                     ("moving", string.Join('\n', found.Added.Concat(found.AddedDirectories.Select(path => path + "/")))))).ConfigureAwait(false);
-                await MoveAsync(host, keep, found, notMoved, removed, timeout, cancellation).ConfigureAwait(false);
+                await MoveAsync(host, keep, found, notMoved, removed, timeout, cancellation, recovery ? HostPath.Parent(where.RecoveredIn!) : null).ConfigureAwait(false);
                 found = Compare(await ListSourceAsync(host, where, content, timeout, cancellation).ConfigureAwait(false), content);
             }
             (kept, evidence) = await KeepAsync(host, where, keep, journal, timeout, cancellation).ConfigureAwait(false);
@@ -357,7 +411,7 @@ internal sealed class ProfileSourceCheck
             try
             {
                 verdict = await RefusedAsync(host, where, Verdict(SourceVerdictKind.Failed, refused.Message + ". Resolve it by hand; env teardown removes the moved files it kept"),
-                    refused, journal, evidence, journalled, timeout, cancellation).ConfigureAwait(false);
+                    refused, journal, evidence, journalled, timeout, cancellation, adoption: adopting).ConfigureAwait(false);
             }
             catch (Exception lost) { return await UnfinishedAsync(lost).ConfigureAwait(false); }
         }
@@ -384,22 +438,28 @@ internal sealed class ProfileSourceCheck
     }
 
     // The one bookkeeping of a refused settlement, in a run or a recovery: the moved files named where they are now, each folder of
-    // them outside the install journalled kept for env teardown, the settlement journalled once, then its report (best effort: the
-    // journal already holds what matters). A recovery's refused adoption (nothing was compared) journals only the kept folders: no
-    // settlement a later recovery would read as the run's, and no report over an earlier recovery's. Throws when the bookkeeping does
+    // them outside the install journalled kept for env teardown, the report then the settlement journalled once. A recovery's
+    // refused adoption (nothing was compared) has its own durable refusal and diagnostic: no settlement a later recovery would
+    // read as the run's, and no report over an earlier recovery's. Throws when the bookkeeping does
     // not finish, so the caller keeps the profile.
     private async Task<SourceVerdict> RefusedAsync(IGameHost host, SourceSettlement where, SourceVerdict verdict, SourceRefusedException refused,
         Func<JournalEntry, Task> journal, string? evidence, bool journalled, TimeSpan timeout, CancellationToken cancellation, bool adoption = false)
     {
         var (moved, folders) = await MovedFilesAsync(host, where, timeout, cancellation).ConfigureAwait(false);
-        foreach (string folder in folders)
+        foreach (string folder in folders.Where(folder => where.KeptApart?.Invoke(folder) != true))
             await journal(JournalEntry.Of(JournalEntry.CopyKept, ("runtime", folder), ("stage", ""), ("parent", HostPath.Parent(folder)),
                 ("holds", AddedFolder), ("why", "its source settlement was refused: " + refused.Message))).ConfigureAwait(false);
         verdict = verdict with { Added = moved, KeptFolders = folders };
-        if (adoption) return verdict;
+        if (adoption)
+        {
+            await journal(JournalEntry.Of(JournalEntry.SourceMoveIntended, ("runtime", where.Runtime),
+                ("sourceAdoptionRefused", refused.Message), ("sourceAdoptionRefusedAttempt", where.RecoveredIn ?? ""))).ConfigureAwait(false);
+            if (where.RecoveredIn != null)
+                await WriteAsync(host, HostPath.Join(where.RecoveredIn, "source-refusal.json"), Encoding.UTF8.GetBytes(verdict.ToJson()), timeout, cancellation, root: HostPath.Parent(where.RecoveredIn)).ConfigureAwait(false);
+            return verdict;
+        }
+        await WriteReportAsync(host, where, evidence, verdict, timeout, cancellation).ConfigureAwait(false);
         if (!journalled) await JournalSettledAsync(journal, where, verdict, ("refused", refused.Message)).ConfigureAwait(false);
-        try { await WriteReportAsync(host, where, evidence, verdict, timeout, cancellation).ConfigureAwait(false); }
-        catch (Exception lost) { Console.Error.WriteLine($"Warning: could not write the source-changes.json of {where.Actor} on {host.Name}: {lost.Message}"); }
         return verdict;
     }
 
@@ -408,7 +468,8 @@ internal sealed class ProfileSourceCheck
         params (string Key, string Value)[] more) => journal(JournalEntry.Of(JournalEntry.SourceSettled,
         [("runtime", where.Runtime), ("sourceVerdict", verdict.Verdict.ToString()), ("added", verdict.Added.Count.ToString(CultureInfo.InvariantCulture)),
          ("changed", verdict.Changed.Count.ToString(CultureInfo.InvariantCulture)), ("missing", verdict.Missing.Count.ToString(CultureInfo.InvariantCulture)),
-         ("notMoved", verdict.NotMoved.Count.ToString(CultureInfo.InvariantCulture)), .. more]));
+         ("notMoved", verdict.NotMoved.Count.ToString(CultureInfo.InvariantCulture)),
+         .. where.RecoveredIn == null ? Array.Empty<(string, string)>() : [("sourceRecoveryCompleted", where.RecoveredIn)], .. more]));
 
     // The first of the install and the profile's folder that does not answer on the host, or null when both do. A folder that is not
     // there cannot be told from an offline volume: both are "not reachable, or gone". A journal that names no install names none here.
@@ -474,7 +535,7 @@ internal sealed class ProfileSourceCheck
     // The host's one settlement script: each added file into keep, then each added folder removed once empty. A path a Windows host
     // would read as a file of the install (it trims a trailing dot or space) is never sent: no baseline file is ever moved.
     private async Task MoveAsync(IGameHost host, string keep, Differences found, Dictionary<string, string> notMoved, List<string> removed,
-        TimeSpan timeout, CancellationToken cancellation)
+        TimeSpan timeout, CancellationToken cancellation, string? keepRoot = null)
     {
         static string Encode(string path) => Convert.ToBase64String(Encoding.UTF8.GetBytes(path));
         bool windows = host.Shell.Kind == HostShellKind.PowerShell;
@@ -486,7 +547,7 @@ internal sealed class ProfileSourceCheck
         var result = (await host.RunAsync(windows ? SourceSettleScripts.PowerShell : SourceSettleScripts.Bash,
             new Dictionary<string, string>
             {
-                ["root"] = Source.Root, ["keep"] = keep,
+                ["root"] = Source.Root, ["keep"] = keep, ["keepRoot"] = keepRoot ?? "",
                 ["files"] = string.Join('\n', found.Added.Where(path => !NamesInstall(path)).Select(Encode)),
                 ["folders"] = string.Join('\n', found.AddedDirectories.Where(path => !NamesInstall(path)).Select(Encode)),
             }, timeout, cancellation).ConfigureAwait(false)).EnsureSuccess($"Moving what the run added out of {Source.Root} on {host.Name}");
@@ -559,7 +620,7 @@ internal sealed class ProfileSourceCheck
         {
             if (folder.Replace('\\', '/').StartsWith(inside, comparison)) continue;
             var listing = await ListFolderAsync(host, folder, timeout, cancellation).ConfigureAwait(false);
-            if (listing is not { Files.Count: > 0 }) continue;
+            if (listing == null) continue;
             if (folder == own) folders.Add(folder);
             files.AddRange(listing.Files.OrderBy(file => file.Key, StringComparer.Ordinal).Select(file =>
                 new SourceAddedFile(file.Key, listing.States[file.Key].Size, file.Value, host.Name + ":" + HostPath.Join(folder, file.Key))));
@@ -579,7 +640,7 @@ internal sealed class ProfileSourceCheck
             new Dictionary<string, string>
             {
                 ["parent"] = where.Parent, ["keep"] = KeepFolder(where.Parent), ["added"] = dropMoved ? "1" : "",
-                ["recovered"] = recovered ?? "", ["baseline"] = dropBaseline ? "1" : "",
+                ["recovered"] = recovered ?? "", ["recoveredRoot"] = recovered == null ? "" : HostPath.Parent(recovered), ["baseline"] = dropBaseline ? "1" : "",
             }, timeout, cancellation).ConfigureAwait(false)).EnsureSuccess($"Settling the moved files of {where.Runtime} on {host.Name}");
         if (InteractiveClient.Line(reply.Stdout, "VT-SOURCE-REFUSED ") is { } refused)
             throw new SourceRefusedException($"the host refused to keep the files moved out of {Source.Root} on {host.Name}: {refused}");
@@ -603,7 +664,8 @@ internal sealed class ProfileSourceCheck
     {
         if (where.RecoveredIn != null)
         {
-            await WriteAsync(host, HostPath.Join(where.RecoveredIn, "source-changes.json"), Encoding.UTF8.GetBytes(verdict.ToJson()), timeout, cancellation).ConfigureAwait(false);
+            await WriteAsync(host, HostPath.Join(where.RecoveredIn, "source-changes.json"), Encoding.UTF8.GetBytes(verdict.ToJson()), timeout, cancellation,
+                root: HostPath.Parent(where.RecoveredIn), exclusive: true).ConfigureAwait(false);
             return;
         }
         if (where.Output == null) return;
@@ -612,10 +674,10 @@ internal sealed class ProfileSourceCheck
         File.WriteAllText(Path.Combine(local, "source-changes.json"), verdict.ToJson());
     }
 
-    private static async Task WriteAsync(IGameHost host, string path, byte[] bytes, TimeSpan timeout, CancellationToken cancellation)
+    private static async Task WriteAsync(IGameHost host, string path, byte[] bytes, TimeSpan timeout, CancellationToken cancellation, string? root = null, bool exclusive = false)
     {
         var result = (await host.RunAsync(host.Shell.Kind == HostShellKind.PowerShell ? SourceSettleScripts.PowerShellWrite : SourceSettleScripts.BashWrite,
-            new Dictionary<string, string> { ["path"] = path, ["content"] = Convert.ToBase64String(bytes) }, timeout, cancellation).ConfigureAwait(false))
+            new Dictionary<string, string> { ["path"] = path, ["content"] = Convert.ToBase64String(bytes), ["root"] = root ?? "", ["exclusive"] = exclusive ? "1" : "" }, timeout, cancellation).ConfigureAwait(false))
             .EnsureSuccess($"Writing {path} on {host.Name}");
         if (InteractiveClient.Line(result.Stdout, "VT-SOURCE-WRITTEN") == null)
             throw new HostOperationException($"Unexpected reply while writing {path} on {host.Name}", result);

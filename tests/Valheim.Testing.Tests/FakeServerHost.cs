@@ -402,9 +402,22 @@ internal sealed class FakeServerHost : IGameHost
             case "source-write":
                 try
                 {
+                    if (v.GetValueOrDefault("root") is { Length: > 0 } boundary)
+                    {
+                        ProtectedPaths.RequireUnlinkedPath(Local(boundary), Local(v["path"]));
+                        ProtectedPaths.RequireUnlinkedPath(Local(boundary), Local(v["path"]) + ".vt-tmp");
+                    }
+                    if (v.GetValueOrDefault("exclusive") == "1" && Path.Exists(Local(v["path"])))
+                        return new HostResult(HostOutcome.Exited, 3, "", "report already exists", TimeSpan.Zero, false);
                     Directory.CreateDirectory(Path.GetDirectoryName(Local(v["path"]))!);
-                    File.WriteAllBytes(Local(v["path"]) + ".vt-tmp", Convert.FromBase64String(v["content"]));
-                    File.Move(Local(v["path"]) + ".vt-tmp", Local(v["path"]), overwrite: true);
+                    bool exclusive = v.GetValueOrDefault("exclusive") == "1";
+                    string temporary = Local(v["path"]) + ".vt-tmp" + (exclusive ? "." + Guid.NewGuid().ToString("N") : "");
+                    try
+                    {
+                        File.WriteAllBytes(temporary, Convert.FromBase64String(v["content"]));
+                        File.Move(temporary, Local(v["path"]), overwrite: !exclusive);
+                    }
+                    finally { if (exclusive && File.Exists(temporary)) File.Delete(temporary); }
                 }
                 catch (Exception error) when (error is IOException or UnauthorizedAccessException)
                 { return new HostResult(HostOutcome.Exited, Windows ? 1 : 3, "", error.Message, TimeSpan.Zero, false); }
@@ -473,6 +486,7 @@ internal sealed class FakeServerHost : IGameHost
                     if (!File.Exists(from)) return;
                     if (File.GetLastWriteTimeUtc(from) < copied) { reply.Append("VT-LOG-OLDER " + name + "\n"); return; }
                     string to = Path.Combine(Local(v["keep"]), name);
+                    ProtectedPaths.RequireUnlinkedPath(Path.GetDirectoryName(Local(v["keep"]))!, to);
                     Directory.CreateDirectory(Path.GetDirectoryName(to)!); File.Copy(from, to, overwrite: true);
                     reply.Append("VT-LOG-KEPT " + name + "\n");
                 }
@@ -818,6 +832,9 @@ internal sealed class FakeServerHost : IGameHost
             case "world-reserve":
             {
                 string keep = Local(v["keep"]);
+                if (v.GetValueOrDefault("root") is { Length: > 0 } root)
+                    try { ProtectedPaths.RequireUnlinkedPath(Local(root), keep); }
+                    catch (IOException) { return new HostResult(HostOutcome.Exited, 4, "", "linked destination", TimeSpan.Zero, false); }
                 if (Path.Exists(keep) || v["stage"].Length != 0 && Path.Exists(Local(v["stage"]))) return new HostResult(HostOutcome.Exited, 4, "", "", TimeSpan.Zero, false);
                 Directory.CreateDirectory(keep);
                 return Ok("VT-WORLD-RESERVED done\n");
@@ -987,7 +1004,13 @@ internal sealed class FakeServerHost : IGameHost
         {
             if (line.Length == 0) continue;
             if (SettleRelative(line) is not { } parts) { Line("VT-NOTMOVED", line, "outside"); continue; }
-            string source = Exact(Path.Combine([root, .. parts])), target = Exact(Path.Combine([keep, .. parts]));
+            string source = Exact(Path.Combine([root, .. parts])), target = Path.Combine([keep, .. parts]);
+            // As PowerShell does before Get-VtExact: compare ordinary paths, then use the extended spelling only for I/O.
+            // Comparing C:\... with \\?\C:\... would falsely classify an owned target as outside its boundary on Windows.
+            if (v.GetValueOrDefault("keepRoot") is { Length: > 0 } boundary)
+                try { ProtectedPaths.RequireUnlinkedPath(Local(boundary), target); }
+                catch (IOException) { Line("VT-NOTMOVED", line, "link"); continue; }
+            target = Exact(target);
             if (!Unlinked(root, parts)) { Line("VT-NOTMOVED", line, "link"); continue; }
             if (!File.Exists(source) && !Directory.Exists(source)) { Line("VT-GONE", line); continue; }
             if (!File.Exists(source)) { Line("VT-NOTMOVED", line, "not-a-file"); continue; }
@@ -1047,6 +1070,9 @@ internal sealed class FakeServerHost : IGameHost
         string kept = Local(keep), root = Local(parent);
         if (recovered.Length != 0)
         {
+            if (v.GetValueOrDefault("recoveredRoot") is { Length: > 0 } boundary)
+                try { ProtectedPaths.RequireUnlinkedPath(Local(boundary), Path.Combine(Local(recovered), "added")); }
+                catch (IOException) { return Refused("the recovered destination passes through a link"); }
             if (NameLink(kept)) return Refused("the moved files folder is a link");
             if (Directory.Exists(kept))
             {
