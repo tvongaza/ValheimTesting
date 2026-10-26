@@ -24,7 +24,11 @@ jobs:
       - uses: ./.github/actions/setup
         with:
           pinned-downloads: true
-      - run: dotnet run scripts/bootstrap-cli.cs
+      - name: Build the pinned CLI transport package
+        uses: ./.github/actions/setup
+        with:
+          phase: bootstrap
+          evidence-label: native-linux
       - name: Build the private image (never pushed)
         timeout-minutes: 30
         run: bash docker/linux-server/build.sh --pull -t valheimtesting-linux-server:ci
