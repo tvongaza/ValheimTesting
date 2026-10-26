@@ -154,6 +154,154 @@ public sealed partial class HostedServerRunTests
     }
 }
 
+// RunFolder's admission failures, with the existing host mirror and post-effect reply-loss seam.
+public sealed class RunFolderTests : IDisposable
+{
+    private readonly TempDirectory _temp = new();
+    private const string RunId = "run-folder-failure";
+    public void Dispose() => _temp.Dispose();
+    private FakeServerHost Host(bool windows = false) => new("box", Path.Combine(_temp.Path, "host"), windows: windows);
+    private static RunFolder Folder(IGameHost host, Func<JournalEntry, CancellationToken, Task> journal, RunFolder.Claims? claims = null) =>
+        new(host, "box", "/journal", host.Shell.Kind == HostShellKind.PowerShell ? "C:/runtime" : "/runtime", RunId, journal, claims);
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task AFailedNotMadeReceiptKeepsTheForeignFolderAndExplainsTheRefusal(bool windows, bool receiptTimedOut)
+    {
+        var host = Host(windows);
+        var attempts = new List<JournalEntry>();
+        var durable = new List<JournalEntry>();
+        Exception receiptFailure = receiptTimedOut
+            ? new HostOperationException("Appending the refusal receipt", new HostResult(HostOutcome.Unknown, null, "", "journal append timed out", TimeSpan.FromSeconds(1), true))
+            : new IOException("journal storage unavailable");
+        var folder = Folder(host, (entry, token) =>
+        {
+            attempts.Add(entry);
+            if (entry.Kind == JournalEntry.CopyRetired)
+            {
+                Assert.Equal(CancellationToken.None, token);
+                Assert.Equal("it already existed", entry.Fields["notMade"]);
+                throw receiptFailure;
+            }
+            durable.Add(entry);
+            return Task.CompletedTask;
+        });
+        string foreign = host.Local(folder.Path);
+        Directory.CreateDirectory(foreign);
+        File.WriteAllText(Path.Combine(foreign, "theirs.txt"), "foreign sentinel");
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => folder.MakeAsync(default));
+
+        Assert.Contains(folder.Path, error.Message);
+        Assert.Contains(host.Name, error.Message);
+        Assert.Contains("already exists", error.Message);
+        Assert.Contains("did not create or own", error.Message);
+        Assert.Contains("notMade refusal receipt could not be recorded", error.Message);
+        Assert.Contains("exited with code 4", error.Message);
+        Assert.Same(receiptFailure, error.InnerException);
+        if (receiptFailure is HostOperationException append)
+        {
+            Assert.Equal(HostOutcome.Unknown, append.Result.Outcome);
+            Assert.True(append.Result.TimedOut);
+        }
+        Assert.False(folder.Made);
+        Assert.Null(await folder.SettleAsync(Path.Combine(_temp.Path, "output"), null, default));
+        Assert.Contains("already claimed by this run", (await Assert.ThrowsAsync<InvalidOperationException>(() => folder.MakeAsync(default))).Message);
+        Assert.Equal([JournalEntry.CopyIntended, JournalEntry.CopyRetired], attempts.Select(entry => entry.Kind));
+        Assert.Equal(JournalEntry.CopyIntended, Assert.Single(durable).Kind);
+        Assert.Equal("world-reserve", Assert.Single(host.Runs).Script);
+        Assert.Equal(["theirs.txt"], Directory.EnumerateFileSystemEntries(foreign).Select(Path.GetFileName));
+        Assert.Equal("foreign sentinel", File.ReadAllText(Path.Combine(foreign, "theirs.txt")));
+        Assert.False(Directory.Exists(Path.Combine(_temp.Path, "output")));
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task ALostReservationReplyRetainsItsClaimAndRefusesASecondMutation(bool windows, bool timedOut)
+    {
+        var inner = Host(windows);
+        var lost = timedOut ? new HostResult(HostOutcome.Unknown, null, "", "reply timed out", TimeSpan.FromSeconds(1), true)
+            : FakeServerHost.TransportFailure;
+        var host = new ForwardingWorldHost(inner)
+        {
+            AfterRun = (script, variables, result) => script == (windows ? HostedWorldOnHost.WindowsReserve : HostedWorldOnHost.BashReserve) ? lost : result,
+        };
+        var journal = new List<JournalEntry>();
+        var claims = new RunFolder.Claims();
+        Task Append(JournalEntry entry, CancellationToken token) { journal.Add(entry); return Task.CompletedTask; }
+        var folder = Folder(host, Append, claims);
+
+        var first = await Assert.ThrowsAsync<HostOperationException>(() => folder.MakeAsync(default));
+        Assert.Same(lost, first.Result);
+        Assert.False(folder.Made);
+        Assert.True(Directory.Exists(inner.Local(folder.Path))); // The effect happened; only its reply was lost.
+        File.WriteAllText(Path.Combine(inner.Local(folder.Path), "unconfirmed.txt"), "do not touch");
+
+        var retry = await Assert.ThrowsAsync<InvalidOperationException>(() => folder.MakeAsync(default));
+        var secondRole = Folder(host, Append, claims);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => secondRole.MakeAsync(default));
+        Assert.Null(await folder.SettleAsync(Path.Combine(_temp.Path, "output"), null, default));
+
+        Assert.Contains(folder.Path, retry.Message);
+        Assert.Contains(host.Name, retry.Message);
+        Assert.Contains("already claimed by this run", retry.Message);
+        Assert.Contains("another role or an earlier unconfirmed reservation", retry.Message);
+        Assert.False(secondRole.Made);
+        Assert.Equal(JournalEntry.CopyIntended, Assert.Single(journal).Kind);
+        Assert.Equal("world-reserve", Assert.Single(inner.Runs).Script);
+        Assert.Equal("do not touch", File.ReadAllText(Path.Combine(inner.Local(folder.Path), "unconfirmed.txt")));
+        Assert.Equal(["unconfirmed.txt"], Directory.EnumerateFileSystemEntries(inner.Local(folder.Path)).Select(Path.GetFileName));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AFailedInitialIntentReleasesItsClaimBeforeAnyReservation(bool cancelled)
+    {
+        var host = Host();
+        var claims = new RunFolder.Claims();
+        Exception failure = cancelled ? new OperationCanceledException("injected intent cancellation") : new IOException("intent could not be written");
+        var first = Folder(host, (_, _) => throw failure, claims);
+
+        Assert.Same(failure, await Record.ExceptionAsync(() => first.MakeAsync(default)));
+        Assert.False(first.Made);
+        Assert.Empty(host.Runs);
+        Assert.False(Directory.Exists(host.Local(first.Path)));
+
+        var journal = new List<JournalEntry>();
+        var second = Folder(host, (entry, _) => { journal.Add(entry); return Task.CompletedTask; }, claims);
+        await second.MakeAsync(default);
+
+        Assert.True(second.Made);
+        Assert.Equal(JournalEntry.CopyIntended, Assert.Single(journal).Kind);
+        Assert.Equal("world-reserve", Assert.Single(host.Runs).Script);
+        Assert.Contains("already claimed by this run", (await Assert.ThrowsAsync<InvalidOperationException>(() => first.MakeAsync(default))).Message);
+        Assert.Single(journal);
+        Assert.Single(host.Runs);
+    }
+
+    [Fact] public async Task AnInjectedReceiptCancellationKeepsItsIdentityAndLeavesTheFolderUnowned()
+    {
+        var host = Host();
+        var cancelled = new OperationCanceledException("injected receipt cancellation");
+        var folder = Folder(host, (entry, _) => entry.Kind == JournalEntry.CopyRetired ? throw cancelled : Task.CompletedTask);
+        Directory.CreateDirectory(host.Local(folder.Path));
+        File.WriteAllText(Path.Combine(host.Local(folder.Path), "theirs.txt"), "foreign sentinel");
+
+        Assert.Same(cancelled, await Assert.ThrowsAsync<OperationCanceledException>(() => folder.MakeAsync(default)));
+        Assert.False(folder.Made);
+        Assert.Null(await folder.SettleAsync(Path.Combine(_temp.Path, "output"), null, default));
+        Assert.Equal("foreign sentinel", File.ReadAllText(Path.Combine(host.Local(folder.Path), "theirs.txt")));
+        Assert.Equal("world-reserve", Assert.Single(host.Runs).Script);
+    }
+}
+
 // The run folder's own scripts in a real shell (bash, or pwsh on Windows): made atomically, fetched whole, removed through the
 // protected-path remover, and the environment's runtime folder left in place.
 public sealed class RunFolderShellTests : IDisposable
@@ -228,7 +376,7 @@ public sealed class RunFolderShellTests : IDisposable
         var second = new RunFolder(host, "local", Journal, Runtime, RunId,
             (entry, token) => new RunJournal(RunId).AppendAsync(host, Journal, "server", entry, TimeSpan.FromSeconds(30), token), claims);
 
-        Assert.Contains("already another role's run folder", (await Assert.ThrowsAsync<InvalidOperationException>(() => second.MakeAsync(default))).Message);
+        Assert.Contains("already claimed by this run", (await Assert.ThrowsAsync<InvalidOperationException>(() => second.MakeAsync(default))).Message);
 
         Assert.True(Directory.Exists(first.Path));
         Assert.Equal([JournalEntry.CopyIntended], await KindsOf(host, first.Path));
@@ -271,5 +419,59 @@ public sealed class RunFolderShellTests : IDisposable
         Assert.Equal("not the run's", File.ReadAllText(Path.Combine(folder.Path, "theirs.txt")));
         Assert.Equal([JournalEntry.CopyIntended, JournalEntry.CopyRetired], await KindsOf(host, folder.Path));
         Assert.Empty(RunJournalStatus.Left("local", await RunJournalOnHost.ReadAsync(host, Journal, RunId, TimeSpan.FromSeconds(30))));
+    }
+
+    [Theory, MemberData(nameof(LocalGameHostShellTests.Shells), MemberType = typeof(LocalGameHostShellTests))]
+    public async Task AFailedNotMadeReceiptNamesTheForeignFolderWithoutTouchingIt(string shell)
+    {
+        var host = Host(shell);
+        var receiptFailure = new IOException("the refusal receipt cannot be written");
+        var folder = new RunFolder(host, "local", Journal, Runtime, RunId, (entry, token) =>
+            entry.Kind == JournalEntry.CopyRetired ? throw receiptFailure
+                : new RunJournal(RunId).AppendAsync(host, Journal, "client", entry, TimeSpan.FromSeconds(30), token));
+        Directory.CreateDirectory(folder.Path);
+        File.WriteAllText(Path.Combine(folder.Path, "theirs.txt"), "foreign sentinel");
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => folder.MakeAsync(default));
+
+        Assert.Contains(folder.Path, error.Message);
+        Assert.Contains(host.Name, error.Message);
+        Assert.Contains("did not create or own", error.Message);
+        Assert.Contains("notMade refusal receipt could not be recorded", error.Message);
+        Assert.Contains("exited with code 4", error.Message);
+        Assert.Same(receiptFailure, error.InnerException);
+        Assert.False(folder.Made);
+        string output = Path.Combine(_root, "output");
+        Assert.Null(await folder.SettleAsync(output, null, default));
+        Assert.False(Directory.Exists(output));
+        Assert.Equal(["theirs.txt"], Directory.EnumerateFileSystemEntries(folder.Path).Select(Path.GetFileName));
+        Assert.Equal("foreign sentinel", File.ReadAllText(Path.Combine(folder.Path, "theirs.txt")));
+        Assert.Equal([JournalEntry.CopyIntended], await KindsOf(host, folder.Path));
+    }
+
+    [Theory, MemberData(nameof(LocalGameHostShellTests.Shells), MemberType = typeof(LocalGameHostShellTests))]
+    public async Task ALostReservationReplyNeverRepeatsTheRealShellMutation(string shell)
+    {
+        var calls = new List<string>();
+        var host = new ForwardingWorldHost(Host(shell)) { BeforeRun = (script, _) => calls.Add(script) };
+        var folder = Folder(host);
+        var lost = new HostResult(HostOutcome.Unknown, null, "", "injected lost reply", TimeSpan.FromSeconds(1), true);
+        host.AfterRun = (script, variables, result) => script == (host.Shell.Kind == HostShellKind.PowerShell ? HostedWorldOnHost.WindowsReserve : HostedWorldOnHost.BashReserve)
+            ? lost : result;
+
+        Assert.Same(lost, (await Assert.ThrowsAsync<HostOperationException>(() => folder.MakeAsync(default))).Result);
+        Assert.True(Directory.Exists(folder.Path)); // A real shell reserved it before its successful reply was replaced.
+        File.WriteAllText(Path.Combine(folder.Path, "unconfirmed.txt"), "do not touch");
+        int beforeRetry = calls.Count;
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => folder.MakeAsync(default));
+        Assert.Null(await folder.SettleAsync(Path.Combine(_root, "output"), null, default));
+
+        Assert.Contains("another role or an earlier unconfirmed reservation", error.Message);
+        Assert.Equal(beforeRetry, calls.Count);
+        Assert.False(folder.Made);
+        Assert.Equal("do not touch", File.ReadAllText(Path.Combine(folder.Path, "unconfirmed.txt")));
+        Assert.Equal(["unconfirmed.txt"], Directory.EnumerateFileSystemEntries(folder.Path).Select(Path.GetFileName));
+        host.AfterRun = null;
+        Assert.Equal([JournalEntry.CopyIntended], await KindsOf(host, folder.Path));
     }
 }
