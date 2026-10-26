@@ -1,19 +1,27 @@
-name: Private bootstrap fixture identity diagnostic
-# TEMPORARY private proposal: replace test.yml only after separate source/runtime grant.
+name: Private SDK403 bootstrap failure control
+# Temporary prospective diagnostic only; no runtime grant is encoded here.
 on:
   workflow_dispatch:
 permissions:
   contents: read
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+  DOTNET_NOLOGO: '1'
 jobs:
-  fixture-identity:
+  bootstrap-sdk403-control:
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    # Existing hosted bootstrap job bound is outer safety only.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - name: Launch one owned fixture and record setup identity
-        id: fixture
+      - name: Use the existing SDK setup policy without caches
+        uses: ./.github/actions/setup
+        with:
+          phase: setup
+      - name: Prepare one owned audit failure using reviewed controller06
+        id: bootstrap-control-fixture
         shell: bash
         run: |
           fixture_directory=$(mktemp -d "$RUNNER_TEMP/bootstrap-control.XXXXXXXX")
@@ -433,15 +441,32 @@ jobs:
               if mode in ['setup','fixture-setup']:setup(root,workspace,fixture_only=mode=='fixture-setup')
               else:raise SystemExit(0 if cleanup(root,workspace,fixture_only=mode=='fixture-cleanup') else 1)
           CONTROL_PY
-          python3 "$fixture_directory/control.py" fixture-setup
-      - name: Independently guard cleanup and verify listener closure
+          python3 "$fixture_directory/control.py" setup
+      - name: Invoke the original bootstrap capture and uploader once
+        id: bootstrap
+        # Prior120s startup-control budget, including the composite's overhead.
+        # This temporary step bound does not change the production action.
+        timeout-minutes: 2
+        uses: ./.github/actions/setup
+        with:
+          phase: bootstrap
+          evidence-label: control-nu1900-linux
+      - name: Later ordinary step must remain skipped
+        shell: bash
+        run: |
+          echo '::error::Bootstrap unexpectedly permitted the later sentinel.'
+          exit 1
+      - name: Restore config and independently stop the owned audit fixture
+        id: bootstrap-control-cleanup
         if: always()
         shell: bash
         env:
-          FIXTURE_DIRECTORY: ${{ steps.fixture.outputs.fixture-directory }}
+          FIXTURE_DIRECTORY: ${{ steps.bootstrap-control-fixture.outputs.fixture-directory }}
+          CONTROL_EVIDENCE_DIRECTORY: ${{ steps.bootstrap.outputs.evidence-directory }}
+          BOOTSTRAP_OUTCOME: ${{ steps.bootstrap.outcome }}
         run: |
           if [[ -z "$FIXTURE_DIRECTORY" ]]; then
-            echo '::error::Fixture allocation/output absent; diagnostic not established.'
+            echo '::error::Fixture state absent; the negative control was not established.'
             exit 1
           fi
           case "$FIXTURE_DIRECTORY" in
@@ -449,7 +474,7 @@ jobs:
             *) echo '::error::Refuse an unexpected fixture path.'; exit 1 ;;
           esac
           if [[ ! -f "$FIXTURE_DIRECTORY/control.py" ]]; then
-            echo '::error::Controller not fully prepared; diagnostic not established.'
+            echo '::error::Fixture controller not fully prepared; negative control invalid.'
             exit 1
           fi
-          python3 "$FIXTURE_DIRECTORY/control.py" fixture-cleanup
+          python3 "$FIXTURE_DIRECTORY/control.py" cleanup
