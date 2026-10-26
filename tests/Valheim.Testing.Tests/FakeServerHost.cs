@@ -1004,10 +1004,13 @@ internal sealed class FakeServerHost : IGameHost
         {
             if (line.Length == 0) continue;
             if (SettleRelative(line) is not { } parts) { Line("VT-NOTMOVED", line, "outside"); continue; }
-            string source = Exact(Path.Combine([root, .. parts])), target = Exact(Path.Combine([keep, .. parts]));
+            string source = Exact(Path.Combine([root, .. parts])), target = Path.Combine([keep, .. parts]);
+            // As PowerShell does before Get-VtExact: compare ordinary paths, then use the extended spelling only for I/O.
+            // Comparing C:\... with \\?\C:\... would falsely classify an owned target as outside its boundary on Windows.
             if (v.GetValueOrDefault("keepRoot") is { Length: > 0 } boundary)
                 try { ProtectedPaths.RequireUnlinkedPath(Local(boundary), target); }
                 catch (IOException) { Line("VT-NOTMOVED", line, "link"); continue; }
+            target = Exact(target);
             if (!Unlinked(root, parts)) { Line("VT-NOTMOVED", line, "link"); continue; }
             if (!File.Exists(source) && !Directory.Exists(source)) { Line("VT-GONE", line); continue; }
             if (!File.Exists(source)) { Line("VT-NOTMOVED", line, "not-a-file"); continue; }

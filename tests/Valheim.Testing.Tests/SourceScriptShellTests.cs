@@ -83,6 +83,36 @@ public sealed class SourceScriptShellTests : IDisposable
             ["root"] = root(dir), ["keep"] = keep(dir), ["files"] = Files(files), ["folders"] = Files(folders),
         }, real);
 
+    [Theory, MemberData(nameof(LocalGameHostShellTests.Shells), MemberType = typeof(LocalGameHostShellTests))]
+    public async Task RecoveryMoveBoundaryAllowsOwnedChildrenButRefusesOutsideAndLinkedDestinations(string shell)
+    {
+        foreach (string kind in new[] { "owned", "outside", "linked" })
+        {
+            string Keep(string dir) => Path.Combine(dir, kind == "outside" ? "foreign" : "evidence", kind == "linked" ? "linked" : "attempt", "added");
+            string reply = await RunBoth(shell, SourceSettleScripts.Bash, SourceSettleScripts.PowerShell,
+                dir =>
+                {
+                    Write(Path.Combine(dir, "install", "new.log"), "source addition");
+                    Write(Path.Combine(dir, "foreign", "sentinel.txt"), "foreign sentinel");
+                    Directory.CreateDirectory(Path.Combine(dir, "evidence"));
+                    if (kind == "linked") DirectoryLinks.Create(Path.Combine(dir, "evidence", "linked"), Path.Combine(dir, "foreign"));
+                    return null;
+                },
+                dir => new()
+                {
+                    ["root"] = Path.Combine(dir, "install"), ["keep"] = Keep(dir), ["keepRoot"] = Path.Combine(dir, "evidence"),
+                    ["files"] = Files("new.log"), ["folders"] = "",
+                }, real: dir =>
+                {
+                    Assert.Equal("foreign sentinel", File.ReadAllText(Path.Combine(dir, "foreign", "sentinel.txt")));
+                    Assert.Equal(kind != "owned", File.Exists(Path.Combine(dir, "install", "new.log")));
+                    if (kind == "owned") Assert.Equal("source addition", File.ReadAllText(Path.Combine(Keep(dir), "new.log")));
+                    else Assert.False(File.Exists(Path.Combine(Keep(dir), "new.log")));
+                });
+            Assert.Contains((kind == "owned" ? "VT-MOVED " : "VT-NOTMOVED ") + B64("new.log") + (kind == "owned" ? "" : " link"), reply);
+        }
+    }
+
     // Each refusal of one path, and folders removed deepest first.
     [Theory, MemberData(nameof(LocalGameHostShellTests.Shells), MemberType = typeof(LocalGameHostShellTests))]
     public async Task TheSettleScriptRefusesLinksEscapesNonFilesAndKeptNamesAndRemovesFoldersDeepestFirst(string shell)
