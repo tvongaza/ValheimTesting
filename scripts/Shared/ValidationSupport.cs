@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Xml.Linq;
 
 internal sealed record ValidationInvocation(
@@ -132,6 +133,10 @@ internal static class ValidationLimitReports
         }
     }
 
+    public static string PreparationLimitFailure(string command, TimeSpan elapsed, TimeSpan cap) =>
+        $"PREPARATION LIMIT: {command} is still running after {Elapsed(elapsed)} (preparation cap {Elapsed(cap)}); " +
+        "no test names: preparation ended before the test command started";
+
     public static string HardLimitFailure(string command, TimeSpan elapsed, TimeSpan hardLimit, string? noTestNamesReason) =>
         $"FAILED: over the hard limit of {Elapsed(hardLimit)} after {Elapsed(elapsed)}: {command}" +
         (noTestNamesReason == null ? "" : $"; no test names: {noTestNamesReason}");
@@ -142,4 +147,12 @@ internal static class ValidationLimitReports
 internal static class ValidationLimitHandling
 {
     public static bool ShouldWaitForCommandExit(int stoppedTestHosts) => stoppedTestHosts != 0;
+}
+
+// Internal script policy only: plain builds and Capture are deliberately outside the first preparation fix.
+internal enum ValidationCommandPhase { Ordinary, Preparation, Test }
+
+internal sealed record ValidationOwnedProcess(Process Handle, long StartUtcTicks, int Depth, bool IsTestHost)
+{
+    public Task? StopRequest { get; set; }
 }

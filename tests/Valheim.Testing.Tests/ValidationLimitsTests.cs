@@ -1,3 +1,7 @@
+using System.Diagnostics;
+using System.Text;
+using System.Text.Json;
+using System.Xml.Linq;
 using Xunit;
 
 // #719: every test command scripts/validate.cs starts has a soft limit (a warning) and a hard limit (stopped, failed, the tests in
@@ -46,6 +50,202 @@ public sealed class ValidationLimitsTests : IClassFixture<ValidationLimitsTests.
         Has(run, "started and not completed: LimitsProbe.HardLimitProbeTests.NeverFinishes");
         Lacks(run, "::warning");
         Assert.Equal(new[] { "LimitsProbe.HardLimitProbeTests.FinishesBeforeTheHardLimit" }, _probe.Passed("HardLimitProbeTests", split: false));
+    }
+
+    [Fact]
+    public async Task PreparationStopsBeforeTestEntryAndDoesNotReportStaleResults()
+    {
+        var probe = await _probe.RunPreparation("stall");
+        Assert.NotEqual(0, probe.Run.ExitCode);
+        Has(probe.Run, "PREPARATION LIMIT:");
+        Has(probe.Run, "no test names: preparation ended before the test command started");
+        Has(probe.Run, "cleanup: root and all known owned descendants exited");
+        Lacks(probe.Run, "start: dotnet test");
+        Lacks(probe.Run, "SOFT LIMIT");
+        Lacks(probe.Run, "StalePreviousRun");
+        Assert.True(probe.Ready, probe.Run.Output);
+        Assert.InRange(probe.Elapsed.TotalSeconds, 4, 12);
+        Assert.False(probe.TestEntered);
+        Assert.False(probe.StaleResultsRemain);
+        Assert.False(probe.OwnedProcessAliveBeforeHarnessCleanup, probe.Run.Output);
+        Assert.NotEmpty(probe.ObservedOwned);
+        using var graph = Evidence(probe, "observed-graph.json");
+        using var child = Evidence(probe, "child.json");
+        AssertOwnedChain(probe.ObservedOwned, graph.RootElement.GetProperty("RootPid").GetInt32(), child.RootElement.GetProperty("Pid").GetInt32());
+        Assert.Empty(probe.AliveObservedPids);
+        Assert.True(probe.UnrelatedSentinelSurvived);
+    }
+
+    [Theory]
+    [InlineData("fast")]
+    [InlineData("fail")]
+    public async Task OrdinaryPreparationKeepsSuccessAndBuildFailure(string behavior)
+    {
+        var probe = await _probe.RunPreparation(behavior);
+        Lacks(probe.Run, "PREPARATION LIMIT:");
+        if (behavior == "fast")
+        {
+            probe.Run.AssertSucceeded();
+            Assert.True(probe.TestEntered, probe.Run.Output);
+        }
+        else
+        {
+            Assert.NotEqual(0, probe.Run.ExitCode);
+            Has(probe.Run, "PREPARATION_HELPER_EXIT_7");
+            Has(probe.Run, "FAILED (1)"); // MSBuild reports its failed Exec as build exit 1, not helper exit 7.
+            Assert.False(probe.TestEntered);
+            Lacks(probe.Run, "start: dotnet test");
+        }
+        Assert.True(probe.UnrelatedSentinelSurvived);
+    }
+
+    [Theory]
+    [InlineData("listing-hang")]
+    [InlineData("listing-pipe")]
+    [InlineData("listing-fail")]
+    [InlineData("listing-root-exit")]
+    public async Task AnUnavailableProcessTableKeepsThePreparationFailureAndBoundsShutdown(string behavior)
+    {
+        var probe = await _probe.RunPreparation(behavior);
+        Assert.True(probe.Ready, probe.Run.Output);
+        Assert.NotEqual(0, probe.Run.ExitCode);
+        Assert.InRange(probe.Elapsed.TotalSeconds, 4, 12);
+        Has(probe.Run, "PREPARATION LIMIT:");
+        Has(probe.Run, "cleanup could not be verified");
+        Has(probe.Run, "no readable blame sequence available");
+        Lacks(probe.Run, "test host process(es); waiting");
+        Lacks(probe.Run, "cleanup: root and all known owned descendants exited");
+        Lacks(probe.Run, "start: dotnet test");
+        Assert.False(probe.TestEntered);
+        Assert.True(probe.UnrelatedSentinelSurvived);
+        AssertListingBoundary(probe, behavior);
+    }
+
+    private static void AssertListingBoundary(ProbeProject.PreparationRun probe, string behavior)
+    {
+        // These assertions describe physical boundaries BEFORE the harness is allowed to clean the fixture.
+        using var listing = Evidence(probe, "listing.json");
+        using var listingReady = Evidence(probe, "listing.ready");
+        int listingPid = listing.RootElement.GetProperty("Pid").GetInt32();
+        Assert.True(listing.RootElement.GetProperty("StartUtcTicks").GetInt64() > 0);
+        Assert.True(listingReady.RootElement.GetProperty("UtcTicks").GetInt64() > 0);
+        if (behavior == "listing-root-exit")
+        {
+            using var snapshot = Evidence(probe, "listing-graph.json");
+            using var exit = Evidence(probe, "root-exit.observed.json");
+            using var returned = Evidence(probe, "graph.returned.json");
+            using var admission = Evidence(probe, "admission.boundary.json");
+            int rootPid = snapshot.RootElement.GetProperty("RootPid").GetInt32();
+            long rootStart = snapshot.RootElement.GetProperty("RootStartUtcTicks").GetInt64();
+            Assert.Equal(rootPid, exit.RootElement.GetProperty("Pid").GetInt32());
+            Assert.Equal(rootStart, exit.RootElement.GetProperty("StartUtcTicks").GetInt64());
+            Assert.True(exit.RootElement.GetProperty("ExitObserved").GetBoolean());
+            Assert.True(snapshot.RootElement.GetProperty("CapturedUtcTicks").GetInt64() <= exit.RootElement.GetProperty("UtcTicks").GetInt64());
+            Assert.True(exit.RootElement.GetProperty("UtcTicks").GetInt64() <= returned.RootElement.GetProperty("UtcTicks").GetInt64());
+            Assert.True(snapshot.RootElement.GetProperty("Owned").GetArrayLength() >= 3);
+            var graph = snapshot.RootElement.GetProperty("Owned").Deserialize<ProbeProject.ObservedProcess[]>()!;
+            foreach (string name in new[] { "helper", "child" })
+            {
+                using var identity = Evidence(probe, name + ".json");
+                Assert.Contains(graph, row => row.Pid == identity.RootElement.GetProperty("Pid").GetInt32() &&
+                    row.StartUtcTicks == identity.RootElement.GetProperty("StartUtcTicks").GetInt64());
+            }
+            using var child = Evidence(probe, "child.json");
+            AssertOwnedChain(graph, rootPid, child.RootElement.GetProperty("Pid").GetInt32());
+            Assert.True(admission.RootElement.GetProperty("RootExited").GetBoolean());
+            Assert.True(admission.RootElement.GetProperty("TableContainsRoot").GetBoolean());
+            Assert.True(admission.RootElement.GetProperty("TableCount").GetInt32() >= 3);
+            Assert.Equal(rootPid, admission.RootElement.GetProperty("RootPid").GetInt32());
+            Assert.Equal(rootStart, admission.RootElement.GetProperty("RootStart").GetInt64());
+            Has(probe.Run, "root exited or changed identity before ancestry was established");
+            Assert.DoesNotContain(listingPid, probe.AliveRecordedPids);
+        }
+        else
+        {
+            using var boundary = Evidence(probe, "listing.boundary.json");
+            Assert.Equal(listingPid, boundary.RootElement.GetProperty("Pid").GetInt32());
+            Assert.Equal(listing.RootElement.GetProperty("StartUtcTicks").GetInt64(), boundary.RootElement.GetProperty("StartUtcTicks").GetInt64());
+            Assert.True(listingReady.RootElement.GetProperty("UtcTicks").GetInt64() <= boundary.RootElement.GetProperty("UtcTicks").GetInt64());
+            if (behavior == "listing-fail")
+            {
+                using var exit = Evidence(probe, "listing.exit.json");
+                Assert.True(boundary.RootElement.GetProperty("HasExited").GetBoolean());
+                Assert.True(boundary.RootElement.GetProperty("ReadCompleted").GetBoolean());
+                Assert.Equal(7, boundary.RootElement.GetProperty("ExitCode").GetInt32());
+                Assert.Equal(7, exit.RootElement.GetProperty("ExitCode").GetInt32());
+                Has(probe.Run, "process listing failed with exit code 7");
+            }
+            else
+            {
+                // The live root or the inherited pipe must still block exit+EOF at this listing's actual deadline.
+                Assert.False(boundary.RootElement.GetProperty("ReadCompleted").GetBoolean());
+                Assert.True(boundary.RootElement.GetProperty("ElapsedSeconds").GetDouble() >= boundary.RootElement.GetProperty("DeadlineSeconds").GetDouble());
+                Assert.InRange(boundary.RootElement.GetProperty("DeadlineSeconds").GetDouble(), 5.8, 8);
+                Assert.Equal(behavior == "listing-pipe", boundary.RootElement.GetProperty("HasExited").GetBoolean());
+                if (behavior == "listing-pipe")
+                {
+                    using var pipeReady = Evidence(probe, "pipe-child.ready");
+                    using var pipeChild = Evidence(probe, "pipe-child.json");
+                    Assert.True(pipeReady.RootElement.GetProperty("UtcTicks").GetInt64() > 0);
+                    Assert.Equal(0, boundary.RootElement.GetProperty("ExitCode").GetInt32());
+                    Assert.Contains(pipeChild.RootElement.GetProperty("Pid").GetInt32(), probe.AliveRecordedPids);
+                    Assert.DoesNotContain(listingPid, probe.AliveRecordedPids);
+                }
+            }
+        }
+        // The unavailable table cannot establish these descendants. Their later harness cleanup is not candidate success.
+        Assert.True(probe.OwnedProcessAliveBeforeHarnessCleanup, probe.Run.Output);
+        Assert.NotEmpty(probe.AliveObservedPids);
+    }
+
+    private static void AssertOwnedChain(ProbeProject.ObservedProcess[] graph, int root, int leaf)
+    {
+        var byPid = graph.ToDictionary(row => row.Pid);
+        var seen = new HashSet<int>();
+        while (leaf != root)
+        {
+            Assert.True(seen.Add(leaf) && byPid.ContainsKey(leaf), "incomplete or cyclic observed process chain");
+            leaf = byPid[leaf].Parent;
+        }
+        Assert.Contains(root, byPid.Keys);
+    }
+
+    private static JsonDocument Evidence(ProbeProject.PreparationRun probe, string file)
+    {
+        string path = Path.Combine(probe.EvidenceDirectory, file);
+        Assert.True(File.Exists(path), "missing physical fixture evidence: " + path + "\n" + probe.Run.Output);
+        return JsonDocument.Parse(File.ReadAllText(path));
+    }
+
+    [Fact]
+    public async Task ANet48EligibleTargetHungInItsModernHostKeepsItsReadableTestNames()
+    {
+        BuildRun run = await _probe.RunEligibleTarget(noHost: false);
+        Assert.NotEqual(0, run.ExitCode);
+        Has(run, "HARD LIMIT:");
+        Has(run, "stopped 1 test host process(es); waiting up to 10 s for the blame sequence to flush");
+        Has(run, "blame sequence flushed; waiting up to 30 s for the test command to exit");
+        Has(run, "started and not completed: LimitsProbe.HardLimitProbeTests.NeverFinishes");
+        Lacks(run, "no test names: net48 xunit console leg");
+        string trx = Assert.Single(Directory.GetFiles(_probe.EligibleTargetResults(noHost: false), "*.trx", SearchOption.AllDirectories));
+        Assert.Contains(XDocument.Load(trx).Descendants(), element => element.Name.LocalName == "UnitTestResult" &&
+            (string?)element.Attribute("testName") == "LimitsProbe.HardLimitProbeTests.FinishesBeforeTheHardLimit" &&
+            (string?)element.Attribute("outcome") == "Passed");
+    }
+
+    [Fact]
+    public async Task ANet48EligibleTargetWithoutAModernHostKeepsItsAbsenceReason()
+    {
+        BuildRun run = await _probe.RunEligibleTarget(noHost: true);
+        Assert.NotEqual(0, run.ExitCode);
+        Has(run, "HARD LIMIT:");
+        Has(run, "PREPARATION_PAIR_READY"); // A real owned waiting pair inside the target, with no testhost.
+        Has(run, "no test host was stopped;");
+        Has(run, "no test names: net48 xunit console leg");
+        Lacks(run, "blame sequence flushed;");
+        Lacks(run, "started and not completed:");
+        string results = _probe.EligibleTargetResults(noHost: true);
+        Assert.Empty(Directory.Exists(results) ? Directory.GetFiles(results, "*.trx", SearchOption.AllDirectories) : Array.Empty<string>());
     }
 
     [Fact]
@@ -166,6 +366,13 @@ public sealed class ValidationLimitsTests : IClassFixture<ValidationLimitsTests.
         private readonly string _directory = Path.Combine(Path.GetTempPath(), "vt-limits-" + Guid.NewGuid().ToString("N"));
         private string _project = "";
         private string _script = "";
+        private string _compiledScript = "";
+        private string _helper = "";
+
+        public sealed record ObservedProcess(int Pid, long StartUtcTicks, int Parent = 0);
+        public sealed record PreparationRun(BuildRun Run, TimeSpan Elapsed, bool Ready, bool TestEntered,
+            bool StaleResultsRemain, bool OwnedProcessAliveBeforeHarnessCleanup, bool UnrelatedSentinelSurvived,
+            string EvidenceDirectory, ObservedProcess[] ObservedOwned, int[] AliveObservedPids, int[] AliveRecordedPids);
 
         public string FixtureDirectory => _directory;
         public string Project => _project;
@@ -183,6 +390,11 @@ public sealed class ValidationLimitsTests : IClassFixture<ValidationLimitsTests.
                   <ItemGroup>
                     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.10.0" /><PackageReference Include="xunit" Version="2.8.1" /><PackageReference Include="xunit.runner.visualstudio" Version="2.8.1" />
                   </ItemGroup>
+                  <Target Name="RunTestsOnBothFrameworks">
+                    <MSBuild Projects="$(MSBuildProjectFullPath)" Targets="VSTest" Condition="'$(ProbeNoHost)' != 'true'"
+                      Properties="Configuration=Release;VSTestTestCaseFilter=FullyQualifiedName~HardLimitProbeTests;VSTestNoBuild=true" />
+                    <Exec Condition="'$(ProbeNoHost)' == 'true'" Command="dotnet &quot;$(PreparationHelper)&quot; stall &quot;$(PreparationEvidenceDirectory)&quot;" />
+                  </Target>
                   <Target Name="WriteMarker">
                     <MakeDir Directories="$(VSTestResultsDirectory)" />
                     <WriteLinesToFile File="$(VSTestResultsDirectory)/target.trx" Lines="&lt;TestRun&gt;&lt;UnitTestResult testName='LimitsProbe.Target.Fake' duration='00:00:04' /&gt;&lt;/TestRun&gt;" Overwrite="true" />
@@ -241,6 +453,127 @@ public sealed class ValidationLimitsTests : IClassFixture<ValidationLimitsTests.
             // folder behind a symbolic link such as macOS's /var spells differently): another spelling is another project to
             // NuGet, so the first test run restored again and the runner then failed to load xunit.abstractions (macOS CI).
             (await FixtureProjects.Dotnet(project, ["build", _project, "-c", "Release", "-m:1"], timeoutMinutes: 4)).AssertSucceeded();
+            string helperDirectory = Path.Combine(_directory, "preparation-helper");
+            Directory.CreateDirectory(helperDirectory);
+            File.WriteAllText(Path.Combine(helperDirectory, "PreparationHelper.csproj"),
+                "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings></PropertyGroup></Project>");
+            File.WriteAllText(Path.Combine(helperDirectory, "Program.cs"), """
+                using System.Diagnostics;
+                using System.Text.Json;
+                string mode = args[0], directory = args[1];
+                string assembly = typeof(Program).Assembly.Location;
+                void Write(string name, object value) => File.WriteAllText(Path.Combine(directory, name), JsonSerializer.Serialize(value));
+                void Record(string name) {
+                    using var self = Process.GetCurrentProcess();
+                    Write(name + ".json", new { Pid = self.Id, StartUtcTicks = self.StartTime.ToUniversalTime().Ticks });
+                }
+                void Ready(string name) => Write(name, new { UtcTicks = DateTime.UtcNow.Ticks });
+                void WaitFor(string file) {
+                    var clock = Stopwatch.StartNew();
+                    while (!File.Exists(file)) {
+                        if (clock.Elapsed > TimeSpan.FromSeconds(8)) throw new Exception("fixture readiness absent: " + file);
+                        Thread.Sleep(20);
+                    }
+                }
+                Process Child(string childMode, bool isolateOutput = false) {
+                    var info = new ProcessStartInfo("dotnet") { UseShellExecute = false,
+                        RedirectStandardOutput = isolateOutput, RedirectStandardError = isolateOutput };
+                    foreach (string arg in new[] { assembly, childMode, directory }) info.ArgumentList.Add(arg);
+                    return Process.Start(info) ?? throw new Exception("fixture child did not start");
+                }
+                // Physical fixture evidence, independent of the production owner's parsed table. The root-exit wrapper
+                // receives the original listing command verbatim; the independent observer uses the same OS command.
+                string Snapshot(int rootPid, long rootStart, string name) {
+                    var start = args.Length > 4 ? new ProcessStartInfo(args[4], args.Skip(5))
+                        : OperatingSystem.IsWindows()
+                            ? new ProcessStartInfo("pwsh", ["-NoProfile", "-NonInteractive", "-Command",
+                                "Get-CimInstance Win32_Process | ForEach-Object { '{0} {1} {2}' -f $_.ProcessId, $_.ParentProcessId, $_.CommandLine }"])
+                            : new ProcessStartInfo("ps", ["-ww", "-A", "-o", "pid=,ppid=,args="]);
+                    start.UseShellExecute = false;
+                    start.RedirectStandardOutput = true;
+                    using var process = Process.Start(start) ?? throw new Exception("fixture snapshot did not start");
+                    Task<string> output = process.StandardOutput.ReadToEndAsync();
+                    try { Task.WhenAll(output, process.WaitForExitAsync()).WaitAsync(TimeSpan.FromSeconds(2)).GetAwaiter().GetResult(); }
+                    finally {
+                        if (!process.HasExited) {
+                            process.Kill(entireProcessTree: true);
+                            if (!process.WaitForExit(TimeSpan.FromSeconds(2))) throw new Exception("fixture snapshot cleanup failed");
+                        }
+                    }
+                    if (process.ExitCode != 0) throw new Exception("fixture snapshot exit " + process.ExitCode);
+                    string text = output.GetAwaiter().GetResult();
+                    var table = new Dictionary<int, int>();
+                    foreach (string line in text.Split('\n', StringSplitOptions.RemoveEmptyEntries)) {
+                        var fields = line.Trim().Split(' ', 3, StringSplitOptions.RemoveEmptyEntries);
+                        if (fields.Length >= 2 && int.TryParse(fields[0], out int pid) && int.TryParse(fields[1], out int parent)) table[pid] = parent;
+                    }
+                    using var root = Process.GetProcessById(rootPid);
+                    if (root.HasExited || root.StartTime.ToUniversalTime().Ticks != rootStart || !table.ContainsKey(rootPid))
+                        throw new Exception("fixture snapshot root is not the live expected identity");
+                    var below = new HashSet<int> { rootPid };
+                    for (bool grew = true; grew;) {
+                        grew = false;
+                        foreach (var (pid, parent) in table) if (below.Contains(parent) && below.Add(pid)) grew = true;
+                    }
+                    var owned = below.Select(pid => {
+                        using var child = Process.GetProcessById(pid);
+                        return new { Pid = pid, Parent = table[pid], StartUtcTicks = child.StartTime.ToUniversalTime().Ticks };
+                    }).ToArray();
+                    Write(name + ".json", new { RootPid = rootPid, RootStartUtcTicks = rootStart,
+                        CapturedUtcTicks = DateTime.UtcNow.Ticks, Owned = owned });
+                    File.WriteAllText(Path.Combine(directory, name + ".txt"), text);
+                    return text;
+                }
+                if (mode == "observe") { Snapshot(int.Parse(args[2]), long.Parse(args[3]), "observed-graph"); return 0; }
+                if (mode == "fast") return 0;
+                if (mode == "fail") { Console.WriteLine("PREPARATION_HELPER_EXIT_7"); return 7; }
+                if (mode is "child" or "pipe-child") {
+                    Record(mode);
+                    Ready(mode + ".ready");
+                    Thread.Sleep(Timeout.Infinite);
+                }
+                if (mode is "stall" or "exit-on-listing") {
+                    Record("helper");
+                    using var child = Child("child", isolateOutput: mode == "exit-on-listing");
+                    WaitFor(Path.Combine(directory, "child.ready"));
+                    Ready("pair.ready");
+                    Console.WriteLine("PREPARATION_PAIR_READY");
+                    if (mode == "exit-on-listing") { WaitFor(Path.Combine(directory, "listing.started")); return 0; }
+                    Thread.Sleep(Timeout.Infinite);
+                }
+                Record("listing");
+                Ready("listing.ready");
+                if (mode == "listing-root-exit") {
+                    int rootPid = int.Parse(args[2]);
+                    long rootStart = long.Parse(args[3]);
+                    // Capture a nonempty REAL graph before allowing the root to exit; return that same table afterward.
+                    string snapshot = Snapshot(rootPid, rootStart, "listing-graph");
+                    using var root = Process.GetProcessById(rootPid);
+                    if (root.HasExited || root.StartTime.ToUniversalTime().Ticks != rootStart) throw new Exception("root lost before exit handshake");
+                    Ready("listing.started");
+                    if (!root.WaitForExit(TimeSpan.FromSeconds(2))) throw new Exception("fixture root did not exit during listing");
+                    Write("root-exit.observed.json", new { Pid = rootPid, StartUtcTicks = rootStart, UtcTicks = DateTime.UtcNow.Ticks, ExitObserved = root.HasExited });
+                    Console.Write(snapshot);
+                    Console.Out.Flush();
+                    Ready("graph.returned.json");
+                    return 0;
+                }
+                if (mode == "listing-fail") { Write("listing.exit.json", new { ExitCode = 7 }); return 7; }
+                if (mode == "listing-pipe") {
+                    using var child = Child("pipe-child");
+                    WaitFor(Path.Combine(directory, "pipe-child.ready"));
+                    Write("listing.exit.json", new { ExitCode = 0 });
+                    return 0; // The real ready child retains inherited stdout after its listing root exits.
+                }
+                Thread.Sleep(Timeout.Infinite); // listing-hang: no EOF and no root exit.
+                return 0;
+                """);
+            (await FixtureProjects.Dotnet(helperDirectory, ["build", "-c", "Release", "-m:1"], timeoutMinutes: 4)).AssertSucceeded();
+            _helper = Path.Combine(helperDirectory, "bin", "Release", "net10.0", "PreparationHelper.dll");
+            string compiled = Path.Combine(_directory, "compiled-validator");
+            (await FixtureProjects.Dotnet(_directory, ["build", _script, "-c", "Release", "-o", compiled], timeoutMinutes: 4)).AssertSucceeded();
+            _compiledScript = Path.Combine(compiled, "validate.dll");
+
         }
 
         public Task DisposeAsync()
@@ -254,7 +587,7 @@ public sealed class ValidationLimitsTests : IClassFixture<ValidationLimitsTests.
         public Task<BuildRun> Run(string test, double? soft, double? hard, bool githubActions, bool split = false) =>
             FixtureProjects.Dotnet(FixtureProjects.RepositoryRoot(),
                 ["run", _script, "--", "--test-project", FixtureProjects.RepositoryRoot(), _project, Results(test, split), "FullyQualifiedName~" + test, .. (split ? new[] { "--split" } : Array.Empty<string>())],
-                new Dictionary<string, string?>
+                new Dictionary<string, string?>(CleanEnvironment())
                 {
                     ["VT_VALIDATE_SOFT_LIMIT_SECONDS"] = soft?.ToString(System.Globalization.CultureInfo.InvariantCulture),
                     ["VT_VALIDATE_HARD_LIMIT_SECONDS"] = hard?.ToString(System.Globalization.CultureInfo.InvariantCulture),
@@ -271,6 +604,275 @@ public sealed class ValidationLimitsTests : IClassFixture<ValidationLimitsTests.
                 {
                     ["VT_VALIDATE_SOFT_LIMIT_SECONDS"] = soft.ToString(System.Globalization.CultureInfo.InvariantCulture),
                 }, timeoutMinutes: 5);
+        }
+
+        public string EligibleTargetResults(bool noHost) => Path.Combine(_directory, noHost ? "eligible-no-host" : "eligible-modern", "LimitsProbe");
+
+        public async Task<BuildRun> RunEligibleTarget(bool noHost)
+        {
+            string directory = Path.GetDirectoryName(EligibleTargetResults(noHost))!;
+            Directory.CreateDirectory(directory);
+            try
+            {
+                return await FixtureProjects.Dotnet(FixtureProjects.RepositoryRoot(),
+                    [_compiledScript, "--test-project", FixtureProjects.RepositoryRoot(), _project, directory, "--target", "RunTestsOnBothFrameworks",
+                        "-p:ProbeNoHost=" + (noHost ? "true" : "false"), "-p:PreparationHelper=" + _helper, "-p:PreparationEvidenceDirectory=" + directory],
+                    new Dictionary<string, string?>(CleanEnvironment())
+                    {
+                        ["VT_VALIDATE_SOFT_LIMIT_SECONDS"] = "2",
+                        ["VT_VALIDATE_HARD_LIMIT_SECONDS"] = "20",
+                    }, timeoutMinutes: 2);
+            }
+            finally
+            {
+                foreach (string name in new[] { "child", "helper" }) StopRecorded(Path.Combine(directory, name + ".json"));
+            }
+        }
+
+        // Drives the actual Test() preparation branch. Only the listing executable is substituted in a disposable script
+        // for boundary cases; all executor/ownership/deadline bodies remain production code. No extra production mode.
+        public async Task<PreparationRun> RunPreparation(string behavior)
+        {
+            string directory = Path.Combine(_directory, "preparation-" + behavior);
+            Directory.CreateDirectory(directory);
+            string repository = Path.Combine(directory, "repository");
+            string tests = Path.Combine(repository, "tests", "Valheim.Testing.Tests");
+            string preparation = Path.Combine(repository, "tests", "Valheim.Testing.StandInProcessLeakProbe");
+            Directory.CreateDirectory(tests);
+            Directory.CreateDirectory(preparation);
+            File.WriteAllText(Path.Combine(repository, "cli-dependency.json"), "{}");
+            string project = Path.Combine(tests, "Valheim.Testing.Tests.csproj");
+            File.Copy(_project, project);
+            string sentinel = Path.Combine(directory, "test-body.sentinel");
+            File.WriteAllText(Path.Combine(tests, "ProbeTests.cs"),
+                "using Xunit; public class PreparationProbe { [Fact] public void Entered() => System.IO.File.WriteAllText(@\"" +
+                sentinel.Replace("\"", "\"\"", StringComparison.Ordinal) + "\", \"entered\"); }");
+            string helperMode = behavior == "listing-root-exit" ? "exit-on-listing" : behavior.StartsWith("listing-", StringComparison.Ordinal) ? "stall" : behavior;
+            string buildCommand = $"\"{FixtureProjects.DotnetHost}\" \"{_helper}\" {helperMode} \"{directory}\"";
+            File.WriteAllText(Path.Combine(preparation, "Valheim.Testing.StandInProcessLeakProbe.csproj"),
+                new XElement("Project", new XElement("Target", new XAttribute("Name", "Build"),
+                    new XElement("Exec", new XAttribute("Command", buildCommand)))).ToString());
+            string compiled = _compiledScript;
+            if (behavior.StartsWith("listing-", StringComparison.Ordinal))
+            {
+                string copied = Path.Combine(directory, "validate-probe");
+                Directory.CreateDirectory(copied);
+                string source = File.ReadAllText(_script);
+                const string anchor = "    start.RedirectStandardOutput = true;";
+                Assert.Equal(1, source.Split(anchor, StringSplitOptions.None).Length - 1);
+                string literal(string value) => "@\"" + value.Replace("\"", "\"\"", StringComparison.Ordinal) + "\"";
+                source = source.Replace(anchor, "    var originalListing = start;\n" +
+                    "    start = new ProcessStartInfo(" + literal(FixtureProjects.DotnetHost) +
+                    ", [" + literal(_helper) + ", " + literal(behavior) + ", " + literal(directory) +
+                    ", rootProcess.Id.ToString(), rootStart!.Value.ToString(), originalListing.FileName, .. originalListing.ArgumentList]);\n" + anchor,
+                    StringComparison.Ordinal);
+                const string boundary = "        // This listing's own root is ours.";
+                Assert.Equal(1, source.Split(boundary, StringSplitOptions.None).Length - 1);
+                source = source.Replace(boundary,
+                    "        {\n" +
+                    "            var snapshot = new { Pid = listing.Id, StartUtcTicks = listingStart, HasExited = listing.HasExited, " +
+                    "ExitCode = listing.HasExited ? (int?)listing.ExitCode : null, ReadCompleted = read.IsCompleted, " +
+                    "ElapsedSeconds = clock.Elapsed.TotalSeconds, DeadlineSeconds = deadline.TotalSeconds, UtcTicks = DateTime.UtcNow.Ticks };\n" +
+                    "            using var bytes = new MemoryStream();\n" +
+                    "            using (var writer = new Utf8JsonWriter(bytes))\n" +
+                    "            {\n" +
+                    "                writer.WriteStartObject();\n" +
+                    "                writer.WriteNumber(\"Pid\", snapshot.Pid);\n" +
+                    "                if (snapshot.StartUtcTicks is long startTicks) writer.WriteNumber(\"StartUtcTicks\", startTicks); else writer.WriteNull(\"StartUtcTicks\");\n" +
+                    "                writer.WriteBoolean(\"HasExited\", snapshot.HasExited);\n" +
+                    "                if (snapshot.ExitCode is int exitCode) writer.WriteNumber(\"ExitCode\", exitCode); else writer.WriteNull(\"ExitCode\");\n" +
+                    "                writer.WriteBoolean(\"ReadCompleted\", snapshot.ReadCompleted);\n" +
+                    "                writer.WriteNumber(\"ElapsedSeconds\", snapshot.ElapsedSeconds);\n" +
+                    "                writer.WriteNumber(\"DeadlineSeconds\", snapshot.DeadlineSeconds);\n" +
+                    "                writer.WriteNumber(\"UtcTicks\", snapshot.UtcTicks);\n" +
+                    "                writer.WriteEndObject();\n" +
+                    "                writer.Flush();\n" +
+                    "            }\n" +
+                    "            File.WriteAllBytes(" + literal(Path.Combine(directory, "listing.boundary.json")) + ", bytes.ToArray());\n" +
+                    "        }\n" + boundary,
+                    StringComparison.Ordinal);
+                const string admission = "        using var currentRoot = Process.GetProcessById(rootPid);";
+                Assert.Equal(1, source.Split(admission, StringSplitOptions.None).Length - 1);
+                source = source.Replace(admission,
+                    "    {\n" +
+                    "        var snapshot = new { RootPid = rootPid, RootStart = rootStart, RootExited = rootProcess.HasExited, " +
+                    "TableContainsRoot = table.ContainsKey(rootPid), TableCount = table.Count };\n" +
+                    "        using var bytes = new MemoryStream();\n" +
+                    "        using (var writer = new Utf8JsonWriter(bytes))\n" +
+                    "        {\n" +
+                    "            writer.WriteStartObject();\n" +
+                    "            writer.WriteNumber(\"RootPid\", snapshot.RootPid);\n" +
+                    "            if (snapshot.RootStart is long startTicks) writer.WriteNumber(\"RootStart\", startTicks); else writer.WriteNull(\"RootStart\");\n" +
+                    "            writer.WriteBoolean(\"RootExited\", snapshot.RootExited);\n" +
+                    "            writer.WriteBoolean(\"TableContainsRoot\", snapshot.TableContainsRoot);\n" +
+                    "            writer.WriteNumber(\"TableCount\", snapshot.TableCount);\n" +
+                    "            writer.WriteEndObject();\n" +
+                    "            writer.Flush();\n" +
+                    "        }\n" +
+                    "        File.WriteAllBytes(" + literal(Path.Combine(directory, "admission.boundary.json")) + ", bytes.ToArray());\n" +
+                    "    }\n" + admission,
+                    StringComparison.Ordinal);
+                File.WriteAllText(Path.Combine(copied, "validate.cs"), source);
+                foreach (string file in new[] { "ValidationSupport.cs", "Directory.Build.props" })
+                    File.Copy(Path.Combine(Path.GetDirectoryName(_script)!, file), Path.Combine(copied, file));
+                string output = Path.Combine(directory, "compiled");
+                (await FixtureProjects.Dotnet(directory, ["build", Path.Combine(copied, "validate.cs"), "-c", "Release", "-o", output], timeoutMinutes: 4)).AssertSucceeded();
+                compiled = Path.Combine(output, "validate.dll");
+            }
+            string results = Path.Combine(directory, "results");
+            string stale = Path.Combine(results, "Valheim.Testing.Tests");
+            Directory.CreateDirectory(stale);
+            File.WriteAllText(Path.Combine(stale, "stale.trx"), "<TestRun><UnitTestResult testName='StalePreviousRun' /></TestRun>");
+            File.WriteAllText(Path.Combine(stale, "Sequence_stale.xml"), "<Sequence><Test DisplayName='StalePreviousRun' Completed='False' /></Sequence>");
+            string unrelated = Path.Combine(directory, "unrelated");
+            Directory.CreateDirectory(unrelated);
+            using var unrelatedProcess = Process.Start(StartHelper("child", unrelated))!;
+            long unrelatedStart = unrelatedProcess.StartTime.ToUniversalTime().Ticks;
+            try
+            {
+                var readiness = Stopwatch.StartNew();
+                while (!File.Exists(Path.Combine(unrelated, "child.ready")) && readiness.Elapsed < TimeSpan.FromSeconds(8)) await Task.Delay(20);
+                Assert.True(File.Exists(Path.Combine(unrelated, "child.ready")), "unrelated sentinel failed to start");
+                var start = new ProcessStartInfo(FixtureProjects.DotnetHost) { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true };
+                foreach (string argument in new[] { compiled, "--test-project", repository, project, results, "FullyQualifiedName~Entered" }) start.ArgumentList.Add(argument);
+                foreach (var (name, value) in CleanEnvironment()) if (value == null) start.Environment.Remove(name); else start.Environment[name] = value;
+                start.Environment["VT_VALIDATE_PREPARATION_LIMIT_SECONDS"] = behavior is "fast" or "fail" ? "20" : "4";
+                start.Environment["VT_VALIDATE_SOFT_LIMIT_SECONDS"] = "2";
+                start.Environment["VT_VALIDATE_HARD_LIMIT_SECONDS"] = "20";
+                start.Environment["VT_VALIDATE_CLEANUP_LIMIT_SECONDS"] = "6";
+                start.Environment["VT_VALIDATE_PROCESS_LIST_LIMIT_SECONDS"] = "2";
+                using var command = Process.Start(start)!;
+                var elapsed = Stopwatch.StartNew();
+                long commandStart = command.StartTime.ToUniversalTime().Ticks;
+                ObservedProcess[] graph = [];
+                var captured = new StringBuilder();
+                async Task Drain(StreamReader reader)
+                {
+                    char[] buffer = new char[4096];
+                    int count;
+                    while ((count = await reader.ReadAsync(buffer)) != 0)
+                        lock (captured) captured.Append(buffer, 0, count);
+                }
+                Task drains = Task.WhenAll(Drain(command.StandardOutput), Drain(command.StandardError));
+                try
+                {
+                    if (behavior is not ("fast" or "fail"))
+                    {
+                        while (!File.Exists(Path.Combine(directory, "pair.ready")) && !command.HasExited && elapsed.Elapsed < TimeSpan.FromSeconds(4))
+                            await Task.Delay(20);
+                        Assert.True(File.Exists(Path.Combine(directory, "pair.ready")), "preparation pair was not ready before the limit");
+                        var observerStart = StartHelper("observe", directory);
+                        observerStart.ArgumentList.Add(command.Id.ToString());
+                        observerStart.ArgumentList.Add(commandStart.ToString());
+                        using var observer = Process.Start(observerStart)!;
+                        long observerIdentity = observer.StartTime.ToUniversalTime().Ticks;
+                        try { await observer.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(3)); Assert.Equal(0, observer.ExitCode); }
+                        finally { StopIdentity(observer.Id, observerIdentity); }
+                        graph = ReadGraph(Path.Combine(directory, "observed-graph.json"));
+                        Assert.Contains(graph, item => item.Pid == command.Id && item.StartUtcTicks == commandStart);
+                        foreach (string name in new[] { "helper", "child" })
+                        {
+                            var recorded = ReadIdentity(Path.Combine(directory, name + ".json"));
+                            Assert.Contains(graph, item => item.Pid == recorded.Pid && item.StartUtcTicks == recorded.StartUtcTicks);
+                        }
+                        Assert.True(graph.Length >= 4, "incomplete independent validator/build/helper/child graph");
+                    }
+                    await command.WaitForExitAsync().WaitAsync(TimeSpan.FromTicks(Math.Max(0, (TimeSpan.FromSeconds(20) - elapsed.Elapsed).Ticks)));
+                    TimeSpan rootElapsed = elapsed.Elapsed;
+                    // An intentionally unverified descendant may retain the harness's inherited pipe too. Read available
+                    // diagnostics now; wait for EOF only after the independent finally cleanup, never renew the command budget.
+                    try { await drains.WaitAsync(TimeSpan.FromMilliseconds(200)); }
+                    catch (TimeoutException) { }
+                    string text;
+                    lock (captured) text = captured.ToString();
+                    int readyAt = text.IndexOf("PREPARATION_PAIR_READY", StringComparison.Ordinal);
+                    int limitAt = text.IndexOf("PREPARATION LIMIT:", StringComparison.Ordinal);
+                    bool ready = File.Exists(Path.Combine(directory, "pair.ready")) && readyAt >= 0 && limitAt > readyAt;
+                    int[] aliveRecorded = new[] { "helper", "child", "listing", "pipe-child" }
+                        .Select(name => Path.Combine(directory, name + ".json")).Where(File.Exists)
+                        .Select(ReadIdentity).Where(RecordedAlive).Select(item => item.Pid).ToArray();
+                    var result = new PreparationRun(new(command.ExitCode, text), rootElapsed, ready,
+                        File.Exists(sentinel), File.Exists(Path.Combine(stale, "stale.trx")) || File.Exists(Path.Combine(stale, "Sequence_stale.xml")),
+                        aliveRecorded.Length != 0, !unrelatedProcess.HasExited, directory, graph,
+                        graph.Where(RecordedAlive).Select(item => item.Pid).ToArray(), aliveRecorded);
+                    // Check physical case evidence while survivors still exist; only finally may clean the fixture.
+                    if (behavior.StartsWith("listing-", StringComparison.Ordinal)) AssertListingBoundary(result, behavior);
+                    if (behavior == "stall") Assert.True(result.AliveObservedPids.Length == 0 && !result.OwnedProcessAliveBeforeHarnessCleanup, text);
+                    return result;
+                }
+                finally
+                {
+                    // Independent fixture cleanup. Assertions above record candidate outcome before this is allowed to act.
+                    var cleanupErrors = new List<Exception>();
+                    foreach (string name in new[] { "pipe-child", "child", "helper", "listing" })
+                        try { StopRecorded(Path.Combine(directory, name + ".json")); }
+                        catch (Exception error) { cleanupErrors.Add(error); }
+                    foreach (var item in graph.Reverse())
+                        try { StopIdentity(item.Pid, item.StartUtcTicks); }
+                        catch (Exception error) { cleanupErrors.Add(error); }
+                    try
+                    {
+                        if (!command.HasExited) { command.Kill(entireProcessTree: true); await command.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(3)); }
+                    }
+                    catch (Exception error) { cleanupErrors.Add(error); }
+                    try { await drains.WaitAsync(TimeSpan.FromSeconds(3)); }
+                    catch (Exception error) { cleanupErrors.Add(error); }
+                    if (cleanupErrors.Count != 0) throw new AggregateException("fixture cleanup failed", cleanupErrors);
+                }
+            }
+            finally
+            {
+                StopIdentity(unrelatedProcess.Id, unrelatedStart);
+            }
+        }
+
+        private ProcessStartInfo StartHelper(string mode, string directory)
+        {
+            var start = new ProcessStartInfo(FixtureProjects.DotnetHost) { UseShellExecute = false };
+            foreach (string arg in new[] { _helper, mode, directory }) start.ArgumentList.Add(arg);
+            return start;
+        }
+
+        private static ObservedProcess ReadIdentity(string record) =>
+            JsonSerializer.Deserialize<ObservedProcess>(File.ReadAllText(record)) ?? throw new InvalidOperationException("missing identity: " + record);
+
+        private static ObservedProcess[] ReadGraph(string record)
+        {
+            using var graph = JsonDocument.Parse(File.ReadAllText(record));
+            return graph.RootElement.GetProperty("Owned").Deserialize<ObservedProcess[]>() ?? throw new InvalidOperationException("missing graph: " + record);
+        }
+
+        private static bool RecordedAlive(ObservedProcess identity)
+        {
+            try
+            {
+                using var process = Process.GetProcessById(identity.Pid);
+                return process.StartTime.ToUniversalTime().Ticks == identity.StartUtcTicks && !process.HasExited;
+            }
+            catch (ArgumentException) { return false; }
+        }
+
+        private static void StopRecorded(string record)
+        {
+            if (!File.Exists(record)) return;
+            using var identity = JsonDocument.Parse(File.ReadAllText(record));
+            try
+            {
+                StopIdentity(identity.RootElement.GetProperty("Pid").GetInt32(), identity.RootElement.GetProperty("StartUtcTicks").GetInt64());
+            }
+            catch (ArgumentException) { /* It already exited. */ }
+        }
+
+        private static void StopIdentity(int pid, long start)
+        {
+            try
+            {
+                using var process = Process.GetProcessById(pid);
+                if (process.StartTime.ToUniversalTime().Ticks != start || process.HasExited) return;
+                process.Kill(entireProcessTree: true);
+                Assert.True(process.WaitForExit(TimeSpan.FromSeconds(3)), "fixture process did not exit");
+            }
+            catch (ArgumentException) { /* It already exited. */ }
         }
 
         /// <summary>The tests a run passed, by name, from the TRX validate.cs keeps for it.</summary>
@@ -298,6 +900,9 @@ public sealed class ValidationLimitsTests : IClassFixture<ValidationLimitsTests.
         {
             ["VT_VALIDATE_SOFT_LIMIT_SECONDS"] = null,
             ["VT_VALIDATE_HARD_LIMIT_SECONDS"] = null,
+            ["VT_VALIDATE_PREPARATION_LIMIT_SECONDS"] = null,
+            ["VT_VALIDATE_CLEANUP_LIMIT_SECONDS"] = null,
+            ["VT_VALIDATE_PROCESS_LIST_LIMIT_SECONDS"] = null,
             ["GITHUB_ACTIONS"] = null,
             ["VT_CI_PROFILE"] = null,
         };

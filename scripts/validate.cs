@@ -23,9 +23,11 @@
 // Every test command has two time limits (#719), enforced in Execute and nowhere else. Past the soft limit (5 minutes) it keeps
 // going and, when it ends, a warning names the command, its duration and its slowest tests (a ::warning:: annotation in CI): the
 // signal to split or speed it up. Past the hard limit (10 minutes) its test host is stopped, so the blame sequence names the tests in
-// flight. When a host was stopped, the test command then has 30 seconds to exit and write its completed results before its tree is
-// killed; with no stopped host, its tree is killed at once. Validation fails either way. VT_VALIDATE_SOFT_LIMIT_SECONDS and
-// VT_VALIDATE_HARD_LIMIT_SECONDS scale both limits down, for the tests of this mechanism (ValidationLimitsTests) only.
+// flight. When an owned host's exit is observed, the test command then has up to 30 seconds to exit and write its completed results.
+// With no stopped host cleanup starts immediately. Preparation has its own 60-second cap; failed cleanup has one 50-second absolute
+// envelope, including the existing 10-second blame/30-second command grace. Signals require retained owned identities; unavailable
+// ancestry or surviving owned processes fail cleanup verification. Validation fails either way. VT_VALIDATE_*_LIMIT_SECONDS values
+// scale these internal limits for ValidationLimitsTests only; ordinary builds, Capture and the consumer remain outside this fix.
 // A RunTestsOnBothFrameworks hard limit during the net48 xunit console leg cannot name tests: xunit.console.exe is not a testhost
 // on Windows or under Mono, so there is no blame collector to flush.
 //
@@ -70,6 +72,11 @@ string dataRoot = DataRoot();
 var dataBefore = Snapshot(dataRoot);
 var softLimit = TimeSpan.FromSeconds(LimitSeconds("VT_VALIDATE_SOFT_LIMIT_SECONDS", 5 * 60));
 var hardLimit = TimeSpan.FromSeconds(LimitSeconds("VT_VALIDATE_HARD_LIMIT_SECONDS", 10 * 60));
+// A separate preparation allocation preserves the full test allowance. 60 + 600 + 50 = 710 seconds under CI's
+// existing 720-second step; cold Windows preparation/startup acceptance remains a separate evidence gate.
+var preparationLimit = TimeSpan.FromSeconds(LimitSeconds("VT_VALIDATE_PREPARATION_LIMIT_SECONDS", 60));
+var cleanupLimit = TimeSpan.FromSeconds(LimitSeconds("VT_VALIDATE_CLEANUP_LIMIT_SECONDS", 50));
+var processListLimit = TimeSpan.FromSeconds(LimitSeconds("VT_VALIDATE_PROCESS_LIST_LIMIT_SECONDS", 5));
 const int hardLimitGracePeriodSeconds = 30;
 if (hardLimit <= softLimit) throw new InvalidOperationException("The hard limit of a test command must be longer than its soft limit.");
 if (splitFilter != null) Note($"OS-aware split (#735): classified test commands here select {splitFilter}; repository validation's other test projects run whole");
@@ -220,13 +227,15 @@ string Solution(string name, IEnumerable<string> projects)
 // sequence would name tests of an earlier run.
 void Test(string project, params string[] extra)
 {
+    string output = Path.Combine(results, Path.GetFileNameWithoutExtension(project));
+    // Preparation can fail before TestCommand: remove earlier TRX/blame before entering it too.
+    if (Directory.Exists(output)) Directory.Delete(output, recursive: true);
     // The assembly-guard test launches this deliberately failing child with --no-build. Build it here, outside the
     // parent's bin/Release tree, so the test never mutates or rebuilds its own loaded assembly (#800).
     if (Path.GetFileName(project) == "Valheim.Testing.Tests.csproj")
-        Run("dotnet", "build", Path.Combine(root, "tests", "Valheim.Testing.StandInProcessLeakProbe",
-                "Valheim.Testing.StandInProcessLeakProbe.csproj"),
-            "-c", "Release", "-m:1");
-    string output = Path.Combine(results, Path.GetFileNameWithoutExtension(project));
+        Execute("dotnet", ["build", Path.Combine(root, "tests", "Valheim.Testing.StandInProcessLeakProbe",
+                "Valheim.Testing.StandInProcessLeakProbe.csproj"), "-c", "Release", "-m:1"],
+            ValidationCommandPhase.Preparation);
     var arguments = new List<string> { "test", project, "-c", "Release", "-m:1", "--blame-hang-timeout", "5m",
         "--blame-hang-dump-type", "none", "--results-directory", output };
     arguments.AddRange(["--logger", Environment.GetEnvironmentVariable("VT_CI_PROFILE") == "1"
@@ -249,10 +258,14 @@ void TestTarget(string project, string target, params string[] extra)
 void TestCommand(string output, string[] arguments, string? noTestNamesReason = null)
 {
     if (Directory.Exists(output)) Directory.Delete(output, recursive: true);
-    try { Execute("dotnet", arguments, output, noTestNamesReason); }
+    try { Execute("dotnet", arguments, ValidationCommandPhase.Test, output, noTestNamesReason); }
     catch
     {
-        foreach (string line in ValidationLimitReports.IncompleteTests(output, results)) Note(line);
+        try { foreach (string line in ValidationLimitReports.IncompleteTests(output, results)) Note(line); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            Note($"incomplete-test evidence unavailable ({error.Message}); preserving the command failure");
+        }
         throw;
     }
 }
@@ -289,71 +302,113 @@ void RunScript(string script, params string[] arguments) => Run("dotnet", ["run"
 
 string CaptureScript(string script, params string[] arguments) => Capture("dotnet", ["run", script, "--", .. arguments]);
 
-void Run(string file, params string[] arguments) => Execute(file, arguments, null);
+void Run(string file, params string[] arguments) => Execute(file, arguments, ValidationCommandPhase.Ordinary);
 
-// Runs a command and fails on a non-zero exit. A test command (testResults: where its results go) also has the soft and hard
-// limits of #719; this is the one place that enforces them.
-void Execute(string file, string[] arguments, string? testResults, string? noTestNamesReason = null)
+// The one command owner. Ordinary Run/Capture budgets are a separate change; preparation cannot borrow test time.
+void Execute(string file, string[] arguments, ValidationCommandPhase phase, string? testResults = null, string? noTestNamesReason = null)
 {
     string command = file + " " + string.Join(' ', arguments);
     Note("start: " + command);
+    if (phase == ValidationCommandPhase.Preparation)
+        Note($"preparation: cap {Elapsed(preparationLimit)}; {command}");
     var info = new ProcessStartInfo(file) { UseShellExecute = false, WorkingDirectory = workingDirectory };
     foreach (string argument in arguments) info.ArgumentList.Add(argument);
     using Process process = Process.Start(info) ?? throw new InvalidOperationException("Could not start " + file);
     var clock = Stopwatch.StartNew();
+    long? rootStart = null;
+    if (phase != ValidationCommandPhase.Ordinary)
+        try { rootStart = process.StartTime.ToUniversalTime().Ticks; }
+        catch (Exception error) when (ProcessObservationError(error)) { /* A quick exit still keeps its actual exit code. */ }
+    TimeSpan cap = phase == ValidationCommandPhase.Preparation ? preparationLimit : hardLimit;
     bool overHardLimit = false;
-    if (testResults == null) process.WaitForExit();
-    else if (!process.WaitForExit(softLimit))
+    if (phase == ValidationCommandPhase.Ordinary) process.WaitForExit();
+    else if (phase == ValidationCommandPhase.Preparation) overHardLimit = !process.WaitForExit(Remaining(clock, cap));
+    else if (!process.WaitForExit(Remaining(clock, softLimit)))
     {
         Note($"{Elapsed(clock.Elapsed)} into the {Elapsed(softLimit)} soft limit: still running; stopped at {Elapsed(hardLimit)}: {command}");
-        overHardLimit = !process.WaitForExit(TimeSpan.FromTicks(Math.Max(0, (hardLimit - clock.Elapsed).Ticks)));
+        overHardLimit = !process.WaitForExit(Remaining(clock, hardLimit));
     }
     if (overHardLimit)
     {
-        // Stopping the test host (not the whole tree) lets the blame collector, which outlives it, write the sequence of
-        // tests that started and did not complete; Test names them. With no test host yet, the command is in a build or restore.
-        Note($"HARD LIMIT: {command} is still running after {Elapsed(clock.Elapsed)} (hard limit {Elapsed(hardLimit)}); stopping it");
+        // Record the primary failure before cleanup. Root exit, failed enumeration or a kill exception must not replace it.
+        bool preparation = phase == ValidationCommandPhase.Preparation;
+        string? unavailable = preparation ? "preparation ended before the test command started" : null;
+        Note(preparation
+            ? ValidationLimitReports.PreparationLimitFailure(command, clock.Elapsed, cap)
+            : $"HARD LIMIT: {command} is still running after {Elapsed(clock.Elapsed)} (hard limit {Elapsed(cap)}); stopping it");
+        TimeSpan cleanupDeadline = cap + cleanupLimit;
+        TimeSpan terminalReserve = TimeSpan.FromTicks(Math.Min(TimeSpan.FromSeconds(5).Ticks, cleanupLimit.Ticks / 10));
+        TimeSpan graceDeadline = cleanupDeadline - terminalReserve;
+        var owned = new List<ValidationOwnedProcess>();
+        bool verified = false;
         int stopped = 0;
-        try { stopped = StopTestHosts(process.Id); }
-        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or AggregateException or IOException)
+        try
         {
-            Note($"could not stop the test host ({ex.Message}); continuing without a blame sequence");
-        }
-        bool cannotNameTests = stopped == 0 && noTestNamesReason != null;
-        // No stopped host means MSBuild may still start another target-framework leg, so only a stopped host earns the grace.
-        bool waitForCommandExit = ValidationLimitHandling.ShouldWaitForCommandExit(stopped);
-        if (waitForCommandExit)
-        {
-            Note($"stopped {stopped} test host process(es); waiting up to 10 s for the blame sequence to flush");
-            Note(WaitForReadableBlameSequence(testResults!, TimeSpan.FromSeconds(10))
-                ? $"blame sequence flushed; waiting up to {hardLimitGracePeriodSeconds} s for the test command to exit"
-                : $"no readable blame sequence after 10 s; waiting up to {hardLimitGracePeriodSeconds} s for the test command to exit");
-        }
-        else Note("no test host was stopped; killing the process tree without a grace period");
-        var exitClock = Stopwatch.StartNew();
-        if (waitForCommandExit && process.WaitForExit(TimeSpan.FromSeconds(hardLimitGracePeriodSeconds)))
-            Note($"test command exited on its own after {Math.Ceiling(exitClock.Elapsed.TotalSeconds):F0} s");
-        else
-        {
-            try
+            StopTestHosts(process, rootStart, clock,
+                Earlier(graceDeadline, clock.Elapsed + processListLimit), cleanupDeadline, owned, !preparation, ref stopped);
+            verified = true;
+            bool waitForCommandExit = ValidationLimitHandling.ShouldWaitForCommandExit(stopped);
+            if (waitForCommandExit)
             {
-                process.Kill(entireProcessTree: true);
-                Note(waitForCommandExit
-                    ? $"test command killed after the {hardLimitGracePeriodSeconds} s grace period"
-                    : "test command killed without a grace period");
+                Note($"stopped {stopped} test host process(es); waiting up to 10 s for the blame sequence to flush");
+                bool readable = WaitForReadableBlameSequence(testResults!, Remaining(clock,
+                    Earlier(graceDeadline, clock.Elapsed + TimeSpan.FromSeconds(10))));
+                Note(readable
+                    ? $"blame sequence flushed; waiting up to {hardLimitGracePeriodSeconds} s for the test command to exit"
+                    : $"no readable blame sequence after 10 s; waiting up to {hardLimitGracePeriodSeconds} s for the test command to exit");
+                var exitClock = Stopwatch.StartNew();
+                if (process.WaitForExit(Remaining(clock, Earlier(graceDeadline, clock.Elapsed + TimeSpan.FromSeconds(hardLimitGracePeriodSeconds)))))
+                    Note($"test command exited on its own after {Math.Ceiling(exitClock.Elapsed.TotalSeconds):F0} s");
             }
-            catch (InvalidOperationException)
-            {
-                Note($"test command exited during the kill after {Math.Ceiling(exitClock.Elapsed.TotalSeconds):F0} s");
-            }
+            else Note("no test host was stopped; stopping owned processes without a grace period; no readable blame sequence available");
         }
-        process.WaitForExit();
-        string? unavailable = cannotNameTests ? noTestNamesReason : null;
-        Note(ValidationLimitReports.HardLimitFailure(command, clock.Elapsed, hardLimit, unavailable));
-        throw new InvalidOperationException($"Validation command passed its {Elapsed(hardLimit)} hard limit and was stopped: {command}" +
-            (unavailable == null ? "" : $"; no test names: {unavailable}"));
+        catch (Exception error) when (ProcessObservationError(error) || error is TimeoutException)
+        {
+            verified = false;
+            Note($"cleanup could not be verified ({error.Message}); no readable blame sequence available");
+        }
+        finally
+        {
+            // Retained identities survive root exit. Never infer ownership of a reparented pipe holder after the fact.
+            if (rootStart is long identity && owned.All(item => item.Handle.Id != process.Id))
+                owned.Add(new(process, identity, 0, false));
+            foreach (var item in owned.OrderByDescending(item => item.Depth))
+                try
+                {
+                    if (item.StopRequest == null && !item.Handle.HasExited) RequestStop(item, clock, cleanupDeadline);
+                }
+                catch (Exception error) when (ProcessObservationError(error) || error is TimeoutException)
+                {
+                    verified = false;
+                    Note($"cleanup could not be verified for PID {item.Handle.Id} ({error.Message})");
+                }
+            foreach (var item in owned)
+                try
+                {
+                    if (!item.Handle.WaitForExit(Remaining(clock, cleanupDeadline)))
+                    {
+                        verified = false;
+                        Note($"still alive: owned PID {item.Handle.Id}; cleanup could not be verified");
+                    }
+                    else Note($"exit observed: owned PID {item.Handle.Id}");
+                }
+                catch (Exception error) when (ProcessObservationError(error))
+                {
+                    verified = false;
+                    Note($"cleanup could not be verified for PID {item.Handle.Id} ({error.Message})");
+                }
+            // Signals use their own freshly checked handle; they never retain these observation handles.
+            foreach (var item in owned.Where(item => item.Handle != process)) item.Handle.Dispose();
+        }
+        Note(verified ? "cleanup: root and all known owned descendants exited" : "cleanup could not be verified; validation remains failed");
+        // A target eligible for net48 may actually be hung in its modern leg. Keep readable modern host evidence distinct.
+        if (!preparation && stopped == 0) unavailable = noTestNamesReason;
+        if (preparation) Note($"FAILED: preparation command after {Elapsed(clock.Elapsed)} (cap {Elapsed(cap)}): {command}; no test names: {unavailable}");
+        else Note(ValidationLimitReports.HardLimitFailure(command, clock.Elapsed, cap, unavailable));
+        throw new InvalidOperationException($"Validation {phase.ToString().ToLowerInvariant()} command passed its {Elapsed(cap)} hard limit: {command}" +
+            (unavailable == null ? "" : $"; no test names: {unavailable}") + (verified ? "" : "; cleanup could not be verified"));
     }
-    if (testResults != null && clock.Elapsed > softLimit) SoftLimitWarning(command, clock.Elapsed, testResults);
+    if (phase == ValidationCommandPhase.Test && clock.Elapsed > softLimit) SoftLimitWarning(command, clock.Elapsed, testResults!);
     if (process.ExitCode != 0)
     {
         Note($"FAILED ({process.ExitCode}) after {Elapsed(clock.Elapsed)}: {command}");
@@ -363,8 +418,30 @@ void Execute(string file, string[] arguments, string? testResults, string? noTes
     DataRootUnchanged(command);
 }
 
+static TimeSpan Remaining(Stopwatch clock, TimeSpan deadline) => TimeSpan.FromTicks(Math.Max(0, (deadline - clock.Elapsed).Ticks));
+static TimeSpan Earlier(TimeSpan first, TimeSpan second) => first <= second ? first : second;
+static bool ProcessObservationError(Exception error) => error is System.ComponentModel.Win32Exception or InvalidOperationException
+    or AggregateException or IOException or ArgumentException;
+
+// Run potentially blocking OS signals off-thread, within this same absolute cleanup deadline. A timeout is not a stopped claim.
+static void RequestStop(ValidationOwnedProcess owned, Stopwatch clock, TimeSpan deadline)
+{
+    int pid = owned.Handle.Id;
+    long identity = owned.StartUtcTicks;
+    owned.StopRequest ??= Task.Run(() =>
+    {
+        if (Remaining(clock, deadline) == TimeSpan.Zero) throw new TimeoutException("no time remains to request stop");
+        using var current = Process.GetProcessById(pid);
+        if (current.StartTime.ToUniversalTime().Ticks != identity)
+            throw new InvalidOperationException("PID start identity changed; no signal sent");
+        current.Kill();
+    });
+    _ = owned.StopRequest.ContinueWith(task => _ = task.Exception, TaskContinuationOptions.OnlyOnFaulted);
+    owned.StopRequest.WaitAsync(Remaining(clock, deadline)).GetAwaiter().GetResult();
+}
+
 // Stopping only the host gives vstest's blame collector a bounded chance to finish its sequence and the command to write its TRX.
-// With no stopped host the tree is killed immediately. This polls only read-only evidence; the stop and tree kill are each issued once.
+// With no stopped host cleanup proceeds immediately. This polls only read-only evidence; each owned stop is requested once.
 static bool WaitForReadableBlameSequence(string testResults, TimeSpan timeout)
 {
     var clock = Stopwatch.StartNew();
@@ -394,10 +471,12 @@ void SoftLimitWarning(string command, TimeSpan elapsed, string testResults)
     }
 }
 
-// Stops every test host that the process tree under rootPid runs and returns how many. The process table comes from
-// ps (macOS, Linux) or pwsh's CIM on Windows (no wmic: newer Windows lacks it).
-static int StopTestHosts(int rootPid)
+// The one process-table owner, for both preparation cleanup and test-host stop. Only a root whose exact identity is
+// still observable and alive at graph admission can establish ancestry. Acquire handles for the snapshot before signaling; retain them across root exit.
+void StopTestHosts(Process rootProcess, long? rootStart, Stopwatch clock, TimeSpan deadline, TimeSpan cleanupDeadline,
+    List<ValidationOwnedProcess> owned, bool stopHosts, ref int stopped)
 {
+    if (rootStart == null) throw new InvalidOperationException("root start identity unavailable");
     var table = new Dictionary<int, (int Parent, string Command)>();
     var start = OperatingSystem.IsWindows()
         ? new ProcessStartInfo("pwsh", ["-NoProfile", "-NonInteractive", "-Command",
@@ -405,40 +484,117 @@ static int StopTestHosts(int rootPid)
         : new ProcessStartInfo("ps", ["-ww", "-A", "-o", "pid=,ppid=,args="]);
     start.RedirectStandardOutput = true;
     start.UseShellExecute = false;
-    Process? started;
-    try { started = Process.Start(start); }
-    catch (System.ComponentModel.Win32Exception error)
+    DateTime beforeListing = DateTime.UtcNow;
+    Process listing = Process.Start(start) ?? throw new InvalidOperationException("Could not list processes.");
+    long? listingStart = null;
+    try { listingStart = listing.StartTime.ToUniversalTime().Ticks; }
+    catch (Exception error) when (ProcessObservationError(error)) { /* A quick exited listing still has its output and exit code. */ }
+    using var cancellation = new CancellationTokenSource();
+    Task<string> read = listing.StandardOutput.ReadToEndAsync(cancellation.Token);
+    Task complete = Task.WhenAll(read, listing.WaitForExitAsync());
+    _ = complete.ContinueWith(task => _ = task.Exception, TaskContinuationOptions.OnlyOnFaulted);
+    try
     {
-        throw new InvalidOperationException($"Could not list processes with {start.FileName} ({error.Message}). On Windows that is PowerShell 7: " +
-            "install it with winget install --id Microsoft.PowerShell --source winget (docs/reference/platforms.md#host-shells).", error);
-    }
-    using (var listing = started ?? throw new InvalidOperationException("Could not list processes."))
-    {
-        string text = listing.StandardOutput.ReadToEnd();
-        listing.WaitForExit();
-        foreach (string line in text.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+        // Root exit alone is insufficient: a descendant may still hold the stdout pipe open.
+        complete.WaitAsync(Remaining(clock, deadline)).GetAwaiter().GetResult();
+        if (listing.ExitCode != 0) throw new InvalidOperationException($"process listing failed with exit code {listing.ExitCode}");
+        foreach (string line in read.GetAwaiter().GetResult().Split('\n', StringSplitOptions.RemoveEmptyEntries))
         {
+            if (Remaining(clock, deadline) == TimeSpan.Zero) throw new TimeoutException("process-table acquisition limit");
             var fields = line.Trim().Split(' ', 3, StringSplitOptions.RemoveEmptyEntries);
             if (fields.Length >= 2 && int.TryParse(fields[0], out int pid) && int.TryParse(fields[1], out int parent))
                 table[pid] = (parent, fields.Length == 3 ? fields[2] : "");
         }
     }
+    catch
+    {
+        // This listing's own root is ours. Its unobserved/reparented children are not safely attributable.
+        cancellation.Cancel();
+        try
+        {
+            if (!listing.HasExited)
+            {
+                if (listingStart == null) throw new InvalidOperationException("process-list root start identity unavailable");
+                RequestStop(new(listing, listingStart.Value, 0, false), clock, cleanupDeadline);
+                if (!listing.WaitForExit(Remaining(clock, cleanupDeadline)))
+                    Note("process-list root still alive; cleanup could not be verified");
+            }
+        }
+        catch (Exception error) when (ProcessObservationError(error) || error is TimeoutException)
+        {
+            Note($"process-list cleanup could not be verified ({error.Message})");
+        }
+        Note("process listing unavailable; listing descendant cleanup could not be verified");
+        throw;
+    }
+    finally
+    {
+        // Do not synchronously dispose a reader whose OS read is still in flight.
+        _ = complete.ContinueWith(_ => listing.Dispose(), TaskScheduler.Default);
+    }
+    int rootPid = rootProcess.Id;
+    try
+    {
+        using var currentRoot = Process.GetProcessById(rootPid);
+        if (currentRoot.HasExited || currentRoot.StartTime.ToUniversalTime().Ticks != rootStart || !table.ContainsKey(rootPid))
+            throw new InvalidOperationException("root exited or changed identity before ancestry was established");
+    }
+    catch (ArgumentException error)
+    {
+        throw new InvalidOperationException("root exited or changed identity before ancestry was established", error);
+    }
+    owned.Add(new(rootProcess, rootStart.Value, 0, false));
     var testHost = new System.Text.RegularExpressions.Regex(@"(^|[\s\\/""])testhost(\.net[0-9]+)?(\.x86)?(\.dll|\.exe)?(""|\s|$)");
-    var below = new HashSet<int> { rootPid };
+    var depths = new Dictionary<int, int> { [rootPid] = 0 };
     for (bool grew = true; grew;)
     {
         grew = false;
         foreach (var (pid, entry) in table)
-            if (below.Contains(entry.Parent) && below.Add(pid)) grew = true;
+        {
+            if (Remaining(clock, deadline) == TimeSpan.Zero) throw new TimeoutException("process ancestry acquisition limit");
+            if (!depths.ContainsKey(pid) && depths.TryGetValue(entry.Parent, out int parentDepth))
+            {
+                depths.Add(pid, parentDepth + 1);
+                grew = true;
+            }
+        }
     }
-    int stopped = 0;
-    foreach (int pid in below.Where(pid => pid != rootPid && table.TryGetValue(pid, out var entry) && testHost.IsMatch(entry.Command)))
+    foreach (var (pid, depth) in depths.Where(item => item.Key != rootPid).OrderBy(item => item.Value))
     {
-        try { using var host = Process.GetProcessById(pid); host.Kill(entireProcessTree: true); stopped++; }
-        catch (ArgumentException) { /* It exited already. */ }
-        catch (InvalidOperationException) { /* So did this one. */ }
+        if (Remaining(clock, deadline) == TimeSpan.Zero) throw new TimeoutException("process identity acquisition limit");
+        var entry = table[pid];
+        var parent = owned.FirstOrDefault(item => item.Handle.Id == entry.Parent)
+            ?? throw new InvalidOperationException($"parent identity unavailable for observed descendant PID {pid}");
+        Process? child = null;
+        try
+        {
+            child = Process.GetProcessById(pid);
+            long identity = child.StartTime.ToUniversalTime().Ticks;
+            // A reused PID or a process born during this non-atomic snapshot cannot be safely attached to this graph.
+            if (identity < parent.StartUtcTicks || identity > beforeListing.Ticks)
+                throw new InvalidOperationException($"PID {pid} start identity does not establish snapshot ancestry");
+            owned.Add(new(child, identity, depth, testHost.IsMatch(entry.Command)));
+            child = null;
+        }
+        catch (ArgumentException) { /* Already absent; descendants needing this parent identity remain unverified. */ }
+        finally { child?.Dispose(); }
     }
-    return stopped;
+    if (stopHosts)
+        foreach (var host in owned.Where(item => item.IsTestHost))
+        {
+            if (host.StopRequest != null || host.Handle.HasExited) continue;
+            try
+            {
+                RequestStop(host, clock, deadline);
+                Note($"stop requested: owned test host PID {host.Handle.Id}");
+                if (host.Handle.WaitForExit(Remaining(clock, deadline)))
+                {
+                    Note($"exit observed: owned test host PID {host.Handle.Id}");
+                    stopped++;
+                }
+            }
+            catch (ArgumentException) { /* It exited before the stop request; it did not earn blame grace. */ }
+        }
 }
 
 // Runs a command as Run does and returns its standard output (its errors still reach the console).
