@@ -236,6 +236,26 @@ public sealed class RunFolderShellTests : IDisposable
         Assert.Equal(("copy", first.Path, "client"), (open.Kind, open.What, open.Actor));
     }
 
+    // The environment's runtime folder is the user's, and may be a link (to another drive, say): the run still makes its folder in it.
+    // Only a recovery's evidence reservation, whose parent the toolkit made, refuses a link at its parent.
+    [Theory, MemberData(nameof(LocalGameHostShellTests.Shells), MemberType = typeof(LocalGameHostShellTests))]
+    public async Task ARunFolderIsMadeInALinkedRuntimeFolder(string shell)
+    {
+        if (OperatingSystem.IsWindows()) return; // Creating a symlink may require a privilege on Windows.
+        var host = Host(shell);
+        string target = Path.Combine(_root, "elsewhere");
+        Directory.CreateDirectory(target);
+        Directory.CreateDirectory(Path.GetDirectoryName(Runtime)!);
+        Directory.CreateSymbolicLink(Runtime, target);
+        var folder = Folder(host);
+
+        await folder.MakeAsync(default);
+
+        Assert.True(folder.Made);
+        Assert.True(Directory.Exists(Path.Combine(target, RunId)));
+        Assert.Equal([JournalEntry.CopyIntended], await KindsOf(host, folder.Path));
+    }
+
     [Theory, MemberData(nameof(LocalGameHostShellTests.Shells), MemberType = typeof(LocalGameHostShellTests))]
     public async Task AFolderThatAlreadyExistsIsNeverTheRuns(string shell)
     {

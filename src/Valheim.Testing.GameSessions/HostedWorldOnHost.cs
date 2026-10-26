@@ -252,11 +252,13 @@ internal static class HostedWorldOnHost
     /// <summary>
     /// Makes <paramref name="directory"/> on <paramref name="host"/> with the same atomic reservation a placement's collection
     /// directory gets, refusing one that already exists: a folder only the caller made (a run's own folder, <see cref="RunFolder"/>).
+    /// With <paramref name="unlinkedRoot"/> (a toolkit-made parent, such as a recovery's run folder), a link at or below that root is
+    /// refused too. A run's own folder passes none: its parent is the environment's runtime folder, which may itself be a link.
     /// </summary>
-    internal static async Task ReserveNewAsync(IGameHost host, string directory, TimeSpan timeout, CancellationToken cancellation)
+    internal static async Task ReserveNewAsync(IGameHost host, string directory, TimeSpan timeout, CancellationToken cancellation, string? unlinkedRoot = null)
     {
         var result = await host.RunAsync(host.Shell.Kind == HostShellKind.PowerShell ? WindowsReserve : BashReserve,
-            new Dictionary<string, string> { ["stage"] = "", ["keep"] = directory, ["root"] = HostPath.Parent(directory) }, timeout, cancellation).ConfigureAwait(false);
+            new Dictionary<string, string> { ["stage"] = "", ["keep"] = directory, ["root"] = unlinkedRoot ?? "" }, timeout, cancellation).ConfigureAwait(false);
         RequireReservation(result, host.Name, directory, "a run makes its own folder, and never reuses one that already exists");
     }
 
