@@ -514,16 +514,13 @@ internal static class RunRecovery
                     await Required(JournalEntry.Of(JournalEntry.CopyIntended, ("runtime", path), ("stage", ""), ("parent", HostPath.Parent(path)),
                         ("holds", "recovered-evidence"), ("retention", "after-fetch"), ("sourceRuntime", runtime), ("reserved", "false"))).ConfigureAwait(false);
                     recoveredOwners.Add(path, false);
-                    bool ownedParent = run.Items.Any(candidate => candidate.Host == group.Key && candidate.Kind == "copy" && candidate.Fields.GetValueOrDefault("holds") == RunFolder.Holds &&
-                        candidate.What == HostPath.Parent(path));
-                    if (!ownedParent)
-                        try { await HostedWorldOnHost.ReserveNewAsync(host, path, timeout, cancellation).ConfigureAwait(false); }
-                        catch (HostOperationException error) when (error.Result is { Outcome: HostOutcome.Exited, ExitCode: 4 })
-                        {
-                            await Required(JournalEntry.Of(JournalEntry.CopyRetired, ("runtime", path), ("notMade", "it already existed"))).ConfigureAwait(false);
-                            recoveredOwners.Remove(path);
-                            throw new IOException("recovered evidence already exists without proven ownership; nothing was written in " + path, error);
-                        }
+                    try { await HostedWorldOnHost.ReserveNewAsync(host, path, timeout, cancellation).ConfigureAwait(false); }
+                    catch (HostOperationException error) when (error.Result is { Outcome: HostOutcome.Exited, ExitCode: 4 })
+                    {
+                        await Required(JournalEntry.Of(JournalEntry.CopyRetired, ("runtime", path), ("notMade", "it already existed"))).ConfigureAwait(false);
+                        recoveredOwners.Remove(path);
+                        throw new IOException("recovered evidence already exists without proven ownership; nothing was written in " + path, error);
+                    }
                     await Required(JournalEntry.Of(JournalEntry.CopyDone, ("runtime", path), ("reserved", "true"))).ConfigureAwait(false);
                     recoveredOwners[path] = true;
                 }

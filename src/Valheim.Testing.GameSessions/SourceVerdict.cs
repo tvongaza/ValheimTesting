@@ -35,7 +35,7 @@ internal sealed record SourceNotMoved(string Path, string Reason);
 
 /// <summary>
 /// The one source-install verdict of an actor's run (#612), written to <c>source-changes/&lt;actor&gt;/source-changes.json</c> in
-/// the run's evidence (in a recovery, <c>recovered-&lt;actor&gt;/source-changes.json</c> on the host). <see cref="Missing"/> names
+/// the run's evidence (in a recovery, beside that profile's adopted files in its journalled attempt folder on the host). <see cref="Missing"/> names
 /// files, <see cref="MissingDirectories"/> folders. <see cref="Record"/> is the only writer of the report's
 /// <c>sourceIntegrity.&lt;actor&gt;</c> and of the step that names it, for every launch path; <see cref="KeepsProfile"/> is the one
 /// answer to whether the profile may be retired.
@@ -147,6 +147,9 @@ internal sealed record SourceVerdict(string Actor, string Host, string Root, str
     /// <summary>The verdict as <c>source-changes.json</c> holds it.</summary>
     internal string ToJson() => JsonSerializer.Serialize(this, s_json) + "\n";
 
+    internal static SourceVerdict FromJson(string json) => JsonSerializer.Deserialize<SourceVerdict>(json, s_json)
+        ?? throw new InvalidDataException("The unfinished source recovery report is empty.");
+
     /// <summary>
     /// Records the verdict as its <see cref="StepPhase.Cleanup"/> step and <c>sourceIntegrity.&lt;actor&gt;</c>, and prints a
     /// warning naming every path the run moved out or found added. A failed or unknown verdict fails the step and throws, so the
@@ -170,7 +173,7 @@ internal sealed record SourceVerdict(string Actor, string Host, string Root, str
 /// Where one profile's source settlement keeps what the game added to the install: the copy's <see cref="Runtime"/> (as journalled),
 /// whose parent folder on the host holds the persisted baseline and the moved files, and either the run's evidence folder
 /// <see cref="Output"/> (they are fetched into <c>source-changes/&lt;actor&gt;/</c> there; without one they stay on the host,
-/// journalled kept) or, in a recovery, the host folder <see cref="RecoveredIn"/> (<c>&lt;runs&gt;/&lt;run&gt;/recovered-&lt;actor&gt;</c>)
+/// journalled kept) or, in a recovery, the host attempt folder <see cref="RecoveredIn"/> below <c>&lt;runs&gt;/&lt;run&gt;/recovered-&lt;actor&gt;</c>
 /// they are moved into. <see cref="Actor"/> is the one name of the verdict and its evidence.
 /// </summary>
 internal sealed record SourceSettlement(string Actor, string Runtime, string? Output, string? RecoveredIn)
@@ -219,6 +222,7 @@ internal static class SourceSettleScripts
             [ -n "$line" ] || continue
             if ! vt_relative "$line"; then printf 'VT-NOTMOVED %s outside\n' "$line"; continue; fi
             src="$root/$rel"; target="$keep/$rel"
+            if [ -n "${keepRoot:-}" ] && ! vt_unlinked "$keepRoot" "$target"; then printf 'VT-NOTMOVED %s link\n' "$line"; continue; fi
             if ! vt_unlinked "$root" "$src"; then printf 'VT-NOTMOVED %s link\n' "$line"; continue; fi
             if [ ! -e "$src" ]; then printf 'VT-GONE %s\n' "$line"; continue; fi
             if [ ! -f "$src" ]; then printf 'VT-NOTMOVED %s not-a-file\n' "$line"; continue; fi
@@ -262,6 +266,7 @@ internal static class SourceSettleScripts
             if (-not $rel) { 'VT-NOTMOVED ' + $line + ' outside'; continue }
             $src = $root + '\' + $rel
             $target = $keep + '\' + $rel
+            if ($keepRoot -and -not (Test-VtUnlinked $keepRoot $target)) { 'VT-NOTMOVED ' + $line + ' link'; continue }
             if (-not (Test-VtUnlinked $root $src)) { 'VT-NOTMOVED ' + $line + ' link'; continue }
             $exactSource = Get-VtExact $src
             $exactTarget = Get-VtExact $target
@@ -302,16 +307,21 @@ internal static class SourceSettleScripts
         'VT-REACHABLE yes'
         """.ReplaceLineEndings("\n");
 
-    // Variables: path, content (base64). Writes the file whole (a temporary name, then a rename), replacing an earlier one.
-    internal static readonly string BashWrite = """
+    // Variables: path, content (base64), optional root (unlinked write boundary), exclusive (never replace a report).
+    // Writes the file whole through a temporary name; ordinary baseline writes replace their previous version.
+    internal static readonly string BashWrite = ProtectedPaths.BashUnlinked + """
         set -u
+        if [ -n "${root:-}" ]; then vt_unlinked "$root" "$path" && vt_unlinked "$root" "$path.vt-tmp" || exit 3; fi
+        if [ -n "${exclusive:-}" ] && { [ -e "$path" ] || [ -L "$path" ]; }; then exit 3; fi
         mkdir -p -- "$(dirname -- "$path")" || exit 3
         { printf '%s' "$content" | base64 -d 2>/dev/null || printf '%s' "$content" | base64 -D; } > "$path.vt-tmp" || exit 3
         mv -f -- "$path.vt-tmp" "$path" || exit 3
         echo 'VT-SOURCE-WRITTEN'
         """.ReplaceLineEndings("\n");
 
-    internal static readonly string PowerShellWrite = """
+    internal static readonly string PowerShellWrite = ProtectedPaths.PowerShellUnlinked + """
+        if ($root -and (-not (Test-VtUnlinked $root $path) -or -not (Test-VtUnlinked $root ($path + '.vt-tmp')))) { throw 'The source report destination passes through a link' }
+        if ($exclusive -and (Test-Path -LiteralPath $path)) { throw 'The source report already exists' }
         [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($path))
         [IO.File]::WriteAllBytes($path + '.vt-tmp', [Convert]::FromBase64String($content))
         [IO.File]::Move($path + '.vt-tmp', $path, $true)
@@ -322,11 +332,12 @@ internal static class SourceSettleScripts
     // remove keep, fetched or holding no file), recovered (a recovery's per-profile folder in recovered-<actor>: keep is moved into it
     // as added, never removed), baseline (1: remove the baseline, last). Every delete stays below the parent (ProtectedPaths). A path that breaks
     // these rules is refused ("VT-SOURCE-REFUSED <why>"), never retried: it cannot change.
-    internal static readonly string BashEvidence = "set -u\n" + ProtectedPaths.BashInside + ProtectedPaths.BashRemove + """
+    internal static readonly string BashEvidence = "set -u\n" + ProtectedPaths.BashInside + ProtectedPaths.BashRemove + ProtectedPaths.BashUnlinked + """
         if [ -z "$parent" ] || [ -z "$keep" ]; then echo 'VT-SOURCE-REFUSED no profile folder or moved files folder was named'; exit 0; fi
         if [ "$(dirname -- "$keep")" != "$parent" ]; then echo "VT-SOURCE-REFUSED $keep is not directly in $parent"; exit 0; fi
         case "$(basename -- "$keep")" in source-added|source-added-*) ;; *) echo "VT-SOURCE-REFUSED $keep is not a moved files folder"; exit 0;; esac
         if [ -n "$recovered" ]; then
+            if [ -n "${recoveredRoot:-}" ] && ! vt_unlinked "$recoveredRoot" "$recovered/added"; then echo 'VT-SOURCE-REFUSED the recovered destination passes through a link'; exit 0; fi
             if [ -L "$keep" ]; then echo 'VT-SOURCE-REFUSED the moved files folder is a link'; exit 0; fi
             if [ -d "$keep" ]; then
                 to="$recovered/added"
@@ -339,7 +350,7 @@ internal static class SourceSettleScripts
         echo 'VT-SOURCE-SETTLED'
         """.ReplaceLineEndings("\n");
 
-    internal static readonly string PowerShellEvidence = ProtectedPaths.PowerShellInside + ProtectedPaths.PowerShellRemove + """
+    internal static readonly string PowerShellEvidence = ProtectedPaths.PowerShellInside + ProtectedPaths.PowerShellRemove + ProtectedPaths.PowerShellUnlinked + """
         if (-not $parent -or -not $keep) { 'VT-SOURCE-REFUSED no profile folder or moved files folder was named'; exit 0 }
         # Both sides as full paths, one separator: a runtime written with / is the same folder (GetDirectoryName rewrites / to \).
         function Get-VtFull([string]$path) { return [IO.Path]::GetFullPath($path).Replace('/', '\').TrimEnd('\') }
@@ -348,6 +359,7 @@ internal static class SourceSettleScripts
         }
         if (-not ([IO.Path]::GetFileName((Get-VtFull $keep)) -like 'source-added*')) { 'VT-SOURCE-REFUSED ' + $keep + ' is not a moved files folder'; exit 0 }
         if ($recovered) {
+            if ($recoveredRoot -and -not (Test-VtUnlinked $recoveredRoot (Join-Path $recovered 'added'))) { 'VT-SOURCE-REFUSED the recovered destination passes through a link'; exit 0 }
             if (Test-VtLink $keep) { 'VT-SOURCE-REFUSED the moved files folder is a link'; exit 0 }
             if ([IO.Directory]::Exists($keep)) {
                 $to = Join-Path $recovered 'added'

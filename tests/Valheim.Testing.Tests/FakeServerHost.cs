@@ -402,6 +402,13 @@ internal sealed class FakeServerHost : IGameHost
             case "source-write":
                 try
                 {
+                    if (v.GetValueOrDefault("root") is { Length: > 0 } boundary)
+                    {
+                        ProtectedPaths.RequireUnlinkedPath(Local(boundary), Local(v["path"]));
+                        ProtectedPaths.RequireUnlinkedPath(Local(boundary), Local(v["path"]) + ".vt-tmp");
+                    }
+                    if (v.GetValueOrDefault("exclusive") == "1" && Path.Exists(Local(v["path"])))
+                        return new HostResult(HostOutcome.Exited, 3, "", "report already exists", TimeSpan.Zero, false);
                     Directory.CreateDirectory(Path.GetDirectoryName(Local(v["path"]))!);
                     File.WriteAllBytes(Local(v["path"]) + ".vt-tmp", Convert.FromBase64String(v["content"]));
                     File.Move(Local(v["path"]) + ".vt-tmp", Local(v["path"]), overwrite: true);
@@ -992,6 +999,9 @@ internal sealed class FakeServerHost : IGameHost
             if (line.Length == 0) continue;
             if (SettleRelative(line) is not { } parts) { Line("VT-NOTMOVED", line, "outside"); continue; }
             string source = Exact(Path.Combine([root, .. parts])), target = Exact(Path.Combine([keep, .. parts]));
+            if (v.GetValueOrDefault("keepRoot") is { Length: > 0 } boundary)
+                try { ProtectedPaths.RequireUnlinkedPath(Local(boundary), target); }
+                catch (IOException) { Line("VT-NOTMOVED", line, "link"); continue; }
             if (!Unlinked(root, parts)) { Line("VT-NOTMOVED", line, "link"); continue; }
             if (!File.Exists(source) && !Directory.Exists(source)) { Line("VT-GONE", line); continue; }
             if (!File.Exists(source)) { Line("VT-NOTMOVED", line, "not-a-file"); continue; }
@@ -1051,6 +1061,9 @@ internal sealed class FakeServerHost : IGameHost
         string kept = Local(keep), root = Local(parent);
         if (recovered.Length != 0)
         {
+            if (v.GetValueOrDefault("recoveredRoot") is { Length: > 0 } boundary)
+                try { ProtectedPaths.RequireUnlinkedPath(Local(boundary), Path.Combine(Local(recovered), "added")); }
+                catch (IOException) { return Refused("the recovered destination passes through a link"); }
             if (NameLink(kept)) return Refused("the moved files folder is a link");
             if (Directory.Exists(kept))
             {
