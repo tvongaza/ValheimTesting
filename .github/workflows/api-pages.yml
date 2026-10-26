@@ -43,7 +43,11 @@ jobs:
       - uses: ./.github/actions/setup
         with:
           pinned-downloads: true
-      - run: dotnet run scripts/bootstrap-cli.cs
+      - name: Build the pinned CLI transport package
+        uses: ./.github/actions/setup
+        with:
+          phase: bootstrap
+          evidence-label: api-pages
       # The whole serial validation on one runner: a test command ends at its 10-minute hard limit (#719), then packaging.
       - run: dotnet run scripts/validate.cs
         timeout-minutes: 20

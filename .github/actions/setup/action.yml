@@ -1,16 +1,47 @@
-name: Set up a .NET runner
-description: The .NET 10 SDK on every OS, on a throwaway Windows runner no real-time malware scanning, and for a job that runs scripts/bootstrap-cli.cs the pinned downloads it reuses. Used after the checkout.
+name: Set up a .NET runner or bootstrap the pinned CLI
+description: Set up the .NET 10 SDK and optional pinned downloads after checkout, or run bootstrap once with failure evidence at the caller's existing bootstrap position.
 inputs:
+  phase:
+    description: 'setup installs the SDK and optional pinned downloads; bootstrap runs the pinned CLI bootstrap once.'
+    default: setup
   pinned-downloads:
     description: >-
       'true' in a job that runs scripts/bootstrap-cli.cs: restore the two files it downloads before the job's steps and save them
       after the job succeeds. Leave it out in any other job.
     default: 'false'
+  evidence-label:
+    description: 'Required for bootstrap: a unique artifact label using only letters, digits, dots, underscores and hyphens.'
+outputs:
+  evidence-directory:
+    description: The unique bootstrap evidence directory, when allocated.
+    value: ${{ steps.bootstrap.outputs.evidence-directory }}
 runs:
   using: composite
   steps:
+    - name: Check the requested phase
+      shell: bash
+      env:
+        SETUP_PHASE: ${{ inputs.phase }}
+        PINNED_DOWNLOADS: ${{ inputs.pinned-downloads }}
+        EVIDENCE_LABEL: ${{ inputs.evidence-label }}
+      run: |
+        case "$SETUP_PHASE" in
+          setup) ;;
+          bootstrap)
+            if [[ "$PINNED_DOWNLOADS" == true ]]; then
+              echo '::error::The bootstrap phase cannot restore pinned downloads; use the earlier setup phase.'
+              exit 1
+            fi
+            if [[ ! "$EVIDENCE_LABEL" =~ ^[A-Za-z0-9._-]+$ ]]; then
+              echo '::error::The bootstrap phase needs an evidence-label containing only letters, digits, dots, underscores and hyphens.'
+              exit 1
+            fi
+            ;;
+          *) echo '::error::Unknown setup action phase; expected setup or bootstrap.'; exit 1 ;;
+        esac
     # Runner images carry a .NET SDK, but not necessarily 10; pin the channel on every OS.
     - uses: actions/setup-dotnet@v6
+      if: inputs.phase == 'setup'
       with:
         dotnet-version: '10.0.x'
     # The BepInExPack (Thunderstore) and the ValheimCLI plugin bundle that bootstrap-cli.cs fetches into .packages, reused across
@@ -19,7 +50,7 @@ runs:
     # fetches once. Exactly these two files, never the folder: it also holds the packages the job builds. A restored file is not
     # trusted: FetchPinned in bootstrap-cli.cs checks its SHA-256 and fetches again when it differs. Needs the checkout first.
     - name: Reuse the pinned downloads
-      if: inputs.pinned-downloads == 'true'
+      if: inputs.phase == 'setup' && inputs.pinned-downloads == 'true'
       uses: actions/cache@v6
       with:
         path: |
@@ -30,7 +61,7 @@ runs:
     # took 55 s against 11-14 s on Linux and macOS). The runner is discarded after the job. A warning, not a failure, if
     # an image ever refuses the change.
     - name: Stop real-time scanning on this throwaway Windows runner
-      if: runner.os == 'Windows'
+      if: inputs.phase == 'setup' && runner.os == 'Windows'
       shell: pwsh
       run: |
         try
@@ -39,3 +70,77 @@ runs:
           "Real-time monitoring disabled: $((Get-MpPreference -ErrorAction Stop).DisableRealtimeMonitoring)"
         }
         catch { Write-Output "::warning::Real-time scanning stays on: $($_.Exception.Message)" }
+    - name: Bootstrap the pinned CLI and retain startup evidence
+      id: bootstrap
+      if: inputs.phase == 'bootstrap'
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      env:
+        EVIDENCE_LABEL: ${{ inputs.evidence-label }}
+      run: |
+        bootstrap_directory=$(mktemp -d "$RUNNER_TEMP/bootstrap-evidence.XXXXXXXX")
+        printf 'evidence-directory=%s\n' "$bootstrap_directory" >> "$GITHUB_OUTPUT"
+        started_utc=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+        started_seconds=$SECONDS
+        evidence_status=0
+        if commit=$(git rev-parse HEAD); then
+          commit_status=0
+        else
+          commit_status=$?
+          commit=unavailable
+          evidence_status=1
+        fi
+        if sdk_version=$(dotnet --version 2>/dev/null); then
+          sdk_status=0
+        else
+          sdk_status=$?
+          sdk_version=unavailable
+        fi
+        if ! printf '%s\n' \
+          'phase=bootstrap invocation (SDK restore/build and script execution)' \
+          'command=dotnet run scripts/bootstrap-cli.cs' \
+          "started-utc=$started_utc" "commit=$commit" "commit-status=$commit_status" \
+          "run-id=$GITHUB_RUN_ID" "run-attempt=$GITHUB_RUN_ATTEMPT" "job-id=$GITHUB_JOB" \
+          "runner-os=$RUNNER_OS" "runner-arch=$RUNNER_ARCH" "evidence-label=$EVIDENCE_LABEL" \
+          "sdk-version=$sdk_version" "sdk-version-status=$sdk_status" \
+          > "$bootstrap_directory/metadata.txt"; then
+          echo '::error::Could not write bootstrap start metadata.'
+          evidence_status=1
+        fi
+
+        set +e
+        dotnet run scripts/bootstrap-cli.cs 2>&1 | tee "$bootstrap_directory/bootstrap.log"
+        bootstrap_statuses=("${PIPESTATUS[@]}")
+        set -e
+
+        dotnet_status=${bootstrap_statuses[0]}
+        tee_status=${bootstrap_statuses[1]}
+        if completed_utc=$(date -u +'%Y-%m-%dT%H:%M:%SZ'); then
+          :
+        else
+          completed_utc=unavailable
+          evidence_status=1
+        fi
+        elapsed_seconds=$((SECONDS - started_seconds))
+        if ! printf '%s\n' "completed-utc=$completed_utc" "elapsed-seconds=$elapsed_seconds" \
+          "dotnet-status=$dotnet_status" "tee-status=$tee_status" \
+          >> "$bootstrap_directory/metadata.txt"; then
+          echo '::error::Could not write bootstrap completion metadata.' >&2 || true
+          evidence_status=1
+        fi
+        # A capture failure must never replace the original bootstrap failure.
+        if [[ "$dotnet_status" != 0 ]]; then
+          exit "$dotnet_status"
+        fi
+        if [[ "$tee_status" != 0 || "$evidence_status" != 0 ]]; then
+          echo '::error::Bootstrap succeeded but its required evidence capture failed.'
+          exit 1
+        fi
+    - name: Keep bootstrap startup evidence on failure
+      if: ${{ (failure() || cancelled()) && inputs.phase == 'bootstrap' && steps.bootstrap.outputs.evidence-directory != '' }}
+      uses: actions/upload-artifact@v7
+      with:
+        name: bootstrap-${{ inputs.evidence-label }}-attempt-${{ github.run_attempt }}
+        path: ${{ steps.bootstrap.outputs.evidence-directory }}
+        retention-days: 14
+        if-no-files-found: error

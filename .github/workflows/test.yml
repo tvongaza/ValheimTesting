@@ -65,7 +65,11 @@ jobs:
         run: |
           mkdir -p .packages
           printf 'obsolete CLI package' > .packages/Valheim.Testing.Cli.0.1.0-preview.0.nupkg
-      - run: dotnet run scripts/bootstrap-cli.cs
+      - name: Build the pinned CLI transport package
+        uses: ./.github/actions/setup
+        with:
+          phase: bootstrap
+          evidence-label: test-${{ matrix.os }}
       - name: Confirm the obsolete CLI package was removed
         if: runner.os == 'Linux'
         run: test ! -e .packages/Valheim.Testing.Cli.0.1.0-preview.0.nupkg
@@ -156,7 +160,11 @@ jobs:
           path: ${{ env.VT_NUGET_CACHE_PATHS }}
           key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', 'scripts/*.cs', 'scripts/Shared/*.cs', 'cli-dependency.json', 'NuGet.Config', '.config/dotnet-tools.json') }}
           restore-keys: nuget-${{ runner.os }}-
-      - run: dotnet run scripts/bootstrap-cli.cs
+      - name: Build the pinned CLI transport package
+        uses: ./.github/actions/setup
+        with:
+          phase: bootstrap
+          evidence-label: toolkit-${{ matrix.os }}-${{ matrix.shard }}
       - name: Run toolkit shard
         # One test command: its 10-minute hard limit (validate.cs, #719) plus the data-root guard and the transcript.
         timeout-minutes: 12
@@ -210,7 +218,11 @@ jobs:
           path: ${{ env.VT_NUGET_CACHE_PATHS }}
           key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', 'scripts/*.cs', 'scripts/Shared/*.cs', 'cli-dependency.json', 'NuGet.Config', '.config/dotnet-tools.json') }}
           restore-keys: nuget-${{ runner.os }}-
-      - run: dotnet run scripts/bootstrap-cli.cs
+      - name: Build the pinned CLI transport package
+        uses: ./.github/actions/setup
+        with:
+          phase: bootstrap
+          evidence-label: ci-shell-${{ matrix.os }}
       - name: Run the local-shell integration tests
         # One test command: its 10-minute hard limit (validate.cs, #719) plus the data-root guard and the transcript.
         timeout-minutes: 12
@@ -248,7 +260,11 @@ jobs:
           path: ${{ env.VT_NUGET_CACHE_PATHS }}
           key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', 'scripts/*.cs', 'scripts/Shared/*.cs', 'cli-dependency.json', 'NuGet.Config', '.config/dotnet-tools.json') }}
           restore-keys: nuget-${{ runner.os }}-
-      - run: dotnet run scripts/bootstrap-cli.cs
+      - name: Build the pinned CLI transport package
+        uses: ./.github/actions/setup
+        with:
+          phase: bootstrap
+          evidence-label: api-reference
       - name: Build candidate API reference
         run: |
           dotnet build docs/reference/ValheimTesting.Api.sln -c Release -m:1
@@ -488,7 +504,11 @@ jobs:
       - uses: ./.github/actions/setup
         with:
           pinned-downloads: true
-      - run: dotnet run scripts/bootstrap-cli.cs
+      - name: Build the pinned CLI transport package
+        uses: ./.github/actions/setup
+        with:
+          phase: bootstrap
+          evidence-label: game-hosts
       - name: Start a throwaway sshd on 127.0.0.1:2222
         run: bash .github/scripts/game-hosts.sh start
       - name: Start a throwaway container on the host network

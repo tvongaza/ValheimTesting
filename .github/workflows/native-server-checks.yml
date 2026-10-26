@@ -95,7 +95,10 @@ jobs:
         env:
           DOTNET_CLI_TELEMETRY_OPTOUT: '1'
           DOTNET_NOLOGO: '1'
-        run: dotnet run scripts/bootstrap-cli.cs
+        uses: ./.github/actions/setup
+        with:
+          phase: bootstrap
+          evidence-label: native-server-checks
       - name: Build the private image (never pushed, saved, cached or uploaded)
         id: build
         timeout-minutes: 30
