@@ -936,7 +936,10 @@ public sealed class MacStandInServerFixtureTests
                 ["test", project, "-c", "Release", "--no-build", "--nologo", "-v:n"],
                 new Dictionary<string, string?> { ["VT_STANDIN_GUARD_PROBE_ROOT"] = root.Path }, timeoutMinutes: 3);
             process = ChildStandIn(host, root.Path);
-            Assert.True(process != null, "The child did not record a stand-in identity.\n" + run.Output);
+            Assert.True(process != null, "The child did not record a stand-in identity, so its guard execution was not verified. " +
+                "Before direct toolkit tests, build the stand-in leak probe from the repository root:\n" +
+                "dotnet build tests/Valheim.Testing.StandInProcessLeakProbe/Valheim.Testing.StandInProcessLeakProbe.csproj -c Release -m:1\n" +
+                "Full validation (dotnet run scripts/validate.cs) already builds this prerequisite.\nChild output:\n" + run.Output);
 
             Assert.NotEqual(0, run.ExitCode);
             Assert.Contains("DeliberatelyLeavesARegisteredStandInAlive", run.Output);
