@@ -844,7 +844,7 @@ public sealed class TargetedRegressionTests : IDisposable
     // One start run (a new run ID, as the command allocates): each arm in turn on one regression, each in its own evidence folder
     // with its own client process, as the command runs them; the last arm's report and folder, and the run ID.
     private (ScenarioReport Report, string Output, string RunId) Start(Func<LocalFakeOwnedProcess> process, Action<ClientRound>? measure = null,
-        bool end = true, string[]? arms = null)
+        bool end = true, string[]? arms = null, Action? beforeClientLaunch = null)
     {
         string runId = RunJournal.NewRunId();
         using var run = RunJournal.UseRun(runId);
@@ -855,7 +855,7 @@ public sealed class TargetedRegressionTests : IDisposable
             output = Path.Combine(_rig.Root, "out-" + runId, "evidence", arm);
             var client = process();
             report = regression.Run(arm, output, "smoke", ["first"], measure ?? (_ => { }), default, null,
-                (plan, directory, _, _) => ClientSession.Launch(plan, directory, () => client, HostingClient, (_, _) => Task.CompletedTask), afterStaged: null);
+                (plan, directory, _, _) => ClientSession.Launch(plan, directory, () => { beforeClientLaunch?.Invoke(); return client; }, HostingClient, (_, _) => Task.CompletedTask), afterStaged: null);
             if (!report.Passed) break;
         }
         regression.Remove();
@@ -880,6 +880,67 @@ public sealed class TargetedRegressionTests : IDisposable
     private JournalRunStatus Status(string runId) =>
         Assert.Single(RunJournalStatus.InspectAsync(Hosts(), _ => Here, TimeSpan.FromSeconds(30)).GetAwaiter().GetResult().Runs, run => run.Run == runId);
 
+    private static void RequireKilledStartReachedHold(ScenarioReport report, bool entered, bool markerWritten, bool cancelled)
+    {
+        string failed = string.Join("; ", report.Steps.Where(step => !step.Passed).Select(step => $"{step.Phase}: {step.Name}: {step.Error}"));
+        Assert.True(!report.Passed && entered && markerWritten && cancelled &&
+            report.Steps.Any(step => !step.Passed && step.Name.EndsWith(": hold until the runner is killed", StringComparison.Ordinal) && step.Error.Contains("the runner was killed", StringComparison.Ordinal)),
+            $"Killed-start recovery was not exercised: hold entered={entered}, marker written={markerWritten}, deliberate cancellation={cancelled}. Failed steps: {failed}");
+    }
+
+    private Dictionary<string, byte[]> KilledStartJournal(string runId) => Directory.Exists(Path.Combine(_rig.Root, "journal", runId))
+        ? Directory.GetFiles(Path.Combine(_rig.Root, "journal", runId), "*.jsonl").ToDictionary(path => Path.GetFileName(path)!, File.ReadAllBytes) : new();
+
+    // Same test-local retention pattern as HostedSteamReleaseTests: outside the disposable rig, one failure's report and exact
+    // owned journal only. Capture before Kill/recovery changes those lines; never copy a machine's global journal or game tree.
+    private string RetainKilledStartFailure(ScenarioReport report, string output, string runId, IReadOnlyDictionary<string, byte[]> journal,
+        bool entered, bool markerWritten, bool cancelled)
+    {
+        string retained = Path.Combine(Path.GetTempPath(), "vt-killed-start-failure-" + Guid.NewGuid().ToString("N"));
+        var errors = new List<string>();
+        void Capture(string what, Action save)
+        {
+            try { save(); }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException) { errors.Add(what + ": " + error.GetType().Name); }
+        }
+        Capture("create retained directory", () => Directory.CreateDirectory(retained));
+        Capture("first report", () => report.Write(retained));
+        Capture("create journal directory", () => Directory.CreateDirectory(Path.Combine(retained, "journal")));
+        foreach (var (name, bytes) in journal) Capture(name, () => File.WriteAllBytes(Path.Combine(retained, "journal", name), bytes));
+        Capture("boundary", () => File.WriteAllText(Path.Combine(retained, "boundary.json"), System.Text.Json.JsonSerializer.Serialize(new
+        {
+            runId, entered, markerWritten, deliberateCancellation = cancelled, output,
+            fixtureWorld = Path.Combine(Worlds, FixtureWorld), profile = _rig.Install,
+            runtime = _rig.Runtime, journal = Path.Combine(_rig.Root, "journal", runId),
+            dotnet = Environment.Version.ToString(), shell = HostShell.ThisMachine.Kind.ToString(), toolkit = report.Toolkit,
+        }, new System.Text.Json.JsonSerializerOptions { WriteIndented = true })));
+        return retained + (errors.Count == 0 ? "" : " (retention incomplete: " + string.Join(", ", errors) + ")");
+    }
+
+    [ClientHostFact]
+    public void AnEarlyKilledStartFailureNamesTheUnreachedBoundaryAndRetainsItsFirstReport()
+    {
+        var (here, scope) = InProcess(); using var machine = scope;
+        using var data = new FakeClientDataDirectory(_rig.Save);
+        bool entered = false;
+        var (failed, output, runId) = Start(() => new LocalFakeOwnedProcess(41), _ => entered = true, end: false,
+            beforeClientLaunch: () => throw new IOException("controlled early launch failure before hold"));
+        var journal = KilledStartJournal(runId);
+        var error = Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => RequireKilledStartReachedHold(failed, entered, false, false));
+        Assert.Contains("hold entered=False", error.Message);
+        Assert.Contains("controlled early launch failure", error.Message);
+        string retained = RetainKilledStartFailure(failed, output, runId, journal, entered, false, false);
+        try
+        {
+            // The report and pre-recovery journal survive removal of the original evidence, as fixture cleanup would remove it.
+            if (Directory.Exists(output)) Directory.Delete(output, recursive: true);
+            Assert.Contains("controlled early launch failure", File.ReadAllText(Path.Combine(retained, "result.json")));
+            Assert.Contains("\"entered\": false", File.ReadAllText(Path.Combine(retained, "boundary.json")));
+            foreach (var (name, bytes) in journal) Assert.Equal(bytes, File.ReadAllBytes(Path.Combine(retained, "journal", name)));
+        }
+        finally { Directory.Delete(retained, recursive: true); }
+    }
+
     // #818: a killed `start --hold` left its hosted fixture world in the client's worlds_local, unjournalled, so env status listed
     // nothing, env recover said nothing was left, and the next start refused. Its placement is now the campaign's journalled site:
     // env status lists it, env recover moves it (a chunked folder the game rewrote, proven by its world UID) into the run's
@@ -891,45 +952,58 @@ public sealed class TargetedRegressionTests : IDisposable
         File.WriteAllText(Path.Combine(Worlds, "MyWorld.fwl"), "the user's world");
         // The runner is killed while it holds the hosting client in its world, after the game saved it: here, the round stops
         // there and the client never stops, so the world stays in the client's worlds, as a killed runner leaves it.
+        bool entered = false, markerWritten = false, deliberatelyCancelled = false;
         var held = new LocalFakeOwnedProcess(41) { StopFailure = () => new IOException("the runner was killed") };
         var (killed, killedOutput, runId) = Start(() => held, round => round.Step("hold until the runner is killed", () =>
         {
+            entered = true;
             File.Copy(Path.Combine(Worlds, FixtureWorld, "_main.1.fwl2"), Path.Combine(Worlds, FixtureWorld, "_main.2.fwl2"));
             File.WriteAllText(Path.Combine(Worlds, FixtureWorld, "0_0.chunk"), "saved by the game");
+            markerWritten = true;
+            deliberatelyCancelled = true;
             throw new OperationCanceledException("the runner was killed");
         }), end: false);
-        Assert.False(killed.Passed);
-        Assert.True(File.Exists(Path.Combine(Worlds, FixtureWorld, "0_0.chunk")));
-        Kill(runId);
-
-        string journalled = Path.Combine(Worlds, FixtureWorld);
-        var left = Status(runId);
-        Assert.Equal(JournalRunState.Recoverable, left.State);
-        Assert.Equal(journalled, Assert.Single(left.Items, item => item.Kind == "copy").What);
-
-        var recovered = RunRecovery.RecoverAsync(Hosts(), _ => Here, runId, teardown: false, TimeSpan.FromSeconds(30)).GetAwaiter().GetResult();
-
-        Assert.True(recovered.Clean, string.Join("\n", recovered.Steps));
-        Assert.Contains($"world UID {_rig.Uid} as journalled", Assert.Single(recovered.Steps, step => step.What == "copy " + journalled).Outcome);
-        Assert.Equal(new[] { "MyWorld.fwl" }, Directory.EnumerateFileSystemEntries(Worlds).Select(Path.GetFileName));
-        Assert.Equal("saved by the game", File.ReadAllText(Path.Combine(killedOutput, runId, "host-world", FixtureWorld, "0_0.chunk")));
-        Assert.Equal(JournalRunState.Ended, Status(runId).State);
-
-        // The next start, an A/B run, places the same fixture for each arm, hosts it and moves it into that arm's evidence (its own
-        // run folder there, so the arms never meet); the run ends clean and leaves nothing in the client environment's runtime.
-        int pid = 50;
-        var (next, output, nextRun) = Start(() => new LocalFakeOwnedProcess(pid++), arms: ["parent", "candidate"]);
-        Assert.True(next.Passed, string.Join("; ", next.Steps.Where(step => !step.Passed).Select(step => step.Name + ": " + step.Error)));
-        Assert.Equal(Path.Combine(output, "host-world"), next.Provenance["hostWorldEvidence"]);
-        foreach (string arm in new[] { "parent", "candidate" })
+        var firstJournal = KilledStartJournal(runId);
+        try
         {
-            string evidence = Path.Combine(Path.GetDirectoryName(output)!, arm);
-            Assert.True(File.Exists(Path.Combine(evidence, "host-world", FixtureWorld, "_main.1.fwl2")), arm);
-            Assert.True(File.Exists(Path.Combine(evidence, nextRun, "host-world", FixtureWorld, "_main.1.fwl2")), arm);
+            RequireKilledStartReachedHold(killed, entered, markerWritten, deliberatelyCancelled);
+            Assert.True(File.Exists(Path.Combine(Worlds, FixtureWorld, "0_0.chunk")));
+            Kill(runId);
+
+            string journalled = Path.Combine(Worlds, FixtureWorld);
+            var left = Status(runId);
+            Assert.Equal(JournalRunState.Recoverable, left.State);
+            Assert.Equal(journalled, Assert.Single(left.Items, item => item.Kind == "copy").What);
+
+            var recovered = RunRecovery.RecoverAsync(Hosts(), _ => Here, runId, teardown: false, TimeSpan.FromSeconds(30)).GetAwaiter().GetResult();
+
+            Assert.True(recovered.Clean, string.Join("\n", recovered.Steps));
+            Assert.Contains($"world UID {_rig.Uid} as journalled", Assert.Single(recovered.Steps, step => step.What == "copy " + journalled).Outcome);
+            Assert.Equal(new[] { "MyWorld.fwl" }, Directory.EnumerateFileSystemEntries(Worlds).Select(Path.GetFileName));
+            Assert.Equal("saved by the game", File.ReadAllText(Path.Combine(killedOutput, runId, "host-world", FixtureWorld, "0_0.chunk")));
+            Assert.Equal(JournalRunState.Ended, Status(runId).State);
+
+            // The next start, an A/B run, places the same fixture for each arm, hosts it and moves it into that arm's evidence (its own
+            // run folder there, so the arms never meet); the run ends clean and leaves nothing in the client environment's runtime.
+            int pid = 50;
+            var (next, output, nextRun) = Start(() => new LocalFakeOwnedProcess(pid++), arms: ["parent", "candidate"]);
+            Assert.True(next.Passed, string.Join("; ", next.Steps.Where(step => !step.Passed).Select(step => step.Name + ": " + step.Error)));
+            Assert.Equal(Path.Combine(output, "host-world"), next.Provenance["hostWorldEvidence"]);
+            foreach (string arm in new[] { "parent", "candidate" })
+            {
+                string evidence = Path.Combine(Path.GetDirectoryName(output)!, arm);
+                Assert.True(File.Exists(Path.Combine(evidence, "host-world", FixtureWorld, "_main.1.fwl2")), arm);
+                Assert.True(File.Exists(Path.Combine(evidence, nextRun, "host-world", FixtureWorld, "_main.1.fwl2")), arm);
+            }
+            Assert.Equal(new[] { "MyWorld.fwl" }, Directory.EnumerateFileSystemEntries(Worlds).Select(Path.GetFileName));
+            Assert.False(Path.Exists(Path.Combine(_rig.Runtime, nextRun)));
+            Assert.Equal(JournalRunState.Ended, Status(nextRun).State);
         }
-        Assert.Equal(new[] { "MyWorld.fwl" }, Directory.EnumerateFileSystemEntries(Worlds).Select(Path.GetFileName));
-        Assert.False(Path.Exists(Path.Combine(_rig.Runtime, nextRun)));
-        Assert.Equal(JournalRunState.Ended, Status(nextRun).State);
+        catch (Exception error)
+        {
+            string retained = RetainKilledStartFailure(killed, killedOutput, runId, firstJournal, entered, markerWritten, deliberatelyCancelled);
+            Assert.Fail(error.Message + " First killed-start report and pre-recovery journal retained at " + retained);
+        }
     }
 
     // #612: a file the game writes into the install during an arm (a preloader log beside the executable on macOS, a mod writing
