@@ -315,6 +315,7 @@ internal static partial class HostedRuntimeStage
             (destination.EndsWith(separator + "runtime", StringComparison.OrdinalIgnoreCase) || settled || destination.EndsWith(separator + "world", StringComparison.OrdinalIgnoreCase) ||
              destination.EndsWith(separator + "host-world", StringComparison.OrdinalIgnoreCase) || destination.EndsWith(separator + "world-stage", StringComparison.OrdinalIgnoreCase) ||
              destination.EndsWith(separator + "host-world-stage", StringComparison.OrdinalIgnoreCase) ||
+             leaf.StartsWith("recovered-", StringComparison.Ordinal) && RunJournal.SafeName(leaf["recovered-".Length..]) ||
              System.Text.RegularExpressions.Regex.IsMatch(destination[(at + 1)..], @"^boot-[1-9][0-9]*$", System.Text.RegularExpressions.RegexOptions.CultureInvariant)))
             return parent;
         throw new ArgumentException("Only a toolkit-created vt-prep runtime, or a run's own folder or the runtime, world copy or numbered boot directory in it, " +

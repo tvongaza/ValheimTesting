@@ -390,7 +390,7 @@ internal static class RunRecovery
             // Move a journalled fixture out of user saves before handling its collected directory on the same host.
             // A run's own folder goes last, once what is inside it was handled (RunFolder).
             var copies = group.Where(item => item.Kind == "copy")
-                .OrderBy(item => item.Fields.GetValueOrDefault("holds") switch { HostedWorldOnHost.Holds => 0, RunFolder.Holds => 2, _ => 1 }).ToList();
+                .OrderBy(item => item.Fields.GetValueOrDefault("holds") switch { HostedWorldOnHost.Holds => 0, "recovered-evidence" => 2, RunFolder.Holds => 3, _ => 1 }).ToList();
             if (Failed(group.Key))
             {
                 // A copy a process may still run from, and a character it may still use, stay.
@@ -490,6 +490,70 @@ internal static class RunRecovery
                     await Note(group.Key, JournalEntry.Of(JournalEntry.CopyRetired, ("runtime", folder))).ConfigureAwait(false);
                     Step(group.Key, "copy " + folder, "removed (teardown requested)");
                 }
+                // A durable child owns recovery output even when the original parent was never made or is retired.
+                // An intent alone does not own an existing folder: no evidence effect precedes the reservation receipt.
+                var recoveredOwners = run.Items.Where(copy => copy.Host == group.Key && copy.Kind == "copy" && copy.Fields.GetValueOrDefault("holds") == "recovered-evidence")
+                    .ToDictionary(copy => copy.What, copy => copy.Fields.GetValueOrDefault("reserved") == "true", StringComparer.Ordinal);
+                Task Required(JournalEntry entry) => journal.AppendAsync(host, RunJournal.DirectoryFor(hosts[group.Key]), Actor, entry, timeout, cancellation);
+                async Task OwnRecoveredAsync(string path, string runtime)
+                {
+                    if (recoveredOwners.TryGetValue(path, out bool reserved))
+                    {
+                        if (reserved) return;
+                        try { await HostInstall.ListAsync(host, path, timeout, cancellation: cancellation).ConfigureAwait(false); }
+                        catch (DirectoryNotFoundException)
+                        {
+                            await Required(JournalEntry.Of(JournalEntry.CopyRetired, ("runtime", path))).ConfigureAwait(false);
+                            recoveredOwners.Remove(path);
+                            await OwnRecoveredAsync(path, runtime).ConfigureAwait(false);
+                            return;
+                        }
+                        throw new IOException("recovered evidence reservation was not confirmed; preserve " + path + " for inspection; no evidence was written by this reservation");
+                    }
+                    HostedRuntimeStage.RequirePrepared(host, path, runId);
+                    await Required(JournalEntry.Of(JournalEntry.CopyIntended, ("runtime", path), ("stage", ""), ("parent", HostPath.Parent(path)),
+                        ("holds", "recovered-evidence"), ("retention", "after-fetch"), ("sourceRuntime", runtime), ("reserved", "false"))).ConfigureAwait(false);
+                    recoveredOwners.Add(path, false);
+                    bool ownedParent = run.Items.Any(candidate => candidate.Host == group.Key && candidate.Kind == "copy" && candidate.Fields.GetValueOrDefault("holds") == RunFolder.Holds &&
+                        candidate.What == HostPath.Parent(path));
+                    if (!ownedParent)
+                        try { await HostedWorldOnHost.ReserveNewAsync(host, path, timeout, cancellation).ConfigureAwait(false); }
+                        catch (HostOperationException error) when (error.Result is { Outcome: HostOutcome.Exited, ExitCode: 4 })
+                        {
+                            await Required(JournalEntry.Of(JournalEntry.CopyRetired, ("runtime", path), ("notMade", "it already existed"))).ConfigureAwait(false);
+                            recoveredOwners.Remove(path);
+                            throw new IOException("recovered evidence already exists without proven ownership; nothing was written in " + path, error);
+                        }
+                    await Required(JournalEntry.Of(JournalEntry.CopyDone, ("runtime", path), ("reserved", "true"))).ConfigureAwait(false);
+                    recoveredOwners[path] = true;
+                }
+                async Task FinishRecoveredAsync()
+                {
+                    foreach (var (path, reserved) in recoveredOwners.ToArray())
+                    {
+                        try
+                        {
+                            HostedRuntimeStage.RequirePrepared(host, path, runId);
+                            HostListing? listing;
+                            try { listing = await HostInstall.ListAsync(host, path, timeout, cancellation: cancellation).ConfigureAwait(false); }
+                            catch (DirectoryNotFoundException) { listing = null; }
+                            if (!reserved && listing != null) throw new IOException("its reservation was not confirmed; preserve it for inspection; no evidence was written by this reservation");
+                            if (listing is { Files.Count: > 0 } && (!teardown || Failed(group.Key)))
+                            {
+                                evidenceHere.Add(path);
+                                await Required(JournalEntry.Of(JournalEntry.CopyKept, ("runtime", path), ("why", "recovery evidence retained until explicit teardown"))).ConfigureAwait(false);
+                                Step(group.Key, "copy " + path, "kept: recovery evidence retained until explicit teardown");
+                                continue;
+                            }
+                            if (listing != null) await HostedRuntimeStage.RetireAsync(host, path, "", timeout, cancellation, runId).ConfigureAwait(false);
+                            await Required(JournalEntry.Of(JournalEntry.CopyRetired, ("runtime", path))).ConfigureAwait(false);
+                            recoveredOwners.Remove(path);
+                            Step(group.Key, "copy " + path, listing == null ? "already gone" : "removed (recovered evidence; teardown requested)");
+                        }
+                        catch (Exception error) when (error is not OperationCanceledException)
+                        { Step(group.Key, "copy " + path, "not removed: " + error.Message, failed: true); leftHere.Add(path); }
+                    }
+                }
                 // What a step says of evidence it kept at path: under a teardown, a run folder of this host that holds it is removed
                 // with it, in this pass, unless something of the run stays in that folder.
                 string Fate(string path) => teardown && copies.Any(candidate => candidate.Fields.GetValueOrDefault("holds") == RunFolder.Holds &&
@@ -505,8 +569,10 @@ internal static class RunRecovery
                         // A run's own folder (RunFolder). Unlike the after-fetch copies inside it (below), it goes last and holds
                         // whatever the run or this recovery left there: an unfetched one is removed when nothing is left in it (its
                         // copies were each settled, or the run never wrote in it), where a world or boot copy is kept until its fetch.
+                        if (copy.Fields.GetValueOrDefault("holds") == "recovered-evidence") continue;
                         if (copy.Fields.GetValueOrDefault("holds") == RunFolder.Holds)
                         {
+                            await FinishRecoveredAsync().ConfigureAwait(false);
                             HostedRuntimeStage.RequirePrepared(host, copy.What, runId);
                             var folder = new RunFolder(host, group.Key, RunJournal.DirectoryFor(hosts[group.Key]),
                                 copy.Fields.GetValueOrDefault("parent") ?? "", runId, (_, _) => Task.CompletedTask);
@@ -517,6 +583,8 @@ internal static class RunRecovery
                                 : !teardown && evidenceHere.FirstOrDefault(folder.Contains) is { } evidence ? "this recovery left " + evidence + " in it" : null;
                             if (openFor != null)
                             {
+                                if (!Failed(group.Key))
+                                    await Required(JournalEntry.Of(JournalEntry.CopyKept, ("runtime", copy.What), ("why", openFor))).ConfigureAwait(false);
                                 Step(group.Key, what, "not removed: " + openFor);
                                 continue;
                             }
@@ -556,7 +624,8 @@ internal static class RunRecovery
                         }
                         // Evidence in a run's folder (a server's, a campaign client's) remains owned until its verified fetch is durable. Recovery cannot invent a
                         // missing fetch receipt: keep the only copy visible, unless teardown explicitly asks to remove it.
-                        if (copy.Fields.GetValueOrDefault("retention") == "after-fetch")
+                        if (copy.Fields.GetValueOrDefault("retention") == "after-fetch" ||
+                            copy.Fields.GetValueOrDefault("holds") == "world" && copy.Fields.GetValueOrDefault("verified") == "true")
                         {
                             HostedRuntimeStage.RequirePrepared(host, copy.What, runId);
                             if (Failed(group.Key)) throw new IOException("an earlier recovery step on this host failed; its evidence stays");
@@ -577,14 +646,6 @@ internal static class RunRecovery
                         if (copy.Fields.GetValueOrDefault("holds") == "world")
                         {
                             HostedRuntimeStage.RequirePrepared(host, copy.What, runId);
-                            if (copy.Fields.GetValueOrDefault("verified") == "true")
-                            {
-                                // A hosted run's verified world copy is its save, evidence: handed over where it is, as a run that ends does.
-                                Step(group.Key, what, "kept as the run's save (handed over, in its run directory)");
-                                leftHere.Add(copy.What);
-                                await Note(group.Key, JournalEntry.Of(JournalEntry.CopyRetired, ("runtime", copy.What), ("handedOver", "true"))).ConfigureAwait(false);
-                                continue;
-                            }
                             // A ship that never finished is nobody's save, and a world holds no game logs.
                             await HostedRuntimeStage.RetireAsync(host, copy.What, stage, timeout, runId: runId).ConfigureAwait(false);
                             Step(group.Key, what, "removed (the ship never finished)");
@@ -605,6 +666,7 @@ internal static class RunRecovery
                         // moved-files folder with its own kept entry is env teardown's. A baseline that does not match its journal keeps the
                         // copy for env recover and is not compared by env teardown; a settlement that did not finish keeps the copy.
                         string recoveredIn = RecoveredFolder(host, copy.What, runId, copy.Actor);
+                        await OwnRecoveredAsync(recoveredIn, copy.What).ConfigureAwait(false);
                         if (await ProfileSourceCheck.RecoverAsync(host, copy.What, copy.Actor, copy.Fields, recoveredIn,
                             path => run.Items.Any(item => item.Kind == "copy" && item.Host == group.Key && item.What == path), teardown,
                             entry => journal.AppendAsync(host, RunJournal.DirectoryFor(hosts[group.Key]), Actor, entry, timeout, cancellation),
@@ -636,6 +698,8 @@ internal static class RunRecovery
                         leftHere.Add(copy.What);
                     }
                 }
+                if (!copies.Any(copy => copy.Fields.GetValueOrDefault("holds") == RunFolder.Holds))
+                    await FinishRecoveredAsync().ConfigureAwait(false);
             }
             catch (Exception error) when (error is not OperationCanceledException)
             {
@@ -1089,10 +1153,11 @@ internal static class RunRecovery
 
     // Variables: runtime, keep, unitylog (GameLaunch.UnityLogName), since (Unix seconds: when the copy was made). Each log written since the copy was made is copied into keep with its time, and named;
     // an older one is only named; links are never followed, and the folder is made only for a log. Then the verdict.
-    internal static readonly string BashKeepLogs = """
+    internal static readonly string BashKeepLogs = ProtectedPaths.BashUnlinked + """
         set -u
         save() {
           if [ -f "$1" ] && [ ! -L "$1" ]; then
+            vt_unlinked "${keep%/*}" "$keep/$2" || exit 3
             written=$(date -r "$1" +%s) || exit 3
             if [ "$written" -lt "$since" ]; then echo "VT-LOG-OLDER $2"; return 0; fi
             mkdir -p -- "$(dirname -- "$keep/$2")" && cp -p -- "$1" "$keep/$2" || exit 3
@@ -1107,13 +1172,14 @@ internal static class RunRecovery
         echo "VT-LOGS-DONE"
         """.ReplaceLineEndings("\n");
 
-    internal static readonly string WindowsKeepLogs = """
+    internal static readonly string WindowsKeepLogs = ProtectedPaths.PowerShellUnlinked + """
         $copied = [DateTimeOffset]::FromUnixTimeSeconds([long]$since).UtcDateTime
         function Save-VtRecovered([string]$from, [string]$name) {
             if (-not [IO.File]::Exists($from)) { return }
             if (([IO.File]::GetAttributes($from) -band [IO.FileAttributes]::ReparsePoint) -ne 0) { return }
             if ([IO.File]::GetLastWriteTimeUtc($from) -lt $copied) { 'VT-LOG-OLDER ' + $name; return }
             $to = Join-Path $keep $name
+            if (-not (Test-VtUnlinked ([IO.Path]::GetDirectoryName($keep)) $to)) { throw 'A recovered log destination passes through a link' }
             [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($to))
             [IO.File]::Copy($from, $to, $true)
             'VT-LOG-KEPT ' + $name

@@ -473,6 +473,7 @@ internal sealed class FakeServerHost : IGameHost
                     if (!File.Exists(from)) return;
                     if (File.GetLastWriteTimeUtc(from) < copied) { reply.Append("VT-LOG-OLDER " + name + "\n"); return; }
                     string to = Path.Combine(Local(v["keep"]), name);
+                    ProtectedPaths.RequireUnlinkedPath(Path.GetDirectoryName(Local(v["keep"]))!, to);
                     Directory.CreateDirectory(Path.GetDirectoryName(to)!); File.Copy(from, to, overwrite: true);
                     reply.Append("VT-LOG-KEPT " + name + "\n");
                 }
@@ -818,6 +819,9 @@ internal sealed class FakeServerHost : IGameHost
             case "world-reserve":
             {
                 string keep = Local(v["keep"]);
+                if (v.GetValueOrDefault("root") is { Length: > 0 } root)
+                    try { ProtectedPaths.RequireUnlinkedPath(Local(root), keep); }
+                    catch (IOException) { return new HostResult(HostOutcome.Exited, 4, "", "linked destination", TimeSpan.Zero, false); }
                 if (Path.Exists(keep) || v["stage"].Length != 0 && Path.Exists(Local(v["stage"]))) return new HostResult(HostOutcome.Exited, 4, "", "", TimeSpan.Zero, false);
                 Directory.CreateDirectory(keep);
                 return Ok("VT-WORLD-RESERVED done\n");

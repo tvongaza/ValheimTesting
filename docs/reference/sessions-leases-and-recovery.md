@@ -122,6 +122,10 @@ Each effect is journalled under the actor `recovery`. A step that fails keeps wh
 
 `env teardown --copy` refuses a path that is not a toolkit copy, a copy a running process uses, and a copy an open run's journal still names. Nothing is ever removed because of its age.
 
+Recovery journals and reserves each `recovered-<actor>` evidence folder before writing source reports, moving source files or keeping logs. Retained recovery evidence stays listed as `KEPT` until `env teardown --run ID` removes that owned subtree, even if no run folder was journalled or the original run folder was already fetched and retired. An earlier fetch receipt does not cover newly recovered evidence. Teardown removes the recovered subtree and any owned containing run folder in the same pass; foreign siblings stay untouched.
+
+An unconfirmed reservation is not ownership. If recovery was interrupted after creating an empty folder but before its confirmation reached the journal, it preserves the existing folder and lists the pending reservation for inspection. Teardown cannot claim that folder from its name or intent alone. A pending reservation whose folder is absent can be cleared safely. Existing recovery folders without a proven owner are also preserved for inspection; recovery does not scan or claim historical unjournalled evidence.
+
 ### Source recovery states
 
 Recovery ends for every journal state of a profile's source install:

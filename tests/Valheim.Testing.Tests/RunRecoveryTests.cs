@@ -352,7 +352,9 @@ public sealed class RunRecoveryTests : IDisposable
         Assert.True(recovered.Recovered, string.Join("\n", recovered.Steps));
         Assert.False(Directory.Exists(_host.Local(parent)));
         Assert.Contains(_host.Runs, call => call.Script == "character-retire");
-        Assert.Empty(Assert.Single((await StatusAsync()).Runs).Items);
+        Assert.Equal("game log", File.ReadAllText(_host.Local("/srv/runs/client/" + run + "/recovered-regression-plain/BepInEx/LogOutput.log")));
+        Assert.Contains(Assert.Single((await StatusAsync()).Runs).Items, item => item.What.EndsWith("recovered-regression-plain", StringComparison.Ordinal));
+        Assert.True((await RecoverAsync(run, teardown: true)).Clean);
     }
 
     // #612: a run killed after its server launched leaves its profile and the journalled source baseline. Recovery settles the
@@ -394,7 +396,7 @@ public sealed class RunRecoveryTests : IDisposable
             Assert.True(File.Exists(Path.Combine(_host.Local(source), "preloader_20261020.log")));
             Assert.True(Directory.Exists(_host.Local(runtime)));
             Assert.False(Directory.Exists(_host.Local(recoveredIn)));
-            Assert.DoesNotContain(_host.Runs, call => call.Script is "source-settle" or "cleanup-stage");
+            Assert.DoesNotContain(_host.Runs, call => call.Script == "source-settle" || call.Script == "cleanup-stage" && call.Variables["runtime"] == runtime);
             return;
         }
         Assert.True(recovered.Recovered, string.Join("\n", recovered.Steps));
@@ -406,7 +408,9 @@ public sealed class RunRecoveryTests : IDisposable
         Assert.Contains("\"verdict\": \"restored\"", File.ReadAllText(Path.Combine(Assert.Single(Directory.GetDirectories(_host.Local(recoveredIn), "source-changes-*")), "source-changes.json")));
         Assert.Equal(["valheim_server.x86_64"], Directory.EnumerateFileSystemEntries(_host.Local(source)).Select(Path.GetFileName));
         Assert.False(Directory.Exists(_host.Local(Prep))); // the copy, its baseline and the moved files' folder are gone
-        Assert.Empty(Assert.Single((await StatusAsync()).Runs).Items);
+        Assert.Contains(Assert.Single((await StatusAsync()).Runs).Items, item => item.What == recoveredIn);
+        Assert.True((await RecoverAsync(run, teardown: true)).Clean);
+        Assert.False(Directory.Exists(_host.Local(recoveredIn)));
     }
 
     // A run killed after its server launched from a profile whose baseline it journalled; returns the source check.
@@ -441,6 +445,9 @@ public sealed class RunRecoveryTests : IDisposable
         File.WriteAllText(Path.Combine(_host.Local(moved), "preloader_1.log"), "moved before the kill");
         string id = moved[(moved.LastIndexOf('/') + 1 + ProfileSourceCheck.AddedFolder.Length + 1)..];
         Directory.CreateDirectory(_host.Local("/srv/runs/server/" + run + "/recovered-server/source-changes-" + id + "/added"));
+        Line(_host, run, "server", Gone, JournalEntry.CopyIntended, ("runtime", "/srv/runs/server/" + run + "/recovered-server"), ("stage", ""),
+            ("parent", "/srv/runs/server/" + run), ("holds", "recovered-evidence"), ("retention", "after-fetch"));
+        Line(_host, run, "server", Gone, JournalEntry.CopyDone, ("runtime", "/srv/runs/server/" + run + "/recovered-server"), ("reserved", "true"));
 
         var recovered = await RecoverAsync(run);
 
@@ -449,7 +456,8 @@ public sealed class RunRecoveryTests : IDisposable
         Assert.Contains("already exists", settled.Outcome);
         Assert.False(Directory.Exists(_host.Local(Prep + "/runtime"))); // the profile retired
         var left = Assert.Single((await StatusAsync()).Runs).Items;
-        Assert.Equal(moved, Assert.Single(left, item => item.Kind == "copy").What);
+        Assert.Contains(left, item => item.Kind == "copy" && item.What == moved);
+        Assert.Contains(left, item => item.What == "/srv/runs/server/" + run + "/recovered-server");
 
         var teardown = await RecoverAsync(run, teardown: true);
         Assert.True(teardown.Recovered, string.Join("\n", teardown.Steps));
@@ -467,13 +475,17 @@ public sealed class RunRecoveryTests : IDisposable
         File.WriteAllText(Path.Combine(_host.Local(moved), "preloader_1.log"), "moved before the kill");
         string id = moved[(moved.LastIndexOf('/') + 1 + ProfileSourceCheck.AddedFolder.Length + 1)..];
         Directory.CreateDirectory(_host.Local("/srv/runs/server/" + run + "/recovered-server/source-changes-" + id + "/added"));
+        Line(_host, run, "server", Gone, JournalEntry.CopyIntended, ("runtime", "/srv/runs/server/" + run + "/recovered-server"), ("stage", ""),
+            ("parent", "/srv/runs/server/" + run), ("holds", "recovered-evidence"), ("retention", "after-fetch"));
+        Line(_host, run, "server", Gone, JournalEntry.CopyDone, ("runtime", "/srv/runs/server/" + run + "/recovered-server"), ("reserved", "true"));
 
         var teardown = await RecoverAsync(run, teardown: true);
 
         Assert.Contains(teardown.Steps, step => step.What == "copy " + moved && !step.Failed);
         Assert.False(Directory.Exists(_host.Local(moved)));
         Assert.False(Directory.Exists(_host.Local(Prep + "/runtime")));
-        Assert.Empty(Assert.Single((await StatusAsync()).Runs).Items);
+        Assert.Contains(Assert.Single((await StatusAsync()).Runs).Items, item => item.What == "/srv/runs/server/" + run + "/recovered-server");
+        Assert.True((await RecoverAsync(run, teardown: true)).Clean);
     }
 
     // #612 r6 item 1: a linked profile lies on the install's volume. With that volume offline the baseline is not found, which is not a
@@ -1465,7 +1477,10 @@ public sealed class RunRecoveryTests : IDisposable
         // Each log is kept before its copy is removed.
         var scripts = _host.Scripts.ToList();
         Assert.True(scripts.IndexOf("keep-logs") < scripts.IndexOf("cleanup-stage"));
-        Assert.Equal(JournalRunState.Ended, Assert.Single((await StatusAsync()).Runs).State);
+        Assert.Equal(JournalRunState.Kept, Assert.Single((await StatusAsync()).Runs).State);
+        Assert.True((await RecoverAsync("run-cut", teardown: true)).Clean);
+        Assert.False(Directory.Exists(server));
+        Assert.False(Directory.Exists(client));
     }
 
     [Fact]
@@ -1571,10 +1586,12 @@ public sealed class RunRecoveryTests : IDisposable
         Assert.False(Directory.Exists(_host.Local(Run + "/runtime")));
         Assert.Equal("server log", File.ReadAllText(Path.Combine(_host.Local(Run + "/recovered-server"), "BepInEx", "LogOutput.log")));
         Assert.True(Directory.Exists(_host.Local(Run + "/world")));
-        Assert.Equal("kept as the run's save (handed over, in its run directory)", Assert.Single(hosted.Steps, step => step.What == "copy " + Run + "/world").Outcome);
+        Assert.Contains("fetch was not proven", Assert.Single(hosted.Steps, step => step.What == "copy " + Run + "/world").Outcome);
         Assert.False(Directory.Exists(_host.Local(Other)));
         Assert.Equal("removed (the ship never finished)", Assert.Single(partial.Steps, step => step.What == "copy " + Other + "/world").Outcome);
-        Assert.All((await StatusAsync()).Runs, run => Assert.Equal(JournalRunState.Ended, run.State));
+        Assert.Contains(Assert.Single((await StatusAsync()).Runs, run => run.Run == "run-hosted").Items, item => item.What == Run + "/world");
+        Assert.True((await RecoverAsync("run-hosted", teardown: true)).Clean);
+        Assert.False(Directory.Exists(_host.Local(Run)));
         // The run directory guards the removal: a copy outside its own run's directory is refused, and stays.
         Directory.CreateDirectory(_host.Local("/srv/runs/someone-else/runtime"));
         Line(_host, "run-stray", "server", Gone, JournalEntry.CopyIntended, ("runtime", "/srv/runs/someone-else/runtime"), ("stage", ""), ("parent", "/srv/runs/someone-else"), ("holds", "runtime"));
@@ -1797,7 +1814,7 @@ public sealed class RunRecoveryTests : IDisposable
         Assert.False(failed.Recovered);
         Assert.StartsWith("not removed: its game logs could not be kept, so it stays", Assert.Single(failed.Steps, step => step.What == "copy " + Prep + "/runtime").Outcome);
         Assert.True(File.Exists(Path.Combine(_host.Local(Prep + "/runtime"), "BepInEx", "LogOutput.log")));
-        Assert.DoesNotContain("cleanup-stage", _host.Scripts);
+        Assert.DoesNotContain(_host.Runs, call => call.Script == "cleanup-stage" && call.Variables["runtime"] == Prep + "/runtime");
         _host.Failures.Remove("keep-logs");
         Assert.True((await RecoverAsync("run-cut")).Recovered);
         Assert.Equal("why", File.ReadAllText(_host.Local("/srv/runs/server/run-cut/recovered-server/BepInEx/LogOutput.log")));
@@ -1811,7 +1828,171 @@ public sealed class RunRecoveryTests : IDisposable
         Assert.NotNull((await RecoverAsync("run-kept")).Refused);
         Assert.False(Directory.Exists(_host.Local("/srv/runs/server/run-kept"))); // Recover left the kept copy alone.
         Assert.True((await RecoverAsync("run-kept", teardown: true)).Recovered);
-        Assert.Equal("kept run", File.ReadAllText(_host.Local("/srv/runs/server/run-kept/recovered-server/BepInEx/LogOutput.log")));
+        Assert.False(Directory.Exists(_host.Local("/srv/runs/server/run-kept/recovered-server")));
+        Assert.Equal(JournalRunState.Ended, Assert.Single((await StatusAsync()).Runs, run => run.Run == "run-kept").State);
+    }
+
+    [Fact]
+    public async Task RealRecoveryLogDestinationRefusesLinksWithoutChangingTheirTargets()
+    {
+        if (OperatingSystem.IsWindows()) return; // Creating a symlink may require a privilege on Windows.
+        var host = new LocalGameHost("local", HostShell.ThisMachine);
+        string runs = Path.Combine(_root, "link-runs"), runtime = Path.Combine(runs, "vt-prep-link", "runtime");
+        string parent = Path.Combine(runs, "run-link"), foreign = Path.Combine(_root, "foreign");
+        Directory.CreateDirectory(Path.Combine(runtime, "BepInEx"));
+        File.WriteAllText(Path.Combine(runtime, "BepInEx", "LogOutput.log"), "new log");
+        Directory.CreateDirectory(parent); Directory.CreateDirectory(foreign);
+        File.WriteAllText(Path.Combine(foreign, "sentinel.txt"), "foreign target");
+        Directory.CreateSymbolicLink(Path.Combine(parent, "recovered-server"), foreign);
+        await Assert.ThrowsAsync<HostOperationException>(() => RunRecovery.KeepLogsAsync(host, runtime, "run-link", "server",
+            DateTime.UtcNow.AddHours(-1), TimeSpan.FromSeconds(10)));
+        Assert.Equal("foreign target", File.ReadAllText(Path.Combine(foreign, "sentinel.txt")));
+        Assert.Equal(["sentinel.txt"], Directory.EnumerateFiles(foreign).Select(Path.GetFileName));
+        Assert.NotNull(new DirectoryInfo(Path.Combine(parent, "recovered-server")).LinkTarget);
+    }
+
+    [Fact]
+    public async Task RealHostRecoveryListsOwnedEvidenceAndTeardownLeavesForeignSiblingIntact()
+    {
+        const string run = "run-real-owned";
+        string root = Path.Combine(_root, "real-owned"), runs = Path.Combine(root, "runs");
+        string runtime = Path.Combine(runs, "vt-prep-real-owned", "runtime"), parent = Path.Combine(runs, run);
+        string journals = Path.Combine(root, "journal"), file = Path.Combine(journals, run, "server.jsonl");
+        Directory.CreateDirectory(Path.Combine(runtime, "BepInEx"));
+        File.WriteAllText(Path.Combine(runtime, "BepInEx", "LogOutput.log"), "real shell evidence");
+        Directory.CreateDirectory(parent);
+        File.WriteAllText(Path.Combine(parent, "foreign.txt"), "foreign sibling");
+        Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+        File.WriteAllText(file, System.Text.Json.JsonSerializer.Serialize(new
+        {
+            utc = DateTime.UtcNow.AddMinutes(-1).ToString("O"), run, actor = "server", kind = JournalEntry.CopyIntended,
+            fields = new Dictionary<string, string> { ["runtime"] = runtime, ["stage"] = "", ["parent"] = Path.GetDirectoryName(runtime)! },
+            runner = new { machine = Gone.Machine, pid = Gone.Pid, startedUtc = Gone.StartedUtc.ToString("O") },
+        }) + "\n");
+        var hosts = new Dictionary<string, HostProfile> { ["local"] = new() { Kind = "local", Lock = Path.Combine(root, "lock") } };
+        var host = new LocalGameHost("local", HostShell.ThisMachine);
+        var recovered = await RunRecovery.RecoverAsync(hosts, _ => host, run, false, TimeSpan.FromSeconds(30));
+        Assert.True(recovered.Recovered, recovered.Refused + string.Join("\n", recovered.Steps));
+        string evidence = Path.Combine(parent, "recovered-server");
+        Assert.Equal("real shell evidence", File.ReadAllText(Path.Combine(evidence, "BepInEx", "LogOutput.log")));
+        Assert.Contains(Assert.Single((await RunJournalStatus.InspectAsync(hosts, _ => host, TimeSpan.FromSeconds(30))).Runs).Items, item => item.What == evidence);
+        var torn = await RunRecovery.RecoverAsync(hosts, _ => host, run, true, TimeSpan.FromSeconds(30));
+        Assert.True(torn.Clean, torn.Refused + string.Join("\n", torn.Steps));
+        Assert.False(Directory.Exists(evidence));
+        Assert.Equal("foreign sibling", File.ReadAllText(Path.Combine(parent, "foreign.txt")));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AnUnknownRecoveredLeafIsNeverClaimedOrDeletedEvenIfItsCollisionCloseFails(bool closeFails)
+    {
+        const string run = "run-foreign", evidence = "/srv/runs/server/run-foreign/recovered-server";
+        await KilledWithBaselineAsync(run, "/srv/game");
+        Directory.CreateDirectory(_host.Local(evidence));
+        File.WriteAllText(_host.Local(evidence + "/foreign.txt"), "inside foreign sentinel");
+        if (closeFails) _host.JournalFailsFor = JournalEntry.CopyRetired;
+        var first = await RecoverAsync(run);
+        Assert.False(first.Recovered);
+        Assert.True(Directory.Exists(_host.Local(Prep + "/runtime")));
+        Assert.DoesNotContain(_host.Scripts, script => script is "source-evidence" or "source-settle" or "keep-logs");
+        _host.JournalFailsFor = null;
+        var torn = await RecoverAsync(run, teardown: true);
+        Assert.False(torn.Clean);
+        Assert.Equal("inside foreign sentinel", File.ReadAllText(_host.Local(evidence + "/foreign.txt")));
+        Assert.True(Directory.Exists(_host.Local(Prep + "/runtime")));
+        if (closeFails) Assert.Contains(Assert.Single((await StatusAsync()).Runs).Items, item => item.What == evidence);
+    }
+
+    [Theory]
+    [InlineData("copy-intended")]
+    [InlineData("copy-done")]
+    public async Task RecoveryEvidenceRequiresDurableReservationBeforeAnyEvidenceEffect(string failure)
+    {
+        const string run = "run-no-reservation", evidence = "/srv/runs/server/run-no-reservation/recovered-server";
+        await KilledWithBaselineAsync(run, "/srv/game");
+        File.WriteAllText(_host.Local("/srv/game/new.log"), "not yet moved");
+        _host.JournalFailsFor = failure;
+        Assert.False((await RecoverAsync(run)).Recovered);
+        Assert.DoesNotContain(_host.Scripts, script => script is "source-evidence" or "source-settle" or "keep-logs");
+        Assert.Equal("not yet moved", File.ReadAllText(_host.Local("/srv/game/new.log")));
+        _host.JournalFailsFor = null;
+        if (failure == JournalEntry.CopyDone)
+        {
+            Assert.Empty(Directory.EnumerateFileSystemEntries(_host.Local(evidence)));
+            var again = await RecoverAsync(run, teardown: true);
+            Assert.False(again.Clean); // The empty reservation gap is ambiguous; an intent never proves ownership.
+            Assert.Contains(Assert.Single((await StatusAsync()).Runs).Items, item => item.What == evidence);
+        }
+        else Assert.False(Directory.Exists(_host.Local(evidence)));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RecoveredEvidenceRemovalAndCloseFailuresRemainVisibleAndRepeatSafely(bool closeFails)
+    {
+        const string run = "run-close", evidence = "/srv/runs/server/run-close/recovered-server";
+        await KilledWithBaselineAsync(run, "/srv/game");
+        File.WriteAllText(_host.Local("/srv/game/new.log"), "evidence");
+        Assert.True((await RecoverAsync(run)).Recovered);
+        if (closeFails) _host.JournalFailsFor = JournalEntry.CopyRetired;
+        else _host.Failures["cleanup-stage"] = FakeServerHost.TransportFailure;
+        Assert.False((await RecoverAsync(run, teardown: true)).Clean);
+        Assert.Contains(Assert.Single((await StatusAsync()).Runs).Items, item => item.What == evidence);
+        Assert.Equal(!closeFails, Directory.Exists(_host.Local(evidence)));
+        _host.JournalFailsFor = null;
+        _host.Failures.Clear();
+        Assert.True((await RecoverAsync(run, teardown: true)).Clean);
+        Assert.False(Directory.Exists(_host.Local(evidence)));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RecoveredEvidenceHasItsOwnOwnerAndOneTeardownRemovesOnlyThatSubtree(bool retiredParent)
+    {
+        const string run = "run-orphan", parent = "/srv/runs/server/run-orphan", evidence = parent + "/recovered-server";
+        await KilledWithBaselineAsync(run, "/srv/game");
+        Directory.CreateDirectory(_host.Local(parent));
+        File.WriteAllText(_host.Local(parent + "/foreign.txt"), "foreign sentinel");
+        if (retiredParent)
+        {
+            Line(_host, run, "server", Gone, JournalEntry.CopyIntended, ("runtime", parent), ("stage", ""), ("parent", "/srv/runs/server"),
+                ("holds", RunFolder.Holds), ("retention", "after-fetch"));
+            Line(_host, run, "server", Gone, JournalEntry.CopyDone, ("runtime", parent), ("fetched", "true"));
+            Line(_host, run, "server", Gone, JournalEntry.CopyRetired, ("runtime", parent));
+        }
+        File.WriteAllText(_host.Local("/srv/game/new.log"), "new evidence");
+        var recovered = await RecoverAsync(run);
+        Assert.True(recovered.Recovered, string.Join("\n", recovered.Steps));
+        Assert.Contains(Assert.Single((await StatusAsync()).Runs).Items, item => item.Kind == "copy" && item.What == evidence);
+        Assert.True(Directory.Exists(_host.Local(evidence)));
+        var torn = await RecoverAsync(run, teardown: true);
+        Assert.True(torn.Clean, string.Join("\n", torn.Steps));
+        Assert.False(Directory.Exists(_host.Local(evidence)));
+        Assert.Equal("foreign sentinel", File.ReadAllText(_host.Local(parent + "/foreign.txt")));
+        Assert.Equal(JournalRunState.Ended, Assert.Single((await StatusAsync()).Runs).State);
+    }
+
+    [Fact]
+    public async Task ReleasedVerifiedWorldRemainsListedUntilOneExplicitTeardownRetiresItAndItsParent()
+    {
+        const string run = "run-legacy", parent = "/srv/runs/run-legacy", world = parent + "/world";
+        Directory.CreateDirectory(_host.Local(world));
+        File.WriteAllText(_host.Local(world + "/save.db"), "only save");
+        Line(_host, run, "server", Gone, JournalEntry.CopyIntended, ("runtime", parent), ("stage", ""), ("parent", "/srv/runs"),
+            ("holds", RunFolder.Holds), ("retention", "after-fetch"));
+        Line(_host, run, "server", Gone, JournalEntry.CopyIntended, ("runtime", world), ("stage", ""), ("parent", parent), ("holds", "world"));
+        Line(_host, run, "server", Gone, JournalEntry.CopyDone, ("runtime", world), ("verified", "true"));
+        var recoveredLegacy = await RecoverAsync(run);
+        Assert.True(recoveredLegacy.Recovered, recoveredLegacy.Refused + string.Join("\n", recoveredLegacy.Steps));
+        Assert.Contains(Assert.Single((await StatusAsync()).Runs).Items, item => item.What == world);
+        Assert.Equal("only save", File.ReadAllText(_host.Local(world + "/save.db")));
+        var torn = await RecoverAsync(run, teardown: true);
+        Assert.True(torn.Clean, string.Join("\n", torn.Steps));
+        Assert.False(Directory.Exists(_host.Local(parent)));
+        Assert.Equal(JournalRunState.Ended, Assert.Single((await StatusAsync()).Runs).State);
     }
 
     private const string KeptRun = "run-kept-folder", KeptRunFolder = "/srv/runs/server/" + KeptRun;

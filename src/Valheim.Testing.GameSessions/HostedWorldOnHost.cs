@@ -256,7 +256,7 @@ internal static class HostedWorldOnHost
     internal static async Task ReserveNewAsync(IGameHost host, string directory, TimeSpan timeout, CancellationToken cancellation)
     {
         var result = await host.RunAsync(host.Shell.Kind == HostShellKind.PowerShell ? WindowsReserve : BashReserve,
-            new Dictionary<string, string> { ["stage"] = "", ["keep"] = directory }, timeout, cancellation).ConfigureAwait(false);
+            new Dictionary<string, string> { ["stage"] = "", ["keep"] = directory, ["root"] = HostPath.Parent(directory) }, timeout, cancellation).ConfigureAwait(false);
         RequireReservation(result, host.Name, directory, "a run makes its own folder, and never reuses one that already exists");
     }
 
@@ -291,8 +291,9 @@ internal static class HostedWorldOnHost
 
     // Reserve the existing collection directory atomically; shipping still gets a new, absent stage directory. Refusal is
     // permanent for this site, so repeated callers cannot share its storage even when the first shipment has not started.
-    internal static readonly string BashReserve = """
+    internal static readonly string BashReserve = ProtectedPaths.BashUnlinked + """
         set -eu
+        [ -z "${root:-}" ] || vt_unlinked "$root" "$keep" || exit 4
         [ ! -e "$stage" ] && [ ! -L "$stage" ] || exit 4
         mkdir -p -- "${keep%/*}"
         if ! mkdir -- "$keep"; then
@@ -301,8 +302,9 @@ internal static class HostedWorldOnHost
         fi
         echo 'VT-WORLD-RESERVED done'
         """;
-    internal static readonly string WindowsReserve = """
+    internal static readonly string WindowsReserve = ProtectedPaths.PowerShellUnlinked + """
         $ErrorActionPreference = 'Stop'
+        if ($root -and -not (Test-VtUnlinked $root $keep)) { exit 4 }
         if ($stage -and (Test-Path -LiteralPath $stage)) { exit 4 }
         $parent = [IO.Path]::GetDirectoryName($keep)
         [void][IO.Directory]::CreateDirectory($parent)
