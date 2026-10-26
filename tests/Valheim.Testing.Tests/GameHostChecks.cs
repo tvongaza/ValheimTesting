@@ -43,7 +43,8 @@ internal static class GameHostChecks
                 try { await HostedRuntimeStage.RequireStoppedAsync(host, Generous, runtimes: [root], clientSession: false); }
                 catch (Exception refused) when (failed != null) { throw new AggregateException(failed, refused); }
             string script = host.Shell.Kind == HostShellKind.Bash ? "rm -rf -- \"$root\"" : "Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue";
-            (await host.RunAsync(script, new Dictionary<string, string> { ["root"] = root }, Generous)).EnsureSuccess("Removing " + root);
+            try { (await host.RunAsync(script, new Dictionary<string, string> { ["root"] = root }, Generous)).EnsureSuccess("Removing " + root); }
+            catch (Exception cleanup) when (failed != null) { throw new AggregateException(failed, cleanup); }
         }
     }
 
