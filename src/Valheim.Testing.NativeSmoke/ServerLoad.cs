@@ -88,7 +88,9 @@ internal static class ServerLoad
             var inputs = await ModInputStage.RunAsync(new ModInputStage.Request(ModInputStage.Route.Dedicated, output, parsed.Options,
                 parsed.Switches, parsed.Mods, parsed.Roots, parsed.Optional, parsed.BuildDependencies)
             {
-                InitialHostingBuild = seams.InitialHostingBuild ?? DetachedSession.PinnedHostingBuild(), InitialWorldAdmission = seams.InitialWorldAdmission, Shipped = seams.Loader, FrozenServerLoader = seams.FrozenServerLoader, ClientArchitecture = seams.ClientArchitecture, Progress = state,
+                InitialHostingBuild = seams.InitialHostingBuild ?? DetachedSession.PinnedHostingBuild(),
+                InitialWorldAdmission = seams.InitialWorldAdmission ?? DetachedSession.PinnedWorldAdmission(),
+                Shipped = seams.Loader, FrozenServerLoader = seams.FrozenServerLoader, ClientArchitecture = seams.ClientArchitecture, Progress = state,
             }, cancel.Token).ConfigureAwait(false);
             return await RunCampaignAsync(parsed, inputs, output, clock, seams, state, cancel.Token).ConfigureAwait(false);
         }
@@ -144,7 +146,7 @@ internal static class ServerLoad
         var bakedBuild = bakeDestination != null ? FixtureBake.CaptureBuild(mods, serverLock, dependencies) : null;
         // Reject a bad or changed world before building an adapter or staging either game actor.
         _ = ModInputStage.VerifyAdmission(inputs.Admission!);
-        var fixture = FixtureBake.Prepare(fixtureSource, output, inputs.WorldAdmission);
+        var fixture = FixtureBake.Prepare(fixtureSource, output, inputs.WorldAdmission, inputs.HostingBuild);
         if (parsed.Options.TryGetValue("--adapter-project", out string? adapterProject))
         {
             string cliCore = dependencies.CliPlugin.File;
@@ -195,6 +197,7 @@ internal static class ServerLoad
         }
         adapter ??= await SmokeAdapter.BuildAsync(serverInstall, dependencies, output, cancellation, core).ConfigureAwait(false);
 
+        fixture.CopyAdmission!.Verify();
         // The server's own files beside its lock: the session adapter, explicit configs and plugin sidecars.
         var files = new List<HostedRuntimeFile> { new(adapter, "BepInEx/plugins/" + Path.GetFileName(adapter)) };
         foreach (string config in parsed.Configs.Select(Path.GetFullPath))
@@ -305,6 +308,7 @@ internal static class ServerLoad
             return 3;
         }
         _ = ModInputStage.VerifyAdmission(inputs.Admission!);
+        fixture.CopyAdmission!.Verify();
         // Only once the preflight passed: the unbound plans beside campaign.json, for an editable consumer (`valheim-test init server`) to run the same campaign.
         // Private: plan.json holds the server's password.
         File.WriteAllText(Path.Combine(output, "plan.json"), JsonSerializer.Serialize(plan, new JsonSerializerOptions { WriteIndented = true }));
@@ -324,6 +328,7 @@ internal static class ServerLoad
                 {
                     Name = "native-smoke-server-load",
                     InitialHostingBuild = inputs.HostingBuild,
+                    InitialWorldAdmission = fixture.CopyAdmission,
                     RunId = DetachedSession.ConfiguredRun,
                     CheckpointFixture = DetachedSession.ConfiguredRun != null,
                     CleanupBudget = bakeDestination == null ? null : TimeSpan.FromMinutes(10),

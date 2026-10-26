@@ -94,7 +94,8 @@ try
 
     // The bundled world, or a saved one (save-world, server-load --bake-fixture): copied into the run's output and verified first.
     _ = ModInputStage.VerifyAdmission(stage.Admission!);
-    var world = FixtureBake.Prepare(worldFixture, output, stage.WorldAdmission).Identity;
+    var fixtureInput = FixtureBake.Prepare(worldFixture, output, stage.WorldAdmission, stage.HostingBuild);
+    var world = fixtureInput.Identity;
     string worldRoot = Path.Combine(output, "world-source", "worlds_local");
     var character = DefaultSmokeCharacter.Prepare(Path.Combine(output, "character-source"));
     var inputs = new RegressionInputs
@@ -123,6 +124,7 @@ try
     inputs.Write(Path.Combine(output, "regression.json"));
     runner = TargetedRegression.Read(Path.Combine(output, "regression.json")); // the inputs on the machine recorded beside them
     runner.InitialHostingBuild = stage.HostingBuild;
+    runner.InitialWorldAdmission = fixtureInput.CopyAdmission;
     Console.WriteLine($"disposable loader profile: {runner.Install}");
     Console.WriteLine("run ID: " + runId);
     bool passed = true;

@@ -334,6 +334,22 @@ internal static class DetachedSession
         return target == null ? null : ReadPinnedTarget(target);
     }
 
+    internal static FixtureBake.Admission? PinnedWorldAdmission(string? control = null)
+    {
+        control ??= ConfiguredControlDirectory;
+        if (control == null) return null;
+        var inputs = JsonSerializer.Deserialize<StagedInput[]>(File.ReadAllText(Path.Combine(control, "input-manifests.json")))
+            ?? throw new InvalidDataException("Missing detached input manifests.");
+        var world = inputs.SingleOrDefault(input => input.SourceManifest != null);
+        if (world == null) return null;
+        var target = inputs.SingleOrDefault(input => input.TargetInstall != null)
+            ?? throw new InvalidDataException("Missing detached hosting game admission.");
+        var retained = new FixtureBake.Admission(WorldIdentity.Capture(world.Staged, ReadPinnedTarget(target), world.Hashes),
+            world.StagedManifest ?? throw new InvalidDataException("Missing detached fixture manifest path."), world.ManifestSha256);
+        FixtureBake.VerifyAdmission(retained);
+        return retained;
+    }
+
     private static string[] CopyMods(string[] args, Func<string, string> stage)
     {
         var staged = (string[])args.Clone();

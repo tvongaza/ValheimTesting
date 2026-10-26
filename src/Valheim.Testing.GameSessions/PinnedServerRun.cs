@@ -50,6 +50,7 @@ public sealed class PinnedServerRunOptions<TPlan> where TPlan : ServerRunPlan
     // Detached checkpoints pin the already-owned immutable fixture before the first boot.
     internal bool CheckpointFixture { get; init; }
     internal GameBuild? InitialHostingBuild { get; init; }
+    internal WorldIdentity.Admission? InitialWorldAdmission { get; init; }
     /// <summary>Test seam: the owned server's session (scripted) instead of launching the server from its profile.</summary>
     internal Func<TPlan, OwnedServerSession>? SessionOverride { get; init; }
     /// <summary>What a run on other hosts reaches outside this process (<see cref="IHostedRunHooks"/>); tests pass fakes.</summary>
@@ -616,6 +617,11 @@ public static class PinnedServerRun
                 journalRun = RunJournal.UseRun(campaignRunId);
                 var inspection = InspectCampaign(report, manifestFile);
                 inspection.Inputs!.Manifest.InitialHostingBuild = options.InitialHostingBuild;
+                if (options.InitialWorldAdmission is { } initialWorld)
+                {
+                    initialWorld.VerifySource(inspection.Inputs.Manifest.World);
+                    inspection.Inputs.Manifest.WorldAdmission = initialWorld;
+                }
                 report.Step(StepPhase.Preflight, "the plan agrees with the campaign", () => HostedCampaignPreparation.CheckPlan(inspection, plan, campaignPlans!));
                 phase = StepPhase.Setup; // From here the hosts are written to.
                 await report.StepAsync(StepPhase.Setup, "check the hosts and prepare every actor's disposable install", async () =>

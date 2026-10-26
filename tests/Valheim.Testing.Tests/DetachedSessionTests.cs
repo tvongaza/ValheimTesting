@@ -37,6 +37,41 @@ public sealed class DetachedSessionTests : IDisposable
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void TheSupervisorRehydratesThePersistedWorldHashesInsteadOfAdoptingStagedDrift(bool afterRehydration)
+    {
+        using var data = new FakeDataRoot(Path.Combine(_root, "supervisor-data"));
+        string server = Path.Combine(_root, "server"); FakeInstalls.Server(server);
+        string world = FakeInstalls.World(Path.Combine(_root, "world"));
+        string mod = Directory.CreateDirectory(Path.Combine(_root, "mods")).FullName;
+        File.WriteAllText(Path.Combine(mod, "Mod.dll"), "mod");
+        string control = Directory.CreateDirectory(Path.Combine(_root, "control")).FullName;
+        var request = new ModInputStage.Request(ModInputStage.Route.Dedicated, Path.Combine(_root, "out"),
+            new Dictionary<string, string> { ["--server"] = server, ["--world-fixture"] = world }, new HashSet<string> { "--server-only" }, [], [], [], []);
+        var admission = ModInputStage.Inspect(request);
+        using var run = RunJournal.UseRun("run-supervisor-world");
+        string[] staged = DetachedSession.StageInputsOwned(["--mod", Path.Combine(mod, "Mod.dll"), "--world-fixture", world], Path.Combine(_root, "inputs"), control, admission);
+        DetachedSession.VerifyStagedInputs(control);
+        var retained = afterRehydration ? DetachedSession.PinnedWorldAdmission(control) : null;
+        string stagedWorld = Path.Combine(staged[3], "worlds_local");
+        File.WriteAllText(Path.Combine(stagedWorld, "Campaign", "_main.1.db2"), "changed after supervisor verification");
+        FixtureBake.VerifyAdmission(admission.WorldAdmission!); // unchanged original input
+        if (!afterRehydration) Assert.Throws<InvalidOperationException>(() => DetachedSession.PinnedWorldAdmission(control));
+        else
+        {
+            int loaders = 0;
+            var options = new Dictionary<string, string>(request.Options) { ["--world-fixture"] = staged[3] };
+            Assert.Throws<InvalidOperationException>(() => ModInputStage.Choose(request with
+            {
+                Options = options, InitialHostingBuild = admission.HostingBuild, InitialWorldAdmission = retained,
+                Shipped = (_, _, _) => { loaders++; throw new Xunit.Sdk.XunitException("Supervisor repinned changed world"); },
+            }));
+            Assert.Equal(0, loaders);
+        }
+    }
+
+    [Theory]
     [InlineData(false, false)]
     [InlineData(false, true)]
     [InlineData(true, false)]
@@ -123,7 +158,7 @@ public sealed class DetachedSessionTests : IDisposable
         if (explicitFixture) args.AddRange(["--world-fixture", source]);
         int effects = 0; var error = new StringWriter();
         int result = await DetachedSession.RunAsync(args.ToArray(), new StringWriter(), error,
-            new DetachedSession.Seams(Windows: true, TaskExecutable: "powershell.exe", TaskUser: "tester", RequireDesktop: () =>
+            new DetachedSession.Seams(Windows: true, TaskExecutable: "pwsh.exe", TaskUser: "tester", RequireDesktop: () =>
             {
                 if (change == "host") File.WriteAllBytes(InstallPins.GameAssembly(server), FakeInstalls.GameAssembly(maximum: 43)); // still supports the fixture
                 else if (change == "version") File.WriteAllBytes(Path.Combine(source, "Campaign", "_main.1.fwl2"), FakeInstalls.Metadata("Campaign", 4242, version: 43));

@@ -330,6 +330,28 @@ public sealed class TargetedRegressionTests : IDisposable
         Assert.False(Directory.Exists(Path.Combine(_rig.Runtime, "config")));
     }
 
+    [ClientHostTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void AVerifiedCopiedWorldCannotBecomeANewRegressionBaseline(bool explicitFixture)
+    {
+        var target = GameVersionAgreement.ReadInPlaceAsync(_rig.Game, default).GetAwaiter().GetResult();
+        var source = explicitFixture ? FixtureBake.Admit(_rig.Fixture, target) : null;
+        var input = FixtureBake.Prepare(explicitFixture ? _rig.Fixture : null, Path.Combine(_rig.Root, "materialized"), source, target);
+        var copy = input.CopyAdmission!;
+        Assert.Equal(input.Identity, copy.Identity);
+        File.WriteAllText(Path.Combine(copy.Source, copy.Identity.Name, "_main.1.db2"), "changed only copied data");
+        if (source != null) FixtureBake.VerifyAdmission(source); // the original fixture is still valid
+        int loaders = 0;
+        var runner = new TargetedRegression(_rig.Manifest(copy.Source, copy.Identity.UidText), inventory: _rig.Inventory())
+        {
+            InitialHostingBuild = target, InitialWorldAdmission = copy,
+            PinnedLoader = (_, _) => { loaders++; throw new Xunit.Sdk.XunitException("Changed copy reached loader selection"); },
+        };
+        Assert.Throws<InvalidOperationException>(() => runner.Stage("parent"));
+        Assert.Equal(0, loaders); Assert.False(Directory.Exists(runner.Install));
+    }
+
     [ClientHostFact] public void DirectStageRetainsAnEarlierCompatibleHostHash()
     {
         var runner = _rig.Regression(_rig.Manifest());

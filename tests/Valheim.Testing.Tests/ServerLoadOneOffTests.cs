@@ -763,6 +763,27 @@ public sealed class ServerLoadOneOffTests : IDisposable
         Assert.False(File.Exists(Path.Combine(output, "dependencies.lock.json")));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AVerifiedWorldCopyCannotBeRepinnedByTheCampaignHandoff(bool explicitFixture)
+    {
+        string output = Path.Combine(_rig.Root, "changed-world-copy"); int campaigns = 0;
+        string[] args = explicitFixture
+            ? Arguments(output, "--server-only", "--world-fixture", _rig.Fixture)
+            : Arguments(output, "--server-only");
+        var original = WorldFixture.Manifest(_rig.Fixture);
+        int result = await ServerLoad.RunAsync(args, new ServerLoad.Seams(
+            Inspect: _ =>
+            {
+                string world = Directory.EnumerateDirectories(Path.Combine(output, "world-source", "worlds_local")).Single();
+                File.WriteAllText(Path.Combine(world, "_main.1.db2"), "changed data with the same UID and version");
+                return Task.FromResult(Ready);
+            }, Campaign: (_, _, _, _, _) => { campaigns++; return Task.FromResult(0); }));
+        Assert.Equal(3, result); Assert.Equal(0, campaigns); Assert.False(File.Exists(Path.Combine(output, "plan.json")));
+        WorldFixture.Verify(_rig.Fixture, original);
+    }
+
     [Fact] public async Task TheDefaultWorldRetainsItsOriginalHostAcrossCampaignInspection()
     {
         string output = Path.Combine(_rig.Root, "changed-default-host"); int campaigns = 0;

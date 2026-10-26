@@ -523,6 +523,35 @@ public sealed class NativeDependencyResolverTests : IDisposable
         Assert.All(hosts.Values, host => Assert.DoesNotContain(host.Scripts, script => script is "profile-seed" or "apply-stage" or "copy" or "ship"));
     }
 
+    [Fact] public async Task AProvidedCopyAdmissionCannotBeReplacedByCampaignInspectionHashes()
+    {
+        var (file, hosts, _) = TwoHostCampaign("copied-world-admission");
+        var inspection = HostedCampaignPreparation.InspectInputs(file);
+        var manifest = inspection.Inputs!.Manifest;
+        string assembly = Path.Combine(hosts["server"].Local(@"C:\game\source"), "valheim_server_Data", "Managed", InstallPins.GameAssemblyName);
+        using var bytes = File.OpenRead(assembly);
+        var target = GameAssemblyVersion.Read(bytes, "actual selected host");
+        var original = WorldIdentity.Capture(manifest.World, target);
+        string copy = Path.Combine(_rig.Root, "verified-campaign-copy"); Directory.CreateDirectory(copy);
+        foreach (var entry in original.Files)
+        {
+            string path = Path.Combine(copy, entry.Key); Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.Copy(Path.Combine(original.Source, entry.Key), path);
+        }
+        var retained = original.ForVerifiedCopy(copy);
+        File.WriteAllText(Path.Combine(copy, "Campaign", "_main.1.db2"), "same UID, different copied data");
+        original.Verify();
+        manifest.World = copy;
+        manifest.WorldAdmission = retained;
+        // The inspection can see the new bytes; the original snapshot must still win.
+        manifest.AdmittedWorldFiles = WorldFixture.Manifest(copy);
+        int loaders = 0;
+        await Assert.ThrowsAsync<ArgumentException>(() => HostedCampaignPreparation.PrepareAsync(inspection, Path.Combine(_rig.Root, "refused-copy"),
+            TimeSpan.FromSeconds(30), name => hosts[name], default, plans: null, shippedLoader: (_, _, _) => { loaders++; return null; }));
+        Assert.Equal(0, loaders);
+        Assert.All(hosts.Values, host => Assert.DoesNotContain(host.Scripts, script => script is "profile-seed" or "apply-stage" or "copy" or "ship"));
+    }
+
     [Fact] public async Task DirectCampaignRetainsTheInitialHostHashAcrossLoaderSelection()
     {
         var (file, hosts, _) = TwoHostCampaign("host-replacement");

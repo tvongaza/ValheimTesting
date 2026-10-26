@@ -37,6 +37,10 @@ public static class DefaultSmokeWorld
         return identity;
     }
 
+    // Bind the materialized default to the reviewed embedded hashes, never a new on-disk baseline.
+    internal static WorldIdentity.Admission AdmitPrepared(string root, GameBuild target) =>
+        WorldIdentity.Capture(root, target, Files.ToDictionary(file => Path.Combine(Name, file.Key), file => file.Value, StringComparer.Ordinal));
+
     /// <summary>
     /// Materializes the pinned one-world fixture into <paramref name="newRoot"/>. The path must not exist, so this
     /// cannot silently replace a valued world or a previous run's evidence. Returns the UID read from the written

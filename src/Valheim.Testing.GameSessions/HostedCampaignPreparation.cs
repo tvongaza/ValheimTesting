@@ -495,7 +495,7 @@ public static class HostedCampaignPreparation
                 if (inputs.Manifest.WorldAdmission is { } prior)
                 {
                     prior.VerifyTarget(target);
-                    prior.Verify();
+                    prior.VerifySource(inputs.Manifest.World);
                 }
                 else inputs.Manifest.WorldAdmission = WorldIdentity.Capture(inputs.Manifest.World, target, inputs.Manifest.AdmittedWorldFiles);
                 if (inputs.Manifest.WorldAdmission.Identity != inputs.Manifest.AdmittedWorldIdentity)

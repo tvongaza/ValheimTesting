@@ -77,14 +77,29 @@ public sealed record WorldIdentity(string Name, string SeedName, int Seed, long 
     }
 
     // One retained admission: hash before parsing, verify afterwards, and never derive replacement pins.
-    internal sealed record Admission(string Source, WorldIdentity Identity, IReadOnlyDictionary<string, string> Files, GameBuild Target)
+    internal sealed record Admission(string Source, WorldIdentity Identity, IReadOnlyDictionary<string, string> Files, GameBuild Target, bool Copied = false)
     {
         internal void Verify(string? copy = null)
         {
             string source = copy ?? Source;
-            WorldFixture.Verify(source, Files, copied: copy != null);
+            WorldFixture.Verify(source, Files, copied: copy != null || Copied);
             if (Read(source, Target) != Identity) throw new InvalidDataException("The fixture identity changed after admission.");
-            WorldFixture.Verify(source, Files, copied: copy != null);
+            WorldFixture.Verify(source, Files, copied: copy != null || Copied);
+        }
+
+        internal void VerifySource(string source)
+        {
+            if (!Path.TrimEndingDirectorySeparator(Path.GetFullPath(source)).Equals(Path.TrimEndingDirectorySeparator(Source),
+                    OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+                throw new InvalidOperationException("Bind the fixture path retained by world-format admission.");
+            Verify();
+        }
+
+        internal Admission ForVerifiedCopy(string copy)
+        {
+            Verify();
+            Verify(copy);
+            return this with { Source = Path.GetFullPath(copy), Copied = true };
         }
 
         internal void VerifyTarget(GameBuild current) => RequireSameTarget(Target, current);

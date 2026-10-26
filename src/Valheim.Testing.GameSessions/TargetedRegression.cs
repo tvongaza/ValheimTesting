@@ -233,6 +233,7 @@ public sealed class TargetedRegression
     public StagedArm Stage(string arm) => WithFailureCleanup(() => StageCore(arm));
 
     internal GameBuild? InitialHostingBuild { get; set; }
+    internal WorldIdentity.Admission? InitialWorldAdmission { get; set; }
     private WorldIdentity.Admission? _worldAdmission;
 
     private StagedArm StageCore(string arm)
@@ -243,9 +244,9 @@ public sealed class TargetedRegression
         _ = FixtureLayout.Discover(env.Fixture.Root, env.Fixture.WorldUid);
         var hostingBuild = GameVersionAgreement.ReadInPlaceAsync(Game, CancellationToken.None).GetAwaiter().GetResult();
         if (InitialHostingBuild is { } initial) WorldIdentity.RequireSameTarget(initial, hostingBuild);
-        var admission = _worldAdmission ??= WorldIdentity.Capture(env.Fixture.Root, hostingBuild);
+        var admission = _worldAdmission ??= InitialWorldAdmission ?? WorldIdentity.Capture(env.Fixture.Root, hostingBuild);
         admission.VerifyTarget(hostingBuild);
-        admission.Verify();
+        admission.VerifySource(env.Fixture.Root);
         var identity = admission.Identity;
         var fixture = admission.Files;
         var hostWorld = new HostWorldPlan
