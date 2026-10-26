@@ -273,6 +273,24 @@ public sealed class ServerLoadOneOffTests : IDisposable
     }
 
     [Fact]
+    public async Task AnUnsupportedWorldRefusesBeforeLoaderExtractionBuildOrCampaignStaging()
+    {
+        string source = FakeInstalls.World(Path.Combine(_rig.Root, "unsupported-world"));
+        File.WriteAllBytes(Path.Combine(source, "Campaign", "_main.1.fwl2"), FakeInstalls.Metadata("Campaign", 4242, version: 1001));
+        string output = Path.Combine(_rig.Root, "unsupported-run");
+        var args = Arguments(output, "--server-only", "--world-fixture", source);
+        var before = WorldFixture.Manifest(_rig.Game);
+        int loader = 0, campaign = 0;
+        int result = await ServerLoad.RunAsync(args, new ServerLoad.Seams(
+            Loader: (_, _, _) => { loader++; throw new InvalidOperationException("loader extraction must not run"); },
+            Campaign: (_, _, _, _, _) => { campaign++; return Task.FromResult(0); }));
+        Assert.Equal(3, result);
+        Assert.Equal(0, loader); Assert.Equal(0, campaign);
+        Assert.False(Directory.Exists(output));
+        WorldFixture.Verify(_rig.Game, before);
+    }
+
+    [Fact]
     public async Task ServerOnlyCanPrepareACustomPinnedWorldWithoutChangingItsSource()
     {
         string source = Path.Combine(_rig.Root, "chosen-world");
@@ -743,6 +761,41 @@ public sealed class ServerLoadOneOffTests : IDisposable
         Assert.Equal(3, await ServerLoad.RunAsync(args, new ServerLoad.Seams(Inspect: _ => Task.FromResult(Ready),
             Campaign: (_, _, _, _, _) => throw new InvalidOperationException("never run"))));
         Assert.False(File.Exists(Path.Combine(output, "dependencies.lock.json")));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AVerifiedWorldCopyCannotBeRepinnedByTheCampaignHandoff(bool explicitFixture)
+    {
+        string output = Path.Combine(_rig.Root, "changed-world-copy"); int campaigns = 0;
+        string[] args = explicitFixture
+            ? Arguments(output, "--server-only", "--world-fixture", _rig.Fixture)
+            : Arguments(output, "--server-only");
+        var original = WorldFixture.Manifest(_rig.Fixture);
+        int result = await ServerLoad.RunAsync(args, new ServerLoad.Seams(
+            Inspect: _ =>
+            {
+                string world = Directory.EnumerateDirectories(Path.Combine(output, "world-source", "worlds_local")).Single();
+                File.WriteAllText(Path.Combine(world, "_main.1.db2"), "changed data with the same UID and version");
+                return Task.FromResult(Ready);
+            }, Campaign: (_, _, _, _, _) => { campaigns++; return Task.FromResult(0); }));
+        Assert.Equal(3, result); Assert.Equal(0, campaigns); Assert.False(File.Exists(Path.Combine(output, "plan.json")));
+        WorldFixture.Verify(_rig.Fixture, original);
+    }
+
+    [Fact] public async Task TheDefaultWorldRetainsItsOriginalHostAcrossCampaignInspection()
+    {
+        string output = Path.Combine(_rig.Root, "changed-default-host"); int campaigns = 0;
+        int result = await ServerLoad.RunAsync(Arguments(output, "--server-only"), new ServerLoad.Seams(
+            Inspect: _ =>
+            {
+                File.WriteAllBytes(InstallPins.GameAssembly(_rig.Game), FakeInstalls.GameAssembly(maximum: 43));
+                return Task.FromResult(Ready);
+            },
+            Campaign: (_, _, _, _, _) => { campaigns++; return Task.FromResult(0); }));
+        Assert.Equal(3, result); Assert.Equal(0, campaigns);
+        Assert.False(File.Exists(Path.Combine(output, "plan.json")));
     }
 
     [Fact] public async Task ALocalHostRefusalStopsBeforeAnyAdapterOrFixtureIsWritten()

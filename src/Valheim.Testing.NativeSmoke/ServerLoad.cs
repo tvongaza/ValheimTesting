@@ -48,7 +48,8 @@ internal static class ServerLoad
         // still names the package, while this carries the reason into each arm's evidence.
         ShippedLoader.Choice? FrozenServerLoader = null,
         string? SummaryLabel = null,
-        TextWriter? SummaryOutput = null);
+        TextWriter? SummaryOutput = null,
+        GameBuild? InitialHostingBuild = null, FixtureBake.Admission? InitialWorldAdmission = null);
 
     public static async Task<int> RunAsync(string[] args, Seams? seams = null)
     {
@@ -79,7 +80,7 @@ internal static class ServerLoad
             if (supervisor != null) DetachedSession.VerifyStagedInputs();
             output = Output(parsed!);
             // A world fixture is one complete world before the mod, its dependencies or either game actor is staged.
-            if (parsed.Options.TryGetValue("--world-fixture", out string? worldFixture)) _ = FixtureBake.Inspect(worldFixture);
+            if (parsed.Options.TryGetValue("--world-fixture", out string? worldFixture)) _ = FixtureBake.Check(worldFixture);
             if (parsed.Options.TryGetValue("--adapter", out string? adapterFile) && !File.Exists(Path.GetFullPath(adapterFile)))
                 throw new FileNotFoundException("A selected file is missing: " + Path.GetFullPath(adapterFile), Path.GetFullPath(adapterFile));
             // The server and client, their loaders, the mod, its build inputs, the scenario and the dependency lock: one
@@ -87,6 +88,8 @@ internal static class ServerLoad
             var inputs = await ModInputStage.RunAsync(new ModInputStage.Request(ModInputStage.Route.Dedicated, output, parsed.Options,
                 parsed.Switches, parsed.Mods, parsed.Roots, parsed.Optional, parsed.BuildDependencies)
             {
+                InitialHostingBuild = seams.InitialHostingBuild ?? DetachedSession.PinnedHostingBuild(),
+                InitialWorldAdmission = seams.InitialWorldAdmission ?? DetachedSession.PinnedWorldAdmission(),
                 Shipped = seams.Loader, FrozenServerLoader = seams.FrozenServerLoader, ClientArchitecture = seams.ClientArchitecture, Progress = state,
             }, cancel.Token).ConfigureAwait(false);
             return await RunCampaignAsync(parsed, inputs, output, clock, seams, state, cancel.Token).ConfigureAwait(false);
@@ -142,7 +145,8 @@ internal static class ServerLoad
         string serverLock = Path.Combine(output, "dependencies.lock.json");
         var bakedBuild = bakeDestination != null ? FixtureBake.CaptureBuild(mods, serverLock, dependencies) : null;
         // Reject a bad or changed world before building an adapter or staging either game actor.
-        var fixture = FixtureBake.Prepare(fixtureSource, output);
+        _ = ModInputStage.VerifyAdmission(inputs.Admission!);
+        var fixture = FixtureBake.Prepare(fixtureSource, output, inputs.WorldAdmission, inputs.HostingBuild);
         if (parsed.Options.TryGetValue("--adapter-project", out string? adapterProject))
         {
             string cliCore = dependencies.CliPlugin.File;
@@ -193,6 +197,7 @@ internal static class ServerLoad
         }
         adapter ??= await SmokeAdapter.BuildAsync(serverInstall, dependencies, output, cancellation, core).ConfigureAwait(false);
 
+        fixture.CopyAdmission!.Verify();
         // The server's own files beside its lock: the session adapter, explicit configs and plugin sidecars.
         var files = new List<HostedRuntimeFile> { new(adapter, "BepInEx/plugins/" + Path.GetFileName(adapter)) };
         foreach (string config in parsed.Configs.Select(Path.GetFullPath))
@@ -302,6 +307,8 @@ internal static class ServerLoad
             SmokeOutput.MarkRefused(output, "server-load", lines);
             return 3;
         }
+        _ = ModInputStage.VerifyAdmission(inputs.Admission!);
+        fixture.CopyAdmission!.Verify();
         // Only once the preflight passed: the unbound plans beside campaign.json, for an editable consumer (`valheim-test init server`) to run the same campaign.
         // Private: plan.json holds the server's password.
         File.WriteAllText(Path.Combine(output, "plan.json"), JsonSerializer.Serialize(plan, new JsonSerializerOptions { WriteIndented = true }));
@@ -320,6 +327,8 @@ internal static class ServerLoad
                 new PinnedServerRunOptions<ServerRunPlan>
                 {
                     Name = "native-smoke-server-load",
+                    InitialHostingBuild = inputs.HostingBuild,
+                    InitialWorldAdmission = fixture.CopyAdmission,
                     RunId = DetachedSession.ConfiguredRun,
                     CheckpointFixture = DetachedSession.ConfiguredRun != null,
                     CleanupBudget = bakeDestination == null ? null : TimeSpan.FromMinutes(10),

@@ -7,7 +7,13 @@ namespace Valheim.Testing.Game;
 /// </summary>
 internal sealed record GameBuild(uint? NetworkVersion, string? GameVersion, string? Unknown)
 {
+    internal WorldSupport? WorldSupport { get; init; }
+    internal string? WorldUnknown { get; init; }
+
     public override string ToString() => NetworkVersion is { } network
         ? $"Valheim {GameVersion ?? "(game version unread)"} (network version {network})"
         : "an unknown Valheim build (" + Unknown + ")";
 }
+
+/// <summary>A verified predicate from the actual host assembly, bound to its bytes.</summary>
+internal sealed record WorldSupport(int Minimum, int Maximum, int ChunkedSave, string Source, string AssemblySha256);

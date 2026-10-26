@@ -35,6 +35,8 @@ internal static class ModInputStage
     {
         /// <summary>The pinned-loader rule for an actor that names no package (<see cref="ShippedLoader.Choose"/> in a real run).</summary>
         public ShippedLoader.Rule? Shipped { get; init; }
+        public GameBuild? InitialHostingBuild { get; init; }
+        public FixtureBake.Admission? InitialWorldAdmission { get; init; }
         /// <summary>An A/B arm's server loader, chosen once before either arm.</summary>
         public ShippedLoader.Choice? FrozenServerLoader { get; init; }
         public Action<EnvironmentInventory, EnvironmentRecipe, string, string?>? ClientArchitecture { get; init; }
@@ -54,6 +56,9 @@ internal static class ModInputStage
     internal sealed record Inputs(Route Route, EnvironmentInventory Inventory, Actor Compile, Actor? Server, Actor? Client,
         string? ClientArchitecture, string? Join, IReadOnlyList<string> Mods, string ModSelection, string? BuildInputs)
     {
+        public Inspection? Admission { get; init; }
+        public FixtureBake.Admission? WorldAdmission => Admission?.WorldAdmission;
+        public GameBuild? HostingBuild => Admission?.HostingBuild;
         public string Core { get; init; } = "";
         public string CliManifest { get; init; } = "";
         public string CliFiles { get; init; } = "";
@@ -79,9 +84,45 @@ internal static class ModInputStage
         }
     }
 
+    // The read-only prefix of the existing choice flow. Detached startup uses it before staging its tool or inputs;
+    // Choose consumes the same selection/admission path before loader or ValheimCLI materialization.
+    internal sealed record Inspection(Choice Choice, string CompileRole, FixtureBake.Admission? WorldAdmission, GameBuild? HostingBuild);
+
+    internal static Inspection Inspect(Request request)
+    {
+        var options = request.Options;
+        // 1. The game and loader choice.
+        string compileRole = request.Route switch
+        {
+            Route.Hosted => "client", Route.Dedicated => "server",
+            _ => options.GetValueOrDefault("--role") ?? "client",
+        };
+        var choice = request.Route == Route.Dedicated || compileRole == "server"
+            ? ChooseDedicated(options, serverOnly: request.Route == Route.Build || request.Switches.Contains("--server-only"), request.Output,
+                request.Route == Route.Build ? "build" : "server-load")
+            : ChooseHosted(options, request.Output, request.Route == Route.Build ? "build" : "start");
+        var inventory = choice.Inventory;
+        FixtureBake.Admission? worldAdmission = null;
+        GameBuild? hostingBuild = null;
+        if (request.Route != Route.Build)
+        {
+            var hosting = choice.Server ?? choice.Client!;
+            var build = hostingBuild = ReadHostingBuild(inventory, hosting);
+            if (request.InitialHostingBuild is { } initial) WorldIdentity.RequireSameTarget(initial, build);
+            if (options.TryGetValue("--world-fixture", out string? fixtureSource))
+            {
+                worldAdmission = request.InitialWorldAdmission ?? FixtureBake.Admit(fixtureSource, build);
+                worldAdmission.World.VerifyTarget(build);
+                FixtureBake.VerifyAdmission(worldAdmission);
+            }
+            else _ = DefaultSmokeWorld.Inspect(build);
+        }
+        return new(choice, compileRole, worldAdmission, hostingBuild);
+    }
+
     /// <summary>
     /// Steps 1 and 2 alone: the game and loader choice and the output guard, with the core, the CLI inputs and the capability
-    /// list the dependency lock is requested with. It builds no mod, probes no host and writes nothing into the output; like
+    /// list the dependency lock is requested with. It builds no mod and writes nothing into the output; its read-only prefix admits the fixture against the selected host, then
     /// the whole stage it extracts the pinned loader and ValheimCLI bundle into the data root. A wrapper
     /// that needs the choice before it runs the stage (<c>server-load-ab</c> before its two arms, <c>server-load-phases</c>
     /// before its first phase) takes it from here instead of deciding its own (#745). <see cref="RunAsync"/> starts with it.
@@ -91,16 +132,8 @@ internal static class ModInputStage
         var options = request.Options;
         string output = request.Output;
 
-        // 1. The game and loader choice.
-        string compileRole = request.Route switch
-        {
-            Route.Hosted => "client", Route.Dedicated => "server",
-            _ => options.GetValueOrDefault("--role") ?? "client",
-        };
-        var choice = request.Route == Route.Dedicated || compileRole == "server"
-            ? ChooseDedicated(options, serverOnly: request.Route == Route.Build || request.Switches.Contains("--server-only"), output,
-                request.Route == Route.Build ? "build" : "server-load")
-            : ChooseHosted(options, output, request.Route == Route.Build ? "build" : "start");
+        var admission = Inspect(request);
+        var (choice, compileRole, worldAdmission, _) = admission;
         var inventory = choice.Inventory;
         Actor? server = choice.Server is { } serverRecipe ? Select(request, inventory, "server", serverRecipe, choice.ServerReason!) : null;
         if (server != null && request.FrozenServerLoader is { } frozen)
@@ -158,8 +191,32 @@ internal static class ModInputStage
             : client == null ? [SessionCapabilities[0]] : SessionCapabilities;
         return new Inputs(request.Route, inventory, compile, server, client, architecture, choice.Join, [], "", options.GetValueOrDefault("--build-inputs"))
         {
-            Core = core, CliManifest = cliManifest, CliFiles = cliFiles, Capabilities = capabilities.ToList(), SteamRuntimePackage = steamRuntime,
+            Admission = admission, Core = core, CliManifest = cliManifest, CliFiles = cliFiles, Capabilities = capabilities.ToList(), SteamRuntimePackage = steamRuntime,
         };
+    }
+
+    private static GameBuild ReadHostingBuild(EnvironmentInventory inventory, EnvironmentRecipe hosting)
+    {
+        if (inventory.Hosts[hosting.Host].Kind == "local")
+            return GameVersionAgreement.ReadInPlaceAsync(hosting.Install, CancellationToken.None).GetAwaiter().GetResult();
+        var host = LocalHostPreflight.DefaultProbes.HostFactory?.Invoke(hosting.Host)
+            ?? new ResolvedEnvironment { Hosts = inventory.Hosts }.CreateHost(hosting.Host);
+        var listing = HostInstall.ListAsync(host, hosting.Install, TimeSpan.FromSeconds(60), null, CancellationToken.None).GetAwaiter().GetResult();
+        return GameVersionAgreement.ReadAsync(host, listing, TimeSpan.FromSeconds(60), CancellationToken.None).GetAwaiter().GetResult();
+    }
+
+    internal static GameBuild VerifyAdmission(Inspection admission)
+    {
+        var current = ReadHostingBuild(admission.Choice.Inventory, admission.Choice.Server ?? admission.Choice.Client!);
+        WorldIdentity.RequireSameTarget(admission.HostingBuild!, current);
+        if (admission.WorldAdmission is { } world) FixtureBake.VerifyAdmission(world);
+        return current;
+    }
+
+    internal static FixtureBake.Admission AdmitCheckpoint(Inputs selection, string fixture, bool original = false)
+    {
+        var current = VerifyAdmission(selection.Admission!);
+        return original && selection.WorldAdmission is { } admitted ? admitted : FixtureBake.Admit(fixture, current);
     }
 
     /// <summary>
@@ -210,6 +267,8 @@ internal static class ModInputStage
                 scenario = LoadScenario(request.Route, scenarioFile, output, client != null);
         }
 
+        if (request.Route != Route.Build) _ = VerifyAdmission(inputs.Admission!);
+
         // 4. The read-only host checks, before any build: a run that cannot start is refused before minutes of compiling.
         inputs = inputs with { Mods = mods, ModSelection = selection, BuildInputs = buildInputs };
         if (request.Route != Route.Build)
@@ -243,6 +302,7 @@ internal static class ModInputStage
 
         // 6. The chosen set frozen beside the run (the later run reads it, even if an inventory file or Steam detection
         // changes before it), then the dependency lock.
+        _ = VerifyAdmission(inputs.Admission!);
         string selectedInventory = request.Route == Route.Hosted
             ? RecordHostedClient(inventory, client!, output)
             : SmokeInputResolver.RecordSelected(inventory, output, inputs.Actors.Select(actor => actor.Recipe));

@@ -12,6 +12,7 @@ public sealed class ServerLoadPhasesTests : IDisposable
     {
         string fixture = FakeInstalls.World(Path.Combine(_root, "source-fixture"));
         string server = Path.Combine(_root, "server");
+        FakeInstalls.Server(server);
         Directory.CreateDirectory(Path.Combine(server, InstallPins.CoreDirectory)); // the core the mod resolves against
         File.WriteAllText(Path.Combine(server, "server-marker"), "source server");
         File.WriteAllText(Path.Combine(_root, "first.dll"), "first plugin");
@@ -38,6 +39,42 @@ public sealed class ServerLoadPhasesTests : IDisposable
     }
 
     [Theory]
+    [InlineData("source")]
+    [InlineData("host")]
+    public async Task TheInitialSourceAndHostCannotBeRepinnedDuringLoaderSelection(string change)
+    {
+        string plan = Plan(), output = Path.Combine(_root, "refused"); int phases = 0, loaders = 0;
+        int result = await ServerLoadPhases.RunAsync(["--plan", plan, "--output", output], _ => { phases++; return Task.FromResult(0); },
+            shippedLoader: (_, _, _) =>
+            {
+                loaders++;
+                if (change == "host") File.WriteAllBytes(InstallPins.GameAssembly(Path.Combine(_root, "server")), FakeInstalls.GameAssembly(maximum: 43));
+                else File.WriteAllText(Path.Combine(_root, "source-fixture", "Campaign", "_main.1.db2"), "new data");
+                return null;
+            });
+        Assert.Equal(3, result); Assert.Equal(1, loaders); Assert.Equal(0, phases); Assert.False(Directory.Exists(output));
+    }
+
+    [Theory]
+    [InlineData("version")]
+    [InlineData("host")]
+    public async Task ACheckpointOrCompatibleHostReplacementIsRefusedBeforeTheNextPhase(string change)
+    {
+        string plan = Plan(), output = Path.Combine(_root, "refused"); int phases = 0;
+        int result = await ServerLoadPhases.RunAsync(["--plan", plan, "--output", output], args =>
+        {
+            phases++;
+            string worlds = FakeInstalls.World(Path.Combine(args[Array.IndexOf(args, "--bake-fixture") + 1], "worlds_local"));
+            if (change == "host") File.WriteAllBytes(InstallPins.GameAssembly(Path.Combine(_root, "server")), FakeInstalls.GameAssembly(maximum: 43));
+            else File.WriteAllBytes(Path.Combine(worlds, "Campaign", "_main.1.fwl2"), FakeInstalls.Metadata("Campaign", 4242, version: 43));
+            return Task.FromResult(0);
+        });
+        Assert.Equal(1, result); Assert.Equal(1, phases);
+        Assert.True(Directory.Exists(Path.Combine(output, "checkpoints", "01-first")));
+        Assert.False(Directory.Exists(Path.Combine(output, "phases", "02-second")));
+    }
+
+    [Theory]
     [InlineData(true)]
     [InlineData(false)]
     public async Task EachPhaseUsesThePreviousConfirmedFixtureAndOnlyTheRequestedFinalOneRemains(bool keepFinal)
@@ -49,7 +86,7 @@ public sealed class ServerLoadPhasesTests : IDisposable
             calls.Add(args);
             string checkpoint = args[Array.IndexOf(args, "--bake-fixture") + 1];
             Directory.CreateDirectory(checkpoint);
-            File.WriteAllText(Path.Combine(checkpoint, "world.fwl"), "saved phase " + calls.Count);
+            FakeInstalls.World(Path.Combine(checkpoint, "worlds_local"));
             return Task.FromResult(0);
         });
 
@@ -72,7 +109,7 @@ public sealed class ServerLoadPhasesTests : IDisposable
         int result = await ServerLoadPhases.RunAsync(["--plan", Plan(), "--output", output], args =>
         {
             calls++;
-            if (calls == 1) Directory.CreateDirectory(args[Array.IndexOf(args, "--bake-fixture") + 1]);
+            if (calls == 1) FakeInstalls.World(Path.Combine(args[Array.IndexOf(args, "--bake-fixture") + 1], "worlds_local"));
             return Task.FromResult(calls == 1 ? 0 : 1);
         });
         Assert.Equal(1, result);
@@ -218,7 +255,7 @@ public sealed class ServerLoadPhasesTests : IDisposable
             firstInput ??= source;
             string checkpoint = args[Array.IndexOf(args, "--bake-fixture") + 1];
             Directory.CreateDirectory(checkpoint);
-            File.WriteAllText(Path.Combine(checkpoint, "world.fwl"), "saved");
+            FakeInstalls.World(Path.Combine(checkpoint, "worlds_local"));
             return Task.FromResult(0);
         });
         Assert.Equal(0, result);
@@ -237,7 +274,7 @@ public sealed class ServerLoadPhasesTests : IDisposable
             calls++;
             string checkpoint = args[Array.IndexOf(args, "--bake-fixture") + 1];
             Directory.CreateDirectory(checkpoint);
-            File.WriteAllText(Path.Combine(checkpoint, "world.fwl"), "saved first phase");
+            FakeInstalls.World(Path.Combine(checkpoint, "worlds_local"));
             File.WriteAllText(Path.Combine(_root, "second.dll"), "changed plugin");
             return Task.FromResult(0);
         });
@@ -259,7 +296,7 @@ public sealed class ServerLoadPhasesTests : IDisposable
             calls++;
             string checkpoint = args[Array.IndexOf(args, "--bake-fixture") + 1];
             Directory.CreateDirectory(checkpoint);
-            File.WriteAllText(Path.Combine(checkpoint, "world.fwl"), "saved " + calls);
+            FakeInstalls.World(Path.Combine(checkpoint, "worlds_local"));
             if (calls == 1)
             {
                 string log = Path.Combine(_root, "server", "logs", "connection_log.txt");

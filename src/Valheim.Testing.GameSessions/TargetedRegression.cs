@@ -232,15 +232,31 @@ public sealed class TargetedRegression
     /// </summary>
     public StagedArm Stage(string arm) => WithFailureCleanup(() => StageCore(arm));
 
+    internal GameBuild? InitialHostingBuild { get; set; }
+    internal WorldIdentity.Admission? InitialWorldAdmission { get; set; }
+    private WorldIdentity.Admission? _worldAdmission;
+
     private StagedArm StageCore(string arm)
     {
         var env = Inputs;
         if (!env.Mod.Arms.TryGetValue(arm, out var chosen))
             throw new ArgumentException($"There is no arm \"{arm}\"; the manifest names {string.Join(", ", env.Mod.Arms.Keys)}.");
+        _ = FixtureLayout.Discover(env.Fixture.Root, env.Fixture.WorldUid);
+        var hostingBuild = GameVersionAgreement.ReadInPlaceAsync(Game, CancellationToken.None).GetAwaiter().GetResult();
+        if (InitialHostingBuild is { } initial) WorldIdentity.RequireSameTarget(initial, hostingBuild);
+        var admission = _worldAdmission ??= InitialWorldAdmission ?? WorldIdentity.Capture(env.Fixture.Root, hostingBuild);
+        admission.VerifyTarget(hostingBuild);
+        admission.VerifySource(env.Fixture.Root);
+        var identity = admission.Identity;
+        var fixture = admission.Files;
+        var hostWorld = new HostWorldPlan
+        {
+            World = new PinnedDirectory { Source = admission.Source, Sha256 = new Dictionary<string, string>(fixture) },
+            WorldUid = env.Fixture.WorldUid, SaveDirectory = SaveDirectory, Admission = admission,
+        };
+        hostWorld.RequireUid(identity);
         _ = HostedRuntimeStage.RequireProfileStorageAsync(_host, HostedRuntimeKind.Client, Game, Install, LocalClientCopy.StepTimeout,
             explicitRuntime: _runtimeExplicit, inPlaceAvailable: false).GetAwaiter().GetResult();
-        var identity = FixtureLayout.Discover(env.Fixture.Root, env.Fixture.WorldUid);
-        var fixture = WorldFixture.Manifest(env.Fixture.Root);
 
         // Every source is the pinned build before anything is copied.
         var sources = new List<(string Role, RegressionFile File, string Sha256)>();
@@ -292,7 +308,7 @@ public sealed class TargetedRegression
         // The regression client hosts its own world (below), so it is not a joined client and needs no mutation access.
         selected = CliServerConfig.Stage(selected, "Regression client", Port, generatedConfig, requireClientMutations: false);
         {
-            try { PrepareCopy(selected); }
+            try { admission.Verify(); PrepareCopy(selected, admission); }
             finally { File.Delete(generatedConfig); }
             string install = Install;
             string gameRoot = _activeGameRoot ?? throw new InvalidOperationException("The game root was not recorded after staging.");
@@ -341,11 +357,7 @@ public sealed class TargetedRegression
                 CliManifest = env.Cli.Manifest, // Required (RegressionCli.Validate): the static check always runs on what was staged.
                 Prepared = true, // The disposable install staged above, with the regression's ValheimCLI set.
                 Capabilities = Capabilities.Except(CliCapabilities.HostedRounds).ToArray(), // The hosted rounds add their own.
-                HostWorld = new HostWorldPlan
-                {
-                    World = new PinnedDirectory { Source = Path.GetFullPath(env.Fixture.Root), Sha256 = new Dictionary<string, string>(fixture) },
-                    WorldUid = env.Fixture.WorldUid, SaveDirectory = SaveDirectory,
-                },
+                HostWorld = hostWorld,
             };
             plan.Validate();
             plan.Preflight(CliCapabilities.HostedRounds);
@@ -601,7 +613,7 @@ public sealed class TargetedRegression
 
     internal static readonly JsonSerializerOptions ManifestJson = new() { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
-    private void PrepareCopy(IReadOnlyList<HostedRuntimeFile> selected)
+    private void PrepareCopy(IReadOnlyList<HostedRuntimeFile> selected, WorldIdentity.Admission admission)
     {
         string source = Path.GetFullPath(Game);
         if (!Directory.Exists(source)) throw new DirectoryNotFoundException($"game: {source} does not exist. Give the Valheim install for the disposable run.");
@@ -614,6 +626,8 @@ public sealed class TargetedRegression
             throw new InvalidOperationException($"game: {source} has no {InstallPins.CoreDirectory}. Install BepInEx (BepInExPack_Valheim) in the prepared game first, or name a reviewed loader package.");
         var inspected = HostedRuntimeStage.InspectSourceAsync(_host, HostedRuntimeKind.Client, source, package,
             LocalClientCopy.StepTimeout).GetAwaiter().GetResult();
+        admission.VerifyTarget(GameVersionAgreement.ReadAsync(_host, inspected, LocalClientCopy.StepTimeout, CancellationToken.None).GetAwaiter().GetResult());
+        admission.Verify();
         if (Inputs.GamePins != null)
         {
             var found = HostInstall.Pins(inspected);

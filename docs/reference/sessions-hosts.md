@@ -131,3 +131,5 @@ In a campaign you never call this yourself: `session.OpenClient` starts the clie
 - `GameLaunch.ToStartInfo` and `ClientSession.Launch` start processes on this machine only.
 - A server in a container has not run a Valheim server natively this way.
 - A remote Mac client is checked natively only with the runner on the same Mac.
+
+World fixtures are admitted against the selected dedicated server or the `HostWorld` plan's hosting client, independently of peer network agreement. A manifest-only check has no hosting-client designation and proves no hosted-world compatibility; hosted preparation needs the actual client plans before staging that fixture. A manifest-only prepared campaign cannot later bind and place a hosted fixture without that admission. See [fixture admission](fixture-authoring.md#fixture-admission).

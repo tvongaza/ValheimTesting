@@ -433,6 +433,7 @@ internal sealed class PreflightInstall : IDisposable
         var platform = GameLaunch.CurrentClientHost;
         var install = new PreflightInstall(ClientLaunchTests.Install.For(platform));
         install.Add(platform == ClientPlatform.MacOS ? "Valheim.app/Contents/Resources/Data/Managed/assembly_valheim.dll" : "valheim_Data/Managed/assembly_valheim.dll", "game");
+        File.WriteAllBytes(InstallPins.GameAssembly(install.Root), FakeInstalls.GameAssembly());
         install.Add($"BepInEx/{cliIn}/valheimCLI.dll", CliBuild);
         return install;
     }

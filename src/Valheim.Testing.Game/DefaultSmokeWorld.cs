@@ -26,6 +26,21 @@ public static class DefaultSmokeWorld
         ["_main.1.ok"] = "4f2d892d6af406902c1aae6e58a78b2e6865fd4b782fc96b12de65d3bf3dc03e",
     };
 
+    internal static WorldIdentity Inspect(GameBuild target)
+    {
+        using var source = typeof(DefaultSmokeWorld).Assembly.GetManifestResourceStream(ResourcePrefix + "_main.1.fwl2")
+            ?? throw new InvalidDataException("The packaged smoke world metadata is missing.");
+        using var bytes = new MemoryStream(); source.CopyTo(bytes);
+        if (FileHash.Sha256(bytes.ToArray()) != Files["_main.1.fwl2"]) throw new InvalidDataException("The packaged smoke world metadata changed.");
+        var identity = WorldIdentity.Parse(bytes.ToArray(), Name + "/_main.1.fwl2");
+        identity.Admit(target);
+        return identity;
+    }
+
+    // Bind the materialized default to the reviewed embedded hashes, never a new on-disk baseline.
+    internal static WorldIdentity.Admission AdmitPrepared(string root, GameBuild target) =>
+        WorldIdentity.Capture(root, target, Files.ToDictionary(file => Path.Combine(Name, file.Key), file => file.Value, StringComparer.Ordinal));
+
     /// <summary>
     /// Materializes the pinned one-world fixture into <paramref name="newRoot"/>. The path must not exist, so this
     /// cannot silently replace a valued world or a previous run's evidence. Returns the UID read from the written
