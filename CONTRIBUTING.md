@@ -56,9 +56,10 @@ Bootstrap builds the pinned ValheimCLI transport into an ignored local package f
 
 **OS-aware split in pull-request CI.** A pull request runs `validate.cs --split`: a toolkit test class (`tests/Valheim.Testing.Tests`; a `--test-project … --split` run filters the project it names the same way) marked `[Trait("Os", "neutral")]` runs once, on Linux; one marked `"windows"`, `"unix"` (Linux and macOS) or `"macos"` runs only there; a class without the trait is OS-sensitive and runs on every OS. Every push to `main` runs every test on every OS, as do local validation and a manual dispatch; a failure there is fixed forward before the next merge, and a release needs `main`'s latest run green. `validate.cs` (`SplitFilter`) is the one place that decides what each OS runs, and `.github/workflows/test.yml` only chooses split or full by event. Classification defaults to OS-sensitive. Mark a class neutral only when it touches nothing of the machine (no process or host script, file system, path spelling, environment, network, clock or thread, native code, nor a string literal over several lines, whose line ends follow the checkout), directly or through a helper or another test class, and the full matrix on `main` has passed it; `OsSplitTests` holds the one list of OS-sensitive APIs and refuses a neutral class that uses one. Mark a class `windows`, `unix` or `macos` only when every test in it does nothing on the other OSes.
 
-For a quick iteration before the full local check:
+For a quick iteration before the full local check, run both commands below. The toolkit tests launch the stand-in leak probe with `--no-build`, so build it first to refresh its outputs after source changes or a clean. `scripts/validate.cs` performs the same prerequisite build automatically.
 
 ```sh
+dotnet build tests/Valheim.Testing.StandInProcessLeakProbe/Valheim.Testing.StandInProcessLeakProbe.csproj -c Release -m:1
 dotnet test tests/Valheim.Testing.Tests/Valheim.Testing.Tests.csproj -c Release
 ```
 
