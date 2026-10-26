@@ -2311,6 +2311,28 @@ public sealed class RunRecoveryTests : IDisposable
         Assert.Equal(JournalRunState.Ended, Assert.Single((await StatusAsync()).Runs).State);
     }
 
+    // A host holding two run folders of the run (a local server's and a local client's runtimes): the recovered evidence is
+    // settled once in the pass, not once per run folder, so it is kept with one step and one journal line.
+    [Fact]
+    public async Task RecoveredEvidenceIsSettledOnceWhenTheHostHoldsTwoRunFolders()
+    {
+        const string run = "run-two-folders", parent = "/srv/runs/server/" + run, other = "/srv/runs/client/" + run, evidence = parent + "/recovered-server";
+        await KilledWithBaselineAsync(run, "/srv/game");
+        foreach (var (folder, runtime) in new[] { (parent, "/srv/runs/server"), (other, "/srv/runs/client") })
+        {
+            Directory.CreateDirectory(_host.Local(folder));
+            Line(_host, run, "server", Gone, JournalEntry.CopyIntended, ("runtime", folder), ("stage", ""), ("parent", runtime),
+                ("holds", RunFolder.Holds), ("retention", "after-fetch"));
+        }
+        File.WriteAllText(_host.Local("/srv/game/new.log"), "new evidence");
+
+        var recovered = await RecoverAsync(run);
+
+        Assert.True(recovered.Recovered, string.Join("\n", recovered.Steps));
+        Assert.Contains("kept", Assert.Single(recovered.Steps, step => step.What == "copy " + evidence).Outcome);
+        Assert.Single(Directory.EnumerateFiles(_host.Local(evidence), "new.log", SearchOption.AllDirectories));
+    }
+
     [Fact]
     public async Task ReleasedVerifiedWorldAndParentRetireInOneDirectTeardown()
     {

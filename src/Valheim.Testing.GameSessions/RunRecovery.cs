@@ -524,8 +524,12 @@ internal static class RunRecovery
                     await Required(JournalEntry.Of(JournalEntry.CopyDone, ("runtime", path), ("reserved", "true"))).ConfigureAwait(false);
                     recoveredOwners[path] = true;
                 }
+                // Once per host pass, before the first run folder (a host may hold several, e.g. a local server's and client's).
+                bool recoveredFinished = false;
                 async Task FinishRecoveredAsync()
                 {
+                    if (recoveredFinished) return;
+                    recoveredFinished = true;
                     foreach (var (path, reserved) in recoveredOwners.ToArray())
                     {
                         try
@@ -695,8 +699,7 @@ internal static class RunRecovery
                         leftHere.Add(copy.What);
                     }
                 }
-                if (!copies.Any(copy => copy.Fields.GetValueOrDefault("holds") == RunFolder.Holds))
-                    await FinishRecoveredAsync().ConfigureAwait(false);
+                await FinishRecoveredAsync().ConfigureAwait(false);
             }
             catch (Exception error) when (error is not OperationCanceledException)
             {
