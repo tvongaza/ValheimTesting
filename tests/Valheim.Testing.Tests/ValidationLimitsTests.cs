@@ -863,8 +863,15 @@ public sealed class ValidationLimitsTests : IClassFixture<ValidationLimitsTests.
                 {
                     // Independent fixture cleanup. Assertions above record candidate outcome before this is allowed to act.
                     var cleanupErrors = new List<Exception>();
+                    var cleanupOperands = new List<string>
+                    {
+                        FormattableString.Invariant($"command Pid={command.Id}, StartUtcTicks={commandStart}"),
+                        FormattableString.Invariant($"unrelated sentinel Pid={unrelatedProcess.Id}, StartUtcTicks={unrelatedStart}")
+                    };
+                    foreach (var item in graph)
+                        cleanupOperands.Add(FormattableString.Invariant($"graph Pid={item.Pid}, StartUtcTicks={item.StartUtcTicks}"));
                     foreach (string name in new[] { "pipe-child", "child", "helper", "listing" })
-                        try { StopRecorded(Path.Combine(directory, name + ".json")); }
+                        try { StopRecorded(Path.Combine(directory, name + ".json"), cleanupOperands); }
                         catch (Exception error) { cleanupErrors.Add(error); }
                     foreach (var item in graph.Reverse())
                         try { StopIdentity(item.Pid, item.StartUtcTicks); }
@@ -876,7 +883,8 @@ public sealed class ValidationLimitsTests : IClassFixture<ValidationLimitsTests.
                     catch (Exception error) { cleanupErrors.Add(error); }
                     try { await drains.WaitAsync(TimeSpan.FromSeconds(3)); }
                     catch (Exception error) { cleanupErrors.Add(error); }
-                    if (cleanupErrors.Count != 0) throw new AggregateException("fixture cleanup failed", cleanupErrors);
+                    if (cleanupErrors.Count != 0) throw new AggregateException(
+                        "fixture cleanup failed; recorded cleanup operands; current liveness/settlement unverified: " + string.Join("; ", cleanupOperands), cleanupErrors);
                 }
             }
             finally
@@ -912,15 +920,19 @@ public sealed class ValidationLimitsTests : IClassFixture<ValidationLimitsTests.
                 long start;
                 try { start = OwnedClientCommandLease.LocalStartUtcTicks(process); }
                 catch (IOException) when (process.HasExited) { return false; }
+                catch (System.ComponentModel.Win32Exception) when (process.HasExited) { return false; }
                 return start == identity.StartUtcTicks && !process.HasExited;
             }
         }
 
-        private static void StopRecorded(string record)
+        private static void StopRecorded(string record, List<string>? cleanupOperands = null)
         {
             if (!File.Exists(record)) return;
             using var identity = JsonDocument.Parse(File.ReadAllText(record));
-            StopIdentity(identity.RootElement.GetProperty("Pid").GetInt32(), identity.RootElement.GetProperty("StartUtcTicks").GetInt64());
+            int pid = identity.RootElement.GetProperty("Pid").GetInt32();
+            long start = identity.RootElement.GetProperty("StartUtcTicks").GetInt64();
+            cleanupOperands?.Add(FormattableString.Invariant($"record {Path.GetFileName(record)} Pid={pid}, StartUtcTicks={start}"));
+            StopIdentity(pid, start);
         }
 
         private static void StopIdentity(int pid, long start)
@@ -934,6 +946,7 @@ public sealed class ValidationLimitsTests : IClassFixture<ValidationLimitsTests.
                 long observed;
                 try { observed = OwnedClientCommandLease.LocalStartUtcTicks(process); }
                 catch (IOException) when (process.HasExited) { return; }
+                catch (System.ComponentModel.Win32Exception) when (process.HasExited) { return; }
                 if (observed != start || process.HasExited) return;
                 process.Kill(entireProcessTree: true);
                 Assert.True(process.WaitForExit(TimeSpan.FromSeconds(3)), "fixture process did not exit");
