@@ -200,6 +200,23 @@ public sealed class NativeSmokeComparisonTests : IDisposable
         Assert.Single(EnvironmentInventory.Read(frozen).Environments);
     }
 
+    [Fact] public async Task CompatibleHostReplacementDuringResolutionCannotBecomeTheFirstArmsNewPin()
+    {
+        string companion = _rig.Write("companion/Companion.dll", RegressionRig.Assembly("Companion", new("example.companion")));
+        string output = Path.Combine(_rig.Root, "replacement-ab"); int arms = 0, builds = 0;
+        int result = await ServerLoadComparison.RunAsync(Arguments(output, _rig.Parent, companion),
+            resolve: request =>
+            {
+                var dependencies = NativeDependencyResolver.Resolve(request);
+                File.WriteAllBytes(InstallPins.GameAssembly(_rig.Game), FakeInstalls.GameAssembly(maximum: 43));
+                return dependencies;
+            },
+            runArm: _ => { arms++; return Task.FromResult(0); },
+            buildAdapter: (_, _, _, _, _) => { builds++; throw new Xunit.Sdk.XunitException("admission must precede adapter build"); });
+        Assert.Equal(3, result); Assert.Equal(0, arms); Assert.Equal(0, builds);
+        Assert.False(Directory.Exists(Path.Combine(output, "selection")));
+    }
+
     [Fact]
     public async Task FrozenArmsKeepTheServerChosenBeforeDependencyResolution()
     {

@@ -49,6 +49,8 @@ public sealed class PinnedServerRunOptions<TPlan> where TPlan : ServerRunPlan
     }
     // Detached checkpoints pin the already-owned immutable fixture before the first boot.
     internal bool CheckpointFixture { get; init; }
+    internal GameBuild? InitialHostingBuild { get; init; }
+    internal WorldIdentity.Admission? InitialWorldAdmission { get; init; }
     /// <summary>Test seam: the owned server's session (scripted) instead of launching the server from its profile.</summary>
     internal Func<TPlan, OwnedServerSession>? SessionOverride { get; init; }
     /// <summary>What a run on other hosts reaches outside this process (<see cref="IHostedRunHooks"/>); tests pass fakes.</summary>
@@ -614,6 +616,12 @@ public static class PinnedServerRun
                 report.Provenance["runId"] = campaignRunId;
                 journalRun = RunJournal.UseRun(campaignRunId);
                 var inspection = InspectCampaign(report, manifestFile);
+                inspection.Inputs!.Manifest.InitialHostingBuild = options.InitialHostingBuild;
+                if (options.InitialWorldAdmission is { } initialWorld)
+                {
+                    initialWorld.VerifySource(inspection.Inputs.Manifest.World);
+                    inspection.Inputs.Manifest.WorldAdmission = initialWorld;
+                }
                 report.Step(StepPhase.Preflight, "the plan agrees with the campaign", () => HostedCampaignPreparation.CheckPlan(inspection, plan, campaignPlans!));
                 phase = StepPhase.Setup; // From here the hosts are written to.
                 await report.StepAsync(StepPhase.Setup, "check the hosts and prepare every actor's disposable install", async () =>
@@ -688,6 +696,9 @@ public static class PinnedServerRun
             // Never deleted automatically: a failed stop or partial save must stay inspectable. Only the server's profile goes at
             // the end, after a clean stop, keeping what the run changed in it.
             if (!ownOutput) { Directory.CreateDirectory(output); ownOutput = true; }
+            var admittedHashes = plan.World.Sha256.Count != 0 ? plan.World.Sha256 : new Dictionary<string, string>(WorldFixture.Manifest(plan.World.Source), StringComparer.Ordinal);
+            await report.StepAsync(StepPhase.Preflight, "admit the fixture against the actual hosting install", () => hosted.AdmitWorldAsync(plan, cancellation.Token, admittedHashes)).ConfigureAwait(false);
+            WorldFixture.Verify(plan.World.Source, admittedHashes);
             // Before copying: a drive that fills part-way through a copy leaves a broken world behind.
             report.Step(StepPhase.Preflight, "enough free disk space for the copies", () =>
             {
@@ -713,16 +724,18 @@ public static class PinnedServerRun
             phase = StepPhase.Setup;
             // A supplied manifest remains an expected pin. A standalone run binds an omitted one from the copy as found.
             bool Verified(PinnedDirectory fixture) => fixture.Sha256.Count != 0;
-            WorldFixture CopyOf(PinnedDirectory fixture) =>
-                Verified(fixture) ? WorldFixture.Copy(fixture.Source, output, fixture.Sha256) : WorldFixture.CopyAsFound(fixture.Source, output);
             bool worldManifestFromPlan = plan.World.Sha256.Count != 0;
             // world=any or world=<name> is already a plan-supplied identity expectation. In particular, prepare-server uses
             // world=any with an intentionally empty new-world directory that the game populates on first boot.
             bool worldIdentityFromPlan = plan.Pins.ContainsKey("worlduid") || plan.Pins.ContainsKey("world");
-            await hosted.LockAndPrepareRuntimeAsync(report, plan, cancellation.Token).ConfigureAwait(false);
             report.Step(StepPhase.Setup, Verified(plan.World) ? "copy and verify pinned world" : "copy the world and pin it as found", () =>
             {
-                world = CopyOf(plan.World); world.Preserve = true;
+                world = WorldFixture.Copy(plan.World.Source, output, admittedHashes); world.Preserve = true;
+                WorldFixture.Verify(plan.World.Source, admittedHashes);
+                hosted.WorldAdmission?.Verify(Path.Combine(world.DirectoryPath, "worlds_local"));
+                var copiedIdentity = plan.PreflightWorld(hosted.WorldBuild, world.DirectoryPath);
+                if (copiedIdentity != hosted.AdmittedWorld)
+                    throw new InvalidDataException("The copied world differs from the fixture admitted before staging.");
                 if (!worldManifestFromPlan)
                     plan.World = new PinnedDirectory { Source = world.DirectoryPath, Sha256 = new Dictionary<string, string>(world.SourceHashes, StringComparer.Ordinal) };
                 if (!worldIdentityFromPlan)
@@ -734,6 +747,7 @@ public static class PinnedServerRun
                     plan.Pins = pins;
                 }
             });
+            await hosted.LockAndPrepareRuntimeAsync(report, plan, cancellation.Token).ConfigureAwait(false);
             await hosted.ShipWorldAsync(report, world!.DirectoryPath, output, cancellation.Token).ConfigureAwait(false);
             string runtimeDirectory = hosted.RuntimeDirectory, worldDirectory = hosted.WorldDirectory;
             report.Provenance["runtime"] = runtimeDirectory; report.Provenance["world"] = world!.DirectoryPath;

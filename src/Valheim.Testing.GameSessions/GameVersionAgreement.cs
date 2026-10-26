@@ -10,7 +10,7 @@ namespace Valheim.Testing.GameSessions;
 internal static class GameVersionAgreement
 {
     /// <summary>The largest game assembly read from another host (Valheim 1.0's is about 2.5 MB).</summary>
-    internal const long AssemblyLimit = 32 << 20;
+    internal const long AssemblyLimit = GameAssemblyVersion.AssemblyLimit;
 
     /// <summary>One actor's install as the host inspection listed it, with its build; a null build was not read because its install check already failed.</summary>
     internal sealed record Side(string Actor, string Host, string Install, GameBuild? Build);
@@ -46,23 +46,8 @@ internal static class GameVersionAgreement
     }
 
     /// <summary>The build of the game assembly in a local <paramref name="install"/> that runs in place, never listed: read where it is.</summary>
-    internal static async Task<GameBuild> ReadInPlaceAsync(string install, CancellationToken cancellation)
-    {
-        string assembly;
-        byte[]? bytes;
-        try
-        {
-            assembly = InstallPins.GameAssembly(install);
-            bytes = await ReadHereAsync(assembly, assembly, "this machine", cancellation).ConfigureAwait(false);
-        }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException or ArgumentException or NotSupportedException)
-        {
-            return new(null, null, error.Message);
-        }
-        if (bytes == null) return new(null, null, $"{assembly} on this machine is missing");
-        using var image = new MemoryStream(bytes, writable: false);
-        return GameAssemblyVersion.Read(image, $"{assembly} on this machine");
-    }
+    internal static Task<GameBuild> ReadInPlaceAsync(string install, CancellationToken cancellation) =>
+        GameAssemblyVersion.ReadInstallAsync(install, cancellation);
 
     /// <summary>
     /// One run's builds (#860): each actor's is admitted where its install is listed or run in place, before it is staged, and an

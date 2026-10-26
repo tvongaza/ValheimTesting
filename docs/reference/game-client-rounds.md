@@ -122,3 +122,5 @@ Scan the client's logs at teardown for `nre-remove-objects` and errors during lo
 - A world save asks every client to save its profile, so a save between the hash and the leave counts as the logout's own (`OldMatchesBefore` is then false).
 - `ClientRounds` makes the client leave after each measurement; the logout cycle leaves the client joined again for it.
 - The helper orders and records the steps; each step's in-game behaviour is that of the pieces it calls.
+
+A hosted fixture requires world-format support read from the actual owned installation before placement. An attached client with `HostWorld` is refused because the operator's install is not inspected; load the world manually and attach without `HostWorld`, or use an owned client. Attaching to an existing world and joining remain available. See [fixture admission](fixture-authoring.md#fixture-admission).

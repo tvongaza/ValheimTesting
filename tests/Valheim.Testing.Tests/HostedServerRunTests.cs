@@ -814,7 +814,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.Equal(["devcommands", "confirmcheats", "devcommands", "confirmcheats"],
             server.Events.Where(e => e.StartsWith("devcommands") || e.StartsWith("confirmcheats")).Select(e => e.TrimEnd("0123456789".ToCharArray())));
         Assert.Same(host, seenHost); Assert.Equal(RunDirectory + "/runtime", seenRuntime);
-        Assert.Equal(new[] { "the world fixture is one complete world", "enough free disk space for the copies", "check the Linux profile storage", "take the server host's lock", StageStep, "copy and verify pinned world", "ship and verify the world copy on the server host",
+        Assert.Equal(new[] { "the world fixture is one complete world", "admit the fixture against the actual hosting install", "enough free disk space for the copies", "check the Linux profile storage", "copy and verify pinned world", "take the server host's lock", StageStep, "ship and verify the world copy on the server host",
                 "server runtime has the plan's server executable", "server runtime is the pinned game build, loader and patchers",
                 "CLI port is free on the server host", "open the loopback CLI tunnel to the server host", "start and verify owned dedicated fixture", "stop only owned server",
                 "fetch the server host's world copy", "verify server's source install after the run (size and modified time)",
@@ -1162,7 +1162,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.StartsWith("the explicit inventory runtime folder " + Runs, step.GetProperty("Error").GetString());
         Assert.Contains("not the source install's mount /opt (xfs, device 2065). A Linux profile hard-links the install's game files, " +
             "and a hard link cannot cross mounts. Put the inventory runtime on the install's mount /opt.", step.GetProperty("Error").GetString());
-        Assert.Equal(["apart", "profile-storage"], host.Scripts); // the trial link's runtime is proven apart from the install first
+        Assert.Equal(["list", "preflight-read", "apart", "profile-storage"], host.Scripts); // the trial link's runtime is proven apart from the install first
         Assert.Empty(host.Claims);
     }
 
@@ -1185,7 +1185,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.False(step.GetProperty("Passed").GetBoolean());
         Assert.StartsWith($"server environment box-server (runtime {Runs}): the explicit inventory runtime folder {Runs} is on / (ext4, device 2049), " +
             "not the source install's mount /opt (xfs, device 2065).", step.GetProperty("Error").GetString());
-        Assert.Equal(["apart", "profile-storage"], host.Scripts);
+        Assert.Equal(["list", "preflight-read", "apart", "profile-storage"], host.Scripts);
     }
 
     // #612 review 4: every refusal of the storage preflight names the environment, not only its verdict: a runtime inside the
@@ -1221,7 +1221,7 @@ public sealed partial class HostedServerRunTests : IDisposable
         var step = Step("take the server host's lock");
         Assert.False(step.GetProperty("Passed").GetBoolean()); Assert.Contains("other-runner run-x [0123]", step.GetProperty("Error").GetString());
         // Only the apart check and the profile-storage probe (its one trial link, removed at once) run before the claim.
-        Assert.Equal(["apart", "profile-storage", "journal", "lock", "journal"], host.Scripts);
+        Assert.Equal(["list", "preflight-read", "apart", "profile-storage", "journal", "lock", "journal"], host.Scripts);
         var journal = await RunJournalOnHost.ReadAsync(host, "/var/tmp/vt/journal", RunId, TimeSpan.FromSeconds(5));
         Assert.Equal([JournalEntry.LockIntended, JournalEntry.RunEnded], journal.Where(record => record.Actor == "run").Select(record => record.Entry.Kind));
         Assert.DoesNotContain(journal, record => record.Entry.Kind == JournalEntry.LockHeld);

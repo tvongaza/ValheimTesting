@@ -1,3 +1,4 @@
+using System.Reflection.Metadata;
 using Valheim.Testing.Game;
 using Valheim.Testing.GameSessions;
 using Xunit;
@@ -11,15 +12,15 @@ public sealed class GameAssemblyVersionTests
     public void TheNetworkVersionIsTheConstantAndTheGameVersionIsTheOneStoredInCurrentVersion()
     {
         // The static constructor first builds FirstVersionWithNetworkVersion (0.214.301), as the game's does: that is not the version.
-        Assert.Equal(new GameBuild(40, "1.0.17", null), Read(FakeInstalls.GameAssembly()));
-        Assert.Equal(new GameBuild(41, "1.0.20", null), Read(FakeInstalls.GameAssembly("1.0.20", 41)));
+        Assert.Equal((40u, "1.0.17", (string?)null), (Read(FakeInstalls.GameAssembly()).NetworkVersion, Read(FakeInstalls.GameAssembly()).GameVersion, Read(FakeInstalls.GameAssembly()).Unknown));
+        Assert.Equal((41u, "1.0.20"), (Read(FakeInstalls.GameAssembly("1.0.20", 41)).NetworkVersion, Read(FakeInstalls.GameAssembly("1.0.20", 41)).GameVersion));
         Assert.Equal("Valheim 1.0.20 (network version 41)", Read(FakeInstalls.GameAssembly("1.0.20", 41)).ToString());
     }
 
     [Fact]
     public void AGameVersionBuiltFromAnythingButThreeIntsIsLeftUnreadAndTheNetworkVersionStillDecides()
     {
-        Assert.Equal(new GameBuild(41, null, null), Read(FakeInstalls.GameAssembly("1.0.20.3", 41)));
+        Assert.Equal((41u, (string?)null), (Read(FakeInstalls.GameAssembly("1.0.20.3", 41)).NetworkVersion, Read(FakeInstalls.GameAssembly("1.0.20.3", 41)).GameVersion));
         Assert.Equal("Valheim (game version unread) (network version 41)", Read(FakeInstalls.GameAssembly("1.0.20.3", 41)).ToString());
     }
 
@@ -43,6 +44,71 @@ public sealed class GameAssemblyVersionTests
         Assert.Equal("assembly_valheim.dll on host has no const Version.c_networkVersion",
             Read(FakeInstalls.GameAssembly(networkConstant: null)).Unknown);
     }
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void BrokenNetworkOrDisplayVersionMetadataCannotEraseVerifiedWorldSupport(bool network)
+    {
+        byte[] image = (byte[])FakeInstalls.GameAssembly(networkVersion: network ? 123u : 40u).Clone();
+        using (var pe = new System.Reflection.PortableExecutable.PEReader(new MemoryStream(image)))
+        {
+            var reader = System.Reflection.Metadata.PEReaderExtensions.GetMetadataReader(pe);
+            var version = reader.TypeDefinitions.Select(reader.GetTypeDefinition).Single(type => reader.GetString(type.Name) == "Version" && type.GetDeclaringType().IsNil);
+            if (network)
+            {
+                var field = version.GetFields().Select(reader.GetFieldDefinition).Single(field => reader.GetString(field.Name) == "c_networkVersion");
+                var blob = reader.GetConstant(field.GetDefaultValue()).Value;
+                int offset = pe.PEHeaders.MetadataStartOffset + System.Reflection.Metadata.Ecma335.MetadataReaderExtensions.GetHeapMetadataOffset(reader, System.Reflection.Metadata.Ecma335.HeapIndex.Blob) +
+                    System.Reflection.Metadata.Ecma335.MetadataTokens.GetHeapOffset(blob);
+                image[offset] = 3; // constant table still UInt32, but its blob is truncated
+            }
+            else
+            {
+                var method = version.GetMethods().Select(reader.GetMethodDefinition).Single(method => reader.GetString(method.Name) == ".cctor");
+                var section = pe.PEHeaders.SectionHeaders.Single(section => method.RelativeVirtualAddress >= section.VirtualAddress && method.RelativeVirtualAddress < section.VirtualAddress + section.VirtualSize);
+                int offset = section.PointerToRawData + method.RelativeVirtualAddress - section.VirtualAddress;
+                offset += (image[offset] & 3) == 2 ? 1 : ((image[offset + 1] << 8 | image[offset]) >> 12) * 4;
+                int store = Array.IndexOf(image, (byte)0x80, offset, pe.GetMethodBody(method.RelativeVirtualAddress).GetILBytes()!.Length);
+                new byte[] { 0xff, 0xff, 0xff, 0x04 }.CopyTo(image, store + 1); // invalid field token in the optional display-version initializer
+            }
+        }
+        var build = Read(image);
+        Assert.NotNull(build.WorldSupport);
+        if (network) { Assert.Null(build.NetworkVersion); Assert.Contains("unreadable network", build.Unknown); }
+        else { Assert.Equal(40u, build.NetworkVersion); Assert.Null(build.GameVersion); }
+    }
+
+    [Theory]
+    [InlineData("interval", true)]
+    [InlineData("primitive", false)]
+    [InlineData("signature", false)]
+    [InlineData("missing", false)]
+    [InlineData("unsigned", false)]
+    [InlineData("contradictory", false)]
+    [InlineData("extra", false)]
+    public void WorldSupportRequiresTheExactEnumDeclarationsAndWholeSignedPredicate(string shape, bool known)
+    {
+        var image = FakeInstalls.GameAssembly(minimum: 12, maximum: 60, chunked: 50, shape: shape);
+        var build = Read(image);
+        Assert.Equal(40u, build.NetworkVersion);
+        if (known)
+        {
+            Assert.NotNull(build.WorldSupport);
+            Assert.Equal((12, 60, 50), (build.WorldSupport.Minimum, build.WorldSupport.Maximum, build.WorldSupport.ChunkedSave));
+            Assert.Equal(FileHash.Sha256(image), build.WorldSupport.AssemblySha256);
+            Assert.Null(build.WorldUnknown);
+        }
+        else { Assert.Null(build.WorldSupport); Assert.Contains("world-format", build.WorldUnknown); }
+    }
+
+    [Fact]
+    public void WorldSupportIsIndependentOfNetworkMetadataAndRejectsContradictoryThresholds()
+    {
+        Assert.NotNull(Read(FakeInstalls.GameAssembly(networkConstant: null)).WorldSupport);
+        Assert.Null(Read(FakeInstalls.GameAssembly(minimum: 41, maximum: 42, chunked: 40)).WorldSupport);
+        Assert.Null(Read(FakeInstalls.GameAssembly(minimum: 9, maximum: 39, chunked: 40)).WorldSupport);
+    }
+
 }
 
 public sealed class GameVersionAgreementTests
@@ -135,7 +201,7 @@ public sealed class GameAssemblyReadShellTests : IDisposable
     public async Task AnInstallThatRunsInPlaceIsReadWhereItIs()
     {
         FakeInstalls.Client(_root);
-        Assert.Equal(new GameBuild(40, "1.0.17", null), await GameVersionAgreement.ReadInPlaceAsync(_root, CancellationToken.None));
+        Assert.Equal(40u, (await GameVersionAgreement.ReadInPlaceAsync(_root, CancellationToken.None)).NetworkVersion);
         File.WriteAllBytes(Path.Combine(_root, "valheim_Data", "Managed", InstallPins.GameAssemblyName), FakeInstalls.GameAssembly("1.0.20", 41));
         var builds = new GameVersionAgreement.Ledger();
         builds.Admit(new("server", "pc", @"C:\game", new GameBuild(40, "1.0.17", null)));
@@ -169,7 +235,7 @@ public sealed class GameAssemblyReadShellTests : IDisposable
         {
             ["valheim_server_Data/Managed/assembly_valheim.dll"] = FileHash.Sha256(assembly),
         }, []);
-        Assert.Equal(new GameBuild(40, "1.0.17", null), await GameVersionAgreement.ReadAsync(host, listing, GameHostChecks.Generous, CancellationToken.None));
+        Assert.Equal(40u, (await GameVersionAgreement.ReadAsync(host, listing, GameHostChecks.Generous, CancellationToken.None)).NetworkVersion);
         File.WriteAllBytes(assembly, FakeInstalls.GameAssembly("1.0.20", 41));
         Assert.EndsWith("changed after the install was listed", (await GameVersionAgreement.ReadAsync(host, listing, GameHostChecks.Generous, CancellationToken.None)).Unknown);
         File.Delete(assembly);

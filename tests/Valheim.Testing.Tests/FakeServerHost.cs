@@ -33,8 +33,8 @@ internal sealed class FakeServerHost : IGameHost
     /// SourceScriptShellTests compares its settlement, listing and read answers with the real scripts, and names where the other
     /// scripts' real runs are.
     /// </summary>
-    public static FakeServerHost ThisMachine(string name = "this machine") =>
-        new(name, server: null, tunnelPort: 15577, GameHostKind.Local, OperatingSystem.IsWindows(), mirror: null);
+    public static FakeServerHost ThisMachine(string name = "this machine", FakeOwnedServer? server = null) =>
+        new(name, server, tunnelPort: 15577, GameHostKind.Local, OperatingSystem.IsWindows(), mirror: null);
     public string Name { get; }
     /// <summary>What a Windows host's server-task logon check replies: s4u, interactive, or "unsupported &lt;why&gt;".</summary>
     public string ServerTaskLogon { get; set; } = "s4u";

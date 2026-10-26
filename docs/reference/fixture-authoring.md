@@ -6,6 +6,16 @@ Bake a saved world once with `valheim-test`, then load it in later runs.
 
 A bake runs your mod once on an owned dedicated server and saves the world. It then publishes the saved world as an immutable fixture, and later runs load that fixture with `--world-fixture`. The bake never edits the source fixture or the game install. For the rest of `server-load`, see [Valheim.Testing.NativeSmoke](../packages/Valheim.Testing.NativeSmoke.md).
 
+## Fixture admission
+
+Give the game-saved chunked world folder, directly or under `worlds_local/`. Stop the game before copying it. When conversion left old flat `.fwl`, `.db`, `.old` files or flat backups beside the chunked folder, omit those leftovers from the fixture; keep the saved chunked folder alone. A flat-only world still needs to be opened and saved by a compatible game first. The game's chunked backup folders, including `_backup_cloud-`, may remain when their name and UID match the active world.
+
+The toolkit inspects the actual selected hosting installation's assembly bytes before input builds, bundle extraction and runtime staging. Its verified compatibility predicate supplies the supported world-version interval; its `ChunkedSave` declaration supplies the chunked-format threshold. Network versions, Steam IDs and toolkit versions do not supply those bounds. A missing, changed, malformed or unrecognized declaration or predicate refuses the fixture. Choose a compatible installation or copy a fresh game-saved fixture; do not change version bytes.
+
+Source files are pinned during admission, whether the plan supplied a manifest or the run observed one. Every disposable copy is checked against those bytes and read again for version, name and UID before it is shipped or launched. A supplied baked manifest remains authoritative. Host-independent `WorldIdentity.Read` is useful for inspection and export but establishes no target compatibility.
+
+An attached client's actual world support is unavailable without inspecting its operator-owned process. Toolkit `HostWorld` placement therefore refuses before world writes or host commands. Use an owned/install-backed hosting client, or load the world manually and attach without asking the toolkit to place `HostWorld`. Attaching to an existing world, joining and read-only workflows retain their normal contracts.
+
 ## One-phase bake
 
 Use a one-phase bake when your mod can prove its generated state is ready during one server boot.
@@ -79,6 +89,8 @@ The manifest records:
 | Export fails after the game run | Exit code 1. The error is in `evidence/fixture-export-failed.txt`. |
 
 ## Load a bake
+
+Both a baked root and its `worlds_local/` directory (with or without a trailing separator) resolve the same `fixture-manifest.json`. Foreground and detached runs validate it before staging. Detached staging retains a canonical package containing only `fixture-manifest.json` and `worlds_local/`, and byte-pins the original and staged manifest as well as the world files. Unrelated parent files are not staged. A manifest-only change is a changed input, even when the new JSON describes the same world.
 
 Load the baked fixture again to test persistence without the one-time action:
 

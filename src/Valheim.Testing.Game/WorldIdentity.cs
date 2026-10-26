@@ -18,7 +18,8 @@ public sealed record WorldIdentity(string Name, string SeedName, int Seed, long 
 
     /// <summary>
     /// The one owner of a world fixture's structure, completeness and identity: the identity of the one world in
-    /// <paramref name="fixture"/>, refusing a fixture the game would not load as it is, before anything is copied.
+    /// <paramref name="fixture"/>, refusing incomplete layouts before anything is copied. This host-independent overload
+    /// establishes no world-version compatibility; runtime admission separately checks the actual hosting installation.
     /// The fixture holds one Valheim 1.0 world folder <c>&lt;name&gt;/</c> exactly as the game saved it (the layout rules are
     /// <see cref="HostedWorld.NameOf"/>'s), and the files are checked as the game (1.0.17) reads them:
     /// <list type="bullet">
@@ -33,7 +34,11 @@ public sealed record WorldIdentity(string Name, string SeedName, int Seed, long 
     /// the UID. Throws <see cref="ArgumentException"/> for a layout problem and <see cref="InvalidDataException"/> for a file
     /// that does not hold what the game needs; each names the file and what to do.
     /// </summary>
-    public static WorldIdentity Read(string fixture)
+    public static WorldIdentity Read(string fixture) => ReadCore(fixture, null, false);
+
+    internal static WorldIdentity Read(string fixture, GameBuild target) => ReadCore(fixture, target, true);
+
+    private static WorldIdentity ReadCore(string fixture, GameBuild? target, bool admit)
     {
         fixture = Path.GetFullPath(fixture);
         if (!Directory.Exists(fixture)) throw new DirectoryNotFoundException("The fixture world does not exist: " + fixture);
@@ -43,6 +48,7 @@ public sealed record WorldIdentity(string Name, string SeedName, int Seed, long 
         var layout = Layout(relative);
         byte[] Bytes(string file) => System.IO.File.ReadAllBytes(Path.Combine(fixture, file));
         var identity = ParseMetadata(Bytes(layout.Metadata), layout.Metadata, out bool? needsDb);
+        if (admit) identity.Admit(target!);
         if (layout.Lone && needsDb != false)
             throw new InvalidDataException($"The fixture's world {layout.Name} is incomplete: {Slash(layout.Metadata)} does not say the world is new (never saved), but " +
                 $"{layout.Name}/_main.0.db2, .chunks and .ok are missing, so the game would generate the world afresh with another UID. " +
@@ -68,6 +74,64 @@ public sealed record WorldIdentity(string Name, string SeedName, int Seed, long 
                     $"A {layout.Name}_backup_ folder holds the game's backup of the same world; remove the other world's copy.");
         }
         return identity;
+    }
+
+    // One retained admission: hash before parsing, verify afterwards, and never derive replacement pins.
+    internal sealed record Admission(string Source, WorldIdentity Identity, IReadOnlyDictionary<string, string> Files, GameBuild Target, bool Copied = false)
+    {
+        internal void Verify(string? copy = null)
+        {
+            string source = copy ?? Source;
+            WorldFixture.Verify(source, Files, copied: copy != null || Copied);
+            if (Read(source, Target) != Identity) throw new InvalidDataException("The fixture identity changed after admission.");
+            WorldFixture.Verify(source, Files, copied: copy != null || Copied);
+        }
+
+        internal void VerifySource(string source)
+        {
+            if (!Path.TrimEndingDirectorySeparator(Path.GetFullPath(source)).Equals(Path.TrimEndingDirectorySeparator(Source),
+                    OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+                throw new InvalidOperationException("Bind the fixture path retained by world-format admission.");
+            Verify();
+        }
+
+        internal Admission ForVerifiedCopy(string copy)
+        {
+            Verify();
+            Verify(copy);
+            return this with { Source = Path.GetFullPath(copy), Copied = true };
+        }
+
+        internal void VerifyTarget(GameBuild current) => RequireSameTarget(Target, current);
+    }
+
+    internal static Admission Capture(string source, GameBuild target, IReadOnlyDictionary<string, string>? pinned = null)
+    {
+        source = Path.GetFullPath(source);
+        var files = new Dictionary<string, string>(pinned is { Count: > 0 } ? pinned : WorldFixture.Manifest(source), StringComparer.Ordinal);
+        var identity = Read(source, target);
+        var admitted = new Admission(source, identity, files, target);
+        admitted.Verify();
+        return admitted;
+    }
+
+    internal static void RequireSameTarget(GameBuild original, GameBuild current)
+        => RequireSameTarget(original.WorldSupport?.AssemblySha256, current);
+
+    internal static void RequireSameTarget(string? originalSha256, GameBuild current)
+    {
+        if (originalSha256 == null || current.WorldSupport?.AssemblySha256 != originalSha256)
+            throw new InvalidOperationException("The hosting game assembly changed after world-format admission; inspect the selected host again.");
+    }
+
+    internal void Admit(GameBuild target)
+    {
+        if (target.WorldSupport is not { } support)
+            throw new InvalidOperationException($"Cannot establish world-format support for {target} before placing fixture {File}: {target.WorldUnknown ?? target.Unknown ?? "the running host's build is unknown"}. " +
+                "Use owned/install-backed fixture hosting, or load the world manually and attach without asking the toolkit to stage HostWorld.");
+        if (WorldVersion < support.Minimum || WorldVersion > support.Maximum || WorldVersion < support.ChunkedSave)
+            throw new InvalidDataException($"Fixture {Slash(File)} has world version {WorldVersion}; host {support.Source} ({target}) accepts {support.Minimum} through {support.Maximum} inclusive, " +
+                $"and chunked .fwl2 saves require version {support.ChunkedSave} or later. Choose a compatible host or copy a fresh game-saved fixture; do not change version bytes.");
     }
 
     /// <summary>The identity in one metadata file's bytes; <paramref name="file"/> names it in messages and the result.</summary>
@@ -107,6 +171,8 @@ public sealed record WorldIdentity(string Name, string SeedName, int Seed, long 
         var flat = paths.Where(path => !path.Contains('/') && Regex.IsMatch(path, @"\.(fwl|db)(\.old)?$", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase)).ToList();
         if (flat.Count != 0)
         {
+            if (paths.Any(path => path.Contains('/') && SaveFile.IsMatch(path[(path.LastIndexOf('/') + 1)..])))
+                throw new ArgumentException($"The fixture holds conversion leftovers {Few(flat)} beside its chunked world folder. Omit the old flat .fwl/.db files and backups; copy only the chunked world folder after the game stops.");
             string stem = Regex.Replace(flat[0], @"\.(fwl|db)(\.old)?$", "", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
             throw new ArgumentException($"The fixture holds {string.Join(" and ", flat.Take(2))}: a world saved before Valheim 1.0, as the flat <name>.fwl and <name>.db pair. " +
                 $"The toolkit loads only Valheim 1.0's chunked saves. Open {stem} once in Valheim 1.0 or later and save it: the game then writes {stem}/ " +
@@ -189,7 +255,7 @@ public sealed record WorldIdentity(string Name, string SeedName, int Seed, long 
     {
         if (name.Length < 3 || name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 || name.IndexOfAny(['/', '\\', ':', '*', '?', '"', '<', '>', '|']) >= 0 || name.Any(char.IsWhiteSpace))
             throw new ArgumentException($"The fixture world's name \"{name}\" must be at least 3 characters, one token and a valid file name on every platform.");
-        if (name.Contains('_') && ReadsTimestamp(name))
+        if (name.LastIndexOf('_') > 0 && ReadsTimestamp(name))
             throw new ArgumentException($"The fixture world's name \"{name}\" holds a date: the game reads such a name as a backup of another save, not as a world of its own. Rename the world.");
         return name;
     }
@@ -231,7 +297,6 @@ public sealed record WorldIdentity(string Name, string SeedName, int Seed, long 
             var package = bytes.AsSpan(4, length);
             int at = 0;
             int version = BinaryPrimitives.ReadInt32LittleEndian(package[at..]); at += 4;
-            if (version is < 1 or > 1000) throw new InvalidDataException($"world version {version} is not one the game writes");
             string name = ReadString(package, ref at), seedName = ReadString(package, ref at);
             int seed = BinaryPrimitives.ReadInt32LittleEndian(package[at..]); at += 4;
             long uid = BinaryPrimitives.ReadInt64LittleEndian(package[at..]); at += 8;

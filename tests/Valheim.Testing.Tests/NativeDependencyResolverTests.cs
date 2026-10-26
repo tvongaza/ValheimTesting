@@ -486,14 +486,84 @@ public sealed class NativeDependencyResolverTests : IDisposable
 
         // A server assembly that is not the game's: unknown, refused, never inferred.
         File.WriteAllText(serverAssembly, "game build 1");
-        var unknown = Assert.Single((await Inspect()).Problems);
+        var unknown = Assert.Single((await Inspect()).Problems, problem => problem.Input == "game version");
         Assert.Equal(("server", "game version"), (unknown.Actor, unknown.Input));
         Assert.Contains(@"is unknown: C:\game\source\valheim_server_Data\Managed\assembly_valheim.dll on server is not a readable .NET assembly", unknown.Message);
 
         // A file that changed after the install was listed is not the listed build.
         File.WriteAllBytes(serverAssembly, FakeInstalls.GameAssembly());
         hosts["server"].BeforeScript = script => { if (script == "preflight-read") File.WriteAllBytes(serverAssembly, FakeInstalls.GameAssembly("1.0.20", 41)); };
-        Assert.Contains("changed after the install was listed", Assert.Single((await Inspect()).Problems).Message);
+        Assert.Contains("changed after the install was listed", Assert.Single((await Inspect()).Problems, problem => problem.Input == "game version").Message);
+    }
+
+    [Fact] public async Task WorldSupportComesFromTheSelectedServerAndNotItsJoiningClient()
+    {
+        var (file, hosts, clientSource) = TwoHostCampaign("world-bounds");
+        string serverAssembly = Path.Combine(hosts["server"].Local(@"C:\game\source"), "valheim_server_Data", "Managed", InstallPins.GameAssemblyName);
+        string clientAssembly = Path.Combine(clientSource, "Valheim.app", "Contents", "Resources", "Data", "Managed", InstallPins.GameAssemblyName);
+        Task<CampaignPreflightReport> Inspect() => HostedCampaignPreparation.InspectAsync(file, TimeSpan.FromSeconds(30), name => hosts[name], pinnedLoader: null);
+        File.WriteAllBytes(serverAssembly, FakeInstalls.GameAssembly(maximum: 40));
+        Assert.Contains((await Inspect()).Problems, problem => problem.Actor == "server" && problem.Input == "world fixture" && problem.Message.Contains("world version 41", StringComparison.Ordinal));
+        await Assert.ThrowsAsync<ArgumentException>(() => HostedCampaignPreparation.PrepareAsync(file, Path.Combine(_rig.Root, "refused-world"), TimeSpan.FromSeconds(30), name => hosts[name], pinnedLoader: null));
+        Assert.All(hosts.Values, host => Assert.DoesNotContain(host.Scripts, script => script is "profile-seed" or "apply-stage" or "copy"));
+        File.WriteAllBytes(serverAssembly, FakeInstalls.GameAssembly());
+        File.WriteAllBytes(clientAssembly, FakeInstalls.GameAssembly(maximum: 40));
+        Assert.True((await Inspect()).Ready); // The joiner's world range is irrelevant; network versions still agree.
+    }
+
+    [Fact] public async Task DirectCampaignAdmissionPrecedesEveryShippedLoaderCallback()
+    {
+        var (file, hosts, _) = TwoHostCampaign("early-world");
+        string assembly = Path.Combine(hosts["server"].Local(@"C:\game\source"), "valheim_server_Data", "Managed", InstallPins.GameAssemblyName);
+        File.WriteAllBytes(assembly, FakeInstalls.GameAssembly(maximum: 40));
+        int loaders = 0;
+        var report = await HostedCampaignPreparation.InspectAsync(file, TimeSpan.FromSeconds(30), name => hosts[name],
+            pinnedLoader: (_, _, _) => { loaders++; throw new Xunit.Sdk.XunitException("Loader extracted before world admission"); });
+        Assert.Contains(report.Problems, problem => problem.Input == "world fixture"); Assert.Equal(0, loaders);
+        Assert.All(hosts.Values, host => Assert.DoesNotContain(host.Scripts, script => script is "profile-seed" or "apply-stage" or "copy" or "ship"));
+    }
+
+    [Fact] public async Task AProvidedCopyAdmissionCannotBeReplacedByCampaignInspectionHashes()
+    {
+        var (file, hosts, _) = TwoHostCampaign("copied-world-admission");
+        var inspection = HostedCampaignPreparation.InspectInputs(file);
+        var manifest = inspection.Inputs!.Manifest;
+        string assembly = Path.Combine(hosts["server"].Local(@"C:\game\source"), "valheim_server_Data", "Managed", InstallPins.GameAssemblyName);
+        using var bytes = File.OpenRead(assembly);
+        var target = GameAssemblyVersion.Read(bytes, "actual selected host");
+        var original = WorldIdentity.Capture(manifest.World, target);
+        string copy = Path.Combine(_rig.Root, "verified-campaign-copy"); Directory.CreateDirectory(copy);
+        foreach (var entry in original.Files)
+        {
+            string path = Path.Combine(copy, entry.Key); Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.Copy(Path.Combine(original.Source, entry.Key), path);
+        }
+        var retained = original.ForVerifiedCopy(copy);
+        File.WriteAllText(Path.Combine(copy, "Campaign", "_main.1.db2"), "same UID, different copied data");
+        original.Verify();
+        manifest.World = copy;
+        manifest.WorldAdmission = retained;
+        // The inspection can see the new bytes; the original snapshot must still win.
+        manifest.AdmittedWorldFiles = WorldFixture.Manifest(copy);
+        int loaders = 0;
+        await Assert.ThrowsAsync<ArgumentException>(() => HostedCampaignPreparation.PrepareAsync(inspection, Path.Combine(_rig.Root, "refused-copy"),
+            TimeSpan.FromSeconds(30), name => hosts[name], default, plans: null, shippedLoader: (_, _, _) => { loaders++; return null; }));
+        Assert.Equal(0, loaders);
+        Assert.All(hosts.Values, host => Assert.DoesNotContain(host.Scripts, script => script is "profile-seed" or "apply-stage" or "copy" or "ship"));
+    }
+
+    [Fact] public async Task DirectCampaignRetainsTheInitialHostHashAcrossLoaderSelection()
+    {
+        var (file, hosts, _) = TwoHostCampaign("host-replacement");
+        string assembly = Path.Combine(hosts["server"].Local(@"C:\game\source"), "valheim_server_Data", "Managed", InstallPins.GameAssemblyName);
+        int loaders = 0;
+        await Assert.ThrowsAsync<ArgumentException>(() => HostedCampaignPreparation.PrepareAsync(file, Path.Combine(_rig.Root, "changed-host"),
+            TimeSpan.FromSeconds(30), name => hosts[name], pinnedLoader: (_, _, _) =>
+            {
+                loaders++; File.WriteAllBytes(assembly, FakeInstalls.GameAssembly(maximum: 43)); return null;
+            }));
+        Assert.True(loaders > 0);
+        Assert.All(hosts.Values, host => Assert.DoesNotContain(host.Scripts, script => script is "profile-seed" or "apply-stage" or "copy" or "ship"));
     }
 
     // #256's acceptance in one preflight: six independent faults, each refused under its own actor and input, all in one
@@ -646,6 +716,28 @@ public sealed class NativeDependencyResolverTests : IDisposable
             HostWorld = new() { World = new() { Source = world }, WorldUid = "4242" } };
         ClientRunPlan PeerSection() => new() { Mode = "owned", Install = @"C:\bound", Port = 5579, Character = "y", JoinsHost = true, Pins = new() { ["example.mymod"] = "absent" } };
         HostedCampaignPreparation.CheckHostedPlan(serverless, new Dictionary<string, ClientRunPlan> { ["client-a"] = HostSection(), ["client-b"] = PeerSection() });
+        // The manifest cannot invent a hosting client; the actual HostWorld plan supplies that decision before profiles.
+        string pcAssembly = Path.Combine(hosts["pc"].Local(@"C:\game\client"), "valheim_Data", "Managed", InstallPins.GameAssemblyName);
+        File.WriteAllBytes(pcAssembly, FakeInstalls.GameAssembly(maximum: 40));
+        Assert.True((await HostedCampaignPreparation.InspectAsync(serverless, TimeSpan.FromSeconds(30), name => hosts[name], pinnedLoader: null)).Ready);
+        var incompatiblePlans = new Dictionary<string, ClientRunPlan> { ["client-a"] = HostSection(), ["client-b"] = PeerSection() };
+        var incompatibleInput = HostedCampaignPreparation.InspectInputs(serverless);
+        HostedCampaignPreparation.CheckHostedPlan(incompatibleInput, incompatiblePlans);
+        await Assert.ThrowsAsync<ArgumentException>(() => HostedCampaignPreparation.PrepareAsync(incompatibleInput, Path.Combine(_rig.Root, "bad-host-client"),
+            TimeSpan.FromSeconds(30), name => hosts[name], default, incompatiblePlans));
+        Assert.All(hosts.Values, host => Assert.DoesNotContain(host.Scripts, script => script is "profile-seed" or "apply-stage" or "copy"));
+        var compatiblePlans = new Dictionary<string, ClientRunPlan> { ["client-a"] = PeerSection(), ["client-b"] = HostSection() };
+        var compatibleInput = HostedCampaignPreparation.InspectInputs(serverless);
+        HostedCampaignPreparation.CheckHostedPlan(compatibleInput, compatiblePlans);
+        await using (var compatible = await HostedCampaignPreparation.PrepareAsync(compatibleInput, Path.Combine(_rig.Root, "good-host-client"),
+            TimeSpan.FromSeconds(30), name => hosts[name], default, compatiblePlans))
+            Assert.Equal("client-b", compatible.ApplyToHosted(compatible.Manifest, compatiblePlans, Path.Combine(_rig.Root, "good-host-client")));
+        await using (var manifestOnly = await HostedCampaignPreparation.PrepareAsync(serverless, Path.Combine(_rig.Root, "manifest-only"),
+            TimeSpan.FromSeconds(30), name => hosts[name], pinnedLoader: null))
+            Assert.Contains("Cannot establish world-format", Assert.Throws<InvalidOperationException>(() => manifestOnly.ApplyToHosted(manifestOnly.Manifest, compatiblePlans,
+                Path.Combine(_rig.Root, "manifest-only"))).Message);
+        File.WriteAllBytes(pcAssembly, FakeInstalls.GameAssembly());
+
         Assert.Contains("exactly one hosting client", Assert.Throws<ArgumentException>(() => HostedCampaignPreparation.CheckHostedPlan(serverless,
             new Dictionary<string, ClientRunPlan> { ["client-a"] = HostSection(), ["client-b"] = HostSection() })).Message);
         Assert.Contains("set joinsHost", Assert.Throws<ArgumentException>(() => HostedCampaignPreparation.CheckHostedPlan(serverless,
@@ -1115,14 +1207,20 @@ public sealed class NativeDependencyResolverTests : IDisposable
         string world = Path.Combine(_rig.Root, "this-machine-world");
         FakeInstalls.World(world);
         // This machine, as the detection reads it: Steam with Valheim Dedicated Server installed.
-        var machine = new FakeMachine(windows ? "windows" : "linux") { SteamPath = windows ? @"C:\Steam" : null };
-        string steam = windows ? @"C:\Steam" : "/home/tester/.steam/steam";
+        // A local metadata read opens the actual listed path. Keep this synthetic Steam tree on disk,
+        // and answer local scripts without a virtual-path mirror, as the real local host does.
+        string home = Path.Combine(_rig.Root, "this-machine-home");
+        string steam = windows ? Path.Combine(_rig.Root, "this-machine-steam") : Path.Combine(home, ".steam", "steam");
+        var machine = new FakeMachine(windows ? "windows" : "linux")
+        {
+            Home = home, DataRoot = Path.Combine(_rig.Root, "this-machine-data"), SteamPath = windows ? steam : null,
+        };
         machine.Directories.Add(steam);
         string install = machine.App(steam, "896660", "Valheim dedicated server", windows ? GameLaunch.ServerWindowsExecutable : GameLaunch.ServerLinuxExecutable);
         string runs = HostPath.Join(machine.DataRoot, "runs", "local-server");
         var server = new FakeOwnedServer("test.mod", saveRoot: HostPath.Join(runs, "run-test", "world"));
-        var host = new FakeServerHost("local", Path.Combine(_rig.Root, "this-machine-host"), server, kind: GameHostKind.Local, windows: windows);
-        string source = host.Local(install);
+        var host = FakeServerHost.ThisMachine("local", server);
+        string source = install;
         FakeInstalls.Server(source);
         File.WriteAllText(Path.Combine(source, windows ? GameLaunch.ServerWindowsExecutable : GameLaunch.ServerLinuxExecutable), "server");
         if (windows)

@@ -201,6 +201,24 @@ internal sealed class HostedServerRun : IServerPlacement
         (await HostedRuntimeStage.RequireProfileStorageAsync(Host, HostedRuntimeKind.Server, Role.Install, Role.Runtime,
             HostedTimeouts.Quick, cancellation, explicitRuntime: Role.RuntimeExplicit).ConfigureAwait(false)).Description;
 
+    internal GameBuild? WorldBuild { get; private set; }
+    internal WorldIdentity.Admission? WorldAdmission { get; private set; }
+    internal WorldIdentity? AdmittedWorld => WorldAdmission?.Identity;
+    internal async Task AdmitWorldAsync(ServerRunPlan plan, CancellationToken cancellation, IReadOnlyDictionary<string, string> files)
+    {
+        if (plan.PreflightWorld() == null) return;
+        var listing = Prepared && _sourceCheck != null ? _sourceCheck.PreparedGame
+            : await HostInstall.ListAsync(Host, Role.Install, HostedTimeouts.Long, null, cancellation).ConfigureAwait(false);
+        WorldBuild = await GameVersionAgreement.ReadAsync(Host, listing, HostedTimeouts.Long, cancellation).ConfigureAwait(false);
+        if (Builds != null) WorldBuild = Builds.Admit(new("server", Host.Name, listing.Root, WorldBuild));
+        var worldFiles = files.Where(file => file.Key.Replace('\\', '/').StartsWith("worlds_local/", StringComparison.Ordinal))
+            .ToDictionary(file => file.Key["worlds_local/".Length..], file => file.Value, StringComparer.Ordinal);
+        WorldAdmission = WorldIdentity.Capture(Path.Combine(plan.World.Source, "worlds_local"), WorldBuild, worldFiles);
+        if (plan.PreflightWorld(WorldBuild, plan.World.Source) != WorldAdmission.Identity)
+            throw new InvalidDataException("The server world changed during admission.");
+        WorldAdmission.Verify();
+    }
+
     /// <summary>
     /// Takes the server host's lock, then readies the server's profile: a campaign's prepared one is verified where it is; a
     /// standalone run stages its own from the host's install (<see cref="StageProfileAsync"/>).
@@ -287,6 +305,8 @@ internal sealed class HostedServerRun : IServerPlacement
         using var selection = await InstallSelection.ReadAsync(Host, HostedRuntimeKind.Server, Role.Install, cli, cliFiles, loader, Role.CliPort,
             client: null, HostedTimeouts.Long, cancellation, Builds, "server").ConfigureAwait(false);
         var source = selection.Source;
+        if (WorldBuild != null) WorldIdentity.RequireSameTarget(WorldBuild, selection.Build ?? new GameBuild(null, null, "the hosting install is unavailable"));
+
         if (verified)
             HostInstall.RequireSame(HostInstall.WithoutSkipped(plan.Runtime.Sha256, HostedRuntimeStage.RuntimeSkips, source.Names), source, "server install",
                 source.Files.Keys.Where(path => HostInstall.Skipped(path, HostedRuntimeStage.RuntimeSkips, source.Names)));

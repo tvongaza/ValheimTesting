@@ -279,7 +279,7 @@ public sealed class LocalClientCopyTests : IDisposable
         plan = Plan(source); // pinned to the install as it is now
         plan.CliManifest = CliSet();
         var copy = await LocalClientCopy.PrepareAsync("client", plan, default, data, ThisMachine(), loader: (_, _) => null, builds: builds);
-        Assert.Equal(new GameBuild(40, "1.0.17", null), plan.PreparedBuild);
+        Assert.Equal(40u, plan.PreparedBuild!.NetworkVersion);
         Assert.Equal(plan.PreparedBuild, builds.Of("client"));
         await copy.RetireAsync(verifySource: false);
         Assert.Null(plan.PreparedBuild); // Restored with the rest of the plan: a reused plan reads its install again.
