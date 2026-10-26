@@ -65,11 +65,290 @@ jobs:
         run: |
           mkdir -p .packages
           printf 'obsolete CLI package' > .packages/Valheim.Testing.Cli.0.1.0-preview.0.nupkg
+      # TEMPORARY #922 negative control: remove this fixture after its reviewed run.
+      - name: Prepare the owned bootstrap audit failure (temporary control)
+        id: bootstrap-control-fixture
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          fixture_directory=$(mktemp -d "$RUNNER_TEMP/bootstrap-control.XXXXXXXX")
+          printf 'fixture-directory=%s\n' "$fixture_directory" >> "$GITHUB_OUTPUT"
+          cat > "$fixture_directory/control.py" <<'CONTROL_PY'
+          """Temporary hosted fixture only. This file is proposed inline YAML, not executed locally."""
+          import datetime,errno,hashlib,json,os,signal,socket,subprocess,sys,time,uuid,xml.etree.ElementTree as ET
+          from pathlib import Path
+          ACTION_SHA='405250b722d01366d445e94adc0bba2717ebb66a27f29587854377f303e4e5bf'
+          CONFIG_SHA='9e7cde96bf71703b2b8e692c2583e2d5fdd132276381199f96b18380c3fdabf7'
+          SERVER_SOURCE=r'''import datetime,hashlib,http.server,json,os,sys
+          from pathlib import Path
+          root=Path(sys.argv[1]);control_id=sys.argv[2]
+          def save(name,value):
+              p=root/name;t=p.with_name(p.name+'.writing');t.write_text(json.dumps(value)+'\n');os.replace(t,p)
+          def identity(pid):
+              fields=Path(f'/proc/{pid}/stat').read_text().rsplit(')',1)[1].split()
+              return {'pid':pid,'start_ticks':fields[19]}
+          save('server.owner.json',dict(identity(os.getpid()),control_id=control_id))
+          expected=f'/{control_id}/v3/index.json'
+          count=0
+          class Handler(http.server.BaseHTTPRequestHandler):
+              def do_GET(self):
+                  global count
+                  count+=1;status=503 if self.path==expected else 404
+                  body=b'Owned #922 audit-source negative control: HTTP 503.\n' if status==503 else b'Unexpected path.\n'
+                  if count<=64:
+                      record={'utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),'method':'GET','path':expected if self.path==expected else '<unexpected>','status':status,'body_bytes':len(body),'body_sha256':hashlib.sha256(body).hexdigest()}
+                      with (root/'requests.jsonl').open('a') as stream:stream.write(json.dumps(record)+'\n')
+                  else:(root/'request-overflow.txt').write_text('request record limit exceeded\n')
+                  self.send_response(status);self.send_header('Content-Type','text/plain');self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body)
+              def log_message(self,*args):pass
+          server=http.server.HTTPServer(('127.0.0.1',0),Handler)
+          save('server-ready.json',{'pid':os.getpid(),'host':'127.0.0.1','port':server.server_address[1],'control_id':control_id,'expected_path':expected})
+          server.serve_forever()
+          '''
+          def sha(data):return hashlib.sha256(data).hexdigest()
+          def save(path,value):
+              temporary=path.with_name(path.name+'.writing');temporary.write_text(json.dumps(value,indent=2)+'\n');os.replace(temporary,path)
+          def proc_identity(pid):
+              try:
+                  stat=Path(f'/proc/{pid}/stat').read_text().rsplit(')',1)[1].split()
+                  argv=Path(f'/proc/{pid}/cmdline').read_bytes().split(b'\0')
+                  # Re-read identity after cmdline: PID replacement or live->zombie transitions
+                  # cannot combine an old stat observation with a new process's command line.
+                  current=Path(f'/proc/{pid}/stat').read_text().rsplit(')',1)[1].split()
+              except FileNotFoundError:return None
+              assert stat[19]==current[19],'process identity changed during observation'
+              return {'pid':pid,'start_ticks':current[19],'state':current[0],'argv':[part.decode() for part in argv if part]}
+          def observe_owned_server(root,owner):
+              identity=proc_identity(owner['pid'])
+              if identity is None:return 'absent'
+              assert identity['start_ticks']==owner['start_ticks'],'PID identity changed; refuse signal'
+              if identity['state'] in ['Z','X']:return 'exited-not-reaped'
+              assert identity['argv'][1:]==[str(root/'server.py'),str(root),owner['control_id']],'live command identity changed; refuse signal'
+              return 'live'
+          def stop_cross_step_server(root,owner):
+              pid=owner['pid'];assert isinstance(pid,int) and pid>1
+              forced=False;fd=None;events=[]
+              def observe():
+                  value=observe_owned_server(root,owner);events.append(value);return value
+              def wait_absent(seconds):
+                  deadline=time.monotonic()+seconds
+                  while True:
+                      state=observe()
+                      if state=='absent':return True
+                      remaining=deadline-time.monotonic()
+                      if remaining<=0:return False
+                      time.sleep(min(.05,remaining))
+              def send_owned(sig):
+                  # Check live argv immediately before using the already identity-bound handle.
+                  state=observe()
+                  if state!='live':return state
+                  try:signal.pidfd_send_signal(fd,sig,None,0)
+                  except ProcessLookupError:
+                      state=observe()
+                      if state=='live':raise RuntimeError('ESRCH conflicts with a matching live process; cleanup ambiguous')
+                      return state
+                  return 'delivered'
+              try:
+                  state=observe()
+                  if state=='absent':gone=True
+                  elif state=='exited-not-reaped':gone=wait_absent(5)
+                  else:
+                      if not callable(getattr(os,'pidfd_open',None)) or not callable(getattr(signal,'pidfd_send_signal',None)):
+                          raise RuntimeError('Linux pidfd support required; no numeric-PID fallback')
+                      try:fd=os.pidfd_open(pid,0)
+                      except ProcessLookupError:
+                          state=observe()
+                          if state=='live':raise RuntimeError('pidfd ESRCH conflicts with a matching live process')
+                          gone=state=='absent' or wait_absent(5)
+                      else:
+                          # Replacement after pidfd_open fails identity checks; replacement
+                          # after this check cannot receive a signal bound to the original fd.
+                          state=send_owned(signal.SIGTERM)
+                          gone=state=='absent' or wait_absent(5)
+                          if not gone:
+                              state=observe()
+                              if state=='live':
+                                  state=send_owned(signal.SIGKILL)
+                                  forced=state=='delivered'
+                                  gone=state=='absent' or wait_absent(5)
+                              # A same-start zombie is never signaled or called absent.
+                  return {'accepted':gone and not forced,'pid':pid,'start_ticks':owner['start_ticks'],'process_absent':gone,'forced_kill':forced,'observations':events[-64:]}
+              finally:
+                  if fd is not None:os.close(fd)
+          def package_snapshot(workspace):
+              return {str(path.relative_to(workspace)):sha(path.read_bytes()) for path in sorted((workspace/'.packages').rglob('*')) if path.is_file()}
+          def setup(root,workspace):
+              assert sha((workspace/'.github/actions/setup/action.yml').read_bytes())==ACTION_SHA
+              original=(workspace/'NuGet.Config').read_bytes();assert sha(original)==CONFIG_SHA
+              (root/'original-NuGet.Config').write_bytes(original)
+              control_id='hosted-'+uuid.uuid4().hex
+              state={'control_id':control_id,'original_config_sha256':sha(original),'action_sha256':ACTION_SHA,
+                     'commit':subprocess.check_output(['git','rev-parse','HEAD'],cwd=workspace,timeout=30,text=True).strip(),
+                     'package_snapshot':package_snapshot(workspace),
+                     'source_hashes':{name:sha((workspace/name).read_bytes()) for name in ['scripts/bootstrap-cli.cs','scripts/Directory.Build.props','Directory.Build.props','cli-dependency.json','loader-dependency.json']}}
+              save(root/'state.json',state)
+              (root/'server.py').write_text(SERVER_SOURCE)
+              stdout=(root/'server.stdout.log').open('wb');stderr=(root/'server.stderr.log').open('wb')
+              proc=None
+              try:
+                  proc=subprocess.Popen([sys.executable,str(root/'server.py'),str(root),control_id],stdout=stdout,stderr=stderr,start_new_session=True)
+                  deadline=time.monotonic()+10
+                  while not (root/'server-ready.json').exists():
+                      assert proc.poll() is None,'owned fixture exited before readiness'
+                      assert time.monotonic()<deadline,'owned fixture readiness timeout'
+                      time.sleep(.02)
+                  ready=json.loads((root/'server-ready.json').read_text());owner=json.loads((root/'server.owner.json').read_text())
+                  identity=proc_identity(proc.pid)
+                  assert ready['pid']==owner['pid']==proc.pid and ready['host']=='127.0.0.1' and ready['control_id']==control_id
+                  assert identity and identity['start_ticks']==owner['start_ticks']
+                  endpoint=f'http://127.0.0.1:{ready["port"]}/{control_id}/v3/index.json'
+                  tree=ET.fromstring(original);assert tree.find('auditSources') is None
+                  audit=ET.SubElement(tree,'auditSources');ET.SubElement(audit,'clear')
+                  ET.SubElement(audit,'add',{'key':'controlled-audit-failure','value':endpoint,'protocolVersion':'3','allowInsecureConnections':'true'})
+                  assert ET.tostring(ET.fromstring(original).find('packageSources'))==ET.tostring(tree.find('packageSources'))
+                  changed=ET.tostring(tree,encoding='utf-8',xml_declaration=True)
+                  state.update({'endpoint':endpoint,'controlled_config_sha256':sha(changed),'package_sources_unchanged':True})
+                  save(root/'state.json',state)
+                  (workspace/'NuGet.Config').write_bytes(changed)
+                  print('CONTROL_SETUP '+json.dumps({'fixture_directory':str(root),'pid':proc.pid,'endpoint':endpoint,'action_sha256':ACTION_SHA,'commit':state['commit'],'original_config_sha256':sha(original),'controlled_config_sha256':sha(changed)}),flush=True)
+              except BaseException:
+                  # The shared cleanup runs even if state/report writing failed after spawn.
+                  # The local Popen handle closes the tiny owner-file creation race on setup failure.
+                  try:cleanup(root,workspace,local_proc=proc)
+                  finally:raise
+              finally:
+                  for stream in [stdout,stderr]:
+                      try:stream.close()
+                      except BaseException:pass
+          
+          def cleanup(root,workspace,local_proc=None):
+              errors=[];records={}
+              def attempt(name,operation):
+                  try:
+                      value=operation();records[name]=value
+                      if not value.get('accepted'):errors.append(name+' not verified')
+                  except BaseException as error:
+                      records[name]={'accepted':False,'type':type(error).__name__,'message':str(error)};errors.append(name+' failed')
+              def restore_config():
+                  backup=root/'original-NuGet.Config'
+                  if not backup.exists():
+                      # Setup writes this before any server/config change; no backup means
+                      # no config mutation by the ordered controller. Still attempt server cleanup.
+                      assert sha((workspace/'NuGet.Config').read_bytes())==CONFIG_SHA
+                      return {'accepted':True,'backup_absent_original_config_unchanged':True}
+                  original=backup.read_bytes();assert sha(original)==CONFIG_SHA
+                  (workspace/'NuGet.Config').write_bytes(original)
+                  return {'accepted':(workspace/'NuGet.Config').read_bytes()==original,'restored_sha256':sha((workspace/'NuGet.Config').read_bytes())}
+              def stop_server():
+                  if local_proc is not None:
+                      forced=False;termination_error=None
+                      try:
+                          if local_proc.poll() is None:local_proc.terminate()
+                      except BaseException as error:termination_error=str(error)
+                      finally:
+                          try:local_proc.wait(timeout=5)
+                          except subprocess.TimeoutExpired:
+                              forced=True
+                              try:local_proc.kill()
+                              finally:local_proc.wait(timeout=5)
+                      return {'accepted':local_proc.poll() is not None and not forced and termination_error is None,'pid':local_proc.pid,'local_child_reaped':True,'exit':local_proc.returncode,'forced_kill':forced,'termination_error':termination_error}
+                  owner_path=root/'server.owner.json'
+                  if not owner_path.exists():return {'accepted':True,'owner_absent_no_spawn_state':True}
+                  owner=json.loads(owner_path.read_text())
+                  return stop_cross_step_server(root,owner)
+              def check_listener():
+                  ready_path=root/'server-ready.json'
+                  if not ready_path.exists():return {'accepted':False,'ready_state_absent':True}
+                  ready=json.loads(ready_path.read_text());assert ready['host']=='127.0.0.1' and 0<ready['port']<65536
+                  with socket.socket() as probe:probe.settimeout(.5);code=probe.connect_ex(('127.0.0.1',ready['port']))
+                  return {'accepted':code==errno.ECONNREFUSED,'port':ready['port'],'errno':code,'errno_name':errno.errorcode.get(code)}
+              def source_and_packages():
+                  state=json.loads((root/'state.json').read_text())
+                  source_ok=all(sha((workspace/name).read_bytes())==digest for name,digest in state['source_hashes'].items())
+                  packages_ok=package_snapshot(workspace)==state['package_snapshot']
+                  action_ok=sha((workspace/'.github/actions/setup/action.yml').read_bytes())==ACTION_SHA
+                  return {'accepted':source_ok and packages_ok and action_ok,'source_unchanged':source_ok,'package_snapshot_unchanged':packages_ok,'action_unchanged':action_ok,'commit':state['commit']}
+              def provenance():
+                  state=json.loads((root/'state.json').read_text())
+                  requests_path=root/'requests.jsonl';raw=requests_path.read_bytes() if requests_path.exists() else b''
+                  assert len(raw)<=65536 and not (root/'request-overflow.txt').exists(),'fixture request evidence overflow'
+                  requests=[json.loads(line) for line in raw.splitlines()]
+                  expected='/' + state['control_id'] + '/v3/index.json'
+                  valid=bool(requests) and len(requests)<=64 and all(row['method']=='GET' and row['path']==expected and row['status']==503 for row in requests)
+                  # Only controller-owned fields and bounded fixed request records reach logs.
+                  print('CONTROL_PROVENANCE '+json.dumps({'state':state,'requests':requests}),flush=True)
+                  return {'accepted':valid,'request_count':len(requests),'all_exact_get_503':valid,'request_file_sha256':sha(raw)}
+              def capture_provenance():
+                  pointer=os.environ.get('CONTROL_EVIDENCE_DIRECTORY','')
+                  assert pointer,'composite evidence output absent'
+                  evidence=Path(pointer).resolve();runner_temp=Path(os.environ['RUNNER_TEMP']).resolve()
+                  assert evidence.parent==runner_temp and evidence.name.startswith('bootstrap-evidence.'),'unexpected capture directory'
+                  raw=(evidence/'metadata.txt').read_bytes();assert len(raw)<=16384
+                  metadata={}
+                  allowed={'phase','command','started-utc','commit','commit-status','run-id','run-attempt','job-id','runner-os','runner-arch','evidence-label','sdk-version','sdk-version-status','completed-utc','elapsed-seconds','dotnet-status','tee-status'}
+                  for line in raw.decode().splitlines():
+                      key,separator,value=line.partition('=');assert separator and key in allowed and key not in metadata
+                      metadata[key]=value
+                  assert set(metadata)==allowed
+                  state=json.loads((root/'state.json').read_text())
+                  assert metadata['command']=='dotnet run scripts/bootstrap-cli.cs' and metadata['commit']==state['commit']
+                  assert metadata['dotnet-status'].isdigit() and int(metadata['dotnet-status'])>0 and metadata['tee-status']=='0'
+                  assert metadata['evidence-label']=='control-nu1900-linux'
+                  summary={'directory':str(evidence),'metadata_sha256':sha(raw),'bootstrap_log_sha256':sha((evidence/'bootstrap.log').read_bytes()),'metadata':metadata}
+                  print('CONTROL_CAPTURE '+json.dumps(summary),flush=True)
+                  return {'accepted':True,'metadata_sha256':summary['metadata_sha256'],'bootstrap_log_sha256':summary['bootstrap_log_sha256']}
+              attempt('config',restore_config)
+              attempt('server',stop_server)
+              attempt('listener',check_listener)
+              attempt('source-and-packages',source_and_packages)
+              attempt('provenance',provenance)
+              attempt('capture-provenance',capture_provenance)
+              if os.environ.get('BOOTSTRAP_OUTCOME')!='failure':errors.append('caller action outcome was not failure')
+              outcome={'accepted':not errors,'operations':records,'errors':errors}
+              # Reporting is after all resource attempts. Its failure cannot skip cleanup.
+              try:save(root/'cleanup.json',outcome)
+              except BaseException as error:outcome['accepted']=False;outcome['errors'].append('cleanup report failed: '+type(error).__name__)
+              try:print('CONTROL_CLEANUP '+json.dumps(outcome),flush=True)
+              except BaseException:outcome['accepted']=False
+              return outcome['accepted']
+          
+          if __name__=='__main__':
+              root=Path(__file__).resolve().parent;workspace=Path(os.environ['GITHUB_WORKSPACE']).resolve();runner_temp=Path(os.environ['RUNNER_TEMP']).resolve()
+              assert root.parent==runner_temp and root.name.startswith('bootstrap-control.'),'refuse unexpected fixture path'
+              mode=sys.argv[1];assert mode in ['setup','cleanup']
+              if mode=='setup':setup(root,workspace)
+              else:raise SystemExit(0 if cleanup(root,workspace) else 1)
+          CONTROL_PY
+          python3 "$fixture_directory/control.py" setup
       - name: Build the pinned CLI transport package
+        id: bootstrap
         uses: ./.github/actions/setup
         with:
           phase: bootstrap
-          evidence-label: test-${{ matrix.os }}
+          evidence-label: ${{ runner.os == 'Linux' && 'control-nu1900-linux' || format('test-{0}', matrix.os) }}
+      - name: Restore config and stop the owned audit fixture (temporary control)
+        id: bootstrap-control-cleanup
+        if: always() && runner.os == 'Linux'
+        shell: bash
+        env:
+          FIXTURE_DIRECTORY: ${{ steps.bootstrap-control-fixture.outputs.fixture-directory }}
+          CONTROL_EVIDENCE_DIRECTORY: ${{ steps.bootstrap.outputs.evidence-directory }}
+          BOOTSTRAP_OUTCOME: ${{ steps.bootstrap.outcome }}
+        run: |
+          if [[ -z "$FIXTURE_DIRECTORY" ]]; then
+            echo 'CONTROL_CLEANUP fixture state absent; allocation/output precedes every owned resource.'
+            echo '::error::The fixture/bootstrap did not establish the required negative control.'
+            exit 1
+          fi
+          case "$FIXTURE_DIRECTORY" in
+            "$RUNNER_TEMP"/bootstrap-control.*) ;;
+            *) echo '::error::Refuse an unexpected fixture path.'; exit 1 ;;
+          esac
+          if [[ ! -f "$FIXTURE_DIRECTORY/control.py" ]]; then
+            echo '::error::Fixture controller was not fully prepared; no controller resource could have started.'
+            exit 1
+          fi
+          python3 "$FIXTURE_DIRECTORY/control.py" cleanup
       - name: Confirm the obsolete CLI package was removed
         if: runner.os == 'Linux'
         run: test ! -e .packages/Valheim.Testing.Cli.0.1.0-preview.0.nupkg
