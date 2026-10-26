@@ -410,8 +410,14 @@ internal sealed class FakeServerHost : IGameHost
                     if (v.GetValueOrDefault("exclusive") == "1" && Path.Exists(Local(v["path"])))
                         return new HostResult(HostOutcome.Exited, 3, "", "report already exists", TimeSpan.Zero, false);
                     Directory.CreateDirectory(Path.GetDirectoryName(Local(v["path"]))!);
-                    File.WriteAllBytes(Local(v["path"]) + ".vt-tmp", Convert.FromBase64String(v["content"]));
-                    File.Move(Local(v["path"]) + ".vt-tmp", Local(v["path"]), overwrite: true);
+                    bool exclusive = v.GetValueOrDefault("exclusive") == "1";
+                    string temporary = Local(v["path"]) + ".vt-tmp" + (exclusive ? "." + Guid.NewGuid().ToString("N") : "");
+                    try
+                    {
+                        File.WriteAllBytes(temporary, Convert.FromBase64String(v["content"]));
+                        File.Move(temporary, Local(v["path"]), overwrite: !exclusive);
+                    }
+                    finally { if (exclusive && File.Exists(temporary)) File.Delete(temporary); }
                 }
                 catch (Exception error) when (error is IOException or UnauthorizedAccessException)
                 { return new HostResult(HostOutcome.Exited, Windows ? 1 : 3, "", error.Message, TimeSpan.Zero, false); }

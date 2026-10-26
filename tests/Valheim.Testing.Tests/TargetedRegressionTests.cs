@@ -888,13 +888,27 @@ public sealed class TargetedRegressionTests : IDisposable
             $"Killed-start recovery was not exercised: hold entered={entered}, marker written={markerWritten}, deliberate cancellation={cancelled}. Failed steps: {failed}");
     }
 
-    private Dictionary<string, byte[]> KilledStartJournal(string runId) => Directory.Exists(Path.Combine(_rig.Root, "journal", runId))
-        ? Directory.GetFiles(Path.Combine(_rig.Root, "journal", runId), "*.jsonl").ToDictionary(path => Path.GetFileName(path)!, File.ReadAllBytes) : new();
+    private Dictionary<string, byte[]> KilledStartJournal(string runId, out List<string> errors, Func<string, byte[]>? read = null)
+    {
+        errors = [];
+        var files = new Dictionary<string, byte[]>();
+        string directory = Path.Combine(_rig.Root, "journal", runId);
+        string[] paths;
+        try { paths = Directory.GetFiles(directory, "*.jsonl"); }
+        catch (DirectoryNotFoundException) { return files; }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        { errors.Add("enumerate journal: " + error); return files; }
+        foreach (string path in paths)
+            try { files.Add(Path.GetFileName(path), (read ?? File.ReadAllBytes)(path)); }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            { errors.Add(Path.GetFileName(path) + ": " + error); }
+        return files;
+    }
 
     // Same test-local retention pattern as HostedSteamReleaseTests: outside the disposable rig, one failure's report and exact
     // owned journal only. Capture before Kill/recovery changes those lines; never copy a machine's global journal or game tree.
     private string RetainKilledStartFailure(ScenarioReport report, string output, string runId, IReadOnlyDictionary<string, byte[]> journal,
-        bool entered, bool markerWritten, bool cancelled)
+        bool entered, bool markerWritten, bool cancelled, IReadOnlyList<string>? journalErrors = null, Exception? failure = null)
     {
         string retained = Path.Combine(Path.GetTempPath(), "vt-killed-start-failure-" + Guid.NewGuid().ToString("N"));
         var errors = new List<string>();
@@ -905,11 +919,12 @@ public sealed class TargetedRegressionTests : IDisposable
         }
         Capture("create retained directory", () => Directory.CreateDirectory(retained));
         Capture("first report", () => report.Write(retained));
+        if (failure != null) Capture("original exception", () => File.WriteAllText(Path.Combine(retained, "failure.txt"), failure.ToString()));
         Capture("create journal directory", () => Directory.CreateDirectory(Path.Combine(retained, "journal")));
         foreach (var (name, bytes) in journal) Capture(name, () => File.WriteAllBytes(Path.Combine(retained, "journal", name), bytes));
         Capture("boundary", () => File.WriteAllText(Path.Combine(retained, "boundary.json"), System.Text.Json.JsonSerializer.Serialize(new
         {
-            runId, entered, markerWritten, deliberateCancellation = cancelled, output,
+            runId, entered, markerWritten, deliberateCancellation = cancelled, output, journalReadErrors = journalErrors ?? [],
             fixtureWorld = Path.Combine(Worlds, FixtureWorld), profile = _rig.Install,
             runtime = _rig.Runtime, journal = Path.Combine(_rig.Root, "journal", runId),
             dotnet = Environment.Version.ToString(), shell = HostShell.ThisMachine.Kind.ToString(), toolkit = report.Toolkit,
@@ -925,11 +940,11 @@ public sealed class TargetedRegressionTests : IDisposable
         bool entered = false;
         var (failed, output, runId) = Start(() => new LocalFakeOwnedProcess(41), _ => entered = true, end: false,
             beforeClientLaunch: () => throw new IOException("controlled early launch failure before hold"));
-        var journal = KilledStartJournal(runId);
+        var journal = KilledStartJournal(runId, out var snapshotErrors);
         var error = Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => RequireKilledStartReachedHold(failed, entered, false, false));
         Assert.Contains("hold entered=False", error.Message);
         Assert.Contains("controlled early launch failure", error.Message);
-        string retained = RetainKilledStartFailure(failed, output, runId, journal, entered, false, false);
+        string retained = RetainKilledStartFailure(failed, output, runId, journal, entered, false, false, snapshotErrors, error);
         try
         {
             // The report and pre-recovery journal survive removal of the original evidence, as fixture cleanup would remove it.
@@ -937,6 +952,30 @@ public sealed class TargetedRegressionTests : IDisposable
             Assert.Contains("controlled early launch failure", File.ReadAllText(Path.Combine(retained, "result.json")));
             Assert.Contains("\"entered\": false", File.ReadAllText(Path.Combine(retained, "boundary.json")));
             foreach (var (name, bytes) in journal) Assert.Equal(bytes, File.ReadAllBytes(Path.Combine(retained, "journal", name)));
+        }
+        finally { Directory.Delete(retained, recursive: true); }
+    }
+
+    [Fact]
+    public void AnUnreadableKilledStartJournalDoesNotHideThePrimaryFailureOrLoseItsReport()
+    {
+        const string runId = "run-unreadable-diagnostic";
+        string directory = Directory.CreateDirectory(Path.Combine(_rig.Root, "journal", runId)).FullName;
+        File.WriteAllText(Path.Combine(directory, "client.jsonl"), "synthetic owned journal");
+        var report = new ScenarioReport("first failed killed-start report");
+        var primary = Assert.Throws<IOException>(() => report.Step(StepPhase.Setup, "controlled early setup failure",
+            () => throw new IOException("original failure before measurement")));
+        var journal = KilledStartJournal(runId, out var errors, _ => throw new IOException("controlled journal read failure"));
+        Assert.Empty(journal); Assert.Single(errors);
+        var boundary = Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => RequireKilledStartReachedHold(report, false, false, false));
+        Assert.Contains("original failure before measurement", boundary.Message);
+        string retained = RetainKilledStartFailure(report, "synthetic-output", runId, journal, false, false, false, errors, primary);
+        try
+        {
+            Assert.Contains("original failure before measurement", File.ReadAllText(Path.Combine(retained, "result.json")));
+            Assert.Contains("controlled journal read failure", File.ReadAllText(Path.Combine(retained, "boundary.json")));
+            string original = File.ReadAllText(Path.Combine(retained, "failure.txt"));
+            Assert.Contains("System.IO.IOException", original); Assert.Contains(nameof(AnUnreadableKilledStartJournalDoesNotHideThePrimaryFailureOrLoseItsReport), original);
         }
         finally { Directory.Delete(retained, recursive: true); }
     }
@@ -963,7 +1002,7 @@ public sealed class TargetedRegressionTests : IDisposable
             deliberatelyCancelled = true;
             throw new OperationCanceledException("the runner was killed");
         }), end: false);
-        var firstJournal = KilledStartJournal(runId);
+        var firstJournal = KilledStartJournal(runId, out var snapshotErrors);
         try
         {
             RequireKilledStartReachedHold(killed, entered, markerWritten, deliberatelyCancelled);
@@ -1001,8 +1040,9 @@ public sealed class TargetedRegressionTests : IDisposable
         }
         catch (Exception error)
         {
-            string retained = RetainKilledStartFailure(killed, killedOutput, runId, firstJournal, entered, markerWritten, deliberatelyCancelled);
-            Assert.Fail(error.Message + " First killed-start report and pre-recovery journal retained at " + retained);
+            string retained = RetainKilledStartFailure(killed, killedOutput, runId, firstJournal, entered, markerWritten, deliberatelyCancelled, snapshotErrors, error);
+            Assert.Fail(error + (snapshotErrors.Count == 0 ? "" : " Journal snapshot incomplete: " + string.Join("; ", snapshotErrors)) +
+                " First killed-start report and pre-recovery journal retained at " + retained);
         }
     }
 

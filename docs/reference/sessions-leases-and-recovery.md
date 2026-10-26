@@ -122,7 +122,7 @@ Each effect is journalled under the actor `recovery`. A step that fails keeps wh
 
 `env teardown --copy` refuses a path that is not a toolkit copy, a copy a running process uses, and a copy an open run's journal still names. Nothing is ever removed because of its age.
 
-Recovery journals and reserves each `recovered-<actor>` evidence folder before writing source reports, moving source files or keeping logs. Retained recovery evidence stays listed as `KEPT` until `env teardown --run ID` removes that owned subtree, even if no run folder was journalled or the original run folder was already fetched and retired. An earlier fetch receipt does not cover newly recovered evidence. A successful teardown removes the recovered subtree and any owned containing run folder in the same pass; foreign siblings stay untouched. If a source verdict fails, its report stays listed even after the profile retires; inspect it, then run explicit teardown again to remove that retained evidence.
+Recovery journals and reserves each `recovered-<actor>` evidence folder before writing source reports, moving source files or keeping logs. Each confirmed retained evidence copy stays listed as kept until `env teardown --run ID` removes that owned subtree, even if no run folder was journalled or the original run folder was already fetched and retired. An earlier fetch receipt does not cover newly recovered evidence. A successful teardown removes the recovered subtree and any owned containing run folder in the same pass; foreign siblings stay untouched. If a source verdict fails, its report stays listed even after the profile retires; inspect it, then run explicit teardown again to remove that retained evidence.
 
 An unconfirmed reservation is not ownership. If recovery was interrupted after creating an empty folder but before its confirmation reached the journal, it preserves the existing folder and lists the pending reservation for inspection. Teardown cannot claim that folder from its name or intent alone. A pending reservation whose folder is absent can be cleared safely. Existing recovery folders without a proven owner are also preserved for inspection; recovery does not scan or claim historical unjournalled evidence.
 
@@ -130,7 +130,9 @@ An unconfirmed reservation is not ownership. If recovery was interrupted after c
 
 Each new source recovery attempt journals its evidence destination before adoption or movement. An interrupted attempt resumes that exact destination; a completed report is immutable even when log keeping or profile retirement needs another call. Older fixed `source-changes-<id>` evidence is preserved. If its recovered folder has no proven owner, recovery leaves the profile visible and refuses to claim or delete that folder; inspect the named paths before deciding how to retain that historical evidence.
 
-Recovery ends for every journal state of a profile's source install:
+The source-state outcomes below apply after ownership of the recovered evidence folder is proven. An unknown existing leaf or an unconfirmed reservation is refused first: the profile remains visible, and neither recover nor teardown claims that evidence from its name. A confirmed kept evidence copy may coexist with a `RECOVERABLE` run while a profile or lock remains open.
+
+Every settled source outcome is durable; an unfinished one remains visible for a later invocation:
 
 | Journal and host | `env recover` | `env teardown` |
 |---|---|---|
@@ -141,7 +143,9 @@ Recovery ends for every journal state of a profile's source install:
 | Not settled, its listing gone, the install and the profile's folder there | Names the install as not compared (`unknown`), keeps any moved files, and removes the profile | The same |
 | A listing whose SHA-256 or install differs from the journal's, or that cannot be read (over the read limit, unreadable by the host user) | Refuses: the profile stays, nothing is moved or removed. Check the install, then run `env teardown` | Names the install as not compared (`unknown`), keeps any moved files, and removes the profile |
 | The install is not reachable, or gone (an offline NAS, an unplugged volume) | Keeps the profile open: reconnect the install and recover again, or run `env teardown` | Names the install as gone (a finished `failed` verdict) and removes the profile |
-| The install now holds a link, or a settlement step is refused (a runtime inside the install, a recovered folder already there) | A finished `failed` verdict naming it and what to fix; the profile is removed, and moved files stay journalled kept | The same, and the kept moved files go in the same pass |
+| The install now holds a link, or comparison/movement is permanently refused (for example a runtime inside the install) | A finished `failed` verdict and report naming it and what to fix; the profile is removed, and moved files stay journalled kept | The same; independently kept moved files go in this pass, while the failed verdict's diagnostic stays listed for inspection until another explicit teardown |
+| Adoption into a journalled exact attempt is refused (its `added` destination already exists) | Durable adoption refusal, without claiming a comparison or overwriting an earlier report; the profile retires and moved files stay separately owned | The same; inspect the retained refusal diagnostic, then explicitly tear it down |
+| Existing recovered leaf without proven ownership, or an existing unconfirmed reservation | Refuses ownership; the profile and pending reservation remain visible, and existing bytes stay untouched | The same: teardown cannot make an ownership decision from an intent or name |
 | A moved-files folder the run kept on purpose (past the size limits, or no evidence folder) | Left alone: it has its own kept entry | Removed |
 | The run kept the profile because its settlement did not finish | Refuses the run as kept | Settles the install, then removes the profile |
 | The settlement does not finish (a host that fails or times out, the listing's read included) | Keeps the profile open for the next `env recover` | The same |

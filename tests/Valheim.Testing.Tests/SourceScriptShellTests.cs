@@ -325,6 +325,57 @@ public sealed class SourceScriptShellTests : IDisposable
     }
 
     [Theory, MemberData(nameof(LocalGameHostShellTests.Shells), MemberType = typeof(LocalGameHostShellTests))]
+    public async Task ARecoveryReportPublisherNeverReplacesADestinationThatAppearsAfterItsCheck(string shell)
+    {
+        foreach (string kind in new[] { "file", "directory", "link" })
+        {
+            if (kind == "link" && OperatingSystem.IsWindows()) continue;
+            string dir = Directory.CreateDirectory(Path.Combine(_root, "publication-" + kind)).FullName;
+            string path = Path.Combine(dir, "source-changes.json"), target = Path.Combine(dir, "winner.txt");
+            File.WriteAllText(target, "complete winner");
+            string script = shell == "pwsh" ? SourceSettleScripts.PowerShellWrite : SourceSettleScripts.BashWrite;
+            // An independently completed writer appears at the publication boundary, after the initial guard. Inject at either
+            // publication shape so this same control also exposes the old precheck-then-overwrite implementation.
+            string inject = shell == "pwsh" ? """
+                if ($kind -eq 'directory') { [void][IO.Directory]::CreateDirectory($path) }
+                elseif ($kind -eq 'link') { [void][IO.File]::CreateSymbolicLink($path, $target) }
+                else { [IO.File]::Copy($target, $path) }
+                """ : """
+                if [ "$kind" = directory ]; then mkdir -- "$path"
+                elif [ "$kind" = link ]; then ln -s -- "$target" "$path"
+                else cp -- "$target" "$path"; fi
+                """;
+            string publication = shell == "pwsh" ? @"(?m)^(\s*)(?=\[IO\.File\]::Move\()" : @"(?m)^(\s*)(?=(?:if ! link|mv -f --))";
+            string controlled = System.Text.RegularExpressions.Regex.Replace(script, publication, match => inject + "\n" + match.Value);
+            Assert.NotEqual(script, controlled);
+            var host = new LocalGameHost("late-publish", HostShell.Parse(shell));
+            var result = await host.RunAsync(controlled, new Dictionary<string, string>
+            {
+                ["path"] = path, ["root"] = dir, ["exclusive"] = "1", ["content"] = B64("late losing writer"), ["kind"] = kind, ["target"] = target,
+            }, TimeSpan.FromSeconds(30));
+            Assert.False(result.Succeeded, "A losing report writer replaced the completed destination: " + kind);
+            Assert.Equal("complete winner", File.ReadAllText(target));
+            if (kind == "directory") Assert.Empty(Directory.EnumerateFileSystemEntries(path));
+            else Assert.Equal("complete winner", File.ReadAllText(path));
+            Assert.Empty(Directory.GetFiles(dir, "*.vt-tmp*"));
+        }
+    }
+
+    [Theory, MemberData(nameof(LocalGameHostShellTests.Shells), MemberType = typeof(LocalGameHostShellTests))]
+    public async Task ExclusiveReportWritersDoNotShareAnEarlierWritersTemporaryFile(string shell)
+    {
+        await RunBoth(shell, SourceSettleScripts.BashWrite, SourceSettleScripts.PowerShellWrite,
+            dir => { Write(Path.Combine(dir, "report.json.vt-tmp"), "an earlier writer's temporary bytes"); return null; },
+            dir => new() { ["path"] = Path.Combine(dir, "report.json"), ["root"] = dir, ["exclusive"] = "1", ["content"] = B64("completed report") },
+            real: dir =>
+            {
+                Assert.True(File.Exists(Path.Combine(dir, "report.json.vt-tmp")), "The exclusive writer consumed an earlier writer's temporary file.");
+                Assert.Equal("an earlier writer's temporary bytes", File.ReadAllText(Path.Combine(dir, "report.json.vt-tmp")));
+                Assert.Equal("completed report", File.ReadAllText(Path.Combine(dir, "report.json")));
+            });
+    }
+
+    [Theory, MemberData(nameof(LocalGameHostShellTests.Shells), MemberType = typeof(LocalGameHostShellTests))]
     public async Task ARecoveryReportOrAdoptionNeverTraversesALink(string shell)
     {
         if (OperatingSystem.IsWindows()) return;

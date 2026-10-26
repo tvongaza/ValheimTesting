@@ -466,9 +466,10 @@ public sealed class RunRecoveryTests : IDisposable
         Assert.False(Directory.Exists(_host.Local(moved)));
     }
 
-    // #612 r4 item 5: under env teardown the same refusal ends in one pass: the folder the refused settlement kept goes too.
+    // A failed teardown retires the profile and independently kept moved folder in its first pass, retaining its diagnostic
+    // report for inspection. The next explicit teardown clears that report without repeating settlement.
     [Fact]
-    public async Task ATeardownRemovesWhatItsOwnRefusedSettlementKeptInOnePass()
+    public async Task AFailedTeardownRetiresTheRefusedProfileAndMovedFolderThenKeepsItsDiagnosticForInspection()
     {
         const string run = "run-refused-teardown", source = "/srv/game";
         var check = await KilledWithBaselineAsync(run, source);
@@ -533,7 +534,7 @@ public sealed class RunRecoveryTests : IDisposable
         {
             Assert.Contains("cannot be read", Assert.Single(teardown.Steps, step => step.What.StartsWith("source install of", StringComparison.Ordinal)).Outcome);
             Assert.Contains(Assert.Single((await StatusAsync()).Runs).Items, item => item.What == "/srv/runs/server/" + run + "/recovered-server");
-        Assert.True((await RecoverAsync(run, teardown: true)).Clean);
+            Assert.True((await RecoverAsync(run, teardown: true)).Clean);
         }
         else
         {
@@ -2047,6 +2048,38 @@ public sealed class RunRecoveryTests : IDisposable
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AValidBaselineWithARefusedInstallListingStillFinishesAndRetainsAnHonestReport(bool gone)
+    {
+        if (!gone && OperatingSystem.IsWindows()) return;
+        const string run = "run-list-refused", source = "/srv/game";
+        await KilledWithBaselineAsync(run, source);
+        if (gone) Directory.Delete(_host.Local(source), recursive: true);
+        else
+        {
+            Directory.CreateDirectory(_host.Local("/srv/foreign"));
+            File.WriteAllText(_host.Local("/srv/foreign/sentinel.txt"), "foreign");
+            Directory.CreateSymbolicLink(_host.Local(source + "/linked"), _host.Local("/srv/foreign"));
+        }
+        var first = await RecoverAsync(run, teardown: true);
+        Assert.False(first.Recovered);
+        Assert.Contains(first.Steps, step => step.What.StartsWith("source install of", StringComparison.Ordinal) &&
+            step.Outcome.Contains(gone ? "is gone" : "holds a link", StringComparison.Ordinal));
+        Assert.False(Directory.Exists(_host.Local(Prep + "/runtime")));
+        var records = await RunJournalOnHost.ReadAsync(_host, "/var/tmp/vt/journal", run, TimeSpan.FromSeconds(5));
+        var settled = Assert.Single(records, record => record.Entry.Kind == JournalEntry.SourceSettled);
+        string attempt = settled.Entry.Fields["sourceRecoveryCompleted"];
+        Assert.True(File.Exists(_host.Local(attempt + "/source-changes.json")));
+        Assert.Contains(gone ? "is gone" : "holds a link", File.ReadAllText(_host.Local(attempt + "/source-changes.json")));
+        Assert.Contains(Assert.Single((await StatusAsync()).Runs).Items, item => item.What == HostPath.Parent(attempt));
+        Assert.True((await RecoverAsync(run, teardown: true)).Clean);
+        Assert.False(Directory.Exists(_host.Local(HostPath.Parent(attempt))));
+        Assert.Single(await RunJournalOnHost.ReadAsync(_host, "/var/tmp/vt/journal", run, TimeSpan.FromSeconds(5)), record => record.Entry.Kind == JournalEntry.SourceSettled);
+        if (!gone) Assert.Equal("foreign", File.ReadAllText(_host.Local("/srv/foreign/sentinel.txt")));
+    }
+
+    [Theory]
     [InlineData(false, false)]
     [InlineData(false, true)]
     [InlineData(true, false)]
@@ -2275,6 +2308,22 @@ public sealed class RunRecoveryTests : IDisposable
         Assert.True(torn.Clean, string.Join("\n", torn.Steps));
         Assert.False(Directory.Exists(_host.Local(evidence)));
         Assert.Equal("foreign sentinel", File.ReadAllText(_host.Local(parent + "/foreign.txt")));
+        Assert.Equal(JournalRunState.Ended, Assert.Single((await StatusAsync()).Runs).State);
+    }
+
+    [Fact]
+    public async Task ReleasedVerifiedWorldAndParentRetireInOneDirectTeardown()
+    {
+        const string run = "run-legacy-direct", parent = "/srv/runs/run-legacy-direct", world = parent + "/world";
+        Directory.CreateDirectory(_host.Local(world));
+        File.WriteAllText(_host.Local(world + "/save.db"), "released save");
+        Line(_host, run, "server", Gone, JournalEntry.CopyIntended, ("runtime", parent), ("stage", ""), ("parent", "/srv/runs"),
+            ("holds", RunFolder.Holds), ("retention", "after-fetch"));
+        Line(_host, run, "server", Gone, JournalEntry.CopyIntended, ("runtime", world), ("stage", ""), ("parent", parent), ("holds", "world"));
+        Line(_host, run, "server", Gone, JournalEntry.CopyDone, ("runtime", world), ("verified", "true"));
+        var torn = await RecoverAsync(run, teardown: true);
+        Assert.True(torn.Clean, torn.Refused + string.Join("\n", torn.Steps));
+        Assert.False(Directory.Exists(_host.Local(parent)));
         Assert.Equal(JournalRunState.Ended, Assert.Single((await StatusAsync()).Runs).State);
     }
 

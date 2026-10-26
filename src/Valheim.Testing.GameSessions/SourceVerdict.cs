@@ -314,8 +314,18 @@ internal static class SourceSettleScripts
         if [ -n "${root:-}" ]; then vt_unlinked "$root" "$path" && vt_unlinked "$root" "$path.vt-tmp" || exit 3; fi
         if [ -n "${exclusive:-}" ] && { [ -e "$path" ] || [ -L "$path" ]; }; then exit 3; fi
         mkdir -p -- "$(dirname -- "$path")" || exit 3
-        { printf '%s' "$content" | base64 -d 2>/dev/null || printf '%s' "$content" | base64 -D; } > "$path.vt-tmp" || exit 3
-        mv -f -- "$path.vt-tmp" "$path" || exit 3
+        temporary="$path.vt-tmp"
+        if [ -n "${exclusive:-}" ]; then temporary=$(mktemp "$path.vt-tmp.XXXXXX") || exit 3; fi
+        if ! { printf '%s' "$content" | base64 -d 2>/dev/null || printf '%s' "$content" | base64 -D; } > "$temporary"; then
+            [ -z "${exclusive:-}" ] || rm -f -- "$temporary"
+            exit 3
+        fi
+        if [ -n "${exclusive:-}" ]; then
+            # POSIX link publishes this exact destination atomically, never replacing it or treating a directory as a container.
+            if ! link "$temporary" "$path"; then rm -f -- "$temporary"; exit 3; fi
+            rm -f -- "$temporary" || exit 3
+        else mv -f -- "$temporary" "$path" || exit 3
+        fi
         echo 'VT-SOURCE-WRITTEN'
         """.ReplaceLineEndings("\n");
 
@@ -323,8 +333,18 @@ internal static class SourceSettleScripts
         if ($root -and (-not (Test-VtUnlinked $root $path) -or -not (Test-VtUnlinked $root ($path + '.vt-tmp')))) { throw 'The source report destination passes through a link' }
         if ($exclusive -and (Test-Path -LiteralPath $path)) { throw 'The source report already exists' }
         [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($path))
-        [IO.File]::WriteAllBytes($path + '.vt-tmp', [Convert]::FromBase64String($content))
-        [IO.File]::Move($path + '.vt-tmp', $path, $true)
+        $bytes = [Convert]::FromBase64String($content)
+        if ($exclusive) {
+            $temporary = $path + '.vt-tmp.' + [Guid]::NewGuid().ToString('N')
+            $stream = [IO.File]::Open($temporary, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+            try {
+                try { $stream.Write($bytes, 0, $bytes.Length) } finally { $stream.Dispose() }
+                [IO.File]::Move($temporary, $path, $false)
+            } finally { if ([IO.File]::Exists($temporary)) { [IO.File]::Delete($temporary) } }
+        } else {
+            [IO.File]::WriteAllBytes($path + '.vt-tmp', $bytes)
+            [IO.File]::Move($path + '.vt-tmp', $path, $true)
+        }
         'VT-SOURCE-WRITTEN'
         """.ReplaceLineEndings("\n");
 
