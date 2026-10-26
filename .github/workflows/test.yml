@@ -20,7 +20,7 @@ jobs:
           printf 'fixture-directory=%s\n' "$fixture_directory" >> "$GITHUB_OUTPUT"
           cat > "$fixture_directory/control.py" <<'CONTROL_PY'
           """Private diagnostic proposal; source only until separately authorized."""
-          import datetime,errno,hashlib,json,os,signal,socket,subprocess,sys,time,uuid,xml.etree.ElementTree as ET
+          import datetime,errno,hashlib,json,math,os,select,signal,socket,subprocess,sys,time,uuid,xml.etree.ElementTree as ET
           from pathlib import Path
           ACTION_SHA='405250b722d01366d445e94adc0bba2717ebb66a27f29587854377f303e4e5bf'
           CONFIG_SHA='9e7cde96bf71703b2b8e692c2583e2d5fdd132276381199f96b18380c3fdabf7'
@@ -179,6 +179,60 @@ jobs:
                       remaining=deadline-time.monotonic()
                       if remaining<=0:return False
                       time.sleep(min(.05,remaining))
+              def wait_delivered(seconds,stage):
+                  # Only a delivered signal enters this read-only exit wait. The already
+                  # owned fd observes exit; neither readiness nor a zombie proves absence.
+                  # One deadline covers polling, EINTR and all later reaping observations.
+                  deadline=time.monotonic()+seconds
+                  if not callable(getattr(select,'poll',None)):
+                      record(stage+'-poll','unavailable');raise IdentityRefusal('pidfd-poll-unavailable')
+                  record(stage+'-poll','begin')
+                  try:
+                      poller=select.poll();poller.register(fd,select.POLLIN|select.POLLHUP)
+                      interrupted=False
+                      while True:
+                          remaining=deadline-time.monotonic()
+                          if remaining<=0:record(stage+'-poll','timeout');return False
+                          try:ready=poller.poll(max(1,math.ceil(remaining*1000)))
+                          except InterruptedError:
+                              if not interrupted:record(stage+'-poll','interrupted');interrupted=True
+                              continue
+                          if not isinstance(ready,list):raise IdentityRefusal('pidfd-poll-invalid-event')
+                          if not ready:continue
+                          if (len(ready)!=1 or
+                              not isinstance(ready[0],tuple) or len(ready[0])!=2):
+                              raise IdentityRefusal('pidfd-poll-invalid-event')
+                          observed_fd,mask=ready[0]
+                          if (type(observed_fd) is not int or observed_fd!=fd or
+                              type(mask) is not int or mask<=0 or mask&~(select.POLLIN|select.POLLHUP)):
+                              raise IdentityRefusal('pidfd-poll-invalid-event')
+                          record(stage+'-poll','exit-ready');break
+                  except OSError as error:record(stage+'-poll',os_result(error),error);raise
+                  except IdentityRefusal:record(stage+'-poll','invalid-event');raise
+                  except BaseException:record(stage+'-poll','api-error');raise
+                  while True:
+                      # Do not busy-loop on an always-readable pidfd after exit readiness.
+                      # Read only bounded stat/start identity; argv cannot authorize a
+                      # signal here and need not remain readable while this owner exits.
+                      if time.monotonic()>=deadline:record(stage+'-absence','timeout');return False
+                      identity=None
+                      try:
+                          identity=dict(parse_stat(bounded_read(Path(f'/proc/{pid}/stat'),STAT_LIMIT)),pid=pid)
+                          if identity['start_ticks']!=owner['start_ticks']:raise IdentityRefusal('owner-start-mismatch')
+                      except FileNotFoundError:
+                          if time.monotonic()>=deadline:record(stage+'-absence','timeout');return False
+                          record(stage+'-absence','absent');events.append('absent');return True
+                      except BaseException as error:
+                          if diagnostics:diagnostics.identity(stage+'-absence',owner,identity,failed=True,code=error.code if isinstance(error,IdentityRefusal) else 'proc-read-failed')
+                          raise
+                      remaining=deadline-time.monotonic()
+                      if remaining<=0:record(stage+'-absence','timeout');return False
+                      time.sleep(min(.05,remaining))
+              def wait_after_send(state,seconds,stage):
+                  if state=='absent':return True
+                  if state=='delivered':return wait_delivered(seconds,stage)
+                  # Preserve earlier absent/zombie/ESRCH paths and their strict checks.
+                  return wait_absent(seconds,stage)
               def send_owned(sig,stage):
                   # Check live argv immediately before using the already identity-bound handle.
                   state=observe(stage+'-identity')
@@ -213,13 +267,13 @@ jobs:
                           # Replacement after pidfd_open fails identity checks; replacement
                           # after this check cannot receive a signal bound to the original fd.
                           state=send_owned(signal.SIGTERM,'pidfd-term')
-                          gone=state=='absent' or wait_absent(5,'term-wait')
+                          gone=wait_after_send(state,5,'term-wait')
                           if not gone:
                               state=observe('before-kill')
                               if state=='live':
                                   state=send_owned(signal.SIGKILL,'pidfd-kill')
                                   forced=state=='delivered'
-                                  gone=state=='absent' or wait_absent(5,'kill-wait')
+                                  gone=wait_after_send(state,5,'kill-wait')
                               # A same-start zombie is never signaled or called absent.
                   return {'accepted':gone and not forced,'pid':pid,'start_ticks':owner['start_ticks'],'process_absent':gone,'forced_kill':forced,'observations':events[-64:]}
               finally:
