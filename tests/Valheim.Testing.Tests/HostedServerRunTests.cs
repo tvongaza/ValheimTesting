@@ -302,10 +302,11 @@ public sealed partial class HostedServerRunTests : IDisposable
         profile.Server.PreparedSourceRoot = Install;
         var plan = ServerRunPlan.Read<ServerRunPlan>(planPath);
         plan.Executable = GameLaunch.ServerMacExecutable;
+        // The campaign validates local source paths before binding the prepared remote runtime.
+        plan.ValidateServerPlan([], "TEST_SESSION_TOKEN");
         plan.Runtime = new() { Source = game, Sha256 = new(gameListing.Files) };
         plan.RuntimePins = InstallPins.Of(host.Local(game), host.Local(owned));
         plan.Pins[CliCapabilityManifest.PluginGuid] = TestCliSet.CorePin;
-        plan.ValidateServerPlan([], "TEST_SESSION_TOKEN");
         var hosted = HostedServerRun.Create(profile, plan, "test", new FakeRunHooks
         {
             Host = _ => host, Connect = _ => server.Connect(), StateWaits = false, RunId = RunId,
