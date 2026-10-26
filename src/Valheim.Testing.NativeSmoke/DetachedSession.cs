@@ -211,7 +211,8 @@ internal static class DetachedSession
         public string? StagedManifest { get; init; }
         public string? ManifestSha256 { get; init; }
     }
-    internal static string[] StageInputsOwned(string[] args, string parent, string control, ModInputStage.Inspection? admission = null)
+    internal static string[] StageInputsOwned(string[] args, string parent, string control, ModInputStage.Inspection? admission = null,
+        Action? afterWorldCopy = null)
     {
         if (admission != null) _ = ModInputStage.VerifyAdmission(admission);
         int output = Array.IndexOf(args, "--output");
@@ -224,8 +225,7 @@ internal static class DetachedSession
             JournalOwnedDirectory.Create(parent, Actor, purpose, owned =>
             {
                 payload = Path.Combine(owned, "payload"); Directory.CreateDirectory(payload);
-                CopyDirectory(source, payload, 10000, maximum, "A detached input directory is too large to stage");
-                WorldFixture.Verify(payload, hashes);
+                CopyDirectory(source, payload, 10000, maximum, "A detached input directory is too large to stage", hashes);
                 WorldFixture.Verify(source, hashes);
             });
             inputs.Add(new(source, payload, hashes));
@@ -236,20 +236,26 @@ internal static class DetachedSession
         if (fixture >= 0)
         {
             string original = args[fixture + 1];
-            var (worlds, manifestFile, _) = FixtureBake.Inspect(original);
-            _ = FixtureBake.Check(original);
+            var (worlds, manifestFile) = FixtureBake.Paths(original);
             var worldAdmission = admission?.WorldAdmission;
+            if (worldAdmission != null && !Path.TrimEndingDirectorySeparator(Path.GetFullPath(worlds)).Equals(
+                    Path.TrimEndingDirectorySeparator(worldAdmission.Source), OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+                throw new InvalidOperationException("Stage the original fixture path retained by world-format admission.");
             string? manifestHash = worldAdmission != null ? worldAdmission.ManifestSha256 : File.Exists(manifestFile) ? FileHash.Sha256(manifestFile) : null;
             var hashes = worldAdmission?.Files ?? WorldFixture.Manifest(worlds);
+            var identity = worldAdmission?.Identity ?? WorldIdentity.ReadObserved(worlds, hashes);
+            if (manifestHash != null) FixtureBake.VerifyBakedManifest(manifestFile, identity, hashes);
             string payload = "";
             JournalOwnedDirectory.Create(parent, Actor, "detached world input", owned =>
             {
                 payload = Path.Combine(owned, "payload");
                 string copy = Path.Combine(payload, "worlds_local");
                 Directory.CreateDirectory(copy);
-                CopyDirectory(worlds, copy, 10000, 4L << 30, "A detached world is too large to stage");
-                WorldFixture.Verify(worlds, hashes);
-                WorldFixture.Verify(copy, hashes);
+                var observed = CopyDirectory(worlds, copy, 10000, 4L << 30, "A detached world is too large to stage", hashes);
+                if (worldAdmission != null) _ = worldAdmission.World.ForObservedCopy(copy, observed);
+                else if (WorldIdentity.ReadObserved(copy, observed) != identity)
+                    throw new InvalidDataException("The detached world identity changed during staging.");
+                afterWorldCopy?.Invoke();
                 string stagedManifest = Path.Combine(payload, FixtureBake.ManifestFile);
                 if (manifestHash != null)
                 {
@@ -257,9 +263,10 @@ internal static class DetachedSession
                     if (FileHash.Sha256(stagedManifest) != manifestHash || FileHash.Sha256(manifestFile) != manifestHash)
                         throw new InvalidDataException("The baked fixture manifest changed during detached staging.");
                 }
-                _ = FixtureBake.Check(payload);
-                worldAdmission?.World.Verify(copy);
-                if (worldAdmission != null) FixtureBake.VerifyAdmission(worldAdmission);
+                if (manifestHash != null) FixtureBake.VerifyBakedManifest(stagedManifest, identity, observed);
+                // Keep source/target refusal inside the owner so a failed copy is retired by that same owner.
+                if (admission != null) _ = ModInputStage.VerifyAdmission(admission);
+                if (worldAdmission == null) WorldFixture.Verify(worlds, hashes);
             });
             inputs.Add(new(worlds, Path.Combine(payload, "worlds_local"), hashes)
             { SourceManifest = manifestFile, StagedManifest = Path.Combine(payload, FixtureBake.ManifestFile), ManifestSha256 = manifestHash });
@@ -267,7 +274,7 @@ internal static class DetachedSession
         }
         if (admission != null)
         {
-            _ = ModInputStage.VerifyAdmission(admission);
+            if (fixture < 0) _ = ModInputStage.VerifyAdmission(admission);
             inputs[0] = inputs[0] with
             {
                 TargetInstall = (admission.Choice.Server ?? admission.Choice.Client!).Install,
@@ -297,7 +304,7 @@ internal static class DetachedSession
         }
     }
 
-    internal static void VerifyStagedInputs(string? control = null)
+    internal static void VerifyStagedInputs(string? control = null, Action? afterStagedVerification = null)
     {
         control ??= ConfiguredControlDirectory ?? throw new InvalidOperationException("Missing detached input control directory.");
         var inputs = JsonSerializer.Deserialize<StagedInput[]>(File.ReadAllText(Path.Combine(control, "input-manifests.json")))
@@ -306,15 +313,23 @@ internal static class DetachedSession
         foreach (var input in inputs)
         {
             if (input.TargetInstall != null) _ = ReadPinnedTarget(input);
-            WorldFixture.Verify(input.Source, input.Hashes);
             WorldFixture.Verify(input.Staged, input.Hashes);
+            afterStagedVerification?.Invoke();
+            // Preserve the late original-content boundary after the potentially long staged scan.
+            WorldFixture.Verify(input.Source, input.Hashes);
             if (input.SourceManifest != null)
             {
                 if (input.ManifestSha256 != (File.Exists(input.SourceManifest) ? FileHash.Sha256(input.SourceManifest) : null) ||
                     input.ManifestSha256 != (File.Exists(input.StagedManifest) ? FileHash.Sha256(input.StagedManifest!) : null))
                     throw new InvalidDataException("A detached baked fixture manifest changed after staging.");
-                _ = FixtureBake.Check(input.Source);
-                _ = FixtureBake.Check(input.Staged);
+                var sourceIdentity = WorldIdentity.ReadObserved(input.Source, input.Hashes);
+                var stagedIdentity = WorldIdentity.ReadObserved(input.Staged, input.Hashes);
+                if (stagedIdentity != sourceIdentity) throw new InvalidDataException("The staged world identity differs from its source.");
+                if (input.ManifestSha256 != null)
+                {
+                    FixtureBake.VerifyBakedManifest(input.SourceManifest, sourceIdentity, input.Hashes);
+                    FixtureBake.VerifyBakedManifest(input.StagedManifest!, stagedIdentity, input.Hashes);
+                }
             }
         }
     }
@@ -346,7 +361,7 @@ internal static class DetachedSession
             ?? throw new InvalidDataException("Missing detached hosting game admission.");
         var retained = new FixtureBake.Admission(WorldIdentity.Capture(world.Staged, ReadPinnedTarget(target), world.Hashes),
             world.StagedManifest ?? throw new InvalidDataException("Missing detached fixture manifest path."), world.ManifestSha256);
-        FixtureBake.VerifyAdmission(retained);
+        FixtureBake.VerifyManifestAdmission(retained);
         return retained;
     }
 
@@ -365,9 +380,10 @@ internal static class DetachedSession
         return staged;
     }
 
-    private static void CopyDirectory(string source, string target, int maxFiles, long maxBytes, string tooLarge)
+    private static IReadOnlyDictionary<string, string> CopyDirectory(string source, string target, int maxFiles, long maxBytes, string tooLarge,
+        IReadOnlyDictionary<string, string>? pinned = null)
     {
-        var manifest = WorldFixture.Manifest(source);
+        var manifest = pinned ?? WorldFixture.Manifest(source);
         if (manifest.Count > maxFiles || manifest.Keys.Sum(relative => new FileInfo(Path.Combine(source, relative)).Length) > maxBytes)
             throw new InvalidDataException(tooLarge + ": " + source);
         foreach (var (relative, hash) in manifest)
@@ -375,10 +391,11 @@ internal static class DetachedSession
             string destination = Path.Combine(target, relative);
             Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
             File.Copy(Path.Combine(source, relative), destination);
-            if (!FileHash.Sha256(destination).Equals(hash, StringComparison.OrdinalIgnoreCase))
-                throw new IOException("The detached input changed during staging: " + relative);
         }
-        WorldFixture.Verify(source, manifest);
+        var observed = WorldFixture.VerifyObserved(target, manifest);
+        // Callers with retained pins own the later original-input check across staging.
+        if (pinned == null) WorldFixture.Verify(source, manifest);
+        return observed;
     }
 
     // The supervisor's first journal line adopts the starter's run before the campaign creates any host state. It is written under

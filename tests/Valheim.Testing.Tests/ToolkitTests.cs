@@ -70,6 +70,47 @@ public class ToolkitTests
         File.WriteAllText(Path.Combine(dirs.Source, "world.db"), "changed");
         Assert.Throws<InvalidOperationException>(() => WorldFixture.Copy(dirs.Source, dirs.Output, manifest));
     }
+    [Theory]
+    [InlineData("changed")]
+    [InlineData("missing")]
+    [InlineData("extra")]
+    public void FinalCopyVerificationRejectsEarlierDestinationDriftAndRetiresOnlyItsTarget(string fault)
+    {
+        using var dirs = new Directories();
+        string journalPath = Path.Combine(dirs.Root, "journal");
+        using var journal = RunJournal.UseLocalDirectory(journalPath);
+        File.WriteAllText(Path.Combine(dirs.Source, "a.db"), "first pinned bytes");
+        File.WriteAllText(Path.Combine(dirs.Source, "b.db"), "second pinned bytes");
+        string unrelated = Path.Combine(dirs.Output, "unrelated.txt"); File.WriteAllText(unrelated, "keep");
+        var pins = WorldFixture.Manifest(dirs.Source);
+        string? first = null; int copies = 0;
+        Assert.Throws<InvalidOperationException>(() => WorldFixture.Copy(dirs.Source, dirs.Output, pins, (from, to) =>
+        {
+            File.Copy(from, to);
+            if (++copies == 1) first = to;
+            else if (fault == "changed") File.WriteAllText(first!, "changed earlier destination");
+            else if (fault == "missing") File.Delete(first!);
+            else File.WriteAllText(Path.Combine(Path.GetDirectoryName(to)!, "extra.db"), "unexpected");
+        }));
+        Assert.Equal(2, copies); Assert.Empty(Directory.GetDirectories(dirs.Output));
+        Assert.Equal("keep", File.ReadAllText(unrelated)); WorldFixture.Verify(dirs.Source, pins);
+        var records = Directory.EnumerateFiles(journalPath, "*.jsonl", SearchOption.AllDirectories)
+            .SelectMany(File.ReadAllLines).Select(RunJournal.ParseLine).ToList();
+        Assert.DoesNotContain(records, record => record.Entry.Kind == JournalEntry.CopyDone);
+        Assert.Contains(records, record => record.Entry.Kind == JournalEntry.CopyRetired);
+    }
+
+    [Fact] public void CopyAsFoundStillRecordsActualSourcePins()
+    {
+        using var dirs = new Directories();
+        File.WriteAllText(Path.Combine(dirs.Source, "a.db"), "actual bytes");
+        var pins = WorldFixture.Manifest(dirs.Source);
+        using var copy = WorldFixture.CopyAsFound(dirs.Source, dirs.Output);
+        Assert.Equal(pins, copy.SourceHashes);
+        Assert.True(File.Exists(Path.Combine(copy.DirectoryPath, WorldFixture.ProvenanceFile)));
+        Assert.Equal("actual bytes", File.ReadAllText(Path.Combine(copy.DirectoryPath, "a.db")));
+    }
+
     [Fact] public void AManifestNeedsAnExistingNonEmptySource()
     {
         using var dirs = new Directories();

@@ -38,15 +38,28 @@ public sealed record WorldIdentity(string Name, string SeedName, int Seed, long 
 
     internal static WorldIdentity Read(string fixture, GameBuild target) => ReadCore(fixture, target, true);
 
-    private static WorldIdentity ReadCore(string fixture, GameBuild? target, bool admit)
+    internal static WorldIdentity ReadObserved(string fixture, IReadOnlyDictionary<string, string> observed, GameBuild? target = null, bool copied = false) =>
+        ReadCore(fixture, target, target != null, observed, copied);
+
+    private static WorldIdentity ReadCore(string fixture, GameBuild? target, bool admit, IReadOnlyDictionary<string, string>? observed = null, bool copied = false)
     {
         fixture = Path.GetFullPath(fixture);
         if (!Directory.Exists(fixture)) throw new DirectoryNotFoundException("The fixture world does not exist: " + fixture);
         // A copy's own record (WorldFixture.Copy) is not part of the world; a pinned manifest never lists it (NameOf refuses it there).
-        var relative = Directory.EnumerateFiles(fixture, "*", SearchOption.AllDirectories).Select(path => Path.GetRelativePath(fixture, path))
-            .Where(path => path != WorldFixture.ProvenanceFile).ToList();
-        var layout = Layout(relative);
-        byte[] Bytes(string file) => System.IO.File.ReadAllBytes(Path.Combine(fixture, file));
+        var actualPaths = (observed == null ? Directory.EnumerateFiles(fixture, "*", SearchOption.AllDirectories) : FileHash.Files(fixture))
+            .Select(path => Path.GetRelativePath(fixture, path)).ToList();
+        // Hashing and parsing share one content observation, but names and links must still be exact at parse time.
+        // Only a verified copy may add the generated record outside its pins.
+        if (observed != null) Check.SameIdentities(actualPaths.Where(path =>
+            !(copied && !observed.ContainsKey(WorldFixture.ProvenanceFile) && path == WorldFixture.ProvenanceFile)), observed.Keys);
+        var layout = Layout(actualPaths.Where(path => path != WorldFixture.ProvenanceFile));
+        byte[] Bytes(string file)
+        {
+            byte[] bytes = System.IO.File.ReadAllBytes(Path.Combine(fixture, file));
+            if (observed != null && !FileHash.Sha256(bytes).Equals(observed[file], StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException("The fixture metadata changed after its content was observed: " + file);
+            return bytes;
+        }
         var identity = ParseMetadata(Bytes(layout.Metadata), layout.Metadata, out bool? needsDb);
         if (admit) identity.Admit(target!);
         if (layout.Lone && needsDb != false)
@@ -76,15 +89,14 @@ public sealed record WorldIdentity(string Name, string SeedName, int Seed, long 
         return identity;
     }
 
-    // One retained admission: hash before parsing, verify afterwards, and never derive replacement pins.
+    // One content observation per boundary; parsed metadata is bound to that observation, never replacement pins.
     internal sealed record Admission(string Source, WorldIdentity Identity, IReadOnlyDictionary<string, string> Files, GameBuild Target, bool Copied = false)
     {
         internal void Verify(string? copy = null)
         {
             string source = copy ?? Source;
-            WorldFixture.Verify(source, Files, copied: copy != null || Copied);
-            if (Read(source, Target) != Identity) throw new InvalidDataException("The fixture identity changed after admission.");
-            WorldFixture.Verify(source, Files, copied: copy != null || Copied);
+            var observed = WorldFixture.VerifyObserved(source, Files, copied: copy != null || Copied);
+            RequireObservedIdentity(source, observed, copy != null || Copied);
         }
 
         internal void VerifySource(string source)
@@ -102,17 +114,29 @@ public sealed record WorldIdentity(string Name, string SeedName, int Seed, long 
             return this with { Source = Path.GetFullPath(copy), Copied = true };
         }
 
+        // Only the copy owner calls this with its just-verified destination observation.
+        internal Admission ForObservedCopy(string copy, IReadOnlyDictionary<string, string> observed)
+        {
+            WorldFixture.RequireHashes(copy, observed, Files);
+            RequireObservedIdentity(copy, observed, copied: true);
+            return this with { Source = Path.GetFullPath(copy), Copied = true };
+        }
+
+        private void RequireObservedIdentity(string source, IReadOnlyDictionary<string, string> observed, bool copied)
+        {
+            if (ReadObserved(source, observed, Target, copied) != Identity)
+                throw new InvalidDataException("The fixture identity changed after admission.");
+        }
+
         internal void VerifyTarget(GameBuild current) => RequireSameTarget(Target, current);
     }
 
     internal static Admission Capture(string source, GameBuild target, IReadOnlyDictionary<string, string>? pinned = null)
     {
         source = Path.GetFullPath(source);
-        var files = new Dictionary<string, string>(pinned is { Count: > 0 } ? pinned : WorldFixture.Manifest(source), StringComparer.Ordinal);
-        var identity = Read(source, target);
-        var admitted = new Admission(source, identity, files, target);
-        admitted.Verify();
-        return admitted;
+        var files = pinned is { Count: > 0 } ? WorldFixture.VerifyObserved(source, pinned, copied: false) : WorldFixture.Manifest(source);
+        var identity = ReadObserved(source, files, target);
+        return new Admission(source, identity, new Dictionary<string, string>(files, StringComparer.Ordinal), target);
     }
 
     internal static void RequireSameTarget(GameBuild original, GameBuild current)

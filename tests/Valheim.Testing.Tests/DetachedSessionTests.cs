@@ -39,6 +39,66 @@ public sealed class DetachedSessionTests : IDisposable
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public void HandoffVerifiesOriginalPayloadAfterStagedPayloadObservation(bool injectDrift)
+    {
+        using var data = new FakeDataRoot(Path.Combine(_root, "late-original-data"));
+        string baked = Path.Combine(_root, "baked"), worlds = FakeInstalls.World(Path.Combine(baked, "worlds_local"));
+        var pins = WorldFixture.Manifest(worlds);
+        File.WriteAllText(Path.Combine(baked, FixtureBake.ManifestFile), JsonSerializer.Serialize(new
+        { schemaVersion = 1, world = new { Name = "Campaign", Uid = 4242L }, filesSha256 = pins }));
+        string mod = Directory.CreateDirectory(Path.Combine(_root, "mod")).FullName;
+        File.WriteAllText(Path.Combine(mod, "Mod.dll"), "mod");
+        string control = Directory.CreateDirectory(Path.Combine(_root, "control")).FullName;
+        using var run = RunJournal.UseRun("late-original");
+        string[] staged = DetachedSession.StageInputsOwned(["--mod", Path.Combine(mod, "Mod.dll"), "--world-fixture", baked], Path.Combine(_root, "copies"), control);
+        int observations = 0;
+        void AfterStaged()
+        {
+            if (++observations != 2 || !injectDrift) return; // mod first, world second
+            string payload = Path.Combine(worlds, "Campaign", "_main.1.db2");
+            DateTime modified = File.GetLastWriteTimeUtc(payload);
+            byte[] bytes = File.ReadAllBytes(payload); bytes[0] ^= 1;
+            File.WriteAllBytes(payload, bytes); File.SetLastWriteTimeUtc(payload, modified);
+        }
+        if (injectDrift)
+        {
+            string error = Assert.Throws<InvalidOperationException>(() => DetachedSession.VerifyStagedInputs(control, AfterStaged)).Message;
+            Assert.Contains(worlds, error); Assert.Contains("_main.1.db2", error);
+        }
+        else DetachedSession.VerifyStagedInputs(control, AfterStaged);
+        Assert.Equal(2, observations);
+        WorldFixture.Verify(Path.Combine(staged[3], "worlds_local"), pins);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void StagingRetainsOriginalFinalVerificationWithAndWithoutWorldAdmission(bool suppliedWorld)
+    {
+        using var data = new FakeDataRoot(Path.Combine(_root, "stage-final-data"));
+        string server = Path.Combine(_root, "server"); FakeInstalls.Server(server);
+        string world = FakeInstalls.World(Path.Combine(_root, "world"));
+        string mod = Directory.CreateDirectory(Path.Combine(_root, "mods")).FullName;
+        File.WriteAllText(Path.Combine(mod, "Mod.dll"), "mod");
+        string control = Directory.CreateDirectory(Path.Combine(_root, "control")).FullName;
+        var request = new ModInputStage.Request(ModInputStage.Route.Dedicated, Path.Combine(_root, "out"),
+            new Dictionary<string, string> { ["--server"] = server, ["--world-fixture"] = world }, new HashSet<string> { "--server-only" }, [], [], [], []);
+        var admission = ModInputStage.Inspect(request);
+        if (!suppliedWorld) admission = admission with { WorldAdmission = null };
+        using var run = RunJournal.UseRun("stage-final");
+        Assert.Throws<InvalidOperationException>(() => DetachedSession.StageInputsOwned(
+            ["--mod", Path.Combine(mod, "Mod.dll"), "--world-fixture", world], Path.Combine(_root, "inputs"), control, admission,
+            afterWorldCopy: () => File.AppendAllText(Path.Combine(world, "Campaign", "_main.1.db2"), "drift after staged verification")));
+        Assert.False(File.Exists(Path.Combine(control, "input-manifests.json")));
+        Assert.DoesNotContain(Directory.EnumerateDirectories(Path.Combine(_root, "inputs")),
+            owned => Directory.Exists(Path.Combine(owned, "payload", "worlds_local")));
+        Assert.True(Directory.Exists(world));
+        Assert.Equal("mod", File.ReadAllText(Path.Combine(mod, "Mod.dll")));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public void TheSupervisorRehydratesThePersistedWorldHashesInsteadOfAdoptingStagedDrift(bool afterRehydration)
     {
         using var data = new FakeDataRoot(Path.Combine(_root, "supervisor-data"));

@@ -730,9 +730,14 @@ public static class PinnedServerRun
             bool worldIdentityFromPlan = plan.Pins.ContainsKey("worlduid") || plan.Pins.ContainsKey("world");
             report.Step(StepPhase.Setup, Verified(plan.World) ? "copy and verify pinned world" : "copy the world and pin it as found", () =>
             {
-                world = WorldFixture.Copy(plan.World.Source, output, admittedHashes); world.Preserve = true;
-                WorldFixture.Verify(plan.World.Source, admittedHashes);
-                hosted.WorldAdmission?.Verify(Path.Combine(world.DirectoryPath, "worlds_local"));
+                if (hosted.WorldAdmission is { } admission)
+                    world = WorldFixture.CopyAdmitted(plan.World.Source, output, admittedHashes, admission, "worlds_local");
+                else
+                {
+                    world = WorldFixture.Copy(plan.World.Source, output, admittedHashes);
+                    WorldFixture.Verify(plan.World.Source, admittedHashes);
+                }
+                world.Preserve = true;
                 var copiedIdentity = plan.PreflightWorld(hosted.WorldBuild, world.DirectoryPath);
                 if (copiedIdentity != hosted.AdmittedWorld)
                     throw new InvalidDataException("The copied world differs from the fixture admitted before staging.");

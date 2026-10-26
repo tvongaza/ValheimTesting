@@ -157,16 +157,17 @@ internal static class HostedWorldOnHost
         if (existing.Count != 0)
             throw new InvalidOperationException($"The client's worlds on {site.HostName} already hold {string.Join(", ", existing)} in {site.WorldsDirectory}: a fixture world is never copied over a world. Remove or rename that one yourself, or rename the fixture world.");
         Reserve(site, cancellation);
-        var copy = WorldFixture.Copy(plan.World.Source, output, plan.World.Sha256);
+        var copy = plan.Admission is { } admission
+            ? WorldFixture.CopyAdmitted(plan.World.Source, output, plan.World.Sha256, admission, "")
+            : WorldFixture.Copy(plan.World.Source, output, plan.World.Sha256);
         copy.Preserve = true;
         try
         {
             if (plan.Admission is { } admitted)
             {
-                admitted.Verify(copy.DirectoryPath);
                 plan.RequireUid(admitted.Identity);
             }
-            WorldFixture.Verify(plan.World.Source, plan.World.Sha256);
+            else WorldFixture.Verify(plan.World.Source, plan.World.Sha256);
 
             // Journalled before the ship: no journal line, no world in the user's worlds.
             site.Journal(JournalEntry.Of(JournalEntry.CopyIntended, ("runtime", world), ("stage", ""), ("parent", site.WorldsDirectory), ("holds", Holds),

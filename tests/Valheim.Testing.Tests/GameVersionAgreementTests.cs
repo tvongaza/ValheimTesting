@@ -181,6 +181,27 @@ public sealed class GameVersionAgreementTests
     }
 
     [Fact]
+    public async Task EarlyInspectionRequestsOnlyTheAssemblyAndLaterInspectionRequestsTheWholeInstall()
+    {
+        string root = Directory.CreateTempSubdirectory("world923-assembly-request-").FullName;
+        try
+        {
+            FakeInstalls.Server(root);
+            var host = FakeServerHost.ThisMachine();
+            var early = await GameVersionAgreement.ReadInstallationAsync(host, root, GameHostChecks.Generous, CancellationToken.None);
+            Assert.NotNull(early.WorldSupport);
+            var request = Assert.Single(host.Runs.Where(run => run.Variables.ContainsKey("dirs")));
+            Assert.Equal(InstallPins.ManagedFolders.Select(folder => folder + "/" + InstallPins.GameAssemblyName), request.Variables["dirs"].Split('\n'));
+            Assert.Equal("1", request.Variables["nocase"]);
+            var full = await HostInstall.ListProfileSourceAsync(host, root, GameHostChecks.Generous);
+            Assert.Equal("", host.Runs.Last(run => run.Variables.ContainsKey("dirs")).Variables["dirs"]);
+            Assert.Contains(full.Files.Keys, name => name.StartsWith("BepInEx/", StringComparison.Ordinal));
+            WorldIdentity.RequireSameTarget(early, await GameVersionAgreement.ReadAsync(host, full, GameHostChecks.Generous, CancellationToken.None));
+        }
+        finally { DirectoryLinks.DeleteTree(root); }
+    }
+
+    [Fact]
     public void OneActorOrAnActorWhoseInstallCheckFailedAddsNothing()
     {
         Assert.Empty(GameVersionAgreement.Decide([Side("server", new GameBuild(null, null, "x"))]));
@@ -210,6 +231,51 @@ public sealed class GameAssemblyReadShellTests : IDisposable
         var missing = await GameVersionAgreement.ReadInPlaceAsync(Path.Combine(_root, "missing"), CancellationToken.None);
         Assert.Null(missing.NetworkVersion);
         Assert.Contains("missing", missing.Unknown);
+    }
+
+    public static TheoryData<string, string> InstallLayouts => new()
+    {
+        { "valheim_Data/Managed", "client" },
+        { "valheim_server_Data/Managed", "server" },
+        { "Valheim.app/Contents/Resources/Data/Managed", "mac-client" },
+        { "valheim_server/Data/Managed", "mac-server" },
+    };
+
+    [Theory, MemberData(nameof(InstallLayouts))]
+    public async Task EarlyAssemblyInspectionSupportsEveryLayoutAndTheLaterListingRemainsComplete(string managed, string name)
+    {
+        string root = Path.Combine(_root, name), assembly = Path.Combine(root, managed, InstallPins.GameAssemblyName);
+        Directory.CreateDirectory(Path.GetDirectoryName(assembly)!);
+        File.WriteAllBytes(assembly, FakeInstalls.GameAssembly());
+        string asset = Path.Combine(root, "bulk-assets", "world.bundle");
+        Directory.CreateDirectory(Path.GetDirectoryName(asset)!); File.WriteAllText(asset, "bulk asset excluded from early admission");
+        var host = new LocalGameHost("local", HostShell.ThisMachine);
+        var early = await GameVersionAgreement.ReadInstallationAsync(host, root, GameHostChecks.Generous, CancellationToken.None);
+        Assert.NotNull(early.WorldSupport);
+        var full = await HostInstall.ListProfileSourceAsync(host, root, GameHostChecks.Generous);
+        Assert.Contains("bulk-assets/world.bundle", full.Files.Keys);
+        var later = await GameVersionAgreement.ReadAsync(host, full, GameHostChecks.Generous, CancellationToken.None);
+        WorldIdentity.RequireSameTarget(early, later);
+        // A different assembly with an unchanged network version must still invalidate the early target.
+        File.WriteAllBytes(assembly, FakeInstalls.GameAssembly(maximum: 43));
+        var changed = await GameVersionAgreement.ReadInstallationAsync(host, root, GameHostChecks.Generous, CancellationToken.None);
+        Assert.Equal(early.NetworkVersion, changed.NetworkVersion);
+        Assert.Throws<InvalidOperationException>(() => WorldIdentity.RequireSameTarget(early, changed));
+    }
+
+    [Fact]
+    public async Task EarlyAssemblyInspectionRefusesMissingAndAmbiguousInstalls()
+    {
+        var host = new LocalGameHost("local", HostShell.ThisMachine);
+        var missing = await GameVersionAgreement.ReadInstallationAsync(host, _root, GameHostChecks.Generous, CancellationToken.None);
+        Assert.Null(missing.WorldSupport); Assert.Contains("No game assembly", missing.Unknown);
+        foreach (string managed in new[] { "valheim_Data/Managed", "valheim_server_Data/Managed" })
+        {
+            Directory.CreateDirectory(Path.Combine(_root, managed));
+            File.WriteAllBytes(Path.Combine(_root, managed, InstallPins.GameAssemblyName), FakeInstalls.GameAssembly());
+        }
+        var ambiguous = await GameVersionAgreement.ReadInstallationAsync(host, _root, GameHostChecks.Generous, CancellationToken.None);
+        Assert.Null(ambiguous.WorldSupport); Assert.Contains("More than one game assembly", ambiguous.Unknown);
     }
 
     [Theory, MemberData(nameof(Shells))]
