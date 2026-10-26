@@ -1,80 +1,25 @@
-name: Local test layers
-# Bootstrap and local validation on every supported toolkit OS: library tests, example builds, the
-# no-game example, package-consuming mod tests and packing. Never launches Valheim or a server. The scripts are .NET file-based
-# programs, so the same commands run in each runner's default shell. No secrets are used. The mod-example job runs
-# the copied template's test project through validate.cs's limits against the published packages. The game-hosts job drives the real ssh
-# and docker paths of the game hosts against a throwaway sshd on localhost and a throwaway container.
-# Pushes to main and pull requests only: a branch with an open PR would otherwise run everything twice.
-# A pull request runs the OS-aware split (#735): validate.cs --split runs OS-neutral toolkit test classes on Linux only and OS-specific ones
-# on their OS. Every push to main (and a manual dispatch) runs every test on every OS; a failure there is fixed forward at once.
+name: Private bootstrap fixture identity diagnostic
+# TEMPORARY private proposal: replace test.yml only after separate source/runtime grant.
 on:
-  push:
-    branches: [main]
-  pull_request:
   workflow_dispatch:
 permissions:
   contents: read
-env:
-  DOTNET_CLI_TELEMETRY_OPTOUT: '1'
-  DOTNET_NOLOGO: '1'
-  # The one choice of split or full by event (#735), passed to every validate.cs command below; validate.cs owns what it selects.
-  VT_SPLIT_ARGUMENT: ${{ github.event_name == 'pull_request' && '--split' || '' }}
 jobs:
-  test:
-    name: test (${{ matrix.os }})
-    strategy:
-      # One OS failing must not hide the others' results.
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
-    # The validate step's bound plus setup, the Linux-only script step and the cache save (see the step comment).
-    timeout-minutes: 25
-    permissions:
-      contents: read
-    env:
-      # GitHub's Windows runners run the job in the signed-in console session, so the interactive client's scheduled-task
-      # start is required to run there (with stand-ins for Steam and the game) rather than only its refusal.
-      VALHEIM_TESTING_WINDOWS_DESKTOP: ${{ matrix.os == 'windows-latest' && '1' || '' }}
-      # The NuGet package cache's paths (see "Restore the NuGet package cache"), shared by its restore and save.
-      VT_NUGET_CACHE_PATHS: |
-        ~/.nuget/packages
-        !~/.nuget/packages/valheim.testing*
-        !~/.nuget/packages/valheim.cli*
+  fixture-identity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: ./.github/actions/setup
-        with:
-          pinned-downloads: true
-      # Packages from NuGet.org, reused across runs. Never this repository's own packages (Valheim.Testing*, and the CLI
-      # transport bootstrap builds): validate packs those at versions it reuses and checks that consumers restore exactly what
-      # it packed, which a cached copy of an earlier build would defeat. A restored entry is trusted as NuGet's global
-      # packages folder trusts its own files; only this repository's workflows can write the cache, a pull request only for itself.
-      - name: Restore the NuGet package cache
-        id: nuget-cache
-        uses: actions/cache/restore@v6
-        with:
-          path: ${{ env.VT_NUGET_CACHE_PATHS }}
-          key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', 'scripts/*.cs', 'scripts/Shared/*.cs', 'cli-dependency.json', 'NuGet.Config', '.config/dotnet-tools.json') }}
-          restore-keys: nuget-${{ runner.os }}-
-      - run: dotnet --info
-      - name: Seed an obsolete CLI package for the local-feed cleanup regression
-        if: runner.os == 'Linux'
-        run: |
-          mkdir -p .packages
-          printf 'obsolete CLI package' > .packages/Valheim.Testing.Cli.0.1.0-preview.0.nupkg
-      # TEMPORARY #922 negative control: remove this fixture after its reviewed run.
-      - name: Prepare the owned bootstrap audit failure (temporary control)
-        id: bootstrap-control-fixture
-        if: runner.os == 'Linux'
+      - name: Launch one owned fixture and record setup identity
+        id: fixture
         shell: bash
         run: |
           fixture_directory=$(mktemp -d "$RUNNER_TEMP/bootstrap-control.XXXXXXXX")
           printf 'fixture-directory=%s\n' "$fixture_directory" >> "$GITHUB_OUTPUT"
           cat > "$fixture_directory/control.py" <<'CONTROL_PY'
-          """Temporary hosted fixture only. This file is proposed inline YAML, not executed locally."""
+          """Private diagnostic proposal; source only until separately authorized."""
           import datetime,errno,hashlib,json,os,signal,socket,subprocess,sys,time,uuid,xml.etree.ElementTree as ET
           from pathlib import Path
           ACTION_SHA='405250b722d01366d445e94adc0bba2717ebb66a27f29587854377f303e4e5bf'
@@ -106,86 +51,195 @@ jobs:
           server.serve_forever()
           '''
           def sha(data):return hashlib.sha256(data).hexdigest()
-          def save(path,value):
-              temporary=path.with_name(path.name+'.writing');temporary.write_text(json.dumps(value,indent=2)+'\n');os.replace(temporary,path)
+          def save(path,value,limit=None):
+              raw=(json.dumps(value,indent=2)+'\n').encode()
+              if limit is not None and len(raw)>limit:raise IdentityRefusal('diagnostic-size-limit')
+              temporary=path.with_name(path.name+'.writing');temporary.write_bytes(raw);os.replace(temporary,path)
+          STAT_LIMIT=4096
+          CMDLINE_LIMIT=16384
+          ARG_LIMIT=32
+          DIAGNOSTIC_LIMIT=32768
+          class IdentityRefusal(RuntimeError):
+              def __init__(self,code,observation=None):
+                  super().__init__(code);self.code=code;self.observation=observation
+          def os_result(error):
+              if error.errno in [errno.EACCES,errno.EPERM]:return 'permission-denied'
+              if error.errno in [errno.ENOSYS,errno.EOPNOTSUPP]:return 'unsupported'
+              return 'os-error'
+          def bounded_read(path,limit):
+              with path.open('rb') as stream:data=stream.read(limit+1)
+              if len(data)>limit:raise IdentityRefusal('proc-input-oversized')
+              return data
+          def parse_stat(raw):
+              if not isinstance(raw,bytes) or len(raw)>STAT_LIMIT:raise IdentityRefusal('stat-input-invalid')
+              try:
+                  fields=raw.decode().rsplit(')',1)[1].split()
+                  state=fields[0];ticks=fields[19]
+                  if len(state)!=1 or len(ticks)>20 or not ticks.isascii() or not ticks.isdigit():raise ValueError()
+                  return {'state':state,'start_ticks':ticks}
+              except (ValueError,IndexError,UnicodeError):raise IdentityRefusal('stat-parse-failed') from None
+          def parse_proc_bytes(pid,first,cmdline,current):
+              # This is the actual proc_identity parser, also called by pure byte tests.
+              # Preserve proposal02's filtering of ALL empty split fields for this diagnostic.
+              # Raw empty positions remain visible as metadata, not as an ownership correction.
+              if not isinstance(cmdline,bytes) or len(cmdline)>CMDLINE_LIMIT:raise IdentityRefusal('cmdline-input-oversized')
+              parts=cmdline.split(b'\0')
+              if len(parts)>ARG_LIMIT:raise IdentityRefusal('cmdline-argument-limit')
+              observation={'pid':pid,'_cmdline':cmdline,'_raw_parts':parts,'_parsed_parts':[part for part in parts if part]}
+              try:
+                  before=parse_stat(first);after=parse_stat(current);observation.update(after)
+                  if before['start_ticks']!=after['start_ticks']:raise IdentityRefusal('start-changed-during-read')
+                  observation['argv']=[part.decode() for part in observation['_parsed_parts']]
+                  return observation
+              except IdentityRefusal as error:
+                  error.observation=observation;raise
+              except UnicodeError:raise IdentityRefusal('cmdline-decode-failed',observation) from None
           def proc_identity(pid):
               try:
-                  stat=Path(f'/proc/{pid}/stat').read_text().rsplit(')',1)[1].split()
-                  argv=Path(f'/proc/{pid}/cmdline').read_bytes().split(b'\0')
-                  # Re-read identity after cmdline: PID replacement or live->zombie transitions
-                  # cannot combine an old stat observation with a new process's command line.
-                  current=Path(f'/proc/{pid}/stat').read_text().rsplit(')',1)[1].split()
+                  first=bounded_read(Path(f'/proc/{pid}/stat'),STAT_LIMIT)
+                  cmdline=bounded_read(Path(f'/proc/{pid}/cmdline'),CMDLINE_LIMIT)
+                  current=bounded_read(Path(f'/proc/{pid}/stat'),STAT_LIMIT)
               except FileNotFoundError:return None
-              assert stat[19]==current[19],'process identity changed during observation'
-              return {'pid':pid,'start_ticks':current[19],'state':current[0],'argv':[part.decode() for part in argv if part]}
-          def observe_owned_server(root,owner):
-              identity=proc_identity(owner['pid'])
-              if identity is None:return 'absent'
-              assert identity['start_ticks']==owner['start_ticks'],'PID identity changed; refuse signal'
-              if identity['state'] in ['Z','X']:return 'exited-not-reaped'
-              assert identity['argv'][1:]==[str(root/'server.py'),str(root),owner['control_id']],'live command identity changed; refuse signal'
-              return 'live'
-          def stop_cross_step_server(root,owner):
+              return parse_proc_bytes(pid,first,cmdline,current)
+          def expected_argv(root,owner):return [str(root/'server.py'),str(root),owner['control_id']]
+          def identity_metadata(root,owner,identity):
+              expected=expected_argv(root,owner)
+              launch=[owner.get('expected_interpreter',sys.executable),*expected]
+              if any(not isinstance(value,str) or len(value.encode())>4096 for value in launch):raise IdentityRefusal('expected-input-oversized')
+              summary={'owned_pid':owner['pid'],'owner_start_ticks':owner['start_ticks'],'expected_launch_argv':launch,'absent':identity is None}
+              if identity is None:return summary
+              summary.update({'observed_start_ticks':identity.get('start_ticks'),'kernel_state':identity.get('state')})
+              raw=identity.get('_cmdline')
+              if raw is None:return dict(summary,raw_available=False)
+              parts=identity['_raw_parts'];parsed=identity['_parsed_parts']
+              summary.update({'raw_available':True,'raw_byte_length':len(raw),'raw_sha256':sha(raw),'nul_count':raw.count(b'\0'),'trailing_nul':raw.endswith(b'\0'),'raw_split_count':len(parts),'raw_empty_positions':[i for i,part in enumerate(parts) if not part],'parsed_argument_count':len(parsed)})
+              summary['raw_positions']=[{'position':index,'byte_length':len(part),'sha256':sha(part),'equals_expected_position':index<len(launch) and part==launch[index].encode()} for index,part in enumerate(parts)]
+              positions=[]
+              for index,part in enumerate(parsed):
+                  value={'position':index,'byte_length':len(part),'sha256':sha(part),'equals_expected':index<len(launch) and part==launch[index].encode()}
+                  if 1<=index<=3:
+                      known=expected[index-1];value['equals_expected']=part==known.encode()
+                      if index in [1,2]:
+                          try:
+                              decoded=part.decode();normalized=os.path.normpath(decoded)
+                              value['normalized_equals_expected']=normalized==os.path.normpath(known)
+                              value['within_owned_root']=os.path.commonpath([str(root),normalized])==str(root)
+                          except (UnicodeError,ValueError):
+                              value.update(normalized_equals_expected=False,within_owned_root=False)
+                  positions.append(value)
+              summary['positions']=positions
+              return summary
+          class IdentityDiagnostics:
+              def __init__(self,root):
+                  self.root=root;self.path=root/'identity-diagnostics.json'
+                  self.value={'schema':1,'initial':None,'first_failure':None,'operations':[]}
+                  if self.path.exists():
+                      self.value=json.loads(bounded_read(self.path,DIAGNOSTIC_LIMIT))
+                      if self.value.get('schema')!=1 or len(self.value.get('operations',[]))>32:raise IdentityRefusal('diagnostic-state-invalid')
+              def persist(self,kind,row):
+                  save(self.path,self.value,limit=DIAGNOSTIC_LIMIT)
+                  # Only bounded controller-created fields, fixed enums, hashes and booleans.
+                  print('CONTROL_IDENTITY '+json.dumps({'kind':kind,'record':row}),flush=True)
+              def identity(self,stage,owner,identity,failed=False,code=None):
+                  key='first_failure' if failed else 'initial'
+                  if self.value[key] is not None:return
+                  row=dict(identity_metadata(self.root,owner,identity),stage=stage,result_class=code or 'observed')
+                  if failed and identity is None:row.update(absent=None,observation_unavailable=True)
+                  self.value[key]=row;self.persist(key,row)
+              def operation(self,stage,result_class,error=None):
+                  if len(self.value['operations'])>=32:raise IdentityRefusal('diagnostic-operation-limit')
+                  row={'stage':stage,'result_class':result_class}
+                  if isinstance(error,OSError):row['errno']=error.errno
+                  self.value['operations'].append(row);self.persist('operation',row)
+          def observe_owned_server(root,owner,diagnostics=None,stage='observation'):
+              identity=None
+              try:
+                  identity=proc_identity(owner['pid'])
+                  if stage=='setup-popen' and diagnostics:diagnostics.identity(stage,owner,identity)
+                  if identity is None:return 'absent'
+                  if identity['start_ticks']!=owner['start_ticks']:raise IdentityRefusal('owner-start-mismatch')
+                  if identity['state'] in ['Z','X']:return 'exited-not-reaped'
+                  if identity['argv'][1:]!=expected_argv(root,owner):raise IdentityRefusal('argv-mismatch')
+                  return 'live'
+              except BaseException as error:
+                  if diagnostics:diagnostics.identity(stage,owner,getattr(error,'observation',None) or identity,failed=True,code=error.code if isinstance(error,IdentityRefusal) else 'proc-read-failed')
+                  raise
+          def stop_cross_step_server(root,owner,diagnostics=None):
               pid=owner['pid'];assert isinstance(pid,int) and pid>1
               forced=False;fd=None;events=[]
-              def observe():
-                  value=observe_owned_server(root,owner);events.append(value);return value
-              def wait_absent(seconds):
+              def observe(stage):
+                  value=observe_owned_server(root,owner,diagnostics,stage);events.append(value);return value
+              def record(stage,value,error=None):
+                  if diagnostics:diagnostics.operation(stage,value,error)
+              def wait_absent(seconds,stage):
                   deadline=time.monotonic()+seconds
                   while True:
-                      state=observe()
+                      state=observe(stage)
                       if state=='absent':return True
                       remaining=deadline-time.monotonic()
                       if remaining<=0:return False
                       time.sleep(min(.05,remaining))
-              def send_owned(sig):
+              def send_owned(sig,stage):
                   # Check live argv immediately before using the already identity-bound handle.
-                  state=observe()
+                  state=observe(stage+'-identity')
                   if state!='live':return state
+                  record(stage,'attempt')
                   try:signal.pidfd_send_signal(fd,sig,None,0)
-                  except ProcessLookupError:
-                      state=observe()
+                  except ProcessLookupError as error:
+                      record(stage,'esrch',error);state=observe(stage+'-esrch-recheck')
                       if state=='live':raise RuntimeError('ESRCH conflicts with a matching live process; cleanup ambiguous')
                       return state
-                  return 'delivered'
+                  except OSError as error:record(stage,os_result(error),error);raise
+                  except BaseException:record(stage,'non-os-error');raise
+                  record(stage,'delivered');return 'delivered'
               try:
-                  state=observe()
+                  state=observe('cleanup-initial')
                   if state=='absent':gone=True
-                  elif state=='exited-not-reaped':gone=wait_absent(5)
+                  elif state=='exited-not-reaped':gone=wait_absent(5,'initial-zombie-wait')
                   else:
                       if not callable(getattr(os,'pidfd_open',None)) or not callable(getattr(signal,'pidfd_send_signal',None)):
+                          record('pidfd-capability','unavailable')
                           raise RuntimeError('Linux pidfd support required; no numeric-PID fallback')
+                      record('pidfd-capability','available');record('pidfd-open','attempt')
                       try:fd=os.pidfd_open(pid,0)
-                      except ProcessLookupError:
-                          state=observe()
+                      except ProcessLookupError as error:
+                          record('pidfd-open','esrch',error);state=observe('pidfd-open-esrch-recheck')
                           if state=='live':raise RuntimeError('pidfd ESRCH conflicts with a matching live process')
-                          gone=state=='absent' or wait_absent(5)
+                          gone=state=='absent' or wait_absent(5,'pidfd-open-esrch-wait')
+                      except OSError as error:record('pidfd-open',os_result(error),error);raise
+                      except BaseException:record('pidfd-open','non-os-error');raise
                       else:
+                          record('pidfd-open','opened')
                           # Replacement after pidfd_open fails identity checks; replacement
                           # after this check cannot receive a signal bound to the original fd.
-                          state=send_owned(signal.SIGTERM)
-                          gone=state=='absent' or wait_absent(5)
+                          state=send_owned(signal.SIGTERM,'pidfd-term')
+                          gone=state=='absent' or wait_absent(5,'term-wait')
                           if not gone:
-                              state=observe()
+                              state=observe('before-kill')
                               if state=='live':
-                                  state=send_owned(signal.SIGKILL)
+                                  state=send_owned(signal.SIGKILL,'pidfd-kill')
                                   forced=state=='delivered'
-                                  gone=state=='absent' or wait_absent(5)
+                                  gone=state=='absent' or wait_absent(5,'kill-wait')
                               # A same-start zombie is never signaled or called absent.
                   return {'accepted':gone and not forced,'pid':pid,'start_ticks':owner['start_ticks'],'process_absent':gone,'forced_kill':forced,'observations':events[-64:]}
               finally:
-                  if fd is not None:os.close(fd)
+                  if fd is not None:
+                      try:os.close(fd)
+                      except OSError as error:record('pidfd-close',os_result(error),error);raise
+                      else:record('pidfd-close','closed')
           def package_snapshot(workspace):
               return {str(path.relative_to(workspace)):sha(path.read_bytes()) for path in sorted((workspace/'.packages').rglob('*')) if path.is_file()}
-          def setup(root,workspace):
+          def setup(root,workspace,fixture_only=False):
               assert sha((workspace/'.github/actions/setup/action.yml').read_bytes())==ACTION_SHA
-              original=(workspace/'NuGet.Config').read_bytes();assert sha(original)==CONFIG_SHA
-              (root/'original-NuGet.Config').write_bytes(original)
+              if not fixture_only:
+                  original=(workspace/'NuGet.Config').read_bytes();assert sha(original)==CONFIG_SHA
+                  (root/'original-NuGet.Config').write_bytes(original)
               control_id='hosted-'+uuid.uuid4().hex
-              state={'control_id':control_id,'original_config_sha256':sha(original),'action_sha256':ACTION_SHA,
+              state={'control_id':control_id,'fixture_only':fixture_only,'expected_interpreter':sys.executable,'action_sha256':ACTION_SHA,
                      'commit':subprocess.check_output(['git','rev-parse','HEAD'],cwd=workspace,timeout=30,text=True).strip(),
                      'package_snapshot':package_snapshot(workspace),
-                     'source_hashes':{name:sha((workspace/name).read_bytes()) for name in ['scripts/bootstrap-cli.cs','scripts/Directory.Build.props','Directory.Build.props','cli-dependency.json','loader-dependency.json']}}
+                     'source_hashes':{name:sha((workspace/name).read_bytes()) for name in ['scripts/bootstrap-cli.cs','scripts/Directory.Build.props','Directory.Build.props','cli-dependency.json','loader-dependency.json','NuGet.Config']}}
+              if not fixture_only:state['original_config_sha256']=sha(original)
               save(root/'state.json',state)
               (root/'server.py').write_text(SERVER_SOURCE)
               stdout=(root/'server.stdout.log').open('wb');stderr=(root/'server.stderr.log').open('wb')
@@ -198,10 +252,14 @@ jobs:
                       assert time.monotonic()<deadline,'owned fixture readiness timeout'
                       time.sleep(.02)
                   ready=json.loads((root/'server-ready.json').read_text());owner=json.loads((root/'server.owner.json').read_text())
-                  identity=proc_identity(proc.pid)
+                  owner['expected_interpreter']=state['expected_interpreter']
                   assert ready['pid']==owner['pid']==proc.pid and ready['host']=='127.0.0.1' and ready['control_id']==control_id
-                  assert identity and identity['start_ticks']==owner['start_ticks']
+                  diagnostics=IdentityDiagnostics(root)
+                  assert observe_owned_server(root,owner,diagnostics,'setup-popen')=='live','setup identity did not establish a live fixture'
                   endpoint=f'http://127.0.0.1:{ready["port"]}/{control_id}/v3/index.json'
+                  if fixture_only:
+                      print('CONTROL_SETUP '+json.dumps({'fixture_only':True,'fixture_directory':str(root),'pid':proc.pid,'action_sha256':ACTION_SHA,'commit':state['commit']}),flush=True)
+                      return
                   tree=ET.fromstring(original);assert tree.find('auditSources') is None
                   audit=ET.SubElement(tree,'auditSources');ET.SubElement(audit,'clear')
                   ET.SubElement(audit,'add',{'key':'controlled-audit-failure','value':endpoint,'protocolVersion':'3','allowInsecureConnections':'true'})
@@ -214,21 +272,21 @@ jobs:
               except BaseException:
                   # The shared cleanup runs even if state/report writing failed after spawn.
                   # The local Popen handle closes the tiny owner-file creation race on setup failure.
-                  try:cleanup(root,workspace,local_proc=proc)
+                  try:cleanup(root,workspace,local_proc=proc,fixture_only=fixture_only)
                   finally:raise
               finally:
                   for stream in [stdout,stderr]:
                       try:stream.close()
                       except BaseException:pass
           
-          def cleanup(root,workspace,local_proc=None):
+          def cleanup(root,workspace,local_proc=None,fixture_only=False):
               errors=[];records={}
               def attempt(name,operation):
                   try:
                       value=operation();records[name]=value
                       if not value.get('accepted'):errors.append(name+' not verified')
                   except BaseException as error:
-                      records[name]={'accepted':False,'type':type(error).__name__,'message':str(error)};errors.append(name+' failed')
+                      records[name]={'accepted':False,'result_class':error.code if isinstance(error,IdentityRefusal) else 'operation-failed','type':type(error).__name__};errors.append(name+' failed')
               def restore_config():
                   backup=root/'original-NuGet.Config'
                   if not backup.exists():
@@ -244,7 +302,7 @@ jobs:
                       forced=False;termination_error=None
                       try:
                           if local_proc.poll() is None:local_proc.terminate()
-                      except BaseException as error:termination_error=str(error)
+                      except BaseException as error:termination_error=type(error).__name__
                       finally:
                           try:local_proc.wait(timeout=5)
                           except subprocess.TimeoutExpired:
@@ -255,7 +313,8 @@ jobs:
                   owner_path=root/'server.owner.json'
                   if not owner_path.exists():return {'accepted':True,'owner_absent_no_spawn_state':True}
                   owner=json.loads(owner_path.read_text())
-                  return stop_cross_step_server(root,owner)
+                  owner['expected_interpreter']=json.loads(bounded_read(root/'state.json',DIAGNOSTIC_LIMIT))['expected_interpreter']
+                  return stop_cross_step_server(root,owner,IdentityDiagnostics(root))
               def check_listener():
                   ready_path=root/'server-ready.json'
                   if not ready_path.exists():return {'accepted':False,'ready_state_absent':True}
@@ -297,13 +356,14 @@ jobs:
                   summary={'directory':str(evidence),'metadata_sha256':sha(raw),'bootstrap_log_sha256':sha((evidence/'bootstrap.log').read_bytes()),'metadata':metadata}
                   print('CONTROL_CAPTURE '+json.dumps(summary),flush=True)
                   return {'accepted':True,'metadata_sha256':summary['metadata_sha256'],'bootstrap_log_sha256':summary['bootstrap_log_sha256']}
-              attempt('config',restore_config)
+              if not fixture_only:attempt('config',restore_config)
               attempt('server',stop_server)
               attempt('listener',check_listener)
               attempt('source-and-packages',source_and_packages)
-              attempt('provenance',provenance)
-              attempt('capture-provenance',capture_provenance)
-              if os.environ.get('BOOTSTRAP_OUTCOME')!='failure':errors.append('caller action outcome was not failure')
+              if not fixture_only:
+                  attempt('provenance',provenance)
+                  attempt('capture-provenance',capture_provenance)
+                  if os.environ.get('BOOTSTRAP_OUTCOME')!='failure':errors.append('caller action outcome was not failure')
               outcome={'accepted':not errors,'operations':records,'errors':errors}
               # Reporting is after all resource attempts. Its failure cannot skip cleanup.
               try:save(root/'cleanup.json',outcome)
@@ -315,29 +375,19 @@ jobs:
           if __name__=='__main__':
               root=Path(__file__).resolve().parent;workspace=Path(os.environ['GITHUB_WORKSPACE']).resolve();runner_temp=Path(os.environ['RUNNER_TEMP']).resolve()
               assert root.parent==runner_temp and root.name.startswith('bootstrap-control.'),'refuse unexpected fixture path'
-              mode=sys.argv[1];assert mode in ['setup','cleanup']
-              if mode=='setup':setup(root,workspace)
-              else:raise SystemExit(0 if cleanup(root,workspace) else 1)
+              mode=sys.argv[1];assert mode in ['setup','cleanup','fixture-setup','fixture-cleanup']
+              if mode in ['setup','fixture-setup']:setup(root,workspace,fixture_only=mode=='fixture-setup')
+              else:raise SystemExit(0 if cleanup(root,workspace,fixture_only=mode=='fixture-cleanup') else 1)
           CONTROL_PY
-          python3 "$fixture_directory/control.py" setup
-      - name: Build the pinned CLI transport package
-        id: bootstrap
-        uses: ./.github/actions/setup
-        with:
-          phase: bootstrap
-          evidence-label: ${{ runner.os == 'Linux' && 'control-nu1900-linux' || format('test-{0}', matrix.os) }}
-      - name: Restore config and stop the owned audit fixture (temporary control)
-        id: bootstrap-control-cleanup
-        if: always() && runner.os == 'Linux'
+          python3 "$fixture_directory/control.py" fixture-setup
+      - name: Independently guard cleanup and verify listener closure
+        if: always()
         shell: bash
         env:
-          FIXTURE_DIRECTORY: ${{ steps.bootstrap-control-fixture.outputs.fixture-directory }}
-          CONTROL_EVIDENCE_DIRECTORY: ${{ steps.bootstrap.outputs.evidence-directory }}
-          BOOTSTRAP_OUTCOME: ${{ steps.bootstrap.outcome }}
+          FIXTURE_DIRECTORY: ${{ steps.fixture.outputs.fixture-directory }}
         run: |
           if [[ -z "$FIXTURE_DIRECTORY" ]]; then
-            echo 'CONTROL_CLEANUP fixture state absent; allocation/output precedes every owned resource.'
-            echo '::error::The fixture/bootstrap did not establish the required negative control.'
+            echo '::error::Fixture allocation/output absent; diagnostic not established.'
             exit 1
           fi
           case "$FIXTURE_DIRECTORY" in
@@ -345,590 +395,7 @@ jobs:
             *) echo '::error::Refuse an unexpected fixture path.'; exit 1 ;;
           esac
           if [[ ! -f "$FIXTURE_DIRECTORY/control.py" ]]; then
-            echo '::error::Fixture controller was not fully prepared; no controller resource could have started.'
+            echo '::error::Controller not fully prepared; diagnostic not established.'
             exit 1
           fi
-          python3 "$FIXTURE_DIRECTORY/control.py" cleanup
-      - name: Confirm the obsolete CLI package was removed
-        if: runner.os == 'Linux'
-        run: test ! -e .packages/Valheim.Testing.Cli.0.1.0-preview.0.nupkg
-      - name: Seed stale publish files for the packaging regression
-        run: dotnet run scripts/tool-pack.cs -- seed
-      # CI runs the two slower, local-shell integration classes in a separate three-OS job. Plain local validate still runs
-      # them. Normal runs take 3-6 minutes. validate.cs gives every test command a 5-minute soft limit (a warning) and a 10-minute
-      # hard limit (failed, naming the tests in flight; #719). A stopped host can add about 0.7 minutes for its blame flush and
-      # exit grace, then the slowest measured rest is about 4 minutes on macOS: about 14.7 minutes worst case fits this timeout.
-      # The transcript and test results are kept when the step fails or is cancelled (#171), and a test run with no progress
-      # for five minutes names its unfinished tests.
-      # Windows and macOS run package and consume beside their toolkit jobs (the shards of scripts/ci-test-timings.json); Linux
-      # retains its full non-shell validation. A pull request runs this OS's share of the toolkit tests (VT_SPLIT_ARGUMENT).
-      - run: dotnet run scripts/validate.cs -- ${{ matrix.os != 'ubuntu-latest' && '--ci-build-only' || '--skip-ci-shell' }} ${{ env.VT_SPLIT_ARGUMENT }}
-        timeout-minutes: 15
-      - name: Keep the validation transcript
-        if: failure() || cancelled()
-        uses: actions/upload-artifact@v7
-        with:
-          name: validate-${{ matrix.os }}
-          path: artifacts/validate
-          if-no-files-found: ignore
-          retention-days: 14
-      # Runs the file-based scripts no other PR step runs, as a user runs them (#434: file-based apps default to PublishAot,
-      # which turns off reflection-based System.Text.Json unless the script sets PublishAot=false). The two dependency scripts
-      # read and write their JSON. Judged by exit codes, on Linux only: an SDK
-      # default reaches every OS alike. api-docs, pins, bootstrap-cli and validate run in this workflow, consumer in release.yml;
-      # tools/doubles-members needs the game's assemblies.
-      - name: File-based scripts run
-        if: runner.os == 'Linux'
-        timeout-minutes: 10
-        run: |
-          t=$(mktemp -d)
-          root=$(jq -r .root loader-dependency.json)
-          unzip -q .packages/bepinexpack-valheim.zip -d "$t/pack" && mv "$t/pack/$root" "$t/loader"
-          unzip -q .packages/valheimcli-bundle.zip -d "$t/cli"
-          dotnet run scripts/bepinex-loader.cs -- capture "$t/loader" "$root" "$(jq -r .version loader-dependency.json)" "$t/loader.json"
-          dotnet run scripts/bepinex-loader.cs -- check "$t/loader.json"
-          # The default plugin from the pinned bundle. CI has no game assemblies, so this lock fixture explicitly treats known
-          # game-provided references as optional. A new reference fails resolve with a gap naming it for review.
-          mkdir "$t/managed"
-          cat > "$t/request.json" <<'EOF'
-          {"mods": ["cli/valheimCLI.dll"], "searchRoots": [], "gameManaged": "managed",
-           "bepInExCore": "loader/BepInEx/core", "cliManifest": "cli/cli-manifest.json", "cliFiles": "cli",
-           "capabilities": [], "optionalReferences": ["System", "System.Core", "mscorlib", "UnityEngine.CoreModule",
-           "UnityEngine.PhysicsModule", "UnityEngine.ImageConversionModule", "UnityEngine.ScreenCaptureModule",
-           "UnityEngine.UI", "UnityEngine.UIModule", "Unity.TextMeshPro", "SoftReferenceableAssets",
-           "assembly_utils", "assembly_valheim", "assembly_guiutils", "gui_framework"]}
-          EOF
-          dotnet run scripts/native-dependencies.cs -- resolve "$t/request.json" "$t/lock.json"
-          dotnet run scripts/native-dependencies.cs -- check "$t/lock.json"
-      - name: Save the NuGet package cache
-        if: steps.nuget-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v6
-        with:
-          path: ${{ env.VT_NUGET_CACHE_PATHS }}
-          key: ${{ steps.nuget-cache.outputs.cache-primary-key }}
-  toolkit:
-    name: toolkit tests (${{ matrix.os }}, ${{ matrix.shard }})
-    # The normal toolkit suite and packaging were serial in validate. The measured slow methods of scripts/ci-test-timings.json also
-    # held xUnit's same-class queue. Main and dispatch use separate Windows and macOS jobs to shorten the path; a PR combines
-    # macOS's share in one job. validate.cs owns every selection, and this matrix only chooses which selections the event starts.
-    strategy:
-      fail-fast: false
-      matrix:
-        # Windows keeps four jobs. The one event choice for toolkit jobs (#777) adds one whole macOS job on a PR,
-        # or the four macOS shards on main and dispatch; every included row names a complete standalone job.
-        os: [windows-latest]
-        shard: [main, timed-1, timed-2, timed-3]
-        include: ${{ fromJSON(github.event_name == 'pull_request' && '[{"os":"macos-latest","shard":"whole"}]' || '[{"os":"macos-latest","shard":"main"},{"os":"macos-latest","shard":"timed-1"},{"os":"macos-latest","shard":"timed-2"},{"os":"macos-latest","shard":"timed-3"}]') }}
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
-    env:
-      VALHEIM_TESTING_WINDOWS_DESKTOP: ${{ matrix.os == 'windows-latest' && '1' || '' }}
-      VT_NUGET_CACHE_PATHS: |
-        ~/.nuget/packages
-        !~/.nuget/packages/valheim.testing*
-        !~/.nuget/packages/valheim.cli*
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-      - uses: ./.github/actions/setup
-        with:
-          pinned-downloads: true
-      - uses: actions/cache/restore@v6
-        with:
-          path: ${{ env.VT_NUGET_CACHE_PATHS }}
-          key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', 'scripts/*.cs', 'scripts/Shared/*.cs', 'cli-dependency.json', 'NuGet.Config', '.config/dotnet-tools.json') }}
-          restore-keys: nuget-${{ runner.os }}-
-      - name: Build the pinned CLI transport package
-        uses: ./.github/actions/setup
-        with:
-          phase: bootstrap
-          evidence-label: toolkit-${{ matrix.os }}-${{ matrix.shard }}
-      - name: Run toolkit shard
-        # One test command: its 10-minute hard limit (validate.cs, #719) plus the data-root guard and the transcript.
-        timeout-minutes: 12
-        run: dotnet run scripts/validate.cs -- ${{ matrix.shard == 'whole' && '--ci-toolkit-tests' || matrix.shard == 'main' && '--ci-main-tests' || matrix.shard == 'timed-1' && '--ci-timed 1' || matrix.shard == 'timed-2' && '--ci-timed 2' || matrix.shard == 'timed-3' && '--ci-timed 3' || '--no-such-shard' }} ${{ env.VT_SPLIT_ARGUMENT }}
-        env:
-          # A manual dispatch keeps each shard's TRX timings, to refresh ci-test-timings.json (the union is the whole suite).
-          VT_CI_PROFILE: ${{ github.event_name == 'workflow_dispatch' && '1' || '' }}
-      - name: Keep the shard's test timings for CI profiling
-        if: github.event_name == 'workflow_dispatch' && always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: test-timings-${{ matrix.os }}-${{ matrix.shard }}
-          path: artifacts/validate/Valheim.Testing.Tests/timings.trx
-          if-no-files-found: ignore
-          retention-days: 2
-      - name: Keep shard evidence on failure
-        if: failure() || cancelled()
-        uses: actions/upload-artifact@v7
-        with:
-          name: ci-toolkit-${{ matrix.os }}-${{ matrix.shard }}
-          path: artifacts/validate
-          if-no-files-found: ignore
-          retention-days: 14
-  ci-shell:
-    name: local shell integration (${{ matrix.os }})
-    # These tests start real shell processes: bash on Linux and macOS, pwsh on Windows, the one shell each OS's hosts run.
-    # They accounted for over half of the toolkit-suite wall time in a local measurement, so run them beside package
-    # validation without dropping any platform or test coverage.
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
-    env:
-      # Keep the Windows desktop test seam consistent with the broad test job if a shell test later uses it.
-      VALHEIM_TESTING_WINDOWS_DESKTOP: ${{ matrix.os == 'windows-latest' && '1' || '' }}
-      VT_NUGET_CACHE_PATHS: |
-        ~/.nuget/packages
-        !~/.nuget/packages/valheim.testing*
-        !~/.nuget/packages/valheim.cli*
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-      - uses: ./.github/actions/setup
-        with:
-          pinned-downloads: true
-      - uses: actions/cache/restore@v6
-        with:
-          path: ${{ env.VT_NUGET_CACHE_PATHS }}
-          key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', 'scripts/*.cs', 'scripts/Shared/*.cs', 'cli-dependency.json', 'NuGet.Config', '.config/dotnet-tools.json') }}
-          restore-keys: nuget-${{ runner.os }}-
-      - name: Build the pinned CLI transport package
-        uses: ./.github/actions/setup
-        with:
-          phase: bootstrap
-          evidence-label: ci-shell-${{ matrix.os }}
-      - name: Run the local-shell integration tests
-        # One test command: its 10-minute hard limit (validate.cs, #719) plus the data-root guard and the transcript.
-        timeout-minutes: 12
-        run: dotnet run scripts/validate.cs -- --only-ci-shell ${{ env.VT_SPLIT_ARGUMENT }}
-      - name: Keep shell-test evidence on failure
-        if: failure() || cancelled()
-        uses: actions/upload-artifact@v7
-        with:
-          name: ci-shell-${{ matrix.os }}
-          path: artifacts/validate
-          if-no-files-found: ignore
-          retention-days: 14
-  api-reference:
-    name: API reference and public surface
-    # Independent of the three-OS test/package matrix; the former serial placement added about 45 seconds to its critical path.
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions:
-      contents: read
-    env:
-      VT_NUGET_CACHE_PATHS: |
-        ~/.nuget/packages
-        !~/.nuget/packages/valheim.testing*
-        !~/.nuget/packages/valheim.cli*
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-      - uses: ./.github/actions/setup
-        with:
-          pinned-downloads: true
-      - name: Restore the NuGet package cache
-        uses: actions/cache/restore@v6
-        with:
-          path: ${{ env.VT_NUGET_CACHE_PATHS }}
-          key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', 'scripts/*.cs', 'scripts/Shared/*.cs', 'cli-dependency.json', 'NuGet.Config', '.config/dotnet-tools.json') }}
-          restore-keys: nuget-${{ runner.os }}-
-      - name: Build the pinned CLI transport package
-        uses: ./.github/actions/setup
-        with:
-          phase: bootstrap
-          evidence-label: api-reference
-      - name: Build candidate API reference
-        run: |
-          dotnet build docs/reference/ValheimTesting.Api.sln -c Release -m:1
-          dotnet tool restore
-          dotnet run scripts/api-docs.cs
-          dotnet run scripts/versioned-api-docs.cs -- archive docs/reference/_site 0.1.0-rc.1 "$GITHUB_SHA" "$RUNNER_TEMP/api-reference-0.1.0-rc.1.tgz"
-          sha=$(sha256sum "$RUNNER_TEMP/api-reference-0.1.0-rc.1.tgz" | cut -d ' ' -f 1)
-          dotnet run scripts/versioned-api-docs.cs -- install "$RUNNER_TEMP/api-reference-0.1.0-rc.1.tgz" "$sha" 0.1.0-rc.1 "$RUNNER_TEMP/api-site"
-          # Prove the selected-entrypoint gate refuses a missing rendered summary.
-          page=artifacts/docs-site/api/Valheim.Testing.ITerrain.yml
-          cp "$page" "$RUNNER_TEMP/ITerrain.yml"
-          sed -i '0,/^  summary:/s/^  summary:/  omitted-summary:/' "$page"
-          if out=$(dotnet run scripts/api-docs.cs -- check-docs 2>&1); then
-            echo "$out"; echo "::error::An undocumented entrypoint passed the documentation gate."; exit 1
-          fi
-          case "$out" in *'has no XML summary: Valheim.Testing.ITerrain'*) ;; *) echo "$out"; exit 1 ;; esac
-          cp "$RUNNER_TEMP/ITerrain.yml" "$page"
-          dotnet run scripts/api-docs.cs -- check-docs
-      # Pull requests do not regenerate the public-api lists (#683); cutting a release does, and release.yml refuses lists
-      # that differ from its build. Here every public type must still be classified (#292): surface refuses one that is not.
-      # It rewrites the lists in this runner only; they are restored below.
-      - name: Public API classification and the release's list check
-        run: |
-          dotnet run scripts/api-docs.cs -- surface
-          # Negative controls, each restored after. GITHUB_ACTIONS is unset so the expected failures are not annotations.
-          refused() { # $1 a pattern the refusal must match; the rest, the check's arguments
-            pattern=$1; shift
-            if out=$(env -u GITHUB_ACTIONS dotnet run scripts/api-docs.cs -- check "$@" 2>&1); then
-              echo "$out"; echo "::error::api-docs check $* passed; expected a refusal matching: $pattern"; return 1
-            fi
-            echo "$out"
-            case "$out" in *"$pattern"*) ;; *) echo "::error::api-docs check $* refused, but not with: $pattern"; return 1 ;; esac
-          }
-          # A list out of step with the build (one type line removed) is refused at release, naming the line.
-          list=docs/reference/public-api/Valheim.Testing.txt
-          removed=$(sed -n '2p' "$list")
-          sed -i '2d' "$list"
-          refused "  +$removed" || exit 1
-          dotnet run scripts/api-docs.cs -- surface
-          # A public record an operation returns, without [ResultShape], is refused by name (#292); the rebuild after restores.
-          printf 'namespace Valheim.Testing.Game;\npublic sealed record ScratchResult(int Value);\npublic static class ScratchOperation { public static ScratchResult Read() => new(1); }\n' > src/Valheim.Testing.Game/ScratchResult.cs
-          dotnet build -c Release src/Valheim.Testing.Game --no-restore -v q
-          refused 'ScratchResult is part of a result' || exit 1
-          rm src/Valheim.Testing.Game/ScratchResult.cs
-          dotnet build -c Release src/Valheim.Testing.Game --no-restore -v q
-          dotnet run scripts/api-docs.cs -- check
-          git checkout -- docs/reference/public-api
-          git diff --exit-code
-  mod-example:
-    name: mod example (published packages)
-    # Runs the template's test project through validate.cs's limits. A copy outside the checkout leaves this
-    # repository's NuGet.Config and local feed out of play, so packages restore from NuGet.org only, as in a mod.
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-      - uses: ./.github/actions/setup
-      - run: cp -R examples/ModWithTests "$RUNNER_TEMP/mod"
-      # One test command: validate.cs owns its soft and hard limits, blame report and transcript (#719, #729).
-      - run: dotnet run scripts/validate.cs -- --test-project "$GITHUB_WORKSPACE" "$RUNNER_TEMP/mod/MyMod.Tests/MyMod.Tests.csproj" "$RUNNER_TEMP/mod-test-results"
-        timeout-minutes: 14
-      - name: Keep test evidence on failure
-        if: failure() || cancelled()
-        uses: actions/upload-artifact@v7
-        with:
-          name: mod-example-results
-          path: ${{ runner.temp }}/mod-test-results
-          if-no-files-found: ignore
-          retention-days: 14
-  pins:
-    name: pins (toolkit-versions.json)
-    # toolkit-versions.json records the released versions; docs, examples and tools pin exactly those and follow every release
-    # (#86). Fails on a pin that differs from the file, a recorded version NuGet.org does not serve or has superseded, a
-    # released package whose Valheim.Testing* dependency the released set does not meet, or a source version older than
-    # its release, or a valheimCLI fork page the docs link that does not exist at releasedCliCommit. Reads NuGet.org and
-    # GitHub; needs no build.
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0 # versions compares src/Valheim.Testing.Game with the commit its published version was built from
-          persist-credentials: false
-      - uses: ./.github/actions/setup
-      - run: dotnet run scripts/pins.cs -- check
-      # Negative controls. Each edits tracked files, expects a refusal that names the file (and line), and restores them.
-      # GITHUB_ACTIONS is unset so the expected failures do not become annotations on the run.
-      - name: Refusals (negative controls)
-        run: |
-          refused() { # $1 mode, $2 a pattern the refusal must match
-            if out=$(env -u GITHUB_ACTIONS dotnet run scripts/pins.cs -- "$1" 2>&1); then
-              echo "$out"; echo "::error::pins $1 passed; expected a refusal matching: $2"; return 1
-            fi
-            echo "$out"
-            case "$out" in *$2*) ;; *) echo "::error::pins $1 refused, but not with: $2"; return 1 ;; esac
-            git checkout -- .
-          }
-          # A pin changed by hand, without the file, fails with its file and line; write puts it back.
-          doubles=examples/ModWithTests/MyMod.Tests/MyMod.Tests.csproj
-          sed -i -E 's/(Include="Valheim\.Testing\.Doubles" Version="\[)[^]]+\]/\10.1.0-preview.5]/' "$doubles"
-          line=$(grep -n 'Include="Valheim.Testing.Doubles"' "$doubles" | cut -d: -f1)
-          refused check "FAIL $doubles:$line: Valheim.Testing.Doubles 0.1.0-preview.5 differs from toolkit-versions.json"
-          sed -i -E 's/(Include="Valheim\.Testing\.Doubles" Version="\[)[^]]+\]/\10.1.0-preview.5]/' "$doubles"
-          dotnet run scripts/pins.cs -- write
-          git diff --exit-code
-          # Docs that lag a release: the file (and every pin written from it) names an older Game than NuGet.org serves.
-          sed -i -E 's/("Valheim\.Testing\.Game": ")[^"]+"/\10.1.0-preview.17"/' toolkit-versions.json
-          dotnet run scripts/pins.cs -- write
-          refused check "Valheim.Testing.Game 0.1.0-preview.17 is superseded"
-          # The pairing (#336): a released Valheim.Testing older than the released Doubles depends on.
-          sed -i -E 's/("Valheim\.Testing": ")[^"]+"/\10.1.0-preview.6"/' toolkit-versions.json
-          dotnet run scripts/pins.cs -- write
-          refused check "depends on Valheim.Testing [0-9]*, but the released Valheim.Testing is 0.1.0-preview.6: a page that pins both"
-          # Candidates may sit on main between releases; release.yml refuses them.
-          sed -i -E 's/("packageVersion": "[^"]+)"/\1-candidate.0000000"/' cli-dependency.json
-          refused versions "cli-dependency.json:[0-9]*: names the candidate version"
-          # A fork move cannot silently reuse the transport's published version: the package on NuGet.org keeps its old bytes.
-          sed -i -E 's/("packageVersion": ")[^"]+"/\10.1.0-preview.8"/' cli-dependency.json
-          refused versions "Valheim.Testing.Cli 0.1.0-preview.8 is already on NuGet.org from fork commit"
-          # A source version older than its release.
-          sed -i -E 's#<Version>[^<]+</Version>#<Version>0.1.0-preview.1</Version>#' src/Valheim.Testing.Doubles/Valheim.Testing.Doubles.csproj
-          refused versions "Valheim.Testing.Doubles 0.1.0-preview.1 in source is older than the release"
-          # A change under a version NuGet.org already serves, in a package the valheim-test tool embeds (#363): with Game and
-          # the project it references exactly as the released Game was built (its nuspec's commit), versions reports nothing
-          # about Game; one changed line in either is refused, naming the file.
-          game=src/Valheim.Testing.Game
-          released=$(sed -nE 's/.*"Valheim\.Testing\.Game": "([^"]+)".*/\1/p' toolkit-versions.json)
-          commit=$(curl -fsS "https://api.nuget.org/v3-flatcontainer/valheim.testing.game/$released/valheim.testing.game.nuspec" | sed -nE 's/.*<repository [^>]*commit="([0-9a-f]{40})".*/\1/p')
-          # Game reads the Cli pin and the shared build files too (pins.cs SharedBuildInputs, those the commit has).
-          embedded=("$game" src/Valheim.Testing cli-dependency.json)
-          for f in Directory.Build.props Directory.Build.targets src/Directory.Build.props src/Directory.Build.targets; do
-            if git cat-file -e "$commit:$f" 2>/dev/null; then embedded+=("$f"); fi
-          done
-          git checkout --no-overlay "$commit" -- "${embedded[@]}"
-          out=$(env -u GITHUB_ACTIONS dotnet run scripts/pins.cs -- versions 2>&1) || true
-          echo "$out"
-          case "$out" in *"problem(s)."*|*"No candidate version"*) ;; *) echo "::error::pins versions did not finish"; exit 1 ;; esac
-          case "$out" in *"FAIL $game/Valheim.Testing.Game.csproj:"*) echo "::error::versions refused the released Game source"; exit 1 ;; esac
-          echo '// changed' >> "$game/ZonePreparation.cs"
-          refused versions "Valheim.Testing.Game $released is on NuGet.org, and its source changed since it was built (*): $game/ZonePreparation.cs."
-          echo '// changed' >> src/Valheim.Testing/Terrain.cs
-          refused versions "Valheim.Testing.Game $released is on NuGet.org, and its source changed since it was built (*): src/Valheim.Testing/Terrain.cs."
-          # Cutting a release (#683): bump gives the changed Game, and each package that references it, a new version; then
-          # versions refuses nothing. While NuGet.org's newest is a stable release, bump refuses to guess the next version
-          # ("choose its next version by hand"); the maintainer sets it, and bump keeps a version NuGet.org never served.
-          echo '// changed' >> "$game/ZonePreparation.cs"
-          if ! out=$(dotnet run scripts/pins.cs -- bump 2>&1); then
-            echo "$out"
-            case "$out" in *"choose its next version by hand"*) ;; *) echo "::error::bump failed"; exit 1 ;; esac
-            # The maintainer's choice: the next patch prerelease after each package's recorded release.
-            for project in src/Valheim.Testing*/Valheim.Testing*.csproj; do
-              id=$(basename "$project" .csproj)
-              recorded=$(sed -nE "s/.*\"$id\": \"([^\"]+)\".*/\\1/p" toolkit-versions.json)
-              next=$(echo "${recorded%%-*}" | awk -F. '{print $1"."$2"."$3+1"-preview.1"}')
-              sed -i -E "s#<Version>[^<]+</Version>#<Version>$next</Version>#" "$project"
-            done
-            dotnet run scripts/pins.cs -- bump
-          fi
-          if grep -q "<Version>$released</Version>" "$game/Valheim.Testing.Game.csproj"; then echo "::error::bump left Game at $released"; exit 1; fi
-          dotnet run scripts/pins.cs -- versions
-          git checkout --no-overlay HEAD -- src "${embedded[@]}"
-          git diff --exit-code HEAD
-          # A valheimCLI fork link at another commit than the released Cli's fails; write puts it back. A fork page's
-          # anchor must be one of its headings at that commit.
-          fork_page=docs/guides/choose-a-test-layer.md
-          sed -i -E 's#(valheimCLI/blob/[0-9a-f]{40}/docs/command-packs\.md)#\1\#no-such-heading#' "$fork_page"
-          refused check "FAIL $fork_page:$(grep -n 'no-such-heading' "$fork_page" | cut -d: -f1): https://github.com/tvongaza/valheimCLI/blob/*/docs/command-packs.md#no-such-heading: the fork's docs/command-packs.md at * has no heading with the anchor #no-such-heading"
-          fork() { sed -i -E 's#(valheimCLI/blob/)[0-9a-f]{40}/#\15c0aef02ddf15cdbf6faa152c6b75881fce7f134/#' "$fork_page"; }
-          fork
-          refused check "FAIL $fork_page:$(grep -n 'valheimCLI/blob/5c0aef02' "$fork_page" | cut -d: -f1): releasedCliCommit 5c0aef02ddf15cdbf6faa152c6b75881fce7f134 differs from toolkit-versions.json"
-          fork
-          dotnet run scripts/pins.cs -- write
-          git diff --exit-code
-  docs:
-    name: docs (headings and links)
-    # The Markdown pages (#278): no heading names a version or a date, no link goes
-    # to a review branch or to a valheimCLI fork page at anything but a full commit, and every relative link, and every link
-    # to this repository's main branch, reaches an existing file and heading anchor. Offline, so it is not hidden while the
-    # pins job waits for a release record.
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-      - uses: ./.github/actions/setup
-      - name: Check the native Ubuntu mirror pin
-        run: bash docker/linux-server/check-ubuntu-base.sh
-      - run: dotnet run scripts/pins.cs -- docs
-      # Negative controls: each edits tracked files, expects a refusal naming the file (and line), and restores them.
-      - name: Refusals (negative controls)
-        run: |
-          refused() { # $1 a pattern the refusal must match
-            if out=$(env -u GITHUB_ACTIONS dotnet run scripts/pins.cs -- docs 2>&1); then
-              echo "$out"; echo "::error::docs passed; expected a refusal matching: $1"; return 1
-            fi
-            echo "$out"
-            case "$out" in *$1*) ;; *) echo "::error::docs refused, but not with: $1"; return 1 ;; esac
-            git checkout -- .
-          }
-          page=docs/reference/game-waiting.md
-          sed -i 's/^## Waiting$/## Waiting (preview 13)/' "$page"
-          refused "FAIL $page:$(grep -n '^## Waiting' "$page" | cut -d: -f1): A heading names a version or a date"
-          last() { echo "FAIL docs/getting-started.md:$(wc -l < docs/getting-started.md): $1"; }
-          echo '[removed](testing-toolkit.md#waiting)' >> docs/getting-started.md
-          refused "$(last 'testing-toolkit.md#waiting: docs/testing-toolkit.md does not exist')"
-          echo '[stale](packages/Valheim.Testing.Game.md#waiting-preview-13)' >> docs/getting-started.md
-          refused "$(last 'packages/Valheim.Testing.Game.md#waiting-preview-13: docs/packages/Valheim.Testing.Game.md has no heading with the anchor #waiting-preview-13')"
-          echo '[moving](https://github.com/tvongaza/valheimCLI/blob/review/x/README.md)' >> docs/getting-started.md
-          refused "$(last 'https://github.com/tvongaza/valheimCLI/blob/review/x/README.md links a review branch')"
-          echo '[short](https://github.com/tvongaza/valheimCLI/tree/main/docs)' >> docs/getting-started.md
-          refused "$(last 'https://github.com/tvongaza/valheimCLI/tree/main/docs links the valheimCLI fork at a branch or short commit')"
-          echo '[gone](https://github.com/tvongaza/ValheimTesting/blob/main/docs/agent-skills.md)' >> llms.txt
-          refused "FAIL llms.txt:$(wc -l < llms.txt): https://github.com/tvongaza/ValheimTesting/blob/main/docs/agent-skills.md: docs/agent-skills.md does not exist"
-          skill=.agents/skills/valheim-mod-testing/SKILL.md
-          echo '[gone](https://github.com/tvongaza/ValheimTesting/blob/main/docs/agent-guide.md#no-such-heading)' >> "$skill"
-          refused "FAIL $skill:$(wc -l < "$skill"): https://github.com/tvongaza/ValheimTesting/blob/main/docs/agent-guide.md#no-such-heading: docs/agent-guide.md has no heading with the anchor #no-such-heading"
-          git diff --exit-code
-  game-hosts:
-    name: game hosts (ssh to localhost, container)
-    # Valheim.Testing.Game's SSH and container hosts end to end, without a game: an sshd on 127.0.0.1:2222 that accepts only
-    # a key generated for this run (bash sessions, a loopback port forward), and an Ubuntu container on the host
-    # network driven with docker exec. Both are removed at the end; .github/scripts/game-hosts.sh sets up and removes the
-    # sshd.
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    env:
-      VALHEIM_TESTING_REQUIRE_HOSTS: '1'
-      VALHEIM_TESTING_SSH_PORT: '2222'
-      VALHEIM_TESTING_CONTAINER: vt-game-host
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-      - uses: ./.github/actions/setup
-        with:
-          pinned-downloads: true
-      - name: Build the pinned CLI transport package
-        uses: ./.github/actions/setup
-        with:
-          phase: bootstrap
-          evidence-label: game-hosts
-      - name: Start a throwaway sshd on 127.0.0.1:2222
-        run: bash .github/scripts/game-hosts.sh start
-      - name: Start a throwaway container on the host network
-        # Use GitHub's public Ubuntu 24.04 runner image. Its immutable digest avoids the Docker Hub and ECR Public
-        # anonymous-pull limits that have stopped this job before any tests ran. Override the runner entrypoint: this
-        # container is only a disposable bash host for GameHosts tests, not a self-hosted Actions runner.
-        run: docker run -d --rm --name vt-game-host --network host --entrypoint /bin/sleep ghcr.io/actions/actions-runner@sha256:e5496277be5d09bc968b3d64911b74e219ac4a3f2edce956a3ecf9271bea1ef4 1800
-      # One test command: validate.cs owns its soft and hard limits, blame report and transcript (#719, #729).
-      - run: dotnet run scripts/validate.cs -- --test-project "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/tests/Valheim.Testing.Tests/Valheim.Testing.Tests.csproj" "$RUNNER_TEMP/game-host-results" Category=GameHosts
-        timeout-minutes: 14
-      - name: Stop the sshd and the container
-        if: always()
-        run: |
-          docker rm -f vt-game-host || true
-          bash .github/scripts/game-hosts.sh stop
-      - name: Keep test evidence on failure
-        if: failure() || cancelled()
-        uses: actions/upload-artifact@v7
-        with:
-          name: game-host-results
-          path: ${{ runner.temp }}/game-host-results
-          if-no-files-found: ignore
-          retention-days: 14
-  test-runners:
-    name: test runners (${{ matrix.os }})
-    # tools/test-runners for real: a copy of ModWithTests that also targets net48 and imports the targets file (the
-    # three project changes docs/guides/run-tests-in-ci.md describes), run with Mono on Linux and macOS and on .NET Framework on Windows, with the
-    # same command on every OS. Negative control: an added test that fails only on .NET Framework must fail the run,
-    # while the net10.0 leg alone still passes, and a filter that selects no test must fail the net48 leg.
-    # Packages restore from NuGet.org, as in a mod.
-    strategy:
-      fail-fast: false
-      matrix:
-        # PRs already exercise the Mono net48 leg on Ubuntu; main and dispatch retain the macOS runner check (#777).
-        os: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-latest","windows-latest"]' || '["ubuntu-latest","macos-latest","windows-latest"]') }}
-    runs-on: ${{ matrix.os }}
-    # Four separately bounded validate.cs calls plus Mono/setup time; any one has time to print its hard-limit evidence.
-    timeout-minutes: 75
-    defaults:
-      run:
-        shell: bash
-    env:
-      VT_TEST_RUNNER_PREFIX: dotnet run scripts/validate.cs -- --test-project "$GITHUB_WORKSPACE" "$RUNNER_TEMP/mod/MyMod.Tests/MyMod.Tests.csproj"
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-      - uses: ./.github/actions/setup
-      # Hosted Linux and macOS images carry no Mono. On Ubuntu, mono-devel is the smallest package set that runs the net48
-      # leg: mono-runtime alone lacks the System.Runtime and netstandard facades the console runner loads. Its archives
-      # are cached because the mirror's speed, not their size, decides the install time: the same 52 MB took 6 s or
-      # several minutes on different runners.
-      - name: Key the Mono packages
-        if: runner.os == 'Linux'
-        id: mono-debs
-        run: |
-          sudo apt-get update -q
-          # Name, size and checksum of each archive apt would fetch: a new package version is a new key, never a stale hit.
-          apt-get install --print-uris -qq -y --no-install-recommends mono-devel > "$RUNNER_TEMP/mono-uris.txt"
-          echo "key=mono-debs-$ImageOS-${{ runner.arch }}-$(sha256sum < "$RUNNER_TEMP/mono-uris.txt" | cut -c1-16)" >> "$GITHUB_OUTPUT"
-      - name: Restore the Mono packages
-        if: runner.os == 'Linux'
-        id: mono-cache
-        uses: actions/cache/restore@v6
-        with:
-          path: ${{ runner.temp }}/mono-debs
-          key: ${{ steps.mono-debs.outputs.key }}
-      - name: Install Mono
-        if: runner.os == 'Linux'
-        run: bash .github/scripts/install-mono.sh
-      - name: Save the Mono packages
-        if: runner.os == 'Linux' && steps.mono-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v6
-        with:
-          path: ${{ runner.temp }}/mono-debs
-          key: ${{ steps.mono-debs.outputs.key }}
-      - name: Install Mono
-        if: runner.os == 'macOS'
-        env:
-          HOMEBREW_NO_AUTO_UPDATE: '1'
-          HOMEBREW_NO_INSTALL_CLEANUP: '1'
-        run: |
-          brew install mono
-          mono --version
-      - name: Copy ModWithTests, target net48 too and import the targets
-        run: |
-          cp -R examples/ModWithTests "$RUNNER_TEMP/mod"
-          cp tools/test-runners/Valheim.TestRunners.targets "$RUNNER_TEMP/mod/"
-          project="$RUNNER_TEMP/mod/MyMod.Tests/MyMod.Tests.csproj"
-          sed -i.orig \
-            -e 's#<TargetFramework>net10.0</TargetFramework>#<TargetFrameworks>net48;net10.0</TargetFrameworks>#' \
-            -e 's#<PackageReference Include="xunit" Version="2.8.1" />#&<PackageReference Include="xunit.runner.console" Version="2.8.1" PrivateAssets="all" />#' \
-            -e 's#</Project>#  <Import Project="../Valheim.TestRunners.targets" />\n</Project>#' \
-            "$project"
-          grep -q '<TargetFrameworks>net48;net10.0</TargetFrameworks>' "$project"
-          grep -q 'Include="xunit.runner.console"' "$project"
-          grep -q 'Valheim.TestRunners.targets' "$project"
-          rm "$project.orig"
-      # validate.cs owns the soft and hard limits, TRX, blame sequence and transcript for every invocation of the
-      # test-running target (#719, #729). The net48 xunit console leg has no testhost, so a hard limit explicitly says it has no names.
-      - name: Both frameworks pass
-        timeout-minutes: 14
-        run: ${{ env.VT_TEST_RUNNER_PREFIX }} "$RUNNER_TEMP/test-runner-results/pass" --target RunTestsOnBothFrameworks
-      - name: Add a test that fails only on .NET Framework
-        run: |
-          cat > "$RUNNER_TEMP/mod/MyMod.Tests/Net48OnlyFailure.cs" <<'CS'
-          using Xunit;
-
-          public class Net48OnlyFailure
-          {
-              [Fact]
-              public void FailsOnlyOnNetFramework()
-              {
-          #if NETFRAMEWORK
-                  Assert.Fail("negative control: this test fails only on .NET Framework");
-          #endif
-              }
-          }
-          CS
-      - name: Negative controls and single-framework run
-        timeout-minutes: 14
-        run: |
-          expect_failure() { # $1 result/log name, $2 expected text; remaining arguments go to the target
-            local name=$1 expected=$2 status
-            shift 2
-            set +e
-            ${{ env.VT_TEST_RUNNER_PREFIX }} "$RUNNER_TEMP/test-runner-results/$name" --target RunTestsOnBothFrameworks "$@" | tee "$RUNNER_TEMP/$name.log"
-            status="${PIPESTATUS[0]}"
-            set -e
-            if [ "$status" = 0 ] || ! grep -q "$expected" "$RUNNER_TEMP/$name.log"; then
-              echo "::error::$name must fail with '$expected'; it exited $status"; exit 1
-            fi
-          }
-          expect_failure net48-failure 'net48: FAILED (tests, exit 1)'
-          ${{ env.VT_TEST_RUNNER_PREFIX }} "$RUNNER_TEMP/test-runner-results/net10-only" --target RunTestsOnBothFrameworks -f net10.0
-          expect_failure net48-no-tests 'net48: FAILED (no tests ran)' -f net48 -p:VSTestTestCaseFilter=FullyQualifiedName~NoSuchTest
-      - name: Keep test evidence on failure
-        if: failure() || cancelled()
-        uses: actions/upload-artifact@v7
-        with:
-          name: test-runner-results-${{ matrix.os }}
-          path: ${{ runner.temp }}/test-runner-results
-          if-no-files-found: ignore
-          retention-days: 14
+          python3 "$FIXTURE_DIRECTORY/control.py" fixture-cleanup
