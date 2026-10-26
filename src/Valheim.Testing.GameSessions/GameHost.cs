@@ -320,6 +320,8 @@ public abstract class ScriptedGameHost : IGameHost
     internal abstract bool IsTransportFailure(ProcessExit exit);
     /// <summary>Whether the host's shell itself was not found (only asked when the command ended without the exit report).</summary>
     internal virtual bool ShellNotFound(ProcessExit exit) => false;
+    /// <summary>Diagnostic context for an end without a successful wrapper report.</summary>
+    internal virtual string FailureContext(string text) => text;
     public abstract Task<CliTunnel> OpenCliTunnelAsync(int hostPort, TimeSpan readyTimeout, int localPort = 0, CancellationToken cancellation = default);
 
     /// <summary>
@@ -659,8 +661,8 @@ public abstract class ScriptedGameHost : IGameHost
     internal HostResult Interpret(ProcessExit exit)
     {
         string stdout = exit.Stdout.Replace("\r", ""), stderr = exit.Stderr.Replace("\r", "");
-        if (exit.End == ProcessEnd.NotStarted) return new HostResult(HostOutcome.TransportFailed, null, stdout, MissingShell(exit) ?? stderr, exit.Elapsed, false);
-        if (exit.End != ProcessEnd.Exited) return new HostResult(HostOutcome.Unknown, null, stdout, ReadableStderr(stderr), exit.Elapsed, exit.End == ProcessEnd.TimedOut);
+        if (exit.End == ProcessEnd.NotStarted) return new HostResult(HostOutcome.TransportFailed, null, stdout, FailureContext(MissingShell(exit) ?? stderr), exit.Elapsed, false);
+        if (exit.End != ProcessEnd.Exited) return new HostResult(HostOutcome.Unknown, null, stdout, FailureContext(ReadableStderr(stderr)), exit.Elapsed, exit.End == ProcessEnd.TimedOut);
         int at = stderr.LastIndexOf("\n" + ExitMarker, StringComparison.Ordinal);
         if (at >= 0)
         {
@@ -672,8 +674,8 @@ public abstract class ScriptedGameHost : IGameHost
                 return new HostResult(HostOutcome.Exited, code, stdout, ReadableStderr(rest), exit.Elapsed, false);
             }
         }
-        if (MissingShell(exit) is { } missing) return new HostResult(HostOutcome.TransportFailed, null, stdout, missing, exit.Elapsed, false);
-        return new HostResult(IsTransportFailure(exit) ? HostOutcome.TransportFailed : HostOutcome.Unknown, null, stdout, ReadableStderr(stderr), exit.Elapsed, false);
+        if (MissingShell(exit) is { } missing) return new HostResult(HostOutcome.TransportFailed, null, stdout, FailureContext(missing), exit.Elapsed, false);
+        return new HostResult(IsTransportFailure(exit) ? HostOutcome.TransportFailed : HostOutcome.Unknown, null, stdout, FailureContext(ReadableStderr(stderr)), exit.Elapsed, false);
     }
 
     // A Windows host without pwsh: what the transport said, then what to install (last, so a shortened report keeps it). The

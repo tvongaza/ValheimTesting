@@ -116,6 +116,196 @@ public class SshOptionTests
         Assert.Equal("chosen-ssh (the host's configured ssh path)", host.SshClientChoice);
     }
 
+    private static readonly TimeSpan FailureTimeout = TimeSpan.FromSeconds(5);
+    private const string AuthRefusal = "Permission denied (publickey).";
+    private const string PrivateOption = "IdentityFile=/keys/do-not-echo-this-option";
+
+    // Run the real selection owner, then carry that selection through the fake process boundary.
+    private static SshGameHost SelectedHost(FakeLauncher fake, string requested = "ssh", bool windows = true)
+    {
+        var choice = SshGameHost.DefaultSshExecutable(requested, windows, inSshSession: true,
+            Path.Combine(Path.GetTempPath(), "Program Files"), "local", _ => true);
+        return new SshGameHost("box", "tester@box.example", HostShell.Bash, 0, [PrivateOption], null, requested, fake, choice);
+    }
+
+    private static void AssertGitAdvice(string text)
+    {
+        Assert.Contains(AuthRefusal, text);
+        Assert.Contains("SSH client:", text);
+        Assert.Contains("Git for Windows", text);
+        Assert.Contains("IdentityFile", text);
+        Assert.DoesNotContain("SSH_AUTH_SOCK", text);
+        Assert.DoesNotContain(PrivateOption, text);
+    }
+
+    [Theory]
+    [InlineData("refused")]
+    [InlineData("unknown")]
+    [InlineData("timeout")]
+    [InlineData("not-started")]
+    public async Task SelectedGitClientAdviceReachesTheActualHostFailure(string end)
+    {
+        string stderr = new string('x', 1000) + "\n" + AuthRefusal + "\n";
+        var exit = end switch
+        {
+            "timeout" => new ProcessExit(ProcessEnd.TimedOut, -1, "partial", stderr, FailureTimeout),
+            "not-started" => new ProcessExit(ProcessEnd.NotStarted, -1, "", stderr, TimeSpan.Zero),
+            _ => FakeLauncher.Exit(end == "refused" ? 255 : 1, "", stderr),
+        };
+        var fake = new FakeLauncher().Reply(_ => exit);
+        var host = SelectedHost(fake);
+        var result = await host.RunAsync("exit 7", null, FailureTimeout);
+        Assert.Equal(end is "refused" or "not-started" ? HostOutcome.TransportFailed : HostOutcome.Unknown, result.Outcome);
+        Assert.Equal(end == "timeout", result.TimedOut);
+        Assert.Null(result.ExitCode);
+        Assert.False(result.Failed);
+        Assert.StartsWith(stderr, result.Stderr);
+        AssertGitAdvice(result.Describe());
+        AssertGitAdvice(Assert.Throws<HostOperationException>(() => result.EnsureSuccess("Reading host state")).Message);
+        Assert.Equal(host.WrapperCommand().Executable, Assert.Single(fake.Calls).Executable);
+        Assert.EndsWith(Path.Combine("Git", "usr", "bin", "ssh.exe"), fake.Calls[0].Executable);
+        Assert.Equal("exit 7\n", FakeLauncher.Script(fake.Calls[0]));
+    }
+
+    [Theory]
+    [InlineData("chosen-ssh", true, "configured ssh path")]
+    [InlineData("ssh", false, "ssh from PATH")]
+    public async Task OtherClientChoicesHaveTheirOwnContextWithoutGitAdvice(string requested, bool windows, string reason)
+    {
+        var fake = new FakeLauncher().Exits(255, stderr: AuthRefusal);
+        var result = await SelectedHost(fake, requested, windows).RunAsync("true", null, FailureTimeout);
+        Assert.Equal(HostOutcome.TransportFailed, result.Outcome);
+        Assert.Contains(AuthRefusal, result.Stderr);
+        Assert.Contains(requested + " (" + (windows ? "the host's " : "") + reason + ")", result.Stderr);
+        Assert.DoesNotContain("Git for Windows", result.Stderr);
+        Assert.DoesNotContain("IdentityFile", result.Stderr);
+        Assert.Equal(requested, Assert.Single(fake.Calls).Executable);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(255)]
+    public async Task AReportedScriptExitNeverReceivesTransportAdvice(int scriptExit)
+    {
+        var fake = new FakeLauncher().Exits(255, stderr: AuthRefusal + FakeLauncher.Report(scriptExit));
+        var result = await SelectedHost(fake).RunAsync("exit " + scriptExit, null, FailureTimeout);
+        Assert.Equal(HostOutcome.Exited, result.Outcome);
+        Assert.Equal(scriptExit, result.ExitCode);
+        Assert.Equal(scriptExit == 0, result.Succeeded);
+        Assert.Equal(AuthRefusal, result.Stderr);
+        Assert.DoesNotContain("SSH client:", result.Describe());
+        Assert.Single(fake.Calls);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ArchiveTransferFailureIncludesTheSelectedClientWithoutRetry(bool timeout)
+    {
+        var fake = timeout ? new FakeLauncher().TimesOut(stderr: AuthRefusal) : new FakeLauncher().Exits(255, stderr: AuthRefusal);
+        var error = await Assert.ThrowsAsync<IOException>(() => SelectedHost(fake).UploadArchiveAsync("archive.tar",
+            "vt-upload-" + new string('a', 32) + ".tar", FailureTimeout, default));
+        AssertGitAdvice(error.Message);
+        Assert.Contains("not proven", error.Message);
+        Assert.Contains("Inspect vt-upload-", error.Message);
+        Assert.Contains(timeout ? "TimedOut" : "exit 255", error.Message);
+        Assert.Contains("BatchMode=yes", Assert.Single(fake.Calls).Arguments);
+        Assert.Empty(fake.Started);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AConfigReadFailureCarriesTheSelectedClientAndStartsNoTunnel(bool timeout)
+    {
+        var fake = timeout ? new FakeLauncher().TimesOut(stderr: AuthRefusal) : new FakeLauncher().Exits(255, stderr: AuthRefusal);
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => SelectedHost(fake).OpenCliTunnelAsync(5577, FailureTimeout));
+        AssertGitAdvice(error.Message);
+        Assert.Contains("Could not read the ssh configuration", error.Message);
+        Assert.Contains(timeout ? "TimedOut" : "exit 255", error.Message);
+        Assert.Contains("-G", Assert.Single(fake.Calls).Arguments);
+        Assert.Empty(fake.Started);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task TunnelReadinessFailureKeepsItsTypeAndStderrAndCleansUpOnce(bool timeout)
+    {
+        var process = new UnreadyForward(exited: !timeout);
+        var fake = new FakeLauncher { OnStart = _ => process }.Exits(0, "hostname box\n");
+        var host = SelectedHost(fake);
+        Exception error;
+        if (timeout)
+        {
+            var expired = await Assert.ThrowsAsync<WaitTimeoutException>(() => host.OpenCliTunnelAsync(5577, TimeSpan.FromMilliseconds(20)));
+            Assert.Equal(AuthRefusal, expired.LastSeen);
+            error = expired;
+        }
+        else
+        {
+            var failed = await Assert.ThrowsAsync<WaitFailedException>(() => host.OpenCliTunnelAsync(5577, FailureTimeout));
+            Assert.Equal(AuthRefusal, failed.LastSeen);
+            Assert.Equal("ssh exited with code 255", failed.Reason);
+            error = failed;
+        }
+        AssertGitAdvice(error.Message);
+        Assert.Equal(1, process.Stops);
+        Assert.Equal(1, process.Disposals);
+        Assert.Single(fake.Calls);
+        Assert.Single(fake.Started);
+    }
+
+    [Theory]
+    [InlineData("script")]
+    [InlineData("upload")]
+    [InlineData("config")]
+    [InlineData("tunnel")]
+    public async Task CancellationKeepsItsIdentityAndCleansUpOnlyAStartedTunnel(string operation)
+    {
+        using var cancellation = new CancellationTokenSource();
+        var original = new OperationCanceledException("cancelled by caller", cancellation.Token);
+        var process = new UnreadyForward(exited: false, waitFailure: original);
+        var fake = operation == "tunnel"
+            ? new FakeLauncher { OnStart = _ => process }.Exits(0, "hostname box\n")
+            : new FakeLauncher().Reply(_ => throw original);
+        var host = SelectedHost(fake);
+        var error = await Assert.ThrowsAsync<OperationCanceledException>(() => operation switch
+        {
+            "script" => host.RunAsync("true", null, FailureTimeout, cancellation.Token),
+            "upload" => host.UploadArchiveAsync("archive.tar", "vt-upload-" + new string('a', 32) + ".tar", FailureTimeout, cancellation.Token),
+            _ => host.OpenCliTunnelAsync(5577, FailureTimeout, cancellation: cancellation.Token),
+        });
+        Assert.Same(original, error);
+        Assert.Equal(cancellation.Token, error.CancellationToken);
+        Assert.Equal(operation == "tunnel" ? 1 : 0, process.Stops);
+        Assert.Equal(operation == "tunnel" ? 1 : 0, process.Disposals);
+        Assert.Single(fake.Calls);
+    }
+
+    [Fact] public async Task RawTunnelStartExceptionsKeepTheirIdentity()
+    {
+        var original = new System.ComponentModel.Win32Exception(2, "client executable missing");
+        var fake = new FakeLauncher { OnStart = _ => throw original }.Exits(0, "hostname box\n");
+        var error = await Assert.ThrowsAsync<System.ComponentModel.Win32Exception>(() => SelectedHost(fake).OpenCliTunnelAsync(5577, FailureTimeout));
+        Assert.Same(original, error);
+        Assert.Single(fake.Started);
+    }
+
+    private sealed class UnreadyForward(bool exited, Exception? waitFailure = null) : IStartedProcess
+    {
+        private readonly TaskCompletionSource<int> _exit = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public int Id => 4242;
+        public bool HasExited => exited;
+        public int ExitCode => 255;
+        public string Stderr => AuthRefusal;
+        public int Stops { get; private set; }
+        public int Disposals { get; private set; }
+        public Task<int> WaitForExitAsync(CancellationToken cancellation) => waitFailure != null ? throw waitFailure : exited ? Task.FromResult(255) : _exit.Task;
+        public void Stop(TimeSpan timeout) { Stops++; _exit.TrySetResult(255); }
+        public void Dispose() => Disposals++;
+    }
+
     [Theory]
     [InlineData("IdentityFile=/keys/valheim_tests")]
     [InlineData(@"IdentityFile=C:\Users\tester\.ssh\key")]

@@ -97,7 +97,8 @@ public sealed class SshGameHost : ScriptedGameHost
     public SshGameHost(string name, string destination, HostShell shell, int port = 0, IEnumerable<string>? sshOptions = null, TimeSpan? connectTimeout = null, string sshExecutable = "ssh")
         : this(name, destination, shell, port, sshOptions, connectTimeout, sshExecutable, SystemProcessLauncher.Instance) { }
 
-    internal SshGameHost(string name, string destination, HostShell shell, int port, IEnumerable<string>? sshOptions, TimeSpan? connectTimeout, string sshExecutable, IProcessLauncher launcher)
+    internal SshGameHost(string name, string destination, HostShell shell, int port, IEnumerable<string>? sshOptions, TimeSpan? connectTimeout, string sshExecutable, IProcessLauncher launcher,
+        (string Executable, string Reason)? clientChoice = null)
         : base(name, shell, launcher)
     {
         Destination = SshChecks.CheckDestination(destination);
@@ -107,15 +108,19 @@ public sealed class SshGameHost : ScriptedGameHost
         ConnectTimeout = connectTimeout ?? TimeSpan.FromSeconds(10);
         if (ConnectTimeout < TimeSpan.FromSeconds(1)) throw new ArgumentOutOfRangeException(nameof(connectTimeout), "Use a connect timeout of at least one second.");
         ArgumentException.ThrowIfNullOrWhiteSpace(sshExecutable);
-        (_ssh, _sshReason) = ReferenceEquals(launcher, SystemProcessLauncher.Instance)
+        // Tests can carry a choice from DefaultSshExecutable through a fake launcher without depending on this machine.
+        (_ssh, _sshReason) = clientChoice ?? (ReferenceEquals(launcher, SystemProcessLauncher.Instance)
             ? DefaultSshExecutable(sshExecutable, OperatingSystem.IsWindows(), SshSession.IsActive(),
                 Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), File.Exists)
-            : (sshExecutable, "set by the caller");
+            : (sshExecutable, "set by the caller"));
         _options = (sshOptions ?? []).Select(option => OptionArgument(SshChecks.CheckOption(option))).ToArray();
     }
 
     /// <summary>The ssh client and why it was chosen, one line. Reported in the run's provenance.</summary>
     internal string SshClientChoice => _ssh + " (" + _sshReason + ")";
+
+    // Last, so HostResult.Describe keeps the remedy when it shortens long stderr. No options or second command.
+    internal override string FailureContext(string text) => text + "\nSSH client: " + SshClientChoice;
 
     // The bare client name, which asks for the default rather than a client: "ssh", and on Windows also "ssh.exe", in any case (the file
     // system and the command search are case-insensitive there). Anything else (a path above all) is an explicit choice.
@@ -181,7 +186,7 @@ public sealed class SshGameHost : ScriptedGameHost
         var process = Launcher.Start(_ssh, SshArguments(forward: true, ["-N", "-n", "-T", "-L", ForwardSpec(port, hostPort)], null));
         try
         {
-            await GameHostPorts.WaitUntilListeningAsync(process, port, readyTimeout, cancellation).ConfigureAwait(false);
+            await GameHostPorts.WaitUntilListeningAsync(process, port, readyTimeout, cancellation, FailureContext).ConfigureAwait(false);
             return new CliTunnel(process, port, hostPort);
         }
         catch
@@ -216,7 +221,7 @@ public sealed class SshGameHost : ScriptedGameHost
         arguments.AddRange(["--", archive, destination + ":" + remoteName]);
         var exit = await Launcher.RunAsync(new ProcessCall(scp, arguments, [], null, null, null, timeout), cancellation).ConfigureAwait(false);
         if (exit.End != ProcessEnd.Exited || exit.ExitCode != 0)
-            throw new IOException($"The archive transfer to {Name} was not proven ({exit.End}, exit {exit.ExitCode}). Inspect {remoteName} in the SSH user's home before retrying. {exit.Stderr.Trim()}");
+            throw new IOException(FailureContext($"The archive transfer to {Name} was not proven ({exit.End}, exit {exit.ExitCode}). Inspect {remoteName} in the SSH user's home before retrying. {exit.Stderr.Trim()}"));
     }
 
     // ssh -G prints the configuration ssh would use for this destination, forwards from the user's and the system's config included.
@@ -224,7 +229,7 @@ public sealed class SshGameHost : ScriptedGameHost
     {
         var exit = await Launcher.RunAsync(new ProcessCall(_ssh, SshArguments(forward: true, ["-G"], null), [], null, null, null, timeout), cancellation).ConfigureAwait(false);
         if (exit.End != ProcessEnd.Exited || exit.ExitCode != 0)
-            throw new InvalidOperationException($"Could not read the ssh configuration for {Destination} ({(exit.End == ProcessEnd.Exited ? "exit " + exit.ExitCode : exit.End.ToString())}): {exit.Stderr.Trim()}");
+            throw new InvalidOperationException(FailureContext($"Could not read the ssh configuration for {Destination} ({(exit.End == ProcessEnd.Exited ? "exit " + exit.ExitCode : exit.End.ToString())}): {exit.Stderr.Trim()}"));
         var forwards = ConfiguredForwards(exit.Stdout);
         if (forwards.Count != 0)
             throw new InvalidOperationException($"The ssh configuration for {Destination} adds forwards that a tunnel would also open: {string.Join("; ", forwards)}. " +
@@ -380,10 +385,11 @@ internal static class GameHostPorts
         return port;
     }
 
-    public static async Task WaitUntilListeningAsync(IStartedProcess process, int port, TimeSpan timeout, CancellationToken cancellation)
+    public static async Task WaitUntilListeningAsync(IStartedProcess process, int port, TimeSpan timeout, CancellationToken cancellation, Func<string, string>? failureContext = null)
     {
         var exited = process.WaitForExitAsync(CancellationToken.None);
         string target = "the forward to listen on 127.0.0.1:" + port.ToString(CultureInfo.InvariantCulture);
+        if (failureContext != null) target = failureContext(target);
         // ssh announces its listener only in debug output, so it is probed: a local connection every 100 ms, the pause
         // raced against ssh's exit (a refused forward ends it at once).
         await ObservedWait.Run(target, async (_, token) =>
