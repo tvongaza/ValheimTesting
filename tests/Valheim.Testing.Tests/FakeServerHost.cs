@@ -159,7 +159,7 @@ internal sealed class FakeServerHost : IGameHost
         ("list", [HostInstallScripts.BashList, HostInstallScripts.PowerShellList]),
         ("port", [HostInstallScripts.BashPort, HostInstallScripts.PowerShellPort]),
         ("apart", [HostInstallScripts.BashApart, HostInstallScripts.PowerShellApart]),
-        ("start", [HostServerScripts.Start, HostServerScripts.WindowsStart]),
+        ("start", [HostServerScripts.Start, HostServerScripts.MacStart, HostServerScripts.WindowsStart]),
         ("keep", [HostServerScripts.Keep, HostServerScripts.WindowsKeep]),
         ("retire", [HostedRunScripts.Retire, HostedRunScripts.WindowsRetire]),
         ("drop-kept", [HostedRunScripts.DropKept, HostedRunScripts.WindowsDropKept]),
@@ -691,6 +691,7 @@ internal sealed class FakeServerHost : IGameHost
                     foreach (string folder in folders)
                         text.Append("VT-DIR ").Append(Convert.ToBase64String(Encoding.UTF8.GetBytes(folder))).Append('\n');
                 if (File.Exists(Path.Combine(root, GameLaunch.ServerLinuxExecutable))) text.Append("VT-EXEC ").Append(GameLaunch.ServerLinuxExecutable).Append('\n');
+                if (File.Exists(Path.Combine(root, GameLaunch.ServerMacExecutable))) text.Append("VT-EXEC ").Append(GameLaunch.ServerMacExecutable).Append('\n');
                 return Ok(text.Append("VT-LIST done\n").ToString());
             }
             case "port": return Ok(PortReply ?? (PortBusy ? "VT-PORT busy\n" : "VT-PORT free\n"));

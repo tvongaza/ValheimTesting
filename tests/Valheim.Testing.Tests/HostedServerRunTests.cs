@@ -267,6 +267,113 @@ public sealed partial class HostedServerRunTests : IDisposable
         Assert.Empty(host.Runs);
     }
 
+    // A campaign has already prepared this native Mac layout. The real placement/actor wiring runs against the existing
+    // fake host: this proves the report's fetched boot logs, not a shell launch or a native Valheim process.
+    [Fact] public async Task APreparedRemoteMacServerReportsEveryFetchedBootLogAndLeavesNothingToRecover()
+    {
+        string saveRoot = "/Users/tester/" + HostedWorld.MacSaveRelative;
+        var server = new FakeOwnedServer("test.mod", saveRoot);
+        var host = NewHost(server);
+        var (planPath, profilePath) = Write(host, hostPlatform: "macos");
+        string source = host.Local(Install);
+        File.Delete(Path.Combine(source, GameLaunch.ServerLinuxExecutable));
+        Directory.Delete(Path.Combine(source, "doorstop_libs"), recursive: true);
+        Directory.CreateDirectory(Path.Combine(source, "valheim_server"));
+        Directory.Move(Path.Combine(source, "valheim_server_Data"), Path.Combine(source, "valheim_server", "Data"));
+        File.WriteAllText(Path.Combine(source, GameLaunch.ServerMacExecutable), "mac server");
+        FakeInstalls.MacLoader(source);
+
+        const string owned = Runs + "/vt-prep-test-server/runtime", game = owned + "/game/server";
+        FakeServerHost.CopyDirectory(Path.Combine(source, "valheim_server"), host.Local(game + "/valheim_server"));
+        FakeServerHost.CopyDirectory(Path.Combine(source, "BepInEx"), host.Local(owned + "/BepInEx"));
+        FakeInstalls.MacLoader(host.Local(owned));
+        string plugins = host.Local(owned + "/BepInEx/plugins");
+        Directory.CreateDirectory(plugins);
+        File.Copy(Path.Combine(TestCliSet.Source.Files, "valheimCLI.dll"), Path.Combine(plugins, "valheimCLI.dll"));
+        var sourceCheck = ProfileSourceCheck.Prepare(await ProfileSourceCheck.InspectAsync(host, Install, TimeSpan.FromSeconds(30)),
+            [GameLaunch.ServerMacExecutable], ProfileLayout.Linked);
+        var gameListing = await HostInstall.ListAsync(host, game, TimeSpan.FromSeconds(30));
+        sourceCheck.RecordPreparedProfile(gameListing, await HostInstall.ListAsync(host, owned, TimeSpan.FromSeconds(30)), []);
+        var sourceBefore = WorldFixture.Manifest(source);
+        var profile = TestEnvironment.Read(profilePath);
+        profile.Server!.Install = owned;
+        profile.Server.PreparedGameRoot = game;
+        profile.Server.PreparedLoaderRoot = owned;
+        profile.Server.PreparedSourceRoot = Install;
+        var plan = ServerRunPlan.Read<ServerRunPlan>(planPath);
+        plan.Executable = GameLaunch.ServerMacExecutable;
+        plan.Runtime = new() { Source = game, Sha256 = new(gameListing.Files) };
+        plan.RuntimePins = InstallPins.Of(host.Local(game), host.Local(owned));
+        plan.Pins[CliCapabilityManifest.PluginGuid] = TestCliSet.CorePin;
+        plan.ValidateServerPlan([], "TEST_SESSION_TOKEN");
+        var hosted = HostedServerRun.Create(profile, plan, "test", new FakeRunHooks
+        {
+            Host = _ => host, Connect = _ => server.Connect(), StateWaits = false, RunId = RunId,
+        }, prepared: true, sourceChecks: new Dictionary<string, ProfileSourceCheck> { ["server"] = sourceCheck });
+        Assert.Equal(ServerPlatform.MacOS, ((IServerPlacement)hosted).Platform);
+        Assert.Equal(("ssh", "macos", game, owned), (hosted.HostProfile.Kind, hosted.HostProfile.Platform, hosted.GameDirectory, hosted.LoaderDirectory));
+        Directory.CreateDirectory(Output);
+        var report = new ScenarioReport("prepared remote Mac boot logs");
+        hosted.Record(report.Provenance);
+        using var journal = RunJournal.UseRun(RunId);
+        await hosted.AdmitWorldAsync(plan, CancellationToken.None, plan.World.Sha256);
+        Assert.NotNull(hosted.WorldAdmission);
+        await hosted.LockAndPrepareRuntimeAsync(report, plan, CancellationToken.None);
+        hosted.CheckRuntime(report, plan);
+        await hosted.ShipWorldAsync(report, plan.World.Source, Output, CancellationToken.None);
+        await hosted.OpenAsync(report, CancellationToken.None);
+        using var actor = new ServerActor(hosted, plan, Output, server.SessionCapability, "TEST_SESSION_TOKEN", CancellationToken.None);
+        try
+        {
+            report.Step(StepPhase.Setup, "start prepared remote Mac server", () => actor.Start());
+            File.WriteAllText(host.Local(owned + "/" + GameLaunch.UnityLogName), "Mac Unity output\n");
+            File.WriteAllText(host.Local(RunDirectory + "/boot-1/stderr.log"), "Mac diagnostic output\n");
+        }
+        finally
+        {
+            report.Step(StepPhase.Cleanup, "stop only owned server", actor.Dispose);
+            Assert.Empty(await hosted.TeardownAsync(report, Output, actor.StartedProcesses.Count != 0, serverStopped: !actor.MayStillRun));
+        }
+        Assert.True(report.ScanLogs(actor.Logs));
+        report.Write(Output);
+        Assert.True(report.Passed);
+        Assert.True(await RunFinish.EndAsync(journal, RunEnd.Of(report, unknownOutcome: false, abandoned: null)));
+
+        var logs = Result().GetProperty("Logs").EnumerateArray().ToList();
+        Assert.Equal(4, logs.Count);
+        foreach (var (role, file, text) in new[]
+        {
+            ("BepInEx log", "game-0.log", "fake boot 1"), ("Unity log", "game-1.log", "Mac Unity output\n"),
+            ("stdout", "stdout.log", "server stdout\n"), ("stderr", "stderr.log", "Mac diagnostic output\n"),
+        })
+        {
+            var log = Assert.Single(logs, log => log.GetProperty("Role").GetString() == "boot-1 " + role);
+            string fetched = Path.Combine(Output, "boot-1", file);
+            Assert.Equal(fetched, log.GetProperty("Path").GetString());
+            Assert.True(log.GetProperty("Present").GetBoolean());
+            Assert.Contains(text, File.ReadAllText(fetched));
+        }
+        var start = Assert.Single(host.Runs, run => run.Script == "start");
+        var spec = FakeServerHost.Spec(start.Variables["spec"]);
+        Assert.Contains(("exe", game + "/" + GameLaunch.ServerMacExecutable), spec);
+        Assert.Contains(("dir", owned), spec);
+        Assert.Equal(owned, start.Variables["logroot"]);
+        Assert.Contains("stop", host.Scripts);
+        Assert.Contains("keep", host.Scripts);
+        Assert.Contains(host.Runs, run => run.Script == "fetch" && run.Variables["dir"] == RunDirectory + "/boot-1");
+        Assert.Single(actor.Stops, stop => stop.Outcome == StopOutcome.Clean);
+        Assert.False(host.IsRunning(Assert.Single(actor.StartedProcesses)));
+        Assert.Single(host.Claims);
+        Assert.Equal(host.Claims, host.Releases);
+        Assert.True(Assert.Single(host.Tunnels).Disposed);
+        Assert.False(Directory.Exists(host.Local(RunDirectory)));
+        Assert.False(Directory.Exists(host.Local(owned)));
+        Assert.Equal(sourceBefore, WorldFixture.Manifest(source));
+        var status = await RunJournalStatus.InspectAsync(profile.Hosts, _ => host, TimeSpan.FromSeconds(5));
+        Assert.True(status.Clean);
+        Assert.Empty(Assert.Single(status.Runs).Items);
+    }
+
     // #700: whether the runtime lies outside the install is decided on the host (links resolved there), before the run writes
     // anything under it; the inventory no longer compares the spelling. A standalone profile inside the install is refused.
     [Fact] public async Task AStandaloneRunRefusesARuntimeInsideTheInstallBeforeStaging()
