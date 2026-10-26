@@ -22,6 +22,89 @@ public class GameHostTests
         _ => new ContainerGameHost("ctr", "vt-server", shell ?? HostShell.Bash, "valheim", "docker", fake),
     };
 
+    [Fact] public async Task AFailedRootCleanupKeepsTheOriginalCheckFailure()
+    {
+        var body = new InvalidOperationException("controlled check failure before cleanup");
+        var start = ProcessRunner.NotStarted(new System.Diagnostics.ProcessStartInfo("pwsh"),
+            new System.ComponentModel.Win32Exception(1920, "controlled inaccessible cleanup shell"), TimeSpan.FromMilliseconds(7), windows: true);
+        var fake = new FakeLauncher().Reply(_ => start);
+        var host = new LocalGameHost("cleanup-probe", HostShell.Pwsh, fake);
+        async Task FailBody(string root) { await Task.CompletedTask; throw body; }
+
+        var error = await Record.ExceptionAsync(() => GameHostChecks.WithRootAsync(host, "/controlled-parent", FailBody));
+        var cleanup = Assert.Single(fake.Calls);
+        Assert.Contains("Remove-Item", FakeLauncher.Script(cleanup));
+        Assert.NotNull(error);
+        Assert.Contains("native error=1920", error.ToString());
+        Assert.True(error is AggregateException,
+            "The check and cleanup failures must both survive. Original check: " + body + "\nObserved: " + error);
+        var errors = ((AggregateException)error).InnerExceptions;
+        Assert.Equal(2, errors.Count);
+        Assert.Same(body, errors[0]);
+        Assert.Contains("FailBody", body.StackTrace);
+        var removal = Assert.IsType<HostOperationException>(errors[1]);
+        Assert.Contains("Removing /controlled-parent/vt-", removal.Message);
+        Assert.Contains("EnsureSuccess", removal.StackTrace);
+        Assert.Equal(HostOutcome.TransportFailed, removal.Outcome);
+        Assert.Contains(start.Stderr, removal.Result.Stderr);
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public async Task RootCleanupPreservesSuccessOrTheOnlyFailure(bool bodyFails, bool cleanupFails)
+    {
+        var body = new InvalidOperationException("controlled body failure");
+        var removal = new IOException("controlled removal failure");
+        var fake = new FakeLauncher().Reply(_ => cleanupFails ? throw removal : FakeLauncher.Exit(0, stderr: FakeLauncher.Report(0)));
+        var host = new LocalGameHost("cleanup-probe", HostShell.Pwsh, fake);
+        async Task RunBody(string root) { await Task.CompletedTask; if (bodyFails) throw body; }
+
+        var error = await Record.ExceptionAsync(() => GameHostChecks.WithRootAsync(host, "/controlled-parent", RunBody));
+        Assert.Contains("Remove-Item", FakeLauncher.Script(Assert.Single(fake.Calls)));
+        if (bodyFails)
+        {
+            Assert.Same(body, error);
+            Assert.Contains("RunBody", body.StackTrace);
+        }
+        else if (cleanupFails)
+        {
+            Assert.Same(removal, error);
+            Assert.Contains(nameof(FakeLauncher.RunAsync), removal.StackTrace);
+        }
+        else Assert.Null(error);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AnUnstoppedRootIsNeverRemovedEvenAfterACheckFailure(bool bodyFails)
+    {
+        var body = new InvalidOperationException("controlled body failure before stop refusal");
+        var fake = new FakeLauncher().Exits(0, "VT-GAME busy 42\n", FakeLauncher.Report(0));
+        var host = new LocalGameHost("guard-probe", HostShell.Pwsh, fake);
+        async Task RunBody(string root) { await Task.CompletedTask; if (bodyFails) throw body; }
+
+        var error = await Record.ExceptionAsync(() => GameHostChecks.WithRootAsync(host, "/controlled-parent", RunBody, serversRunFromIt: true));
+        string script = FakeLauncher.Script(Assert.Single(fake.Calls));
+        Assert.Contains(HostedRuntimeStage.WindowsProcessCheck, script);
+        Assert.DoesNotContain("Remove-Item", script);
+        Exception? refused = error;
+        if (bodyFails)
+        {
+            var errors = Assert.IsType<AggregateException>(error).InnerExceptions;
+            Assert.Equal(2, errors.Count);
+            Assert.Same(body, errors[0]);
+            Assert.Contains("RunBody", body.StackTrace);
+            refused = errors[1];
+        }
+        Assert.IsType<InvalidOperationException>(refused);
+        Assert.Contains("Conflicting Valheim process 42", refused.Message);
+        Assert.Contains("no files were changed", refused.Message);
+        Assert.Contains(nameof(HostedRuntimeStage.RequireStoppedAsync), refused.StackTrace);
+    }
+
     [Fact] public async Task ALocalHostStartsTheWrapperInItsOwnShell()
     {
         var fake = new FakeLauncher().Exits(0, "hi\n", FakeLauncher.Report(0));
