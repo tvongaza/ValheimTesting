@@ -4,13 +4,13 @@ using System.Text.Json;
 using Xunit;
 using Valheim.Testing.GameSessions;
 
-// Classes in this collection check the real process table (this one, and the launch-gone idle checks). Other test classes
-// launch stand-ins with the game's names; an idle check cannot race those launches and still have a deterministic verdict.
-[CollectionDefinition(nameof(WindowsGameProcessInventory), DisableParallelization = true)]
-public sealed class WindowsGameProcessInventory { }
+// Host-wide inventory assertions and unresolvable game-named producers must run apart from all other collections.
+// This existing exclusive collection protects those checks while unrelated tests keep their normal parallel scheduling.
+[CollectionDefinition(nameof(GameProcessInventory), DisableParallelization = true)]
+public sealed class GameProcessInventory { }
 
-[Collection(nameof(WindowsGameProcessInventory))]
-public sealed class HostedRuntimeStageTests : IDisposable
+[Collection(nameof(GameProcessInventory))]
+public sealed class HostedRuntimeStageTests(Xunit.Abstractions.ITestOutputHelper output) : IDisposable
 {
     private readonly string _root = Directory.CreateTempSubdirectory("host-stage-").FullName;
     public void Dispose() { try { Directory.Delete(_root, recursive: true); } catch (IOException) { } }
@@ -69,6 +69,81 @@ public sealed class HostedRuntimeStageTests : IDisposable
         Assert.Equal(0, child.ExitCode);
         Assert.Contains(expected, output);
         Assert.Empty(errors);
+    }
+
+    [Fact]
+    public void GameNamedUnixLauncherProducerUsesTheProcessInventoryCollection()
+    {
+        var collection = Assert.Single(typeof(UnixServerLauncherTimeoutTests).CustomAttributes
+            .Where(attribute => attribute.AttributeType == typeof(CollectionAttribute)));
+        Assert.Equal(nameof(GameProcessInventory), collection.ConstructorArguments[0].Value);
+        var definition = Assert.Single(typeof(GameProcessInventory)
+            .GetCustomAttributes(typeof(CollectionDefinitionAttribute), inherit: false).Cast<CollectionDefinitionAttribute>());
+        Assert.True(definition.DisableParallelization);
+    }
+
+    // Linux ps reports a copied executable's short name, not its path. Even an unrelated runtime must refuse
+    // that unknown game until its owner proves it stopped; the inventory check must never signal the bystander.
+    [OsFact("linux")]
+    public async Task LinuxUnknownGamePreservesAnotherRuntimeUntilItsOwnerStopsIt()
+    {
+        // Keep failed evidence outside _root: Dispose must not delete a runtime whose safety remains unknown.
+        string testRoot = Directory.CreateTempSubdirectory("host-stage-linux-unknown-").FullName;
+        output.WriteLine("Owned Linux unknown-process safety root: " + testRoot);
+        var host = new LocalGameHost("linux-process-overlap", HostShell.Bash);
+        var launch = LauncherTimeoutStandIn.Unix(Path.Combine(testRoot, "bystander"), binary: true);
+        string? keptRoot = null;
+        HostServerProcess? held = null;
+        bool stoppedAndIdle = false;
+        try
+        {
+            await StandInServer.RunAsync(host, launch, Path.Combine(testRoot, "boot"), GameHostChecks.Generous,
+                nameof(LinuxUnknownGamePreservesAnotherRuntimeUntilItsOwnerStopsIt), async process =>
+                {
+                    held = process;
+                    output.WriteLine($"Owned bystander: PID {process.Id}, start {process.StartIdentity}");
+                    Assert.Equal(ProbedState.Same, (await HostProcessProbe.ProbeAsync(host,
+                        [(process.Id, process.StartIdentity)], GameHostChecks.Generous))[(process.Id, process.StartIdentity)].State);
+                    var refusal = await Assert.ThrowsAsync<HostOperationException>(() => GameHostChecks.WithRootAsync(host, testRoot,
+                        root =>
+                        {
+                            keptRoot = root;
+                            Directory.CreateDirectory(root);
+                            File.WriteAllText(Path.Combine(root, "keep.txt"), "runtime contents");
+                            return Task.CompletedTask;
+                        }, serversRunFromIt: true));
+                    Assert.Contains("VT-GAME unknown", refusal.Result.Stdout);
+                    Assert.Equal("runtime contents", File.ReadAllText(Path.Combine(keptRoot!, "keep.txt")));
+                    Assert.Equal(ProbedState.Same, (await HostProcessProbe.ProbeAsync(host,
+                        [(process.Id, process.StartIdentity)], GameHostChecks.Generous))[(process.Id, process.StartIdentity)].State);
+                }, logs: []);
+
+            // The owner stopped its recorded PID/start identity. Independently prove it gone before removing the kept runtime.
+            Assert.NotNull(held);
+            Assert.NotNull(keptRoot);
+            var stopped = (await HostProcessProbe.ProbeAsync(host, [(held.Id, held.StartIdentity)], GameHostChecks.Generous))
+                [(held.Id, held.StartIdentity)].State;
+            output.WriteLine($"Owned bystander after stop: PID {held.Id}, start {held.StartIdentity}, state {stopped}");
+            Assert.True(stopped is ProbedState.Gone or ProbedState.Reused);
+            await HostedRuntimeStage.RequireStoppedAsync(host, GameHostChecks.Generous, runtimes: [keptRoot], clientSession: false);
+            Directory.Delete(keptRoot, recursive: true);
+            Assert.False(Directory.Exists(keptRoot));
+
+            string? cleanedRoot = null;
+            await GameHostChecks.WithRootAsync(host, testRoot, root =>
+            {
+                cleanedRoot = root;
+                Directory.CreateDirectory(root);
+                return Task.CompletedTask;
+            }, serversRunFromIt: true);
+            Assert.NotNull(cleanedRoot);
+            Assert.False(Directory.Exists(cleanedRoot));
+            stoppedAndIdle = true;
+        }
+        finally
+        {
+            if (stoppedAndIdle) Directory.Delete(testRoot, recursive: true);
+        }
     }
 
     // The real bash apply stages a reviewed package in place of the source's loader: the profile's loader pin is the package's.

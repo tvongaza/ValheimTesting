@@ -457,6 +457,7 @@ public sealed class StandInServerFixtureTests
 }
 
 [Trait("Os", "unix")]
+[Collection(nameof(GameProcessInventory))]
 public sealed class UnixServerLauncherTimeoutTests
 {
     [Fact]
