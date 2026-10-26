@@ -55,8 +55,9 @@ public sealed record WorldIdentity(string Name, string SeedName, int Seed, long 
         var layout = Layout(actualPaths.Where(path => path != WorldFixture.ProvenanceFile));
         byte[] Bytes(string file)
         {
-            byte[] bytes = System.IO.File.ReadAllBytes(Path.Combine(fixture, file));
-            if (observed != null && !FileHash.Sha256(bytes).Equals(observed[file], StringComparison.OrdinalIgnoreCase))
+            string concretePath = Path.Combine(fixture, file);
+            byte[] bytes = System.IO.File.ReadAllBytes(concretePath);
+            if (observed != null && !FileHash.Sha256(bytes).Equals(observed[Path.GetRelativePath(fixture, concretePath)], StringComparison.OrdinalIgnoreCase))
                 throw new InvalidDataException("The fixture metadata changed after its content was observed: " + file);
             return bytes;
         }

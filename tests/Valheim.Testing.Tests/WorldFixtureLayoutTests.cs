@@ -91,6 +91,25 @@ public sealed class WorldFixtureLayoutTests : IDisposable
     }
 
     [Fact]
+    public void NativeManifestKeysBindMainChunkListAndBackupMetadata()
+    {
+        string fixture = FakeInstalls.Backup(Fixture());
+        var observed = WorldFixture.Manifest(fixture);
+        Assert.Contains(Path.Combine("Campaign", "_main.1.fwl2"), observed.Keys);
+        Assert.Contains(Path.Combine("Campaign", "_main.1.chunks"), observed.Keys);
+        Assert.Contains(Path.Combine("Campaign_backup_auto-20261020-120000", "_main.0.fwl2"), observed.Keys);
+        var identity = WorldIdentity.ReadObserved(fixture, observed);
+        Assert.Equal("Campaign/_main.1.fwl2", identity.File);
+        var target = GameAssemblyVersion.Read(new MemoryStream(FakeInstalls.GameAssembly()), "host");
+        var pinned = WorldIdentity.Capture(fixture, target, observed);
+        Assert.Equal(identity, pinned.Identity);
+        pinned.Verify();
+        var unpinned = WorldIdentity.Capture(fixture, target);
+        Assert.Equal(identity, unpinned.Identity);
+        unpinned.Verify();
+    }
+
+    [Fact]
     public void OnlyACopiedObservationMayAddItsGeneratedProvenanceRecord()
     {
         string fixture = Fixture();
