@@ -151,10 +151,31 @@ public sealed class HostedWorldOnHostShellTests : IDisposable
         var before = WorldFixture.Manifest(_root);
         var directories = Directory.GetDirectories(_root, "*", SearchOption.AllDirectories).Order(StringComparer.Ordinal).ToArray();
         var result = (await Collisions(host)).EnsureSuccess("read-only cloud name check");
-        Assert.Contains("VT-WORLD-COLLISION " + entry, result.Stdout);
-        Assert.Contains("VT-WORLD-COLLISIONS done", result.Stdout);
-        Assert.Equal(before, WorldFixture.Manifest(_root));
-        Assert.Equal(directories, Directory.GetDirectories(_root, "*", SearchOption.AllDirectories).Order(StringComparer.Ordinal));
+        string? actual = null, resolvedActual = null, resolvedExpected = null;
+        try
+        {
+            const string prefix = "VT-WORLD-COLLISION ";
+            var lines = result.Stdout.Split('\n').Select(line => line.TrimEnd('\r')).ToList();
+            if (lines.Count > 0 && lines[^1].Length == 0) lines.RemoveAt(lines.Count - 1);
+            Assert.True(lines.Count == 2 && lines[0].StartsWith(prefix, StringComparison.Ordinal) &&
+                lines[1] == "VT-WORLD-COLLISIONS done", "Expected exactly one collision followed by the completed receipt.");
+            actual = lines[0][prefix.Length..];
+            Assert.True(Path.IsPathFullyQualified(actual) && Path.IsPathFullyQualified(entry), "Both collision paths must be fully qualified.");
+            Assert.True(Path.Exists(actual) && Path.Exists(entry), "Both collision paths must name existing entries.");
+            resolvedActual = ProtectedPaths.Resolve(actual);
+            resolvedExpected = ProtectedPaths.Resolve(entry);
+            Assert.True(string.Equals(resolvedExpected, resolvedActual, Windows(host) ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal),
+                "The collision must identify the complete expected physical entry.");
+            Assert.Equal(before, WorldFixture.Manifest(_root));
+            Assert.Equal(directories, Directory.GetDirectories(_root, "*", SearchOption.AllDirectories).Order(StringComparer.Ordinal));
+        }
+        catch (Exception error)
+        {
+            string diagnostic;
+            try { diagnostic = System.Text.Json.JsonSerializer.Serialize(new { result.Stdout, Expected = entry, Actual = actual, resolvedExpected, resolvedActual }); }
+            catch (Exception diagnosticError) { diagnostic = "Diagnostic collection failed: " + diagnosticError; }
+            throw new Xunit.Sdk.XunitException(error + "\nFull collision protocol diagnostic: " + diagnostic);
+        }
     }
 
     [Theory, MemberData(nameof(LocalGameHostShellTests.Shells), MemberType = typeof(LocalGameHostShellTests))]
