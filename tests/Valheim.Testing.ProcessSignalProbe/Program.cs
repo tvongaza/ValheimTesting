@@ -68,6 +68,11 @@ internal static class Program
         }
         if (args is ["stdio-gate", var outputMarker])
         {
+            var utf8 = new System.Text.UTF8Encoding(false, true);
+            File.WriteAllText(outputMarker + ".encoding", Console.OutputEncoding.CodePage.ToString(System.Globalization.CultureInfo.InvariantCulture), utf8);
+            string input = Environment.GetEnvironmentVariable("VT_TEST_INPUT") ?? throw new InvalidOperationException("The stdio fixture needs VT_TEST_INPUT.");
+            File.WriteAllText(outputMarker + ".input", input, utf8);
+            Console.OutputEncoding = utf8;
             File.WriteAllText(outputMarker + ".ready", Environment.ProcessId.ToString());
             using var released = new ManualResetEventSlim();
             using var watcher = new FileSystemWatcher(Path.GetDirectoryName(outputMarker)!, Path.GetFileName(outputMarker) + ".release")
@@ -78,7 +83,7 @@ internal static class Program
             if (!File.Exists(outputMarker + ".release") && !released.Wait(TimeSpan.FromSeconds(30)))
                 throw new TimeoutException("The stdio test gate was not released.");
             Console.Out.WriteLine("VT-STDOUT after launcher exit");
-            if (Environment.GetEnvironmentVariable("VT_TEST_INPUT") is { } input) Console.Out.WriteLine("VT-INPUT " + input);
+            Console.Out.WriteLine("VT-INPUT " + input);
             Console.Error.WriteLine("VT-STDERR after launcher exit");
             Console.Out.Flush();
             Console.Error.Flush();

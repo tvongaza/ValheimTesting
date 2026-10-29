@@ -78,12 +78,32 @@ public sealed class ExplicitRunInputsTests : IDisposable
     [Theory]
     [InlineData("valheimCLI.valheimCLI.cfg")]
     [InlineData("VALHEIMCLI.VALHEIMCLI.CFG")]
-    [InlineData("a\\other.cfg")]
     [InlineData("bad;name.cfg")]
     public void ConfigTargetsUseTheRuntimeOwnersAdmissionRules(string config)
     {
         Assert.False(StartArguments.TryRead(["--mod", "mod.dll", "--config", config], out _, out _));
         Assert.False(ServerLoad.TryRead(["--mod", "mod.dll", "--config", config], out _, out _));
+    }
+
+    [Theory]
+    [InlineData("a/other.cfg")]
+    [InlineData("a\\other.cfg")]
+    public void NestedConfigPathsKeepTheirSourceAndUseTheRuntimeOwnersBasename(string config)
+    {
+        string source = _rig.Root + "/" + config;
+        bool accepted = config == "a/other.cfg" || OperatingSystem.IsWindows();
+        Assert.Equal(accepted, StartArguments.TryRead(["--mod", "mod.dll", "--config", source], out var start, out _));
+        Assert.Equal(accepted, ServerLoad.TryRead(["--mod", "mod.dll", "--config", source], out var server, out _));
+        if (accepted)
+        {
+            Assert.Equal([source], start!.RunInputs.Configs);
+            Assert.Equal([source], server!.RunInputs.Configs);
+            _rig.Write("a/other.cfg", Encoding.UTF8.GetBytes("[Settings]\nSelected = true\n"));
+            Assert.Equal("other.cfg", Assert.Single(ModInputStage.RetainExplicit(start.RunInputs,
+                ModInputStage.Route.Hosted, Path.Combine(_rig.Root, "start-inputs"), true).Configs).Destination);
+            Assert.Equal("other.cfg", Assert.Single(ModInputStage.RetainExplicit(server.RunInputs,
+                ModInputStage.Route.Dedicated, Path.Combine(_rig.Root, "server-inputs"), false).Configs).Destination);
+        }
     }
 
     [Fact]
