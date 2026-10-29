@@ -12,12 +12,17 @@ public sealed class SmokeCommandOptionsTests
         Assert.Equal("Fresh-World", named!.Create!.Name);
     }
 
+    public static IEnumerable<object[]> InvalidSeedOptions()
+    {
+        yield return [new[] { "--world-name", "Fresh" }];
+        yield return [new[] { "--world-seed", "abc", "--world-fixture", "fixture" }];
+        yield return [new[] { "--world-seed", "abc", "--compare-mod", "other", "--compare-source", "commit" }];
+        yield return [new[] { "--world-seed", "a b" }];
+        yield return [new[] { "--world-seed", "abc", "--world-name", "CON" }];
+    }
+
     [Theory]
-    [InlineData(new[] { "--world-name", "Fresh" })]
-    [InlineData(new[] { "--world-seed", "abc", "--world-fixture", "fixture" })]
-    [InlineData(new[] { "--world-seed", "abc", "--compare-mod", "other", "--compare-source", "commit" })]
-    [InlineData(new[] { "--world-seed", "a b" })]
-    [InlineData(new[] { "--world-seed", "abc", "--world-name", "CON" })]
+    [MemberData(nameof(InvalidSeedOptions))]
     public void InvalidSeedCombinationsRefuseBeforeMachineSelection(string[] options) =>
         Assert.False(StartArguments.TryRead(["--mod", "candidate.dll", .. options], out _, out _));
 

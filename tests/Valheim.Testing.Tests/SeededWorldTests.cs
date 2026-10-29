@@ -162,6 +162,8 @@ public sealed class SeededWorldTests : IDisposable
         using var install = PreflightInstall.Create();
         using var data = new FakeClientDataDirectory(Path.Combine(_root, "data"));
         var plan = Plan(); plan.Install = install.Root;
+        plan.Architecture = "x64";
+        plan.Port = 5556;
         plan.Pins["valheimCLI.valheimCLI"] = install.CliMd5;
         plan.RunManifestState = new RunManifest("seed", "control", null, null, null, false, [], [], [], new InstallPins(),
             Name, null, 0, [], [], "controlled") { Create = Request };
@@ -215,6 +217,127 @@ public sealed class SeededWorldTests : IDisposable
         Assert.Throws<InvalidDataException>(() => HostedWorldOnHost.RecoverAsync(site.Host, Fields(), Path.Combine(Worlds, Name), "run-1", TimeSpan.FromSeconds(30), default).GetAwaiter().GetResult());
         Assert.DoesNotContain(_journal, entry => entry.Kind == JournalEntry.CopyRetired);
         Assert.Equal(fault != "missing", Directory.Exists(Path.Combine(Worlds, Name)));
+    }
+
+    [ClientHostFact] public async Task APreCommandFailureRetiresOnlyItsAbsentCreationIntent()
+    {
+        var plan = Plan();
+        var site = Site((_, _, _) => Task.FromException(new IOException("controlled failure before creation")));
+        site.ReserveCreation(plan.HostWorld!, Output, default);
+        var transport = Transport(); using var client = Open(plan, transport);
+        Assert.Equal("controlled failure before creation", Assert.Throws<IOException>(() => site.CreateWorld(plan, client, Output, default)).Message);
+        Assert.Equal(0, transport.Count("cli_create_world"));
+        Assert.Equal("intended", Fields()["creationState"]);
+        Assert.Empty(await HostedWorldOnHost.RecoverAsync(site.Host, Fields(), Path.Combine(Worlds, Name), "run-1", TimeSpan.FromSeconds(30), default));
+        Assert.False(Directory.Exists(Worlds));
+        Assert.Empty(Directory.EnumerateFileSystemEntries(site.KeepIn));
+    }
+
+    [Theory] [InlineData(false)] [InlineData(true)]
+    public async Task IntendedCreationAbsenceIsReadOnlyForMissingAndExistingWorldFolders(bool existing)
+    {
+        var site = Site(); site.ReserveCreation(Plan().HostWorld!, Output, default);
+        if (existing) { Directory.CreateDirectory(Worlds); File.WriteAllText(Path.Combine(Worlds, "Personal.fwl"), "personal"); }
+        Assert.Empty(await HostedWorldOnHost.RecoverAsync(site.Host, Fields(), Path.Combine(Worlds, Name), "run-1", TimeSpan.FromSeconds(30), default));
+        Assert.Equal(existing, Directory.Exists(Worlds));
+        if (existing) { Assert.Equal(["Personal.fwl"], Directory.GetFileSystemEntries(Worlds).Select(Path.GetFileName)); Assert.Equal("personal", File.ReadAllText(Path.Combine(Worlds, "Personal.fwl"))); }
+        Assert.Empty(Directory.EnumerateFileSystemEntries(site.KeepIn));
+    }
+
+    [Theory] [InlineData("Seeded-Test.fwl")] [InlineData("SEEDED-TEST.fwl")]
+    [InlineData("Seeded-Test_backup_auto-1.fwl")] [InlineData("Seeded-Test")]
+    public async Task IntendedCreationNeverRetiresOverAForeignNamedEntry(string leaf)
+    {
+        var site = Site(); site.ReserveCreation(Plan().HostWorld!, Output, default);
+        Directory.CreateDirectory(Worlds);
+        string entry = Path.Combine(Worlds, leaf), file = leaf == Name ? Path.Combine(Directory.CreateDirectory(entry).FullName, "personal.txt") : entry;
+        File.WriteAllText(file, "foreign bytes");
+        await Assert.ThrowsAsync<HostOperationException>(() => HostedWorldOnHost.RecoverAsync(site.Host, Fields(), Path.Combine(Worlds, Name), "run-1", TimeSpan.FromSeconds(30), default));
+        Assert.Equal("foreign bytes", File.ReadAllText(file));
+        Assert.Equal([leaf], Directory.GetFileSystemEntries(Worlds).Select(Path.GetFileName));
+        Assert.Empty(Directory.EnumerateFileSystemEntries(site.KeepIn));
+    }
+
+    [UnixFact] public async Task IntendedCreationRefusesDanglingEntriesAndLinkedWorldParents()
+    {
+        var site = Site(); site.ReserveCreation(Plan().HostWorld!, Output, default);
+        Directory.CreateDirectory(Worlds);
+        string link = Path.Combine(Worlds, Name + ".fwl"), missing = Path.Combine(_root, "missing-world");
+        File.CreateSymbolicLink(link, missing);
+        await Assert.ThrowsAsync<HostOperationException>(() => HostedWorldOnHost.RecoverAsync(site.Host, Fields(), Path.Combine(Worlds, Name), "run-1", TimeSpan.FromSeconds(30), default));
+        Assert.Equal(missing, new FileInfo(link).LinkTarget); Assert.False(File.Exists(missing));
+        File.Delete(link); Directory.Delete(Worlds);
+        string foreign = Directory.CreateDirectory(Path.Combine(_root, "foreign-worlds")).FullName;
+        File.WriteAllText(Path.Combine(foreign, "personal.txt"), "personal");
+        Directory.CreateSymbolicLink(Worlds, foreign);
+        await Assert.ThrowsAsync<HostOperationException>(() => HostedWorldOnHost.RecoverAsync(site.Host, Fields(), Path.Combine(Worlds, Name), "run-1", TimeSpan.FromSeconds(30), default));
+        Assert.Equal(foreign, new DirectoryInfo(Worlds).LinkTarget);
+        Assert.Equal("personal", File.ReadAllText(Path.Combine(foreign, "personal.txt")));
+        Assert.Equal(["personal.txt"], Directory.GetFileSystemEntries(foreign).Select(Path.GetFileName));
+        Directory.Delete(Worlds); Directory.Delete(Path.GetDirectoryName(Worlds)!);
+        Directory.CreateSymbolicLink(Path.GetDirectoryName(Worlds)!, foreign);
+        await Assert.ThrowsAsync<HostOperationException>(() => HostedWorldOnHost.RecoverAsync(site.Host, Fields(), Path.Combine(Worlds, Name), "run-1", TimeSpan.FromSeconds(30), default));
+        Assert.Equal(foreign, new DirectoryInfo(Path.GetDirectoryName(Worlds)!).LinkTarget);
+        Assert.Equal(["personal.txt"], Directory.GetFileSystemEntries(foreign).Select(Path.GetFileName));
+    }
+
+    [UnixFact] public async Task IntendedCreationRefusesAnUnreadableWorldFolder()
+    {
+        if (OperatingSystem.IsWindows()) throw new PlatformNotSupportedException("UnixFact excludes Windows; this test uses Unix permissions.");
+        var site = Site(); site.ReserveCreation(Plan().HostWorld!, Output, default);
+        Directory.CreateDirectory(Worlds); var mode = File.GetUnixFileMode(Worlds);
+        try
+        {
+            File.SetUnixFileMode(Worlds, UnixFileMode.None);
+            await Assert.ThrowsAsync<HostOperationException>(() => HostedWorldOnHost.RecoverAsync(site.Host, Fields(), Path.Combine(Worlds, Name), "run-1", TimeSpan.FromSeconds(30), default));
+        }
+        finally { File.SetUnixFileMode(Worlds, mode); }
+        Assert.Empty(Directory.EnumerateFileSystemEntries(Worlds));
+    }
+
+    [Theory]
+    [InlineData("", 0, false)]
+    [InlineData("VT-WORLD-ABSENCE", 0, false)]
+    [InlineData("VT-WORLD-ABSENCE done\nunknown\n", 0, false)]
+    [InlineData("VT-WORLD-ABSENCE done\nVT-WORLD-ABSENCE done\n", 0, false)]
+    [InlineData("VT-WORLD-ABSENCE done\n", 5, false)]
+    [InlineData("VT-WORLD-ABSENCE done\n", 0, true)]
+    public async Task IntendedCreationRequiresASuccessfulCompleteAbsenceReceipt(string stdout, int exit, bool unknown)
+    {
+        var site = Site(); site.ReserveCreation(Plan().HostWorld!, Output, default);
+        var host = new ForwardingWorldHost(site.Host)
+        {
+            InsteadOfRun = (script, _) => script == HostedWorldOnHost.BashCreationAbsence || script == HostedWorldOnHost.WindowsCreationAbsence
+                ? new HostResult(unknown ? HostOutcome.TransportFailed : HostOutcome.Exited, exit, stdout, "controlled observation", TimeSpan.Zero, false) : null,
+        };
+        await Assert.ThrowsAsync<HostOperationException>(() => HostedWorldOnHost.RecoverAsync(host, Fields(), Path.Combine(Worlds, Name), "run-1", TimeSpan.FromSeconds(30), default));
+        Assert.False(Directory.Exists(Worlds)); Assert.Empty(Directory.EnumerateFileSystemEntries(site.KeepIn));
+    }
+
+    [Theory]
+    [InlineData("placementState", "attempted")] [InlineData("creationState", "unknown")]
+    [InlineData("worldUid", "")] [InlineData("verified", "false")]
+    [InlineData("creationProof", "")] [InlineData("creationProofSha256", "")]
+    [InlineData("absenceVerified", "false")] [InlineData("stage", "unexpected")]
+    [InlineData("runtime", "unexpected")] [InlineData("holds", "runtime")] [InlineData("transferredEntries", "[]")]
+    [InlineData("seed", "bad seed")] [InlineData("parent", "worlds_local")]
+    [InlineData("keepIn", "/somewhere/another-run/host-world")]
+    public async Task InconsistentCreationIntentNeverBecomesAnAbsenceClaim(string field, string value)
+    {
+        var site = Site(); site.ReserveCreation(Plan().HostWorld!, Output, default);
+        var fields = Fields(); fields[field] = value; bool observed = false;
+        var host = new ForwardingWorldHost(site.Host) { BeforeRun = (_, _) => observed = true };
+        var error = await Record.ExceptionAsync(() => HostedWorldOnHost.RecoverAsync(host, fields, Path.Combine(Worlds, Name), "run-1", TimeSpan.FromSeconds(30), default));
+        Assert.True(error is ArgumentException or InvalidDataException, error?.ToString() ?? "invalid intent was accepted");
+        Assert.False(observed); Assert.False(Directory.Exists(Worlds));
+    }
+
+    [Fact] public async Task AnAttemptedCreationStaysPendingEvenWhenNoEntryExists()
+    {
+        var site = Site(); site.ReserveCreation(Plan().HostWorld!, Output, default);
+        var fields = Fields(); fields["creationState"] = fields["placementState"] = "attempted";
+        await Assert.ThrowsAsync<InvalidDataException>(() => HostedWorldOnHost.RecoverAsync(site.Host, fields, Path.Combine(Worlds, Name), "run-1", TimeSpan.FromSeconds(30), default));
+        Assert.False(Directory.Exists(Worlds));
     }
 
     [Theory]

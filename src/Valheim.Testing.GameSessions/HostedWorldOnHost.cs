@@ -417,6 +417,28 @@ internal static class HostedWorldOnHost
     {
         if (fields.TryGetValue("creationState", out string? creation))
         {
+            if (creation == "intended" && fields.GetValueOrDefault("placementState") == "intended")
+            {
+                string intendedName = RequireJournalledPaths(fields, runtime, runId);
+                _ = new SeededWorldRequest(intendedName, fields.GetValueOrDefault("seed") ?? "");
+                if (host.Kind != GameHostKind.Local || fields.GetValueOrDefault("holds") != Holds ||
+                    fields.GetValueOrDefault("absenceVerified") != "true" || fields.GetValueOrDefault("stage") != "" ||
+                    fields.GetValueOrDefault("runtime") != runtime ||
+                    new[] { "worldUid", "verified", "creationProof", "creationProofSha256", "transferredEntries" }.Any(fields.ContainsKey) ||
+                    new[] { runtime, fields["parent"], fields["keepIn"] }.Any(path => !Path.IsPathFullyQualified(path) ||
+                        !Path.GetFullPath(path).Equals(path, StringComparison.Ordinal)))
+                    throw new InvalidDataException("The never-issued creation intent has inconsistent local request or path fields; preserve it.");
+                // The recovery controller has settled its runner/processes and holds its lock. Only a complete read-only
+                // absence observation can retire this intent; a name alone never authorizes moving a world.
+                var observation = (await host.RunAsync(host.Shell.Kind == HostShellKind.PowerShell ? WindowsCreationAbsence : BashCreationAbsence,
+                    new Dictionary<string, string> { ["worlds"] = fields["parent"], ["name"] = intendedName }, timeout, cancellation).ConfigureAwait(false))
+                    .EnsureSuccess($"Checking the never-issued world's absence on {host.Name}");
+                string receipt = observation.Stdout.Replace("\r\n", "\n", StringComparison.Ordinal);
+                if (receipt.EndsWith('\n')) receipt = receipt[..^1];
+                if (receipt != "VT-WORLD-ABSENCE done")
+                    throw new HostOperationException("The never-issued world's absence was not confirmed; preserve the pending request without moving any save", observation);
+                return [];
+            }
             if (creation != "completed" || fields.GetValueOrDefault("placementState") != "created")
                 throw new InvalidDataException("Seeded creation was not proven complete; preserve the pending request without retrying or moving any save.");
             string proof = fields.GetValueOrDefault("creationProof") ?? "";
@@ -527,10 +549,16 @@ internal static class HostedWorldOnHost
     /// </summary>
     internal static (string Name, string WorldUid) RequireJournalled(IReadOnlyDictionary<string, string> fields, string runtime, string runId)
     {
-        string worlds = fields.GetValueOrDefault("parent") ?? "", name = fields.GetValueOrDefault("world") ?? "", keepIn = fields.GetValueOrDefault("keepIn") ?? "";
+        string name = RequireJournalledPaths(fields, runtime, runId);
         string uid = fields.GetValueOrDefault("worldUid") ?? "";
         if (!long.TryParse(uid, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out _))
             throw new InvalidDataException("its journal names no world UID, so the world in the client's worlds cannot be proven the run's own");
+        return (name, uid);
+    }
+
+    private static string RequireJournalledPaths(IReadOnlyDictionary<string, string> fields, string runtime, string runId)
+    {
+        string worlds = fields.GetValueOrDefault("parent") ?? "", name = fields.GetValueOrDefault("world") ?? "", keepIn = fields.GetValueOrDefault("keepIn") ?? "";
         string Leaf(string path) => path.Replace('\\', '/').TrimEnd('/').Split('/').Last();
         if (!Leaf(worlds).Equals("worlds_local", StringComparison.OrdinalIgnoreCase))
             throw new InvalidDataException($"its journal names {worlds}, which is not a client's worlds_local");
@@ -542,7 +570,7 @@ internal static class HostedWorldOnHost
         var segments = keepIn.Replace('\\', '/').TrimEnd('/').Split('/');
         if (!RunJournal.SafeName(runId) || segments.Length < 3 || segments[^1] != "host-world" || segments[^2] != runId || segments.Any(segment => segment is "." or ".."))
             throw new InvalidDataException($"its journal names {keepIn}, which is not this run's host-world folder (<runtime>/{runId}/host-world)");
-        return (name, uid);
+        return name;
     }
 
     /// <summary>
@@ -760,8 +788,7 @@ internal static class HostedWorldOnHost
         done
         echo 'VT-WORLD-MOVE done'
         """;
-    private static readonly string WindowsCollisionFolders = "$ErrorActionPreference = 'Stop'\n" +
-        SteamDetection.PowerShellUserData + ProtectedPaths.PowerShellUnlinked + """
+    private static readonly string WindowsWorldDirectory = ProtectedPaths.PowerShellUnlinked + """
         function Test-VtWorldDirectory([string]$boundary, [string]$folder) {
             if (-not (Test-VtUnlinked $boundary $folder)) { throw "Linked world or cloud root: $folder" }
             $current = $folder
@@ -777,6 +804,10 @@ internal static class HostedWorldOnHost
             $null = @([IO.Directory]::EnumerateFileSystemEntries($current))
             return $current -ceq $folder
         }
+
+        """;
+    private static readonly string WindowsCollisionFolders = "$ErrorActionPreference = 'Stop'\n" +
+        SteamDetection.PowerShellUserData + WindowsWorldDirectory + """
         function Get-VtWorldCollisions([string]$local) {
             $parent = [IO.Path]::GetDirectoryName($local)
             $roots = @(@($parent, $local), @($parent, $cloud))
@@ -796,7 +827,7 @@ internal static class HostedWorldOnHost
         }
 
         """;
-    private static readonly string BashCollisionFolders = "set -eu\n" + SteamDetection.BashUserData + ProtectedPaths.BashUnlinked + """
+    private static readonly string BashWorldDirectory = ProtectedPaths.BashUnlinked + """
         vt_world_directory() {
             local boundary=$1 folder=$2 current=$2
             vt_unlinked "$boundary" "$folder" || { printf 'Linked world or cloud root: %s\n' "$folder" >&2; exit 5; }
@@ -817,6 +848,9 @@ internal static class HostedWorldOnHost
                 done
             fi
         }
+
+        """;
+    private static readonly string BashCollisionFolders = "set -eu\n" + SteamDetection.BashUserData + BashWorldDirectory + """
         vt_world_collisions() {
             local local_worlds=$1 account
             vt_world_entries "${local_worlds%/*}" "$local_worlds"
@@ -831,6 +865,21 @@ internal static class HostedWorldOnHost
             fi
         }
 
+        """;
+    // Unlike Entries, these observations never create worlds_local. Any named entry (even a dangling link) refuses retirement.
+    internal static readonly string WindowsCreationAbsence = "$ErrorActionPreference = 'Stop'\n" + WindowsWorldDirectory + WindowsNamed + """
+        $parent = [IO.Path]::GetDirectoryName($worlds)
+        if (Test-VtWorldDirectory $parent $worlds) {
+            foreach ($entry in [IO.Directory]::EnumerateFileSystemEntries($worlds)) {
+                if (Test-VtNamed ([IO.Path]::GetFileName($entry))) { 'VT-WORLD-PRESENT ' + $entry; break }
+            }
+        }
+        'VT-WORLD-ABSENCE done'
+        """;
+    internal static readonly string BashCreationAbsence = "set -eu\n" + BashWorldDirectory + BashNamed + """
+        entries=$(vt_world_entries "${worlds%/*}" "$worlds") || exit $?
+        [ -z "$entries" ] || printf 'VT-WORLD-PRESENT %s\n' "$entries"
+        echo 'VT-WORLD-ABSENCE done'
         """;
     internal static readonly string WindowsCollisions = WindowsCollisionFolders + WindowsNamed + """
         foreach ($entry in @(Get-VtWorldCollisions $worlds)) { 'VT-WORLD-COLLISION ' + $entry }
