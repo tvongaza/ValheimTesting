@@ -16,14 +16,36 @@ public sealed class ModInputStageTests : IDisposable
         Journals: (_, _) => Task.FromResult<IReadOnlyList<CampaignPreflightProblem>>([]), Packaged: () => null));
     public void Dispose() { _preflight.Dispose(); _rig.Dispose(); }
 
+    private string DedicatedGame()
+    {
+        string server = Path.Combine(_rig.Root, "server-game");
+        FakeInstalls.Server(server);
+        if (OperatingSystem.IsMacOS())
+        {
+            Directory.CreateDirectory(Path.Combine(server, "valheim_server"));
+            Directory.Move(Path.Combine(server, "valheim_server_Data"), Path.Combine(server, "valheim_server", "Data"));
+        }
+        string executable = Path.Combine(server, ServerRunPlan.ExecutableFor(HostProfile.CurrentPlatform switch
+            { "windows" => ServerPlatform.Windows, "macos" => ServerPlatform.MacOS, _ => ServerPlatform.Linux }));
+        Directory.CreateDirectory(Path.GetDirectoryName(executable)!); File.WriteAllText(executable, "synthetic dedicated server");
+        string core = Path.Combine(server, InstallPins.CoreDirectory);
+        foreach (string file in Directory.EnumerateFiles(Path.Combine(_rig.Game, InstallPins.CoreDirectory)))
+            File.Copy(file, Path.Combine(core, Path.GetFileName(file)), overwrite: true);
+        string managed = Path.GetDirectoryName(InstallPins.GameAssembly(server))!;
+        File.Copy(Path.Combine(Path.GetDirectoryName(InstallPins.GameAssembly(_rig.Game))!, "System.Private.CoreLib.dll"),
+            Path.Combine(managed, "System.Private.CoreLib.dll"));
+        File.WriteAllText(Path.Combine(managed, "System.Runtime.dll"), "provided synthetic framework assembly");
+        return server;
+    }
+
     private ModInputStage.Request TwoRoles(RegressionRig client, string output, ModInputStage.RoleSelection selection,
         string? serverProject = null)
     {
-        _rig.Write("game/" + ServerRunPlan.ExecutableFor(HostProfile.CurrentPlatform switch
-            { "windows" => ServerPlatform.Windows, "macos" => ServerPlatform.MacOS, _ => ServerPlatform.Linux }), Encoding.UTF8.GetBytes("server"));
+        string server = DedicatedGame();
+        File.WriteAllText(Path.Combine(Path.GetDirectoryName(InstallPins.GameAssembly(client.Game))!, "System.Runtime.dll"), "provided synthetic framework assembly");
         var options = new Dictionary<string, string>
         {
-            ["--server"] = _rig.Game, ["--client"] = client.Game,
+            ["--server"] = server, ["--client"] = client.Game,
             ["--cli-manifest"] = _rig.CliManifest(save: true, full: true), ["--cli-files"] = Path.Combine(_rig.Root, "cli"),
         };
         if (serverProject != null) options["--project"] = serverProject;
@@ -38,16 +60,29 @@ public sealed class ModInputStageTests : IDisposable
         using var client = new RegressionRig();
         string dependency = _rig.Write("compile/BepInEx.dll", RegressionRig.Assembly("BepInEx", null, "server-core"));
         client.Write("game/BepInEx/core/BepInEx.dll", RegressionRig.Assembly("BepInEx", null, "client-core"));
+        string harmony = client.Write("game/BepInEx/core/0Harmony.dll", RegressionRig.Assembly("0Harmony", null, "client-core"));
+        string gameSource = InstallPins.GameAssembly(client.Game);
+        string publicized = _rig.Write("client-compile/assembly_valheim_publicized.dll", File.ReadAllBytes(gameSource));
+        string compiledCore = drift == "loader" ? dependency : Path.Combine(client.Game, InstallPins.CoreDirectory, "BepInEx.dll");
         string record = _rig.Write("client-build.json", Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new ModBuild.BuildRecord(
             client.Game, drift == "game" ? new string('0', 64) : InstallPins.GameHash(client.Game),
-            Path.GetDirectoryName(InstallPins.GameAssembly(client.Game))!, _rig.Candidate,
-            drift == "mod" ? new string('0', 64) : FileHash.Sha256(_rig.Candidate), "BepInEx.AssemblyPublicizer/0.4.3", [], [],
-            drift == "loader" ? [new(dependency, FileHash.Sha256(dependency))] : []))));
+            Path.GetDirectoryName(gameSource)!, _rig.Candidate,
+            drift == "mod" ? new string('0', 64) : FileHash.Sha256(_rig.Candidate), "BepInEx.AssemblyPublicizer/0.4.3",
+            [new(gameSource, FileHash.Sha256(gameSource))], [new(publicized, FileHash.Sha256(publicized))],
+            [new(compiledCore, FileHash.Sha256(compiledCore)), new(harmony, FileHash.Sha256(harmony))]))));
         int probes = 0;
         using var check = LocalHostPreflight.ReplaceDefaultProbesForTest(new(Processes: (_, _, _, _) => { probes++; return Task.CompletedTask; }, Packaged: () => null));
         var request = TwoRoles(client, Path.Combine(_rig.Root, "bad-client-" + drift), new([_rig.Candidate], [], [], []) { BuildInputs = record });
-        await Assert.ThrowsAsync<InvalidDataException>(() => ModInputStage.RunAsync(request, default));
+        var failure = await Assert.ThrowsAsync<InvalidDataException>(() => ModInputStage.RunAsync(request, default));
+        string expected = drift switch
+        {
+            "mod" => "Build input changed since preparation: " + _rig.Candidate,
+            "game" => "Selected native game build differs from the mod's compile game SHA256",
+            _ => "The selected native loader has a different BepInEx.dll",
+        };
+        Assert.True(failure.Message.Contains(expected, StringComparison.Ordinal), failure.ToString());
         Assert.Equal(0, probes); Assert.False(Directory.Exists(Path.Combine(request.Output, "build")));
+        Assert.False(Directory.Exists(Path.Combine(request.Output, "client", "build")));
     }
 
     [ClientHostFact] public async Task BothExplicitProjectsBuildOnceAgainstTheirOwnCoreAndRecordSeparateLocks()
@@ -78,14 +113,15 @@ public sealed class ModInputStageTests : IDisposable
         var request = TwoRoles(client, Path.Combine(_rig.Root, "two-builds"), new([], [], [], []) { Project = clientProject }, serverProject);
         var inputs = await ModInputStage.RunAsync(request, default);
         var selectedClient = Assert.IsType<ModInputStage.SelectedRole>(inputs.ClientMods);
-        Assert.Equal(Path.Combine(_rig.Game, InstallPins.CoreDirectory), inputs.Core);
+        Assert.Equal(Path.Combine(request.Options["--server"], InstallPins.CoreDirectory), inputs.Core);
+        Assert.NotEqual(inputs.Compile.Recipe.Install, selectedClient.Actor.Recipe.Install);
         Assert.Equal(Path.Combine(client.Game, InstallPins.CoreDirectory), selectedClient.Core);
         Assert.Single(File.ReadAllLines(Path.Combine(Path.GetDirectoryName(serverProject)!, "build-count.txt")));
         Assert.Single(File.ReadAllLines(Path.Combine(Path.GetDirectoryName(clientProject)!, "build-count.txt")));
         Assert.NotEqual(Assert.Single(inputs.Dependencies!.Mods).Sha256, Assert.Single(selectedClient.Dependencies.Mods).Sha256);
         var serverRecord = JsonSerializer.Deserialize<ModBuild.BuildRecord>(File.ReadAllText(inputs.BuildInputs!), new JsonSerializerOptions { PropertyNameCaseInsensitive = true })!;
         var clientRecord = JsonSerializer.Deserialize<ModBuild.BuildRecord>(File.ReadAllText(selectedClient.BuildInputs!), new JsonSerializerOptions { PropertyNameCaseInsensitive = true })!;
-        Assert.Equal(_rig.Game, serverRecord.Game); Assert.Equal(client.Game, clientRecord.Game);
+        Assert.Equal(request.Options["--server"], serverRecord.Game); Assert.Equal(client.Game, clientRecord.Game);
         Assert.Contains(clientRecord.Dependencies, file => file.File == Path.Combine(client.Game, InstallPins.CoreDirectory, "BepInEx.dll"));
         Assert.True(File.Exists(Path.Combine(request.Output, "dependencies.lock.json")));
         Assert.True(File.Exists(Path.Combine(request.Output, "client", "dependencies.lock.json")));
@@ -93,17 +129,22 @@ public sealed class ModInputStageTests : IDisposable
 
     [Fact] public void RemoteExplicitClientRefusesBeforeLoaderMaterializationOrOutput()
     {
+        string server = DedicatedGame();
         string inventory = _rig.Write("remote-inventory.json", Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new
         {
             hosts = new { remote = new { kind = "ssh", platform = "windows", shell = "pwsh", destination = "test@remote", @lock = "C:/vt/lock" } },
-            environments = new object[] { new { name = "server", roles = new[] { "server" }, install = _rig.Game },
+            environments = new object[] { new { name = "server", roles = new[] { "server" }, install = server,
+                    runtime = Path.Combine(_rig.Root, "server-runs"), cliPort = 5560, gamePort = 2456 },
                 new { name = "remote-client", host = "remote", roles = new[] { "client" }, install = "C:/game", runtime = "C:/runs", cliPort = 5556 } },
+            leaseHost = "remote", leaseDirectory = "C:/vt/leases",
         })));
         string output = Path.Combine(_rig.Root, "remote-refused"); int loaders = 0;
         var request = new ModInputStage.Request(ModInputStage.Route.Dedicated, output,
             new Dictionary<string, string> { ["--inventory"] = inventory, ["--join"] = "127.0.0.1:2456" }, new HashSet<string>(), [_rig.Parent], [], [], [])
         { ClientSelection = new([_rig.Candidate], [], [], []), Shipped = (_, _, _) => { loaders++; throw new Exception("unexpected materialization"); } };
-        Assert.Contains("local joining client", Assert.Throws<ArgumentException>(() => ModInputStage.Choose(request)).Message);
+        var refusal = Record.Exception(() => ModInputStage.Choose(request));
+        Assert.True(refusal is ArgumentException && refusal.Message.Contains("local joining client", StringComparison.Ordinal),
+            refusal?.ToString() ?? "The remote client was accepted.");
         Assert.Equal(0, loaders); Assert.False(Directory.Exists(output));
     }
 
