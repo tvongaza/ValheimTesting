@@ -315,7 +315,8 @@ public sealed class HostServerTests : IDisposable
         {
             string marker = Path.Combine(_root, "stdio " + index), boot = Path.Combine(_root, "stdio boot [literal] " + index);
             string evidence = Path.Combine(_root, "stdio evidence " + index);
-            var launch = GameLaunch.ForServer(runtime, ["stdio-gate", marker], hostPlatform: ServerPlatform.Windows);
+            var launch = GameLaunch.ForServer(runtime, ["stdio-gate", marker],
+                new Dictionary<string, string> { ["VT_TEST_INPUT"] = ExplicitRunInputsTests.Opaque }, hostPlatform: ServerPlatform.Windows);
             await StandInServer.RunAsync(host, launch, boot, TimeSpan.FromSeconds(75),
                 nameof(WindowsServerWritesBothStreamsAfterItsScheduledTaskLauncherExits), async process =>
             {
@@ -337,6 +338,8 @@ public sealed class HostServerTests : IDisposable
                 finally { await process.StopAsync(TimeSpan.FromSeconds(15)); }
             }, evidence: evidence, logonSeams: sessions[index]);
             Assert.Contains("VT-STDOUT after launcher exit", File.ReadAllText(Path.Combine(evidence, "stdout.log")));
+            Assert.Contains("VT-INPUT " + ExplicitRunInputsTests.Opaque, File.ReadAllText(Path.Combine(evidence, "stdout.log")));
+            Assert.False(File.Exists(Path.Combine(runtime, "should-not-exist")));
             Assert.Contains("VT-STDERR after launcher exit", File.ReadAllText(Path.Combine(evidence, "stderr.log")));
             string moved = Path.Combine(_root, "moved stdout " + index);
             File.Move(Path.Combine(boot, "stdout.log"), moved);

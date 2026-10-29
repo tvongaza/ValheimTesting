@@ -723,7 +723,8 @@ internal static class MacServerStandIn
     // copied. The stand-in writes a marker where BepInEx puts Paths.GameRootPath on macOS, its executable's fourth parent.
     internal const string GameRootMarker = "vt-game-root-marker";
 
-    internal static async Task<(GameLaunch Launch, string Install, string Profile)> PrepareAsync(IGameHost host, string root, TimeSpan timeout)
+    internal static async Task<(GameLaunch Launch, string Install, string Profile)> PrepareAsync(IGameHost host, string root, TimeSpan timeout,
+        IReadOnlyDictionary<string, string>? environment = null)
     {
         using var source = new TempDirectory();
         string game = Path.Combine(source.Path, "valheim_server", "Valheim");
@@ -734,6 +735,7 @@ internal static class MacServerStandIn
             #include <mach-o/dyld.h>
             #include <signal.h>
             #include <stdio.h>
+            #include <stdlib.h>
             #include <string.h>
             #include <unistd.h>
             static volatile sig_atomic_t stop;
@@ -746,6 +748,7 @@ internal static class MacServerStandIn
                 FILE *file = fopen(marker, "w"); if (file) { fputs("game root\n", file); fclose(file); }
               }
               signal(SIGINT, on_stop);
+              const char *input = getenv("VT_TEST_INPUT"); if (input) printf("input=%s\n", input);
               puts("native server running"); fflush(stdout);
               while (!stop) usleep(10000);
               puts("native server stopped"); fflush(stdout);
@@ -770,7 +773,7 @@ internal static class MacServerStandIn
             ["gameFiles"] = string.Join('\n', HostedRuntimeStage.PlanLinkedProfile(ClientPlatform.MacOS, listing.Files.Keys).Links.Select(Encode)),
             ["files"] = string.Join('\n', listing.Files.Keys.Where(path => InstallPins.IsLoaderFile(path)).Select(Encode)),
         }, timeout)).EnsureSuccess("Seeding the Mac server stand-in's profile");
-        return (GameLaunch.ForServerWithLoader(gameRoot, profile, ["-nographics"], null, ServerPlatform.MacOS, linked: true), install, profile);
+        return (GameLaunch.ForServerWithLoader(gameRoot, profile, ["-nographics"], environment, ServerPlatform.MacOS, linked: true), install, profile);
     }
 
     private static void Compile(string output, string input, bool library)

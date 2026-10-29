@@ -206,6 +206,10 @@ public sealed class DetachedSessionTests : IDisposable
         string[] valid = ["--server", server, "--mod", mod, "--server-only", "--output", output];
         Assert.True(DetachedSession.TryServerArgs(valid, out string selected, out _));
         Assert.Equal(output, selected);
+        Assert.False(DetachedSession.TryServerArgs([.. valid, "--env", "MOD_SETTING=value"], out _, out string explicitEnvironment));
+        Assert.Contains("--env", explicitEnvironment);
+        Assert.False(DetachedSession.TryServerArgs([.. valid, "--config", Path.Combine(_root, "mod.cfg")], out _, out string config));
+        Assert.Contains("--config", config);
         Assert.False(DetachedSession.TryServerArgs(["--server", server, "--mod", "relative.dll", "--server-only", "--output", output], out _, out string relative));
         Assert.Contains("--mod", relative);
         Assert.False(DetachedSession.TryServerArgs([.. valid, "--hold"], out _, out string held));

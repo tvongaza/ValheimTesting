@@ -6,6 +6,11 @@ internal static class Program
 {
     private static void Main(string[] args)
     {
+        if (args is ["environment", var environmentOutput])
+        {
+            File.WriteAllText(environmentOutput, Environment.GetEnvironmentVariable("VT_TEST_INPUT"));
+            return;
+        }
         if (args is ["tcp-listener"])
         {
             using var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
@@ -73,6 +78,7 @@ internal static class Program
             if (!File.Exists(outputMarker + ".release") && !released.Wait(TimeSpan.FromSeconds(30)))
                 throw new TimeoutException("The stdio test gate was not released.");
             Console.Out.WriteLine("VT-STDOUT after launcher exit");
+            if (Environment.GetEnvironmentVariable("VT_TEST_INPUT") is { } input) Console.Out.WriteLine("VT-INPUT " + input);
             Console.Error.WriteLine("VT-STDERR after launcher exit");
             Console.Out.Flush();
             Console.Error.Flush();

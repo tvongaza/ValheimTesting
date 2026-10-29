@@ -23,6 +23,105 @@ public sealed class ServerLoadOneOffTests : IDisposable
     private static readonly CampaignPreflightReport Ready = new([]);
     private static ModInputStage.Choice Choose(ServerLoad.Arguments parsed, string output) =>
         ModInputStage.ChooseDedicated(parsed.Options, parsed.ServerOnly, output);
+
+    [ClientHostFact]
+    public async Task ExplicitInputsReachBothGamePlansAndOnlyTheServersConfigFiles()
+    {
+        string output = Path.Combine(_rig.Root, "explicit-inputs");
+        string config = _rig.Write("inputs/example.cfg", Encoding.UTF8.GetBytes("[Settings]\nMessage = selected\n"));
+        string asset = _rig.Write("inputs/data.json", Encoding.UTF8.GetBytes("{\"selected\":true}"));
+        int campaigns = 0;
+        var provenance = new Dictionary<string, string>();
+        using var machine = EnvironmentInventory.UseMachine(WithValheim(out _));
+        int result = await ServerLoad.RunAsync(Arguments(output, "--config", config, "--config", asset,
+            "--env", "MOD_SETTING=" + ExplicitRunInputsTests.Opaque, "--env", "SECOND=two"), new ServerLoad.Seams(
+            Inspect: _ => Task.FromResult(Ready), ClientArchitecture: (_, _, _, _) => { },
+            Campaign: (file, plan, bind, _, options) =>
+            {
+                campaigns++;
+                Assert.Equal(ExplicitRunInputsTests.Opaque, plan.Environment["MOD_SETTING"]);
+                Assert.Equal("two", plan.Environment["SECOND"]);
+                Assert.True(plan.Environment.ContainsKey(SmokeSessionContract.SelectedGuidsVariable));
+                var client = Assert.Single(bind(plan)).Value;
+                Assert.Equal(ExplicitRunInputsTests.Opaque, client.Environment["MOD_SETTING"]);
+                Assert.Equal("two", client.Environment["SECOND"]);
+                Assert.False(client.Environment.ContainsKey(SmokeSessionContract.SelectedGuidsVariable));
+                client.Environment["SECOND"] = "client-only change";
+                Assert.Equal("two", plan.Environment["SECOND"]);
+                var campaign = JsonDocument.Parse(File.ReadAllText(file)).RootElement;
+                var serverFiles = campaign.GetProperty("server").GetProperty("files").EnumerateArray().ToList();
+                foreach (string original in new[] { config, asset })
+                {
+                    var retained = Assert.Single(serverFiles, selected => selected.GetProperty("relativePath").GetString() == "BepInEx/config/" + Path.GetFileName(original));
+                    string copy = retained.GetProperty("source").GetString()!;
+                    Assert.NotEqual(original, copy);
+                    Assert.Equal(File.ReadAllBytes(original), File.ReadAllBytes(copy));
+                    Assert.Equal(FileHash.Sha256(original), retained.GetProperty("expectedSha256").GetString());
+                }
+                Assert.DoesNotContain(campaign.GetProperty("clients").GetProperty("client").GetProperty("files").EnumerateArray(),
+                    selected => selected.GetProperty("relativePath").GetString()!.StartsWith("BepInEx/config/example", StringComparison.Ordinal));
+                options.Provenance!(plan, provenance);
+                return Task.FromResult(0);
+            }));
+        Assert.Equal(0, result);
+        Assert.Equal(1, campaigns);
+        Assert.Equal(Path.Combine(output, "run-inputs.json"), provenance["runInputs"]);
+        Assert.Equal(FileHash.Sha256(provenance["runInputs"]), provenance["runInputsSha256"]);
+        var record = JsonDocument.Parse(File.ReadAllText(provenance["runInputs"])).RootElement;
+        Assert.Equal(["server", "client"], record.GetProperty("environmentRoles").EnumerateArray().Select(role => role.GetString()));
+        Assert.Equal("server", record.GetProperty("configRole").GetString());
+        Assert.Equal(ExplicitRunInputsTests.Opaque, record.GetProperty("environment").GetProperty("MOD_SETTING").GetString());
+        Assert.False(record.GetProperty("environment").TryGetProperty(SmokeSessionContract.PasswordVariable, out _));
+        Assert.False(record.GetProperty("environment").TryGetProperty(SmokeSessionContract.SessionTokenVariable, out _));
+    }
+
+    [Theory]
+    [InlineData("config")]
+    [InlineData("record")]
+    [InlineData("unchanged")]
+    public async Task RetainedInputChangesDuringCampaignInspectionRefuseBeforeTheCampaign(string change)
+    {
+        string output = Path.Combine(_rig.Root, "input-inspection-" + change);
+        string config = _rig.Write("inputs/example.cfg", Encoding.UTF8.GetBytes("[Settings]\nMessage = selected\n"));
+        int inspected = 0, campaigns = 0;
+        int result = await ServerLoad.RunAsync(Arguments(output, "--server-only", "--config", config), new ServerLoad.Seams(
+            Inspect: async file =>
+            {
+                inspected++;
+                // Exercise an asynchronous preflight completion before the adapter can hand off the campaign.
+                await Task.Yield();
+                var campaign = HostedCampaignManifest.Read(file);
+                var selected = Assert.Single(campaign.Server!.Files, entry => entry.RelativePath == "BepInEx/config/example.cfg");
+                Assert.Equal(FileHash.Sha256(config), selected.ExpectedSha256);
+                if (change == "config") File.AppendAllText(selected.Source, "changed during preflight");
+                if (change == "record") File.AppendAllText(Path.Combine(output, "run-inputs.json"), "changed during preflight");
+                return Ready;
+            }, Campaign: (_, _, _, _, _) => { campaigns++; return Task.FromResult(0); }));
+        bool unchanged = change == "unchanged";
+        Assert.Equal(1, inspected);
+        Assert.Equal(unchanged ? 0 : 3, result);
+        Assert.Equal(unchanged ? 1 : 0, campaigns);
+        Assert.Equal(unchanged, File.Exists(Path.Combine(output, "plan.json")));
+        Assert.Equal("[Settings]\nMessage = selected\n", File.ReadAllText(config));
+    }
+
+    [Fact]
+    public async Task MissingConfigRefusesBeforeHostPreflightOrCampaignAndBeforeAnyBuild()
+    {
+        string output = Path.Combine(_rig.Root, "missing-config");
+        int probes = 0, campaigns = 0;
+        using var preflight = LocalHostPreflight.ReplaceDefaultProbesForTest(new(
+            Processes: (_, _, _, _) => { probes++; return Task.CompletedTask; },
+            Packaged: () => null));
+        int result = await ServerLoad.RunAsync(Arguments(output, "--server-only", "--config", Path.Combine(_rig.Root, "missing.cfg")),
+            new ServerLoad.Seams(Inspect: _ => throw new Xunit.Sdk.XunitException("Missing config reached campaign preflight"),
+                Campaign: (_, _, _, _, _) => { campaigns++; return Task.FromResult(0); }));
+        Assert.Equal(3, result);
+        Assert.Equal(0, probes);
+        Assert.Equal(0, campaigns);
+        Assert.False(Directory.Exists(Path.Combine(output, "build")));
+        Assert.False(File.Exists(Path.Combine(output, "campaign.json")));
+    }
     [Fact]
     public async Task ScenarioInputRefusalHappensBeforeFixtureOrCampaignPreparation()
     {

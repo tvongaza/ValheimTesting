@@ -636,7 +636,7 @@ public class InteractiveClientShellTests
         {
             string game = Path.Combine(install, "Valheim.app/Contents/MacOS/Valheim");
             Directory.CreateDirectory(Path.GetDirectoryName(game)!);
-            CopiedProgram.WriteScript(game, "#!/bin/sh\nexec /bin/sleep 600\n"); // not File.WriteAllText: ETXTBSY (#723)
+            CopiedProgram.WriteScript(game, "#!/bin/sh\nprintf 'input=%s\\n' \"$VT_TEST_INPUT\" > input.txt\nexec /bin/sleep 600\n"); // not File.WriteAllText: ETXTBSY (#723)
             foreach (string path in new[] { "BepInEx/core/BepInEx.Preloader.dll", "BepInEx/core/BepInEx.dll" })
             {
                 string file = Path.Combine(install, path);
@@ -655,13 +655,17 @@ public class InteractiveClientShellTests
                 Assert.True(compile.WaitForExit(30000));
                 Assert.True(compile.ExitCode == 0, compile.StandardError.ReadToEnd());
             }
-            var launch = GameLaunch.ForOwnedClientOnHost(ClientPlatform.MacOS, install, install, [], null,
+            var launch = GameLaunch.ForOwnedClientOnHost(ClientPlatform.MacOS, install, install, [],
+                new Dictionary<string, string> { ["VT_TEST_INPUT"] = ExplicitRunInputsTests.Opaque },
                 ClientArchitecture.Arm64, launchDirectory, macDoorstop: "libdoorstop.dylib");
             await StandInClient.RunAsync(host, launch, launchDirectory, Generous, nameof(CheckMacGuiAgentStartAndStop), async started =>
             {
                 client = started;
                 Assert.True(client.Id > 0);
                 Assert.True(File.Exists(Path.Combine(launchDirectory, "pid")));
+                Assert.True(SpinWait.SpinUntil(() => File.Exists(Path.Combine(install, "input.txt")), TimeSpan.FromSeconds(10)));
+                Assert.Equal("input=" + ExplicitRunInputsTests.Opaque + "\n", File.ReadAllText(Path.Combine(install, "input.txt")));
+                Assert.False(File.Exists(Path.Combine(install, "should-not-exist")));
                 Assert.NotNull(await HostProcessProbe.CommandLineAsync(host, client.Id, client.StartIdentity, TimeSpan.FromSeconds(10)));
                 Assert.Equal(InteractiveStop.Quit, await client.StopAsync(TimeSpan.FromSeconds(3), TimeSpan.FromSeconds(10)));
                 Assert.True(client.HasExited);

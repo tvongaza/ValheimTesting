@@ -36,7 +36,7 @@ internal static class SmokeCommandOptions
         ["--server-env"] = new(Kind.Single, Start: false, Build: true), ["--join"] = new(Kind.Single, Start: false),
         ["--adapter"] = new(Kind.Single, Start: false), ["--loader-package"] = new(Kind.Single, Start: false, Build: true),
         ["--steam-runtime-package"] = new(Kind.Single, Start: false, ServerLoadAb: false),
-        ["--config"] = new(Kind.Repeat, Start: false), ["--plugin-file"] = new(Kind.Repeat, Start: false),
+        ["--config"] = new(Kind.Repeat), ["--env"] = new(Kind.Repeat), ["--plugin-file"] = new(Kind.Repeat, Start: false),
         ["--plugin-dir"] = new(Kind.Repeat, Start: false),
         ["--server-only"] = new(Kind.Switch, Start: false),
         ["--world-fixture"] = new(Kind.Single, ServerLoadAb: false),
@@ -55,6 +55,7 @@ internal static class SmokeCommandOptions
         internal Dictionary<string, string> Options { get; } = new(StringComparer.Ordinal);
         internal Dictionary<string, List<string>> Repeated { get; } = new(StringComparer.Ordinal);
         internal HashSet<string> Switches { get; } = new(StringComparer.Ordinal);
+        internal ModInputStage.ExplicitInputs RunInputs { get; set; } = ModInputStage.ExplicitInputs.Empty;
         internal List<string> List(string key) => Repeated.TryGetValue(key, out var list) ? list : [];
     }
 
@@ -162,6 +163,12 @@ internal static class SmokeCommandOptions
         { error = "--assert-command currently runs on the owned dedicated server; give --server-only."; return false; }
         if (result.Options.TryGetValue("--assert-command", out string? assertion) && assertion.IndexOfAny(['\0', '\r', '\n']) >= 0)
         { error = "--assert-command must be one game command, without control characters."; return false; }
+        try
+        {
+            result.RunInputs = ModInputStage.ReadExplicit(result.List("--config"), result.List("--env"),
+                command == Command.Start, result.Options.GetValueOrDefault("--session-token-variable"));
+        }
+        catch (ArgumentException failure) { error = failure.Message; return false; }
         parsed = result;
         return true;
     }

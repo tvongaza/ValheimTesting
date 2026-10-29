@@ -724,6 +724,66 @@ public sealed class HostedRuntimeStageTests : IDisposable
         }
     }
 
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task AdmittedConfigHashSurvivesTheAsynchronousProfileStorageCheck(bool client, bool changed)
+    {
+        var host = new FakeServerHost("config-pin", Mirror, windows: client);
+        string source = client ? @"C:\game\client" : "/srv/valheim";
+        string runtime = client ? @"C:\runs\config\runtime" : "/srv/runs/config/runtime";
+        string staging = client ? @"C:\runs\config\staging" : "/srv/runs/config/staging";
+        string install = host.Local(source);
+        if (client)
+        {
+            FakeInstalls.Client(install);
+            File.WriteAllText(Path.Combine(install, GameLaunch.ClientWindowsExecutable), "client");
+            StageLoader(install);
+        }
+        else LinuxServerInstall(install);
+        var originalInstall = WorldFixture.Manifest(install);
+        string config = Path.Combine(_root, "admitted.cfg");
+        File.WriteAllText(config, "[Settings]\nMessage = admitted\n");
+        string expected = FileHash.Sha256(config);
+        var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        host.BeforeScriptAsync = async name =>
+        {
+            if (name != "profile-storage") return;
+            reached.TrySetResult();
+            await release.Task.WaitAsync(cancellation.Token);
+        };
+        var preparing = HostedRuntimeStage.PrepareProfileAsync(host, client ? HostedRuntimeKind.Client : HostedRuntimeKind.Server,
+            source, runtime, staging, [new HostedRuntimeFile(config, "BepInEx/config/admitted.cfg")
+                { ExpectedSha256 = expected.ToUpperInvariant() }], TimeSpan.FromSeconds(30), cancellation.Token);
+        try
+        {
+            await reached.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.False(preparing.IsCompleted);
+            if (changed) File.AppendAllText(config, "changed while storage check was pending");
+        }
+        finally { release.TrySetResult(); }
+        if (changed)
+        {
+            var refusal = await Assert.ThrowsAsync<InvalidDataException>(() => preparing);
+            Assert.Contains("admitted SHA256", refusal.Message);
+            Assert.False(Directory.Exists(host.Local(runtime)));
+            Assert.False(Directory.Exists(host.Local(staging)));
+            Assert.DoesNotContain(host.Runs, run => run.Script == "profile-seed");
+        }
+        else
+        {
+            var prepared = await preparing;
+            Assert.Equal(expected, prepared.Loader.Files["BepInEx/config/admitted.cfg"]);
+            Assert.Equal(expected, FileHash.Sha256(Path.Combine(host.Local(runtime), "BepInEx", "config", "admitted.cfg")));
+        }
+        Assert.DoesNotContain(host.Runs, run => run.Script is "client-start" or "server-start");
+        Assert.Equal(originalInstall, WorldFixture.Manifest(install));
+    }
+
     // #612: a Linux server's profile is its launch folder, as a Windows one is: the game's files are linked into it (the seed's
     // gameFiles), the loader and selected plugin copied, so the launch's working directory, executable, library path and
     // command line all name the profile. Paths.GameRootPath, and the preloader log BepInEx writes beside the executable, are

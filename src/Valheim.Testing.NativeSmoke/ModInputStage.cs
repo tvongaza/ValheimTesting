@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json;
 using Valheim.Testing.Game;
 using Valheim.Testing.GameSessions;
 
@@ -23,6 +24,120 @@ internal static class ModInputStage
 
     internal static readonly IReadOnlyList<string> SessionCapabilities = ["valheim.session/state", "valheim.session/join", "valheim.session/leave"];
 
+    internal sealed record ExplicitInputs(IReadOnlyList<string> Configs, IReadOnlyDictionary<string, string> Environment)
+    {
+        internal static ExplicitInputs Empty { get; } = new([], new Dictionary<string, string>());
+    }
+
+    internal sealed record ConfigInput(string Destination, string Source, string File, string Sha256);
+    internal sealed record RetainedInputs(IReadOnlyDictionary<string, string> Environment, IReadOnlyList<ConfigInput> Configs,
+        string? RecordFile = null, string? RecordSha256 = null)
+    {
+        internal static RetainedInputs Empty { get; } = new(new Dictionary<string, string>(), []);
+        internal void Verify()
+        {
+            foreach (var config in Configs)
+            {
+                RequireConfigFile(config.File);
+                if (!FileHash.Sha256(config.File).Equals(config.Sha256, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidDataException("A retained --config input changed: " + config.File);
+            }
+            VerifyRecord();
+        }
+
+        // Evidence integrity is independent of the operational config pins enforced by HostedRuntimeStage.
+        internal void VerifyRecord()
+        {
+            if (RecordFile != null && !FileHash.Sha256(RecordFile).Equals(RecordSha256, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException("The private run-inputs record changed: " + RecordFile);
+        }
+
+        internal void ApplyTo(RegressionInputs inputs)
+        {
+            Verify();
+            inputs.Configs = Configs.ToDictionary(config => config.Destination, config => config.File, StringComparer.Ordinal);
+            inputs.Client.Environment = new Dictionary<string, string>(Environment, StringComparer.Ordinal);
+        }
+    }
+
+    // All one-shot adapters and wrappers use this conversion; values are opaque, single-line, non-secret data.
+    internal static ExplicitInputs ReadExplicit(IReadOnlyList<string> configs, IReadOnlyList<string> assignments,
+        bool hosted, string? tokenVariable = null)
+    {
+        var environment = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (string assignment in assignments)
+        {
+            int equals = assignment.IndexOf('=');
+            if (equals <= 0) throw new ArgumentException("--env needs NAME=VALUE.");
+            string name = assignment[..equals], value = assignment[(equals + 1)..];
+            if (!environment.TryAdd(name, value)) throw new ArgumentException("Repeated --env variable name (names ignore case).");
+            if (value.Length == 0) throw new ArgumentException("--env needs a non-empty value; one-shot commands do not support empty values.");
+            if (new[] { "{runtime}", "{world}", "{port}" }.Any(value.Contains))
+                throw new ArgumentException("--env values cannot contain the server plan tokens {runtime}, {world} or {port}.");
+        }
+        GameLaunch.ValidateExplicitEnvironment(environment);
+        foreach (string reserved in new[] { SmokeSessionContract.SessionTokenVariable, SmokeSessionContract.SelectedGuidsVariable,
+                     SmokeSessionContract.PasswordVariable, tokenVariable }.OfType<string>())
+            if (environment.ContainsKey(reserved)) throw new ArgumentException("--env cannot set a runner-owned authentication or session variable.");
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (string config in configs)
+        {
+            string name = Path.GetFileName(config);
+            if (name.Length == 0 || name.Contains('\\') ||
+                hosted && !name.EndsWith(".cfg", StringComparison.OrdinalIgnoreCase))
+                throw new ArgumentException("--config needs a flat file name" + (hosted ? " ending in .cfg." : "."));
+            HostedRuntimeStage.ValidatePayloadPath("BepInEx/config/" + name);
+            if (name.Equals(OwnedClientPreflight.CliConfig, StringComparison.OrdinalIgnoreCase))
+                throw new ArgumentException("ValheimCLI's config is the run's own; do not supply it as a mod config.");
+            if (!names.Add(name)) throw new ArgumentException("--config destination names must be unique (names ignore case).");
+        }
+        return new(configs.ToArray(), environment);
+    }
+
+    private static void RequireConfigFile(string file)
+    {
+        // Match HostedRuntimeStage's regular-file admission, including its refusal of reparse points.
+        if (!File.Exists(file) || (File.GetAttributes(file) & (FileAttributes.ReparsePoint | FileAttributes.Directory)) != 0)
+            throw new FileNotFoundException("A selected --config file is missing or linked: " + file, file);
+    }
+
+    internal static RetainedInputs RetainExplicit(ExplicitInputs selected, Route route, string output, bool withClient)
+    {
+        if (selected.Configs.Count == 0 && selected.Environment.Count == 0) return RetainedInputs.Empty;
+        var admitted = selected.Configs.Select(source =>
+        {
+            string file = Path.GetFullPath(source);
+            RequireConfigFile(file);
+            return (File: file, Name: Path.GetFileName(file), Sha: FileHash.Sha256(file));
+        }).ToArray();
+        string directory = Path.Combine(output, "inputs", "configs");
+        var configs = new List<ConfigInput>();
+        foreach (var source in admitted)
+        {
+            RequireConfigFile(source.File);
+            Directory.CreateDirectory(directory);
+            string copy = Path.Combine(directory, source.Name);
+            File.Copy(source.File, copy);
+            RequireConfigFile(source.File);
+            RequireConfigFile(copy);
+            if (!FileHash.Sha256(source.File).Equals(source.Sha, StringComparison.OrdinalIgnoreCase) ||
+                !FileHash.Sha256(copy).Equals(source.Sha, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException("A selected --config changed while retaining its bytes: " + source.File);
+            configs.Add(new(source.Name, source.File, copy, source.Sha));
+        }
+        Directory.CreateDirectory(output);
+        string record = Path.Combine(output, "run-inputs.json");
+        var environment = new Dictionary<string, string>(selected.Environment, StringComparer.Ordinal);
+        File.WriteAllText(record, JsonSerializer.Serialize(new
+        {
+            schema = 1, meaning = "requested/staged non-secret inputs; plugin consumption requires separate evidence",
+            environment, environmentRoles = route == Route.Hosted ? new[] { "client" } : withClient ? ["server", "client"] : ["server"],
+            configRole = route == Route.Hosted ? "client" : "server", configs,
+        }, new JsonSerializerOptions { WriteIndented = true }) + "\n");
+        Console.WriteLine($"explicit run inputs: {configs.Count} config(s); environment names: " + string.Join(", ", environment.Keys));
+        return new(environment, configs, record, FileHash.Sha256(record));
+    }
+
     /// <summary>Whether the output was checked against the selected sources, so a refusal may be written into it.</summary>
     internal class Progress
     {
@@ -41,6 +156,7 @@ internal static class ModInputStage
         public ShippedLoader.Choice? FrozenServerLoader { get; init; }
         public Action<EnvironmentInventory, EnvironmentRecipe, string, string?>? ClientArchitecture { get; init; }
         public Progress Progress { get; init; } = new();
+        public ExplicitInputs RunInputs { get; init; } = ExplicitInputs.Empty;
     }
 
     /// <summary>The environments a one-off runs on, chosen from the inventory with the reason for each.</summary>
@@ -68,14 +184,21 @@ internal static class ModInputStage
         public string? SelectedInventory { get; init; }
         public string? SteamRuntimePackage { get; init; }
         public NativeDependencyLock? Dependencies { get; init; }
+        public RetainedInputs RunInputs { get; init; } = RetainedInputs.Empty;
 
         public IEnumerable<Actor> Actors => new[] { Server, Client }.OfType<Actor>();
 
         /// <summary>The stage's provenance keys: each actor's loader, the mod selection and the scenario.</summary>
         public void Record(IDictionary<string, string> provenance)
         {
+            RunInputs.VerifyRecord();
             foreach (var actor in Actors) SmokeInputResolver.RecordLoader(provenance, actor.Role, actor.Loader, actor.Shipped);
             provenance["modSelection"] = ModSelection;
+            if (RunInputs.RecordFile != null)
+            {
+                provenance["runInputs"] = RunInputs.RecordFile;
+                provenance["runInputsSha256"] = RunInputs.RecordSha256!;
+            }
             if (Scenario != null)
             {
                 provenance["oneShotScenario"] = Scenario.Name;
@@ -234,6 +357,7 @@ internal static class ModInputStage
         string output = request.Output;
         var given = ModBuild.ParseDependencies(request.Dependencies);
         var inputs = Choose(request);
+        inputs = inputs with { RunInputs = RetainExplicit(request.RunInputs, request.Route, output, inputs.Client != null) };
         var inventory = inputs.Inventory;
         var client = inputs.Client;
         var compile = inputs.Compile;

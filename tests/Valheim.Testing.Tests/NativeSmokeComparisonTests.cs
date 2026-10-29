@@ -8,6 +8,42 @@ public sealed class NativeSmokeComparisonTests : IDisposable
     private readonly RegressionRig _rig = new();
     public void Dispose() => _rig.Dispose();
 
+    [Theory]
+    [InlineData("none")]
+    [InlineData("source")]
+    [InlineData("retained")]
+    public async Task BothArmsPinConfigBytesAndKeepRepeatedEnvironmentValues(string change)
+    {
+        string companion = _rig.Write("companion/Companion.dll", RegressionRig.Assembly("Companion", new("example.companion")));
+        string config = _rig.Write("inputs/example.cfg", System.Text.Encoding.UTF8.GetBytes("[Settings]\nValue = selected\n"));
+        string output = Path.Combine(_rig.Root, "input-comparison");
+        var arms = new List<ServerLoad.Arguments>();
+        int result = await ServerLoadComparison.RunAsync([.. Arguments(output, _rig.Parent, companion), "--config", config,
+            "--env", "MOD_SETTING=" + ExplicitRunInputsTests.Opaque, "--env", "SECOND=two"], args =>
+        {
+            Assert.True(ServerLoad.TryRead(args, out var parsed, out string error), error);
+            Assert.Equal(ExplicitRunInputsTests.Opaque, parsed!.RunInputs.Environment["MOD_SETTING"]);
+            Assert.Equal("two", parsed.RunInputs.Environment["SECOND"]);
+            string copy = Assert.Single(parsed.Configs);
+            Assert.NotEqual(config, copy);
+            Assert.Equal("[Settings]\nValue = selected\n", File.ReadAllText(copy));
+            arms.Add(parsed);
+            if (arms.Count == 1)
+            {
+                // A consumer mutating its own parsed map cannot alter the next arm's selected map.
+                ((IDictionary<string, string>)parsed.RunInputs.Environment)["SECOND"] = "changed by first arm";
+                if (change == "source") File.AppendAllText(config, "changed source");
+                if (change == "retained") File.AppendAllText(copy, "changed evidence");
+            }
+            return Task.FromResult(0);
+        });
+        Assert.Equal(change == "none" ? 0 : 3, result);
+        Assert.Equal(change == "none" ? 2 : 1, arms.Count);
+        var record = JsonDocument.Parse(File.ReadAllText(Path.Combine(output, "run-inputs.json"))).RootElement;
+        Assert.Equal(config, record.GetProperty("configs")[0].GetProperty("Source").GetString());
+        Assert.Equal("two", record.GetProperty("environment").GetProperty("SECOND").GetString());
+    }
+
     [Fact] public async Task ComparisonRefusesOutputInsideAModProjectBeforeBuildingItsAdapter()
     {
         string project = Path.Combine(_rig.Root, "mod-project");
