@@ -10,6 +10,69 @@ public sealed class ExplicitRunInputsTests : IDisposable
     public void Dispose() => _rig.Dispose();
     internal const string Opaque = "space = extra= \"quote\" \\path café 雪 $HOME $(touch should-not-exist) `touch should-not-exist` %PATH%; end";
 
+    [Fact] public void RoleConfigsAndCompanionsUseOneMapperWithIndependentRetainedBytes()
+    {
+        string server = _rig.Write("server-inputs/same.cfg", Encoding.UTF8.GetBytes("server"));
+        string client = _rig.Write("client-inputs/same.cfg", Encoding.UTF8.GetBytes("client"));
+        string asset = _rig.Write("client-inputs/data.json", Encoding.UTF8.GetBytes("client asset"));
+        string output = Path.Combine(_rig.Root, "roles");
+        var sr = ModInputStage.RetainExplicit(ModInputStage.ReadExplicit([server], ["SHARED=" + Opaque], false), ModInputStage.Route.Dedicated, output, true);
+        var cr = ModInputStage.RetainExplicit(ModInputStage.ReadExplicit([client], [], false), ModInputStage.Route.Dedicated, Path.Combine(output, "client"), true, "client");
+        var sf = Assert.Single(ModInputStage.PayloadFiles(sr, [], []));
+        var cf = ModInputStage.PayloadFiles(cr, [asset], []);
+        Assert.Equal(sf.RelativePath, cf[0].RelativePath); Assert.NotEqual(sf.Source, cf[0].Source);
+        Assert.Equal("server", File.ReadAllText(sf.Source)); Assert.Equal("client", File.ReadAllText(cf[0].Source));
+        Assert.Equal(FileHash.Sha256(client), cf[0].ExpectedSha256);
+        Assert.Equal("BepInEx/plugins/data.json", cf[1].RelativePath);
+        Assert.Throws<InvalidDataException>(() => ModInputStage.PayloadFiles(cr, [asset, asset], []));
+        Assert.Throws<InvalidDataException>(() => ModInputStage.PayloadFiles(cr, [_rig.Candidate], []));
+        string directory = Directory.CreateDirectory(Path.Combine(_rig.Root, "assets")).FullName;
+        File.Copy(_rig.Candidate, Path.Combine(directory, "plugin.dll"));
+        Assert.Throws<InvalidDataException>(() => ModInputStage.PayloadFiles(cr, [], [directory]));
+        Assert.Equal(Opaque, sr.Environment["SHARED"]); Assert.Empty(cr.Environment);
+    }
+
+    [Fact] public async Task ClientRoleRetainedConfigPinSurvivesTheAsynchronousProfileBoundary()
+    {
+        var host = new FakeServerHost("client-input-pin", Path.Combine(_rig.Root, "mirror"), windows: true);
+        const string source = @"C:\game\client", runtime = @"C:\runs\client\runtime", staging = @"C:\runs\client\staging";
+        string install = host.Local(source); FakeInstalls.Client(install);
+        File.WriteAllText(Path.Combine(install, GameLaunch.ClientWindowsExecutable), "client");
+        File.WriteAllText(Path.Combine(install, "winhttp.dll"), "MZ target_assembly");
+        File.WriteAllText(Path.Combine(install, "doorstop_config.ini"), "[General]\nenabled=true\ntarget_assembly=BepInEx\\core\\BepInEx.Preloader.dll\n");
+        var original = WorldFixture.Manifest(install);
+        string selected = _rig.Write("inputs/client.cfg", Encoding.UTF8.GetBytes("admitted client bytes"));
+        var retained = ModInputStage.RetainExplicit(ModInputStage.ReadExplicit([selected], [], false), ModInputStage.Route.Dedicated,
+            Path.Combine(_rig.Root, "client-evidence"), true, "client");
+        var files = ModInputStage.PayloadFiles(retained, [], []); var admitted = Assert.Single(files);
+        var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        host.BeforeScriptAsync = async script =>
+        {
+            if (script != "apart") return;
+            reached.TrySetResult(); await release.Task.WaitAsync(cancellation.Token);
+        };
+        var preparing = HostedRuntimeStage.PrepareProfileAsync(host, HostedRuntimeKind.Client, source, runtime, staging, files,
+            TimeSpan.FromSeconds(30), cancellation.Token);
+        Exception? stimulus = null;
+        try
+        {
+            await reached.Task.WaitAsync(TimeSpan.FromSeconds(10)); Assert.False(preparing.IsCompleted);
+            var apart = Assert.Single(host.Runs, run => run.Script == "apart");
+            Assert.Equal(source, apart.Variables["root"]); Assert.Contains(runtime, apart.Variables["paths"]);
+            File.AppendAllText(admitted.Source, "changed during storage admission");
+        }
+        catch (Exception error) { stimulus = error; }
+        finally { release.TrySetResult(); }
+        Exception? settlement = null;
+        try { await preparing; } catch (Exception error) { settlement = error; }
+        if (stimulus != null) throw settlement == null ? stimulus : new AggregateException(stimulus, settlement);
+        Assert.Contains("admitted SHA256", Assert.IsType<InvalidDataException>(settlement).Message);
+        Assert.False(Directory.Exists(host.Local(runtime))); Assert.False(Directory.Exists(host.Local(staging)));
+        Assert.Equal(original, WorldFixture.Manifest(install)); Assert.Equal("admitted client bytes", File.ReadAllText(selected));
+    }
+
     [Fact]
     public void StartAndDedicatedAdaptersShareRepeatedInputConversion()
     {

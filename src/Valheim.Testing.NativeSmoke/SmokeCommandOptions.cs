@@ -6,12 +6,23 @@ internal static class SmokeCommandOptions
 {
     internal enum Command { Start, ServerLoad, ServerLoadAb, Build }
     private enum Kind { Single, Repeat, Switch }
-    private sealed record Spec(Kind Kind, bool Start = true, bool ServerLoad = true, bool ServerLoadAb = true, bool Build = false);
+    private sealed record Spec(Kind Kind, bool Start = true, bool ServerLoad = true, bool ServerLoadAb = true, bool Build = false, bool ClientRole = false);
 
     // A shared option has one arity and one validation rule regardless of the actor that runs it.
     private static readonly Dictionary<string, Spec> Table = new(StringComparer.Ordinal)
     {
         ["--mod"] = new(Kind.Repeat), ["--output"] = new(Kind.Single, Build: true),
+        ["--client-project"] = new(Kind.Single, Start: false, ServerLoadAb: false, ClientRole: true),
+        ["--client-build-inputs"] = new(Kind.Single, Start: false, ServerLoadAb: false, ClientRole: true),
+        ["--client-assert-command"] = new(Kind.Single, Start: false, ServerLoadAb: false, ClientRole: true),
+        ["--client-assert-line"] = new(Kind.Single, Start: false, ServerLoadAb: false, ClientRole: true),
+        ["--client-mod"] = new(Kind.Repeat, Start: false, ServerLoadAb: false, ClientRole: true),
+        ["--client-dependency"] = new(Kind.Repeat, Start: false, ServerLoadAb: false, ClientRole: true),
+        ["--client-search-root"] = new(Kind.Repeat, Start: false, ServerLoadAb: false, ClientRole: true),
+        ["--client-optional-reference"] = new(Kind.Repeat, Start: false, ServerLoadAb: false, ClientRole: true),
+        ["--client-config"] = new(Kind.Repeat, Start: false, ServerLoadAb: false, ClientRole: true),
+        ["--client-plugin-file"] = new(Kind.Repeat, Start: false, ServerLoadAb: false, ClientRole: true),
+        ["--client-plugin-dir"] = new(Kind.Repeat, Start: false, ServerLoadAb: false, ClientRole: true),
         ["--build-inputs"] = new(Kind.Single, ServerLoadAb: false),
         ["--project"] = new(Kind.Single, ServerLoadAb: false, Build: true),
         ["--dependency"] = new(Kind.Repeat, ServerLoadAb: false, Build: true),
@@ -50,12 +61,16 @@ internal static class SmokeCommandOptions
         ["--role"] = new(Kind.Single, Start: false, ServerLoad: false, ServerLoadAb: false, Build: true),
     };
 
+    internal static readonly IReadOnlySet<string> ClientRoleOptions = Table
+        .Where(option => option.Value.ClientRole).Select(option => option.Key).ToHashSet(StringComparer.Ordinal);
+
     internal sealed class Parsed
     {
         internal Dictionary<string, string> Options { get; } = new(StringComparer.Ordinal);
         internal Dictionary<string, List<string>> Repeated { get; } = new(StringComparer.Ordinal);
         internal HashSet<string> Switches { get; } = new(StringComparer.Ordinal);
         internal ModInputStage.ExplicitInputs RunInputs { get; set; } = ModInputStage.ExplicitInputs.Empty;
+        internal ModInputStage.RoleSelection? ClientSelection { get; set; }
         internal List<string> List(string key) => Repeated.TryGetValue(key, out var list) ? list : [];
     }
 
@@ -103,10 +118,19 @@ internal static class SmokeCommandOptions
             if (other.FirstOrDefault(result.Options.ContainsKey) is { } wrong)
             { error = $"{wrong} selects the other role's install; --role {role} takes " + (role == "server" ? "--server, --server-env and --loader-package." : "--game, --client-env and --client-loader-package."); return false; }
         }
-        if (result.Options.ContainsKey("--project") && (result.List("--mod").Count != 0 || result.Options.ContainsKey("--build-inputs")))
-        { error = "--project builds the one selected mod and records its inputs; leave out --mod and --build-inputs."; return false; }
-        if (result.List("--dependency").Count != 0 && !result.Options.ContainsKey("--project"))
-        { error = "--dependency supplies a private compile reference for --project; use --search-root for an already built mod."; return false; }
+        foreach (string prefix in new[] { "--", "--client-" })
+        {
+            if (result.Options.ContainsKey(prefix + "project") && (result.List(prefix + "mod").Count != 0 || result.Options.ContainsKey(prefix + "build-inputs")))
+            { error = prefix + "project builds the one selected mod and records its inputs; leave out " + prefix + "mod and " + prefix + "build-inputs."; return false; }
+            if (result.List(prefix + "dependency").Count != 0 && !result.Options.ContainsKey(prefix + "project"))
+            { error = prefix + "dependency supplies a private compile reference for " + prefix + "project; use " + prefix + "search-root for an already built mod."; return false; }
+        }
+        bool clientSelected = result.List("--client-mod").Count != 0 || result.Options.ContainsKey("--client-project");
+        if (!clientSelected && ClientRoleOptions.Where(key => key is not ("--client-assert-command" or "--client-assert-line"))
+            .Any(key => result.Options.ContainsKey(key) || result.List(key).Count != 0))
+        { error = "Client dependency, config and companion inputs require --client-mod or --client-project."; return false; }
+        if (result.Switches.Contains("--server-only") && ClientRoleOptions.Any(key => result.Options.ContainsKey(key) || result.List(key).Count != 0))
+        { error = "--server-only runs no client: leave out client mod inputs and client assertions."; return false; }
         if (result.Options.ContainsKey("--scenario") && result.Options.ContainsKey("--scenario-project"))
         { error = "Choose --scenario DLL or --scenario-project TEST.csproj, not both."; return false; }
         if (result.Options.ContainsKey("--adapter") && result.Options.ContainsKey("--adapter-project"))
@@ -118,8 +142,8 @@ internal static class SmokeCommandOptions
         if (result.Options.ContainsKey("--adapter-project") && !result.Options.ContainsKey("--session-capability"))
         { error = "--adapter-project needs its registered --session-capability OWNER/session and --session-token-variable NAME; the built-in adapter uses a different identity."; return false; }
         if ((result.Options.ContainsKey("--scenario") || result.Options.ContainsKey("--scenario-project")) && (result.Switches.Contains("--hold") ||
-            result.Options.ContainsKey("--bake-fixture") || result.Options.ContainsKey("--assert-command")))
-        { error = "--scenario owns its assertions; leave out --hold, --bake-fixture and --assert-command."; return false; }
+            result.Options.ContainsKey("--bake-fixture") || result.Options.ContainsKey("--assert-command") || result.Options.ContainsKey("--client-assert-command")))
+        { error = "--scenario owns its assertions; leave out --hold, --bake-fixture and inline assertions."; return false; }
         if (command == Command.Start && (result.Options.ContainsKey("--scenario") || result.Options.ContainsKey("--scenario-project")) &&
             result.Options.ContainsKey("--compare-mod"))
         { error = "Run a hosted scenario against one mod build; leave out --compare-mod."; return false; }
@@ -155,16 +179,22 @@ internal static class SmokeCommandOptions
         { error = "--before-save-command and --before-save-line must be given together with --bake-fixture."; return false; }
         if (result.Options.TryGetValue("--before-save-command", out string? action) && action.IndexOfAny(['\0', '\r', '\n']) >= 0)
         { error = "--before-save-command must be one game command, without control characters."; return false; }
-        if (result.Options.ContainsKey("--assert-command") != result.Options.ContainsKey("--assert-line"))
-        { error = "--assert-command and --assert-line must be given together."; return false; }
+
         if (result.Options.ContainsKey("--bake-fixture") && !result.Options.ContainsKey("--assert-command"))
         { error = "--bake-fixture needs --assert-command and --assert-line to prove the mod's generated state is ready before saving."; return false; }
-        if (result.Options.ContainsKey("--assert-command") && !result.Switches.Contains("--server-only"))
-        { error = "--assert-command currently runs on the owned dedicated server; give --server-only."; return false; }
-        if (result.Options.TryGetValue("--assert-command", out string? assertion) && assertion.IndexOfAny(['\0', '\r', '\n']) >= 0)
-        { error = "--assert-command must be one game command, without control characters."; return false; }
+
         try
         {
+            foreach (string prefix in new[] { "--", "--client-" })
+                SmokeAssertion.Validate(result.Options.GetValueOrDefault(prefix + "assert-command"), result.Options.GetValueOrDefault(prefix + "assert-line"), prefix);
+            _ = ModBuild.ParseDependencies(result.List("--client-dependency"));
+            if (clientSelected)
+                result.ClientSelection = new(result.List("--client-mod"), result.List("--client-search-root"), result.List("--client-optional-reference"), result.List("--client-dependency"))
+                {
+                    Project = result.Options.GetValueOrDefault("--client-project"), BuildInputs = result.Options.GetValueOrDefault("--client-build-inputs"),
+                    RunInputs = ModInputStage.ReadExplicit(result.List("--client-config"), [], false),
+                    PluginFiles = result.List("--client-plugin-file"), PluginDirectories = result.List("--client-plugin-dir"),
+                };
             result.RunInputs = ModInputStage.ReadExplicit(result.List("--config"), result.List("--env"),
                 command == Command.Start, result.Options.GetValueOrDefault("--session-token-variable"));
         }
@@ -198,4 +228,20 @@ internal static class SmokeCommandOptions
         if (Path.Exists(output)) throw new IOException("--output must be new; existing evidence will not be overwritten: " + output);
         return output;
     }
+}
+
+// One paired assertion rule and one strict execution path for either actor; actor selection belongs to the scenario.
+internal static class SmokeAssertion
+{
+    internal static void Validate(string? command, string? line, string prefix)
+    {
+        if ((command == null) != (line == null)) throw new ArgumentException(prefix + "assert-command and " + prefix + "assert-line must be given together.");
+        if (command == null) return;
+        if (string.IsNullOrWhiteSpace(command) || string.IsNullOrWhiteSpace(line) ||
+            command.IndexOfAny(['\0', '\r', '\n']) >= 0 || line!.IndexOfAny(['\0', '\r', '\n']) >= 0)
+            throw new ArgumentException(prefix + "assert-command and " + prefix + "assert-line require nonempty single-line text without control characters.");
+    }
+
+    internal static void Execute(GameActor actor, string command, string line, string role) =>
+        actor.Execute(command).RequireLine(line, "The " + role + " observation did not match the declared assertion");
 }

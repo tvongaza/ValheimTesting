@@ -16,6 +16,97 @@ public sealed class ModInputStageTests : IDisposable
         Journals: (_, _) => Task.FromResult<IReadOnlyList<CampaignPreflightProblem>>([]), Packaged: () => null));
     public void Dispose() { _preflight.Dispose(); _rig.Dispose(); }
 
+    private ModInputStage.Request TwoRoles(RegressionRig client, string output, ModInputStage.RoleSelection selection,
+        string? serverProject = null)
+    {
+        _rig.Write("game/" + ServerRunPlan.ExecutableFor(HostProfile.CurrentPlatform switch
+            { "windows" => ServerPlatform.Windows, "macos" => ServerPlatform.MacOS, _ => ServerPlatform.Linux }), Encoding.UTF8.GetBytes("server"));
+        var options = new Dictionary<string, string>
+        {
+            ["--server"] = _rig.Game, ["--client"] = client.Game,
+            ["--cli-manifest"] = _rig.CliManifest(save: true, full: true), ["--cli-files"] = Path.Combine(_rig.Root, "cli"),
+        };
+        if (serverProject != null) options["--project"] = serverProject;
+        return new(ModInputStage.Route.Dedicated, output, options, new HashSet<string>(),
+            serverProject == null ? [_rig.Parent] : [], [Path.Combine(_rig.Root, "deps")], [], [])
+            { ClientSelection = selection, ClientArchitecture = (_, _, _, _) => { } };
+    }
+
+    [ClientHostTheory] [InlineData("mod")] [InlineData("game")] [InlineData("loader")]
+    public async Task ClientBuildRecordUsesItsSelectedGameAndCoreBeforeHostChecks(string drift)
+    {
+        using var client = new RegressionRig();
+        string dependency = _rig.Write("compile/BepInEx.dll", RegressionRig.Assembly("BepInEx", null, "server-core"));
+        client.Write("game/BepInEx/core/BepInEx.dll", RegressionRig.Assembly("BepInEx", null, "client-core"));
+        string record = _rig.Write("client-build.json", Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new ModBuild.BuildRecord(
+            client.Game, drift == "game" ? new string('0', 64) : InstallPins.GameHash(client.Game),
+            Path.GetDirectoryName(InstallPins.GameAssembly(client.Game))!, _rig.Candidate,
+            drift == "mod" ? new string('0', 64) : FileHash.Sha256(_rig.Candidate), "BepInEx.AssemblyPublicizer/0.4.3", [], [],
+            drift == "loader" ? [new(dependency, FileHash.Sha256(dependency))] : []))));
+        int probes = 0;
+        using var check = LocalHostPreflight.ReplaceDefaultProbesForTest(new(Processes: (_, _, _, _) => { probes++; return Task.CompletedTask; }, Packaged: () => null));
+        var request = TwoRoles(client, Path.Combine(_rig.Root, "bad-client-" + drift), new([_rig.Candidate], [], [], []) { BuildInputs = record });
+        await Assert.ThrowsAsync<InvalidDataException>(() => ModInputStage.RunAsync(request, default));
+        Assert.Equal(0, probes); Assert.False(Directory.Exists(Path.Combine(request.Output, "build")));
+    }
+
+    [ClientHostFact] public async Task BothExplicitProjectsBuildOnceAgainstTheirOwnCoreAndRecordSeparateLocks()
+    {
+        using var client = new RegressionRig();
+        foreach (var (rig, marker) in new[] { (_rig, "server"), (client, "client") })
+        {
+            rig.Write("game/BepInEx/core/BepInEx.dll", RegressionRig.Assembly("BepInEx", null, marker));
+            rig.Write("game/BepInEx/core/0Harmony.dll", RegressionRig.Assembly("0Harmony", null, marker));
+        }
+        string Project(RegressionRig rig, string version)
+        {
+            string project = rig.Write("role-project/RoleMod.csproj", Encoding.UTF8.GetBytes("""
+                <Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+                <Target Name="CountRoleBuild" BeforeTargets="CoreCompile"><WriteLinesToFile File="$(MSBuildProjectDirectory)/build-count.txt" Lines="build" Overwrite="false" /></Target></Project>
+                """));
+            rig.Write("role-project/RoleMod.cs", Encoding.UTF8.GetBytes("""
+                namespace BepInEx {
+                    [System.AttributeUsage(System.AttributeTargets.Class)] public sealed class BepInPlugin : System.Attribute {
+                        public BepInPlugin(string guid, string name, string version) { }
+                    }
+                }
+                [BepInEx.BepInPlugin("test.rolemod", "RoleMod", "VERSION")] public sealed class RoleMod { }
+                """.Replace("VERSION", version, StringComparison.Ordinal)));
+            return project;
+        }
+        string serverProject = Project(_rig, "1.0.0"), clientProject = Project(client, "2.0.0");
+        var request = TwoRoles(client, Path.Combine(_rig.Root, "two-builds"), new([], [], [], []) { Project = clientProject }, serverProject);
+        var inputs = await ModInputStage.RunAsync(request, default);
+        var selectedClient = Assert.IsType<ModInputStage.SelectedRole>(inputs.ClientMods);
+        Assert.Equal(Path.Combine(_rig.Game, InstallPins.CoreDirectory), inputs.Core);
+        Assert.Equal(Path.Combine(client.Game, InstallPins.CoreDirectory), selectedClient.Core);
+        Assert.Single(File.ReadAllLines(Path.Combine(Path.GetDirectoryName(serverProject)!, "build-count.txt")));
+        Assert.Single(File.ReadAllLines(Path.Combine(Path.GetDirectoryName(clientProject)!, "build-count.txt")));
+        Assert.NotEqual(Assert.Single(inputs.Dependencies!.Mods).Sha256, Assert.Single(selectedClient.Dependencies.Mods).Sha256);
+        var serverRecord = JsonSerializer.Deserialize<ModBuild.BuildRecord>(File.ReadAllText(inputs.BuildInputs!), new JsonSerializerOptions { PropertyNameCaseInsensitive = true })!;
+        var clientRecord = JsonSerializer.Deserialize<ModBuild.BuildRecord>(File.ReadAllText(selectedClient.BuildInputs!), new JsonSerializerOptions { PropertyNameCaseInsensitive = true })!;
+        Assert.Equal(_rig.Game, serverRecord.Game); Assert.Equal(client.Game, clientRecord.Game);
+        Assert.Contains(clientRecord.Dependencies, file => file.File == Path.Combine(client.Game, InstallPins.CoreDirectory, "BepInEx.dll"));
+        Assert.True(File.Exists(Path.Combine(request.Output, "dependencies.lock.json")));
+        Assert.True(File.Exists(Path.Combine(request.Output, "client", "dependencies.lock.json")));
+    }
+
+    [Fact] public void RemoteExplicitClientRefusesBeforeLoaderMaterializationOrOutput()
+    {
+        string inventory = _rig.Write("remote-inventory.json", Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new
+        {
+            hosts = new { remote = new { kind = "ssh", platform = "windows", shell = "pwsh", destination = "test@remote", @lock = "C:/vt/lock" } },
+            environments = new object[] { new { name = "server", roles = new[] { "server" }, install = _rig.Game },
+                new { name = "remote-client", host = "remote", roles = new[] { "client" }, install = "C:/game", runtime = "C:/runs", cliPort = 5556 } },
+        })));
+        string output = Path.Combine(_rig.Root, "remote-refused"); int loaders = 0;
+        var request = new ModInputStage.Request(ModInputStage.Route.Dedicated, output,
+            new Dictionary<string, string> { ["--inventory"] = inventory, ["--join"] = "127.0.0.1:2456" }, new HashSet<string>(), [_rig.Parent], [], [], [])
+        { ClientSelection = new([_rig.Candidate], [], [], []), Shipped = (_, _, _) => { loaders++; throw new Exception("unexpected materialization"); } };
+        Assert.Contains("local joining client", Assert.Throws<ArgumentException>(() => ModInputStage.Choose(request)).Message);
+        Assert.Equal(0, loaders); Assert.False(Directory.Exists(output));
+    }
+
     // The rig's game plays a vanilla dedicated server: its Steam install has no BepInEx or Doorstop, as a profile run
     // leaves it (#601). The environment names a reviewed loader package instead.
     private string VanillaServerWithLoaderPackage(out string package)
