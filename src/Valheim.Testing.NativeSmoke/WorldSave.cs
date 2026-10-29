@@ -235,6 +235,14 @@ internal static class WorldSave
         result["mods"] = regression.Mod.Arms.ToDictionary(arm => arm.Key, arm => (object)new { file = Path.GetFileName(arm.Value.File), sha256 = arm.Value.Sha256, commit = arm.Value.Commit }, StringComparer.Ordinal);
         result["plugins"] = regression.Plugins.Select(plugin => new { file = Path.GetFileName(plugin.File), sha256 = plugin.Sha256 }).ToList();
         result["cliCore"] = new { file = Path.GetFileName(regression.Cli.Core.File), sha256 = regression.Cli.Core.Sha256 };
+        if (regression.Fixture.Create is { } request)
+        {
+            string created = Path.Combine(evidence, "world-created.json");
+            using var proof = JsonDocument.Parse(File.ReadAllText(created));
+            result["startedFrom"] = new { requested = request, worldUid = proof.RootElement.GetProperty("worldUid").GetString(),
+                creationProofSha256 = FileHash.Sha256(created) };
+            return result;
+        }
         string? startedFrom = null;
         string fixtureManifest = Path.Combine(Path.GetDirectoryName(regression.Fixture.Root)!, FixtureBake.ManifestFile);
         if (File.Exists(fixtureManifest))

@@ -12,13 +12,13 @@ namespace Valheim.Testing.GameSessions;
 public sealed class StagedArm
 {
     internal StagedArm(string arm, ClientRunPlan plan, RunManifest manifest, IReadOnlyDictionary<string, string> tree, string install)
-    { Arm = arm; Plan = plan; Manifest = manifest; Tree = tree; _install = install; }
+    { Arm = arm; Plan = plan; Plan.RunManifestState = manifest; Tree = tree; _install = install; }
     private readonly string _install;
 
     public string Arm { get; }
     /// <summary>The strict client plan: every staged plugin pinned by MD5 under its declared GUID, the install pins and the pinned fixture.</summary>
     public ClientRunPlan Plan { get; }
-    public RunManifest Manifest { get; }
+    public RunManifest Manifest => Plan.RunManifestState!;
     /// <summary>Every staged file under <c>BepInEx/plugins</c>, <c>patchers</c>, <c>config</c> and <c>scripts</c>, by relative path and SHA256.</summary>
     public IReadOnlyDictionary<string, string> Tree { get; }
 
@@ -44,7 +44,8 @@ public sealed class StagedArm
             $"{Manifest.Name}: arm {Arm}, mod {Manifest.ModPlugin} at {Manifest.ModCommit ?? "an unrecorded commit"}, sha256 {Manifest.ModSha256}{(Manifest.Repeatability ? " (repeatability run)" : "")}";
         foreach (var arm in Manifest.Arms) yield return $"  arm {arm.Arm,-12} commit {arm.Commit ?? "unrecorded",-12} artifact {arm.Artifact}  sha256 {arm.Sha256}  md5 {arm.Md5}";
         foreach (var file in Manifest.Allowlist) yield return $"  {file.Role,-12} {file.Path}  md5 {file.Md5}  {string.Join(", ", file.Plugins)}";
-        yield return $"  fixture      {Manifest.World} uid {Manifest.WorldUid} ({Manifest.FixtureFiles} files)";
+        yield return Manifest.WorldUid == null ? $"  requested    {Manifest.World}, creation pending (no world UID yet)" :
+            $"  fixture      {Manifest.World} uid {Manifest.WorldUid} ({Manifest.FixtureFiles} files)";
         yield return $"  capabilities {string.Join(", ", Manifest.Capabilities)}{(Manifest.LiveOnlyCapabilities.Count == 0 ? "" : "; live only: " + string.Join(", ", Manifest.LiveOnlyCapabilities))}";
         yield return $"  cli manifest {Manifest.CliManifest}";
     }
@@ -63,7 +64,8 @@ public sealed class StagedArm
         if (Manifest.ModCommit != null) provenance["modCommit"] = Manifest.ModCommit;
         if (Manifest.ModSha256 != null) provenance["modSha256"] = Manifest.ModSha256;
         provenance["allowlist"] = string.Join(", ", Manifest.Allowlist.Select(file => $"{file.Path}={file.Md5}"));
-        provenance["worldUid"] = Manifest.WorldUid;
+        if (Manifest.WorldUid is { } uid) provenance["worldUid"] = uid;
+        else provenance["worldCreation"] = "pending";
         Manifest.InstallPins.Record(provenance, "client");
     }
 }
@@ -250,20 +252,32 @@ public sealed class TargetedRegression
         if (!env.ArmNames.Contains(arm, StringComparer.Ordinal))
             throw new ArgumentException($"There is no arm \"{arm}\"; the manifest names {string.Join(", ", env.ArmNames)}.");
         RegressionArm? chosen = env.NoMod ? null : env.Mod.Arms[arm];
-        _ = FixtureLayout.Discover(env.Fixture.Root, env.Fixture.WorldUid);
+        env.Fixture.Validate();
         var hostingBuild = GameVersionAgreement.ReadInPlaceAsync(Game, CancellationToken.None).GetAwaiter().GetResult();
         if (InitialHostingBuild is { } initial) WorldIdentity.RequireSameTarget(initial, hostingBuild);
-        var admission = _worldAdmission ??= InitialWorldAdmission ?? WorldIdentity.Capture(env.Fixture.Root, hostingBuild);
-        admission.VerifyTarget(hostingBuild);
-        admission.VerifySource(env.Fixture.Root);
-        var identity = admission.Identity;
-        var fixture = admission.Files;
-        var hostWorld = new HostWorldPlan
+        WorldIdentity.Admission? admission = null;
+        WorldIdentity? identity = null;
+        IReadOnlyDictionary<string, string> fixture = new Dictionary<string, string>();
+        HostWorldPlan hostWorld;
+        if (env.Fixture.Create is { } request)
         {
-            World = new PinnedDirectory { Source = admission.Source, Sha256 = new Dictionary<string, string>(fixture) },
-            WorldUid = env.Fixture.WorldUid, SaveDirectory = SaveDirectory, Admission = admission,
-        };
-        hostWorld.RequireUid(identity);
+            env.Validate(); // A seed run has exactly one arm and no repeatability comparison.
+            hostWorld = new HostWorldPlan { Create = request, SaveDirectory = SaveDirectory };
+            new ClientRunPlan { Mode = "owned", HostWorld = hostWorld, Environment = env.Client.Environment }.RequireCreationRoute();
+        }
+        else
+        {
+            _ = FixtureLayout.Discover(env.Fixture.Root, env.Fixture.WorldUid);
+            admission = _worldAdmission ??= InitialWorldAdmission ?? WorldIdentity.Capture(env.Fixture.Root, hostingBuild);
+            admission.VerifyTarget(hostingBuild); admission.VerifySource(env.Fixture.Root);
+            identity = admission.Identity; fixture = admission.Files;
+            hostWorld = new HostWorldPlan
+            {
+                World = new PinnedDirectory { Source = admission.Source, Sha256 = new Dictionary<string, string>(fixture) },
+                WorldUid = env.Fixture.WorldUid, SaveDirectory = SaveDirectory, Admission = admission,
+            };
+            hostWorld.RequireUid(identity);
+        }
         _ = HostedRuntimeStage.RequireProfileStorageAsync(_host, HostedRuntimeKind.Client, Game, Install, LocalClientCopy.StepTimeout,
             explicitRuntime: _runtimeExplicit, inPlaceAvailable: false).GetAwaiter().GetResult();
 
@@ -319,7 +333,7 @@ public sealed class TargetedRegression
         // The regression client hosts its own world (below), so it is not a joined client and needs no mutation access.
         selected = CliServerConfig.Stage(selected, "Regression client", Port, generatedConfig, requireClientMutations: false);
         {
-            try { admission.Verify(); PrepareCopy(selected, admission); }
+            try { admission?.Verify(); PrepareCopy(selected, admission, hostingBuild); }
             finally { File.Delete(generatedConfig); }
             string install = Install;
             string gameRoot = _activeGameRoot ?? throw new InvalidOperationException("The game root was not recorded after staging.");
@@ -368,7 +382,7 @@ public sealed class TargetedRegression
                 CliManifest = env.Cli.Manifest, // Required (RegressionCli.Validate): the static check always runs on what was staged.
                 Prepared = true, // The disposable install staged above, with the regression's ValheimCLI set.
                 Capabilities = Capabilities.Except(CliCapabilities.HostedRounds).ToArray(), // The hosted rounds add their own.
-                HostWorld = hostWorld,
+                HostWorld = hostWorld, PreparedBuild = hostingBuild,
             };
             plan.Validate();
             plan.Preflight(CliCapabilities.HostedRounds);
@@ -376,8 +390,8 @@ public sealed class TargetedRegression
 
             var tree = StagedTree(install);
             var manifest = new RunManifest(env.Name, arm, chosen == null ? null : string.Join(", ", armPlugins[arm].Plugins.Select(p => p.Guid)), chosen?.Commit, chosen?.Sha256.ToLowerInvariant(),
-                env.Mod.Repeatability, arms, allowlist, configs, installPins, identity.Name, identity.UidText, fixture.Count, Capabilities, LiveOnlyCapabilities, cliManifest)
-                { NoMod = env.NoMod };
+                env.Mod.Repeatability, arms, allowlist, configs, installPins, identity?.Name ?? env.Fixture.Create!.Name, identity?.UidText, fixture.Count, Capabilities, LiveOnlyCapabilities, cliManifest)
+                { NoMod = env.NoMod, Create = env.Fixture.Create };
             return new StagedArm(arm, plan, manifest, tree, install);
         }
     }
@@ -441,12 +455,25 @@ public sealed class TargetedRegression
         var logs = new List<RunLog>();
         RegisteredCharacterStage? characterStage = null;
         LocalClientJournal? directClientJournal = null;
+        HostedWorldOnHost.Site? creationSite = null;
         try
         {
             report.Provenance["clientEnvironment"] = ClientEnvironment;
             if (LoaderPackage is { } loaderPath)
                 report.Provenance["bepInExPackage"] = BepInExLoaderPackage.Read(loaderPath).Identity;
             if (_pinnedLoader != null) report.Provenance["clientLoaderShipped"] = _pinnedLoader.Reason;
+            if (Inputs.Fixture.Create is { } request)
+            {
+                Inputs.Validate();
+                var pending = new HostWorldPlan { Create = request, SaveDirectory = SaveDirectory };
+                new ClientRunPlan { Mode = "owned", HostWorld = pending, Environment = Inputs.Client.Environment }.RequireCreationRoute();
+                var platform = GameLaunch.DetectClient(Game);
+                string save = SaveDirectory ?? HostedWorld.DefaultSaveDirectory(platform);
+                HostedWorld.RequireNativeSaveDirectory(platform, SaveDirectory, Inputs.Client.LaunchArguments, HostedWorld.DefaultSaveDirectory(platform));
+                RequireHostLock();
+                creationSite = HostedWorldSite(output, Path.Combine(save, "worlds_local"));
+                report.Step(StepPhase.Preflight, "reserve the fresh seeded name before staging character or profile", () => creationSite.ReserveCreation(pending, output, cancellation));
+            }
             if (Inputs.Client.CharacterStore is { } store)
             {
                 string save = SaveDirectory ?? HostedWorld.DefaultSaveDirectory(GameLaunch.DetectClient(Game));
@@ -467,7 +494,7 @@ public sealed class TargetedRegression
             new ClientRounds
             {
                 Client = staged.Plan, Report = report, Output = output, Rounds = rounds, Cancellation = cancellation,
-            }.RunHosted(worlds => HostedWorldSite(output, worlds), () =>
+            }.RunHosted(worlds => creationSite ?? HostedWorldSite(output, worlds), () =>
             {
                 staged.Verify();
                 ClientSession client;
@@ -548,7 +575,15 @@ public sealed class TargetedRegression
                     throw new InvalidOperationException("This run does not hold this machine's lock, so the client's worlds are not its to change; stage the arm first.");
                 RequireStopped(null, clientSession: true);
                 return Task.CompletedTask;
-            }) with { SteamUserDataDirectory = SteamUserData ?? "" };
+            }) with
+            {
+                SteamUserDataDirectory = SteamUserData ?? "",
+                MenuHold = (client, plan, cancellation) =>
+                {
+                    if (_hostLock == null) throw new InvalidOperationException("Seeded creation requires this run's machine lock.");
+                    return HostedRuntimeStage.RequireOwnedMenuAsync(_host, client, plan, LocalClientCopy.StepTimeout, cancellation);
+                },
+            };
 
     private void JournalCharacterEvent(CharacterStageEvent point, string characters, string userData, string name, string expectedSha256) =>
         _journal.AppendLocal("client", CharacterEntry(point, characters, userData, name, expectedSha256));
@@ -623,9 +658,16 @@ public sealed class TargetedRegression
         if (retirement != null) System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw(retirement);
     }
 
-    internal static readonly JsonSerializerOptions ManifestJson = new() { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+    internal static readonly JsonSerializerOptions ManifestJson = RunManifest.Json;
 
-    private void PrepareCopy(IReadOnlyList<HostedRuntimeFile> selected, WorldIdentity.Admission admission)
+    private void RequireHostLock()
+    {
+        if (_hostLock == null && !SkipHostLockForTest)
+            _hostLock = JournaledHostLock.AcquireAsync(_host, _lockPath, "regression " + _journal.RunId, _journal,
+                RunJournal.LocalDirectory, "run", HostedTimeouts.Quick).GetAwaiter().GetResult();
+    }
+
+    private void PrepareCopy(IReadOnlyList<HostedRuntimeFile> selected, WorldIdentity.Admission? admission, GameBuild hostingBuild)
     {
         string source = Path.GetFullPath(Game);
         if (!Directory.Exists(source)) throw new DirectoryNotFoundException($"game: {source} does not exist. Give the Valheim install for the disposable run.");
@@ -638,8 +680,10 @@ public sealed class TargetedRegression
             throw new InvalidOperationException($"game: {source} has no {InstallPins.CoreDirectory}. Install BepInEx (BepInExPack_Valheim) in the prepared game first, or name a reviewed loader package.");
         var inspected = HostedRuntimeStage.InspectSourceAsync(_host, HostedRuntimeKind.Client, source, package,
             LocalClientCopy.StepTimeout).GetAwaiter().GetResult();
-        admission.VerifyTarget(GameVersionAgreement.ReadAsync(_host, inspected, LocalClientCopy.StepTimeout, CancellationToken.None).GetAwaiter().GetResult());
-        admission.Verify();
+        var currentBuild = GameVersionAgreement.ReadAsync(_host, inspected, LocalClientCopy.StepTimeout, CancellationToken.None).GetAwaiter().GetResult();
+        WorldIdentity.RequireSameTarget(hostingBuild, currentBuild);
+        admission?.VerifyTarget(currentBuild);
+        admission?.Verify();
         if (Inputs.GamePins != null)
         {
             var found = HostInstall.Pins(inspected);
@@ -652,9 +696,7 @@ public sealed class TargetedRegression
             throw new IOException($"The disposable install already exists: {Install}. Inspect env status and recover its owner; it is never replaced by name.");
         // Keep the host exclusive from the first copy through the final arm's client and copy retirement.
         // The journal lets env recover release a lock left by an interrupted direct consumer.
-        if (_hostLock == null && !SkipHostLockForTest)
-            _hostLock = JournaledHostLock.AcquireAsync(_host, _lockPath, "regression " + _journal.RunId, _journal,
-                RunJournal.LocalDirectory, "run", HostedTimeouts.Quick).GetAwaiter().GetResult();
+        RequireHostLock();
         RequireStopped(null, clientSession: true);
         string parent = Path.GetDirectoryName(Install)!;
         Directory.CreateDirectory(Path.GetDirectoryName(parent)!);

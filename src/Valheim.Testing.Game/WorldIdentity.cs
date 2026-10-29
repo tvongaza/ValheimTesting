@@ -287,9 +287,19 @@ public sealed record WorldIdentity(string Name, string SeedName, int Seed, long 
         }
     }
 
-    private static WorldIdentity ParseMetadata(byte[] bytes, string file, out bool? needsDb)
+    internal static int? ReadGenerationVersion(byte[] bytes, string file)
+    {
+        _ = ParseMetadata(bytes, file, out _, out int? generation);
+        return generation;
+    }
+
+    private static WorldIdentity ParseMetadata(byte[] bytes, string file, out bool? needsDb) =>
+        ParseMetadata(bytes, file, out needsDb, out _);
+
+    private static WorldIdentity ParseMetadata(byte[] bytes, string file, out bool? needsDb, out int? generation)
     {
         ArgumentNullException.ThrowIfNull(bytes);
+        generation = null;
         try
         {
             int length = BinaryPrimitives.ReadInt32LittleEndian(bytes);
@@ -303,7 +313,7 @@ public sealed record WorldIdentity(string Name, string SeedName, int Seed, long 
             if (name.Length == 0) throw new InvalidDataException("it names no world");
             // World.LoadWorld: the world-generation version from 26, then whether the world has saved data from 30 (null when
             // the package ends before it: only a never-saved world is read by it).
-            if (version >= 26) at += 4;
+            if (version >= 26) { generation = BinaryPrimitives.ReadInt32LittleEndian(package[at..]); at += 4; }
             needsDb = version < 30 ? false : at < package.Length ? package[at] != 0 : null;
             return new WorldIdentity(name, seedName, seed, uid, version, file);
         }

@@ -2,6 +2,37 @@ using Xunit;
 
 public sealed class SmokeCommandOptionsTests
 {
+    [Fact] public void SeededStartRetainsTheExactRequestAndDoesNotImplyNoMod()
+    {
+        Assert.True(StartArguments.TryRead(["--mod", "candidate.dll", "--world-seed", "aBc123"], out var first, out string error), error);
+        Assert.Equal("aBc123", first!.Create!.Seed);
+        Assert.Equal(first.Create.Name, first.Options["--world-name"]);
+        Assert.DoesNotContain("--no-mod", first.Switches);
+        Assert.True(StartArguments.TryRead(["--no-mod", "--world-seed", "aBc123", "--world-name", "Fresh-World"], out var named, out error), error);
+        Assert.Equal("Fresh-World", named!.Create!.Name);
+    }
+
+    public static IEnumerable<object[]> InvalidSeedOptions()
+    {
+        yield return [new[] { "--world-name", "Fresh" }];
+        yield return [new[] { "--world-seed", "abc", "--world-fixture", "fixture" }];
+        yield return [new[] { "--world-seed", "abc", "--compare-mod", "other", "--compare-source", "commit" }];
+        yield return [new[] { "--world-seed", "a b" }];
+        yield return [new[] { "--world-seed", "abc", "--world-name", "CON" }];
+    }
+
+    [Theory]
+    [MemberData(nameof(InvalidSeedOptions))]
+    public void InvalidSeedCombinationsRefuseBeforeMachineSelection(string[] options) =>
+        Assert.False(StartArguments.TryRead(["--mod", "candidate.dll", .. options], out _, out _));
+
+    [Theory]
+    [InlineData("Build")]
+    [InlineData("ServerLoad")]
+    [InlineData("ServerLoadAb")]
+    public void SeededCreationIsNotAnUnimplementedServerOrBuildOption(string command) =>
+        Assert.False(SmokeCommandOptions.TryRead(["--mod", "candidate.dll", "--world-seed", "abc"], Enum.Parse<SmokeCommandOptions.Command>(command), true, out _, out _));
+
     [Fact]
     public void NoModIsExplicitStartOnlyAndRetainsTheExistingRunInputs()
     {

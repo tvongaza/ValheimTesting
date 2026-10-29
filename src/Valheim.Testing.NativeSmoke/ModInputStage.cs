@@ -242,6 +242,13 @@ internal static class ModInputStage
                 worldAdmission.World.VerifyTarget(build);
                 FixtureBake.VerifyAdmission(worldAdmission);
             }
+            else if (options.ContainsKey("--world-seed"))
+            {
+                if (request.Route != Route.Hosted || GameLaunch.CurrentClientHost == ClientPlatform.Linux)
+                    throw new NotSupportedException("Seeded creation supports one local owned Windows or macOS hosting client.");
+                _ = new SeededWorldRequest(options.GetValueOrDefault("--world-name") ??
+                    throw new ArgumentException("A seeded request must retain its generated world name."), options["--world-seed"]);
+            }
             else _ = DefaultSmokeWorld.Inspect(build);
         }
         return new(choice, compileRole, worldAdmission, hostingBuild);

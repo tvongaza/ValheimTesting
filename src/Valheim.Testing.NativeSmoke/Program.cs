@@ -4,7 +4,7 @@ using Valheim.Testing.GameSessions;
 
 if (args is ["help" or "--help"])
 {
-    Console.WriteLine("valheim-test start [--mod DLL ... | --no-mod] [--config FILE ...] [--env NAME=VALUE ...] [--output NEW_DIR] [--world-fixture DIR] [--inventory FILE | --game DIR] [--client-env NAME] [--client-architecture x64|arm64] [setup options] (without --mod or --no-mod, the current project's one built plugin)");
+    Console.WriteLine("valheim-test start [--mod DLL ... | --no-mod] [--config FILE ...] [--env NAME=VALUE ...] [--output NEW_DIR] [--world-fixture DIR | --world-seed SEED [--world-name NAME]] [--inventory FILE | --game DIR] [--client-env NAME] [--client-architecture x64|arm64] [setup options] (without --mod or --no-mod, the current project's one built plugin)");
     Console.WriteLine("--no-mod explicitly runs a CLI-only control with no mod under test; no mod build, dependency search, scenario or comparison inputs are allowed.");
     Console.WriteLine("--config stages non-secret config files on the mod-bearing actor; --env sets non-empty literal values on every owned game process. Both are retained in private run-inputs.json; omit credentials.");
     Console.WriteLine(ServerLoad.Usage + " (a server and one clean client from the inventory; this machine when no --inventory)");
@@ -43,7 +43,7 @@ if (args.Length != 0 && args[0] is "server-load" or "server-load-ab")
 if (!StartArguments.TryRead(args, out var parsedStart, out var error, allowImplicitMod: true))
 {
     Console.Error.WriteLine(error);
-    Console.Error.WriteLine("Usage: valheim-test start [--mod DLL ... | --project MOD.csproj | --no-mod] [--config FILE ...] [--env NAME=VALUE ...] [--scenario TEST.dll | --scenario-project TEST.csproj] [--dependency NAME=DLL ...] [--build-inputs FILE] [--output NEW_DIR] [--world-fixture DIR] [--inventory FILE | --game DIR] [--client-env NAME] [--client-architecture x64|arm64] [--join-seconds 10..900] [--hold] [--source COMMIT] [--cli-manifest FILE --cli-files DIR] [--compare-mod DLL --compare-source COMMIT] [--search-root DIR|DLL ...] [--optional-reference ASSEMBLY ...] [--client-loader-package FILE] [--expected-log-error EXACT_HEADER --expected-log-reason REASON]");
+    Console.Error.WriteLine("Usage: valheim-test start [--mod DLL ... | --project MOD.csproj | --no-mod] [--config FILE ...] [--env NAME=VALUE ...] [--scenario TEST.dll | --scenario-project TEST.csproj] [--dependency NAME=DLL ...] [--build-inputs FILE] [--output NEW_DIR] [--world-fixture DIR | --world-seed SEED [--world-name NAME]] [--inventory FILE | --game DIR] [--client-env NAME] [--client-architecture x64|arm64] [--join-seconds 10..900] [--hold] [--source COMMIT] [--cli-manifest FILE --cli-files DIR] [--compare-mod DLL --compare-source COMMIT] [--search-root DIR|DLL ...] [--optional-reference ASSEMBLY ...] [--client-loader-package FILE] [--expected-log-error EXACT_HEADER --expected-log-reason REASON]");
     return 2;
 }
 var options = parsedStart!.Options;
@@ -103,15 +103,16 @@ try
 
     // The bundled world, or a saved one (save-world, server-load --bake-fixture): copied into the run's output and verified first.
     _ = ModInputStage.VerifyAdmission(stage.Admission!);
-    var fixtureInput = FixtureBake.Prepare(worldFixture, output, stage.WorldAdmission, stage.HostingBuild);
-    var world = fixtureInput.Identity;
+    var fixtureInput = parsedStart.Create == null ? FixtureBake.Prepare(worldFixture, output, stage.WorldAdmission, stage.HostingBuild) : null;
+    var world = fixtureInput?.Identity;
     string worldRoot = Path.Combine(output, "world-source", "worlds_local");
     var character = DefaultSmokeCharacter.Prepare(Path.Combine(output, "character-source"));
     var inputs = new RegressionInputs
     {
         // A name per run: its shared hosted-runtime copy is never shared with another start.
         Name = "native-smoke-" + DateTime.UtcNow.ToString("yyyyMMdd-HHmmss-fff", System.Globalization.CultureInfo.InvariantCulture),
-        Fixture = new RegressionFixture { Root = worldRoot, WorldUid = world.UidText },
+        Fixture = parsedStart.Create is { } create ? new RegressionFixture { Create = create } :
+            new RegressionFixture { Root = worldRoot, WorldUid = world!.UidText },
         Client = new RegressionClient { Character = DefaultSmokeCharacter.Name, CharacterStore = character.Root, Architecture = architecture },
         NoMod = stage.NoMod,
         Mod = mod == null ? new RegressionMod() : new RegressionMod { InstallAs = Path.GetFileName(mod), Arms = new Dictionary<string, RegressionArm>
@@ -135,7 +136,7 @@ try
     inputs.Write(Path.Combine(output, "regression.json"));
     runner = TargetedRegression.Read(Path.Combine(output, "regression.json")); // the inputs on the machine recorded beside them
     runner.InitialHostingBuild = stage.HostingBuild;
-    runner.InitialWorldAdmission = fixtureInput.CopyAdmission;
+    runner.InitialWorldAdmission = fixtureInput?.CopyAdmission;
     runner.InitialConfigSha256 = stage.RunInputs.Configs.ToDictionary(config => config.Destination, config => config.Sha256, StringComparer.Ordinal);
     Console.WriteLine($"disposable loader profile: {runner.Install}");
     Console.WriteLine("run ID: " + runId);

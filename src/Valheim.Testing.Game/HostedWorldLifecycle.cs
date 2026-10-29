@@ -28,6 +28,7 @@ internal sealed class HostedWorldLifecycle
     private readonly object _state = new();
     private HostedWorld? _world;
     private string? _saveDirectory;
+    private IHostedWorldSite? _creationSite;
     // Whether the world may be open: from the moment a start is issued until a leave completed.
     private bool _hosting;
     // Whether the owned process stopped: then nothing hosts the world any more.
@@ -40,7 +41,7 @@ internal sealed class HostedWorldLifecycle
     public bool WorldReleased { get { lock (_state) return !_hosting || _stopped; } }
     public void Stopped() { lock (_state) _stopped = true; }
 
-    public string PreflightStep => plan.Owned ? "preflight the fixture world and the owned client's install, before anything is copied or started" : "preflight the fixture world, before it is copied";
+    public string PreflightStep => Section.Create != null ? "preflight the seed request and owned local client's pinned install" : plan.Owned ? "preflight the fixture world and the owned client's install, before anything is copied or started" : "preflight the fixture world, before it is copied";
     /// <summary>
     /// The plan's static preflight: the fixture's pinned files and own world UID, and an owned client's install with the session
     /// commands hosting uses. A client on a campaign host has its install checked on that host by its preparation and launch; here
@@ -51,6 +52,13 @@ internal sealed class HostedWorldLifecycle
         var target = plan.Owned
             ? plan.PreparedBuild ?? GameAssemblyVersion.ReadInstallAsync(plan.Install, cancellation).GetAwaiter().GetResult()
             : new GameBuild(null, null, "the running host's build is unknown") { WorldUnknown = "an attached client's operator-owned install is not inspected" };
+        if (Section.Create != null)
+        {
+            plan.RequireCreationRoute();
+            if (site != null) throw new NotSupportedException("Seeded creation is supported only by local owned rounds.");
+            plan.Preflight(CliCapabilities.HostedRounds);
+            return;
+        }
         if (Section.Admission is { } previous)
         {
             previous.VerifyTarget(target);
@@ -95,7 +103,14 @@ internal sealed class HostedWorldLifecycle
             if (_world != null) throw new InvalidOperationException("The fixture world is placed already.");
             saveDirectory = _saveDirectory ?? throw new InvalidOperationException("Check the client's save directory before placing the fixture world.");
         }
-        var world = (site ?? localSite!(Path.Combine(saveDirectory, "worlds_local"))).Place(Section, output, cancellation);
+        var destination = site ?? localSite!(Path.Combine(saveDirectory, "worlds_local"));
+        if (Section.Create != null)
+        {
+            destination.ReserveCreation(Section, output, cancellation);
+            _creationSite = destination;
+            return;
+        }
+        var world = destination.Place(Section, output, cancellation);
         lock (_state) _world = world;
     }
     /// <summary>The three preparation steps in <paramref name="report"/>: preflight, save directory, placement; the placed world's name is recorded.</summary>
@@ -103,8 +118,28 @@ internal sealed class HostedWorldLifecycle
     {
         report.Step(StepPhase.Preflight, PreflightStep, Preflight);
         report.Step(StepPhase.Preflight, "preflight the native client's hosted-world save directory", CheckSaveDirectory);
-        report.Step(StepPhase.Setup, "place the disposable fixture world in the client's local worlds", PlaceWorld);
-        report.Provenance["hostWorld"] = World!.Name;
+        report.Step(StepPhase.Setup, Section.Create != null ? "reserve the fresh name for game creation without placing a fixture" :
+            "place the disposable fixture world in the client's local worlds", PlaceWorld);
+        report.Provenance["hostWorld"] = Section.Create?.Name ?? World!.Name;
+        if (Section.Create != null) report.Provenance["worldCreation"] = "pending";
+    }
+
+    internal void Opened(ClientSession session, ScenarioReport report)
+    {
+        if (Section.Create == null) return;
+        var destination = _creationSite ?? throw new InvalidOperationException("Reserve the requested world before opening the client.");
+        report.Step(StepPhase.Setup, "create the requested world once at the pinned owned menu and verify its identity", () =>
+        {
+            var world = destination.CreateWorld(plan, session, output, cancellation);
+            lock (_state) _world = world;
+            if (plan.RunManifestState is { } manifest)
+            {
+                plan.RunManifestState = manifest with { WorldUid = Section.WorldUid, FixtureFiles = Section.World.Sha256.Count };
+                plan.RunManifestState.Write(Path.Combine(output, "run-manifest.json"));
+            }
+            report.Provenance["worldUid"] = Section.WorldUid;
+            report.Provenance["worldCreation"] = "verified";
+        });
     }
 
     /// <summary>From its idle menu, <paramref name="host"/> hosts the placed world (<see cref="HostWorlds.Start"/>, within the plan's join time).</summary>
@@ -150,4 +185,8 @@ internal interface IHostedWorldSite
     string WorldsDirectory { get; }
     /// <summary>Copies the fixture into <paramref name="output"/> (verified) and into <see cref="WorldsDirectory"/>, refusing a world already named for it.</summary>
     HostedWorld Place(HostWorldPlan plan, string output, CancellationToken cancellation);
+    void ReserveCreation(HostWorldPlan plan, string output, CancellationToken cancellation) =>
+        throw new NotSupportedException("This hosted-world site does not support owned local seeded creation.");
+    HostedWorld CreateWorld(ClientRunPlan plan, ClientSession client, string output, CancellationToken cancellation) =>
+        throw new NotSupportedException("This hosted-world site does not support owned local seeded creation.");
 }

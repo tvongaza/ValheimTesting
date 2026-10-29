@@ -90,6 +90,8 @@ public sealed class RegressionInputs
                 throw new ArgumentException("noMod: a CLI-only control requires an empty mod, plugins, patchers, optionalReferences and probe.");
         }
         else Mod.Validate();
+        if (Fixture.Create != null && (ArmNames.Count != 1 || Mod.Repeatability))
+            throw new ArgumentException("fixture.create: seeded creation requires one arm and no A/B/repeatability comparison. Export a saved fixture for identical-state comparisons.");
         foreach (var (name, source) in Configs)
         {
             if (name.Length == 0 || name != Path.GetFileName(name) || !name.EndsWith(".cfg", StringComparison.OrdinalIgnoreCase))
@@ -144,10 +146,19 @@ public sealed class RegressionClient
 /// <summary>The hosted fixture: a directory that holds exactly one world (<see cref="FixtureLayout.ExpectedTree"/>), and that world's UID.</summary>
 public sealed class RegressionFixture
 {
+    /// <summary>One requested new world; mutually exclusive with Root and WorldUid. No UID exists until verified game creation.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public SeededWorldRequest? Create { get; set; }
     public string Root { get; set; } = "";
     public string WorldUid { get; set; } = "";
     public void Validate()
     {
+        if (Create != null)
+        {
+            if (!string.IsNullOrEmpty(Root) || !string.IsNullOrEmpty(WorldUid))
+                throw new ArgumentException("fixture.create is mutually exclusive with fixture.root and fixture.worldUid.");
+            return;
+        }
         if (!Path.IsPathFullyQualified(Root)) throw new ArgumentException("fixture.root: give the directory that holds the one world folder.\n" + FixtureLayout.ExpectedTree);
         if (!long.TryParse(WorldUid, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out _))
             throw new ArgumentException("fixture.worldUid: give the fixture world's exact UID (WorldIdentity.Read(root).UidText), never one from its name.");
@@ -238,9 +249,14 @@ public sealed record StagedFile(string Role, string Path, string Sha256, string 
 [ResultShape]
 public sealed record RunManifest(string Name, string Arm, string? ModPlugin, string? ModCommit, string? ModSha256, bool Repeatability,
     IReadOnlyList<RunManifestArm> Arms, IReadOnlyList<StagedFile> Allowlist, IReadOnlyList<StagedFile> Configs,
-    InstallPins InstallPins, string World, string WorldUid, int FixtureFiles, IReadOnlyList<string> Capabilities,
+    InstallPins InstallPins, string World, string? WorldUid, int FixtureFiles, IReadOnlyList<string> Capabilities,
     IReadOnlyList<string> LiveOnlyCapabilities, string CliManifest)
 {
+    /// <summary>The creation request retained before/after resolution. A request with null WorldUid and 0 FixtureFiles is pending, never empty-world success.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public SeededWorldRequest? Create { get; init; }
+    internal static readonly JsonSerializerOptions Json = new() { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+    internal void Write(string path) => File.WriteAllText(path, JsonSerializer.Serialize(this, Json));
     /// <summary>True for an explicit CLI-only control: no mod identity or mod artifact arms are present. Omitted for ordinary mod runs.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public bool NoMod { get; init; }
