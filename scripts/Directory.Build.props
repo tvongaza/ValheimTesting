@@ -5,6 +5,6 @@
   <ItemGroup>
     <Compile Include="$(MSBuildThisFileDirectory)Shared/RepositoryPaths.cs" Link="RepositoryPaths.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Shared/ValidationSupport.cs" Link="ValidationSupport.cs" />
-    <Compile Include="$(MSBuildThisFileDirectory)../src/Valheim.Testing.Game/OwnedClientCommandLease.Identity.cs" Link="OwnedClientCommandLease.Identity.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)../src/Valheim.Testing.Game/OwnedClientCommandLease.Identity.cs" Link="OwnedClientCommandLease.Identity.cs" Condition="'$(MSBuildProjectName)' == 'validate'" />
   </ItemGroup>
 </Project>

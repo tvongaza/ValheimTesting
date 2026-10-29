@@ -603,6 +603,8 @@ public sealed class ValidationLimitsTests : IClassFixture<ValidationLimitsTests.
                     bool rootLost = recheckExited || (recheckStart = OwnedClientCommandLease.LocalStartUtcTicks(root)) != rootStart;
                     Stage(FormattableString.Invariant($"root-recheck HasExited={recheckExited}; ObservedStartUtcTicks={recheckStart?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unevaluated"}; Lost={rootLost}"));
                     if (rootLost) throw new Exception("root lost before exit handshake");
+                    // This fixture stops only its verified owned root; graceful shell/MSBuild teardown is not the stimulus.
+                    root.Kill();
                     Ready("listing.started");
                     Stage("listing-started-written");
                     Stage("root-wait-entered");
