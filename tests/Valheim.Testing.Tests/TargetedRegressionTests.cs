@@ -1339,6 +1339,8 @@ internal sealed class RegressionRig : IDisposable
     {
         _journalScope = RunJournal.UseLocalDirectory(Path.Combine(Root, "journal"));
         Runtime = Path.Combine(Root, "runs");
+        SteamUserData = Path.Combine(Root, "steam", "userdata");
+        Directory.CreateDirectory(SteamUserData);
         // A Linux machine runs no client (#708): its rig holds a Windows-layout install, which plans validate from any machine,
         // plus the Linux Doorstop library its dedicated-server tests load.
         var platform = GameLaunch.CurrentClientHost == ClientPlatform.Linux ? ClientPlatform.Windows : GameLaunch.CurrentClientHost;

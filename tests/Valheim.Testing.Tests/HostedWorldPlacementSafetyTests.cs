@@ -46,7 +46,8 @@ public sealed class HostedWorldPlacementSafetyTests : IDisposable
             File.WriteAllBytes(target, bytes);
         };
         var site = new HostedWorldOnHost.Site(host, host.Name, worlds, stage, keep,
-            (entry, _) => { journal.Add(entry); return Task.CompletedTask; }, _ => Task.CompletedTask);
+            (entry, _) => { journal.Add(entry); return Task.CompletedTask; }, _ => Task.CompletedTask)
+            { SteamUserDataDirectory = Path.Combine(_root, "userdata") };
         Assert.ThrowsAny<Exception>(() => site.Place(plan, Path.Combine(_root, "output"), default));
         Assert.Equal(bytes, File.ReadAllBytes(Path.Combine(worlds, foreign)));
         Assert.DoesNotContain(journal, entry => entry.Kind == JournalEntry.CopyRetired);
@@ -58,6 +59,34 @@ public sealed class HostedWorldPlacementSafetyTests : IDisposable
             Assert.ThrowsAny<Exception>(() => HostedWorldOnHost.RecoverAsync(host, fields, Path.Combine(worlds, "Campaign"), "run-1", TimeSpan.FromSeconds(30), default).GetAwaiter().GetResult());
             Assert.Equal(bytes, File.ReadAllBytes(Path.Combine(worlds, foreign)));
         }
+    }
+
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ALateCloudCollisionIsNeverTransferredOrRecoveredAsTheRunsWorld(bool anotherAccount)
+    {
+        var (plan, site, host, journal) = Setup();
+        string cloud = anotherAccount ? Path.Combine(site.SteamUserDataDirectory, "222", "892970", "remote", "worlds")
+            : Path.Combine(_root, "worlds");
+        byte[] bytes = File.ReadAllBytes(Path.Combine(plan.World.Source, "Campaign", "_main.1.fwl2"));
+        host.BeforeRun = (_, variables) =>
+        {
+            if (variables?.GetValueOrDefault("worlds") != site.Stage) return;
+            Directory.CreateDirectory(Path.Combine(cloud, "Campaign"));
+            File.WriteAllBytes(Path.Combine(cloud, "Campaign", "_main.1.fwl2"), bytes);
+        };
+        Assert.ThrowsAny<Exception>(() => site.Place(plan, Path.Combine(_root, "output"), default));
+        Assert.False(Directory.Exists(site.WorldsDirectory));
+        Assert.Empty(Directory.EnumerateFileSystemEntries(site.KeepIn));
+        Assert.DoesNotContain(journal, entry => entry.Kind == JournalEntry.CopyDone && entry.Fields.GetValueOrDefault("verified") == "true");
+        var before = WorldFixture.Manifest(cloud);
+        for (int attempt = 0; attempt < 2; attempt++)
+            Assert.Throws<InvalidDataException>(() => HostedWorldOnHost.RecoverAsync(host, Fields(journal),
+                Path.Combine(site.WorldsDirectory, "Campaign"), "run-1", TimeSpan.FromSeconds(30), default).GetAwaiter().GetResult());
+        Assert.Equal(before, WorldFixture.Manifest(cloud));
+        WorldFixture.Verify(plan.World.Source, plan.World.Sha256);
     }
 
     private static Dictionary<string, string> Fields(List<JournalEntry> journal)
@@ -78,7 +107,8 @@ public sealed class HostedWorldPlacementSafetyTests : IDisposable
         var host = new ForwardingWorldHost(new LocalGameHost("local", HostShell.ThisMachine));
         var site = new HostedWorldOnHost.Site(host, host.Name, Path.Combine(root, "worlds_local"),
             Path.Combine(root, "runs", "run-1", "host-world-stage"), Path.Combine(root, "runs", "run-1", "host-world"),
-            (entry, _) => { journal.Add(entry); return Task.CompletedTask; }, _ => Task.CompletedTask);
+            (entry, _) => { journal.Add(entry); return Task.CompletedTask; }, _ => Task.CompletedTask)
+            { SteamUserDataDirectory = Path.Combine(_root, "userdata") };
         return (plan, site, host, journal);
     }
 
@@ -118,7 +148,7 @@ public sealed class HostedWorldPlacementSafetyTests : IDisposable
             return new HostResult(HostOutcome.Unknown, null, "", "", TimeSpan.Zero, false);
         };
         Assert.Throws<HostOperationException>(() => site.Place(plan, Path.Combine(_root, "output"), default));
-        Assert.Empty(Directory.EnumerateFileSystemEntries(site.WorldsDirectory));
+        Assert.False(Directory.Exists(site.WorldsDirectory));
         var fields = Fields(journal);
         Assert.Contains("may still run", (await Assert.ThrowsAsync<InvalidDataException>(() => HostedWorldOnHost.RecoverAsync(host, fields,
             Path.Combine(site.WorldsDirectory, "Campaign"), "run-1", TimeSpan.FromSeconds(30), default))).Message);
@@ -340,10 +370,10 @@ public sealed class HostedWorldPlacementSafetyTests : IDisposable
         string output = Path.Combine(_root, "shared-output"), run = RunJournal.NewRunId();
         using var directory = RunJournal.UseLocalDirectory(Path.Combine(_root, "journal"));
         using var scope = RunJournal.UseRun(run);
-        var abandoned = (HostedWorldOnHost.Site)HostedWorldOnHost.ThisMachine(output, "abandoned")(Path.Combine(_root, "worlds_local"));
+        var abandoned = (HostedWorldOnHost.Site)HostedWorldOnHost.ThisMachine(output, "abandoned", Path.Combine(_root, "userdata"))(Path.Combine(_root, "worlds_local"));
         Assert.Empty(Directory.EnumerateFileSystemEntries(Path.Combine(output, run)));
         // The process dies after allocation: there has been no journal or user-world mutation to recover.
-        var next = (HostedWorldOnHost.Site)HostedWorldOnHost.ThisMachine(output, "next")(Path.Combine(_root, "worlds_local"));
+        var next = (HostedWorldOnHost.Site)HostedWorldOnHost.ThisMachine(output, "next", Path.Combine(_root, "userdata"))(Path.Combine(_root, "worlds_local"));
         Assert.NotEqual(abandoned.Stage, next.Stage);
         Assert.Contains("placement-2", next.Stage);
         string fixture = FakeInstalls.World(Path.Combine(_root, "fixture"));
@@ -365,7 +395,7 @@ public sealed class HostedWorldPlacementSafetyTests : IDisposable
         using var barrier = new Barrier(2);
         await Task.WhenAll(Enumerable.Range(0, 2).Select(index => Task.Run(() =>
         {
-            var site = HostedWorldOnHost.ThisMachine(output, "actor-" + index)(Path.Combine(_root, "client-" + index, "worlds_local"));
+            var site = HostedWorldOnHost.ThisMachine(output, "actor-" + index, Path.Combine(_root, "userdata"))(Path.Combine(_root, "client-" + index, "worlds_local"));
             Assert.True(barrier.SignalAndWait(TimeSpan.FromSeconds(30)));
             var placed = site.Place(plan, Path.Combine(_root, "input-" + index), default);
             placed.Collect();

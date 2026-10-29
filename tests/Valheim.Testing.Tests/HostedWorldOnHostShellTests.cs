@@ -19,7 +19,7 @@ public sealed class HostedWorldOnHostShellTests : IDisposable
         var plan = new HostWorldPlan { World = new() { Source = fixture, Sha256 = new(WorldFixture.Manifest(fixture)) }, WorldUid = "4242" };
         var journal = new List<JournalEntry>();
         var site = new HostedWorldOnHost.Site(host, host.Name, Worlds, Path.Combine(_root, "runs", "run-1", "world-stage"), To,
-            (entry, _) => { journal.Add(entry); return Task.CompletedTask; }, _ => Task.CompletedTask) { RetireRunCopies = "run-1" };
+            (entry, _) => { journal.Add(entry); return Task.CompletedTask; }, _ => Task.CompletedTask) { RetireRunCopies = "run-1", SteamUserDataDirectory = Path.Combine(_root, "userdata") };
         Directory.CreateDirectory(Worlds);
         File.WriteAllText(Path.Combine(Worlds, "Unrelated.fwl"), "the user's world");
         string output = Path.Combine(_root, "output");
@@ -119,4 +119,92 @@ public sealed class HostedWorldOnHostShellTests : IDisposable
         File.WriteAllBytes(Path.Combine(Worlds, "CAMPAIGN_backup_auto-20261006-120000", "_main.0.fwl2"), FakeInstalls.Metadata("Campaign", 9999));
         Assert.Contains("UID 9999, not the fixture's 4242", (await Assert.ThrowsAsync<InvalidDataException>(() => Check("Campaign", "4242"))).Message);
     }
+    private Dictionary<string, string> CollisionVariables() => new()
+    {
+        ["worlds"] = Worlds, ["cloud"] = Path.Combine(_root, "worlds"), ["name"] = "Campaign",
+        ["userdata"] = "", ["steam"] = Path.Combine(_root, "nondefault-steam"), ["remote"] = "892970/remote/worlds",
+    };
+    private Task<HostResult> Collisions(IGameHost host) => host.RunAsync(
+        Windows(host) ? HostedWorldOnHost.WindowsCollisions : HostedWorldOnHost.BashCollisions,
+        CollisionVariables(), TimeSpan.FromSeconds(30));
+
+    public static IEnumerable<object[]> CloudCollisions()
+    {
+        foreach (var shell in LocalGameHostShellTests.Shells)
+            foreach (string folder in new[] { "local", "sibling", "other-account" })
+                foreach (string leaf in new[] { "Campaign", "campaign.fwl", "CAMPAIGN_backup_auto-1.db" })
+                    yield return [shell[0], folder, leaf];
+    }
+
+    [Theory, MemberData(nameof(CloudCollisions))]
+    public async Task ReadOnlyCloudCheckSeesFlatChunkedAndBackupNamesAcrossAllAccounts(string shell, string folder, string leaf)
+    {
+        var host = Host(shell);
+        string userdata = Path.Combine(_root, "nondefault-steam", "userdata");
+        Directory.CreateDirectory(Path.Combine(userdata, "111", "892970", "remote", "worlds"));
+        string saves = folder == "local" ? Worlds : folder == "sibling" ? Path.Combine(_root, "worlds")
+            : Path.Combine(userdata, "222", "892970", "remote", "worlds");
+        Directory.CreateDirectory(saves);
+        string entry = Path.Combine(saves, leaf);
+        if (leaf == "Campaign") { Directory.CreateDirectory(entry); File.WriteAllBytes(Path.Combine(entry, "_main.0.fwl2"), FakeInstalls.Metadata("Campaign", 4242, needsDb: false)); }
+        else File.WriteAllText(entry, "the player's own save");
+        var before = WorldFixture.Manifest(_root);
+        var directories = Directory.GetDirectories(_root, "*", SearchOption.AllDirectories).Order(StringComparer.Ordinal).ToArray();
+        var result = (await Collisions(host)).EnsureSuccess("read-only cloud name check");
+        Assert.Contains("VT-WORLD-COLLISION " + entry, result.Stdout);
+        Assert.Contains("VT-WORLD-COLLISIONS done", result.Stdout);
+        Assert.Equal(before, WorldFixture.Manifest(_root));
+        Assert.Equal(directories, Directory.GetDirectories(_root, "*", SearchOption.AllDirectories).Order(StringComparer.Ordinal));
+    }
+
+    [Theory, MemberData(nameof(LocalGameHostShellTests.Shells), MemberType = typeof(LocalGameHostShellTests))]
+    public async Task ProvenAbsentCloudRootsAndSimilarNamesDoNotCreateDirectories(string shell)
+    {
+        var host = Host(shell);
+        var absent = (await Collisions(host)).EnsureSuccess("absent Steam and worlds");
+        Assert.DoesNotContain("VT-WORLD-COLLISION ", absent.Stdout);
+        Assert.False(Directory.Exists(Worlds)); Assert.False(Directory.Exists(CollisionVariables()["steam"]));
+        string cloud = Path.Combine(_root, "worlds"); Directory.CreateDirectory(cloud);
+        foreach (string leaf in Others) File.WriteAllText(Path.Combine(cloud, leaf), "another world");
+        var before = WorldFixture.Manifest(_root);
+        var unrelated = (await Collisions(host)).EnsureSuccess("different names");
+        Assert.DoesNotContain("VT-WORLD-COLLISION ", unrelated.Stdout);
+        Assert.Equal(before, WorldFixture.Manifest(_root)); Assert.False(Directory.Exists(Worlds));
+    }
+
+    [Theory, MemberData(nameof(LocalGameHostShellTests.Shells), MemberType = typeof(LocalGameHostShellTests))]
+    public async Task WrongRootTypeFailsWithoutAnEmptySuccessReceipt(string shell)
+    {
+        string steam = CollisionVariables()["steam"]; Directory.CreateDirectory(steam);
+        string userdata = Path.Combine(steam, "userdata"); File.WriteAllText(userdata, "not a directory");
+        var before = WorldFixture.Manifest(_root);
+        var result = await Collisions(Host(shell));
+        Assert.False(result.Succeeded); Assert.DoesNotContain("VT-WORLD-COLLISIONS done", result.Stdout);
+        Assert.Equal(before, WorldFixture.Manifest(_root)); Assert.False(Directory.Exists(Worlds));
+    }
+
+    [Fact]
+    public async Task LinkedOrUnreadableCloudRootsNeverMasqueradeAsAbsent()
+    {
+        // Unix link/permission controls. Windows link privileges are not assumed; its wrong-type and failed-host controls are above.
+        if (OperatingSystem.IsWindows()) return;
+        var host = Host("bash"); string cloud = Path.Combine(_root, "worlds"), other = Path.Combine(_root, "other");
+        Directory.CreateDirectory(other); File.WriteAllText(Path.Combine(other, "Campaign.fwl"), "private");
+        Directory.CreateSymbolicLink(cloud, other);
+        var linked = await Collisions(host);
+        Assert.False(linked.Succeeded); Assert.DoesNotContain("VT-WORLD-COLLISIONS done", linked.Stdout);
+        Directory.Delete(cloud);
+        Directory.CreateDirectory(cloud);
+        var mode = File.GetUnixFileMode(cloud);
+        try
+        {
+            File.SetUnixFileMode(cloud, UnixFileMode.None);
+            var unreadable = await Collisions(host);
+            Assert.False(unreadable.Succeeded); Assert.DoesNotContain("VT-WORLD-COLLISIONS done", unreadable.Stdout);
+        }
+        finally { File.SetUnixFileMode(cloud, mode); }
+        Assert.Equal("private", File.ReadAllText(Path.Combine(other, "Campaign.fwl")));
+        Assert.False(Directory.Exists(Worlds));
+    }
+
 }

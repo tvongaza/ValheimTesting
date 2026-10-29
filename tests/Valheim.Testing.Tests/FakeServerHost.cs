@@ -27,6 +27,23 @@ internal sealed class FakeServerHost : IGameHost
         Name = name; _mirror = mirror; _server = server; TunnelPort = tunnelPort; _kind = kind; Windows = windows;
     }
 
+    private List<string> WorldCollisions(IReadOnlyDictionary<string, string> variables, string worlds)
+    {
+        var folders = new List<string> { worlds, variables["cloud"] };
+        string userdata = variables.GetValueOrDefault("userdata") ?? "";
+        if (userdata.Length != 0)
+        {
+            string localData = Local(userdata);
+            if (File.Exists(localData)) throw new IOException("Steam userdata is not a directory.");
+            if (Directory.Exists(localData))
+                foreach (string account in Directory.EnumerateDirectories(localData))
+                    folders.Add(HostPath.Join(userdata, Path.GetFileName(account), variables["remote"]));
+        }
+        return folders.SelectMany(folder => Directory.Exists(Local(folder))
+            ? Directory.EnumerateFileSystemEntries(Local(folder)).Where(entry => HostedWorld.IsNamedFor(Path.GetFileName(entry), variables["name"]))
+                .Select(entry => HostPath.Join(folder, Path.GetFileName(entry))) : Enumerable.Empty<string>()).ToList();
+    }
+
     /// <summary>
     /// This machine, answered in process: a local host whose paths are this machine's own (no mirror) and whose scripts answer as
     /// this machine's shell's do (pwsh on Windows, bash elsewhere), so a test of what the toolkit decides runs no shell.
@@ -218,6 +235,7 @@ internal sealed class FakeServerHost : IGameHost
         ("scheduled-task-retire", [WindowsScheduledTask.RetireScript]),
         ("lease", [LeaseScripts.Bash, LeaseScripts.PowerShell]),
         ("world-entries", [HostedWorldOnHost.WindowsEntries, HostedWorldOnHost.BashEntries]),
+        ("world-collisions", [HostedWorldOnHost.WindowsCollisions, HostedWorldOnHost.BashCollisions]),
         ("world-move", [HostedWorldOnHost.WindowsMoveOut, HostedWorldOnHost.BashMoveOut, HostedWorldOnHost.WindowsPlace, HostedWorldOnHost.BashPlace]),
         ("world-reserve", [HostedWorldOnHost.WindowsReserve, HostedWorldOnHost.BashReserve]),
         ("world-meta", [HostedWorldOnHost.WindowsMetadata, HostedWorldOnHost.BashMetadata]));
@@ -842,6 +860,8 @@ internal sealed class FakeServerHost : IGameHost
                 Directory.CreateDirectory(keep);
                 return Ok("VT-WORLD-RESERVED done\n");
             }
+            case "world-collisions":
+                return Ok(string.Concat(WorldCollisions(v, v["worlds"]).Select(path => "VT-WORLD-COLLISION " + path + "\n")) + "VT-WORLD-COLLISIONS done\n");
             case "world-entries":
             case "world-move":
             {
@@ -853,6 +873,12 @@ internal sealed class FakeServerHost : IGameHost
                 var entries = Directory.Exists(worlds) ? Directory.EnumerateFileSystemEntries(worlds).Where(entry => Named(Path.GetFileName(entry))).ToList() : [];
                 if (name == "world-entries") return Ok(string.Concat(entries.Select(entry => "VT-WORLD-ENTRY " + Path.GetFileName(entry) + "\n")) + "VT-WORLD-ENTRIES done\n");
                 string to = Local(v["to"]);
+                if (script == HostedWorldOnHost.WindowsPlace || script == HostedWorldOnHost.BashPlace)
+                {
+                    var cloudConflicts = WorldCollisions(v, v["to"]);
+                    if (cloudConflicts.Count != 0) return new HostResult(HostOutcome.Exited, 4,
+                        "VT-WORLD-EXISTS " + cloudConflicts[0] + "\n", "", TimeSpan.Zero, false);
+                }
                 Directory.CreateDirectory(to);
                 if ((script == HostedWorldOnHost.WindowsPlace || script == HostedWorldOnHost.BashPlace) &&
                     Directory.EnumerateFileSystemEntries(to).Any(entry => Named(Path.GetFileName(entry))))

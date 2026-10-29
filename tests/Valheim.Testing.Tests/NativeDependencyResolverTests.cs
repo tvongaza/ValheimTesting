@@ -1794,7 +1794,7 @@ public sealed class NativeDependencyResolverTests : IDisposable
         var pc = hosts["pc"];
         // Placed in the host user's worlds_local, journalled first; then moved out into the run's folder there and fetched.
         var placed = pc.Runs.ToList();
-        int listed = placed.FindIndex(run => run.Script == "world-entries");
+        int listed = placed.FindIndex(run => run.Script == "world-collisions");
         Assert.True(listed >= 0);
         Assert.Equal(worlds, placed[listed].Variables["worlds"]);
         Assert.Contains(placed, run => run.Script == "world-move" && run.Variables["to"] == On("pc", "/runs/run-hosted/host-world"));
