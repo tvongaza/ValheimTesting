@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using System.Text.Json;
 using Valheim.Testing.Game;
 using Xunit;
 using Valheim.Testing.GameSessions;
@@ -315,32 +316,71 @@ public sealed class HostServerTests : IDisposable
         {
             string marker = Path.Combine(_root, "stdio " + index), boot = Path.Combine(_root, "stdio boot [literal] " + index);
             string evidence = Path.Combine(_root, "stdio evidence " + index);
-            var launch = GameLaunch.ForServer(runtime, ["stdio-gate", marker], hostPlatform: ServerPlatform.Windows);
-            await StandInServer.RunAsync(host, launch, boot, TimeSpan.FromSeconds(75),
-                nameof(WindowsServerWritesBothStreamsAfterItsScheduledTaskLauncherExits), async process =>
+            var launch = GameLaunch.ForServer(runtime, ["stdio-gate", marker],
+                new Dictionary<string, string> { ["VT_TEST_INPUT"] = ExplicitRunInputsTests.Opaque }, hostPlatform: ServerPlatform.Windows);
+            try
             {
+                await StandInServer.RunAsync(host, launch, boot, TimeSpan.FromSeconds(75),
+                    nameof(WindowsServerWritesBothStreamsAfterItsScheduledTaskLauncherExits), async process =>
+                {
+                    try
+                    {
+                        Assert.True(SpinWait.SpinUntil(() => File.Exists(marker + ".ready"), TimeSpan.FromSeconds(10)));
+                        string ownerName = File.ReadAllText(Path.Combine(boot, "launcher-owner-name")).Trim();
+                        var owner = HostServerLaunchOwnership.Parse(File.ReadAllText(Path.Combine(boot, ownerName)));
+                        Assert.Equal(HostServerLauncherState.Gone,
+                            await HostServerLauncher.InspectAsync(host, owner, boot, TimeSpan.FromSeconds(15), CancellationToken.None));
+                        Assert.Equal(process.Id, owner.GamePid);
+                        Assert.Equal(process.StartIdentity, owner.GameStartIdentity);
+                        File.WriteAllText(marker + ".release", "go");
+                        (await host.WaitForLogAsync(Path.Combine(boot, "stdout.log"), 0,
+                            new System.Text.RegularExpressions.Regex("VT-STDOUT after launcher exit"), null, TimeSpan.FromSeconds(15))).EnsureMatched();
+                        (await host.WaitForLogAsync(Path.Combine(boot, "stderr.log"), 0,
+                            new System.Text.RegularExpressions.Regex("VT-STDERR after launcher exit"), null, TimeSpan.FromSeconds(15))).EnsureMatched();
+                    }
+                    finally { await process.StopAsync(TimeSpan.FromSeconds(15)); }
+                }, evidence: evidence, logonSeams: sessions[index]);
+                var utf8 = new UTF8Encoding(false, true);
+                byte[] childBytes = File.ReadAllBytes(marker + ".input");
+                Assert.True(childBytes.SequenceEqual(utf8.GetBytes(ExplicitRunInputsTests.Opaque)), "The actual child's VT_TEST_INPUT bytes differ.");
+                string stdoutValue = utf8.GetString(File.ReadAllBytes(Path.Combine(evidence, "stdout.log")));
+                Assert.Contains("VT-STDOUT after launcher exit", stdoutValue);
+                Assert.Contains("VT-INPUT " + ExplicitRunInputsTests.Opaque, stdoutValue);
+                Assert.False(File.Exists(Path.Combine(runtime, "should-not-exist")));
+                Assert.Contains("VT-STDERR after launcher exit", utf8.GetString(File.ReadAllBytes(Path.Combine(evidence, "stderr.log"))));
+                string moved = Path.Combine(_root, "moved stdout " + index);
+                File.Move(Path.Combine(boot, "stdout.log"), moved);
+                Assert.True(File.Exists(moved));
+            }
+            catch (Exception error)
+            {
+                // Keep full canary values and bytes in the TRX even when this fixture's directory is disposed.
+                string diagnostics;
                 try
                 {
-                    Assert.True(SpinWait.SpinUntil(() => File.Exists(marker + ".ready"), TimeSpan.FromSeconds(10)));
-                    string ownerName = File.ReadAllText(Path.Combine(boot, "launcher-owner-name")).Trim();
-                    var owner = HostServerLaunchOwnership.Parse(File.ReadAllText(Path.Combine(boot, ownerName)));
-                    Assert.Equal(HostServerLauncherState.Gone,
-                        await HostServerLauncher.InspectAsync(host, owner, boot, TimeSpan.FromSeconds(15), CancellationToken.None));
-                    Assert.Equal(process.Id, owner.GamePid);
-                    Assert.Equal(process.StartIdentity, owner.GameStartIdentity);
-                    File.WriteAllText(marker + ".release", "go");
-                    (await host.WaitForLogAsync(Path.Combine(boot, "stdout.log"), 0,
-                        new System.Text.RegularExpressions.Regex("VT-STDOUT after launcher exit"), null, TimeSpan.FromSeconds(15))).EnsureMatched();
-                    (await host.WaitForLogAsync(Path.Combine(boot, "stderr.log"), 0,
-                        new System.Text.RegularExpressions.Regex("VT-STDERR after launcher exit"), null, TimeSpan.FromSeconds(15))).EnsureMatched();
+                    string stdout = File.Exists(Path.Combine(evidence, "stdout.log")) ? Path.Combine(evidence, "stdout.log") : Path.Combine(boot, "stdout.log");
+                    byte[]? childBytes = File.Exists(marker + ".input") ? File.ReadAllBytes(marker + ".input") : null;
+                    byte[]? stdoutBytes = File.Exists(stdout) ? File.ReadAllBytes(stdout) : null;
+                    var childText = DecodeDiagnostic(childBytes);
+                    var stdoutText = DecodeDiagnostic(stdoutBytes);
+                    diagnostics = JsonSerializer.Serialize(new
+                    {
+                        Seam = index, Expected = ExplicitRunInputsTests.Opaque, ChildValue = childText.Value, ChildDecodingError = childText.Error,
+                        Stdout = stdoutText.Value, StdoutDecodingError = stdoutText.Error,
+                        ChildUtf8Hex = childBytes == null ? null : Convert.ToHexString(childBytes),
+                        StdoutHex = stdoutBytes == null ? null : Convert.ToHexString(stdoutBytes),
+                        OriginalOutputCodePage = File.Exists(marker + ".encoding") ? File.ReadAllText(marker + ".encoding") : null,
+                    });
                 }
-                finally { await process.StopAsync(TimeSpan.FromSeconds(15)); }
-            }, evidence: evidence, logonSeams: sessions[index]);
-            Assert.Contains("VT-STDOUT after launcher exit", File.ReadAllText(Path.Combine(evidence, "stdout.log")));
-            Assert.Contains("VT-STDERR after launcher exit", File.ReadAllText(Path.Combine(evidence, "stderr.log")));
-            string moved = Path.Combine(_root, "moved stdout " + index);
-            File.Move(Path.Combine(boot, "stdout.log"), moved);
-            Assert.True(File.Exists(moved));
+                catch (Exception diagnosticError) { diagnostics = "Diagnostic collection failed: " + diagnosticError; }
+                throw new Xunit.Sdk.XunitException(error + "\nFull stdio fixture diagnostics: " + diagnostics);
+
+                static (string? Value, string? Error) DecodeDiagnostic(byte[]? bytes)
+                {
+                    try { return (bytes == null ? null : new UTF8Encoding(false, true).GetString(bytes), null); }
+                    catch (DecoderFallbackException failure) { return (null, failure.ToString()); }
+                }
+            }
         }
     }
 

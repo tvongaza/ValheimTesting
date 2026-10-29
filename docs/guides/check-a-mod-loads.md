@@ -59,6 +59,7 @@ valheim-test server-load \
   --plugin-file /path/to/FirstMod.assets \
   --plugin-dir /path/to/SecondModData \
   --search-root /path/to/libraries \
+  --config /path/to/example.mod.cfg --env 'EXAMPLE_MODE=selected value' \
   --output /private/runs/pair
 ```
 
@@ -67,9 +68,12 @@ valheim-test server-load \
 | `--plugin-file FILE` | An asset file a mod needs beside its DLL |
 | `--plugin-dir DIR` | A folder of assets a mod needs; DLLs are refused |
 | `--search-root DIR\|DLL` | A folder or exact DLL to search for dependencies |
-| `--config FILE` | A known server config, for example one that skips slow world generation |
+| `--config FILE` | A known config for the mod-bearing actor: the server here, or the hosting client with `start`. Repeat |
+| `--env NAME=VALUE` | A non-secret, non-empty variable on each owned game process, including any joining client. Repeat for distinct names |
 
 The tool resolves the combined dependency set before it starts either process and writes it to `dependencies.lock.json`.
+
+Both commands retain explicit values and config contents in private `run-inputs.json` and `inputs/configs/`; keep credentials out of them. `--env` values are literal and single-line, with no `{runtime}`, `{world}` or `{port}` tokens. The [run options](../packages/Valheim.Testing.NativeSmoke.md#run-options) describe collisions, protected variables and actor scope. A mod log or assertion must still prove that the selected setting was read.
 
 ### 5. Remove one mod from a set
 

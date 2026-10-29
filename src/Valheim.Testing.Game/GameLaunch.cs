@@ -23,7 +23,7 @@ namespace Valheim.Testing.Game;
 /// </remarks>
 public sealed partial class GameLaunch
 {
-    private static readonly Regex VariableName = new("^[A-Za-z_][A-Za-z0-9_]*$", RegexOptions.CultureInvariant);
+    private static readonly Regex VariableName = new(@"\A[A-Za-z_][A-Za-z0-9_]*\z", RegexOptions.CultureInvariant);
 
     /// <summary>Validate a disposable client's caller variables before its install is copied or a process starts.</summary>
     internal static void ValidateClientEnvironment(IReadOnlyDictionary<string, string> environment, IEnumerable<string> arguments)
@@ -36,6 +36,17 @@ public sealed partial class GameLaunch
             if (value == null || value.IndexOfAny(['\0', '\r', '\n']) >= 0)
                 throw new ArgumentException($"Client environment variable '{name}' needs a single-line value without NUL.", nameof(environment));
         }
+    }
+
+    // One-shot inputs are portable between clients and dedicated hosts. A profile owns its injected loader libraries.
+    internal static void ValidateExplicitEnvironment(IReadOnlyDictionary<string, string> environment)
+    {
+        ValidateClientEnvironment(environment, []);
+        foreach (string name in environment.Keys)
+            if (name.StartsWith("DOORSTOP_", StringComparison.OrdinalIgnoreCase) ||
+                name.StartsWith("DYLD_", StringComparison.OrdinalIgnoreCase) ||
+                new[] { "LD_LIBRARY_PATH", "LD_PRELOAD" }.Contains(name, StringComparer.OrdinalIgnoreCase))
+                throw new ArgumentException($"Environment variable '{name}' is set by the launch for BepInEx's loader.", nameof(environment));
     }
 
     private GameLaunch(bool server, ClientPlatform platform, bool forHost, string gameDirectory, string loaderDirectory, string executable, IReadOnlyList<string> arguments,
