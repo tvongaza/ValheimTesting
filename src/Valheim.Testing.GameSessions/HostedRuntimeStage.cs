@@ -132,6 +132,21 @@ internal static partial class HostedRuntimeStage
         if (parts[0] != "idle") throw new HostOperationException($"Unexpected game-process verdict from {host.Name}", result);
     }
 
+    // Creation is the single exception to the pre-launch no-game hold: the exact owned, pinned menu client only.
+    internal static async Task RequireOwnedMenuAsync(IGameHost host, ClientSession client, ClientRunPlan plan,
+        TimeSpan timeout, CancellationToken cancellation)
+    {
+        if (host is not LocalGameHost) throw new NotSupportedException("Seeded creation requires a local owned client.");
+        int pid = client.RequireOwnedMenu(plan);
+        var result = (await host.RunAsync(host.Shell.Kind == HostShellKind.PowerShell ? WindowsProcessCheck : BashProcessCheck,
+            new Dictionary<string, string> { ["runtime"] = plan.Install, ["clientSession"] = "true" }, timeout, cancellation).ConfigureAwait(false))
+            .EnsureSuccess("Checking that only the owned menu client runs");
+        // Same process-check script and verdict as the no-game hold; no broad PID bypass and no unknown/idle admission.
+        if (InteractiveClient.Line(result.Stdout, "VT-GAME ") != "busy " + pid.ToString(CultureInfo.InvariantCulture))
+            throw new HostOperationException("Seeded creation requires exactly the verified owned menu client and no conflicting game", result);
+        if (client.RequireOwnedMenu(plan) != pid) throw new InvalidOperationException("The owned menu client's identity changed.");
+    }
+
     internal static readonly string WindowsProcessCheck = """
         $busy = @()
         $roots = @($runtime -split "`n" | Where-Object { $_ })

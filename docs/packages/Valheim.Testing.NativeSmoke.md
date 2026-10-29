@@ -32,6 +32,22 @@ The tool needs the .NET 10 SDK. If a Homebrew .NET on macOS cannot start the too
 
 `valheim-test help` lists every command with its usage.
 
+### Start a world from a seed
+
+```sh
+valheim-test start --mod ./bin/MyMod.dll --world-seed AbCdEf1234 --hold
+# An explicit CLI-only control is separate:
+valheim-test start --no-mod --world-seed AbCdEf1234 --world-name Fresh-Seed-Control --hold
+```
+
+`--world-seed SEED` requests one fresh world instead of the packaged or `--world-fixture` world. Without `--world-name`, the tool generates a readable seed-derived name with a fresh suffix. An explicit name is never renamed to evade a collision. Seed case is preserved exactly. The supported console-token subset is nonempty ASCII alphanumeric seeds and 3–64 character names of ASCII letters/digits, `_` and `-`, beginning alphanumeric, excluding Windows device names and names the existing save parser recognizes as dated backups. This subset is not a statement of Valheim's full input grammar.
+
+The existing owned local Windows/macOS client opens once to its pinned menu. The tool checks the fresh name against local and Steam Cloud worlds before staging and again before issuing ordinary `cli_create_world NAME SEED` once, without overwrite. The game's reply and actual never-saved `_main.0.fwl2` metadata must agree on name, exact seed, numeric seed/UID and generator version before the first hosted round. A missing or uncertain reply leaves the request pending; the tool does not retry, host, overwrite or collect an unproven entry. Keep its diagnostics for inspection. Only a proven owned new world is collected after release.
+
+The save parent can be the signed-in user's existing `worlds_local` (required on native macOS); this feature does not provide a separate save backend or rely on `-savedir`. Existing personal entries are never renamed or overwritten. The collision check does not lock out later Steam sync. Creation is currently limited to `start`'s one local owned profile client, not attached/in-place, campaign/remote, dedicated or Linux clients. Competing `VALHEIMCLI_START_WORLD_*` startup instructions are refused before launch. Seeded comparisons/multiple arms are refused: use `save-world`, then the resulting `--world-fixture`, for identical initial-state comparisons. `--world-seed` does not imply `--no-mod`.
+
+These lifecycle checks and controlled test cases are not a claim of completed native acceptance on either platform.
+
 ### Exit codes
 
 | Code | `start`, `server-load`, `server-load-ab` | `env`, `session check` | `cli` |

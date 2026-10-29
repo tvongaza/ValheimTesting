@@ -73,6 +73,109 @@ internal static class HostedWorldOnHost
         internal string SteamUserDataDirectory { get; init; } = "";
         public HostedWorld Place(HostWorldPlan plan, string output, CancellationToken cancellation) =>
             HostedWorldOnHost.Place(this, plan, output, cancellation);
+        internal Func<ClientSession, ClientRunPlan, CancellationToken, Task>? MenuHold { get; init; }
+        private SeededWorldRequest? _creation;
+        private string? _creationOutput;
+        private bool _creationAttempted;
+        public void ReserveCreation(HostWorldPlan plan, string output, CancellationToken cancellation)
+        {
+            if (_creation != null)
+            {
+                if (_creation == plan.Create && _creationOutput == Path.GetFullPath(output) && !_creationAttempted) return;
+                throw new InvalidOperationException("This site already reserved a different or attempted creation.");
+            }
+            if (Host.Kind != GameHostKind.Local || MenuHold == null || RetireRunCopies != null)
+                throw new NotSupportedException("Seeded creation requires the local regression run's machine lock and owned menu hold.");
+            plan.Validate();
+            var request = plan.Create ?? throw new ArgumentException("No seeded world was requested.");
+            Hold(cancellation).GetAwaiter().GetResult();
+            RefuseCollisions(this, request.Name, "seed request", cancellation);
+            Reserve(this, cancellation);
+            _creation = request; _creationOutput = Path.GetFullPath(output);
+            CreationEvent(this, request, "intended", cancellation);
+        }
+        public HostedWorld CreateWorld(ClientRunPlan plan, ClientSession client, string output, CancellationToken cancellation)
+        {
+            var request = _creation ?? throw new InvalidOperationException("Reserve creation before opening the client.");
+            if (_creationAttempted || _creationOutput != Path.GetFullPath(output) || plan.HostWorld?.Create != request)
+                throw new InvalidOperationException("A creation is attempted once by its original run and request; preserve uncertain attempts for inspection.");
+            plan.RequireCreationRoute();
+            MenuHold!(client, plan, cancellation).GetAwaiter().GetResult();
+            RefuseCollisions(this, request.Name, "seed request", cancellation);
+            _creationAttempted = true;
+            CreationEvent(this, request, "attempted", cancellation);
+            // The ordinary pinned actor records the one command. A lost reply never authorizes retry or collection.
+            var reply = client.Actor.Execute($"cli_create_world {request.Name} {request.Seed}");
+            var proof = ReadCreationReply(reply, request);
+            MenuHold(client, plan, cancellation).GetAwaiter().GetResult();
+            var admitted = CaptureCreated(this, request, output, plan.PreparedBuild ??
+                throw new InvalidOperationException("Seeded creation has no inspected hosting build."), proof);
+            string record = Path.Combine(output, "world-created.json");
+            using (var file = new FileStream(record, FileMode.CreateNew, FileAccess.Write))
+                JsonSerializer.Serialize(file, new { requested = request, runId = Path.GetFileName(Path.GetDirectoryName(KeepIn)), processId = client.ProcessId,
+                    processStart = (client.OwnedProcess as ILocalClientProcessIdentity)?.StartFileTimeUtc,
+                    command = reply.Command, worldsDirectory = WorldsDirectory, worldUid = admitted.Identity.UidText, identity = admitted.Identity,
+                    worldGenVersion = proof.GenerationVersion, metadataSha256 = admitted.Files.Values.Single(), reply = reply.Output },
+                    new JsonSerializerOptions { WriteIndented = true });
+            Journal(JournalEntry.Of(JournalEntry.CopyDone, ("runtime", HostPath.Join(WorldsDirectory, request.Name)),
+                ("creationState", "completed"), ("placementState", "created"), ("verified", "true"),
+                ("worldUid", admitted.Identity.UidText), ("creationProof", record), ("creationProofSha256", FileHash.Sha256(record))), cancellation).GetAwaiter().GetResult();
+            plan.HostWorld!.BindCreated(request, admitted);
+            return HostedWorld.OnHost(request.Name, admitted.Identity.UidText, WorldsDirectory, admitted.Source, output, HostName, target =>
+            {
+                if (!RequireOwnWorldAsync(Host, WorldsDirectory, request.Name, admitted.Identity.UidText, HostedTimeouts.Quick, CancellationToken.None).GetAwaiter().GetResult())
+                    throw new InvalidDataException("The created world is absent; preserve its pending collection.");
+                return Collect(this, request.Name, target);
+            });
+        }
+
+    }
+
+    private static void CreationEvent(Site site, SeededWorldRequest request, string state, CancellationToken cancellation) =>
+        site.Journal(JournalEntry.Of(JournalEntry.CopyIntended, ("runtime", HostPath.Join(site.WorldsDirectory, request.Name)),
+            ("stage", ""), ("parent", site.WorldsDirectory), ("holds", Holds), ("world", request.Name), ("seed", request.Seed),
+            ("keepIn", site.KeepIn), ("absenceVerified", "true"), ("creationState", state), ("placementState", state)), cancellation).GetAwaiter().GetResult();
+
+    internal sealed record CreationReply(long Uid, int Seed, int GenerationVersion);
+    internal static CreationReply ReadCreationReply(GameReply reply, SeededWorldRequest request)
+    {
+        reply.RequireAccepted();
+        var lines = reply.Lines("OK: WORLD_CREATED ").ToArray();
+        if (lines.Length != 1) throw new InvalidDataException("Creation has no unique success receipt; preserve the pending request.");
+        var match = System.Text.RegularExpressions.Regex.Match(lines[0],
+            @"^OK: WORLD_CREATED name=([^ ]+) seedName=([^ ]+) seed=(-?[0-9]+) uid=(-?[0-9]+) worldGenVersion=([0-9]+)\z",
+            System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+        if (!match.Success || match.Groups[1].Value != request.Name || match.Groups[2].Value != request.Seed ||
+            !int.TryParse(match.Groups[3].Value, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out int seed) ||
+            !long.TryParse(match.Groups[4].Value, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out long uid) ||
+            !int.TryParse(match.Groups[5].Value, NumberStyles.None, CultureInfo.InvariantCulture, out int generation))
+            throw new InvalidDataException("Creation's receipt does not match the exact request and numeric game identity; preserve the pending request.");
+        return new(uid, seed, generation);
+    }
+
+    // Read only the expected new entry. The existing parser owns metadata/layout/version rules; no save bytes are authored.
+    private static WorldIdentity.Admission CaptureCreated(Site site, SeededWorldRequest request, string output, GameBuild build, CreationReply reply)
+    {
+        string root = Path.GetFullPath(site.WorldsDirectory), world = Path.Combine(root, request.Name), metadata = Path.Combine(world, "_main.0.fwl2");
+        ProtectedPaths.RequireUnlinkedPath(root, metadata);
+        var entries = Directory.EnumerateFileSystemEntries(world).ToArray();
+        if (entries.Length != 1 || entries[0] != metadata || (File.GetAttributes(metadata) & (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0 ||
+            new FileInfo(metadata).Length is <= 0 or > 1048576)
+            throw new InvalidDataException("The created entry is not one new, bounded metadata file; preserve it for inspection.");
+        string expected = FileHash.Sha256(metadata);
+        string copy = Path.Combine(output, "world-created-input"), destination = Path.Combine(copy, request.Name);
+        ProtectedPaths.RequireUnlinkedPath(output, destination);
+        Directory.CreateDirectory(destination);
+        File.Copy(metadata, Path.Combine(destination, "_main.0.fwl2"), overwrite: false);
+        ProtectedPaths.RequireUnlinkedPath(root, metadata);
+        if (FileHash.Sha256(metadata) != expected) throw new InvalidDataException("Created metadata changed during admission.");
+        var admitted = WorldIdentity.Capture(copy, build);
+        var identity = admitted.Identity;
+        if (admitted.Files.Values.Single() != expected || identity.Name != request.Name || identity.SeedName != request.Seed ||
+            identity.Uid != reply.Uid || identity.Seed != reply.Seed ||
+            WorldIdentity.ReadGenerationVersion(File.ReadAllBytes(Path.Combine(destination, "_main.0.fwl2")), identity.File) != reply.GenerationVersion)
+            throw new InvalidDataException("The game-created metadata does not agree with the one-command receipt; preserve the pending request.");
+        return admitted;
     }
 
     /// <summary>
@@ -312,6 +415,15 @@ internal static class HostedWorldOnHost
     internal static async Task<IReadOnlyList<string>> RecoverAsync(IGameHost host, IReadOnlyDictionary<string, string> fields,
         string runtime, string runId, TimeSpan timeout, CancellationToken cancellation)
     {
+        if (fields.TryGetValue("creationState", out string? creation))
+        {
+            if (creation != "completed" || fields.GetValueOrDefault("placementState") != "created")
+                throw new InvalidDataException("Seeded creation was not proven complete; preserve the pending request without retrying or moving any save.");
+            string proof = fields.GetValueOrDefault("creationProof") ?? "";
+            if (host.Kind != GameHostKind.Local || !Path.IsPathFullyQualified(proof) ||
+                !File.Exists(proof) || FileHash.Sha256(proof) != fields.GetValueOrDefault("creationProofSha256"))
+                throw new InvalidDataException("The completed creation's retained proof is missing or changed; preserve the pending request.");
+        }
         var (name, uid) = RequireJournalled(fields, runtime, runId);
         string? placement = fields.GetValueOrDefault("placementState");
         if (placement is "attempted" or "uncertain")
@@ -332,7 +444,7 @@ internal static class HostedWorldOnHost
         bool present = await RequireOwnWorldAsync(host, fields["parent"], name, uid, timeout, cancellation).ConfigureAwait(false);
         if (!present) return [];
         if (fields.GetValueOrDefault("verified") != "true" ||
-            (fields.TryGetValue("placementState", out string? state) && state != "transferred"))
+            (fields.TryGetValue("placementState", out string? state) && state != "transferred" && !(state == "created" && fields.GetValueOrDefault("creationState") == "completed")))
             throw new InvalidDataException("the hosted-world transfer was never confirmed; a same-named save may be personal even with the fixture UID. Inspect it and the pending journal, move foreign files aside for safekeeping, then retry env recover");
         return await MoveOut(host, fields["parent"], name, fields["keepIn"], timeout, cancellation).ConfigureAwait(false);
     }

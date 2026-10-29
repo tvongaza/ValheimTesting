@@ -41,6 +41,8 @@ internal static class SmokeCommandOptions
         ["--plugin-dir"] = new(Kind.Repeat, Start: false),
         ["--server-only"] = new(Kind.Switch, Start: false),
         ["--world-fixture"] = new(Kind.Single, ServerLoadAb: false),
+        ["--world-seed"] = new(Kind.Single, ServerLoad: false, ServerLoadAb: false),
+        ["--world-name"] = new(Kind.Single, ServerLoad: false, ServerLoadAb: false),
         ["--bake-fixture"] = new(Kind.Single, Start: false, ServerLoadAb: false),
         ["--before-save-command"] = new(Kind.Single, Start: false, ServerLoadAb: false),
         ["--before-save-line"] = new(Kind.Single, Start: false, ServerLoadAb: false),
@@ -56,6 +58,7 @@ internal static class SmokeCommandOptions
         internal Dictionary<string, string> Options { get; } = new(StringComparer.Ordinal);
         internal Dictionary<string, List<string>> Repeated { get; } = new(StringComparer.Ordinal);
         internal HashSet<string> Switches { get; } = new(StringComparer.Ordinal);
+        internal SeededWorldRequest? Create { get; set; }
         internal ModInputStage.ExplicitInputs RunInputs { get; set; } = ModInputStage.ExplicitInputs.Empty;
         internal List<string> List(string key) => Repeated.TryGetValue(key, out var list) ? list : [];
     }
@@ -93,6 +96,16 @@ internal static class SmokeCommandOptions
             else if (!result.Options.TryAdd(key, value))
             { error = "Repeated option: " + key; return false; }
         }
+        if (result.Options.TryGetValue("--world-seed", out string? seed))
+        {
+            if (result.Options.ContainsKey("--world-fixture") || result.Options.ContainsKey("--compare-mod") || result.Options.ContainsKey("--compare-source"))
+            { error = "--world-seed requires one new world: leave out --world-fixture and comparison options; export a saved fixture for identical-state comparisons."; return false; }
+            try { result.Create = SeededWorldRequest.FromSeed(seed, result.Options.GetValueOrDefault("--world-name")); }
+            catch (ArgumentException failure) { error = failure.Message; return false; }
+            result.Options["--world-name"] = result.Create.Name; // Generate once; detached and foreground stages retain the same request.
+        }
+        else if (result.Options.ContainsKey("--world-name"))
+        { error = "--world-name requires --world-seed."; return false; }
         if (result.Switches.Contains("--no-mod"))
             try { RequireNoModInputs(result.Options.Keys.Concat(result.Repeated.Keys)); }
             catch (ArgumentException failure) { error = failure.Message; return false; }
