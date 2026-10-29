@@ -5,8 +5,8 @@ using Valheim.Testing.GameSessions;
 if (args is ["help" or "--help"])
 {
     Console.WriteLine("valheim-test start [--mod DLL ...] [--config FILE ...] [--env NAME=VALUE ...] [--output NEW_DIR] [--world-fixture DIR] [--inventory FILE | --game DIR] [--client-env NAME] [--client-architecture x64|arm64] [setup options] (with no --mod, the current project's one built plugin)");
-    Console.WriteLine("--config stages non-secret config files on the mod-bearing actor; --env sets non-empty literal values on every owned game process. Both are retained in private run-inputs.json; omit credentials.");
-    Console.WriteLine(ServerLoad.Usage + " (a server and one clean client from the inventory; this machine when no --inventory)");
+    Console.WriteLine("--config stages non-secret config files on start's hosting client or server-load's server; --client-config targets server-load's explicit client mod set. --env sets non-empty literal values on every owned game process. Inputs are retained privately; omit credentials.");
+    Console.WriteLine(ServerLoad.Usage + " (a dedicated server and one joining client; client is CLI-only by default, with explicit --client-mod or --client-project support; inventory selects the hosts, otherwise this machine)");
     Console.WriteLine(ServerLoadPhases.Usage + " (ordered disposable server-only saves)");
     Console.WriteLine("valheim-test server-load-ab --mod DLL --mod DLL --remove-mod DLL --output NEW_DIR [server-load options except --hold and --preflight-only]");
     Console.WriteLine("valheim-test init [server] --output NEW_DIR (editable NuGet.org-only consumer)");

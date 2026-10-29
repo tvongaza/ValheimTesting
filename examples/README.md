@@ -8,6 +8,7 @@ Start with [Your first gameplay assertion](../docs/tutorials/first-gameplay-asse
 | [ModWithTests](ModWithTests/README.md) | The production placement decision on supplied terrain | Unit; no game |
 | [MarkerScenarioTests](FullLifecycle/ExampleMod.Tests/MarkerScenarioTests.cs) | Lost replies, unconfirmed saves and missing client visibility | Scripted integration; no game |
 | [TargetedRegression](TargetedRegression/README.md) | The same scenario against parent and candidate builds | Native regression |
+| [ModdedClient](ModdedClient/README.md) | Independent server/client builds and a joined-client assertion | Native role check |
 | [FullLifecycle](FullLifecycle/README.md) | Saved state survives restart and clients observe it | Native persistence and replication |
 | [SharedWorld](SharedWorld/README.md) | Terrain composition, seams, snapshots and recorded-input parity | Unit; no game |
 | [ObserveCheck](ObserveCheck/README.md) | A focused observation on an operator-owned disposable game | Attached native observation |

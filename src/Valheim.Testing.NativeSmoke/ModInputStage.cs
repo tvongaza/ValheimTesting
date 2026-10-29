@@ -14,8 +14,8 @@ using Valheim.Testing.GameSessions;
 /// <item>building the mod (<c>--project</c>; <c>build</c> stops here, as it launches nothing) and the scenario, with the same checks;</item>
 /// <item>the frozen environment choice, the dependency resolution and the provenance keys (<see cref="Inputs.Record"/>).</item>
 /// </list>
-/// The mod compiles and resolves against one actor: the hosting client for <c>start</c>, the dedicated server for
-/// <c>server-load</c>, and the <c>--role</c> for <c>build</c>. Its third-party compile references come from that same loader
+/// Each selected role compiles and resolves against its own actor: the hosting client for <c>start</c>, the dedicated server for
+/// <c>server-load</c> (and its explicit joining client, if selected), and the <c>--role</c> for <c>build</c>. Its third-party compile references come from that same loader
 /// choice and the explicit <c>--dependency</c> and <c>--search-root</c> inputs, never from the game folder.
 /// </summary>
 internal static class ModInputStage
@@ -101,7 +101,7 @@ internal static class ModInputStage
             throw new FileNotFoundException("A selected --config file is missing or linked: " + file, file);
     }
 
-    internal static RetainedInputs RetainExplicit(ExplicitInputs selected, Route route, string output, bool withClient)
+    internal static RetainedInputs RetainExplicit(ExplicitInputs selected, Route route, string output, bool withClient, string? role = null)
     {
         if (selected.Configs.Count == 0 && selected.Environment.Count == 0) return RetainedInputs.Empty;
         var admitted = selected.Configs.Select(source =>
@@ -131,8 +131,8 @@ internal static class ModInputStage
         File.WriteAllText(record, JsonSerializer.Serialize(new
         {
             schema = 1, meaning = "requested/staged non-secret inputs; plugin consumption requires separate evidence",
-            environment, environmentRoles = route == Route.Hosted ? new[] { "client" } : withClient ? ["server", "client"] : ["server"],
-            configRole = route == Route.Hosted ? "client" : "server", configs,
+            environment, environmentRoles = role == "client" || route == Route.Hosted ? new[] { "client" } : withClient ? ["server", "client"] : ["server"],
+            configRole = role ?? (route == Route.Hosted ? "client" : "server"), configs,
         }, new JsonSerializerOptions { WriteIndented = true }) + "\n");
         Console.WriteLine($"explicit run inputs: {configs.Count} config(s); environment names: " + string.Join(", ", environment.Keys));
         return new(environment, configs, record, FileHash.Sha256(record));
@@ -143,6 +143,19 @@ internal static class ModInputStage
     {
         public bool OutputChecked { get; set; }
     }
+
+    internal sealed record RoleSelection(IReadOnlyList<string> Mods, IReadOnlyList<string> SearchRoots,
+        IReadOnlyList<string> OptionalReferences, IReadOnlyList<string> Dependencies)
+    {
+        internal string? Project { get; init; }
+        internal string? BuildInputs { get; init; }
+        internal ExplicitInputs RunInputs { get; init; } = ExplicitInputs.Empty;
+        internal IReadOnlyList<string> PluginFiles { get; init; } = [];
+        internal IReadOnlyList<string> PluginDirectories { get; init; } = [];
+    }
+
+    internal sealed record SelectedRole(Actor Actor, string Core, IReadOnlyList<string> Mods, string Selection,
+        string? BuildInputs, NativeDependencyLock Dependencies, RetainedInputs RunInputs, IReadOnlyList<HostedRuntimeFile> Files);
 
     /// <summary>A command's parsed inputs, and the test seams for what reads the real machine.</summary>
     internal sealed record Request(Route Route, string Output, IReadOnlyDictionary<string, string> Options, IReadOnlySet<string> Switches,
@@ -157,6 +170,9 @@ internal static class ModInputStage
         public Action<EnvironmentInventory, EnvironmentRecipe, string, string?>? ClientArchitecture { get; init; }
         public Progress Progress { get; init; } = new();
         public ExplicitInputs RunInputs { get; init; } = ExplicitInputs.Empty;
+        public IReadOnlyList<string> PluginFiles { get; init; } = [];
+        public IReadOnlyList<string> PluginDirectories { get; init; } = [];
+        public RoleSelection? ClientSelection { get; init; }
     }
 
     /// <summary>The environments a one-off runs on, chosen from the inventory with the reason for each.</summary>
@@ -185,6 +201,8 @@ internal static class ModInputStage
         public string? SteamRuntimePackage { get; init; }
         public NativeDependencyLock? Dependencies { get; init; }
         public RetainedInputs RunInputs { get; init; } = RetainedInputs.Empty;
+        public IReadOnlyList<HostedRuntimeFile> Files { get; init; } = [];
+        public SelectedRole? ClientMods { get; init; }
 
         public IEnumerable<Actor> Actors => new[] { Server, Client }.OfType<Actor>();
 
@@ -192,6 +210,17 @@ internal static class ModInputStage
         public void Record(IDictionary<string, string> provenance)
         {
             RunInputs.VerifyRecord();
+            ClientMods?.RunInputs.VerifyRecord();
+            if (ClientMods is { } selectedClient)
+            {
+                provenance["clientModSelection"] = selectedClient.Selection;
+                if (selectedClient.BuildInputs != null) provenance["clientBuildInputs"] = selectedClient.BuildInputs;
+                if (selectedClient.RunInputs.RecordFile != null)
+                {
+                    provenance["clientRunInputs"] = selectedClient.RunInputs.RecordFile;
+                    provenance["clientRunInputsSha256"] = selectedClient.RunInputs.RecordSha256!;
+                }
+            }
             foreach (var actor in Actors) SmokeInputResolver.RecordLoader(provenance, actor.Role, actor.Loader, actor.Shipped);
             provenance["modSelection"] = ModSelection;
             if (RunInputs.RecordFile != null)
@@ -225,6 +254,9 @@ internal static class ModInputStage
                 request.Route == Route.Build ? "build" : "server-load")
             : ChooseHosted(options, request.Output, request.Route == Route.Build ? "build" : "start");
         var inventory = choice.Inventory;
+        if (request.ClientSelection != null && (request.Route != Route.Dedicated || request.Switches.Contains("--server-only") ||
+            choice.Client == null || inventory.Hosts[choice.Client.Host].Kind != "local"))
+            throw new ArgumentException("Explicit client mod inputs require a local joining client install; remote role locks use the explicit campaign API.");
         FixtureBake.Admission? worldAdmission = null;
         GameBuild? hostingBuild = null;
         if (request.Route != Route.Build)
@@ -271,10 +303,8 @@ internal static class ModInputStage
         string game = compile.Recipe.Install;
         // The core the mod compiles and resolves against: the chosen package's, else the install's own. A vanilla install
         // (a profile run leaves it so) needs a package, given or named as the environment's loaderPackage.
-        string core = Path.Combine(compile.LoaderRoot ?? game, InstallPins.CoreDirectory);
-        if (!Directory.Exists(core))
-            throw new DirectoryNotFoundException($"The {compile.Role} install {game} has no BepInEx ({InstallPins.CoreDirectory}) and no loader package was chosen. " +
-                $"Give {LoaderOption(compile.Role)} FILE with a reviewed loader package, name one as environment {compile.Recipe.Name}'s loaderPackage, or install BepInExPack_Valheim into it; the mod is compiled and resolved against that core.");
+        string core = CoreFor(compile);
+        if (request.ClientSelection != null) _ = CoreFor(client!);
         // A Mac dedicated server's Steam runtime libraries are part of the server's runtime choice.
         string? steamRuntime = options.TryGetValue("--steam-runtime-package", out string? steam) ? Path.GetFullPath(steam) : null;
         if (steamRuntime != null)
@@ -302,8 +332,9 @@ internal static class ModInputStage
         // 2. Every output is outside every selected source before anything is written.
         string cliManifest = "", cliFiles = "";
         if (request.Route != Route.Build) (cliManifest, cliFiles) = SmokeInputs.Cli(options);
-        SmokeOutput.RefuseResolved(output, request.Route == Route.Build ? null : cliFiles, inventory, [server?.Recipe, client?.Recipe],
-            server?.LoaderRoot, client?.LoaderRoot);
+        var protectedInputs = new[] { server?.LoaderRoot, client?.LoaderRoot }
+            .Concat(RoleSources(Primary(request))).Concat(request.ClientSelection == null ? [] : RoleSources(request.ClientSelection)).ToArray();
+        SmokeOutput.RefuseResolved(output, request.Route == Route.Build ? null : cliFiles, inventory, [server?.Recipe, client?.Recipe], protectedInputs);
         if (options.TryGetValue("--bake-fixture", out string? bake))
             FixtureBake.RefuseOutput(Path.GetFullPath(bake), new[] { output, server?.Recipe.Install, client?.Recipe.Install,
                 options.TryGetValue("--world-fixture", out string? fixture) ? Path.GetFullPath(fixture) : null }.OfType<string>().ToArray());
@@ -351,97 +382,163 @@ internal static class ModInputStage
         (resolve ?? NativeDependencyResolver.Resolve)(SmokeDependencyInputs.Request(mods, inputs.Compile.Recipe.Install, inputs.Core,
             inputs.CliManifest, inputs.CliFiles, searchRoots, optionalReferences, inputs.Capabilities));
 
+    private static string CoreFor(Actor actor)
+    {
+        string core = Path.Combine(actor.LoaderRoot ?? actor.Recipe.Install, InstallPins.CoreDirectory);
+        if (!Directory.Exists(core))
+            throw new DirectoryNotFoundException($"The {actor.Role} install {actor.Recipe.Install} has no BepInEx ({InstallPins.CoreDirectory}) and no loader package was chosen. " +
+                $"Give {LoaderOption(actor.Role)} FILE with a reviewed loader package, name one as environment {actor.Recipe.Name}'s loaderPackage, or install BepInExPack_Valheim into it; the mod is compiled and resolved against that core.");
+        return core;
+    }
+
+    private static RoleSelection Primary(Request request) => new(request.Mods, request.SearchRoots, request.OptionalReferences, request.Dependencies)
+    {
+        Project = request.Options.GetValueOrDefault("--project"), BuildInputs = request.Options.GetValueOrDefault("--build-inputs"),
+        RunInputs = request.RunInputs, PluginFiles = request.PluginFiles, PluginDirectories = request.PluginDirectories,
+    };
+
+    private static IEnumerable<string?> RoleSources(RoleSelection selected) => selected.Mods.Concat(selected.SearchRoots)
+        .Concat(selected.RunInputs.Configs).Concat(selected.PluginFiles).Concat(selected.PluginDirectories)
+        .Concat(ModBuild.ParseDependencies(selected.Dependencies).Values)
+        .Concat(new[] { selected.BuildInputs, selected.Project == null ? null : Path.GetDirectoryName(Path.GetFullPath(selected.Project)) });
+
+    private sealed class PreparingRole(RoleSelection selected, Actor actor, string core, string output)
+    {
+        internal RoleSelection Selected { get; } = selected;
+        internal Actor Actor { get; } = actor;
+        internal string Core { get; } = core;
+        internal string Output { get; } = output;
+        internal Dictionary<string, string> Given { get; } = ModBuild.ParseDependencies(selected.Dependencies);
+        internal List<string> Mods { get; } = [];
+        internal List<string> Roots { get; } = selected.SearchRoots.ToList();
+        internal string Selection { get; set; } = "";
+        internal string? BuildInputs { get; set; } = selected.BuildInputs;
+        internal ModBuild.BuildRecord? Verified { get; set; }
+        internal RetainedInputs Retained { get; set; } = RetainedInputs.Empty;
+        internal IReadOnlyList<HostedRuntimeFile> Files { get; set; } = [];
+    }
+
+    private static PreparingRole InspectRole(RoleSelection selected, Actor actor, string core, string output,
+        Route route, bool withClient, bool implicitSelection, bool buildOnly)
+    {
+        if (!implicitSelection && selected.Project == null && selected.Mods.Count == 0)
+            throw new ArgumentException("An explicit role needs selected mods or a project; it never discovers a client mod implicitly.");
+        var role = new PreparingRole(selected, actor, core, output);
+        role.Retained = RetainExplicit(selected.RunInputs, route, output, withClient, implicitSelection ? null : actor.Role);
+        role.Files = PayloadFiles(role.Retained, selected.PluginFiles, selected.PluginDirectories);
+        if (!buildOnly && selected.Project == null)
+        {
+            SmokeModInput.Selection mods = implicitSelection ? SmokeModInput.Select(selected.Mods, Environment.CurrentDirectory)
+                : new(selected.Mods.Select(Path.GetFullPath).ToArray(), "explicit --client-mod selection");
+            role.Mods.AddRange(mods.Mods); role.Selection = mods.Reason;
+            Console.WriteLine(actor.Role + " mod selection: " + role.Selection);
+            role.Verified = CheckMod(role.Mods, role.BuildInputs, actor.Recipe.Install, core, role.Roots);
+        }
+        return role;
+    }
+
+    private static async Task BuildRoleAsync(PreparingRole role, CancellationToken cancellation, bool verify = true)
+    {
+        if (role.Selected.Project == null) return;
+        var plan = ModBuild.Plan(role.Selected.Project, role.Actor.Recipe.Install, role.Given,
+            Path.Combine(role.Output, "build"), role.Actor.LoaderRoot, role.Selected.SearchRoots);
+        var record = await ModBuild.BuildAsync(plan, cancellation).ConfigureAwait(false);
+        role.Mods.Add(record.Mod); role.BuildInputs = Path.Combine(plan.Output, "build-inputs.json");
+        role.Selection = "built from --project " + Path.GetFullPath(role.Selected.Project);
+        Console.WriteLine(role.Actor.Role + " built mod: " + record.Mod);
+        if (verify) role.Verified = CheckMod(role.Mods, role.BuildInputs, role.Actor.Recipe.Install, role.Core, role.Roots);
+    }
+
+    private static SelectedRole ResolveRole(Inputs inputs, PreparingRole role)
+    {
+        var dependencies = Resolve(inputs with { Compile = role.Actor, Core = role.Core }, role.Mods, role.Roots, role.Selected.OptionalReferences);
+        Directory.CreateDirectory(role.Output);
+        if (role.BuildInputs != null) File.Copy(role.BuildInputs, Path.Combine(role.Output, "build-inputs.json"));
+        dependencies.Write(Path.Combine(role.Output, "dependencies.lock.json"));
+        if (!dependencies.Ready) throw new InvalidDataException("Dependency choices remain: " + SmokeDependencyInputs.Gaps(dependencies));
+        if (role.Verified != null) ModBuild.RequireResolvedDependencies(role.Verified, dependencies);
+        File.WriteAllText(Path.Combine(role.Output, "selected-plugins.json"), JsonSerializer.Serialize(new
+        {
+            role = role.Actor.Role, meaning = "selected expected plugins; observed loading requires strict pins and role logs",
+            files = dependencies.Mods.Concat(dependencies.Plugins).Select(file => new
+            {
+                file.File, file.Sha256, plugins = PluginMetadata.Read(file.File).Plugins,
+            }),
+        }, new JsonSerializerOptions { WriteIndented = true }) + "\n");
+        return new(role.Actor, role.Core, role.Mods, role.Selection, role.BuildInputs, dependencies, role.Retained, role.Files);
+    }
+
     public static async Task<Inputs> RunAsync(Request request, CancellationToken cancellation)
     {
-        var options = request.Options;
-        string output = request.Output;
-        var given = ModBuild.ParseDependencies(request.Dependencies);
+        _ = ModBuild.ParseDependencies(request.Dependencies);
+        if (request.ClientSelection != null) _ = ModBuild.ParseDependencies(request.ClientSelection.Dependencies);
         var inputs = Choose(request);
-        inputs = inputs with { RunInputs = RetainExplicit(request.RunInputs, request.Route, output, inputs.Client != null) };
-        var inventory = inputs.Inventory;
-        var client = inputs.Client;
-        var compile = inputs.Compile;
-        string game = compile.Recipe.Install, core = inputs.Core;
         string? cliManifest = request.Route == Route.Build ? null : inputs.CliManifest;
-        string? cliFiles = request.Route == Route.Build ? null : inputs.CliFiles;
-
-        // 3. The inputs that already exist are checked before any host is probed, so an unrelated slow or transient desktop
-        // or Steam check cannot mask a pure input error (#626): the selected mod and its build inputs, the scenario DLL.
-        var mods = new List<string>();
-        string selection = "";
-        string? buildInputs = options.GetValueOrDefault("--build-inputs");
-        var roots = request.SearchRoots.ToList();
-        ModBuild.BuildRecord? verified = null;
-        Scenario? scenario = null;
-        bool buildsMod = options.ContainsKey("--project");
         if (request.Route != Route.Build)
         {
-            foreach (var (name, path) in new[] { ("game", game), ("--cli-files", cliFiles!) })
+            foreach (var (name, path) in new[] { ("game", inputs.Compile.Recipe.Install), ("--cli-files", inputs.CliFiles) })
                 if (!Directory.Exists(path)) throw new DirectoryNotFoundException(name + " directory does not exist: " + path);
             if (!File.Exists(cliManifest)) throw new FileNotFoundException("--cli-manifest file does not exist: " + cliManifest, cliManifest);
-            if (!buildsMod)
-            {
-                var selected = SmokeModInput.Select(request.Mods, Environment.CurrentDirectory);
-                mods.AddRange(selected.Mods);
-                selection = selected.Reason;
-                Console.WriteLine("mod selection: " + selection);
-                verified = CheckMod(mods, buildInputs, game, core, roots);
-            }
-            if (options.TryGetValue("--scenario", out string? scenarioFile))
-                scenario = LoadScenario(request.Route, scenarioFile, output, client != null);
         }
-
-        if (request.Route != Route.Build) _ = VerifyAdmission(inputs.Admission!);
-
-        // 4. The read-only host checks, before any build: a run that cannot start is refused before minutes of compiling.
-        inputs = inputs with { Mods = mods, ModSelection = selection, BuildInputs = buildInputs };
+        // Admit both roles' ready-made inputs before host probes or either build, through the same selection/check owner.
+        var primary = InspectRole(Primary(request), inputs.Compile, inputs.Core, request.Output, request.Route,
+            inputs.Client != null, implicitSelection: true, buildOnly: request.Route == Route.Build);
+        var client = request.ClientSelection == null ? null : InspectRole(request.ClientSelection, inputs.Client!, CoreFor(inputs.Client!),
+            Path.Combine(request.Output, "client"), request.Route, withClient: true, implicitSelection: false, buildOnly: false);
+        Scenario? scenario = request.Options.TryGetValue("--scenario", out string? scenarioFile)
+            ? LoadScenario(request.Route, scenarioFile, request.Output, inputs.Client != null) : null;
         if (request.Route != Route.Build)
         {
-            var problems = await LocalHostPreflight.InspectAsync(inventory,
-                inputs.Actors.Select(actor => new LocalHostPreflight.Actor(actor.Role, actor.Recipe)),
-                TimeSpan.FromSeconds(60), cancellation).ConfigureAwait(false);
-            if (problems.Count != 0)
-                throw new InvalidOperationException(string.Join("; ", problems.Select(problem => $"{problem.Actor} {problem.Input}: {problem.Message}")));
+            _ = VerifyAdmission(inputs.Admission!);
+            var problems = await LocalHostPreflight.InspectAsync(inputs.Inventory,
+                inputs.Actors.Select(actor => new LocalHostPreflight.Actor(actor.Role, actor.Recipe)), TimeSpan.FromSeconds(60), cancellation).ConfigureAwait(false);
+            if (problems.Count != 0) throw new InvalidOperationException(string.Join("; ", problems.Select(problem => $"{problem.Actor} {problem.Input}: {problem.Message}")));
         }
-
-        // 5. The builds, against the compile actor's install and loader; each output gets the same checks as a given one.
-        if (buildsMod)
+        await BuildRoleAsync(primary, cancellation, verify: request.Route != Route.Build).ConfigureAwait(false);
+        inputs = inputs with { Mods = primary.Mods, ModSelection = primary.Selection, BuildInputs = primary.BuildInputs, RunInputs = primary.Retained, Files = primary.Files };
+        if (request.Route == Route.Build)
         {
-            string project = options["--project"];
-            var plan = ModBuild.Plan(project, game, given, Path.Combine(output, "build"), compile.LoaderRoot, request.SearchRoots);
-            var record = await ModBuild.BuildAsync(plan, cancellation).ConfigureAwait(false);
-            mods.Add(record.Mod);
-            buildInputs = Path.Combine(plan.Output, "build-inputs.json");
-            selection = "built from --project " + Path.GetFullPath(project);
-            Console.WriteLine("built mod: " + record.Mod);
-            Console.WriteLine("mod selection: " + selection);
-            inputs = inputs with { ModSelection = selection, BuildInputs = buildInputs };
-            if (request.Route == Route.Build) return inputs;
-            verified = CheckMod(mods, buildInputs, game, core, roots);
+            if (primary.Selected.Project == null) throw new ArgumentException("Give --project MOD.csproj.");
+            return inputs;
         }
-        else if (request.Route == Route.Build) throw new ArgumentException("Give --project MOD.csproj.");
-        if (options.TryGetValue("--scenario-project", out string? scenarioProject))
-            scenario = LoadScenario(request.Route, await OneShotScenario.BuildAsync(scenarioProject, Path.Combine(output, "scenario-build"), cancellation)
-                .ConfigureAwait(false), output, client != null);
-
-        // 6. The chosen set frozen beside the run (the later run reads it, even if an inventory file or Steam detection
-        // changes before it), then the dependency lock.
+        if (client != null) await BuildRoleAsync(client, cancellation).ConfigureAwait(false);
+        if (request.Options.TryGetValue("--scenario-project", out string? scenarioProject))
+            scenario = LoadScenario(request.Route, await OneShotScenario.BuildAsync(scenarioProject, Path.Combine(request.Output, "scenario-build"), cancellation)
+                .ConfigureAwait(false), request.Output, inputs.Client != null);
         _ = VerifyAdmission(inputs.Admission!);
-        string selectedInventory = request.Route == Route.Hosted
-            ? RecordHostedClient(inventory, client!, output)
-            : SmokeInputResolver.RecordSelected(inventory, output, inputs.Actors.Select(actor => actor.Recipe));
-        var dependencies = Resolve(inputs, mods, roots, request.OptionalReferences);
-        Directory.CreateDirectory(output);
-        if (buildInputs != null) File.Copy(buildInputs, Path.Combine(output, "build-inputs.json"));
-        dependencies.Write(Path.Combine(output, "dependencies.lock.json"));
-        if (!dependencies.Ready)
-            throw new InvalidDataException("Dependency choices remain: " + SmokeDependencyInputs.Gaps(dependencies));
-        if (verified != null) ModBuild.RequireResolvedDependencies(verified, dependencies);
-        return inputs with
+        string selectedInventory = request.Route == Route.Hosted ? RecordHostedClient(inputs.Inventory, inputs.Client!, request.Output)
+            : SmokeInputResolver.RecordSelected(inputs.Inventory, request.Output, inputs.Actors.Select(actor => actor.Recipe));
+        var resolved = ResolveRole(inputs, primary);
+        var resolvedClient = client == null ? null : ResolveRole(inputs, client);
+        return inputs with { SearchRoots = primary.Roots, Scenario = scenario, SelectedInventory = selectedInventory,
+            Dependencies = resolved.Dependencies, ClientMods = resolvedClient };
+    }
+
+    // Companion files and retained configs have one mapping/admission rule for both roles.
+    internal static IReadOnlyList<HostedRuntimeFile> PayloadFiles(RetainedInputs inputs, IReadOnlyList<string> files, IReadOnlyList<string> directories)
+    {
+        inputs.Verify();
+        var result = inputs.Configs.Select(config => new HostedRuntimeFile(config.File, "BepInEx/config/" + config.Destination)
+            { ExpectedSha256 = config.Sha256 }).ToList();
+        void Add(string source, string relative)
         {
-            SearchRoots = roots,
-            Scenario = scenario, SelectedInventory = selectedInventory, Dependencies = dependencies,
-        };
+            if (Path.GetExtension(source).Equals(".dll", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException("Plugin DLLs belong in selected mods or dependency resolution, not a sidecar: " + source);
+            RequireConfigFile(source);
+            HostedRuntimeStage.ValidatePayloadPath(relative);
+            result.Add(new HostedRuntimeFile(source, relative) { ExpectedSha256 = FileHash.Sha256(source) });
+        }
+        foreach (string file in files.Select(Path.GetFullPath)) Add(file, "BepInEx/plugins/" + Path.GetFileName(file));
+        foreach (string directory in directories.Select(path => Path.TrimEndingDirectorySeparator(Path.GetFullPath(path))))
+        {
+            if (!Directory.Exists(directory)) throw new DirectoryNotFoundException("An explicitly selected plugin sidecar directory is missing: " + directory);
+            FileHash.RefuseLink(directory);
+            foreach (string relative in WorldFixture.Manifest(directory).Keys.Order(StringComparer.Ordinal))
+                Add(Path.Combine(directory, relative), "BepInEx/plugins/" + Path.GetFileName(directory) + "/" + relative.Replace(Path.DirectorySeparatorChar, '/'));
+        }
+        if (result.Select(file => file.RelativePath).Distinct(StringComparer.OrdinalIgnoreCase).Count() != result.Count)
+            throw new InvalidDataException("Config and companion destinations must be unique within each role.");
+        return result;
     }
 
     // The selected mod files exist, and recorded build inputs still match this game and the chosen loader; their pinned

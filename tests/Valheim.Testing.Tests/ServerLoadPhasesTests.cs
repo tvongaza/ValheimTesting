@@ -32,6 +32,18 @@ public sealed class ServerLoadPhasesTests : IDisposable
         Assert.Contains("MOD_SETTING=", File.ReadAllText(Path.Combine(output, "phase-plan.json")));
     }
 
+    [Theory] [InlineData(false)] [InlineData(true)]
+    public async Task ClientRoleOptionsNeverStartAPhaseOrCreateItsOutput(bool common)
+    {
+        string file = Plan(), output = Path.Combine(_root, "client-refused");
+        var plan = JsonSerializer.Deserialize<ServerLoadPhases.Plan>(File.ReadAllText(file), new JsonSerializerOptions { PropertyNameCaseInsensitive = true })!;
+        if (common) plan.CommonArgs = [.. plan.CommonArgs, "--client-mod", "client.dll"];
+        else plan.Phases[0].Args = [.. plan.Phases[0].Args, "--client-assert-command", "probe", "--client-assert-line", "READY"];
+        File.WriteAllText(file, JsonSerializer.Serialize(plan)); int calls = 0;
+        Assert.Equal(3, await ServerLoadPhases.RunAsync(["--plan", file, "--output", output], _ => { calls++; return Task.FromResult(0); }));
+        Assert.Equal(0, calls); Assert.False(Directory.Exists(output));
+    }
+
     private string Plan(bool keepFinal = true)
     {
         string fixture = FakeInstalls.World(Path.Combine(_root, "source-fixture"));

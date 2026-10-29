@@ -2,6 +2,67 @@ using Xunit;
 
 public sealed class SmokeCommandOptionsTests
 {
+    public static IEnumerable<object[]> ClientRoleFlags()
+    {
+        foreach (string option in SmokeCommandOptions.ClientRoleOptions)
+            yield return [option, option == "--client-dependency" ? "Private=private.dll" : "value"];
+    }
+
+    [Theory, MemberData(nameof(ClientRoleFlags))]
+    public void ClientRoleOptionsAreForegroundJoinedServerLoadOnly(string option, string value)
+    {
+        foreach (var command in new[] { SmokeCommandOptions.Command.Start, SmokeCommandOptions.Command.Build, SmokeCommandOptions.Command.ServerLoadAb })
+            Assert.False(SmokeCommandOptions.TryRead(["--mod", "server.dll", option, value], command, true, out _, out _));
+        Assert.False(ServerLoad.TryRead(["--mod", "server.dll", "--server-only", option, value], out _, out _));
+        Assert.False(DetachedSession.TryServerArgs(["--server-only", option, value], out _, out _));
+    }
+
+    [Fact] public void IndependentClientSelectionAndJoinedActorAssertionsPreserveTheirInputs()
+    {
+        Assert.True(ServerLoad.TryRead(["--mod", "server.dll", "--client-mod", "client.dll", "--client-mod", "another.dll",
+            "--client-config", "same.cfg", "--client-search-root", "client-deps", "--client-optional-reference", "Optional",
+            "--client-plugin-file", "data.json", "--client-plugin-dir", "assets", "--client-env", "named-environment",
+            "--assert-command", "server_probe", "--assert-line", " SERVER prefix ",
+            "--client-assert-command", "client_probe", "--client-assert-line", " CLIENT prefix "], out var args, out string error), error);
+        Assert.Equal(["server.dll"], args!.Mods);
+        Assert.Equal(["client.dll", "another.dll"], args.ClientSelection!.Mods);
+        Assert.Equal(["same.cfg"], args.ClientSelection.RunInputs.Configs);
+        Assert.Equal("named-environment", args.Options["--client-env"]);
+        Assert.Equal(" CLIENT prefix ", args.Options["--client-assert-line"]);
+        Assert.True(ServerLoad.TryRead(["--mod", "server.dll", "--client-assert-command", "probe", "--client-assert-line", "READY"], out var bare, out error), error);
+        Assert.Null(bare!.ClientSelection);
+        Assert.False(ServerLoad.TryRead(["--mod", "server.dll", "--bake-fixture", "new", "--assert-command", "probe", "--assert-line", "READY"], out _, out _));
+    }
+
+    public static IEnumerable<object[]> BadClientSelections()
+    {
+        yield return [new[] { "--client-project", "mod.csproj", "--client-mod", "mod.dll" }];
+        yield return [new[] { "--client-project", "mod.csproj", "--client-build-inputs", "build.json" }];
+        yield return [new[] { "--client-mod", "mod.dll", "--client-dependency", "Private=private.dll" }];
+        yield return [new[] { "--client-project", "mod.csproj", "--client-dependency", "broken" }];
+        foreach (string key in new[] { "--client-build-inputs", "--client-search-root", "--client-optional-reference", "--client-config", "--client-plugin-file", "--client-plugin-dir" })
+            yield return [new[] { key, "unselected" }];
+        yield return [new[] { "--client-project", "one.csproj", "--client-project", "two.csproj" }];
+        yield return [new[] { "--scenario", "scenario.dll", "--client-assert-command", "probe", "--client-assert-line", "READY" }];
+        yield return [new[] { "--scenario", "scenario.dll", "--assert-command", "probe", "--assert-line", "READY" }];
+    }
+    [Theory, MemberData(nameof(BadClientSelections))]
+    public void ConflictingOrUnusedClientSelectionsRefuseBeforeAnyMachineChoice(string[] options) =>
+        Assert.False(ServerLoad.TryRead(["--mod", "server.dll", .. options], out _, out _));
+
+    [Theory]
+    [InlineData("")] [InlineData(" ")] [InlineData("line\nnext")] [InlineData("line\rnext")] [InlineData("NUL\0value")]
+    public void BothAssertionPairsRefuseEmptyOrControlledCommandAndPrefix(string bad)
+    {
+        foreach (string prefix in new[] { "--", "--client-" })
+        {
+            Assert.False(ServerLoad.TryRead(["--mod", "server.dll", prefix + "assert-command", bad, prefix + "assert-line", "READY"], out _, out _));
+            Assert.False(ServerLoad.TryRead(["--mod", "server.dll", prefix + "assert-command", "probe", prefix + "assert-line", bad], out _, out _));
+            Assert.False(ServerLoad.TryRead(["--mod", "server.dll", prefix + "assert-command", "probe"], out _, out _));
+            Assert.False(ServerLoad.TryRead(["--mod", "server.dll", prefix + "assert-line", "READY"], out _, out _));
+        }
+    }
+
     public static IEnumerable<object[]> SharedBadOptions()
     {
         yield return [new[] { "--client-architecture", "native" }];

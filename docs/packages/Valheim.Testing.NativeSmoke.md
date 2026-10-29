@@ -17,7 +17,7 @@ The tool needs the .NET 10 SDK. If a Homebrew .NET on macOS cannot start the too
 | Command | Does |
 |---|---|
 | [`start`](#start) | Loads a client-side mod in an owned client that hosts a disposable world |
-| [`server-load`](#server-load) | Loads a server-side mod on an owned dedicated server; one clean client joins |
+| [`server-load`](#server-load) | Loads selected server mods on an owned dedicated server; one CLI-only or explicitly modded client joins |
 | [`server-load-ab`](#server-load-ab) | Runs `server-load` with and without one mod, to isolate a load interaction |
 | [`server-load-phases`](#server-load-phases) | Runs ordered server-only fixture bakes |
 | [`build`](#build) | Builds a mod against the selected install's publicized assemblies, privately |
@@ -91,7 +91,7 @@ These flags take **non-secret data**: the exact values, config source paths, ret
 | `--client-env NAME` | all four | The client environment to use from the inventory |
 | `--server DIR` | server-load, server-load-ab, build | The dedicated-server install to use |
 | `--server-env NAME` | server-load, server-load-ab, build | The server environment to use from the inventory |
-| `--client DIR` | server-load, server-load-ab | The clean client's install |
+| `--client DIR` | server-load, server-load-ab | The joining client's install |
 | `--client-architecture x64\|arm64` | start, server-load, server-load-ab | The macOS client slice ([Apple Silicon](../reference/platforms.md#native-apple-silicon-client)) |
 | `--join HOST:PORT` | server-load, server-load-ab | The address a client on another machine joins |
 
@@ -135,7 +135,7 @@ Both compared builds must declare the same plugin identities. The client needs i
 valheim-test server-load --mod /path/to/ServerMod.dll
 ```
 
-`server-load` prints the server and client it chose, retains any explicit config inputs, writes `campaign.json` and runs the host preflight before runtime staging (the preflight writes only a Linux or Mac server's trial link, made and removed under the runtime root). The preflight refuses a server and client whose installs are on different Valheim network versions. Then one clean client without the mod joins the owned server.
+`server-load` prints the server and client it chose, retains any explicit config inputs, writes `campaign.json` and runs the host preflight before runtime staging (the preflight writes only a Linux or Mac server's trial link, made and removed under the runtime root). The preflight refuses a server and client whose installs are on different Valheim network versions. By default one CLI-only client without the server mods joins the owned server. Explicit client selectors give it an independent plugin set; a server and client may select different builds of the same plugin GUID.
 
 | Option | Does |
 |---|---|
@@ -148,10 +148,33 @@ valheim-test server-load --mod /path/to/ServerMod.dll
 | `--session-capability OWNER/session --session-token-variable NAME` | The custom adapter's capability and token variable |
 | `--world-fixture DIR` | Loads a pinned world fixture instead of the packaged world |
 | `--bake-fixture NEW_DIR` | Saves the world as a new fixture; see [Bake a fixture](../reference/fixture-authoring.md) |
-| `--assert-command TEXT --assert-line PREFIX` | One server command whose reply proves the mod is ready; needs `--server-only` |
+| `--assert-command TEXT --assert-line PREFIX` | One strict server command/prefix assertion before a client joins; also allowed on joined runs |
 | `--before-save-command TEXT --before-save-line PREFIX` | One change before a bake saves |
 
 The result line is `SERVER_JOIN_PASS`, `SERVER_LOAD_PASS` or `SERVER_LOAD_FAIL`, with the evidence's size and path. The server must be on this machine. Building the bundled adapter needs NuGet.org; offline, pass `--adapter DLL`.
+
+### Dedicated server and modded client
+
+Foreground `server-load` accepts `--client-mod DLL` (repeatable) or `--client-project MOD.csproj`. Client selection is explicit: it never discovers the current project or copies the server set automatically. Select the same DLL for both roles to test the same build, or select different DLLs for different builds of one GUID. Each role retains its own dependency lock, plugin metadata, hashes and game logs. Within-role duplicate plugin GUIDs remain an error.
+
+Client inputs mirror the server's existing rules: `--client-build-inputs FILE` verifies a selected DLL's compile provenance; `--client-dependency NAME=DLL` supplies private references for `--client-project`; repeated `--client-search-root DIR|DLL` and `--client-optional-reference ASSEMBLY` control only client resolution. Client project and ready-made client DLL/build-record selections cannot be mixed. A missing dependency never falls back to the server install or roots. Explicit modded-client resolution/build requires a local selected client install and its own reviewed loader core; existing remote CLI-only client campaigns keep their behavior.
+
+Repeated `--client-config FILE`, `--client-plugin-file FILE` and `--client-plugin-dir DIR` require an explicit client mod/project. They use the same retained config and companion-file admission as server inputs. Equal basenames across actors remain separate under `client/` evidence; duplicate destinations within an actor or DLLs supplied as companions refuse. Server `--config` stays server-only. Shared `--env NAME=VALUE` reaches independent server/client dictionaries, while `--client-env NAME` still selects an inventory environment.
+
+```sh
+valheim-test server-load --server /games/server --client /games/client \
+  --mod /builds/server/MyMod.dll --client-mod /builds/client/MyMod.dll \
+  --config /inputs/server/my.mod.cfg --client-config /inputs/client/my.mod.cfg \
+  --plugin-file /inputs/server/data.json --client-plugin-file /inputs/client/data.json \
+  --env MYMOD_MODE=check \
+  --assert-command mymod_status --assert-line 'MYMOD role=server version=1' \
+  --client-assert-command mymod_status --client-assert-line 'MYMOD role=client version=2' \
+  --output /evidence/new-two-role-run
+```
+
+The mod owns `mymod_status`; substitute its real read-only observation and independent expected prefixes. The server assertion executes once on the server. The client assertion executes once on the client only after strict joined-world/player readiness, before any hold. A client assertion also works with the default CLI-only client. Missing, empty or refused output, wrong pins, a failed assertion or cleanup fails the run; server output cannot satisfy the client's expectation. Neither pair accepts empty/whitespace or NUL/line breaks. A failed server assertion or join prevents the client assertion, and hold starts only after both requested assertions pass.
+
+`--preflight-only` prepares both role plans and locks but proves neither loading nor joining and runs no assertion. New client inputs/assertions are refused with `--server-only`, comparisons, phases, detach, start and build before staging. Fixture baking still requires `--server-only`. A scenario DLL/project owns its own assertions and cannot be combined with either inline pair. Selected plugin metadata is expected input evidence; strict role pins and role logs establish loading. This does not add runtime network-version telemetry or prove gameplay beyond the assertions.
 
 ## server-load-ab
 
@@ -210,7 +233,7 @@ valheim-test server-load --server-only \
   --session-token-variable MYMOD_TEST_SESSION_TOKEN
 ```
 
-A scenario owns its assertions, so it refuses `--hold`, `--bake-fixture` and `--assert-command`.
+A scenario owns its assertions, so it refuses `--hold`, `--bake-fixture` and both inline assertion pairs.
 
 ## init
 

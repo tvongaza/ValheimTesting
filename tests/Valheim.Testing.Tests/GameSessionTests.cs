@@ -21,6 +21,8 @@ public sealed class GameSessionTests : IDisposable
     private readonly Dictionary<string, ScriptedTransport> _clientTransports = [];
 
     private bool _patchApplied = true;
+    private string? _oneShotFault;
+    private int _serverAssertionCalls;
     private int ServerPid() { lock (_serverProcesses) return _serverProcesses[^1].Id; }
 
     // An owned server whose session adapter answers its token, pid and save root and accepts connections, with test access.
@@ -33,6 +35,9 @@ public sealed class GameSessionTests : IDisposable
             token = launched; devcommands = false; cheats = false;
             lock (_serverProcesses) { var process = new FakeOwnedProcess(500 + _serverProcesses.Count); _serverProcesses.Add(process); _serverLaunched.Set(); return process; }
         }, () => new ScriptedTransport()
+            .On("cli_world", _ => ScriptedTransport.Ok("WORLD name=Fixture seed=Seed uid=4242 worldgen=2 files=- files_hashed=not_at_load dir="))
+            .On("vt_role_assert", _ => { _serverAssertionCalls++; return _oneShotFault == "server-fail" ? ScriptedTransport.Ok("MISSING") : ScriptedTransport.Ok("SERVER_OK", "CLIENT_OK"); })
+            .On("cli_peers", _ => ScriptedTransport.Ok("OK: 1 peer(s)", "PEER 1 character position=0.0,40.00,0.0 zone=0,0"))
             .Extension("test.mod", "session", _ => new
             {
                 source = "owned-test-session", token, pid = ServerPid(), saveRoot = Path.GetFullPath(Save), complete = true, dedicated = true, acceptingConnections = true,
@@ -73,18 +78,38 @@ public sealed class GameSessionTests : IDisposable
         return new ScriptedTransport()
             .ClientAccess(() => joined)
             .OnPrefix("cli_select_character ", _ => ScriptedTransport.Ok("OK: Selected character 'Tester' (tester-copy, Local)"))
-            .Extension("valheim.session", "join", _ => { joined = true; return new { source = "session-join", complete = true, action = "join" }; }, readOnly: false)
+            .Extension("valheim.session", "join", _ =>
+            {
+                if (_oneShotFault == "join-fail") throw new IOException("controlled join failure");
+                joined = true; return new { source = "session-join", complete = true, action = "join" };
+            }, readOnly: false)
             .Extension("valheim.session", "leave", _ =>
             {
                 if (_failLeave) throw new IOException("the reply was lost");
                 joined = false;
                 return new { source = "session-leave", complete = true, action = "leave" };
             }, readOnly: false)
-            .Extension("valheim.session", "state", _ => new
+            .Extension("valheim.session", "state", _ =>
             {
-                source = "session-state", complete = true, phase = joined ? "world-present" : "menu", worldUid = joined ? WorldUid : null, worldPresent = joined,
-                worldReady = joined, server = false, dedicated = false, localPlayer = joined, playerReady = joined, saving = false, loadError = false,
-                connectionStatus = joined ? "Connected" : "None",
+                if (joined && _oneShotFault == "client-pins")
+                    foreach (var transport in _clientTransports.Values) transport.PinsHold = false;
+                return new
+                {
+                    source = "session-state", complete = true, phase = joined ? "world-present" : "menu", worldUid = joined ? WorldUid : null, worldPresent = joined,
+                    worldReady = joined, server = false, dedicated = false, localPlayer = joined, playerReady = joined, saving = false, loadError = false,
+                    connectionStatus = joined ? "Connected" : "None",
+                };
+            })
+            .On("vt_role_assert", _ =>
+            {
+                Assert.True(joined, "The client assertion ran before joined-world readiness.");
+                return _oneShotFault switch
+                {
+                    "client-refused" => ScriptedTransport.Ok("That command is a cheat"),
+                    "client-empty" => ScriptedTransport.Ok(),
+                    "client-missing" => ScriptedTransport.Ok("MISSING"),
+                    _ => ScriptedTransport.Ok("CLIENT_OK"),
+                };
             })
             .On("cli_set_player_safety true", _ => ScriptedTransport.Ok("OK: playerSafety enabled=True god=True ghost=True debugMode=True cheats=True ghostReplicated=True"))
             .OnPrefix("cli_skip_intro", _ => ScriptedTransport.Ok("OK: skipped=False profileFirstSpawn=False position=0,40,0 ms=3"));
@@ -114,6 +139,49 @@ public sealed class GameSessionTests : IDisposable
     }
 
     private static List<string> Steps(ScenarioReport report, StepPhase phase) => report.Steps.Where(step => step.Phase == phase).Select(step => step.Name).ToList();
+
+    [Theory]
+    [InlineData("pass")] [InlineData("client-missing")] [InlineData("client-refused")] [InlineData("client-empty")]
+    [InlineData("server-fail")] [InlineData("join-fail")] [InlineData("client-pins")] [InlineData("cleanup")]
+    public async Task BuiltInServerLoadAssertsEachActualActorOnceAfterReadinessAndSettlesFailure(string fault)
+    {
+        _oneShotFault = fault; _failLeave = fault == "cleanup";
+        var report = new ScenarioReport("two-role one-shot");
+        var placement = new Placement(this, (_, _) => Task.CompletedTask);
+        await using var session = new GameSession(report, _root, WorldUid, Server, [], CancellationToken.None)
+            { ResolveClient = (_, name) => (name ?? "client", placement) };
+        await session.StartAsync();
+        bool failBeforeHold = fault is not ("pass" or "cleanup");
+        var error = await Record.ExceptionAsync(() => ServerLoad.Scenario(session, Plan(), System.Diagnostics.Stopwatch.StartNew(),
+            failBeforeHold, WorldUid, false, null, null, "vt_role_assert", "SERVER_OK",
+            clientAssertCommand: "vt_role_assert", clientAssertLine: "CLIENT_OK", moddedClient: true));
+        await session.DisposeAsync();
+        bool passed = fault == "pass";
+        Assert.Equal(passed, report.Passed);
+        if (passed) Assert.Null(error);
+        Assert.Equal(1, _serverAssertionCalls);
+        if (fault == "server-fail") Assert.Empty(_clientTransports);
+        else
+        {
+            var transport = Assert.Single(_clientTransports).Value;
+            Assert.Equal(fault is "join-fail" or "client-pins" ? 0 : 1, transport.Count("vt_role_assert"));
+            Assert.True(transport.Disposed); Assert.Equal(1, Assert.Single(_clientProcesses).Value.Stops);
+        }
+        Assert.DoesNotContain(report.Steps, step => step.Name.Contains("keep the owned", StringComparison.Ordinal));
+        Assert.All(_serverProcesses, process => Assert.Equal(1, process.Stops));
+        if (fault is "client-missing" or "client-refused" or "client-empty")
+            Assert.Contains(report.Steps, step => step.Name.Contains("client observation", StringComparison.Ordinal) && !step.Passed);
+    }
+
+    [Fact] public async Task BuiltInServerOnlyAssertionNeverOpensAClient()
+    {
+        var report = new ScenarioReport("server-only assertion");
+        await using var session = Session(report);
+        await session.StartAsync();
+        await ServerLoad.Scenario(session, null, System.Diagnostics.Stopwatch.StartNew(), false, WorldUid, false,
+            null, null, "vt_role_assert", "SERVER_OK");
+        Assert.Equal(1, _serverAssertionCalls); Assert.Empty(_clientProcesses); Assert.True(report.Passed);
+    }
 
     [Fact] public async Task TheServerAndEveryClientStartAtOnce()
     {
