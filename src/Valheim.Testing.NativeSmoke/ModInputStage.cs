@@ -157,6 +157,7 @@ internal static class ModInputStage
         public Action<EnvironmentInventory, EnvironmentRecipe, string, string?>? ClientArchitecture { get; init; }
         public Progress Progress { get; init; } = new();
         public ExplicitInputs RunInputs { get; init; } = ExplicitInputs.Empty;
+        public bool NoMod { get; init; }
     }
 
     /// <summary>The environments a one-off runs on, chosen from the inventory with the reason for each.</summary>
@@ -185,6 +186,7 @@ internal static class ModInputStage
         public string? SteamRuntimePackage { get; init; }
         public NativeDependencyLock? Dependencies { get; init; }
         public RetainedInputs RunInputs { get; init; } = RetainedInputs.Empty;
+        public bool NoMod { get; init; }
 
         public IEnumerable<Actor> Actors => new[] { Server, Client }.OfType<Actor>();
 
@@ -194,6 +196,7 @@ internal static class ModInputStage
             RunInputs.VerifyRecord();
             foreach (var actor in Actors) SmokeInputResolver.RecordLoader(provenance, actor.Role, actor.Loader, actor.Shipped);
             provenance["modSelection"] = ModSelection;
+            if (NoMod) provenance["noMod"] = "true";
             if (RunInputs.RecordFile != null)
             {
                 provenance["runInputs"] = RunInputs.RecordFile;
@@ -213,6 +216,7 @@ internal static class ModInputStage
 
     internal static Inspection Inspect(Request request)
     {
+        RequireNoModRequest(request);
         var options = request.Options;
         // 1. The game and loader choice.
         string compileRole = request.Route switch
@@ -315,6 +319,7 @@ internal static class ModInputStage
         return new Inputs(request.Route, inventory, compile, server, client, architecture, choice.Join, [], "", options.GetValueOrDefault("--build-inputs"))
         {
             Admission = admission, Core = core, CliManifest = cliManifest, CliFiles = cliFiles, Capabilities = capabilities.ToList(), SteamRuntimePackage = steamRuntime,
+            NoMod = request.NoMod,
         };
     }
 
@@ -347,12 +352,16 @@ internal static class ModInputStage
     /// shape of the stage's step 6 and of an A/B run's before and after locks. <paramref name="resolve"/> is a test seam.
     /// </summary>
     internal static NativeDependencyLock Resolve(Inputs inputs, IReadOnlyList<string> mods, IReadOnlyList<string> searchRoots,
-        IReadOnlyList<string> optionalReferences, Func<NativeDependencyRequest, NativeDependencyLock>? resolve = null) =>
-        (resolve ?? NativeDependencyResolver.Resolve)(SmokeDependencyInputs.Request(mods, inputs.Compile.Recipe.Install, inputs.Core,
-            inputs.CliManifest, inputs.CliFiles, searchRoots, optionalReferences, inputs.Capabilities));
+        IReadOnlyList<string> optionalReferences, Func<NativeDependencyRequest, NativeDependencyLock>? resolve = null)
+    {
+        var request = SmokeDependencyInputs.Request(mods, inputs.Compile.Recipe.Install, inputs.Core,
+            inputs.CliManifest, inputs.CliFiles, searchRoots, optionalReferences, inputs.Capabilities);
+        return resolve != null ? resolve(request) : inputs.NoMod ? NativeDependencyResolver.ResolveCliOnly(request) : NativeDependencyResolver.Resolve(request);
+    }
 
     public static async Task<Inputs> RunAsync(Request request, CancellationToken cancellation)
     {
+        RequireNoModRequest(request);
         var options = request.Options;
         string output = request.Output;
         var given = ModBuild.ParseDependencies(request.Dependencies);
@@ -368,7 +377,7 @@ internal static class ModInputStage
         // 3. The inputs that already exist are checked before any host is probed, so an unrelated slow or transient desktop
         // or Steam check cannot mask a pure input error (#626): the selected mod and its build inputs, the scenario DLL.
         var mods = new List<string>();
-        string selection = "";
+        string selection = request.NoMod ? "explicit --no-mod" : "";
         string? buildInputs = options.GetValueOrDefault("--build-inputs");
         var roots = request.SearchRoots.ToList();
         ModBuild.BuildRecord? verified = null;
@@ -379,7 +388,7 @@ internal static class ModInputStage
             foreach (var (name, path) in new[] { ("game", game), ("--cli-files", cliFiles!) })
                 if (!Directory.Exists(path)) throw new DirectoryNotFoundException(name + " directory does not exist: " + path);
             if (!File.Exists(cliManifest)) throw new FileNotFoundException("--cli-manifest file does not exist: " + cliManifest, cliManifest);
-            if (!buildsMod)
+            if (!buildsMod && !request.NoMod)
             {
                 var selected = SmokeModInput.Select(request.Mods, Environment.CurrentDirectory);
                 mods.AddRange(selected.Mods);
@@ -442,6 +451,22 @@ internal static class ModInputStage
             SearchRoots = roots,
             Scenario = scenario, SelectedInventory = selectedInventory, Dependencies = dependencies,
         };
+    }
+
+    private static void RequireNoModRequest(Request request)
+    {
+        if (!request.NoMod)
+        {
+            if (request.Options.ContainsKey("--no-mod") || request.Switches.Contains("--no-mod"))
+                throw new ArgumentException("--no-mod requires an explicit no-mod request.");
+            return;
+        }
+        if (request.Route != Route.Hosted) throw new ArgumentException("--no-mod is supported only by start.");
+        var supplied = request.Options.Keys.ToHashSet(StringComparer.Ordinal);
+        foreach (var (key, count) in new[] { ("--mod", request.Mods.Count), ("--search-root", request.SearchRoots.Count),
+            ("--optional-reference", request.OptionalReferences.Count), ("--dependency", request.Dependencies.Count) })
+            if (count != 0) supplied.Add(key);
+        SmokeCommandOptions.RequireNoModInputs(supplied);
     }
 
     // The selected mod files exist, and recorded build inputs still match this game and the chosen loader; their pinned

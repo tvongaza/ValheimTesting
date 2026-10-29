@@ -79,6 +79,8 @@ An assembly a soft integration references is a candidate, not automatically opti
 
 `NativeDependencyLock.ApplyTo(inputs, cliManifestPath)` fills a `RegressionInputs`' CLI, plugin and optional-reference fields. You supply the fixture, character and mod arms, then run `TargetedRegression.Preflight()` and the scenario, calling `Remove()` after a successful preflight, or `Remove(report, output)` after the last arm of a run ([cleanup](sessions-targeted-regression.md#clean-up-after-a-run)).
 
+`start --no-mod` explicitly selects the same resolver's internal CLI-only route. Its lock has empty mods/plugins and exactly the real pinned CLI file; CLI hash, capability and declared-dependency checks remain required. Public `NativeDependencyResolver.Resolve` still refuses an empty mod request. This internal route accepts no search roots or optional-reference exceptions, so it never scans an install for an unselected plugin. The resulting `RegressionInputs.NoMod` is an explicit additive JSON opt-in, not an inference from an empty lock; see [control inputs](sessions-targeted-regression.md#optional-input-fields).
+
 ## Limits
 
 - The static loader check is not a claim that Doorstop ran; the owned client's fresh BepInEx log is.

@@ -12,6 +12,7 @@ internal static class SmokeCommandOptions
     private static readonly Dictionary<string, Spec> Table = new(StringComparer.Ordinal)
     {
         ["--mod"] = new(Kind.Repeat), ["--output"] = new(Kind.Single, Build: true),
+        ["--no-mod"] = new(Kind.Switch, ServerLoad: false, ServerLoadAb: false),
         ["--build-inputs"] = new(Kind.Single, ServerLoadAb: false),
         ["--project"] = new(Kind.Single, ServerLoadAb: false, Build: true),
         ["--dependency"] = new(Kind.Repeat, ServerLoadAb: false, Build: true),
@@ -92,7 +93,11 @@ internal static class SmokeCommandOptions
             else if (!result.Options.TryAdd(key, value))
             { error = "Repeated option: " + key; return false; }
         }
-        if (!allowImplicitMod && result.List("--mod").Count == 0) { error = "Missing: --mod"; return false; }
+        if (result.Switches.Contains("--no-mod"))
+            try { RequireNoModInputs(result.Options.Keys.Concat(result.Repeated.Keys)); }
+            catch (ArgumentException failure) { error = failure.Message; return false; }
+        if (!allowImplicitMod && result.List("--mod").Count == 0 && !result.Switches.Contains("--no-mod"))
+        { error = "Missing: --mod"; return false; }
         if (command == Command.Build)
         {
             if (!result.Options.ContainsKey("--project")) { error = "Give --project MOD.csproj."; return false; }
@@ -171,6 +176,15 @@ internal static class SmokeCommandOptions
         catch (ArgumentException failure) { error = failure.Message; return false; }
         parsed = result;
         return true;
+    }
+
+    internal static void RequireNoModInputs(IEnumerable<string> supplied)
+    {
+        string[] conflicts = ["--mod", "--project", "--build-inputs", "--source", "--compare-mod", "--compare-source",
+            "--dependency", "--search-root", "--optional-reference", "--scenario", "--scenario-project",
+            "--adapter", "--adapter-project", "--plugin-file", "--plugin-dir"];
+        if (conflicts.FirstOrDefault(supplied.Contains) is { } conflict)
+            throw new ArgumentException($"--no-mod runs a CLI-only control; leave out {conflict}.");
     }
 
     internal static string Output(IReadOnlyDictionary<string, string> options, Func<string, bool>? containsProject = null)

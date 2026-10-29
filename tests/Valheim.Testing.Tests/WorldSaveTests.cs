@@ -33,6 +33,29 @@ public sealed class WorldSaveTests : IDisposable
     private static readonly IReadOnlyDictionary<string, object?> Provenance = new Dictionary<string, object?> { ["runId"] = "run-test" };
 
     [Fact]
+    public void ExportRetainsExplicitNoModProvenanceWithoutInventingAModIdentity()
+    {
+        using var rig = new RegressionRig();
+        var live = LiveWorld();
+        string run = Path.Combine(_root, "control-run"), evidence = Path.Combine(run, "evidence", "control");
+        Directory.CreateDirectory(evidence);
+        var inputs = rig.ControlManifest();
+        inputs.Fixture = new RegressionFixture { Root = Path.GetDirectoryName(live.World)!, WorldUid = DefaultSmokeWorld.Uid };
+        inputs.Write(Path.Combine(run, "regression.json"));
+        var provenance = WorldSave.Provenance("control-run", evidence, []);
+        Assert.Equal(true, provenance["noMod"]);
+        string saved = Path.Combine(_root, "saved-control");
+        WorldSave.Export(live, 1, saved, provenance);
+        using var document = JsonDocument.Parse(File.ReadAllText(Path.Combine(saved, FixtureBake.ManifestFile)));
+        var from = document.RootElement.GetProperty("savedFrom");
+        Assert.True(from.GetProperty("noMod").GetBoolean());
+        Assert.Empty(from.GetProperty("mods").EnumerateObject());
+        Assert.Empty(from.GetProperty("plugins").EnumerateArray());
+        Assert.Equal("valheimCLI.dll", from.GetProperty("cliCore").GetProperty("file").GetString());
+        Assert.Equal(inputs.Cli.Core.Sha256, from.GetProperty("cliCore").GetProperty("sha256").GetString());
+    }
+
+    [Fact]
     public void ExportCopiesOnlyTheNewestSaveAndItsChunksIntoAFixtureStartStages()
     {
         var live = LiveWorld();

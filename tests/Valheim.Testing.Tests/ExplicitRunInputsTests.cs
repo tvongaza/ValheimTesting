@@ -190,21 +190,24 @@ public sealed class ExplicitRunInputsTests : IDisposable
         Assert.False(File.Exists(Path.Combine(_rig.Game, "should-not-exist")));
     }
 
-    [ClientHostFact]
-    public void StartInputsReachTheActualRegressionProfileAndClientPlanAndSurviveRuntimeRemoval()
+    [ClientHostTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void StartInputsReachTheActualRegressionProfileAndClientPlanAndSurviveRuntimeRemoval(bool noMod)
     {
         string source = _rig.Write("inputs/example.cfg", Encoding.UTF8.GetBytes("[Settings]\nMessage = selected\n"));
         string settings = _rig.Write("inputs/BepInEx.cfg", Encoding.UTF8.GetBytes("[Logging.Console]\nEnabled = false\n"));
         string output = Path.Combine(_rig.Root, "run");
-        Assert.True(StartArguments.TryRead(["--mod", _rig.Parent, "--config", source, "--config", settings, "--env", "MOD_SETTING=" + Opaque],
+        string[] selection = noMod ? ["--no-mod"] : ["--mod", _rig.Parent];
+        Assert.True(StartArguments.TryRead([.. selection, "--config", source, "--config", settings, "--env", "MOD_SETTING=" + Opaque],
             out var parsed, out string error), error);
         var retained = ModInputStage.RetainExplicit(parsed!.RunInputs, ModInputStage.Route.Hosted, output, true);
-        var inputs = _rig.Manifest();
+        var inputs = noMod ? _rig.ControlManifest() : _rig.Manifest();
         retained.ApplyTo(inputs); // The same assignment boundary Program uses before writing regression.json.
         inputs.Write(Path.Combine(output, "regression.json"));
         var regression = _rig.Regression(inputs);
         regression.InitialConfigSha256 = retained.Configs.ToDictionary(config => config.Destination, config => config.Sha256, StringComparer.Ordinal);
-        var staged = regression.Stage("parent");
+        var staged = regression.Stage(noMod ? "control" : "parent");
         Assert.Equal(Opaque, staged.Plan.Environment["MOD_SETTING"]);
         Assert.Equal(File.ReadAllBytes(source), File.ReadAllBytes(Path.Combine(regression.Install, "BepInEx", "config", "example.cfg")));
         Assert.Equal(File.ReadAllBytes(settings), File.ReadAllBytes(Path.Combine(regression.Install, "BepInEx", "config", "BepInEx.cfg")));
@@ -214,33 +217,87 @@ public sealed class ExplicitRunInputsTests : IDisposable
         Assert.Equal(File.ReadAllBytes(source), File.ReadAllBytes(Assert.Single(retained.Configs, file => file.Destination == "example.cfg").File));
     }
 
-    [ClientHostFact]
-    public void StartCarriesOriginalConfigPinsPastTheOuterInputVerification()
+    [ClientHostTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void StartCarriesOriginalConfigPinsPastTheOuterInputVerification(bool noMod)
     {
         string source = _rig.Write("inputs/example.cfg", Encoding.UTF8.GetBytes("[Settings]\nMessage = selected\n"));
         var retained = ModInputStage.RetainExplicit(ModInputStage.ReadExplicit([source], [], true),
             ModInputStage.Route.Hosted, Path.Combine(_rig.Root, "run"), true);
-        var inputs = _rig.Manifest();
+        var inputs = noMod ? _rig.ControlManifest() : _rig.Manifest();
         retained.ApplyTo(inputs);
         var regression = _rig.Regression(inputs);
         regression.InitialConfigSha256 = retained.Configs.ToDictionary(config => config.Destination, config => config.Sha256, StringComparer.Ordinal);
         retained.Verify();
         File.AppendAllText(Assert.Single(retained.Configs).File, "changed after verification");
         // Do not call retained.Verify again: the staging owner must enforce the original pin itself.
-        var failure = Assert.Throws<InvalidDataException>(() => regression.Stage("parent"));
+        var failure = Assert.Throws<InvalidDataException>(() => regression.Stage(noMod ? "control" : "parent"));
         Assert.Contains("admitted SHA256", failure.Message);
         Assert.False(Directory.Exists(regression.Install));
     }
 
-    [Fact]
-    public void ProvenanceRefusesAModifiedPrivateRecordIndependentlyOfConfigDelivery()
+    [ClientHostFact]
+    public async Task NoModKeepsTheConfigPinAcrossTheAsynchronousStorageCheck()
+    {
+        var host = FakeServerHost.ThisMachine();
+        using var machine = LocalGameHost.UseThisMachineForTest(host);
+        string source = _rig.Write("inputs/control.cfg", Encoding.UTF8.GetBytes("selected bytes"));
+        var retained = ModInputStage.RetainExplicit(ModInputStage.ReadExplicit([source], [], true),
+            ModInputStage.Route.Hosted, Path.Combine(_rig.Root, "control-inputs"), true);
+        var inputs = _rig.ControlManifest(); retained.ApplyTo(inputs);
+        var regression = _rig.Regression(inputs);
+        regression.InitialConfigSha256 = retained.Configs.ToDictionary(config => config.Destination, config => config.Sha256, StringComparer.Ordinal);
+        var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        host.BeforeScriptAsync = async name =>
+        {
+            if (name != "apart") return;
+            reached.TrySetResult();
+            await release.Task.WaitAsync(cancellation.Token);
+        };
+        var staging = Task.Run(() => regression.Stage("control"));
+        Exception? stimulusFailure = null;
+        try
+        {
+            await reached.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.False(staging.IsCompleted);
+            var check = Assert.Single(host.Runs, run => run.Script == "apart");
+            Assert.Equal(_rig.Game, check.Variables["root"]);
+            Assert.Contains(regression.Install, check.Variables["paths"].Split('\n'));
+            File.AppendAllText(Assert.Single(retained.Configs).File, " changed while storage was pending");
+        }
+        catch (Exception failure) { stimulusFailure = failure; }
+        finally { release.TrySetResult(); }
+        if (stimulusFailure != null)
+        {
+            try
+            {
+                await staging;
+                regression.Remove(); // A failed stimulus may leave a successfully staged profile to retire.
+            }
+            catch (Exception settlementFailure)
+            {
+                throw new AggregateException("The config-change stimulus and staging or cleanup both failed.", stimulusFailure, settlementFailure);
+            }
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(stimulusFailure).Throw();
+        }
+        Assert.Contains("admitted SHA256", (await Assert.ThrowsAsync<InvalidDataException>(() => staging)).Message);
+        Assert.False(Directory.Exists(regression.Install));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ProvenanceRefusesAModifiedPrivateRecordIndependentlyOfConfigDelivery(bool noMod)
     {
         var retained = ModInputStage.RetainExplicit(ModInputStage.ReadExplicit([], ["MOD_SETTING=selected"], true),
             ModInputStage.Route.Hosted, Path.Combine(_rig.Root, "run"), true);
         var inventory = _rig.Inventory();
         var actor = new ModInputStage.Actor("client", Assert.Single(inventory.Environments), "test", null, null, null);
         var inputs = new ModInputStage.Inputs(ModInputStage.Route.Hosted, inventory, actor, null, actor,
-            "x64", null, [], "selected", null) { RunInputs = retained };
+            "x64", null, [], noMod ? "explicit --no-mod" : "selected", null) { RunInputs = retained, NoMod = noMod };
         var provenance = new Dictionary<string, string>();
         inputs.Record(provenance);
         Assert.Equal(retained.RecordSha256, provenance["runInputsSha256"]);

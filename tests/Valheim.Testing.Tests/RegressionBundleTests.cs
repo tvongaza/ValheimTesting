@@ -12,6 +12,23 @@ public sealed class RegressionBundleTests : IDisposable
     private readonly BundleRig _rig = new();
     public void Dispose() => _rig.Dispose();
 
+    [ClientHostFact]
+    public void AControlManifestCannotAcquireModIdentitiesFromBundleDeclarations()
+    {
+        string file = Path.Combine(_rig.Root, "evidence", "parent", "run-manifest.json");
+        var manifest = JsonSerializer.Deserialize<RunManifest>(File.ReadAllText(file), TargetedRegression.ManifestJson)!;
+        var control = manifest with { NoMod = true, ModPlugin = null, ModCommit = null, ModSha256 = null, Arms = [] };
+        File.WriteAllText(file, JsonSerializer.Serialize(control, TargetedRegression.ManifestJson));
+        var spec = _rig.Spec();
+        spec.ModPlugin = "example.mod";
+        spec.Arms["parent"].Commit = "p1";
+        spec.Arms["parent"].Md5 = FileHash.Md5(_rig.Rig.Parent);
+        spec.Arms["parent"].Sha256 = FileHash.Sha256(_rig.Rig.Parent);
+        string output = _rig.Output();
+        Assert.Contains("no mod under test", Assert.Throws<InvalidOperationException>(() => RegressionBundle.Create(spec, output, _rig.Sources)).Message);
+        Assert.False(Directory.Exists(output));
+    }
+
     [ClientHostFact] public void ACleanRunMakesASmallBundleThatVerifies()
     {
         string output = _rig.Output();

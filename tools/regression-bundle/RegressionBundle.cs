@@ -613,6 +613,8 @@ public static class RegressionBundle
         // Which build ran: every source that records it must agree, and the declared values must be among them.
         string manifestPath = Path.Combine(arm.Evidence, "run-manifest.json");
         RunManifest? run = File.Exists(manifestPath) ? JsonSerializer.Deserialize<RunManifest>(File.ReadAllText(manifestPath), ManifestJson) : null;
+        if (run?.NoMod == true || environment?.NoMod == true)
+            throw new InvalidOperationException($"{where}: a CLI-only control has no mod under test; it cannot supply mod-regression build identities.");
         if (run != null && run.Arm != name) throw new InvalidOperationException($"{where}: run-manifest.json is arm {run.Arm}'s.");
         var declared = environment?.Mod.Arms[name];
         // The first source that records a value, after every source that records it agrees (case aside).

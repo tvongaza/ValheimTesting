@@ -194,6 +194,20 @@ public static class NativeDependencyResolver
     {
         ArgumentNullException.ThrowIfNull(request);
         if (request.Mods.Count == 0) throw new ArgumentException("mods: give at least one plugin DLL.");
+        return ResolveCore(request);
+    }
+
+    // Explicit start control only. Public empty-mod discovery remains an error; CLI admission shares the same core.
+    internal static NativeDependencyLock ResolveCliOnly(NativeDependencyRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (request.Mods.Count != 0 || request.SearchRoots.Count != 0 || request.OptionalReferences.Count != 0)
+            throw new ArgumentException("A CLI-only control has no mods, search roots or optional references.");
+        return ResolveCore(request);
+    }
+
+    private static NativeDependencyLock ResolveCore(NativeDependencyRequest request)
+    {
         foreach (string source in request.SearchRoots)
             if (!Path.IsPathFullyQualified(source) || !(Directory.Exists(source) || File.Exists(source) &&
                 Path.GetExtension(source).Equals(".dll", StringComparison.OrdinalIgnoreCase)))

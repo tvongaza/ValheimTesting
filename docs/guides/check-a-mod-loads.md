@@ -49,6 +49,8 @@ The client hosts the packaged world with both mods. The result line names the ar
 PASS: hosted fixture, 2 selected mod(s), 1 arm(s); private evidence in /private/runs/client-pair; 95.0s
 ```
 
+For a client-hosted baseline without a mod under test, explicitly select `valheim-test start --no-mod --world-fixture /path/to/disposable-fixture --hold`. The profile contains the selected CLI plugin and required loader only; `finish` and evidence use the same owned-run path. Omitting `--mod` without `--no-mod` still selects the current project's built plugin and refuses missing or stale output. See [CLI-only controls](../packages/Valheim.Testing.NativeSmoke.md#start) for conflicts and evidence.
+
 ### 4. Load a server set together
 
 Select every mod in one run. The example asset and library paths are illustrative:
