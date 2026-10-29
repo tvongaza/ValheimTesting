@@ -240,7 +240,7 @@ public sealed class ExplicitRunInputsTests : IDisposable
     [ClientHostFact]
     public async Task NoModKeepsTheConfigPinAcrossTheAsynchronousStorageCheck()
     {
-        var host = Valheim.Testing.Game.Fakes.FakeServerHost.ThisMachine();
+        var host = FakeServerHost.ThisMachine();
         using var machine = LocalGameHost.UseThisMachineForTest(host);
         string source = _rig.Write("inputs/control.cfg", Encoding.UTF8.GetBytes("selected bytes"));
         var retained = ModInputStage.RetainExplicit(ModInputStage.ReadExplicit([source], [], true),
@@ -253,7 +253,7 @@ public sealed class ExplicitRunInputsTests : IDisposable
         using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         host.BeforeScriptAsync = async name =>
         {
-            if (name != "profile-storage") return;
+            if (name != "apart") return;
             reached.TrySetResult();
             await release.Task.WaitAsync(cancellation.Token);
         };
@@ -263,6 +263,9 @@ public sealed class ExplicitRunInputsTests : IDisposable
         {
             await reached.Task.WaitAsync(TimeSpan.FromSeconds(10));
             Assert.False(staging.IsCompleted);
+            var check = Assert.Single(host.Runs, run => run.Script == "apart");
+            Assert.Equal(_rig.Game, check.Variables["root"]);
+            Assert.Contains(regression.Install, check.Variables["paths"].Split('\n'));
             File.AppendAllText(Assert.Single(retained.Configs).File, " changed while storage was pending");
         }
         catch (Exception failure) { stimulusFailure = failure; }
