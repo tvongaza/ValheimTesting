@@ -40,7 +40,8 @@ public sealed class StagedArm
     /// <summary>The arm table and allowlist as lines for a person to review.</summary>
     public IEnumerable<string> Describe()
     {
-        yield return $"{Manifest.Name}: arm {Arm}, mod {Manifest.ModPlugin} at {Manifest.ModCommit ?? "an unrecorded commit"}, sha256 {Manifest.ModSha256}{(Manifest.Repeatability ? " (repeatability run)" : "")}";
+        yield return Manifest.NoMod ? $"{Manifest.Name}: arm {Arm}, no mod under test (CLI-only control)" :
+            $"{Manifest.Name}: arm {Arm}, mod {Manifest.ModPlugin} at {Manifest.ModCommit ?? "an unrecorded commit"}, sha256 {Manifest.ModSha256}{(Manifest.Repeatability ? " (repeatability run)" : "")}";
         foreach (var arm in Manifest.Arms) yield return $"  arm {arm.Arm,-12} commit {arm.Commit ?? "unrecorded",-12} artifact {arm.Artifact}  sha256 {arm.Sha256}  md5 {arm.Md5}";
         foreach (var file in Manifest.Allowlist) yield return $"  {file.Role,-12} {file.Path}  md5 {file.Md5}  {string.Join(", ", file.Plugins)}";
         yield return $"  fixture      {Manifest.World} uid {Manifest.WorldUid} ({Manifest.FixtureFiles} files)";
@@ -53,9 +54,14 @@ public sealed class StagedArm
     {
         provenance["regression"] = Manifest.Name;
         provenance["arm"] = Arm;
-        provenance["modPlugin"] = Manifest.ModPlugin;
+        if (Manifest.NoMod)
+        {
+            provenance["noMod"] = "true";
+            foreach (string key in new[] { "modPlugin", "modCommit", "modSha256" }) provenance.Remove(key);
+        }
+        if (Manifest.ModPlugin != null) provenance["modPlugin"] = Manifest.ModPlugin;
         if (Manifest.ModCommit != null) provenance["modCommit"] = Manifest.ModCommit;
-        provenance["modSha256"] = Manifest.ModSha256;
+        if (Manifest.ModSha256 != null) provenance["modSha256"] = Manifest.ModSha256;
         provenance["allowlist"] = string.Join(", ", Manifest.Allowlist.Select(file => $"{file.Path}={file.Md5}"));
         provenance["worldUid"] = Manifest.WorldUid;
         Manifest.InstallPins.Record(provenance, "client");
@@ -222,7 +228,7 @@ public sealed class TargetedRegression
     public IReadOnlyList<StagedArm> Preflight() => WithFailureCleanup(() =>
     {
         RequireDirectClientDesktop();
-        return Inputs.Mod.Arms.Keys.Select(Stage).ToList();
+        return Inputs.ArmNames.Select(Stage).ToList();
     });
 
     /// <summary>
@@ -240,8 +246,10 @@ public sealed class TargetedRegression
     private StagedArm StageCore(string arm)
     {
         var env = Inputs;
-        if (!env.Mod.Arms.TryGetValue(arm, out var chosen))
-            throw new ArgumentException($"There is no arm \"{arm}\"; the manifest names {string.Join(", ", env.Mod.Arms.Keys)}.");
+        if (env.NoMod) env.Validate();
+        if (!env.ArmNames.Contains(arm, StringComparer.Ordinal))
+            throw new ArgumentException($"There is no arm \"{arm}\"; the manifest names {string.Join(", ", env.ArmNames)}.");
+        RegressionArm? chosen = env.NoMod ? null : env.Mod.Arms[arm];
         _ = FixtureLayout.Discover(env.Fixture.Root, env.Fixture.WorldUid);
         var hostingBuild = GameVersionAgreement.ReadInPlaceAsync(Game, CancellationToken.None).GetAwaiter().GetResult();
         if (InitialHostingBuild is { } initial) WorldIdentity.RequireSameTarget(initial, hostingBuild);
@@ -301,7 +309,8 @@ public sealed class TargetedRegression
         var placements = new List<(string Role, string Source, string Sha256, string Relative, PluginAssembly Metadata)>();
         foreach (var (role, file, sha256) in sources)
             placements.Add((role, file.File, sha256, "BepInEx/plugins/" + Path.GetFileName(file.File), Read(file.File)));
-        placements.Add(("mod", chosen.File, chosen.Sha256.ToLowerInvariant(), "BepInEx/plugins/" + env.Mod.InstallAs, armPlugins[arm]));
+        if (chosen != null)
+            placements.Add(("mod", chosen.File, chosen.Sha256.ToLowerInvariant(), "BepInEx/plugins/" + env.Mod.InstallAs, armPlugins[arm]));
         var selected = placements.Select(file => new HostedRuntimeFile(file.Source, file.Relative)).ToList();
         selected.AddRange(patchers.Select(file => new HostedRuntimeFile(file.File.File, "BepInEx/patchers/" + Path.GetFileName(file.File.File))));
         selected.AddRange(env.Configs.Select(file => new HostedRuntimeFile(file.Value, "BepInEx/config/" + file.Key)
@@ -366,8 +375,9 @@ public sealed class TargetedRegression
             string cliManifest = plan.CheckCliManifest(CliCapabilities.HostedRounds)?.ToString() ?? plan.CliPreflight;
 
             var tree = StagedTree(install);
-            var manifest = new RunManifest(env.Name, arm, string.Join(", ", armPlugins[arm].Plugins.Select(p => p.Guid)), chosen.Commit, chosen.Sha256.ToLowerInvariant(),
-                env.Mod.Repeatability, arms, allowlist, configs, installPins, identity.Name, identity.UidText, fixture.Count, Capabilities, LiveOnlyCapabilities, cliManifest);
+            var manifest = new RunManifest(env.Name, arm, chosen == null ? null : string.Join(", ", armPlugins[arm].Plugins.Select(p => p.Guid)), chosen?.Commit, chosen?.Sha256.ToLowerInvariant(),
+                env.Mod.Repeatability, arms, allowlist, configs, installPins, identity.Name, identity.UidText, fixture.Count, Capabilities, LiveOnlyCapabilities, cliManifest)
+                { NoMod = env.NoMod };
             return new StagedArm(arm, plan, manifest, tree, install);
         }
     }

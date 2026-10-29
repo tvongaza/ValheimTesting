@@ -14,6 +14,91 @@ public sealed class TargetedRegressionTests : IDisposable
     private readonly RegressionRig _rig = new();
     public void Dispose() => _rig.Dispose();
 
+    [Fact]
+    public void NoModIsAnExplicitJsonContractAndOrdinaryModJsonStaysUnchanged()
+    {
+        string path = Path.Combine(_rig.Root, "ordinary.json");
+        _rig.Manifest().Write(path);
+        string original = File.ReadAllText(path);
+        Assert.DoesNotContain("\"noMod\"", original);
+        var ordinary = RegressionInputs.Read(path);
+        ordinary.Write(path);
+        Assert.Equal(original, File.ReadAllText(path));
+        Assert.Equal(["parent", "candidate"], ordinary.ArmNames);
+
+        var control = _rig.ControlManifest();
+        control.Write(path);
+        var read = RegressionInputs.Read(path);
+        Assert.True(read.NoMod); Assert.Equal(["control"], read.ArmNames);
+        Assert.Empty(read.Mod.Arms); Assert.Equal("", read.Mod.InstallAs);
+        read.NoMod = false;
+        Assert.Throws<ArgumentException>(read.Validate);
+        Assert.Throws<ArgumentException>(() => _rig.Regression(control).Stage("parent"));
+    }
+
+    [Theory]
+    [InlineData("mod-name")]
+    [InlineData("mod-arms")]
+    [InlineData("repeatability")]
+    [InlineData("plugins")]
+    [InlineData("patchers")]
+    [InlineData("optional")]
+    [InlineData("probe")]
+    [InlineData("dll-config")]
+    public void NoModRefusesConflictingDirectModelPayloads(string field)
+    {
+        var control = _rig.ControlManifest();
+        var modded = _rig.Manifest();
+        switch (field)
+        {
+            case "mod-name": control.Mod.InstallAs = "ExampleMod.dll"; break;
+            case "mod-arms": control.Mod.Arms = modded.Mod.Arms; break;
+            case "repeatability": control.Mod.Repeatability = true; break;
+            case "plugins": control.Plugins = modded.Plugins; break;
+            case "patchers": control.Patchers = modded.Plugins; break;
+            case "optional": control.OptionalReferences.Add("Dependency"); break;
+            case "probe": control.Probe = modded.Probe; break;
+            case "dll-config": control.Configs["Hidden.dll"] = modded.Cli.Core.File; break;
+        }
+        Assert.Throws<ArgumentException>(control.Validate);
+        string file = Path.Combine(_rig.Root, "contradictory.json"); control.Write(file);
+        Assert.Throws<ArgumentException>(() => RegressionInputs.Read(file));
+    }
+
+    [ClientHostFact]
+    public void NoModStagesOnlyTheCliAndKeepsHonestAbsentModIdentities()
+    {
+        _rig.Write("game/BepInEx/patchers/Foreign.dll", RegressionRig.Assembly("Foreign", new("foreign.mod")));
+        _rig.Write("game/BepInEx/config/foreign.cfg", Encoding.UTF8.GetBytes("not selected"));
+        var original = WorldFixture.Manifest(_rig.Game);
+        var regression = _rig.Regression(_rig.ControlManifest());
+        try
+        {
+            var staged = Assert.Single(regression.Preflight());
+            Assert.Equal("control", staged.Arm); Assert.True(staged.Manifest.NoMod);
+            Assert.Null(staged.Manifest.ModPlugin); Assert.Null(staged.Manifest.ModCommit); Assert.Null(staged.Manifest.ModSha256);
+            Assert.Empty(staged.Manifest.Arms);
+            Assert.Equal("cli-core", Assert.Single(staged.Manifest.Allowlist).Role);
+            Assert.Equal(CliCapabilityManifest.PluginGuid, Assert.Single(staged.Plan.Pins).Key);
+            Assert.Equal(FileHash.Md5(regression.Inputs.Cli.Core.File), staged.Plan.Pins[CliCapabilityManifest.PluginGuid]);
+            Assert.False(File.Exists(Path.Combine(regression.Install, "BepInEx", "plugins", "Unrelated.dll")));
+            Assert.False(File.Exists(Path.Combine(regression.Install, "BepInEx", "patchers", "Foreign.dll")));
+            Assert.False(File.Exists(Path.Combine(regression.Install, "BepInEx", "config", "foreign.cfg")));
+            var provenance = new Dictionary<string, string> { ["modPlugin"] = "previous.mod", ["modCommit"] = "p1", ["modSha256"] = FileHash.Sha256(_rig.Parent) };
+            staged.Record(provenance);
+            Assert.Equal("true", provenance["noMod"]);
+            Assert.DoesNotContain("modPlugin", provenance.Keys); Assert.DoesNotContain("modSha256", provenance.Keys); Assert.DoesNotContain("modCommit", provenance.Keys);
+            Assert.Contains(staged.Describe(), line => line.Contains("no mod under test", StringComparison.Ordinal));
+            using var json = System.Text.Json.JsonDocument.Parse(System.Text.Json.JsonSerializer.Serialize(staged.Manifest, TargetedRegression.ManifestJson));
+            Assert.True(json.RootElement.GetProperty("noMod").GetBoolean());
+            Assert.Equal(System.Text.Json.JsonValueKind.Null, json.RootElement.GetProperty("modPlugin").ValueKind);
+            Assert.Equal(System.Text.Json.JsonValueKind.Null, json.RootElement.GetProperty("modSha256").ValueKind);
+            Assert.Empty(json.RootElement.GetProperty("arms").EnumerateArray());
+        }
+        finally { regression.Remove(); }
+        Assert.Equal(original, WorldFixture.Manifest(_rig.Game));
+    }
+
     [Fact] public void DirectClientLaunchHasNoWindowsSessionZeroRoute()
     {
         Assert.Contains("Windows SSH/session 0", Assert.Throws<InvalidOperationException>(() =>
@@ -896,11 +981,11 @@ public sealed class TargetedRegressionTests : IDisposable
     // One start run (a new run ID, as the command allocates): each arm in turn on one regression, each in its own evidence folder
     // with its own client process, as the command runs them; the last arm's report and folder, and the run ID.
     private (ScenarioReport Report, string Output, string RunId) Start(Func<LocalFakeOwnedProcess> process, Action<ClientRound>? measure = null,
-        bool end = true, string[]? arms = null, Action? beforeClientLaunch = null)
+        bool end = true, string[]? arms = null, Action? beforeClientLaunch = null, RegressionInputs? inputs = null)
     {
         string runId = RunJournal.NewRunId();
         using var run = RunJournal.UseRun(runId);
-        var regression = _rig.Regression(_rig.Manifest());
+        var regression = _rig.Regression(inputs ?? _rig.Manifest());
         ScenarioReport? report = null; string? output = null;
         foreach (string arm in arms ?? ["parent"])
         {
@@ -927,6 +1012,28 @@ public sealed class TargetedRegressionTests : IDisposable
                 node["runner"]!["startedUtc"] = RunJournalStatusTests.Gone.StartedUtc.ToString("O");
                 return node.ToJsonString();
             }));
+    }
+
+    [ClientHostTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void NoModUsesTheSharedHostedRunAndFailureCleanup(bool failLaunch)
+    {
+        var (_, scope) = InProcess(); using var machine = scope;
+        using var data = new FakeClientDataDirectory(_rig.Save);
+        Directory.CreateDirectory(Worlds);
+        var (report, output, runId) = Start(() => new LocalFakeOwnedProcess(63), arms: ["control"], inputs: _rig.ControlManifest(),
+            beforeClientLaunch: failLaunch ? () => throw new IOException("controlled no-mod launch failure") : null);
+        Assert.Equal(!failLaunch, report.Passed);
+        Assert.Equal("true", report.Provenance["noMod"]);
+        Assert.DoesNotContain("modPlugin", report.Provenance.Keys);
+        Assert.DoesNotContain("modSha256", report.Provenance.Keys);
+        if (!failLaunch)
+            Assert.Equal(CliCapabilityManifest.PluginGuid, Assert.Single(Assert.Single(report.Plugins).Value).Key);
+        Assert.True(File.Exists(Path.Combine(output, "run-manifest.json")));
+        Assert.Empty(Directory.Exists(_rig.Runtime) ? Directory.EnumerateFileSystemEntries(_rig.Runtime) : []);
+        var status = Status(runId);
+        Assert.Equal(JournalRunState.Ended, status.State); Assert.Empty(status.Items);
     }
 
     private JournalRunStatus Status(string runId) =>
@@ -1404,6 +1511,13 @@ internal sealed class RegressionRig : IDisposable
             },
         },
     };
+
+    public RegressionInputs ControlManifest()
+    {
+        var inputs = Manifest();
+        inputs.NoMod = true; inputs.Mod = new(); inputs.Plugins.Clear(); inputs.Probe = null;
+        return inputs;
+    }
 
     /// <summary>A capability manifest of the rig's one default plugin. With
     /// <paramref name="full"/> false, <paramref name="save"/> false leaves out valheim.session/save.</summary>

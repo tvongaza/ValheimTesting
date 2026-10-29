@@ -6,7 +6,7 @@ It is in [`Valheim.Testing.GameSessions`](../packages/Valheim.Testing.GameSessio
 
 ## Inputs and the machine
 
-It serves one shape: one owned client hosting one disposable fixture world, one mod under test in a parent and a candidate build, its dependencies and perhaps a probe. The run itself is the hosted [`ClientRounds`](game-client-rounds.md#client-rounds).
+It serves one owned client hosting one disposable fixture world: a mod under test with its builds and dependencies, or an explicit CLI-only control. The run itself is the hosted [`ClientRounds`](game-client-rounds.md#client-rounds).
 
 | Type or member | Does | Fails or refuses when |
 |---|---|---|
@@ -36,6 +36,7 @@ With `characterStore`, `run` stages the registered character before launch and r
 
 | Field | Does | Fails or refuses when |
 |---|---|---|
+| `noMod` | Explicit CLI-only control, default false and omitted when false | `mod` is not its empty default, repeatability is true, or plugins, patchers, optional references or a probe are supplied |
 | `mod.repeatability` | Allows arms with the same SHA256 | Otherwise identical arms are refused |
 | `configs` | Stages named BepInEx config files | Files do not match their declared inputs |
 | `patchers` | Stages the declared preloader patchers | A file is missing or changed |
@@ -46,6 +47,8 @@ With `characterStore`, `run` stages the registered character before launch and r
 | `logScan` | Declares expected error headers and their reasons | New or different errors appear |
 
 See the canonical [input sample](../../examples/TargetedRegression/regression.sample.json) for the JSON shape and [log scan](game-log-scan.md) for expected-error declarations. Without a supplied `valheimCLI.valheimCLI.cfg`, staging writes the environment's port.
+
+`RegressionInputs.NoMod=true` retains all client, fixture, CLI, config, log and game-pin validation. It has one execution arm, `control`; `Stage` refuses any other name. `Mod.Arms` remains empty: no DLL, GUID, hash or source commit is invented. Without this explicit opt-in an empty mod remains invalid. Readers must support this additive input contract; old strict input readers reject the marker. Ordinary mod inputs and result JSON omit the false marker.
 
 ## Stage checks
 
@@ -68,6 +71,8 @@ File names never count in the metadata check. A probe's or the mod's own command
 | `Plan` | The strict `ClientRunPlan`: every staged plugin's declared GUID pinned by its MD5, no `absent` pins for anything else |
 | `Manifest` | The `RunManifest`: the arms, the allowlist with SHA256 and MD5, the install pins, the world and capabilities, install-relative paths only |
 | `Verify()` | Refuses any file added, changed or deleted in the staged folders since staging |
+
+A control's `RunManifest.NoMod` is true, `Arm` is `control`, `Arms` has no mod artifacts, and nullable `ModPlugin`, `ModCommit` and `ModSha256` are null. The positional constructor and deconstruction keep their existing arity. The CLI identity remains real in `Allowlist` and the strict plan's pins. `StagedArm.Record` adds `noMod=true` and omits absent mod identity keys; `Describe` says “no mod under test”. Saving a held control world preserves the explicit marker, empty mods/plugins and real CLI identity in export provenance. Neither an empty mod map alone nor a passing synthetic export proves native CLI-only execution.
 
 | Member | Does |
 |---|---|

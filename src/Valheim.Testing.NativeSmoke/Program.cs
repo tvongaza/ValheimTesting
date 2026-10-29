@@ -4,7 +4,8 @@ using Valheim.Testing.GameSessions;
 
 if (args is ["help" or "--help"])
 {
-    Console.WriteLine("valheim-test start [--mod DLL ...] [--config FILE ...] [--env NAME=VALUE ...] [--output NEW_DIR] [--world-fixture DIR] [--inventory FILE | --game DIR] [--client-env NAME] [--client-architecture x64|arm64] [setup options] (with no --mod, the current project's one built plugin)");
+    Console.WriteLine("valheim-test start [--mod DLL ... | --no-mod] [--config FILE ...] [--env NAME=VALUE ...] [--output NEW_DIR] [--world-fixture DIR] [--inventory FILE | --game DIR] [--client-env NAME] [--client-architecture x64|arm64] [setup options] (without --mod or --no-mod, the current project's one built plugin)");
+    Console.WriteLine("--no-mod explicitly runs a CLI-only control with no mod under test; no mod build, dependency search, scenario or comparison inputs are allowed.");
     Console.WriteLine("--config stages non-secret config files on the mod-bearing actor; --env sets non-empty literal values on every owned game process. Both are retained in private run-inputs.json; omit credentials.");
     Console.WriteLine(ServerLoad.Usage + " (a server and one clean client from the inventory; this machine when no --inventory)");
     Console.WriteLine(ServerLoadPhases.Usage + " (ordered disposable server-only saves)");
@@ -42,7 +43,7 @@ if (args.Length != 0 && args[0] is "server-load" or "server-load-ab")
 if (!StartArguments.TryRead(args, out var parsedStart, out var error, allowImplicitMod: true))
 {
     Console.Error.WriteLine(error);
-    Console.Error.WriteLine("Usage: valheim-test start [--mod DLL ... | --project MOD.csproj] [--config FILE ...] [--env NAME=VALUE ...] [--scenario TEST.dll | --scenario-project TEST.csproj] [--dependency NAME=DLL ...] [--build-inputs FILE] [--output NEW_DIR] [--world-fixture DIR] [--inventory FILE | --game DIR] [--client-env NAME] [--client-architecture x64|arm64] [--join-seconds 10..900] [--hold] [--source COMMIT] [--cli-manifest FILE --cli-files DIR] [--compare-mod DLL --compare-source COMMIT] [--search-root DIR|DLL ...] [--optional-reference ASSEMBLY ...] [--client-loader-package FILE] [--expected-log-error EXACT_HEADER --expected-log-reason REASON]");
+    Console.Error.WriteLine("Usage: valheim-test start [--mod DLL ... | --project MOD.csproj | --no-mod] [--config FILE ...] [--env NAME=VALUE ...] [--scenario TEST.dll | --scenario-project TEST.csproj] [--dependency NAME=DLL ...] [--build-inputs FILE] [--output NEW_DIR] [--world-fixture DIR] [--inventory FILE | --game DIR] [--client-env NAME] [--client-architecture x64|arm64] [--join-seconds 10..900] [--hold] [--source COMMIT] [--cli-manifest FILE --cli-files DIR] [--compare-mod DLL --compare-source COMMIT] [--search-root DIR|DLL ...] [--optional-reference ASSEMBLY ...] [--client-loader-package FILE] [--expected-log-error EXACT_HEADER --expected-log-reason REASON]");
     return 2;
 }
 var options = parsedStart!.Options;
@@ -74,13 +75,14 @@ try
     // The client (the inventory's; this machine's Valheim with no --inventory), its loader, the mod, its build inputs,
     // the scenario and the dependency lock: one stage, shared with build and server-load.
     var stage = await ModInputStage.RunAsync(new ModInputStage.Request(ModInputStage.Route.Hosted, output, options!,
-        new HashSet<string>(StringComparer.Ordinal), // start's one switch, --hold, is its run's own
+        parsedStart.Switches,
         mods!, roots!, optionalReferences!, buildDependencies!)
-        { Shipped = ShippedLoader.Choose, Progress = progress, RunInputs = parsedStart.RunInputs }, cancel.Token).ConfigureAwait(false);
+        { Shipped = ShippedLoader.Choose, Progress = progress, RunInputs = parsedStart.RunInputs,
+            NoMod = parsedStart.Switches.Contains("--no-mod") }, cancel.Token).ConfigureAwait(false);
     var selectedMods = stage.Mods;
     string game = stage.Compile.Recipe.Install;
     string architecture = stage.ClientArchitecture!;
-    string mod = selectedMods[0];
+    string? mod = stage.NoMod ? null : selectedMods[0];
     var custom = stage.Scenario;
     var hostedScenario = (IOneShotHostedScenario?)custom?.Runner;
     var dependencies = stage.Dependencies!;
@@ -111,7 +113,8 @@ try
         Name = "native-smoke-" + DateTime.UtcNow.ToString("yyyyMMdd-HHmmss-fff", System.Globalization.CultureInfo.InvariantCulture),
         Fixture = new RegressionFixture { Root = worldRoot, WorldUid = world.UidText },
         Client = new RegressionClient { Character = DefaultSmokeCharacter.Name, CharacterStore = character.Root, Architecture = architecture },
-        Mod = new RegressionMod { InstallAs = Path.GetFileName(mod), Arms = new Dictionary<string, RegressionArm>
+        NoMod = stage.NoMod,
+        Mod = mod == null ? new RegressionMod() : new RegressionMod { InstallAs = Path.GetFileName(mod), Arms = new Dictionary<string, RegressionArm>
             { [comparison == null ? "smoke" : "before"] = new() { File = mod, Sha256 = FileHash.Sha256(mod),
                 // Only a real source commit; the artifact's own SHA-256 is already the arm's Sha256.
                 Commit = options.GetValueOrDefault("--source") } } },
@@ -137,17 +140,17 @@ try
     Console.WriteLine($"disposable loader profile: {runner.Install}");
     Console.WriteLine("run ID: " + runId);
     bool passed = true;
-    string finalArm = inputs.Mod.Arms.Keys.Last();
-    foreach (string arm in inputs.Mod.Arms.Keys)
+    string finalArm = inputs.ArmNames.Last();
+    foreach (string arm in inputs.ArmNames)
     {
         stage.RunInputs.Verify();
         string armOutput = Path.Combine(output, "evidence", arm);
         LocalClientJournal? processJournal = null;
-        var report = runner.Run(arm, armOutput, custom?.Name ?? "selected plugin loads in a hosted fixture",
+        var report = runner.Run(arm, armOutput, custom?.Name ?? (inputs.NoMod ? "CLI-only control hosts the fixture; no mod under test" : "selected plugin loads in a hosted fixture"),
             ["first"], round =>
             {
                 hostedScenario?.Run(round, custom!.ValidatedInputs);
-                if (holdRequested && arm == inputs.Mod.Arms.Keys.Last())
+                if (holdRequested && arm == finalArm)
                     round.Step("keep the owned client running until finish", () =>
                         ForegroundHold.HoldAsync(runId, armOutput, cancel.Token,
                             [("client", processJournal?.Process ?? throw new InvalidOperationException("The owned client process was not recorded."))])
@@ -155,7 +158,7 @@ try
             }, cancel.Token, afterPinnedClientOpened: ready =>
             {
                 ready.Provenance["runId"] = runId;
-                ready.Provenance["firstModLoadedSecondsFromCommand"] =
+                ready.Provenance[inputs.NoMod ? "controlReadySecondsFromCommand" : "firstModLoadedSecondsFromCommand"] =
                     elapsed.Elapsed.TotalSeconds.ToString("F3", System.Globalization.CultureInfo.InvariantCulture);
                 stage.Record(ready.Provenance);
             }, openClient: (plan, directory, logs, token) =>
@@ -179,7 +182,7 @@ try
                 journalClean = false;
                 report.RecordFailure(StepPhase.Cleanup, "owned client process was not proved stopped", failure);
             }
-        Console.WriteLine(NativeSmokeLogSummary.Format(report.Logs, inputs.Mod.Arms.Count > 1 ? arm : null));
+        Console.WriteLine(NativeSmokeLogSummary.Format(report.Logs, inputs.ArmNames.Count > 1 ? arm : null));
         // Final-arm evidence is written once after the copy-cleanup verdict in finally.
         report.Provenance["runId"] = runId;
         lastArm = report; lastArmOutput = armOutput;
@@ -189,7 +192,7 @@ try
         if (!report.Passed) break;
     }
     exitCode = passed ? 0 : 1;
-    outcome = $": hosted fixture, {selectedMods.Count} selected mod(s), {inputs.Mod.Arms.Count} arm(s); private evidence in {output}";
+    outcome = $": hosted fixture, {(inputs.NoMod ? "no mod under test" : selectedMods.Count + " selected mod(s)")}, {inputs.ArmNames.Count} arm(s); private evidence in {output}";
 }
 catch (Exception failure) when (failure is ArgumentException or IOException or InvalidDataException or InvalidOperationException or UnauthorizedAccessException or FormatException or OperationCanceledException or PlatformNotSupportedException)
 {
@@ -233,7 +236,7 @@ finally
 if (outcome != null)
 {
     Console.WriteLine((exitCode == 0 ? "PASS" : "FAIL") + outcome + $"; {elapsed.Elapsed.TotalSeconds:F1}s");
-    SmokeProject.PrintHint(server: false);
+    if (!parsedStart.Switches.Contains("--no-mod")) SmokeProject.PrintHint(server: false);
 }
 return exitCode;
 
