@@ -17,9 +17,9 @@ namespace Valheim.Testing.Doubles
     public static class DoubledGame
     {
         /// <summary>The game's version string; <c>ZNet.VersionString</c>'s default.</summary>
-        public const string Version = "1.0.17";
+        public const string Version = "1.0.21";
         /// <summary>The game's network version (<c>Version.c_networkVersion</c>); <c>ZNet.NetworkVersion</c>'s default.</summary>
-        public const uint NetworkVersion = 40;
+        public const uint NetworkVersion = 41;
     }
 
     /// <summary>A <see cref="WorldGenerator"/> over the toolkit's composable terrain (<see cref="ITerrain"/>).</summary>

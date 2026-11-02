@@ -4,6 +4,8 @@
 
 `Valheim.Testing.Doubles` lets a unit-test project compile and run a mod's pure-logic source files without Unity, Valheim, BepInEx or Jotunn. It is a source package: its files compile into your test project and stand in for the game's types under their real names. Your mod's source, linked unchanged, calls them as it would call the game. Use it for decisions, persistence formats, RPC handlers, registrations and anything else a mod computes from game types. For rendering, physics, timing and real networking, run a native check with [`Valheim.Testing.Game`](Valheim.Testing.Game.md).
 
+The current doubled game target is Valheim 1.0.21, network version 41, exposed through `DoubledGame.Version` and `DoubledGame.NetworkVersion`. The native member and byte-capture checks require that target; pure tests and metadata parity do not replace current-game runtime evidence.
+
 **Example:** [ModWithTests](../../examples/ModWithTests/README.md) links real mod source and runs five tests. The step-by-step guide is [Test mod logic that uses game types](../guides/test-logic-that-uses-game-types.md).
 
 ## Install
