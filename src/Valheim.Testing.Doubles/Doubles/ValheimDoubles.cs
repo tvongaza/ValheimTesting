@@ -229,6 +229,15 @@ public partial class Heightmap
             hm.m_terrainComp = new TerrainComp(hm, width);
         return hm;
     }
+
+    /// <summary>Creates an unregistered zone map bound to this saved compiler record and decodes its arrays.
+    /// Does not create another record, generate baseline terrain or rebuild the map.</summary>
+    [TestOnly] public static Heightmap CreateForZone(Vector2s zoneID, ZDO savedCompiler, int width = 64)
+    {
+        var hm = CreateForZone(zoneID, width, withCompiler: false);
+        hm.m_terrainComp = new TerrainComp(hm, width, savedCompiler);
+        return hm;
+    }
 }
 
 /// <summary>
@@ -488,6 +497,31 @@ public partial class TerrainComp
         m_modifiedHeight = new bool[n];
         m_paintMask = new UnityEngine.Color[n];
         m_modifiedPaint = new bool[n];
+    }
+
+    /// <summary>Allocates arrays around an existing saved compiler and loads them through <see cref="Load"/>.
+    /// Preserves its identity, owner and data; a failed load preserves its previous live-view reference.</summary>
+    [TestOnly] public TerrainComp(Heightmap hmap, int width, ZDO savedCompiler)
+    {
+        if (hmap == null) throw new System.ArgumentNullException(nameof(hmap));
+        if (savedCompiler == null) throw new System.ArgumentNullException(nameof(savedCompiler));
+        if (width <= 0 || width != hmap.m_width) throw new System.ArgumentOutOfRangeException(nameof(width), "Width must be positive and match the map.");
+        int n = checked((width + 1) * (width + 1));
+        if (savedCompiler.GetPrefab() != PrefabName.GetStableHashCode())
+            throw new System.ArgumentException("The supplied record is not a terrain compiler.", nameof(savedCompiler));
+        if (savedCompiler.GetSector() != ZoneSystem.GetZone(hmap.transform.position))
+            throw new System.ArgumentException("The saved compiler belongs to another zone.", nameof(savedCompiler));
+        m_hmap = hmap; m_width = width;
+        m_levelDelta = new float[n]; m_smoothDelta = new float[n]; m_modifiedHeight = new bool[n];
+        m_paintMask = new UnityEngine.Color[n]; m_modifiedPaint = new bool[n];
+        ZNetView? previous = savedCompiler.m_view; bool loaded = false;
+        try
+        {
+            m_nview = new ZNetView(savedCompiler);
+            if (!Load()) throw new System.IO.InvalidDataException("The saved terrain compiler has no compatible TCData payload.");
+            loaded = true;
+        }
+        finally { if (!loaded) savedCompiler.m_view = previous; }
     }
 
     private int m_lastHash;

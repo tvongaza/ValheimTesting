@@ -197,6 +197,15 @@ namespace Valheim.Testing.Doubles
             global::Heightmap.s_heightmaps.Add(hm);
             return hm;
         }
+        /// <summary>Loads this zone using the supplied authoritative saved compiler without creating another record.
+        /// Its arrays are decoded before the old map is replaced. No generated/loaded flags or terrain rebuild are applied.</summary>
+        public global::Heightmap RegisterHeightmap(Vector2s zone, ZDO savedCompiler, int width = 64)
+        {
+            var hm = global::Heightmap.CreateForZone(zone, savedCompiler, width);
+            UnloadHeightmap(zone);
+            global::Heightmap.s_heightmaps.Add(hm);
+            return hm;
+        }
         /// <summary>Unloads the zone's heightmap, as the game does when the zone leaves the active area.</summary>
         public void UnloadHeightmap(Vector2s zone)
         {
