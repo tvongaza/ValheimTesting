@@ -492,11 +492,7 @@ public partial class TerrainComp
         zdo.SetOwner(ZDOMan.GetSessionID());
         m_nview = new ZNetView(zdo);
         int n = (width + 1) * (width + 1);
-        m_levelDelta = new float[n];
-        m_smoothDelta = new float[n];
-        m_modifiedHeight = new bool[n];
-        m_paintMask = new UnityEngine.Color[n];
-        m_modifiedPaint = new bool[n];
+        (m_levelDelta, m_smoothDelta, m_modifiedHeight, m_paintMask, m_modifiedPaint) = NewArrays(n);
     }
 
     /// <summary>Allocates arrays around an existing saved compiler and loads them through <see cref="Load"/>.
@@ -512,8 +508,7 @@ public partial class TerrainComp
         if (savedCompiler.GetSector() != ZoneSystem.GetZone(hmap.transform.position))
             throw new System.ArgumentException("The saved compiler belongs to another zone.", nameof(savedCompiler));
         m_hmap = hmap; m_width = width;
-        m_levelDelta = new float[n]; m_smoothDelta = new float[n]; m_modifiedHeight = new bool[n];
-        m_paintMask = new UnityEngine.Color[n]; m_modifiedPaint = new bool[n];
+        (m_levelDelta, m_smoothDelta, m_modifiedHeight, m_paintMask, m_modifiedPaint) = NewArrays(n);
         ZNetView? previous = savedCompiler.m_view; bool loaded = false;
         try
         {
@@ -523,6 +518,9 @@ public partial class TerrainComp
         }
         finally { if (!loaded) savedCompiler.m_view = previous; }
     }
+
+    private static (float[] level, float[] smooth, bool[] heightFlags, UnityEngine.Color[] paint, bool[] paintFlags) NewArrays(int count) =>
+        (new float[count], new float[count], new bool[count], new UnityEngine.Color[count], new bool[count]);
 
     private int m_lastHash;
     // The game's ComputePaintMaskHash: a double summing each modified texel's flag and colour channels, hashed.

@@ -500,6 +500,7 @@ Heightmap	method	Poke(int, bool) : void	game
 Heightmap	method	RebuildTerrain() : void	test-only
 Heightmap	method	Regenerate() : void	game
 Heightmap	method	TerrainVSModifier(TerrainModifier) : bool	game
+Heightmap	method	static CreateForZone(Vector2s, ZDO, int) : Heightmap	test-only
 Heightmap	method	static CreateForZone(Vector2s, int, bool) : Heightmap	test-only
 Heightmap	method	static FindHeightmap(UnityEngine.Vector3) : Heightmap	game
 Heightmap	method	static GetAllHeightmaps() : List<Heightmap>	game
@@ -1081,6 +1082,7 @@ Terminal.ConsoleEventFailable	type	delegate	game
 Terminal.ConsoleOptionsFetcher	type	delegate	game
 TerrainComp	type	class	game
 TerrainComp	ctor	.ctor(Heightmap, int)	test-only
+TerrainComp	ctor	.ctor(Heightmap, int, ZDO)	test-only
 TerrainComp	field	SaveCount : int	test-only
 TerrainComp	field	m_hmap : Heightmap	game
 TerrainComp	field	m_initialized : bool	game

@@ -112,7 +112,7 @@ using var world = new ValheimWorldScope().WithTerrain(new PlaneTerrain(30f)).Wit
 | `WithUnityOrder(UnityOrder.Reversed)` | Unity's unordered phases run backwards; restored on dispose |
 | `AsServer` | The server role flag |
 | `WithLocalPlayer(position)` | A `Player` (none by default, as on a dedicated server) |
-| `RegisterHeightmap` | A loaded zone; zones add up, loading a zone again replaces it |
+| `RegisterHeightmap` | A loaded zone; supply its saved compiler ZDO to reload that record, or omit it to create a fresh compiler |
 | `UnloadHeightmap` | The zone unloaded |
 | `CaptureLog` | The captured log |
 
@@ -123,6 +123,28 @@ The scope covers the game's statics, not your mod's. Scope those with `Valheim.T
 ```csharp
 using var plain = StaticOverride.Set(() => MyMod.Enabled, false);
 ```
+
+### Reload saved terrain
+
+The original `RegisterHeightmap(zone, width, withCompiler)` and `Heightmap.CreateForZone(zone, width, withCompiler)` signatures create a new compiler record when `withCompiler` is true. For a saved compiler, supply that exact authoritative ZDO instead:
+
+```csharp
+using var world = new ValheimWorldScope().WithTerrain(new PlaneTerrain(40f)).WithZdos().WithZoneSystem();
+var zone = new Vector2s(0, 0);
+var first = world.RegisterHeightmap(zone);
+first.m_terrainComp!.m_modifiedHeight[0] = true;
+first.m_terrainComp.m_levelDelta[0] = 1.25f;
+first.m_terrainComp.Save();
+var saved = first.m_terrainComp.m_nview.GetZDO();
+world.UnloadHeightmap(zone);
+var loaded = world.RegisterHeightmap(zone, saved);
+loaded.AuthoredHeight = (_, _) => 40f;
+loaded.RebuildTerrain();
+```
+
+The saved overload allocates arrays and uses the existing `TerrainComp.Load()` decoder. It creates no replacement ZDO, claims no ownership, rewrites no payload, and changes no generated-zone or scene-placement flags. A failed load leaves the prior registered map and the record's prior live-view reference intact. The caller supplies the record; the helper does not discover, choose or remove another compiler in the same zone. Null records, wrong prefabs/zones, incompatible dimensions and missing or undecodable payloads refuse instead of returning a fresh compiler. This is the existing game-like decoder, not an additional strict arbitrary-format validator.
+
+`Heightmap.CreateForZone(zone, saved, width)` creates the same bound map without registering it. `new TerrainComp(map, width, saved)` binds directly to an existing map. Binding loads deltas and flags only: it neither generates baseline heights nor rebuilds terrain. Supply the known baseline through the existing `AuthoredHeight`/world input, then use `RebuildTerrain` and the consumer's normal observation hooks. A successful binding alone does not establish native terrain readiness or Harmony callback order.
 
 ## Roles: server, host, client and main menu
 

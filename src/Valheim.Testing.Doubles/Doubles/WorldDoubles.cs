@@ -186,9 +186,8 @@ namespace Valheim.Testing.Doubles
         /// <summary>Sets the server flag on the current <c>ZNet</c> (restored on dispose).</summary>
         public ValheimWorldScope AsServer(bool server = true) { ZNet.instance.Server = server; return this; }
         /// <summary>
-        /// Loads a zone heightmap (with a compiler unless <paramref name="withCompiler"/> is false) and returns it. Zones
-        /// add up, so a test can load neighbours one after another; loading a zone again replaces its heightmap, as an
-        /// unload and reload would.
+        /// Loads a zone heightmap with a new compiler unless <paramref name="withCompiler"/> is false. Zones add up;
+        /// registering a zone again replaces its live map. To reload a saved compiler, use the saved-record overload.
         /// </summary>
         public global::Heightmap RegisterHeightmap(Vector2s zone, int width = 64, bool withCompiler = true)
         {
