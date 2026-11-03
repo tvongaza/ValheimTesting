@@ -8,7 +8,7 @@ using Xunit;
 // The launch-abandonment checks themselves, through the real host shell. Controlled snapshots cover hazards; the real-listing
 // tests make each CI OS prove that its production process-table command runs and reports this game-free runner idle.
 [Trait("Os", "unix")]
-[Collection(nameof(WindowsGameProcessInventory))]
+[Collection(nameof(GameProcessInventory))]
 public sealed class BashLaunchGoneScriptTests
 {
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(30);
@@ -71,7 +71,7 @@ public sealed class BashLaunchGoneScriptTests
 }
 
 [Trait("Os", "macos")]
-[Collection(nameof(WindowsGameProcessInventory))]
+[Collection(nameof(GameProcessInventory))]
 public sealed class MacLaunchGoneScriptTests
 {
     [OsFact("macos")]
@@ -80,7 +80,7 @@ public sealed class MacLaunchGoneScriptTests
 }
 
 [Trait("Os", "windows")]
-[Collection(nameof(WindowsGameProcessInventory))]
+[Collection(nameof(GameProcessInventory))]
 public sealed class WindowsLaunchGoneScriptTests
 {
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(30);

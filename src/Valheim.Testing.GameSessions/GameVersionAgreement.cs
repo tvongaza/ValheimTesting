@@ -45,6 +45,15 @@ internal static class GameVersionAgreement
         return GameAssemblyVersion.Read(image, $"{path} on {host.Name}");
     }
 
+    // World admission needs this assembly alone. The later full listing still owns install preservation.
+    // HostInstall also reads its fixed executable/patcher entries, as for every bounded listing.
+    internal static async Task<GameBuild> ReadInstallationAsync(IGameHost host, string install, TimeSpan timeout, CancellationToken cancellation)
+    {
+        var listing = await HostInstall.ListCaseInsensitiveAsync(host, install, timeout,
+            InstallPins.ManagedFolders.Select(folder => folder + "/" + InstallPins.GameAssemblyName).ToArray(), cancellation).ConfigureAwait(false);
+        return await ReadAsync(host, listing, timeout, cancellation).ConfigureAwait(false);
+    }
+
     /// <summary>The build of the game assembly in a local <paramref name="install"/> that runs in place, never listed: read where it is.</summary>
     internal static Task<GameBuild> ReadInPlaceAsync(string install, CancellationToken cancellation) =>
         GameAssemblyVersion.ReadInstallAsync(install, cancellation);

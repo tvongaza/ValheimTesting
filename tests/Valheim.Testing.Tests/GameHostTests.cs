@@ -1,6 +1,7 @@
 using System.Formats.Tar;
 using System.Net;
 using System.Net.Sockets;
+using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text.RegularExpressions;
 using Valheim.Testing.Game;
@@ -57,7 +58,10 @@ public class GameHostTests
     {
         var body = new InvalidOperationException("controlled body failure");
         var removal = new IOException("controlled removal failure");
-        var fake = new FakeLauncher().Reply(_ => cleanupFails ? throw removal : FakeLauncher.Exit(0, stderr: FakeLauncher.Report(0)));
+        // The removal throws from a frame the test owns and the JIT keeps: Release builds may inline FakeLauncher.RunAsync out of
+        // the trace (#924), but a cleanup that rethrew with a new trace would lose this frame too.
+        [MethodImpl(MethodImplOptions.NoInlining)] ProcessExit ThrowRemoval() => throw removal;
+        var fake = new FakeLauncher().Reply(_ => cleanupFails ? ThrowRemoval() : FakeLauncher.Exit(0, stderr: FakeLauncher.Report(0)));
         var host = new LocalGameHost("cleanup-probe", HostShell.Pwsh, fake);
         async Task RunBody(string root) { await Task.CompletedTask; if (bodyFails) throw body; }
 
@@ -71,7 +75,7 @@ public class GameHostTests
         else if (cleanupFails)
         {
             Assert.Same(removal, error);
-            Assert.Contains(nameof(FakeLauncher.RunAsync), removal.StackTrace);
+            Assert.Contains(nameof(ThrowRemoval), removal.StackTrace);
         }
         else Assert.Null(error);
     }

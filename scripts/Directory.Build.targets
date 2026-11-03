@@ -1,0 +1,12 @@
+<Project>
+  <!-- File-based apps declare their entry Compile item after props. Bind to that input here,
+       rather than to the SDK-dependent virtual project name. -->
+  <PropertyGroup Condition="'$(FileBasedProgram)' == 'true'">
+    <_ValidatorSourcePath>$([MSBuild]::NormalizePath('$(MSBuildThisFileDirectory)validate.cs'))</_ValidatorSourcePath>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(FileBasedProgram)' == 'true'">
+    <_ValidatorEntryPoint Include="@(Compile->WithMetadataValue('FullPath', '$(_ValidatorSourcePath)'))" />
+    <Compile Include="$(MSBuildThisFileDirectory)../src/Valheim.Testing.Game/OwnedClientCommandLease.Identity.cs"
+             Link="OwnedClientCommandLease.Identity.cs" Condition="'@(_ValidatorEntryPoint)' != ''" />
+  </ItemGroup>
+</Project>

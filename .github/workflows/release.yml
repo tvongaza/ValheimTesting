@@ -46,7 +46,11 @@ jobs:
       # `pins.cs bump` fixes when the release is prepared.
       - name: Refuse candidate, stale and already-published versions
         run: dotnet run scripts/pins.cs -- versions
-      - run: dotnet run scripts/bootstrap-cli.cs
+      - name: Build the pinned CLI transport package
+        uses: ./.github/actions/setup
+        with:
+          phase: bootstrap
+          evidence-label: release
       # The whole serial validation on one runner: a test command ends at its 10-minute hard limit (#719), then packaging.
       - run: dotnet run scripts/validate.cs
         timeout-minutes: 20

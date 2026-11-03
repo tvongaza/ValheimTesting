@@ -188,8 +188,6 @@ public sealed class PreparedHostedCampaign : IAsyncDisposable
             string target = Path.Combine(serverWorld, targetRelative);
             Directory.CreateDirectory(Path.GetDirectoryName(target)!);
             File.Copy(Path.Combine(manifest.World, relative), target);
-            if (!FileHash.Sha256(target).Equals(hash, StringComparison.OrdinalIgnoreCase))
-                throw new IOException("The campaign's server-world copy changed while it was staged: " + relative);
             // WorldFixture uses paths relative to the machine running the campaign.
             // Keep its native separator so a Windows-run campaign can verify the copy.
             serverHashes.Add(targetRelative, hash);
@@ -488,8 +486,7 @@ public static class HostedCampaignPreparation
             {
                 var item = inputs.Roles.Single(role => role.Name == worldHost);
                 var host = hostFactory?.Invoke(item.Role.Host) ?? inputs.Profile.CreateHost(item.Role.Host);
-                var game = await HostInstall.ListAsync(host, item.Role.Install, timeout, null, cancellation).ConfigureAwait(false);
-                var target = await GameVersionAgreement.ReadAsync(host, game, timeout, cancellation).ConfigureAwait(false);
+                var target = await GameVersionAgreement.ReadInstallationAsync(host, item.Role.Install, timeout, cancellation).ConfigureAwait(false);
                 builds[worldHost] = target;
                 if (inputs.Manifest.InitialHostingBuild is { } initial) WorldIdentity.RequireSameTarget(initial, target);
                 if (inputs.Manifest.WorldAdmission is { } prior)
@@ -994,12 +991,10 @@ public static class HostedCampaignPreparation
             Try("server", "world fixture", () =>
             {
                 manifest.AdmittedWorldFiles = WorldFixture.Manifest(manifest.World);
-                var identity = WorldIdentity.Read(manifest.World);
+                var identity = WorldIdentity.ReadObserved(manifest.World, manifest.AdmittedWorldFiles);
                 manifest.AdmittedWorldIdentity = identity;
-                WorldFixture.Verify(manifest.World, manifest.AdmittedWorldFiles);
                 if (manifest.WorldUid.Length > 0 && !identity.UidText.Equals(manifest.WorldUid, StringComparison.Ordinal))
                     throw new InvalidDataException("The fixture world UID does not match the campaign's reviewed worldUid.");
-                _ = WorldFixture.Manifest(manifest.World);
             });
         else if (manifest.WorldUid.Length > 0)
             problems.Add(new("server", "world fixture", "worldUid needs a fixture world."));

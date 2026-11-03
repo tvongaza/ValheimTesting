@@ -73,7 +73,7 @@ internal sealed class RunFolder
             if (Made) return;
             string key = HostName.ToUpperInvariant() + "|" + (Host.Shell.Kind == HostShellKind.PowerShell ? Path.Replace('/', '\\').ToUpperInvariant() : Path);
             if (!_claims.Add(key))
-                throw new InvalidOperationException($"{Path} on {Host.Name} is already another role's run folder in this run; give each environment on a host its own runtime folder.");
+                throw new InvalidOperationException($"{Path} on {Host.Name} is already claimed by this run; another role or an earlier unconfirmed reservation may hold it. Give each environment on a host its own runtime folder.");
             try
             {
                 await _journal(JournalEntry.Of(JournalEntry.CopyIntended, ("runtime", Path), ("stage", ""), ("parent", Runtime), ("holds", Holds),
@@ -85,7 +85,19 @@ internal sealed class RunFolder
             {
                 // Someone else's folder: never the run's to fetch or remove. The line that says so is required, not best-effort: without
                 // it the open intent would let env teardown remove that folder, so a failed write fails the run here, before anything else.
-                await _journal(JournalEntry.Of(JournalEntry.CopyRetired, ("runtime", Path), ("notMade", "it already existed")), CancellationToken.None).ConfigureAwait(false);
+                try
+                {
+                    await _journal(JournalEntry.Of(JournalEntry.CopyRetired, ("runtime", Path), ("notMade", "it already existed")), CancellationToken.None).ConfigureAwait(false);
+                }
+                catch (Exception receiptError) when (receiptError is not OperationCanceledException)
+                {
+                    // The journal append may have failed or only lost its reply: either way the run's open intent may still list the
+                    // folder as the run's own, which env teardown would remove.
+                    throw new InvalidOperationException($"{Path} already exists on {Host.Name}; this run did not create or own the folder. " +
+                        "Nothing was written in it, but its notMade refusal receipt may not have been recorded, so the journal may still list it " +
+                        $"as run {RunId}'s folder: keep it, and do not run env teardown --run {RunId} until env status no longer lists it for that run. " +
+                        $"Reservation refusal: {error.Message}", receiptError);
+                }
                 throw new InvalidOperationException($"{Path} already exists on {Host.Name}; a run never writes into a folder it did not make. Nothing was written in it.", error);
             }
             lock (_state) _made = true;

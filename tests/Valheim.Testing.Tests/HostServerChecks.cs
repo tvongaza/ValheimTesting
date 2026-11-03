@@ -465,6 +465,7 @@ public sealed class StandInServerFixtureTests
 }
 
 [Trait("Os", "unix")]
+[Collection(nameof(GameProcessInventory))]
 public sealed class UnixServerLauncherTimeoutTests
 {
     [Fact]
@@ -569,6 +570,7 @@ public sealed class UnixServerLauncherTimeoutTests
 // The fixture's own entry point on a real start and stop: a failed test body stays the failure when the stand-in's cleanup
 // then fails too, and the cleanup error rides along on it. The stop really runs; only its reply is lost.
 [Trait("Os", "unix")]
+[Collection(nameof(GameProcessInventory))]
 public sealed class UnixStandInServerFixtureTests
 {
     [Fact]

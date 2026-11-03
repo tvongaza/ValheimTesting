@@ -61,6 +61,31 @@ public sealed class HostedWorldOnHostTests : IDisposable
         Assert.True(Path.Exists(path));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void AnAdmittedLocalCopyStillVerifiesTheLaterRemoteTransfer(bool corruptTransfer)
+    {
+        using var journal = RunJournal.UseLocalDirectory(Path.Combine(_root, "local-journal"));
+        var plan = Plan();
+        var target = GameAssemblyVersion.Read(new MemoryStream(FakeInstalls.GameAssembly()), "host");
+        plan.Admission = WorldIdentity.Capture(plan.World.Source, target, plan.World.Sha256);
+        if (corruptTransfer) _host.AfterShip = copy => File.AppendAllText(Path.Combine(copy, "Campaign", "_main.0.fwl2"), "transfer-only drift");
+        string output = Directory.CreateDirectory(Path.Combine(_root, "out")).FullName;
+        if (corruptTransfer)
+        {
+            Assert.Throws<InvalidOperationException>(() => HostedWorldOnHost.Place(Site(), plan, output, CancellationToken.None));
+            Assert.DoesNotContain(_host.Runs, run => run.Script == "world-move");
+            Assert.DoesNotContain(_journal, entry => entry.Kind == JournalEntry.CopyDone);
+        }
+        else
+        {
+            using var placed = HostedWorldOnHost.Place(Site(), plan, output, CancellationToken.None);
+            Assert.Equal("4242", placed.WorldUid);
+        }
+        plan.Admission.Verify();
+    }
+
     [Fact] public void ThePlacementIsJournalledBeforeTheShipAndCollectingMovesItIntoTheRunsFolder()
     {
         string output = Directory.CreateDirectory(Path.Combine(_root, "out")).FullName;

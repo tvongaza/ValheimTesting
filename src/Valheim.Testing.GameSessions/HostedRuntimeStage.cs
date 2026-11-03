@@ -129,6 +129,9 @@ internal static partial class HostedRuntimeStage
             throw new InvalidOperationException((pids.Count == 0 ? "A conflicting Valheim client or owned-runtime process" : "Conflicting Valheim " + string.Join("; ", pids.Select(Name))) +
                 $" is running on {host.Name}" + (clientSession ? ", where this run needs the desktop session's one client" : "") + "; no files were changed.");
         }
+        if (parts[0] == "unknown")
+            throw new HostOperationException($"A Valheim process whose executable path cannot be read is running on {host.Name} and may " +
+                "be using this runtime (Linux ps reports only its name); stop that game and retry, no files were changed", result);
         if (parts[0] != "idle") throw new HostOperationException($"Unexpected game-process verdict from {host.Name}", result);
     }
 
