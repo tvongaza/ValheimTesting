@@ -313,7 +313,7 @@ public sealed record WorldIdentity(string Name, string SeedName, int Seed, long 
             if (name.Length == 0) throw new InvalidDataException("it names no world");
             // World.LoadWorld: the world-generation version from 26, then whether the world has saved data from 30 (null when
             // the package ends before it: only a never-saved world is read by it).
-            if (version >= 26) { generation = BinaryPrimitives.ReadInt32LittleEndian(package[at..]); at += 4; }
+            if (version >= 26) { if (package.Length - at >= 4) generation = BinaryPrimitives.ReadInt32LittleEndian(package[at..]); at += 4; }
             needsDb = version < 30 ? false : at < package.Length ? package[at] != 0 : null;
             return new WorldIdentity(name, seedName, seed, uid, version, file);
         }
