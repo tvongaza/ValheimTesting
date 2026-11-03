@@ -152,6 +152,24 @@ public sealed class WorldSaveTests : IDisposable
     }
 
     [Fact]
+    public void ASeededRunsPlacementIsTheWorldTheGameCreatedWithItsVerifiedUid()
+    {
+        string journal = Path.Combine(_root, "journal");
+        var run = new RunJournal("run-s");
+        string world = Path.Combine(_root, "worlds_local", "VT-seeded");
+        foreach (string state in new[] { "intended", "attempted" })
+            run.AppendLocal("client", JournalEntry.Of(JournalEntry.CopyIntended, ("runtime", world), ("holds", "hosted-world"), ("world", "VT-seeded"),
+                ("seed", "abc"), ("creationState", state), ("placementState", state)), journal);
+        // A requested or attempted creation is not a placed world.
+        Assert.Contains("no hosted world", Assert.Throws<InvalidOperationException>(() => WorldSave.FindPlacement(journal, "run-s")).Message);
+        run.AppendLocal("client", JournalEntry.Of(JournalEntry.CopyDone, ("runtime", world), ("creationState", "completed"), ("placementState", "created"),
+            ("verified", "true"), ("worldUid", "42")), journal);
+        Assert.Equal(new WorldSave.Placement(world, "VT-seeded", "42"), WorldSave.FindPlacement(journal, "run-s"));
+        run.AppendLocal("client", JournalEntry.Of(JournalEntry.CopyRetired, ("runtime", world), ("handedOver", "true")), journal);
+        Assert.Contains("no hosted world", Assert.Throws<InvalidOperationException>(() => WorldSave.FindPlacement(journal, "run-s")).Message);
+    }
+
+    [Fact]
     public void StartTakesAWorldFixtureAndAComparisonStillDoesNot()
     {
         Assert.True(SmokeCommandOptions.TryRead(["--world-fixture", "saved"], SmokeCommandOptions.Command.Start, allowImplicitMod: true, out var parsed, out _));
