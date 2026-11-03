@@ -16,7 +16,7 @@ The tool needs the .NET 10 SDK. If a Homebrew .NET on macOS cannot start the too
 
 | Command | Does |
 |---|---|
-| [`start`](#start) | Loads a client-side mod in an owned client that hosts a disposable world |
+| [`start`](#start) | Loads a client-side mod or an explicit CLI-only control in an owned client that hosts a disposable world |
 | [`server-load`](#server-load) | Loads a server-side mod on an owned dedicated server; one clean client joins |
 | [`server-load-ab`](#server-load-ab) | Runs `server-load` with and without one mod, to isolate a load interaction |
 | [`server-load-phases`](#server-load-phases) | Runs ordered server-only fixture bakes |
@@ -51,7 +51,8 @@ The tool needs the .NET 10 SDK. If a Homebrew .NET on macOS cannot start the too
 
 | Option | Taken by | Does |
 |---|---|---|
-| `--mod DLL` | start, server-load, server-load-ab | A mod to load. Repeat for a set. Without it, `start` and `server-load` pick the current project's one built plugin |
+| `--mod DLL` | start, server-load, server-load-ab | A mod to load. Repeat for a set. Without a selection, `start` and `server-load` pick the current project's one built plugin; `start --no-mod` explicitly selects a control |
+| `--no-mod` | start | A CLI-only control with no mod under test; no mod discovery or build |
 | `--project MOD.csproj` | start, server-load, build | Builds the mod privately first; leave out `--mod` and `--build-inputs` |
 | `--build-inputs FILE` | start, server-load | The `build-inputs.json` from `build`; the run refuses a changed mod or reference |
 | `--dependency NAME=DLL` | start, server-load, build | A third-party compile reference for `--project`. Repeat |
@@ -120,6 +121,18 @@ valheim-test start --mod /path/to/MyMod.dll
 ```
 
 `start` loads a client-side mod in an owned Windows or macOS client that hosts the packaged world with the packaged character. It prints `run ID:`, a log-scan line and a `PASS` or `FAIL` result line.
+
+For a control containing only the selected ValheimCLI plugin and required loader:
+
+```sh
+valheim-test start --no-mod --world-fixture /path/to/disposable-fixture --hold
+```
+
+`--no-mod` is explicit inside and outside a mod project. Without it, omitting `--mod` keeps implicit project selection: an absent, ambiguous, missing or stale build still refuses. A failed mod selection never becomes a control run. The control uses the same owned profile, world/character admission, strict CLI pins, hold, finish and cleanup as a modded start. Installed plugins and patchers are not inherited.
+
+Do not combine `--no-mod` with `--mod`, `--project`, `--build-inputs`, `--source`, `--compare-mod`, `--compare-source`, `--dependency`, `--search-root`, `--optional-reference`, `--scenario` or `--scenario-project`. It is not an option of build, server-load, comparisons, phases or detach. Explicit `--config` and `--env` keep their admission and retained-byte rules; they select no plugin payload. CLI, loader, host or fixture failures still refuse the control.
+
+Its inputs record `noMod: true`, an empty `mod` and one execution arm `control`. `evidence/control/run-manifest.json` records `noMod: true`, null mod identity fields and an empty mod-artifact arm list; the allowlist and strict pins still identify the real CLI. Result provenance says `noMod=true`, with no mod plugin/commit/hash. Use a matching toolkit reader for this additive input/result contract; older input readers reject `noMod`. Modded runs omit the false marker and keep their existing JSON. The generated `init` example targets a modded smoke arm; no control-specific consumer is generated.
 
 | Option | Does |
 |---|---|

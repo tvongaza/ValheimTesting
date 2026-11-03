@@ -6,6 +6,10 @@ using Valheim.Testing.GameSessions;
 using Xunit;
 
 // #673: build, start and server-load share one mod-input stage, so the same inputs give the same game, loader and refusal.
+[CollectionDefinition(nameof(CurrentModProject), DisableParallelization = true)]
+public sealed class CurrentModProject { }
+
+[Collection(nameof(CurrentModProject))]
 public sealed class ModInputStageTests : IDisposable
 {
     private readonly RegressionRig _rig = new();
@@ -15,6 +19,72 @@ public sealed class ModInputStageTests : IDisposable
         Desktop: _ => Task.CompletedTask, MacDesktop: () => { }, SteamRunning: () => true,
         Journals: (_, _) => Task.FromResult<IReadOnlyList<CampaignPreflightProblem>>([]), Packaged: () => null));
     public void Dispose() { _preflight.Dispose(); _rig.Dispose(); }
+
+    [Theory]
+    [InlineData("--mod")]
+    [InlineData("--project")]
+    [InlineData("--build-inputs")]
+    [InlineData("--source")]
+    [InlineData("--compare-mod")]
+    [InlineData("--compare-source")]
+    [InlineData("--dependency")]
+    [InlineData("--search-root")]
+    [InlineData("--optional-reference")]
+    [InlineData("--scenario")]
+    [InlineData("--scenario-project")]
+    [InlineData("dedicated")]
+    [InlineData("build")]
+    public async Task InternalNoModContradictionsRefuseBeforeChoiceOrMaterialization(string conflict)
+    {
+        string output = Path.Combine(_rig.Root, "refused-control"); int loaders = 0;
+        var options = new Dictionary<string, string> { ["--inventory"] = Path.Combine(_rig.Root, "must-not-read.json") };
+        if (conflict.StartsWith("--", StringComparison.Ordinal)) options[conflict] = "missing";
+        var route = conflict == "build" ? ModInputStage.Route.Build : conflict == "dedicated" ? ModInputStage.Route.Dedicated : ModInputStage.Route.Hosted;
+        var request = new ModInputStage.Request(route, output, options, new HashSet<string>(),
+            conflict == "--mod" ? ["missing.dll"] : [], conflict == "--search-root" ? ["missing"] : [],
+            conflict == "--optional-reference" ? ["missing"] : [], conflict == "--dependency" ? ["missing"] : [])
+        { NoMod = true, Shipped = (_, _, _) => { loaders++; throw new Exception("must not select a loader"); } };
+        Assert.Contains("--no-mod", Assert.Throws<ArgumentException>(() => ModInputStage.Choose(request)).Message);
+        Assert.Contains("--no-mod", (await Assert.ThrowsAsync<ArgumentException>(() => ModInputStage.RunAsync(request, CancellationToken.None))).Message);
+        Assert.Equal(0, loaders); Assert.False(Path.Exists(output));
+    }
+
+    [ClientHostTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ExplicitNoModDoesNotDiscoverOrBuildTheCurrentProject(bool insideProject)
+    {
+        using var data = new FakeDataRoot(Path.Combine(_rig.Root, "no-mod-data"));
+        using var machine = EnvironmentInventory.UseMachine(new FakeMachine(HostProfile.CurrentPlatform)
+            { Home = _rig.Root, DataRoot = Path.Combine(_rig.Root, "no-mod-data") });
+        string current = Directory.GetCurrentDirectory(), directory = Path.Combine(_rig.Root, "working");
+        Directory.CreateDirectory(directory);
+        if (insideProject) File.WriteAllText(Path.Combine(directory, "Unbuildable.csproj"), "<Project><Target Name=\"Build\"><Error Text=\"must not build\" /></Target></Project>");
+        string inventory = Path.Combine(_rig.Root, "control-inventory.json");
+        File.WriteAllText(inventory, JsonSerializer.Serialize(_rig.Inventory()));
+        string output = Path.Combine(_rig.Root, "control-output");
+        var options = new Dictionary<string, string>
+        {
+            ["--inventory"] = inventory, ["--cli-manifest"] = _rig.CliManifest(save: true, full: true),
+            ["--cli-files"] = Path.Combine(_rig.Root, "cli"),
+        };
+        var request = new ModInputStage.Request(ModInputStage.Route.Hosted, output, options, new HashSet<string>(), [], [], [], [])
+        { NoMod = true, ClientArchitecture = (_, _, _, _) => { }, Shipped = (_, _, _) => null };
+        try
+        {
+            Directory.SetCurrentDirectory(directory);
+            var control = await ModInputStage.RunAsync(request, CancellationToken.None);
+            Assert.True(control.NoMod); Assert.Empty(control.Mods); Assert.Null(control.BuildInputs);
+            Assert.Equal("explicit --no-mod", control.ModSelection);
+            Assert.Empty(control.Dependencies!.Mods); Assert.Empty(control.Dependencies.Plugins); Assert.Single(control.Dependencies.CliFiles);
+            Assert.False(Directory.Exists(Path.Combine(output, "build")));
+            var provenance = new Dictionary<string, string>(); control.Record(provenance);
+            Assert.Equal("true", provenance["noMod"]); Assert.Equal("explicit --no-mod", provenance["modSelection"]);
+            await Assert.ThrowsAsync<ArgumentException>(() => ModInputStage.RunAsync(request with
+                { NoMod = false, Output = Path.Combine(_rig.Root, "ordinary-refused") }, CancellationToken.None));
+        }
+        finally { Directory.SetCurrentDirectory(current); }
+    }
 
     // The rig's game plays a vanilla dedicated server: its Steam install has no BepInEx or Doorstop, as a profile run
     // leaves it (#601). The environment names a reviewed loader package instead.

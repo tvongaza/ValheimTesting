@@ -1,12 +1,13 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 
 namespace Valheim.Testing.Game;
 
 /// <summary>
-/// The inputs of a targeted native regression: one owned client hosting one disposable world, one mod under test in two
+/// The inputs of a targeted native regression: one owned client hosting one disposable world, a mod under test in one
 /// or more arms (conventionally <c>parent</c> and <c>candidate</c>), its runtime dependencies and an optional game-side
-/// probe. Where it runs is not here: the client's install, port, disposable copy, save folders and loader come from the
+/// probe, or an explicit <see cref="NoMod"/> CLI-only control. Where it runs is not here: the client's install, port, disposable copy, save folders and loader come from the
 /// environment inventory's client environment (selected by <c>TargetedRegression</c> in GameSessions), this machine when there is no file.
 /// The scenario source (the rounds and their assertions) stays free of both, so the same source can be shared.
 /// <see cref="Read"/> resolves relative paths against the file's own directory and refuses unknown fields.
@@ -23,6 +24,10 @@ public sealed class RegressionInputs
     /// <summary>An optional game-side test probe: a plugin that serves the scenario's observations.</summary>
     public RegressionFile? Probe { get; set; }
     public RegressionMod Mod { get; set; } = new();
+    /// <summary>Explicitly selects a CLI-only control with no mod under test. Mod, plugins, patchers, optional references and probe must be empty. Requires a toolkit reader that supports this input.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool NoMod { get; set; }
+    [JsonIgnore] internal IReadOnlyList<string> ArmNames => NoMod ? ["control"] : Mod.Arms.Keys.ToArray();
     /// <summary>Config files to place in <c>BepInEx/config</c>, by file name. Without <c>valheimCLI.valheimCLI.cfg</c> one is written with the client's port. A <c>BepInEx.cfg</c> here replaces the loader's default; the install's own is never used (#711).</summary>
     public Dictionary<string, string> Configs { get; set; } = [];
     /// <summary>BepInEx preloader patchers to place in <c>BepInEx/patchers</c>; none by default.</summary>
@@ -78,7 +83,13 @@ public sealed class RegressionInputs
         foreach (var (file, field) in Plugins.Select((file, i) => (file, $"plugins[{i}]"))) file.Validate(field);
         Probe?.Validate("probe");
         foreach (var (file, field) in Patchers.Select((file, i) => (file, $"patchers[{i}]"))) file.Validate(field);
-        Mod.Validate();
+        if (NoMod)
+        {
+            if (Mod.InstallAs.Length != 0 || Mod.Arms.Count != 0 || Mod.Repeatability || Plugins.Count != 0 ||
+                Patchers.Count != 0 || OptionalReferences.Count != 0 || Probe != null)
+                throw new ArgumentException("noMod: a CLI-only control requires an empty mod, plugins, patchers, optionalReferences and probe.");
+        }
+        else Mod.Validate();
         foreach (var (name, source) in Configs)
         {
             if (name.Length == 0 || name != Path.GetFileName(name) || !name.EndsWith(".cfg", StringComparison.OrdinalIgnoreCase))
@@ -222,11 +233,18 @@ public sealed record StagedFile(string Role, string Path, string Sha256, string 
 /// <param name="Capabilities">Every ValheimCLI extension command the run uses: checked against <c>cli.manifest</c> before launch, when set, and live.</param>
 /// <param name="LiveOnlyCapabilities">The scenario's commands of other owners (a probe's or the mod's extensions): checked live only.</param>
 /// <param name="CliManifest">What the static ValheimCLI check found, or why none ran.</param>
+/// <param name="ModPlugin">The mod's plugin identity; null for an explicit CLI-only control.</param>
+/// <param name="ModSha256">The mod artifact's SHA256; null for an explicit CLI-only control.</param>
 [ResultShape]
-public sealed record RunManifest(string Name, string Arm, string ModPlugin, string? ModCommit, string ModSha256, bool Repeatability,
+public sealed record RunManifest(string Name, string Arm, string? ModPlugin, string? ModCommit, string? ModSha256, bool Repeatability,
     IReadOnlyList<RunManifestArm> Arms, IReadOnlyList<StagedFile> Allowlist, IReadOnlyList<StagedFile> Configs,
     InstallPins InstallPins, string World, string WorldUid, int FixtureFiles, IReadOnlyList<string> Capabilities,
-    IReadOnlyList<string> LiveOnlyCapabilities, string CliManifest);
+    IReadOnlyList<string> LiveOnlyCapabilities, string CliManifest)
+{
+    /// <summary>True for an explicit CLI-only control: no mod identity or mod artifact arms are present. Omitted for ordinary mod runs.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool NoMod { get; init; }
+}
 
 /// <summary>One arm of the comparison: its name, commit, distinct artifact name and SHA256.</summary>
 [ResultShape]

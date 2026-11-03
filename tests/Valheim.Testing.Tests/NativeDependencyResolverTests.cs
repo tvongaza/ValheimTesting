@@ -10,6 +10,58 @@ public sealed class NativeDependencyResolverTests : IDisposable
     private readonly RegressionRig _rig = new();
     public void Dispose() => _rig.Dispose();
 
+    [Fact]
+    public void ExplicitCliOnlyResolutionUsesTheSamePinsAndKeepsPublicEmptyModsInvalid()
+    {
+        var request = Request(_rig.Parent);
+        request.Mods.Clear(); request.SearchRoots.Clear();
+        Assert.Throws<ArgumentException>(() => NativeDependencyResolver.Resolve(request));
+        var control = NativeDependencyResolver.ResolveCliOnly(request);
+        Assert.True(control.Ready, string.Join("; ", control.Gaps.Select(gap => gap.Reason)));
+        Assert.Empty(control.Mods); Assert.Empty(control.Plugins); Assert.Empty(control.OptionalReferences);
+        Assert.Equal("valheimCLI.dll", Path.GetFileName(Assert.Single(control.CliFiles).File));
+        string file = Path.Combine(_rig.Root, "control.lock.json");
+        control.Write(file);
+        Assert.Empty(NativeDependencyLock.ReadReady(file).Mods);
+        request.SearchRoots.Add(Path.Combine(_rig.Root, "deps"));
+        Assert.Throws<ArgumentException>(() => NativeDependencyResolver.ResolveCliOnly(request));
+        request.SearchRoots.Clear(); request.OptionalReferences.Add("Dependency");
+        Assert.Throws<ArgumentException>(() => NativeDependencyResolver.ResolveCliOnly(request));
+        request.OptionalReferences.Clear(); request.Mods.Add(_rig.Parent);
+        Assert.Throws<ArgumentException>(() => NativeDependencyResolver.ResolveCliOnly(request));
+    }
+
+    [Theory]
+    [InlineData("missing")]
+    [InlineData("changed")]
+    [InlineData("ambiguous")]
+    [InlineData("capability")]
+    [InlineData("dependency")]
+    public void ExplicitCliOnlyResolutionNeverWaivesCliAdmission(string fault)
+    {
+        var request = Request(_rig.Parent);
+        request.Mods.Clear(); request.SearchRoots.Clear();
+        string cli = Path.Combine(request.CliFiles, "valheimCLI.dll");
+        if (fault == "missing") File.Delete(cli);
+        if (fault == "changed") File.AppendAllText(cli, "changed");
+        if (fault == "ambiguous") _rig.Write("cli/other/valheimCLI.dll", File.ReadAllBytes(cli));
+        if (fault == "capability") request.Capabilities.Add("valheim.session/not-registered");
+        if (fault == "dependency")
+        {
+            File.WriteAllBytes(cli, RegressionRig.Assembly("valheimCLI", new(CliCapabilityManifest.PluginGuid) { Hard = ["missing.plugin"] }));
+            var manifest = CliCapabilityManifest.Read(request.CliManifest);
+            manifest.Plugin.Sha256 = FileHash.Sha256(cli);
+            manifest.Write(request.CliManifest);
+        }
+        if (fault == "capability") Assert.Throws<InvalidOperationException>(() => NativeDependencyResolver.ResolveCliOnly(request));
+        else
+        {
+            var refused = NativeDependencyResolver.ResolveCliOnly(request);
+            Assert.False(refused.Ready);
+            Assert.NotEmpty(refused.Gaps);
+        }
+    }
+
     [Fact] public void CampaignCarriesAndValidatesAClientArchitectureOverride()
     {
         string file = Path.Combine(_rig.Root, "architecture-campaign.json");

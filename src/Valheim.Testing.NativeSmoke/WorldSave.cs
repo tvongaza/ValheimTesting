@@ -231,6 +231,7 @@ internal static class WorldSave
         string inputs = Path.GetFullPath(Path.Combine(evidence, "..", "..", "regression.json"));
         if (!File.Exists(inputs)) return result;
         var regression = RegressionInputs.Read(inputs);
+        if (regression.NoMod) result["noMod"] = true;
         result["mods"] = regression.Mod.Arms.ToDictionary(arm => arm.Key, arm => (object)new { file = Path.GetFileName(arm.Value.File), sha256 = arm.Value.Sha256, commit = arm.Value.Commit }, StringComparer.Ordinal);
         result["plugins"] = regression.Plugins.Select(plugin => new { file = Path.GetFileName(plugin.File), sha256 = plugin.Sha256 }).ToList();
         result["cliCore"] = new { file = Path.GetFileName(regression.Cli.Core.File), sha256 = regression.Cli.Core.Sha256 };

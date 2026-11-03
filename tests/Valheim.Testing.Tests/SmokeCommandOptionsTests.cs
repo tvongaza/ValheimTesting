@@ -2,6 +2,49 @@ using Xunit;
 
 public sealed class SmokeCommandOptionsTests
 {
+    [Fact]
+    public void NoModIsExplicitStartOnlyAndRetainsTheExistingRunInputs()
+    {
+        Assert.True(StartArguments.TryRead(["--no-mod", "--hold", "--config", "example.cfg", "--env", "CONTROL=" + ExplicitRunInputsTests.Opaque],
+            out var parsed, out string error), error);
+        Assert.Contains("--no-mod", parsed!.Switches);
+        Assert.Empty(parsed.List("--mod"));
+        Assert.Equal(["example.cfg"], parsed.RunInputs.Configs);
+        Assert.Equal(ExplicitRunInputsTests.Opaque, parsed.RunInputs.Environment["CONTROL"]);
+        Assert.False(StartArguments.TryRead([], out _, out error));
+        Assert.Equal("Missing: --mod", error);
+        foreach (var command in new[] { SmokeCommandOptions.Command.Build, SmokeCommandOptions.Command.ServerLoad, SmokeCommandOptions.Command.ServerLoadAb })
+        {
+            Assert.False(SmokeCommandOptions.TryRead(["--no-mod"], command, true, out _, out error));
+            Assert.Equal("Unknown option: --no-mod", error);
+        }
+        Assert.False(StartArguments.TryRead(["--no-mod", "--no-mod"], out _, out error));
+        Assert.Equal("Repeated option: --no-mod", error);
+        Assert.False(StartArguments.TryRead(["--no-mod", "value"], out _, out error));
+        Assert.Equal("Unknown option: value", error);
+        Assert.False(StartArguments.TryRead(["--no-mod", "--env", "DOORSTOP_CUSTOM=value"], out _, out _));
+        Assert.False(StartArguments.TryRead(["--no-mod", "--config", "valheimCLI.valheimCLI.cfg"], out _, out _));
+    }
+
+    [Theory]
+    [InlineData("--mod")]
+    [InlineData("--project")]
+    [InlineData("--build-inputs")]
+    [InlineData("--source")]
+    [InlineData("--compare-mod")]
+    [InlineData("--compare-source")]
+    [InlineData("--dependency")]
+    [InlineData("--search-root")]
+    [InlineData("--optional-reference")]
+    [InlineData("--scenario")]
+    [InlineData("--scenario-project")]
+    public void NoModRefusesContradictorySelectionsBeforeMachineSelection(string option)
+    {
+        Assert.False(StartArguments.TryRead(["--no-mod", option, "missing-input"], out _, out string error));
+        Assert.Contains("--no-mod", error);
+        Assert.Contains(option, error);
+    }
+
     public static IEnumerable<object[]> SharedBadOptions()
     {
         yield return [new[] { "--client-architecture", "native" }];
