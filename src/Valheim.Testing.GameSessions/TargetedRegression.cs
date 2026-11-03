@@ -234,6 +234,7 @@ public sealed class TargetedRegression
 
     internal GameBuild? InitialHostingBuild { get; set; }
     internal WorldIdentity.Admission? InitialWorldAdmission { get; set; }
+    internal IReadOnlyDictionary<string, string>? InitialConfigSha256 { get; set; }
     private WorldIdentity.Admission? _worldAdmission;
 
     private StagedArm StageCore(string arm)
@@ -303,7 +304,8 @@ public sealed class TargetedRegression
         placements.Add(("mod", chosen.File, chosen.Sha256.ToLowerInvariant(), "BepInEx/plugins/" + env.Mod.InstallAs, armPlugins[arm]));
         var selected = placements.Select(file => new HostedRuntimeFile(file.Source, file.Relative)).ToList();
         selected.AddRange(patchers.Select(file => new HostedRuntimeFile(file.File.File, "BepInEx/patchers/" + Path.GetFileName(file.File.File))));
-        selected.AddRange(env.Configs.Select(file => new HostedRuntimeFile(file.Value, "BepInEx/config/" + file.Key)));
+        selected.AddRange(env.Configs.Select(file => new HostedRuntimeFile(file.Value, "BepInEx/config/" + file.Key)
+        { ExpectedSha256 = InitialConfigSha256?.GetValueOrDefault(file.Key) }));
         string generatedConfig = Path.Combine(Path.GetTempPath(), "vt-regression-" + Guid.NewGuid().ToString("N") + ".cfg");
         // The regression client hosts its own world (below), so it is not a joined client and needs no mutation access.
         selected = CliServerConfig.Stage(selected, "Regression client", Port, generatedConfig, requireClientMutations: false);

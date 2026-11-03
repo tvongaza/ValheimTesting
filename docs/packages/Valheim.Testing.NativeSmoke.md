@@ -55,12 +55,32 @@ The tool needs the .NET 10 SDK. If a Homebrew .NET on macOS cannot start the too
 | `--project MOD.csproj` | start, server-load, build | Builds the mod privately first; leave out `--mod` and `--build-inputs` |
 | `--build-inputs FILE` | start, server-load | The `build-inputs.json` from `build`; the run refuses a changed mod or reference |
 | `--dependency NAME=DLL` | start, server-load, build | A third-party compile reference for `--project`. Repeat |
+| `--config FILE` | start, server-load, server-load-ab | A config file for the mod-bearing actor, copied into `BepInEx/config` by basename. Repeat; `start` takes `.cfg` files |
+| `--env NAME=VALUE` | start, server-load, server-load-ab | A non-secret variable set explicitly on every owned game process. Repeat for distinct names |
 | `--search-root DIR\|DLL` | all four | A folder or exact DLL to search for dependencies. Repeat |
 | `--optional-reference ASSEMBLY` | start, server-load, server-load-ab | Confirms a reference that is deliberately absent. Repeat |
 | `--scenario TEST.dll`, `--scenario-project TEST.csproj` | start, server-load | A mod-owned scenario; one or the other ([scenarios](#your-own-scenario)) |
 | `--output NEW_DIR` | all four | A new folder outside the mod project. Default: a new folder under `valheim-test-runs/` in ValheimTesting's data folder |
 
 The [dependency resolver](../reference/game-run-inputs.md#resolve-mod-dependencies) chooses files and writes `dependencies.lock.json`. It never downloads a mod.
+
+**Explicit config and environment inputs**
+
+`start --config` configures the hosting client. `server-load --config` configures the dedicated server; the joining client keeps its clean profile. `--env` reaches the hosting client for `start`, and both the server and any joining client for `server-load`. `--client-env` and `--server-env` select inventory recipes; they do not pass variables.
+
+```sh
+valheim-test start --mod /path/to/MyMod.dll \
+  --config /path/to/example.mod.cfg --config /path/to/BepInEx.cfg \
+  --env 'EXAMPLE_MODE=selected value=one' --env EXAMPLE_TRACE=1 --hold
+```
+
+Config destinations must be distinct without regard to case. Missing or linked files and ValheimCLI's runner-owned config are refused before host preflight or builds. An explicit `BepInEx.cfg` replaces the disposable loader's default. Source configs and the source install are never edited. Config bytes are retained once before launch; `start` comparison arms reuse those bytes, and staging checks each retained copy against its original SHA-256, including after asynchronous host checks. `server-load-ab` pins the originals and retained copies between arms.
+
+Environment names use letters, digits and underscores, starting with a letter or underscore, and must be distinct without regard to case. Values split at the first `=` and preserve spaces, quotes, Unicode and shell punctuation literally. Empty values, NUL, line breaks, `{runtime}`, `{world}` and `{port}` are refused on every route. Loader-owned names, including the entire `DOORSTOP_` and `DYLD_` namespaces (case-insensitive), `LD_LIBRARY_PATH` and `LD_PRELOAD`, session GUIDs and built-in or selected adapter authentication variables are also refused. Quote values for your calling shell. Direct launches can inherit their caller's environment; desktop tasks and remote hosts have different inheritance, so use `--env` for reproducible selected inputs. The tool forwards only explicitly supplied variables through these flags.
+
+These flags take **non-secret data**: the exact values, config source paths, retained config copies and SHA-256 hashes remain in private `run-inputs.json` and `inputs/configs/` after runtime cleanup. Each result links the record and its hash from provenance; a changed record is refused before that link is recorded. Routine output lists variable names, without values. Keep credentials out of flags and config contents; use the existing authentication channels. The record describes requested/staged inputs; confirm that a plugin consumed them in its own log or assertion.
+
+`server-load-phases` accepts repeated `--env` in each phase's `args`, so phases can choose different values. Its private copied phase plan retains those values. Experimental `detach server-load` currently refuses both `--config` and `--env`; use foreground `--hold` for these inputs.
 
 **Machine and installs**
 
@@ -115,13 +135,12 @@ Both compared builds must declare the same plugin identities. The client needs i
 valheim-test server-load --mod /path/to/ServerMod.dll
 ```
 
-`server-load` prints the server and client it chose, writes `campaign.json` and runs the host preflight before anything is copied (it writes nothing but a Linux or Mac server's trial link, made and removed under the runtime root). The preflight refuses a server and client whose installs are on different Valheim network versions. Then one clean client without the mod joins the owned server.
+`server-load` prints the server and client it chose, retains any explicit config inputs, writes `campaign.json` and runs the host preflight before runtime staging (the preflight writes only a Linux or Mac server's trial link, made and removed under the runtime root). The preflight refuses a server and client whose installs are on different Valheim network versions. Then one clean client without the mod joins the owned server.
 
 | Option | Does |
 |---|---|
 | `--server-only` | Runs no client. Prints `SERVER_LOAD_PASS` instead of `SERVER_JOIN_PASS` |
 | `--preflight-only` | Stops after `PREFLIGHT PASSED` |
-| `--config FILE` | A config file for the server. Repeat |
 | `--plugin-file FILE`, `--plugin-dir DIR` | A mod's assets beside its DLL; DLLs are refused. Repeat |
 | `--adapter DLL` | A built test adapter, instead of building the bundled one |
 | `--adapter-project ADAPTER.csproj` | Builds a mod's own adapter; needs `--session-capability` and `--session-token-variable` |

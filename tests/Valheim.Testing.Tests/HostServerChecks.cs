@@ -16,7 +16,8 @@ internal static partial class HostServerChecks
     public static Task ANativeMacServerProfileStartsAndQuitsByIdentity(IGameHost host, string parent) =>
         GameHostChecks.WithRootAsync(host, parent, async root =>
         {
-            var prepared = await MacServerStandIn.PrepareAsync(host, root, Generous);
+            var prepared = await MacServerStandIn.PrepareAsync(host, root, Generous,
+                new Dictionary<string, string> { ["VT_TEST_INPUT"] = ExplicitRunInputsTests.Opaque });
             string install = prepared.Install, boot = root + "/boot";
             var before = await HostInstall.ListAsync(host, install, Generous);
             var launch = prepared.Launch;
@@ -27,6 +28,10 @@ internal static partial class HostServerChecks
                 {
                     (await host.WaitForLogAsync(boot + "/stdout.log", 0,
                         new System.Text.RegularExpressions.Regex("native server running"), null, Generous)).EnsureMatched();
+                    string stdout = (await host.RunAsync("cat \"$boot/stdout.log\"", new Dictionary<string, string> { ["boot"] = boot }, Generous)).Stdout;
+                    Assert.Contains("input=" + ExplicitRunInputsTests.Opaque + "\n", stdout);
+                    (await host.RunAsync("test ! -e \"$profile/should-not-exist\"", new Dictionary<string, string> { ["profile"] = prepared.Profile }, Generous))
+                        .EnsureSuccess("Opaque environment input did not execute shell substitutions");
                     var found = (await HostProcessProbe.ProbeAsync(host, [(process.Id, process.StartIdentity)], Generous))
                         [(process.Id, process.StartIdentity)];
                     Assert.Equal(ProbedState.Same, found.State);
@@ -158,7 +163,8 @@ internal static partial class HostServerChecks
         string bystander = (await host.RunAsync("setsid sleep 300 > /dev/null 2>&1 < /dev/null & echo $!", null, Generous)).EnsureSuccess("Starting a bystander").Stdout.Trim();
         try
         {
-            var launch = GameLaunch.ForServer(runtime, ["-batchmode", "-name", "it's a test"], new Dictionary<string, string> { ["VT_TEST_TOKEN"] = "token-123" }, hostPlatform: ServerPlatform.Linux);
+            var launch = GameLaunch.ForServer(runtime, ["-batchmode", "-name", "it's a test"],
+                new Dictionary<string, string> { ["VT_TEST_TOKEN"] = ExplicitRunInputsTests.Opaque }, hostPlatform: ServerPlatform.Linux);
             using var evidence = new TempDirectory();
             string local = Path.Combine(evidence.Path, "boot-1");
             await StandInServer.RunAsync(host, launch, root + "/run/boot-1", Generous,
@@ -213,7 +219,9 @@ internal static partial class HostServerChecks
             Assert.True(File.Exists(Path.Combine(local, "game-1.log.absent")));
             string stdout = File.ReadAllText(Path.Combine(local, "stdout.log"));
             Assert.Contains("args=-batchmode -name it's a test", stdout);
-            Assert.Contains("VT_TEST_TOKEN=token-123", stdout);
+            Assert.Contains("VT_TEST_TOKEN=" + ExplicitRunInputsTests.Opaque + "\n", stdout);
+            (await host.RunAsync("test ! -e \"$runtime/should-not-exist\"", new Dictionary<string, string> { ["runtime"] = runtime }, Generous))
+                .EnsureSuccess("Opaque environment input did not execute shell substitutions");
             Assert.Contains("SteamAppId=" + GameLaunch.SteamAppId, stdout);
             Assert.Contains("DOORSTOP_ENABLED=1", stdout);
             Assert.Contains("DOORSTOP_TARGET_ASSEMBLY=" + runtime + "/BepInEx/core/BepInEx.Preloader.dll", stdout);

@@ -38,11 +38,14 @@ internal static class ServerLoadComparison
             var stage = ModInputStage.Choose(new ModInputStage.Request(ModInputStage.Route.Dedicated, output, options, parsed.Switches,
                 parsed.Mods, parsed.Roots, parsed.Optional, parsed.BuildDependencies) { Shipped = shippedLoader, ClientArchitecture = clientArchitecture, Progress = progress });
             _ = ModInputStage.VerifyAdmission(stage.Admission!);
+            // Freeze the config bytes before either arm; each command retains its own copy of these pinned files.
+            stage = stage with { RunInputs = ModInputStage.RetainExplicit(parsed.RunInputs, ModInputStage.Route.Dedicated, output, stage.Client != null) };
             var server = stage.Server!;
             string serverInstall = server.Recipe.Install, serverCore = stage.Core;
             Task<int> RunArm(string name, string[] arm)
             {
                 _ = ModInputStage.VerifyAdmission(stage.Admission!);
+                stage.RunInputs.Verify();
                 if (runArm != null) return runArm(arm);
                 var armSeams = new ServerLoad.Seams(Loader: ShippedLoader.Choose,
                     FrozenServerLoader: server.Shipped, SummaryLabel: name,
@@ -109,7 +112,8 @@ internal static class ServerLoadComparison
                 arm.AddRange(parsed.Switches);
                 Add("--mod", parsed.Mods.Where(mod => !omit || !Path.GetFullPath(mod).Equals(removed, pathComparison)));
                 Add("--search-root", parsed.Roots);
-                Add("--config", parsed.Configs);
+                Add("--config", stage.RunInputs.Configs.Select(config => config.File));
+                Add("--env", parsed.RunInputs.Environment.Select(pair => pair.Key + "=" + pair.Value));
                 Add("--plugin-file", parsed.PluginFiles);
                 Add("--plugin-dir", parsed.PluginDirectories);
                 Add("--optional-reference", parsed.Optional);

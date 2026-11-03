@@ -188,7 +188,7 @@ internal static class DetachedSession
         { error = "give one absolute --output and --server, --server-only, and at least one absolute --mod."; return false; }
         for (int i = 0; i < args.Length; i++)
         {
-            if (args[i] is "--config" or "--plugin-file" or "--plugin-dir" or "--search-root" or "--adapter" or
+            if (args[i] is "--config" or "--env" or "--plugin-file" or "--plugin-dir" or "--search-root" or "--adapter" or
                 "--cli-manifest" or "--cli-files" or "--loader-package" or "--inventory")
             { error = "detached server input staging currently supports --mod, --server and --output only; use foreground --hold for " + args[i] + "."; return false; }
             if (args[i] is not ("--output" or "--server" or "--mod" or "--world-fixture")) continue;

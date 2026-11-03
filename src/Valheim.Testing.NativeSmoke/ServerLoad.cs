@@ -17,7 +17,7 @@ internal static class ServerLoad
 {
     internal static readonly string Usage = "valheim-test server-load [--mod DLL ... | --project MOD.csproj] [--scenario TEST.dll | --scenario-project TEST.csproj] [--adapter DLL | --adapter-project ADAPTER.csproj] [--adapter-property NAME={mod}|{cli} ...] [--session-capability OWNER/session --session-token-variable NAME] [--dependency NAME=DLL ...] [--output NEW_DIR] [--inventory FILE | --server DIR] [--client DIR] " +
         $"[--server-env NAME] [--client-env NAME] [--client-architecture x64|arm64] [--server-only] [--server-startup-seconds 1..{ServerRunPlan.MaximumStartupSeconds}] [--world-fixture DIR] [--bake-fixture NEW_DIR] [--before-save-command TEXT --before-save-line PREFIX] [--assert-command TEXT --assert-line PREFIX] [--join HOST:PORT] [--join-seconds 10..900] [--preflight-only] [--hold] [--loader-package FILE] [--steam-runtime-package FILE] [--client-loader-package FILE] " +
-        "[--build-inputs FILE] [--cli-manifest FILE --cli-files DIR] [--search-root DIR|DLL ...] [--config FILE ...] [--plugin-file FILE ...] [--plugin-dir DIR ...] " +
+        "[--build-inputs FILE] [--cli-manifest FILE --cli-files DIR] [--search-root DIR|DLL ...] [--config FILE ...] [--env NAME=VALUE ...] [--plugin-file FILE ...] [--plugin-dir DIR ...] " +
         "[--optional-reference ASSEMBLY ...] [--expected-log-error EXACT_HEADER --expected-log-reason REASON]";
 
     /// <summary>The parsed command line: single options, repeatable inputs and switches.</summary>
@@ -27,6 +27,7 @@ internal static class ServerLoad
         public List<string> Mods { get; } = [];
         public List<string> Roots { get; } = [];
         public List<string> Configs { get; } = [];
+        public ModInputStage.ExplicitInputs RunInputs { get; init; } = ModInputStage.ExplicitInputs.Empty;
         public List<string> PluginFiles { get; } = [];
         public List<string> PluginDirectories { get; } = [];
         public List<string> Optional { get; } = [];
@@ -91,6 +92,7 @@ internal static class ServerLoad
                 InitialHostingBuild = seams.InitialHostingBuild ?? DetachedSession.PinnedHostingBuild(),
                 InitialWorldAdmission = seams.InitialWorldAdmission ?? DetachedSession.PinnedWorldAdmission(),
                 Shipped = seams.Loader, FrozenServerLoader = seams.FrozenServerLoader, ClientArchitecture = seams.ClientArchitecture, Progress = state,
+                RunInputs = parsed.RunInputs,
             }, cancel.Token).ConfigureAwait(false);
             return await RunCampaignAsync(parsed, inputs, output, clock, seams, state, cancel.Token).ConfigureAwait(false);
         }
@@ -200,11 +202,10 @@ internal static class ServerLoad
         fixture.CopyAdmission!.Verify();
         // The server's own files beside its lock: the session adapter, explicit configs and plugin sidecars.
         var files = new List<HostedRuntimeFile> { new(adapter, "BepInEx/plugins/" + Path.GetFileName(adapter)) };
-        foreach (string config in parsed.Configs.Select(Path.GetFullPath))
+        inputs.RunInputs.Verify();
+        foreach (var config in inputs.RunInputs.Configs)
         {
-            if (Path.GetFileName(config).Equals(OwnedClientPreflight.CliConfig, StringComparison.OrdinalIgnoreCase))
-                throw new InvalidDataException("ValheimCLI's config is the run's own; do not supply it as a mod config.");
-            files.Add(new HostedRuntimeFile(config, "BepInEx/config/" + Path.GetFileName(config)));
+            files.Add(new HostedRuntimeFile(config.File, "BepInEx/config/" + config.Destination) { ExpectedSha256 = config.Sha256 });
         }
         foreach (string sidecar in parsed.PluginFiles.Select(Path.GetFullPath))
         {
@@ -274,7 +275,8 @@ internal static class ServerLoad
             }),
             Arguments = ["-batchmode", "-nographics", "-name", worldName, "-port", server.GamePort.ToString(CultureInfo.InvariantCulture),
                 "-world", worldName, "-password", password, "-public", "0", "-savedir", "{world}", "-logFile", "{runtime}/" + GameLaunch.UnityLogName],
-            Environment = new Dictionary<string, string> { [SmokeSessionContract.SelectedGuidsVariable] = string.Join(";", selectedGuids) },
+            Environment = new Dictionary<string, string>(inputs.RunInputs.Environment, StringComparer.Ordinal)
+                { [SmokeSessionContract.SelectedGuidsVariable] = string.Join(";", selectedGuids) },
             Port = server.CliPort,
             StartupSeconds = parsed.Options.TryGetValue("--server-startup-seconds", out string? startupSeconds)
                 ? int.Parse(startupSeconds, CultureInfo.InvariantCulture) : 300,
@@ -286,6 +288,7 @@ internal static class ServerLoad
         {
             Mode = "owned", PasswordVariable = SmokeSessionContract.PasswordVariable, Capabilities = [.. ModInputStage.SessionCapabilities],
             Architecture = clientArchitecture!,
+            Environment = new Dictionary<string, string>(inputs.RunInputs.Environment, StringComparer.Ordinal),
             JoinSeconds = parsed.Options.TryGetValue("--join-seconds", out string? seconds)
                 ? int.Parse(seconds, CultureInfo.InvariantCulture) : 180,
             // The clean client loads none of the server's plugins.
@@ -297,6 +300,7 @@ internal static class ServerLoad
         // The read-only host checks, before anything is copied: a client that cannot run is refused with the reason, never dropped.
         var report = await (seams.Inspect ?? (file => HostedCampaignPreparation.InspectAfterLocalPreflightAsync(file,
             HostedTimeouts.Quick, cancellation)))(campaignFile).ConfigureAwait(false);
+        inputs.RunInputs.Verify();
         foreach (var actor in report.Actors.Where(actor => actor.CharactersDirectory != null))
             Console.WriteLine($"{actor.Name}: characters_local {actor.CharactersDirectory}; Steam userdata {actor.SteamUserDataDirectory}");
         if (!report.Ready)
@@ -466,7 +470,7 @@ internal static class ServerLoad
 
     internal static Arguments FromParsed(SmokeCommandOptions.Parsed read)
     {
-        var result = new Arguments();
+        var result = new Arguments { RunInputs = read.RunInputs };
         foreach (var (key, value) in read.Options) result.Options.Add(key, value);
         result.Mods.AddRange(read.List("--mod"));
         result.Roots.AddRange(read.List("--search-root"));

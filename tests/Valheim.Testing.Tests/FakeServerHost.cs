@@ -62,6 +62,8 @@ internal sealed class FakeServerHost : IGameHost
     public HashSet<string> Hang { get; } = [];
     /// <summary>Runs when a script starts, by its name.</summary>
     public Action<string>? BeforeScript { get; set; }
+    /// <summary>A controlled asynchronous boundary before a script answers.</summary>
+    public Func<string, Task>? BeforeScriptAsync { get; set; }
     public Exception? TunnelFailure { get; set; }
     public bool PortBusy { get; set; }
     /// <summary>The port check's whole reply when set; else free or busy by <see cref="PortBusy"/>.</summary>
@@ -236,6 +238,7 @@ internal sealed class FakeServerHost : IGameHost
         string name = ScriptName(script);
         lock (_sync) Runs.Add((name, v));
         BeforeScript?.Invoke(name);
+        if (BeforeScriptAsync != null) await BeforeScriptAsync(name);
         // A script that never answers until the caller gives up: a hung SSH session, a stuck removal.
         if (Hang.Contains(name)) await Task.Delay(Timeout.Infinite, cancellation);
         if (Failures.TryGetValue(name, out var failure)) return failure;

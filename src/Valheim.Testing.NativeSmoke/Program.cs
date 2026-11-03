@@ -4,7 +4,8 @@ using Valheim.Testing.GameSessions;
 
 if (args is ["help" or "--help"])
 {
-    Console.WriteLine("valheim-test start [--mod DLL ...] [--output NEW_DIR] [--world-fixture DIR] [--inventory FILE | --game DIR] [--client-env NAME] [--client-architecture x64|arm64] [setup options] (with no --mod, the current project's one built plugin)");
+    Console.WriteLine("valheim-test start [--mod DLL ...] [--config FILE ...] [--env NAME=VALUE ...] [--output NEW_DIR] [--world-fixture DIR] [--inventory FILE | --game DIR] [--client-env NAME] [--client-architecture x64|arm64] [setup options] (with no --mod, the current project's one built plugin)");
+    Console.WriteLine("--config stages non-secret config files on the mod-bearing actor; --env sets non-empty literal values on every owned game process. Both are retained in private run-inputs.json; omit credentials.");
     Console.WriteLine(ServerLoad.Usage + " (a server and one clean client from the inventory; this machine when no --inventory)");
     Console.WriteLine(ServerLoadPhases.Usage + " (ordered disposable server-only saves)");
     Console.WriteLine("valheim-test server-load-ab --mod DLL --mod DLL --remove-mod DLL --output NEW_DIR [server-load options except --hold and --preflight-only]");
@@ -38,12 +39,17 @@ if (args.Length != 0 && args[0] is "server-load" or "server-load-ab")
 }
 
 // The default path hosts a world in an owned client; server-load uses an owned dedicated server.
-if (!StartArguments.TryRead(args, out var options, out var mods, out var roots, out var optionalReferences, out var buildDependencies, out var error, allowImplicitMod: true))
+if (!StartArguments.TryRead(args, out var parsedStart, out var error, allowImplicitMod: true))
 {
     Console.Error.WriteLine(error);
-    Console.Error.WriteLine("Usage: valheim-test start [--mod DLL ... | --project MOD.csproj] [--scenario TEST.dll | --scenario-project TEST.csproj] [--dependency NAME=DLL ...] [--build-inputs FILE] [--output NEW_DIR] [--world-fixture DIR] [--inventory FILE | --game DIR] [--client-env NAME] [--client-architecture x64|arm64] [--join-seconds 10..900] [--hold] [--source COMMIT] [--cli-manifest FILE --cli-files DIR] [--compare-mod DLL --compare-source COMMIT] [--search-root DIR|DLL ...] [--optional-reference ASSEMBLY ...] [--client-loader-package FILE] [--expected-log-error EXACT_HEADER --expected-log-reason REASON]");
+    Console.Error.WriteLine("Usage: valheim-test start [--mod DLL ... | --project MOD.csproj] [--config FILE ...] [--env NAME=VALUE ...] [--scenario TEST.dll | --scenario-project TEST.csproj] [--dependency NAME=DLL ...] [--build-inputs FILE] [--output NEW_DIR] [--world-fixture DIR] [--inventory FILE | --game DIR] [--client-env NAME] [--client-architecture x64|arm64] [--join-seconds 10..900] [--hold] [--source COMMIT] [--cli-manifest FILE --cli-files DIR] [--compare-mod DLL --compare-source COMMIT] [--search-root DIR|DLL ...] [--optional-reference ASSEMBLY ...] [--client-loader-package FILE] [--expected-log-error EXACT_HEADER --expected-log-reason REASON]");
     return 2;
 }
+var options = parsedStart!.Options;
+var mods = parsedStart.List("--mod");
+var roots = parsedStart.List("--search-root");
+var optionalReferences = parsedStart.List("--optional-reference");
+var buildDependencies = parsedStart.List("--dependency");
 
 using var cancel = new CancellationTokenSource();
 Console.CancelKeyPress += (_, press) => { press.Cancel = true; cancel.Cancel(); };
@@ -69,7 +75,8 @@ try
     // the scenario and the dependency lock: one stage, shared with build and server-load.
     var stage = await ModInputStage.RunAsync(new ModInputStage.Request(ModInputStage.Route.Hosted, output, options!,
         new HashSet<string>(StringComparer.Ordinal), // start's one switch, --hold, is its run's own
-        mods!, roots!, optionalReferences!, buildDependencies!) { Shipped = ShippedLoader.Choose, Progress = progress }, cancel.Token).ConfigureAwait(false);
+        mods!, roots!, optionalReferences!, buildDependencies!)
+        { Shipped = ShippedLoader.Choose, Progress = progress, RunInputs = parsedStart.RunInputs }, cancel.Token).ConfigureAwait(false);
     var selectedMods = stage.Mods;
     string game = stage.Compile.Recipe.Install;
     string architecture = stage.ClientArchitecture!;
@@ -109,6 +116,7 @@ try
                 // Only a real source commit; the artifact's own SHA-256 is already the arm's Sha256.
                 Commit = options.GetValueOrDefault("--source") } } },
     };
+    stage.RunInputs.ApplyTo(inputs);
     if (options.TryGetValue("--join-seconds", out string? joinSeconds))
         inputs.Client.JoinSeconds = int.Parse(joinSeconds, System.Globalization.CultureInfo.InvariantCulture);
     if (options.TryGetValue("--expected-log-error", out string? expectedError))
@@ -125,12 +133,14 @@ try
     runner = TargetedRegression.Read(Path.Combine(output, "regression.json")); // the inputs on the machine recorded beside them
     runner.InitialHostingBuild = stage.HostingBuild;
     runner.InitialWorldAdmission = fixtureInput.CopyAdmission;
+    runner.InitialConfigSha256 = stage.RunInputs.Configs.ToDictionary(config => config.Destination, config => config.Sha256, StringComparer.Ordinal);
     Console.WriteLine($"disposable loader profile: {runner.Install}");
     Console.WriteLine("run ID: " + runId);
     bool passed = true;
     string finalArm = inputs.Mod.Arms.Keys.Last();
     foreach (string arm in inputs.Mod.Arms.Keys)
     {
+        stage.RunInputs.Verify();
         string armOutput = Path.Combine(output, "evidence", arm);
         LocalClientJournal? processJournal = null;
         var report = runner.Run(arm, armOutput, custom?.Name ?? "selected plugin loads in a hosted fixture",
@@ -229,6 +239,13 @@ return exitCode;
 
 internal static class StartArguments
 {
+    internal static bool TryRead(string[] args, out SmokeCommandOptions.Parsed? parsed, out string error, bool allowImplicitMod = false)
+    {
+        if (!SmokeCommandOptions.TryRead(args, SmokeCommandOptions.Command.Start, allowImplicitMod, out parsed, out error)) return false;
+        foreach (string flag in parsed!.Switches) parsed.Options[flag] = "true";
+        return true;
+    }
+
     public static bool TryRead(string[] args, out Dictionary<string, string>? result, out List<string>? mods,
         out List<string>? roots, out List<string>? optionalReferences, out string error, bool allowImplicitMod = false)
         => TryRead(args, out result, out mods, out roots, out optionalReferences, out _, out error, allowImplicitMod);
@@ -238,7 +255,7 @@ internal static class StartArguments
         out string error, bool allowImplicitMod = false)
     {
         result = null; mods = null; roots = null; optionalReferences = null; buildDependencies = null;
-        if (!SmokeCommandOptions.TryRead(args, SmokeCommandOptions.Command.Start, allowImplicitMod, out var parsed, out error))
+        if (!TryRead(args, out var parsed, out error, allowImplicitMod))
             return false;
         result = parsed!.Options;
         foreach (string flag in parsed.Switches) result[flag] = "true";

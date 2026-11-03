@@ -14,7 +14,7 @@ internal static class ServerLoadPhases
     };
     private static readonly HashSet<string> PhaseOptions = new(StringComparer.Ordinal)
     {
-        "--mod", "--config", "--plugin-file", "--plugin-dir", "--search-root", "--optional-reference",
+        "--mod", "--config", "--env", "--plugin-file", "--plugin-dir", "--search-root", "--optional-reference",
         "--assert-command", "--assert-line", "--before-save-command", "--before-save-line",
         "--expected-log-error", "--expected-log-reason",
     };

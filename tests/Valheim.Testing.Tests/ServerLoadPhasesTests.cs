@@ -8,6 +8,30 @@ public sealed class ServerLoadPhasesTests : IDisposable
     private readonly string _root = Directory.CreateTempSubdirectory("vt-server-phases-").FullName;
     public void Dispose() => Directory.Delete(_root, recursive: true);
 
+    [Fact]
+    public async Task EachPhaseCanSelectRepeatedOpaqueEnvironmentValuesWithoutCapturingThemAsPaths()
+    {
+        string planFile = Plan(), output = Path.Combine(_root, "environment-phases");
+        var plan = JsonSerializer.Deserialize<ServerLoadPhases.Plan>(File.ReadAllText(planFile),
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true })!;
+        for (int index = 0; index < plan.Phases.Length; index++)
+            plan.Phases[index].Args = [.. plan.Phases[index].Args, "--env", "MOD_SETTING=" + ExplicitRunInputsTests.Opaque,
+                "--env", "PHASE=" + index];
+        File.WriteAllText(planFile, JsonSerializer.Serialize(plan));
+        int calls = 0;
+        int result = await ServerLoadPhases.RunAsync(["--plan", planFile, "--output", output], args =>
+        {
+            Assert.True(ServerLoad.TryRead(args, out var parsed, out string error), error);
+            Assert.Equal(ExplicitRunInputsTests.Opaque, parsed!.RunInputs.Environment["MOD_SETTING"]);
+            Assert.Equal((calls++).ToString(), parsed.RunInputs.Environment["PHASE"]);
+            FakeInstalls.World(Path.Combine(args[Array.IndexOf(args, "--bake-fixture") + 1], "worlds_local"));
+            return Task.FromResult(0);
+        });
+        Assert.Equal(0, result);
+        Assert.Equal(2, calls);
+        Assert.Contains("MOD_SETTING=", File.ReadAllText(Path.Combine(output, "phase-plan.json")));
+    }
+
     private string Plan(bool keepFinal = true)
     {
         string fixture = FakeInstalls.World(Path.Combine(_root, "source-fixture"));

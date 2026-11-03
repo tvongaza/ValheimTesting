@@ -6,7 +6,12 @@ namespace Valheim.Testing.GameSessions;
 
 /// <summary>A reviewed local file copied to one path in a disposable host runtime.</summary>
 [ResultShape]
-public sealed record HostedRuntimeFile(string Source, string RelativePath);
+public sealed record HostedRuntimeFile(string Source, string RelativePath)
+{
+    /// <summary>An optional previously admitted SHA256. Staging refuses changed bytes; null selects the file's current bytes.</summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? ExpectedSha256 { get; init; }
+}
 
 /// <summary>The game process whose executable must be present in the source install.</summary>
 internal enum HostedRuntimeKind { Server, Client }
@@ -52,6 +57,14 @@ internal static partial class HostedRuntimeStage
     private static SelectedPayloadFile Select(string source, string sha, string relative) =>
         new(source, sha, PayloadKind(relative));
 
+    internal static void ValidatePayloadPath(string relativePath)
+    {
+        if (string.IsNullOrWhiteSpace(relativePath) || !SafePath.IsMatch(relativePath) ||
+            relativePath.Split('/').Any(part => part is "." or "..") || relativePath.StartsWith(' ') ||
+            !InPayloadFolder(relativePath, PayloadFolders))
+            throw new ArgumentException("Staged paths must be regular files under BepInEx/plugins, scripts, config or patchers. Use loaderPackage to replace the copied loader; never pass loader files as plugins.", "files");
+    }
+
     // The profile's selection and loader-package policy.
     private static (Dictionary<string, SelectedPayloadFile> Files, bool ExplicitSettings) SelectPayload(
         IReadOnlyList<HostedRuntimeFile> files, BepInExLoaderPackage? loaderPackage, HostShellKind shell)
@@ -59,14 +72,14 @@ internal static partial class HostedRuntimeStage
         var selected = new Dictionary<string, SelectedPayloadFile>(HostNames);
         foreach (var file in files)
         {
-            if (string.IsNullOrWhiteSpace(file.RelativePath) || !SafePath.IsMatch(file.RelativePath) ||
-                file.RelativePath.Split('/').Any(part => part is "." or "..") || file.RelativePath.StartsWith(' ') ||
-                !InPayloadFolder(file.RelativePath, PayloadFolders))
-                throw new ArgumentException("Staged paths must be regular files under BepInEx/plugins, scripts, config or patchers. Use loaderPackage to replace the copied loader; never pass loader files as plugins.", nameof(files));
+            ValidatePayloadPath(file.RelativePath);
             string local = Path.GetFullPath(file.Source);
             if (!File.Exists(local) || (File.GetAttributes(local) & FileAttributes.ReparsePoint) != 0)
                 throw new FileNotFoundException("A selected runtime file is missing or linked: " + local, local);
-            if (!selected.TryAdd(file.RelativePath, Select(local, FileHash.Sha256(local), file.RelativePath)))
+            string sha = FileHash.Sha256(local);
+            if (file.ExpectedSha256 != null && !sha.Equals(file.ExpectedSha256, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException("A selected runtime file differs from its admitted SHA256: " + local);
+            if (!selected.TryAdd(file.RelativePath, Select(local, sha, file.RelativePath)))
                 throw new ArgumentException("Two selected runtime files have the same target path: " + file.RelativePath, nameof(files));
         }
         bool explicitlySelectedSettings = selected.ContainsKey(BepInExSettings.RelativePath);
