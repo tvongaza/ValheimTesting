@@ -883,6 +883,7 @@ sealed class Valheim.Testing.Game.HostWorldPlan
   property System.String SaveDirectory { get; set; }
   property System.String WorldUid { get; set; }
   property Valheim.Testing.Game.PinnedDirectory World { get; set; }
+  property Valheim.Testing.Game.SeededWorldRequest Create { get; set; }
 static class Valheim.Testing.Game.HostWorlds
   method static Valheim.Testing.Game.SessionState Restart(Valheim.Testing.Game.GameActor host, Valheim.Testing.Game.ClientRunPlan plan, System.String worldName, System.TimeSpan timeout, System.Threading.CancellationToken cancellation = null, System.Boolean protectPlayer = true)
   method static Valheim.Testing.Game.SessionState Start(Valheim.Testing.Game.GameActor host, Valheim.Testing.Game.ClientRunPlan plan, System.String worldName, System.TimeSpan timeout, System.Threading.CancellationToken cancellation = null, System.Boolean protectPlayer = true)
@@ -1490,11 +1491,13 @@ sealed class Valheim.Testing.Game.RegressionFixture
   method System.Void Validate()
   property System.String Root { get; set; }
   property System.String WorldUid { get; set; }
+  property Valheim.Testing.Game.SeededWorldRequest Create { get; set; }
 sealed class Valheim.Testing.Game.RegressionInputs
   method System.Void .ctor()
   method System.Void Validate()
   method System.Void Write(System.String path)
   method static Valheim.Testing.Game.RegressionInputs Read(System.String path)
+  property System.Boolean NoMod { get; set; }
   property System.Collections.Generic.Dictionary`2<System.String,System.String> Configs { get; set; }
   property System.Collections.Generic.Dictionary`2<System.String,Valheim.Testing.Game.LogClassification> LogScan { get; set; }
   property System.Collections.Generic.List`1<System.String> OptionalReferences { get; set; }
@@ -1567,6 +1570,7 @@ sealed class Valheim.Testing.Game.RoomSize : System.IEquatable`1<Valheim.Testing
   method virtual System.Boolean Equals(System.Object obj)
   method virtual System.Int32 GetHashCode()
   method virtual System.String ToString()
+  property System.Boolean NoMod { get; init; }
   property System.Boolean Repeatability { get; init; }
   property System.Collections.Generic.IReadOnlyList`1<System.String> Capabilities { get; init; }
   property System.Collections.Generic.IReadOnlyList`1<System.String> LiveOnlyCapabilities { get; init; }
@@ -1583,6 +1587,7 @@ sealed class Valheim.Testing.Game.RoomSize : System.IEquatable`1<Valheim.Testing
   property System.String World { get; init; }
   property System.String WorldUid { get; init; }
   property Valheim.Testing.Game.InstallPins InstallPins { get; init; }
+  property Valheim.Testing.Game.SeededWorldRequest Create { get; init; }
 [result shape] sealed class Valheim.Testing.Game.RunManifestArm : System.IEquatable`1<Valheim.Testing.Game.RunManifestArm>
   method System.Boolean Equals(Valheim.Testing.Game.RunManifestArm other)
   method System.Void .ctor(System.String Arm, System.String Commit, System.String Artifact, System.String Sha256, System.String Md5)
@@ -1648,6 +1653,17 @@ sealed class Valheim.Testing.Game.ScenarioReport
   property System.Int32 Schema { get; }
   property System.String Name { get; }
   property Valheim.Testing.Game.ToolkitProvenance Toolkit { get; }
+[result shape] sealed class Valheim.Testing.Game.SeededWorldRequest : System.IEquatable`1<Valheim.Testing.Game.SeededWorldRequest>
+  method System.Boolean Equals(Valheim.Testing.Game.SeededWorldRequest other)
+  method System.Void .ctor(System.String name, System.String seed)
+  method Valheim.Testing.Game.SeededWorldRequest <Clone>$()
+  method static System.Boolean op_Equality(Valheim.Testing.Game.SeededWorldRequest left, Valheim.Testing.Game.SeededWorldRequest right)
+  method static System.Boolean op_Inequality(Valheim.Testing.Game.SeededWorldRequest left, Valheim.Testing.Game.SeededWorldRequest right)
+  method virtual System.Boolean Equals(System.Object obj)
+  method virtual System.Int32 GetHashCode()
+  method virtual System.String ToString()
+  property System.String Name { get; }
+  property System.String Seed { get; }
 [result shape] enum Valheim.Testing.Game.ServerPlatform
   field const Valheim.Testing.Game.ServerPlatform Linux = 1
   field const Valheim.Testing.Game.ServerPlatform MacOS = 2
