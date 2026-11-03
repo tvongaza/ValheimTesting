@@ -494,7 +494,9 @@ public sealed class TargetedRegression
             new ClientRounds
             {
                 Client = staged.Plan, Report = report, Output = output, Rounds = rounds, Cancellation = cancellation,
-            }.RunHosted(worlds => creationSite ?? HostedWorldSite(output, worlds), () =>
+            }.RunHosted(worlds => creationSite == null ? HostedWorldSite(output, worlds) :
+                Path.GetFullPath(creationSite.WorldsDirectory) == Path.GetFullPath(worlds) ? creationSite :
+                throw new InvalidOperationException($"The seeded name was reserved in {creationSite.WorldsDirectory}, but the client's checked worlds are {worlds}; nothing was created."), () =>
             {
                 staged.Verify();
                 ClientSession client;
