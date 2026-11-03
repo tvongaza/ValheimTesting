@@ -4,8 +4,9 @@ using System.Text.Json;
 using Xunit;
 using Valheim.Testing.GameSessions;
 
-// Host-wide inventory assertions and unresolvable game-named producers must run apart from all other collections.
-// This existing exclusive collection protects those checks while unrelated tests keep their normal parallel scheduling.
+// Linux ps gives a game's name, not its path: while any game-named process runs, a runtime-scoped check reads UNKNOWN (#866).
+// Real Linux runtime checks (this class, the launch-gone idle checks, the Unix fixture cleanup check) and the long-lived
+// copied-binary producer run alone in this collection, so no parallel class's stand-in can overlap them.
 [CollectionDefinition(nameof(GameProcessInventory), DisableParallelization = true)]
 public sealed class GameProcessInventory { }
 
@@ -74,9 +75,12 @@ public sealed class HostedRuntimeStageTests(Xunit.Abstractions.ITestOutputHelper
     [Fact]
     public void GameNamedUnixLauncherProducerUsesTheProcessInventoryCollection()
     {
-        var collection = Assert.Single(typeof(UnixServerLauncherTimeoutTests).CustomAttributes
-            .Where(attribute => attribute.AttributeType == typeof(CollectionAttribute)));
-        Assert.Equal(nameof(GameProcessInventory), collection.ConstructorArguments[0].Value);
+        // The producer of #866 and the real fixture cleanup check it failed.
+        foreach (var type in new[] { typeof(UnixServerLauncherTimeoutTests), typeof(UnixStandInServerFixtureTests) })
+        {
+            var collection = Assert.Single(type.CustomAttributes.Where(attribute => attribute.AttributeType == typeof(CollectionAttribute)));
+            Assert.Equal(nameof(GameProcessInventory), collection.ConstructorArguments[0].Value);
+        }
         var definition = Assert.Single(typeof(GameProcessInventory)
             .GetCustomAttributes(typeof(CollectionDefinitionAttribute), inherit: false).Cast<CollectionDefinitionAttribute>());
         Assert.True(definition.DisableParallelization);
