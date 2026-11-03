@@ -100,7 +100,7 @@ runs:
           'phase=bootstrap invocation (SDK restore/build and script execution)' \
           'command=dotnet run scripts/bootstrap-cli.cs' \
           "started-utc=$started_utc" "commit=$commit" "commit-status=$commit_status" \
-          "run-id=$GITHUB_RUN_ID" "run-attempt=$GITHUB_RUN_ATTEMPT" "job-id=$GITHUB_JOB" \
+          "run-id=$GITHUB_RUN_ID" "run-attempt=$GITHUB_RUN_ATTEMPT" "job-key=$GITHUB_JOB" \
           "runner-os=$RUNNER_OS" "runner-arch=$RUNNER_ARCH" "evidence-label=$EVIDENCE_LABEL" \
           "sdk-version=$sdk_version" "sdk-version-status=$sdk_status" \
           > "$bootstrap_directory/metadata.txt"; then
