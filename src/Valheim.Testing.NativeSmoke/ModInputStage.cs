@@ -201,8 +201,7 @@ internal static class ModInputStage
             return GameVersionAgreement.ReadInPlaceAsync(hosting.Install, CancellationToken.None).GetAwaiter().GetResult();
         var host = LocalHostPreflight.DefaultProbes.HostFactory?.Invoke(hosting.Host)
             ?? new ResolvedEnvironment { Hosts = inventory.Hosts }.CreateHost(hosting.Host);
-        var listing = HostInstall.ListAsync(host, hosting.Install, TimeSpan.FromSeconds(60), null, CancellationToken.None).GetAwaiter().GetResult();
-        return GameVersionAgreement.ReadAsync(host, listing, TimeSpan.FromSeconds(60), CancellationToken.None).GetAwaiter().GetResult();
+        return GameVersionAgreement.ReadInstallationAsync(host, hosting.Install, TimeSpan.FromSeconds(60), CancellationToken.None).GetAwaiter().GetResult();
     }
 
     internal static GameBuild VerifyAdmission(Inspection admission)

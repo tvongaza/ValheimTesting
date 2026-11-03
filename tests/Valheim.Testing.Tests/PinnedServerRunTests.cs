@@ -293,6 +293,24 @@ public sealed class PinnedServerRunTests : IDisposable
         Assert.Equal(2, await RunHere(["launch", plan, Output + "2"], Options()));
         Assert.Equal(2, await RunHere(["validate", plan], Options()));
     }
+    [Fact] public async Task AdmittedServerCopyRetainsPinnedFilesBesideWorldsLocal()
+    {
+        string path = WritePlan(), parentFile = Path.Combine(World, "server.cfg");
+        File.WriteAllText(parentFile, "whole save root pin");
+        var node = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(path))!;
+        node["world"]!["sha256"] = JsonSerializer.SerializeToNode(WorldFixture.Manifest(World));
+        File.WriteAllText(path, node.ToJsonString());
+        bool sawParent = false;
+        _machine.Host.AfterShip = shipped =>
+        {
+            if (!Directory.Exists(Path.Combine(shipped, "worlds_local"))) return;
+            Assert.Equal("whole save root pin", File.ReadAllText(Path.Combine(shipped, "server.cfg")));
+            sawParent = true;
+        };
+        Assert.Equal(0, await RunHere(["validate", path, Output], Options()));
+        Assert.True(sawParent); Assert.Equal("whole save root pin", File.ReadAllText(parentFile));
+    }
+
     [Fact] public async Task AChangedFixtureFailsBeforeAnythingLaunches()
     {
         string plan = WritePlan();
