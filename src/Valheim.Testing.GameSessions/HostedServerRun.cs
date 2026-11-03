@@ -207,10 +207,12 @@ internal sealed class HostedServerRun : IServerPlacement
     internal async Task AdmitWorldAsync(ServerRunPlan plan, CancellationToken cancellation, IReadOnlyDictionary<string, string> files)
     {
         if (plan.PreflightWorld() == null) return;
-        WorldBuild = Prepared && _sourceCheck != null
-            ? await GameVersionAgreement.ReadAsync(Host, _sourceCheck.PreparedGame, HostedTimeouts.Long, cancellation).ConfigureAwait(false)
+        var prepared = Prepared && _sourceCheck != null ? _sourceCheck.PreparedGame : null;
+        WorldBuild = prepared != null
+            ? await GameVersionAgreement.ReadAsync(Host, prepared, HostedTimeouts.Long, cancellation).ConfigureAwait(false)
             : await GameVersionAgreement.ReadInstallationAsync(Host, Role.Install, HostedTimeouts.Long, cancellation).ConfigureAwait(false);
-        if (Builds != null) WorldBuild = Builds.Admit(new("server", Host.Name, Role.Install, WorldBuild));
+        // The ledger names the install that was read: the prepared game root when one was read.
+        if (Builds != null) WorldBuild = Builds.Admit(new("server", Host.Name, prepared?.Root ?? Role.Install, WorldBuild));
         var worldFiles = files.Where(file => file.Key.Replace('\\', '/').StartsWith("worlds_local/", StringComparison.Ordinal))
             .ToDictionary(file => file.Key["worlds_local/".Length..], file => file.Value, StringComparer.Ordinal);
         WorldAdmission = WorldIdentity.Capture(Path.Combine(plan.World.Source, "worlds_local"), WorldBuild, worldFiles);
