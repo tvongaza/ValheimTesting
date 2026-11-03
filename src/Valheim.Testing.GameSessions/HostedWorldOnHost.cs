@@ -195,7 +195,7 @@ internal static class HostedWorldOnHost
                 // Intent/attempt is never ownership, even when a foreign world has the fixture's UID or identical bytes.
                 site.Journal(JournalEntry.Of(JournalEntry.CopyIntended, ("runtime", world), ("placementState", "attempted")), cancellation).GetAwaiter().GetResult();
                 var variables = CollisionVariables(site, name);
-                variables["worlds"] = site.Stage; variables["to"] = site.WorldsDirectory;
+                variables["to"] = variables["worlds"]; variables["worlds"] = site.Stage;
                 var result = site.Host.RunAsync(site.Host.Shell.Kind == HostShellKind.PowerShell ? WindowsPlace : BashPlace,
                     variables,
                     HostedTimeouts.Long, cancellation).GetAwaiter().GetResult();
@@ -248,9 +248,12 @@ internal static class HostedWorldOnHost
             if (!userdata.EndsWith("/userdata", StringComparison.OrdinalIgnoreCase) || userdata.Split('/').Any(part => part is "." or ".."))
                 throw new ArgumentException("The Steam cloud root must be the host's userdata folder.");
         }
-        return new() { ["worlds"] = site.WorldsDirectory, ["name"] = name,
-            ["cloud"] = HostPath.Join(HostPath.Parent(site.WorldsDirectory), "worlds"),
-            ["userdata"] = site.SteamUserDataDirectory, ["steam"] = "", ["remote"] = SteamDetection.GameApp + "/remote/worlds" };
+        // Without a trailing separator, so the scripts' parent of the worlds folder is the C# one the cloud folder is beside.
+        string worlds = site.WorldsDirectory.TrimEnd('/', '\\');
+        return new() { ["worlds"] = worlds, ["name"] = name,
+            ["cloud"] = HostPath.Join(HostPath.Parent(worlds), "worlds"),
+            ["userdata"] = site.SteamUserDataDirectory.Length > 1 ? site.SteamUserDataDirectory.TrimEnd('/', '\\') : site.SteamUserDataDirectory,
+            ["steam"] = "", ["remote"] = SteamDetection.GameApp + "/remote/worlds" };
     }
 
     private static void RefuseCollisions(Site site, string name, string fixture, CancellationToken cancellation)
