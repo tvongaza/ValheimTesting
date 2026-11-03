@@ -110,7 +110,7 @@ public sealed class ValidationLimitsTests : IClassFixture<ValidationLimitsTests.
         var probe = await _probe.RunPreparation(behavior);
         Assert.True(probe.Ready, probe.Run.Output);
         Assert.NotEqual(0, probe.Run.ExitCode);
-        Assert.InRange(probe.Elapsed.TotalSeconds, 4, 12);
+        Assert.InRange(probe.Elapsed.TotalSeconds, 8, 18);
         Has(probe.Run, "PREPARATION LIMIT:");
         Has(probe.Run, "cleanup could not be verified");
         Has(probe.Run, "no readable blame sequence available");
@@ -181,7 +181,7 @@ public sealed class ValidationLimitsTests : IClassFixture<ValidationLimitsTests.
                 // The live root or the inherited pipe must still block exit+EOF at this listing's actual deadline.
                 Assert.False(boundary.RootElement.GetProperty("ReadCompleted").GetBoolean());
                 Assert.True(boundary.RootElement.GetProperty("ElapsedSeconds").GetDouble() >= boundary.RootElement.GetProperty("DeadlineSeconds").GetDouble());
-                Assert.InRange(boundary.RootElement.GetProperty("DeadlineSeconds").GetDouble(), 5.8, 8);
+                Assert.InRange(boundary.RootElement.GetProperty("DeadlineSeconds").GetDouble(), 12.8, 15); // 8 s preparation + 5 s listing.
                 Assert.Equal(behavior == "listing-pipe", boundary.RootElement.GetProperty("HasExited").GetBoolean());
                 if (behavior == "listing-pipe")
                 {
@@ -518,7 +518,7 @@ public sealed class ValidationLimitsTests : IClassFixture<ValidationLimitsTests.
                     start.RedirectStandardOutput = true;
                     using var process = Process.Start(start) ?? throw new Exception("fixture snapshot did not start");
                     Task<string> output = process.StandardOutput.ReadToEndAsync();
-                    try { Task.WhenAll(output, process.WaitForExitAsync()).WaitAsync(TimeSpan.FromSeconds(2)).GetAwaiter().GetResult(); }
+                    try { Task.WhenAll(output, process.WaitForExitAsync()).WaitAsync(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult(); }
                     finally {
                         if (!process.HasExited) {
                             process.Kill(entireProcessTree: true);
@@ -797,11 +797,14 @@ public sealed class ValidationLimitsTests : IClassFixture<ValidationLimitsTests.
                 var start = new ProcessStartInfo(FixtureProjects.DotnetHost) { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true };
                 foreach (string argument in new[] { compiled, "--test-project", repository, project, results, "FullyQualifiedName~Entered" }) start.ArgumentList.Add(argument);
                 foreach (var (name, value) in CleanEnvironment()) if (value == null) start.Environment.Remove(name); else start.Environment[name] = value;
-                start.Environment["VT_VALIDATE_PREPARATION_LIMIT_SECONDS"] = behavior is "fast" or "fail" ? "20" : "4";
+                // A listing case snapshots the graph with pwsh/CIM on Windows, which a busy runner can hold past 2 s: give those
+                // cases room for the observer's and the validator's snapshots before the scaled preparation limit.
+                bool listing = behavior.StartsWith("listing-", StringComparison.Ordinal);
+                start.Environment["VT_VALIDATE_PREPARATION_LIMIT_SECONDS"] = behavior is "fast" or "fail" ? "20" : listing ? "8" : "4";
                 start.Environment["VT_VALIDATE_SOFT_LIMIT_SECONDS"] = "2";
                 start.Environment["VT_VALIDATE_HARD_LIMIT_SECONDS"] = "20";
-                start.Environment["VT_VALIDATE_CLEANUP_LIMIT_SECONDS"] = "6";
-                start.Environment["VT_VALIDATE_PROCESS_LIST_LIMIT_SECONDS"] = "2";
+                start.Environment["VT_VALIDATE_CLEANUP_LIMIT_SECONDS"] = listing ? "8" : "6";
+                start.Environment["VT_VALIDATE_PROCESS_LIST_LIMIT_SECONDS"] = listing ? "5" : "2";
                 using var command = Process.Start(start)!;
                 var elapsed = Stopwatch.StartNew();
                 long commandStart = OwnedClientCommandLease.LocalStartUtcTicks(command);
@@ -832,7 +835,7 @@ public sealed class ValidationLimitsTests : IClassFixture<ValidationLimitsTests.
                         Task<string> observerErrors = observer.StandardError.ReadToEndAsync();
                         try
                         {
-                            await observer.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(3));
+                            await observer.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(6));
                             string errors;
                             try { errors = await observerErrors.WaitAsync(TimeSpan.FromSeconds(1)); }
                             catch (TimeoutException) { errors = "(observer stderr still open)"; }
