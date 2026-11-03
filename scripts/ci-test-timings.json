@@ -95,10 +95,5 @@
   {"Name": "TargetedRegressionTests.SourceIntegrityAndLockReleaseFailuresAreBothReported", "Seconds": {"Windows": 22.57}},
   {"Name": "TargetedRegressionTests.SourceIntegrityFailureRetiresTheProfileAndReleasesTheHostLockBeforeItIsRaised", "Seconds": {"Windows": 25.12}},
   {"Name": "TestRunnersTargetsTests.BothFrameworksPass", "Seconds": {"Windows": 13.94}},
-  {"Name": "UserSaveFilesTests.TheHostScriptOnThisMachinesShellKeepsTheFilesAsTheInProcessStepsDo", "Seconds": {"Windows": 19.83}},
-  {"Name": "WindowsServerLauncherTimeoutTests.ACompletedTaskLauncherStillStopsItsProcessTreeWhenThePidHandoffFails", "Seconds": {"Windows": 10.15}},
-  {"Name": "WindowsServerLauncherTimeoutTests.AFailedHandoffStopsAGameItsLauncherHasNotRecordedYet", "Seconds": {"Windows": 13.02}},
-  {"Name": "WindowsServerLauncherTimeoutTests.ATimedOutTaskLauncherStopsItsProcessTree", "Seconds": {"Windows": 14.77}},
-  {"Name": "WindowsServerLauncherTimeoutTests.RecoveryFromAPidFileRemovesTheLaunchersStartTask", "Seconds": {"Windows": 58.01}},
-  {"Name": "WindowsServerLauncherTimeoutTests.RecoveryStopsARealLauncherWhoseControllerDiedBeforePidPublication", "Seconds": {"Windows": 26.07}}
+  {"Name": "UserSaveFilesTests.TheHostScriptOnThisMachinesShellKeepsTheFilesAsTheInProcessStepsDo", "Seconds": {"Windows": 19.83}}
 ]
