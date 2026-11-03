@@ -222,10 +222,10 @@ internal static class HostedCharacterStage
 
     // A macOS host's (the only one that runs bash for a client). Variables: characters, userdata, userhome and steam (each may be
     // empty; userhome and steam only for controlled tests). One "found" or "tried" line per path considered.
-    internal static readonly string BashDirectories = (SteamDetection.BashRoot + """
+    internal static readonly string BashDirectories = (SteamDetection.BashUserData + """
         set -u
         home=${userhome:-$HOME}
-        folder=${userdata:-$steam/userdata}
+        folder=$userdata
         echo "VT-CHARDIR userdata tried $folder"
         if [ -d "$folder" ]; then echo "VT-CHARDIR userdata found $folder"; fi
         standard="$home/Library/Application Support/IronGate/Valheim/characters_local"
@@ -235,9 +235,9 @@ internal static class HostedCharacterStage
         """).ReplaceLineEndings("\n");
 
     // A Windows host's (the only one that runs PowerShell). With no Steam root, the registry value is what was tried.
-    internal static readonly string PowerShellDirectories = (SteamDetection.PowerShellRoot + $$"""
+    internal static readonly string PowerShellDirectories = (SteamDetection.PowerShellUserData + $$"""
         $userHomeDir = if ($userhome) { $userhome } elseif ($env:USERPROFILE) { $env:USERPROFILE } else { [Environment]::GetFolderPath('UserProfile') }
-        $folder = if ($userdata) { $userdata } elseif ($steam) { [IO.Path]::Combine($steam, 'userdata') } else { '{{SteamDetection.RegistryValue}} (not set: Steam has not run for this user)' }
+        $folder = if ($userdata) { $userdata } else { '{{SteamDetection.RegistryValue}} (not set: Steam has not run for this user)' }
         "VT-CHARDIR userdata tried $folder"
         if ([IO.Directory]::Exists($folder)) { "VT-CHARDIR userdata found $folder" }
         $standard = [IO.Path]::Combine($userHomeDir, 'AppData', 'LocalLow', 'IronGate', 'Valheim', 'characters_local')

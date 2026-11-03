@@ -538,7 +538,7 @@ public sealed class TargetedRegression
                     throw new InvalidOperationException("This run does not hold this machine's lock, so the client's worlds are not its to change; stage the arm first.");
                 RequireStopped(null, clientSession: true);
                 return Task.CompletedTask;
-            });
+            }) with { SteamUserDataDirectory = SteamUserData ?? "" };
 
     private void JournalCharacterEvent(CharacterStageEvent point, string characters, string userData, string name, string expectedSha256) =>
         _journal.AppendLocal("client", CharacterEntry(point, characters, userData, name, expectedSha256));

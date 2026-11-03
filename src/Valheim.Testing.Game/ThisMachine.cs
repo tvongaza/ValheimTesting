@@ -172,6 +172,23 @@ internal sealed record SteamDetection(string? Root, string RootRule, string? Rea
 
         """.ReplaceLineEndings("\n");
 
+    // The host-aware userdata rule shared by character staging and hosted-world refusal.
+    // A supplied userdata path needs no lookup of the user's installed Steam root.
+    internal static readonly string BashUserData = """
+        if [ -z "${userdata:-}" ]; then
+        """ + "\n" + BashRoot + """
+        userdata="$steam/userdata"
+        fi
+
+        """;
+    internal static readonly string PowerShellUserData = """
+        if (-not $userdata) {
+        """ + "\n" + PowerShellRoot + """
+        if ($steam) { $userdata = [IO.Path]::Combine($steam, 'userdata') }
+        }
+
+        """;
+
     /// <summary>When <see cref="Root"/> is null: the one refusal, saying why and what to do instead.</summary>
     internal string? NotFound => Reason == null ? null : "Steam was not found: " + Reason +
         ". Steam in another folder (a Flatpak or a custom one) is not searched: list the environment in an inventory file with its install.";
