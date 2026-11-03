@@ -113,6 +113,7 @@ public sealed class HostedRuntimeStageTests(Xunit.Abstractions.ITestOutputHelper
                             return Task.CompletedTask;
                         }, serversRunFromIt: true));
                     Assert.Contains("VT-GAME unknown", refusal.Result.Stdout);
+                    Assert.Contains("executable path cannot be read", refusal.Message);
                     Assert.Equal("runtime contents", File.ReadAllText(Path.Combine(keptRoot!, "keep.txt")));
                     Assert.Equal(ProbedState.Same, (await HostProcessProbe.ProbeAsync(host,
                         [(process.Id, process.StartIdentity)], GameHostChecks.Generous))[(process.Id, process.StartIdentity)].State);
