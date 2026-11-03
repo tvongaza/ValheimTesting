@@ -29,6 +29,18 @@ public sealed class RegressionBundleTests : IDisposable
         Assert.False(Directory.Exists(output));
     }
 
+    [ClientHostFact]
+    public void AControlEnvironmentIsRefusedBeforeTheArmComparison()
+    {
+        var control = _rig.Rig.Manifest();
+        control.NoMod = true; control.Mod = new(); control.Probe = null;
+        control.Plugins.Clear(); control.Patchers.Clear(); control.OptionalReferences.Clear();
+        control.Write(_rig.EnvironmentPath);
+        string output = _rig.Output();
+        Assert.Contains("no mod under test", Assert.Throws<InvalidOperationException>(() => RegressionBundle.Create(_rig.Spec(), output, _rig.Sources)).Message);
+        Assert.False(Directory.Exists(output));
+    }
+
     [ClientHostFact] public void ACleanRunMakesASmallBundleThatVerifies()
     {
         string output = _rig.Output();

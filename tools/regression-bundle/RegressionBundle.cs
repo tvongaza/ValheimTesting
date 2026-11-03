@@ -537,6 +537,9 @@ public static class RegressionBundle
     private static EvidenceCheck CheckEvidence(BundleSpec spec, TargetedRegression? run, RegressionTemplate? template)
     {
         var environment = run?.Inputs;
+        // Before the arm comparison, which a control's empty mod arms would otherwise fail first.
+        if (environment?.NoMod == true)
+            throw new InvalidOperationException($"{spec.Environment}: a CLI-only control has no mod under test; it cannot supply mod-regression build identities.");
         if (environment != null && !environment.Mod.Arms.Keys.Order(StringComparer.Ordinal).SequenceEqual(spec.Arms.Keys.Order(StringComparer.Ordinal), StringComparer.Ordinal))
             throw new InvalidOperationException($"The spec's arms ({string.Join(", ", spec.Arms.Keys)}) are not the environment's ({string.Join(", ", environment.Mod.Arms.Keys)}).");
         var arms = spec.Arms.Select(entry => CheckArm(spec, environment, entry.Key, entry.Value)).ToList();
@@ -613,7 +616,7 @@ public static class RegressionBundle
         // Which build ran: every source that records it must agree, and the declared values must be among them.
         string manifestPath = Path.Combine(arm.Evidence, "run-manifest.json");
         RunManifest? run = File.Exists(manifestPath) ? JsonSerializer.Deserialize<RunManifest>(File.ReadAllText(manifestPath), ManifestJson) : null;
-        if (run?.NoMod == true || environment?.NoMod == true)
+        if (run?.NoMod == true)
             throw new InvalidOperationException($"{where}: a CLI-only control has no mod under test; it cannot supply mod-regression build identities.");
         if (run != null && run.Arm != name) throw new InvalidOperationException($"{where}: run-manifest.json is arm {run.Arm}'s.");
         var declared = environment?.Mod.Arms[name];

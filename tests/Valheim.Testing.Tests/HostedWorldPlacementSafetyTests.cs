@@ -385,6 +385,20 @@ public sealed class HostedWorldPlacementSafetyTests : IDisposable
     }
 
     [Fact]
+    public void AWorldsFolderWithATrailingSeparatorChecksItsSiblingCloudFolderAndPlaces()
+    {
+        string output = Path.Combine(_root, "output"), run = RunJournal.NewRunId();
+        using var directory = RunJournal.UseLocalDirectory(Path.Combine(_root, "journal"));
+        using var scope = RunJournal.UseRun(run);
+        Directory.CreateDirectory(Path.Combine(_root, "worlds"));
+        var site = HostedWorldOnHost.ThisMachine(output, "client", Path.Combine(_root, "userdata"))(Path.Combine(_root, "worlds_local") + Path.DirectorySeparatorChar);
+        string fixture = FakeInstalls.World(Path.Combine(_root, "fixture"));
+        var plan = new HostWorldPlan { World = new() { Source = fixture, Sha256 = new(WorldFixture.Manifest(fixture)) }, WorldUid = "4242" };
+        site.Place(plan, Path.Combine(_root, "input"), default).Collect();
+        Assert.True(Directory.Exists(Path.Combine(output, run, "host-world", "Campaign")));
+    }
+
+    [Fact]
     public async Task ParallelPlacementsIntoOneOutputReserveDifferentRunDirectories()
     {
         string output = Path.Combine(_root, "shared-output"), run = RunJournal.NewRunId();
