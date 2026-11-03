@@ -177,6 +177,7 @@ internal static class ModInputStage
         public IReadOnlyList<string> PluginFiles { get; init; } = [];
         public IReadOnlyList<string> PluginDirectories { get; init; } = [];
         public RoleSelection? ClientSelection { get; init; }
+        public bool NoMod { get; init; }
     }
 
     /// <summary>The environments a one-off runs on, chosen from the inventory with the reason for each.</summary>
@@ -207,6 +208,7 @@ internal static class ModInputStage
         public RetainedInputs RunInputs { get; init; } = RetainedInputs.Empty;
         public IReadOnlyList<HostedRuntimeFile> Files { get; init; } = [];
         public SelectedRole? ClientMods { get; init; }
+        public bool NoMod { get; init; }
 
         public IEnumerable<Actor> Actors => new[] { Server, Client }.OfType<Actor>();
 
@@ -227,6 +229,7 @@ internal static class ModInputStage
             }
             foreach (var actor in Actors) SmokeInputResolver.RecordLoader(provenance, actor.Role, actor.Loader, actor.Shipped);
             provenance["modSelection"] = ModSelection;
+            if (NoMod) provenance["noMod"] = "true";
             if (RunInputs.RecordFile != null)
             {
                 provenance["runInputs"] = RunInputs.RecordFile;
@@ -246,6 +249,7 @@ internal static class ModInputStage
 
     internal static Inspection Inspect(Request request)
     {
+        RequireNoModRequest(request);
         var options = request.Options;
         // 1. The game and loader choice.
         string compileRole = request.Route switch
@@ -273,6 +277,13 @@ internal static class ModInputStage
                 worldAdmission = request.InitialWorldAdmission ?? FixtureBake.Admit(fixtureSource, build);
                 worldAdmission.World.VerifyTarget(build);
                 FixtureBake.VerifyAdmission(worldAdmission);
+            }
+            else if (options.ContainsKey("--world-seed"))
+            {
+                if (request.Route != Route.Hosted || GameLaunch.CurrentClientHost == ClientPlatform.Linux)
+                    throw new NotSupportedException("Seeded creation supports one local owned Windows or macOS hosting client.");
+                _ = new SeededWorldRequest(options.GetValueOrDefault("--world-name") ??
+                    throw new ArgumentException("A seeded request must retain its generated world name."), options["--world-seed"]);
             }
             else _ = DefaultSmokeWorld.Inspect(build);
         }
@@ -350,6 +361,7 @@ internal static class ModInputStage
         return new Inputs(request.Route, inventory, compile, server, client, architecture, choice.Join, [], "", options.GetValueOrDefault("--build-inputs"))
         {
             Admission = admission, Core = core, CliManifest = cliManifest, CliFiles = cliFiles, Capabilities = capabilities.ToList(), SteamRuntimePackage = steamRuntime,
+            NoMod = request.NoMod,
         };
     }
 
@@ -381,9 +393,12 @@ internal static class ModInputStage
     /// shape of the stage's step 6 and of an A/B run's before and after locks. <paramref name="resolve"/> is a test seam.
     /// </summary>
     internal static NativeDependencyLock Resolve(Inputs inputs, IReadOnlyList<string> mods, IReadOnlyList<string> searchRoots,
-        IReadOnlyList<string> optionalReferences, Func<NativeDependencyRequest, NativeDependencyLock>? resolve = null) =>
-        (resolve ?? NativeDependencyResolver.Resolve)(SmokeDependencyInputs.Request(mods, inputs.Compile.Recipe.Install, inputs.Core,
-            inputs.CliManifest, inputs.CliFiles, searchRoots, optionalReferences, inputs.Capabilities));
+        IReadOnlyList<string> optionalReferences, Func<NativeDependencyRequest, NativeDependencyLock>? resolve = null)
+    {
+        var request = SmokeDependencyInputs.Request(mods, inputs.Compile.Recipe.Install, inputs.Core,
+            inputs.CliManifest, inputs.CliFiles, searchRoots, optionalReferences, inputs.Capabilities);
+        return resolve != null ? resolve(request) : inputs.NoMod ? NativeDependencyResolver.ResolveCliOnly(request) : NativeDependencyResolver.Resolve(request);
+    }
 
     private static string CoreFor(Actor actor)
     {
@@ -424,14 +439,15 @@ internal static class ModInputStage
     }
 
     private static PreparingRole InspectRole(RoleSelection selected, Actor actor, string core, string output,
-        Route route, bool withClient, bool implicitSelection, bool buildOnly)
+        Route route, bool withClient, bool implicitSelection, bool buildOnly, bool noMod = false)
     {
         if (!implicitSelection && selected.Project == null && selected.Mods.Count == 0)
             throw new ArgumentException("An explicit role needs selected mods or a project; it never discovers a client mod implicitly.");
         var role = new PreparingRole(selected, actor, core, output) { Prefix = implicitSelection ? "--" : "--client-" };
         role.Retained = RetainExplicit(selected.RunInputs, route, output, withClient, implicitSelection ? null : actor.Role);
         role.Files = PayloadFiles(role.Retained, selected.PluginFiles, selected.PluginDirectories);
-        if (!buildOnly && selected.Project == null)
+        if (noMod) role.Selection = "explicit --no-mod";
+        else if (!buildOnly && selected.Project == null)
         {
             SmokeModInput.Selection mods = implicitSelection ? SmokeModInput.Select(selected.Mods, Environment.CurrentDirectory)
                 : new(selected.Mods.Select(Path.GetFullPath).ToArray(), "explicit --client-mod selection");
@@ -475,6 +491,7 @@ internal static class ModInputStage
 
     public static async Task<Inputs> RunAsync(Request request, CancellationToken cancellation)
     {
+        RequireNoModRequest(request);
         _ = ModBuild.ParseDependencies(request.Dependencies);
         if (request.ClientSelection != null) _ = ModBuild.ParseDependencies(request.ClientSelection.Dependencies, "--client-dependency");
         var inputs = Choose(request);
@@ -487,7 +504,7 @@ internal static class ModInputStage
         }
         // Admit both roles' ready-made inputs before host probes or either build, through the same selection/check owner.
         var primary = InspectRole(Primary(request), inputs.Compile, inputs.Core, request.Output, request.Route,
-            inputs.Client != null, implicitSelection: true, buildOnly: request.Route == Route.Build);
+            inputs.Client != null, implicitSelection: true, buildOnly: request.Route == Route.Build, noMod: request.NoMod);
         var client = request.ClientSelection == null ? null : InspectRole(request.ClientSelection, inputs.Client!, CoreFor(inputs.Client!),
             Path.Combine(request.Output, "client"), request.Route, withClient: true, implicitSelection: false, buildOnly: false);
         Scenario? scenario = request.Options.TryGetValue("--scenario", out string? scenarioFile)
@@ -544,6 +561,22 @@ internal static class ModInputStage
         if (result.Select(file => file.RelativePath).Distinct(StringComparer.OrdinalIgnoreCase).Count() != result.Count)
             throw new InvalidDataException("Config and companion destinations must be unique within each role.");
         return result;
+    }
+
+    private static void RequireNoModRequest(Request request)
+    {
+        if (!request.NoMod)
+        {
+            if (request.Options.ContainsKey("--no-mod") || request.Switches.Contains("--no-mod"))
+                throw new ArgumentException("--no-mod requires an explicit no-mod request.");
+            return;
+        }
+        if (request.Route != Route.Hosted) throw new ArgumentException("--no-mod is supported only by start.");
+        var supplied = request.Options.Keys.ToHashSet(StringComparer.Ordinal);
+        foreach (var (key, count) in new[] { ("--mod", request.Mods.Count), ("--search-root", request.SearchRoots.Count),
+            ("--optional-reference", request.OptionalReferences.Count), ("--dependency", request.Dependencies.Count) })
+            if (count != 0) supplied.Add(key);
+        SmokeCommandOptions.RequireNoModInputs(supplied);
     }
 
     // The selected mod files exist, and recorded build inputs still match this game and the chosen loader; their pinned

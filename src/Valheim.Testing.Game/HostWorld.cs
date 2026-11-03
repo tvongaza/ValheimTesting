@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.Text.Json.Serialization;
 
 namespace Valheim.Testing.Game;
 
@@ -17,6 +18,11 @@ public sealed class HostWorldPlan
     /// (<see cref="WorldIdentity.Read"/>). Every file is pinned by SHA256 (<see cref="WorldFixture.Manifest"/>).
     /// </summary>
     public PinnedDirectory World { get; set; } = new();
+    /// <summary>Pending game creation instead of a fixture. World/WorldUid must be empty until the existing owner verifies the actual created metadata.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public SeededWorldRequest? Create { get; set; }
+    internal SeededWorldRequest? RequestedCreation { get; private set; }
+
     /// <summary>
     /// The fixture world's exact UID, required even without pins: the host must load that world, and the game silently
     /// creates a fresh world when the named one is missing.
@@ -39,10 +45,22 @@ public sealed class HostWorldPlan
     /// </summary>
     public void Validate()
     {
+        if (Create != null)
+        {
+            if (World == null || !string.IsNullOrEmpty(World.Source) || World.Sha256.Count != 0 || !string.IsNullOrEmpty(WorldUid))
+                throw new ArgumentException("hostWorld.create is mutually exclusive with a fixture source, manifest and UID.");
+            ValidateSaveOptions();
+            return;
+        }
         World.Validate();
         _ = HostedWorld.NameOf(World.Sha256.Keys);
         if (!long.TryParse(WorldUid, NumberStyles.Integer, CultureInfo.InvariantCulture, out _))
             throw new ArgumentException("hostWorld.worldUid: give the fixture world's exact UID. The host must load that world, and the game silently creates a fresh one when it is missing.");
+        ValidateSaveOptions();
+    }
+
+    private void ValidateSaveOptions()
+    {
         if (SaveDirectory != null && !Path.IsPathFullyQualified(SaveDirectory))
             throw new ArgumentException("hostWorld.saveDirectory: give the full path of the client's data directory (the one that holds worlds_local), or leave it out for this user's default.");
         if (SaveSeconds is < 1 or > 600) throw new ArgumentException("hostWorld.saveSeconds is 1 to 600.");
@@ -60,10 +78,22 @@ public sealed class HostWorldPlan
 
     internal WorldIdentity Preflight(GameBuild? target, string source)
     {
+        if (Create != null) throw new InvalidOperationException("The seeded world is unresolved: no fixture identity or UID exists before verified game creation.");
         if (World.Sha256.Count != 0 && source == World.Source) WorldFixture.Verify(source, World.Sha256);
         var identity = target == null ? WorldIdentity.Read(source) : WorldIdentity.Read(source, target);
         RequireUid(identity);
         return identity;
+    }
+
+    internal void BindCreated(SeededWorldRequest request, WorldIdentity.Admission admitted)
+    {
+        if (Create != request || RequestedCreation != null) throw new InvalidOperationException("The seeded request changed or was already resolved.");
+        Validate(); admitted.Verify();
+        if (admitted.Identity.Name != request.Name || admitted.Identity.SeedName != request.Seed)
+            throw new InvalidDataException("The game-created metadata does not match the requested name and exact seed.");
+        World = new PinnedDirectory { Source = admitted.Source, Sha256 = new(admitted.Files, StringComparer.Ordinal) };
+        WorldUid = admitted.Identity.UidText; Admission = admitted;
+        RequestedCreation = request; Create = null;
     }
 
     internal void RequireUid(WorldIdentity identity)
@@ -217,6 +247,7 @@ public static class HostWorlds
     public static SessionState Start(GameActor host, ClientRunPlan plan, string worldName, TimeSpan timeout, CancellationToken cancellation = default, bool protectPlayer = true)
     {
         var world = plan.HostWorld ?? throw new ArgumentException("The client plan has no hostWorld section.", nameof(plan));
+        if (world.Create != null) throw new InvalidOperationException("Create and verify the requested world before issuing a host command or publishing a UID.");
         if (timeout <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(timeout));
         if (string.IsNullOrEmpty(worldName) || worldName.Any(char.IsWhiteSpace)) throw new ArgumentException("The world name must be a single token.", nameof(worldName));
         var clock = Stopwatch.StartNew();

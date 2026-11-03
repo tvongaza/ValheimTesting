@@ -12,6 +12,7 @@ internal static class SmokeCommandOptions
     private static readonly Dictionary<string, Spec> Table = new(StringComparer.Ordinal)
     {
         ["--mod"] = new(Kind.Repeat), ["--output"] = new(Kind.Single, Build: true),
+        ["--no-mod"] = new(Kind.Switch, ServerLoad: false, ServerLoadAb: false),
         ["--client-project"] = new(Kind.Single, Start: false, ServerLoadAb: false, ClientRole: true),
         ["--client-build-inputs"] = new(Kind.Single, Start: false, ServerLoadAb: false, ClientRole: true),
         ["--client-assert-command"] = new(Kind.Single, Start: false, ServerLoadAb: false, ClientRole: true),
@@ -51,6 +52,8 @@ internal static class SmokeCommandOptions
         ["--plugin-dir"] = new(Kind.Repeat, Start: false),
         ["--server-only"] = new(Kind.Switch, Start: false),
         ["--world-fixture"] = new(Kind.Single, ServerLoadAb: false),
+        ["--world-seed"] = new(Kind.Single, ServerLoad: false, ServerLoadAb: false),
+        ["--world-name"] = new(Kind.Single, ServerLoad: false, ServerLoadAb: false),
         ["--bake-fixture"] = new(Kind.Single, Start: false, ServerLoadAb: false),
         ["--before-save-command"] = new(Kind.Single, Start: false, ServerLoadAb: false),
         ["--before-save-line"] = new(Kind.Single, Start: false, ServerLoadAb: false),
@@ -69,6 +72,7 @@ internal static class SmokeCommandOptions
         internal Dictionary<string, string> Options { get; } = new(StringComparer.Ordinal);
         internal Dictionary<string, List<string>> Repeated { get; } = new(StringComparer.Ordinal);
         internal HashSet<string> Switches { get; } = new(StringComparer.Ordinal);
+        internal SeededWorldRequest? Create { get; set; }
         internal ModInputStage.ExplicitInputs RunInputs { get; set; } = ModInputStage.ExplicitInputs.Empty;
         internal ModInputStage.RoleSelection? ClientSelection { get; set; }
         internal List<string> List(string key) => Repeated.TryGetValue(key, out var list) ? list : [];
@@ -107,7 +111,21 @@ internal static class SmokeCommandOptions
             else if (!result.Options.TryAdd(key, value))
             { error = "Repeated option: " + key; return false; }
         }
-        if (!allowImplicitMod && result.List("--mod").Count == 0) { error = "Missing: --mod"; return false; }
+        if (result.Options.TryGetValue("--world-seed", out string? seed))
+        {
+            if (result.Options.ContainsKey("--world-fixture") || result.Options.ContainsKey("--compare-mod") || result.Options.ContainsKey("--compare-source"))
+            { error = "--world-seed requires one new world: leave out --world-fixture and comparison options; export a saved fixture for identical-state comparisons."; return false; }
+            try { result.Create = SeededWorldRequest.FromSeed(seed, result.Options.GetValueOrDefault("--world-name")); }
+            catch (ArgumentException failure) { error = failure.Message; return false; }
+            result.Options["--world-name"] = result.Create.Name; // Generate once; detached and foreground stages retain the same request.
+        }
+        else if (result.Options.ContainsKey("--world-name"))
+        { error = "--world-name requires --world-seed."; return false; }
+        if (result.Switches.Contains("--no-mod"))
+            try { RequireNoModInputs(result.Options.Keys.Concat(result.Repeated.Keys)); }
+            catch (ArgumentException failure) { error = failure.Message; return false; }
+        if (!allowImplicitMod && result.List("--mod").Count == 0 && !result.Switches.Contains("--no-mod"))
+        { error = "Missing: --mod"; return false; }
         if (command == Command.Build)
         {
             if (!result.Options.ContainsKey("--project")) { error = "Give --project MOD.csproj."; return false; }
@@ -201,6 +219,15 @@ internal static class SmokeCommandOptions
         catch (ArgumentException failure) { error = failure.Message; return false; }
         parsed = result;
         return true;
+    }
+
+    internal static void RequireNoModInputs(IEnumerable<string> supplied)
+    {
+        string[] conflicts = ["--mod", "--project", "--build-inputs", "--source", "--compare-mod", "--compare-source",
+            "--dependency", "--search-root", "--optional-reference", "--scenario", "--scenario-project",
+            "--adapter", "--adapter-project", "--plugin-file", "--plugin-dir"];
+        if (conflicts.FirstOrDefault(supplied.Contains) is { } conflict)
+            throw new ArgumentException($"--no-mod runs a CLI-only control; leave out {conflict}.");
     }
 
     internal static string Output(IReadOnlyDictionary<string, string> options, Func<string, bool>? containsProject = null)

@@ -131,7 +131,7 @@ public sealed class ClientRounds
                     if (Arrival != null) CliCapabilities.Require(session.Actor, PlayerPlacement.ArrivalCapabilities);
                 });
             var client = session!.Actor;
-            world.Opened(client);
+            world.Opened(session);
             for (int i = 0; i < Rounds.Count; i++)
             {
                 var round = new ClientRound(Rounds[i], i, i == Rounds.Count - 1, world.ServerFor(client), client, Report, Output, world.WorldUid);
@@ -191,7 +191,7 @@ public sealed class ClientRounds
         string WorldUid { get; }
         void Record();
         void Prepare();
-        void Opened(GameActor client);
+        void Opened(ClientSession client);
         GameActor ServerFor(GameActor client);
         void Enter(ClientRound round);
         void Save(ClientRound round);
@@ -220,7 +220,7 @@ public sealed class ClientRounds
                 rounds.Report.Step(StepPhase.Preflight, "the owned client's ValheimCLI manifest offers the arrival waits, before launch",
                     () => rounds.Client.CheckCliManifest(PlayerPlacement.ArrivalCapabilities));
         }
-        public void Opened(GameActor client) { }
+        public void Opened(ClientSession client) { }
         public GameActor ServerFor(GameActor client) => _server;
         public void Enter(ClientRound round) => rounds.Join(round);
         public void Save(ClientRound round) => round.Server.SaveConfirmed();
@@ -246,13 +246,17 @@ public sealed class ClientRounds
             Report.Provenance["hostRounds"] = string.Join(",", rounds.Rounds);
         }
         public void Prepare() => _world.Prepare(Report);
-        public void Opened(GameActor client) =>
-            Report.Step(StepPhase.Setup, "the client's ValheimCLI offers the session commands the rounds use", () => CliCapabilities.Require(client, CliCapabilities.HostedRounds));
+        public void Opened(ClientSession client)
+        {
+            Report.Step(StepPhase.Setup, "the client's ValheimCLI offers the session commands the rounds use", () => CliCapabilities.Require(client.Actor, CliCapabilities.HostedRounds));
+            _world.Opened(client, Report);
+        }
         public GameActor ServerFor(GameActor client) => client; // The host is both.
         public void Enter(ClientRound round)
         {
             string protect = rounds.ProtectPlayer ? ", protected" : "";
-            round.Step(StepPhase.Setup, round.Index == 0 ? "host the fixture world with the disposable character" + protect : "restart the hosted world" + protect,
+            round.Step(StepPhase.Setup, round.Index == 0 ? (plan.RequestedCreation == null ? "host the fixture world with the disposable character" :
+                "host the verified created world with the disposable character") + protect : "restart the hosted world" + protect,
                 () => _world.StartWorld(round.Client, rounds.ProtectPlayer));
             // The owned host's disposable character and fixture acknowledge cheats; an operator's client keeps devcommands only.
             if (Client.Owned)
@@ -308,6 +312,7 @@ public sealed class ClientRounds
         if (Lobby != null) throw new ArgumentException("Lobby: a hosting client joins no lobby; leave Lobby out.");
         if (Arrival != null) throw new ArgumentException("Arrival: a hosting client's rounds have no arrival step; place the player in the measurement.");
         if (ArriveStep != DefaultArriveStep) throw new ArgumentException("ArriveStep: a hosting client's rounds have no arrival step to name; leave ArriveStep out.");
+        if (plan.Create != null && WorldUid != null) throw new ArgumentException("A seeded world's UID is unresolved; leave WorldUid out.");
         if (WorldUid != null && WorldUid != plan.WorldUid)
             throw new ArgumentException($"WorldUid: {WorldUid} is not the hosted fixture's world UID {plan.WorldUid}; leave WorldUid out for a hosting client.");
         return plan;

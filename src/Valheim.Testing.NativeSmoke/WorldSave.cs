@@ -59,7 +59,7 @@ internal static class WorldSave
 
     /// <summary>
     /// The one hosted world run <paramref name="run"/> journalled in this machine's journal as placed in a client's worlds
-    /// (<c>holds=hosted-world</c>, then <c>placementState=transferred</c>) and not yet moved out (no <c>copy-retired</c> for it).
+    /// (<c>holds=hosted-world</c>, then <c>placementState=transferred</c>, or <c>created</c> with the created world's UID) and not yet moved out (no <c>copy-retired</c> for it).
     /// A run with none hosts no world on this machine; several are refused, never guessed between.
     /// </summary>
     internal static Placement FindPlacement(string journal, string run)
@@ -88,9 +88,19 @@ internal static class WorldSave
             .Select(record => record.Entry.Fields["runtime"]).Distinct(StringComparer.Ordinal))
         {
             var about = records.Where(record => record.Entry.Fields.GetValueOrDefault("runtime") == world).ToList();
-            int transferred = about.FindLastIndex(record => record.Entry.Kind == JournalEntry.CopyDone && record.Entry.Fields.GetValueOrDefault("placementState") == "transferred");
+            // A fixture is placed once transferred; a seeded world once the game created it and its verified UID was journalled.
+            int transferred = about.FindLastIndex(record => record.Entry.Kind == JournalEntry.CopyDone &&
+                (record.Entry.Fields.GetValueOrDefault("placementState") == "transferred" ||
+                 record.Entry.Fields.GetValueOrDefault("placementState") == "created" && record.Entry.Fields.ContainsKey("worldUid")));
             int retired = about.FindLastIndex(record => record.Entry.Kind is JournalEntry.CopyRetired or JournalEntry.CopyKept);
             if (transferred <= retired) continue;
+            var done = about[transferred].Entry.Fields;
+            if (done.GetValueOrDefault("placementState") == "created")
+            {
+                var request = about.Take(transferred).Last(record => record.Entry.Kind == JournalEntry.CopyIntended && record.Entry.Fields.ContainsKey("world"));
+                placed.Add(new Placement(world, request.Entry.Fields["world"], done["worldUid"]));
+                continue;
+            }
             var intended = about.Last(record => record.Entry.Kind == JournalEntry.CopyIntended && record.Entry.Fields.ContainsKey("worldUid"));
             placed.Add(new Placement(world, intended.Entry.Fields["world"], intended.Entry.Fields["worldUid"]));
         }
@@ -231,9 +241,18 @@ internal static class WorldSave
         string inputs = Path.GetFullPath(Path.Combine(evidence, "..", "..", "regression.json"));
         if (!File.Exists(inputs)) return result;
         var regression = RegressionInputs.Read(inputs);
+        if (regression.NoMod) result["noMod"] = true;
         result["mods"] = regression.Mod.Arms.ToDictionary(arm => arm.Key, arm => (object)new { file = Path.GetFileName(arm.Value.File), sha256 = arm.Value.Sha256, commit = arm.Value.Commit }, StringComparer.Ordinal);
         result["plugins"] = regression.Plugins.Select(plugin => new { file = Path.GetFileName(plugin.File), sha256 = plugin.Sha256 }).ToList();
         result["cliCore"] = new { file = Path.GetFileName(regression.Cli.Core.File), sha256 = regression.Cli.Core.Sha256 };
+        if (regression.Fixture.Create is { } request)
+        {
+            string created = Path.Combine(evidence, "world-created.json");
+            using var proof = JsonDocument.Parse(File.ReadAllText(created));
+            result["startedFrom"] = new { requested = request, worldUid = proof.RootElement.GetProperty("worldUid").GetString(),
+                creationProofSha256 = FileHash.Sha256(created) };
+            return result;
+        }
         string? startedFrom = null;
         string fixtureManifest = Path.Combine(Path.GetDirectoryName(regression.Fixture.Root)!, FixtureBake.ManifestFile);
         if (File.Exists(fixtureManifest))

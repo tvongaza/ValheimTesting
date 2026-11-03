@@ -34,6 +34,27 @@ public sealed class ClientSession : IDisposable, IWorldPins
     /// <summary>The owned client's process ID, or null for an attached client.</summary>
     public int? ProcessId => _process?.Id;
     internal IOwnedProcess? OwnedProcess => _process;
+    // Only the launch owner can admit the one live, owned local client at its strictly pinned idle menu.
+    internal int RequireOwnedMenu(ClientRunPlan plan)
+    {
+        if (Closed || !plan.Owned || _process is not ILocalClientProcessIdentity identity || _process.HasExited || Stopped != null ||
+            OwnedClientCommandLease.LocalStartFileTimeUtc(_process.Id) != identity.StartFileTimeUtc)
+            throw new InvalidOperationException("Seeded creation requires this session's exact live owned local client.");
+        Actor.VerifyEnvironment(plan.MenuExpectations);
+        var state = new SessionControl(Actor).Read();
+        if (state.Phase != "menu" || state.WorldPresent)
+            throw new InvalidOperationException("Seeded creation requires the owned client at its pinned idle menu.");
+        return _process.Id;
+    }
+
+    internal static void RefuseSeededStartupVariables(IReadOnlyDictionary<string, string> environment, bool inherited = false)
+    {
+        bool Conflict(string key, string? value) => key.StartsWith("VALHEIMCLI_START_WORLD_", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrEmpty(value);
+        if (environment.Any(pair => Conflict(pair.Key, pair.Value)) || inherited &&
+            System.Environment.GetEnvironmentVariables().Cast<System.Collections.DictionaryEntry>().Any(pair => Conflict((string)pair.Key, pair.Value?.ToString())))
+            throw new ArgumentException("Seeded creation refuses VALHEIMCLI_START_WORLD_* startup instructions; remove the competing autostart input before launch.");
+    }
+
     /// <summary>
     /// The folder an owned client's evidence goes to, and where this session publishes its command lease and pins for
     /// <c>valheim-test cli</c> (when its process is on this machine); null for an attached client.
@@ -324,6 +345,7 @@ public sealed class ClientSession : IDisposable, IWorldPins
         Action<IOwnedProcess, GameActor?, string>? failureEvidence = null, UserSaveFilesGuard? saveFiles = null)
     {
         plan.RequirePasswordSource();
+        if (plan.HostWorld?.Create != null) RefuseSeededStartupVariables(plan.Environment, inherited: true);
         account?.RequireReady(null);
         var architecture = plan.LaunchArchitecture;
         var clock = Stopwatch.StartNew();

@@ -33,6 +33,29 @@ public sealed class WorldSaveTests : IDisposable
     private static readonly IReadOnlyDictionary<string, object?> Provenance = new Dictionary<string, object?> { ["runId"] = "run-test" };
 
     [Fact]
+    public void ExportRetainsExplicitNoModProvenanceWithoutInventingAModIdentity()
+    {
+        using var rig = new RegressionRig();
+        var live = LiveWorld();
+        string run = Path.Combine(_root, "control-run"), evidence = Path.Combine(run, "evidence", "control");
+        Directory.CreateDirectory(evidence);
+        var inputs = rig.ControlManifest();
+        inputs.Fixture = new RegressionFixture { Root = Path.GetDirectoryName(live.World)!, WorldUid = DefaultSmokeWorld.Uid };
+        inputs.Write(Path.Combine(run, "regression.json"));
+        var provenance = WorldSave.Provenance("control-run", evidence, []);
+        Assert.Equal(true, provenance["noMod"]);
+        string saved = Path.Combine(_root, "saved-control");
+        WorldSave.Export(live, 1, saved, provenance);
+        using var document = JsonDocument.Parse(File.ReadAllText(Path.Combine(saved, FixtureBake.ManifestFile)));
+        var from = document.RootElement.GetProperty("savedFrom");
+        Assert.True(from.GetProperty("noMod").GetBoolean());
+        Assert.Empty(from.GetProperty("mods").EnumerateObject());
+        Assert.Empty(from.GetProperty("plugins").EnumerateArray());
+        Assert.Equal("valheimCLI.dll", from.GetProperty("cliCore").GetProperty("file").GetString());
+        Assert.Equal(inputs.Cli.Core.Sha256, from.GetProperty("cliCore").GetProperty("sha256").GetString());
+    }
+
+    [Fact]
     public void ExportCopiesOnlyTheNewestSaveAndItsChunksIntoAFixtureStartStages()
     {
         var live = LiveWorld();
@@ -126,6 +149,24 @@ public sealed class WorldSaveTests : IDisposable
             run.AppendLocal("client", JournalEntry.Of(JournalEntry.CopyDone, ("runtime", path), ("placementState", "transferred")), journal);
         }
         Assert.Contains("2 hosted worlds", Assert.Throws<InvalidOperationException>(() => WorldSave.FindPlacement(journal, "run-a")).Message);
+    }
+
+    [Fact]
+    public void ASeededRunsPlacementIsTheWorldTheGameCreatedWithItsVerifiedUid()
+    {
+        string journal = Path.Combine(_root, "journal");
+        var run = new RunJournal("run-s");
+        string world = Path.Combine(_root, "worlds_local", "VT-seeded");
+        foreach (string state in new[] { "intended", "attempted" })
+            run.AppendLocal("client", JournalEntry.Of(JournalEntry.CopyIntended, ("runtime", world), ("holds", "hosted-world"), ("world", "VT-seeded"),
+                ("seed", "abc"), ("creationState", state), ("placementState", state)), journal);
+        // A requested or attempted creation is not a placed world.
+        Assert.Contains("no hosted world", Assert.Throws<InvalidOperationException>(() => WorldSave.FindPlacement(journal, "run-s")).Message);
+        run.AppendLocal("client", JournalEntry.Of(JournalEntry.CopyDone, ("runtime", world), ("creationState", "completed"), ("placementState", "created"),
+            ("verified", "true"), ("worldUid", "42")), journal);
+        Assert.Equal(new WorldSave.Placement(world, "VT-seeded", "42"), WorldSave.FindPlacement(journal, "run-s"));
+        run.AppendLocal("client", JournalEntry.Of(JournalEntry.CopyRetired, ("runtime", world), ("handedOver", "true")), journal);
+        Assert.Contains("no hosted world", Assert.Throws<InvalidOperationException>(() => WorldSave.FindPlacement(journal, "run-s")).Message);
     }
 
     [Fact]

@@ -1606,6 +1606,51 @@ public sealed class RunRecoveryTests : IDisposable
         Assert.True(Directory.Exists(_host.Local("/srv/runs/someone-else/runtime")));
     }
 
+    [Theory, Trait("Category", "CiShell")]
+    [InlineData(false)] [InlineData(true)]
+    public async Task NeverIssuedCreationRecoveryRetiresItsJournalAndExactStaleLock(bool teardown)
+    {
+        const string run = "run-seed-intent", name = "Fresh-Seeded";
+        string root = Path.Combine(_root, "real-intended"), worlds = Path.Combine(root, "data", "worlds_local");
+        string keep = Path.Combine(root, "runs", run, "host-world"), runtime = Path.Combine(worlds, name);
+        string lockPath = Path.Combine(root, "lock");
+        var hosts = new Dictionary<string, HostProfile> { ["local"] = new() { Kind = "local", Lock = lockPath } };
+        var host = new LocalGameHost("local", HostShell.ThisMachine);
+        Directory.CreateDirectory(worlds); File.WriteAllText(Path.Combine(worlds, "Personal.fwl"), "personal save");
+        Directory.CreateDirectory(keep); // Reservation evidence is not a world save.
+        await using var stale = await host.AcquireLockAsync(lockPath, run, TimeSpan.FromSeconds(30));
+        string journal = RunJournal.DirectoryFor(hosts["local"]), file = Path.Combine(journal, run, "client.jsonl");
+        Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+        void Record(string kind, Dictionary<string, string> fields) => File.AppendAllText(file, System.Text.Json.JsonSerializer.Serialize(new
+        {
+            utc = DateTime.UtcNow.AddMinutes(-1).ToString("O"), run, actor = "client", kind, fields,
+            runner = new { machine = Gone.Machine, pid = Gone.Pid, startedUtc = Gone.StartedUtc.ToString("O") },
+        }) + "\n");
+        Record(JournalEntry.CopyIntended, new()
+        {
+            ["runtime"] = runtime, ["stage"] = "", ["parent"] = worlds, ["holds"] = HostedWorldOnHost.Holds,
+            ["world"] = name, ["seed"] = "ExactSeed", ["keepIn"] = keep, ["absenceVerified"] = "true",
+            ["creationState"] = "intended", ["placementState"] = "intended",
+        });
+        Record(JournalEntry.LockHeld, new() { ["lock"] = lockPath, ["claimant"] = stale.Owner });
+
+        var report = await RunRecovery.RecoverAsync(hosts, _ => host, run, teardown, TimeSpan.FromSeconds(30));
+
+        Assert.True(report.Clean, report.Refused + string.Join("\n", report.Steps));
+        Assert.Empty(report.Remaining);
+        Assert.Contains(report.Steps, step => step.What == "copy " + runtime && !step.Failed && step.Outcome == "nothing left in the client's worlds");
+        Assert.Equal(HostLockState.Free, (await host.CheckLockAsync(lockPath, stale.Owner, TimeSpan.FromSeconds(30))).State);
+        var records = (await RunJournalOnHost.ReadAllAsync(host, journal, TimeSpan.FromSeconds(30))).Records;
+        Assert.Single(records, record => record.Entry.Kind == JournalEntry.CopyRetired && record.Entry.Fields["runtime"] == runtime);
+        Assert.Single(records, record => record.Entry.Kind == JournalEntry.LockReleased && record.Entry.Fields["claimant"] == stale.Owner);
+        var status = Assert.Single((await RunJournalStatus.InspectAsync(hosts, _ => host, TimeSpan.FromSeconds(30))).Runs);
+        Assert.Equal(JournalRunState.Ended, status.State); Assert.Empty(status.Items);
+        Assert.True((await RunRecovery.RecoverAsync(hosts, _ => host, run, teardown, TimeSpan.FromSeconds(30))).Clean);
+        Assert.Equal("personal save", File.ReadAllText(Path.Combine(worlds, "Personal.fwl")));
+        Assert.Equal(["Personal.fwl"], Directory.GetFileSystemEntries(worlds).Select(Path.GetFileName));
+        Assert.Empty(Directory.EnumerateFileSystemEntries(keep));
+    }
+
     // #258 step 8b: a hosted world a killed run left in a campaign client's own worlds_local is moved out into that run's
     // host-world folder (never deleted), with the game's backup beside it, once its metadata states the journalled world UID; the
     // user's own world stays. A journal line that does not name a worlds_local or a world UID, or a keep folder outside this run's

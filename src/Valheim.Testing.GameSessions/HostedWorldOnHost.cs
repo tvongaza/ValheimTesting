@@ -11,7 +11,8 @@ namespace Valheim.Testing.GameSessions;
 /// a campaign's, <c>start</c>'s, a session's and rounds a caller drives. Only entries named for the world are ever touched, by one
 /// rule (<see cref="HostedWorld.IsNamedFor"/>: <c>&lt;name&gt;</c>, <c>&lt;name&gt;.*</c>, <c>&lt;name&gt;_backup*</c>, in any case),
 /// which the refusal, the move-out and recovery's presence check share (<see cref="BashNamed"/>, <see cref="WindowsNamed"/>); the
-/// placement refuses when one exists, so a user's world is never overwritten or used. The placement is journalled on the host before the ship (a
+/// placement refuses when one exists locally, in the sibling cloud folder or in any Steam account's cloud worlds. This
+/// is an existing-name refusal, not protection from a later external Steam sync. The placement is journalled on the host before the ship (a
 /// <see cref="JournalEntry.CopyIntended"/> that <c>holds</c> <c>hosted-world</c>), so <c>env recover</c> moves a world a killed run
 /// left behind out of the user's worlds in the same way (<see cref="RunRecovery"/>), only after a transfer was confirmed and
 /// the world there states the journalled world UID (<see cref="RequireOwnWorldAsync"/>). Intent alone is never ownership.
@@ -69,8 +70,112 @@ internal static class HostedWorldOnHost
         // A run that owns its run folder on the host (a dedicated server's, a campaign client's: RunFolder) owns the staging and
         // collected directories in it until their verified fetch, then removes them. Null for a site in an output on this machine.
         internal string? RetireRunCopies { get; init; }
+        internal string SteamUserDataDirectory { get; init; } = "";
         public HostedWorld Place(HostWorldPlan plan, string output, CancellationToken cancellation) =>
             HostedWorldOnHost.Place(this, plan, output, cancellation);
+        internal Func<ClientSession, ClientRunPlan, CancellationToken, Task>? MenuHold { get; init; }
+        private SeededWorldRequest? _creation;
+        private string? _creationOutput;
+        private bool _creationAttempted;
+        public void ReserveCreation(HostWorldPlan plan, string output, CancellationToken cancellation)
+        {
+            if (_creation != null)
+            {
+                if (_creation == plan.Create && _creationOutput == Path.GetFullPath(output) && !_creationAttempted) return;
+                throw new InvalidOperationException("This site already reserved a different or attempted creation.");
+            }
+            if (Host.Kind != GameHostKind.Local || MenuHold == null || RetireRunCopies != null)
+                throw new NotSupportedException("Seeded creation requires the local regression run's machine lock and owned menu hold.");
+            plan.Validate();
+            var request = plan.Create ?? throw new ArgumentException("No seeded world was requested.");
+            Hold(cancellation).GetAwaiter().GetResult();
+            RefuseCollisions(this, request.Name, "seed request", cancellation);
+            Reserve(this, cancellation);
+            _creation = request; _creationOutput = Path.GetFullPath(output);
+            CreationEvent(this, request, "intended", cancellation);
+        }
+        public HostedWorld CreateWorld(ClientRunPlan plan, ClientSession client, string output, CancellationToken cancellation)
+        {
+            var request = _creation ?? throw new InvalidOperationException("Reserve creation before opening the client.");
+            if (_creationAttempted || _creationOutput != Path.GetFullPath(output) || plan.HostWorld?.Create != request)
+                throw new InvalidOperationException("A creation is attempted once by its original run and request; preserve uncertain attempts for inspection.");
+            plan.RequireCreationRoute();
+            MenuHold!(client, plan, cancellation).GetAwaiter().GetResult();
+            RefuseCollisions(this, request.Name, "seed request", cancellation);
+            _creationAttempted = true;
+            CreationEvent(this, request, "attempted", cancellation);
+            // The ordinary pinned actor records the one command. A lost reply never authorizes retry or collection.
+            var reply = client.Actor.Execute($"cli_create_world {request.Name} {request.Seed}");
+            var proof = ReadCreationReply(reply, request);
+            MenuHold(client, plan, cancellation).GetAwaiter().GetResult();
+            var admitted = CaptureCreated(this, request, output, plan.PreparedBuild ??
+                throw new InvalidOperationException("Seeded creation has no inspected hosting build."), proof);
+            string record = Path.Combine(output, "world-created.json");
+            using (var file = new FileStream(record, FileMode.CreateNew, FileAccess.Write))
+                JsonSerializer.Serialize(file, new { requested = request, runId = Path.GetFileName(Path.GetDirectoryName(KeepIn)), processId = client.ProcessId,
+                    processStart = (client.OwnedProcess as ILocalClientProcessIdentity)?.StartFileTimeUtc,
+                    command = reply.Command, worldsDirectory = WorldsDirectory, worldUid = admitted.Identity.UidText, identity = admitted.Identity,
+                    worldGenVersion = proof.GenerationVersion, metadataSha256 = admitted.Files.Values.Single(), reply = reply.Output },
+                    new JsonSerializerOptions { WriteIndented = true });
+            Journal(JournalEntry.Of(JournalEntry.CopyDone, ("runtime", HostPath.Join(WorldsDirectory, request.Name)),
+                ("creationState", "completed"), ("placementState", "created"), ("verified", "true"),
+                ("worldUid", admitted.Identity.UidText), ("creationProof", record), ("creationProofSha256", FileHash.Sha256(record))), cancellation).GetAwaiter().GetResult();
+            plan.HostWorld!.BindCreated(request, admitted);
+            return HostedWorld.OnHost(request.Name, admitted.Identity.UidText, WorldsDirectory, admitted.Source, output, HostName, target =>
+            {
+                if (!RequireOwnWorldAsync(Host, WorldsDirectory, request.Name, admitted.Identity.UidText, HostedTimeouts.Quick, CancellationToken.None).GetAwaiter().GetResult())
+                    throw new InvalidDataException("The created world is absent; preserve its pending collection.");
+                return Collect(this, request.Name, target);
+            });
+        }
+
+    }
+
+    private static void CreationEvent(Site site, SeededWorldRequest request, string state, CancellationToken cancellation) =>
+        site.Journal(JournalEntry.Of(JournalEntry.CopyIntended, ("runtime", HostPath.Join(site.WorldsDirectory, request.Name)),
+            ("stage", ""), ("parent", site.WorldsDirectory), ("holds", Holds), ("world", request.Name), ("seed", request.Seed),
+            ("keepIn", site.KeepIn), ("absenceVerified", "true"), ("creationState", state), ("placementState", state)), cancellation).GetAwaiter().GetResult();
+
+    internal sealed record CreationReply(long Uid, int Seed, int GenerationVersion);
+    internal static CreationReply ReadCreationReply(GameReply reply, SeededWorldRequest request)
+    {
+        reply.RequireAccepted();
+        var lines = reply.Lines("OK: WORLD_CREATED ").ToArray();
+        if (lines.Length != 1) throw new InvalidDataException("Creation has no unique success receipt; preserve the pending request.");
+        var match = System.Text.RegularExpressions.Regex.Match(lines[0],
+            @"^OK: WORLD_CREATED name=([^ ]+) seedName=([^ ]+) seed=(-?[0-9]+) uid=(-?[0-9]+) worldGenVersion=([0-9]+)\z",
+            System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+        if (!match.Success || match.Groups[1].Value != request.Name || match.Groups[2].Value != request.Seed ||
+            !int.TryParse(match.Groups[3].Value, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out int seed) ||
+            !long.TryParse(match.Groups[4].Value, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out long uid) ||
+            !int.TryParse(match.Groups[5].Value, NumberStyles.None, CultureInfo.InvariantCulture, out int generation))
+            throw new InvalidDataException("Creation's receipt does not match the exact request and numeric game identity; preserve the pending request.");
+        return new(uid, seed, generation);
+    }
+
+    // Read only the expected new entry. The existing parser owns metadata/layout/version rules; no save bytes are authored.
+    private static WorldIdentity.Admission CaptureCreated(Site site, SeededWorldRequest request, string output, GameBuild build, CreationReply reply)
+    {
+        string root = Path.GetFullPath(site.WorldsDirectory), world = Path.Combine(root, request.Name), metadata = Path.Combine(world, "_main.0.fwl2");
+        ProtectedPaths.RequireUnlinkedPath(root, metadata);
+        var entries = Directory.EnumerateFileSystemEntries(world).ToArray();
+        if (entries.Length != 1 || entries[0] != metadata || (File.GetAttributes(metadata) & (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0 ||
+            new FileInfo(metadata).Length is <= 0 or > 1048576)
+            throw new InvalidDataException("The created entry is not one new, bounded metadata file; preserve it for inspection.");
+        string expected = FileHash.Sha256(metadata);
+        string copy = Path.Combine(output, "world-created-input"), destination = Path.Combine(copy, request.Name);
+        ProtectedPaths.RequireUnlinkedPath(output, destination);
+        Directory.CreateDirectory(destination);
+        File.Copy(metadata, Path.Combine(destination, "_main.0.fwl2"), overwrite: false);
+        ProtectedPaths.RequireUnlinkedPath(root, metadata);
+        if (FileHash.Sha256(metadata) != expected) throw new InvalidDataException("Created metadata changed during admission.");
+        var admitted = WorldIdentity.Capture(copy, build);
+        var identity = admitted.Identity;
+        if (admitted.Files.Values.Single() != expected || identity.Name != request.Name || identity.SeedName != request.Seed ||
+            identity.Uid != reply.Uid || identity.Seed != reply.Seed ||
+            WorldIdentity.ReadGenerationVersion(File.ReadAllBytes(Path.Combine(destination, "_main.0.fwl2")), identity.File) != reply.GenerationVersion)
+            throw new InvalidDataException("The game-created metadata does not agree with the one-command receipt; preserve the pending request.");
+        return admitted;
     }
 
     /// <summary>
@@ -83,7 +188,7 @@ internal static class HostedWorldOnHost
         IGameHost clientHost, Func<JournalEntry, CancellationToken, Task> journal, Func<CancellationToken, Task> hold)
     {
         var role = environment.Clients[client];
-        return ForClient(clientHost, role.Host, WorldsBeside(character.CharactersLocalDirectory), role.Runtime, runId, journal, hold) with { RetireRunCopies = runId };
+        return ForClient(clientHost, role.Host, WorldsBeside(character.CharactersLocalDirectory), role.Runtime, runId, journal, hold) with { RetireRunCopies = runId, SteamUserDataDirectory = character.SteamUserDataDirectory };
     }
 
     /// <summary>
@@ -105,9 +210,12 @@ internal static class HostedWorldOnHost
     /// machine's journal under the run the flow journals when it places the world (<see cref="RunJournal.ThisProcess"/>) as <paramref name="actor"/>, as the
     /// fixture's own copy is. <c>env status</c> lists a world a killed run left and <c>env recover --run</c> moves it out.
     /// </summary>
-    internal static Func<string, IHostedWorldSite> ThisMachine(string output, string actor)
+    internal static Func<string, IHostedWorldSite> ThisMachine(string output, string actor, string steamUserData = "")
     {
         var host = LocalGameHost.ThisMachine();
+        // The existing no-game data-directory scope isolates Steam lookups as well as local saves.
+        if (steamUserData.Length == 0 && HostedWorld.SimulatedClientData.Value is { } simulated)
+            steamUserData = Path.Combine(simulated.Directory, "steam", "userdata");
         return worlds =>
         {
             var journal = RunJournal.ThisProcess; // The run this flow journals as it places the world, for every line of the placement.
@@ -123,7 +231,7 @@ internal static class HostedWorldOnHost
             }
             return ForClient(host, host.Name, worlds, root, journal.RunId,
                 (entry, _) => { journal.AppendLocal(actor, entry); return Task.CompletedTask; },
-                _ => Task.CompletedTask); // No lock: the caller owns this machine's client, as it owns the client it opens.
+                _ => Task.CompletedTask) with { SteamUserDataDirectory = steamUserData }; // No lock: the caller owns this machine's client, as it owns the client it opens.
         };
     }
 
@@ -141,7 +249,7 @@ internal static class HostedWorldOnHost
     }
 
     /// <summary>
-    /// Refuses when the host's worlds already hold an entry named for the world, before anything is copied (a refused run leaves
+    /// Refuses when the host's local or cloud worlds already hold an entry named for the world, before anything is copied (a refused run leaves
     /// nothing, #820), then copies <paramref name="plan"/>'s fixture into <paramref name="output"/> (verified, the input evidence,
     /// kept), journals the placement, ships the fixture into the run's stage folder on the host
     /// and verifies every file there, then moves its entries (all named for the world) into the host's worlds, refusing one that
@@ -153,9 +261,7 @@ internal static class HostedWorldOnHost
         string name = HostedWorld.NameOf(plan.World.Sha256.Keys);
         string world = HostPath.Join(site.WorldsDirectory, name);
         site.Hold(cancellation).GetAwaiter().GetResult();
-        var existing = Entries(site.Host, site.WorldsDirectory, name, cancellation);
-        if (existing.Count != 0)
-            throw new InvalidOperationException($"The client's worlds on {site.HostName} already hold {string.Join(", ", existing)} in {site.WorldsDirectory}: a fixture world is never copied over a world. Remove or rename that one yourself, or rename the fixture world.");
+        RefuseCollisions(site, name, plan.World.Source, cancellation);
         Reserve(site, cancellation);
         var copy = plan.Admission is { } admission
             ? WorldFixture.CopyAdmitted(plan.World.Source, output, plan.World.Sha256, admission, "")
@@ -189,10 +295,13 @@ internal static class HostedWorldOnHost
             IReadOnlyList<string> proven = [];
             try
             {
+                site.Hold(cancellation).GetAwaiter().GetResult();
                 // Intent/attempt is never ownership, even when a foreign world has the fixture's UID or identical bytes.
                 site.Journal(JournalEntry.Of(JournalEntry.CopyIntended, ("runtime", world), ("placementState", "attempted")), cancellation).GetAwaiter().GetResult();
+                var variables = CollisionVariables(site, name);
+                variables["to"] = variables["worlds"]; variables["worlds"] = site.Stage;
                 var result = site.Host.RunAsync(site.Host.Shell.Kind == HostShellKind.PowerShell ? WindowsPlace : BashPlace,
-                    new Dictionary<string, string> { ["worlds"] = site.Stage, ["name"] = name, ["to"] = site.WorldsDirectory },
+                    variables,
                     HostedTimeouts.Long, cancellation).GetAwaiter().GetResult();
                 // Only an exited script's well-formed receipts prove individual transfers. A lost reply can still mean a
                 // running mutation: leave the pending journal and all files for inspection, never guess from UID or hashes.
@@ -228,6 +337,42 @@ internal static class HostedWorldOnHost
             return HostedWorld.OnHost(name, plan.WorldUid, site.WorldsDirectory, copy.DirectoryPath, output, site.HostName, target => Collect(site, name, target));
         }
         finally { copy.Dispose(); } // kept (Preserve) as input evidence; nothing uses it after placement
+    }
+
+    private static Dictionary<string, string> CollisionVariables(Site site, string name)
+    {
+        HostInstall.RequireHostPath(site.Host, site.WorldsDirectory, nameof(site.WorldsDirectory));
+        string local = site.WorldsDirectory.Replace('\\', '/').TrimEnd('/');
+        if (!local.EndsWith("/worlds_local", StringComparison.OrdinalIgnoreCase) || local.Split('/').Any(part => part is "." or ".."))
+            throw new ArgumentException("A hosted world's destination must be the host's worlds_local folder.");
+        if (site.SteamUserDataDirectory.Length != 0)
+        {
+            HostInstall.RequireHostPath(site.Host, site.SteamUserDataDirectory, nameof(site.SteamUserDataDirectory));
+            string userdata = site.SteamUserDataDirectory.Replace('\\', '/').TrimEnd('/');
+            if (!userdata.EndsWith("/userdata", StringComparison.OrdinalIgnoreCase) || userdata.Split('/').Any(part => part is "." or ".."))
+                throw new ArgumentException("The Steam cloud root must be the host's userdata folder.");
+        }
+        // Without a trailing separator, so the scripts' parent of the worlds folder is the C# one the cloud folder is beside.
+        string worlds = site.WorldsDirectory.TrimEnd('/', '\\');
+        return new() { ["worlds"] = worlds, ["name"] = name,
+            ["cloud"] = HostPath.Join(HostPath.Parent(worlds), "worlds"),
+            ["userdata"] = site.SteamUserDataDirectory.Length > 1 ? site.SteamUserDataDirectory.TrimEnd('/', '\\') : site.SteamUserDataDirectory,
+            ["steam"] = "", ["remote"] = SteamDetection.GameApp + "/remote/worlds" };
+    }
+
+    private static void RefuseCollisions(Site site, string name, string fixture, CancellationToken cancellation)
+    {
+        var result = site.Host.RunAsync(site.Host.Shell.Kind == HostShellKind.PowerShell ? WindowsCollisions : BashCollisions,
+            CollisionVariables(site, name), HostedTimeouts.Quick, cancellation).GetAwaiter().GetResult();
+        result.EnsureSuccess($"Checking local and Steam Cloud worlds on {site.HostName}");
+        var lines = result.Stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(line => line.TrimEnd('\r')).ToList();
+        const string prefix = "VT-WORLD-COLLISION ";
+        if (lines.Count == 0 || lines[^1] != "VT-WORLD-COLLISIONS done" || lines.Take(lines.Count - 1).Any(line => !line.StartsWith(prefix, StringComparison.Ordinal)))
+            throw new HostOperationException($"The local and Steam Cloud collision check on {site.HostName} was not confirmed", result);
+        var conflicts = lines.Take(lines.Count - 1).Select(line => line[prefix.Length..]).ToList();
+        foreach (string path in conflicts) HostInstall.RequireHostPath(site.Host, path, "conflicting world");
+        if (conflicts.Count != 0)
+            throw new InvalidOperationException($"A local or Steam Cloud world on {site.HostName} already holds {string.Join(", ", conflicts)}: fixture {fixture} is never copied over a world. Choose a fresh disposable fixture name; player saves are left unchanged.");
     }
 
     private static IReadOnlyList<string> ProvenTransfers(HostResult result, IReadOnlyList<string> expected)
@@ -274,6 +419,37 @@ internal static class HostedWorldOnHost
     internal static async Task<IReadOnlyList<string>> RecoverAsync(IGameHost host, IReadOnlyDictionary<string, string> fields,
         string runtime, string runId, TimeSpan timeout, CancellationToken cancellation)
     {
+        if (fields.TryGetValue("creationState", out string? creation))
+        {
+            if (creation == "intended" && fields.GetValueOrDefault("placementState") == "intended")
+            {
+                string intendedName = RequireJournalledPaths(fields, runtime, runId);
+                _ = new SeededWorldRequest(intendedName, fields.GetValueOrDefault("seed") ?? "");
+                if (host.Kind != GameHostKind.Local || fields.GetValueOrDefault("holds") != Holds ||
+                    fields.GetValueOrDefault("absenceVerified") != "true" || fields.GetValueOrDefault("stage") != "" ||
+                    fields.GetValueOrDefault("runtime") != runtime ||
+                    new[] { "worldUid", "verified", "creationProof", "creationProofSha256", "transferredEntries" }.Any(fields.ContainsKey) ||
+                    new[] { runtime, fields["parent"], fields["keepIn"] }.Any(path => !Path.IsPathFullyQualified(path) ||
+                        !Path.GetFullPath(path).Equals(path, StringComparison.Ordinal)))
+                    throw new InvalidDataException("The never-issued creation intent has inconsistent local request or path fields; preserve it.");
+                // The recovery controller has settled its runner/processes and holds its lock. Only a complete read-only
+                // absence observation can retire this intent; a name alone never authorizes moving a world.
+                var observation = (await host.RunAsync(host.Shell.Kind == HostShellKind.PowerShell ? WindowsCreationAbsence : BashCreationAbsence,
+                    new Dictionary<string, string> { ["worlds"] = fields["parent"], ["name"] = intendedName }, timeout, cancellation).ConfigureAwait(false))
+                    .EnsureSuccess($"Checking the never-issued world's absence on {host.Name}");
+                string receipt = observation.Stdout.Replace("\r\n", "\n", StringComparison.Ordinal);
+                if (receipt.EndsWith('\n')) receipt = receipt[..^1];
+                if (receipt != "VT-WORLD-ABSENCE done")
+                    throw new HostOperationException("The never-issued world's absence was not confirmed; preserve the pending request without moving any save", observation);
+                return [];
+            }
+            if (creation != "completed" || fields.GetValueOrDefault("placementState") != "created")
+                throw new InvalidDataException("Seeded creation was not proven complete; preserve the pending request without retrying or moving any save.");
+            string proof = fields.GetValueOrDefault("creationProof") ?? "";
+            if (host.Kind != GameHostKind.Local || !Path.IsPathFullyQualified(proof) ||
+                !File.Exists(proof) || FileHash.Sha256(proof) != fields.GetValueOrDefault("creationProofSha256"))
+                throw new InvalidDataException("The completed creation's retained proof is missing or changed; preserve the pending request.");
+        }
         var (name, uid) = RequireJournalled(fields, runtime, runId);
         string? placement = fields.GetValueOrDefault("placementState");
         if (placement is "attempted" or "uncertain")
@@ -294,7 +470,7 @@ internal static class HostedWorldOnHost
         bool present = await RequireOwnWorldAsync(host, fields["parent"], name, uid, timeout, cancellation).ConfigureAwait(false);
         if (!present) return [];
         if (fields.GetValueOrDefault("verified") != "true" ||
-            (fields.TryGetValue("placementState", out string? state) && state != "transferred"))
+            (fields.TryGetValue("placementState", out string? state) && state != "transferred" && !(state == "created" && fields.GetValueOrDefault("creationState") == "completed")))
             throw new InvalidDataException("the hosted-world transfer was never confirmed; a same-named save may be personal even with the fixture UID. Inspect it and the pending journal, move foreign files aside for safekeeping, then retry env recover");
         return await MoveOut(host, fields["parent"], name, fields["keepIn"], timeout, cancellation).ConfigureAwait(false);
     }
@@ -377,10 +553,16 @@ internal static class HostedWorldOnHost
     /// </summary>
     internal static (string Name, string WorldUid) RequireJournalled(IReadOnlyDictionary<string, string> fields, string runtime, string runId)
     {
-        string worlds = fields.GetValueOrDefault("parent") ?? "", name = fields.GetValueOrDefault("world") ?? "", keepIn = fields.GetValueOrDefault("keepIn") ?? "";
+        string name = RequireJournalledPaths(fields, runtime, runId);
         string uid = fields.GetValueOrDefault("worldUid") ?? "";
         if (!long.TryParse(uid, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out _))
             throw new InvalidDataException("its journal names no world UID, so the world in the client's worlds cannot be proven the run's own");
+        return (name, uid);
+    }
+
+    private static string RequireJournalledPaths(IReadOnlyDictionary<string, string> fields, string runtime, string runId)
+    {
+        string worlds = fields.GetValueOrDefault("parent") ?? "", name = fields.GetValueOrDefault("world") ?? "", keepIn = fields.GetValueOrDefault("keepIn") ?? "";
         string Leaf(string path) => path.Replace('\\', '/').TrimEnd('/').Split('/').Last();
         if (!Leaf(worlds).Equals("worlds_local", StringComparison.OrdinalIgnoreCase))
             throw new InvalidDataException($"its journal names {worlds}, which is not a client's worlds_local");
@@ -392,7 +574,7 @@ internal static class HostedWorldOnHost
         var segments = keepIn.Replace('\\', '/').TrimEnd('/').Split('/');
         if (!RunJournal.SafeName(runId) || segments.Length < 3 || segments[^1] != "host-world" || segments[^2] != runId || segments.Any(segment => segment is "." or ".."))
             throw new InvalidDataException($"its journal names {keepIn}, which is not this run's host-world folder (<runtime>/{runId}/host-world)");
-        return (name, uid);
+        return name;
     }
 
     /// <summary>
@@ -610,19 +792,120 @@ internal static class HostedWorldOnHost
         done
         echo 'VT-WORLD-MOVE done'
         """;
-    internal static readonly string WindowsPlace = WindowsMoveOut.Replace("[void][IO.Directory]::CreateDirectory($to)", """
-        [void][IO.Directory]::CreateDirectory($to)
-        foreach ($existing in [IO.Directory]::EnumerateFileSystemEntries($to)) {
-            if (Test-VtNamed ([IO.Path]::GetFileName($existing))) { 'VT-WORLD-EXISTS ' + [IO.Path]::GetFileName($existing); exit 4 }
+    private static readonly string WindowsWorldDirectory = ProtectedPaths.PowerShellUnlinked + """
+        function Test-VtWorldDirectory([string]$boundary, [string]$folder) {
+            if (-not (Test-VtUnlinked $boundary $folder)) { throw "Linked world or cloud root: $folder" }
+            $current = $folder
+            while ($true) {
+                try { $attributes = [IO.File]::GetAttributes($current); break }
+                catch [IO.FileNotFoundException] { }
+                catch [IO.DirectoryNotFoundException] { }
+                $current = [IO.Path]::GetDirectoryName($current)
+                if (-not $current) { throw "Cannot establish the world root: $folder" }
+            }
+            if (-not ($attributes -band [IO.FileAttributes]::Directory)) { throw "World or cloud root is not a directory: $current" }
+            # Enumeration failure is not an absent folder, even when Exists would return false.
+            $null = @([IO.Directory]::EnumerateFileSystemEntries($current))
+            return $current -ceq $folder
         }
+
+        """;
+    private static readonly string WindowsCollisionFolders = "$ErrorActionPreference = 'Stop'\n" +
+        SteamDetection.PowerShellUserData + WindowsWorldDirectory + """
+        function Get-VtWorldCollisions([string]$local) {
+            $parent = [IO.Path]::GetDirectoryName($local)
+            $roots = @(@($parent, $local), @($parent, $cloud))
+            if ($userdata -and (Test-VtWorldDirectory $userdata $userdata)) {
+                foreach ($account in [IO.Directory]::EnumerateFileSystemEntries($userdata)) {
+                    $attributes = [IO.File]::GetAttributes($account)
+                    if ($attributes -band [IO.FileAttributes]::ReparsePoint) { throw "Linked Steam account root: $account" }
+                    if ($attributes -band [IO.FileAttributes]::Directory) { $roots += ,@($userdata, [IO.Path]::Combine($account, $remote)) }
+                }
+            }
+            foreach ($root in $roots) {
+                if (-not (Test-VtWorldDirectory $root[0] $root[1])) { continue }
+                foreach ($entry in [IO.Directory]::EnumerateFileSystemEntries($root[1])) {
+                    if (Test-VtNamed ([IO.Path]::GetFileName($entry))) { $entry }
+                }
+            }
+        }
+
+        """;
+    private static readonly string BashWorldDirectory = ProtectedPaths.BashUnlinked + """
+        vt_world_directory() {
+            local boundary=$1 folder=$2 current=$2
+            vt_unlinked "$boundary" "$folder" || { printf 'Linked world or cloud root: %s\n' "$folder" >&2; exit 5; }
+            while [ ! -e "$current" ] && [ ! -L "$current" ]; do
+                [ "$current" != / ] || { printf 'Unknown world root: %s\n' "$folder" >&2; exit 5; }
+                current=${current%/*}; [ -n "$current" ] || current=/
+            done
+            [ -d "$current" ] && [ -r "$current" ] && [ -x "$current" ] || { printf 'Unreadable world or cloud directory: %s\n' "$current" >&2; exit 5; }
+            ls -A -- "$current" >/dev/null || { printf 'Cannot enumerate world or cloud root: %s\n' "$current" >&2; exit 5; }
+            [ "$current" = "$folder" ]
+        }
+        vt_world_entries() {
+            local boundary=$1 folder=$2 entry
+            if vt_world_directory "$boundary" "$folder"; then
+                for entry in "$folder"/* "$folder"/.[!.]* "$folder"/..?*; do
+                    [ -e "$entry" ] || [ -L "$entry" ] || continue
+                    if vt_named "${entry##*/}"; then printf '%s\n' "$entry"; fi
+                done
+            fi
+        }
+
+        """;
+    private static readonly string BashCollisionFolders = "set -eu\n" + SteamDetection.BashUserData + BashWorldDirectory + """
+        vt_world_collisions() {
+            local local_worlds=$1 account
+            vt_world_entries "${local_worlds%/*}" "$local_worlds"
+            vt_world_entries "${local_worlds%/*}" "$cloud"
+            if [ -n "$userdata" ] && vt_world_directory "$userdata" "$userdata"; then
+                for account in "$userdata"/* "$userdata"/.[!.]* "$userdata"/..?*; do
+                    [ -e "$account" ] || [ -L "$account" ] || continue
+                    [ ! -L "$account" ] || { printf 'Linked Steam account root: %s\n' "$account" >&2; exit 5; }
+                    [ -d "$account" ] || continue
+                    vt_world_entries "$userdata" "$account/$remote"
+                done
+            fi
+        }
+
+        """;
+    // Unlike Entries, these observations never create worlds_local. Any named entry (even a dangling link) refuses retirement.
+    internal static readonly string WindowsCreationAbsence = "$ErrorActionPreference = 'Stop'\n" + WindowsWorldDirectory + WindowsNamed + """
+        $parent = [IO.Path]::GetDirectoryName($worlds)
+        if (Test-VtWorldDirectory $parent $worlds) {
+            foreach ($entry in [IO.Directory]::EnumerateFileSystemEntries($worlds)) {
+                if (Test-VtNamed ([IO.Path]::GetFileName($entry))) { 'VT-WORLD-PRESENT ' + $entry; break }
+            }
+        }
+        'VT-WORLD-ABSENCE done'
+        """;
+    internal static readonly string BashCreationAbsence = "set -eu\n" + BashWorldDirectory + BashNamed + """
+        entries=$(vt_world_entries "${worlds%/*}" "$worlds") || exit $?
+        [ -z "$entries" ] || printf 'VT-WORLD-PRESENT %s\n' "$entries"
+        echo 'VT-WORLD-ABSENCE done'
+        """;
+    internal static readonly string WindowsCollisions = WindowsCollisionFolders + WindowsNamed + """
+        foreach ($entry in @(Get-VtWorldCollisions $worlds)) { 'VT-WORLD-COLLISION ' + $entry }
+        'VT-WORLD-COLLISIONS done'
+        """;
+    internal static readonly string BashCollisions = BashCollisionFolders + BashNamed + """
+        # Keep the helper's failure status; a failed enumeration never emits a completed receipt.
+        collisions=$(vt_world_collisions "$worlds") || exit $?
+        while IFS= read -r entry; do [ -z "$entry" ] || printf 'VT-WORLD-COLLISION %s\n' "$entry"; done <<< "$collisions"
+        echo 'VT-WORLD-COLLISIONS done'
+        """;
+    internal static readonly string WindowsPlace = WindowsCollisionFolders + WindowsMoveOut.Replace("[void][IO.Directory]::CreateDirectory($to)", """
+        foreach ($existing in @(Get-VtWorldCollisions $to)) { 'VT-WORLD-EXISTS ' + $existing; exit 4 }
+        [void][IO.Directory]::CreateDirectory($to)
         """);
-    internal static readonly string BashPlace = BashMoveOut.Replace("mkdir -p -- \"$to\"", """
+    internal static readonly string BashPlace = BashCollisionFolders + BashMoveOut.Replace("mkdir -p -- \"$to\"", """
+        collisions=$(vt_world_collisions "$to") || exit $?
+        if [ -n "$collisions" ]; then
+            while IFS= read -r entry; do printf 'VT-WORLD-EXISTS %s\n' "$entry"; done <<< "$collisions"
+            exit 4
+        fi
         mkdir -p -- "$to"
-        for existing in "$to"/* "$to"/.[!.]*; do
-            [ -e "$existing" ] || [ -L "$existing" ] || continue
-            leaf=${existing##*/}
-            if vt_named "$leaf"; then printf 'VT-WORLD-EXISTS %s\n' "$leaf"; exit 4; fi
-        done
         """);
 
 }

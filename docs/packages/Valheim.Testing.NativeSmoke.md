@@ -16,7 +16,7 @@ The tool needs the .NET 10 SDK. If a Homebrew .NET on macOS cannot start the too
 
 | Command | Does |
 |---|---|
-| [`start`](#start) | Loads a client-side mod in an owned client that hosts a disposable world |
+| [`start`](#start) | Loads a client-side mod or an explicit CLI-only control in an owned client that hosts a disposable world |
 | [`server-load`](#server-load) | Loads selected server mods on an owned dedicated server; one CLI-only or explicitly modded client joins |
 | [`server-load-ab`](#server-load-ab) | Runs `server-load` with and without one mod, to isolate a load interaction |
 | [`server-load-phases`](#server-load-phases) | Runs ordered server-only fixture bakes |
@@ -31,6 +31,22 @@ The tool needs the .NET 10 SDK. If a Homebrew .NET on macOS cannot start the too
 | [`steam-runtime capture`](#steam-runtime-capture) | Pins SteamCMD's macOS server libraries for a Mac server profile |
 
 `valheim-test help` lists every command with its usage.
+
+### Start a world from a seed
+
+```sh
+valheim-test start --mod ./bin/MyMod.dll --world-seed AbCdEf1234 --hold
+# An explicit CLI-only control is separate:
+valheim-test start --no-mod --world-seed AbCdEf1234 --world-name Fresh-Seed-Control --hold
+```
+
+`--world-seed SEED` requests one fresh world instead of the packaged or `--world-fixture` world. Without `--world-name`, the tool generates a readable seed-derived name with a fresh suffix. An explicit name is never renamed to evade a collision. Seed case is preserved exactly. The supported console-token subset is nonempty ASCII alphanumeric seeds and 3–64 character names of ASCII letters/digits, `_` and `-`, beginning alphanumeric, excluding Windows device names and names the existing save parser recognizes as dated backups. This subset is not a statement of Valheim's full input grammar.
+
+The existing owned local Windows/macOS client opens once to its pinned menu. The tool checks the fresh name against local and Steam Cloud worlds before staging and again before issuing ordinary `cli_create_world NAME SEED` once, without overwrite. The game's reply and actual never-saved `_main.0.fwl2` metadata must agree on name, exact seed, numeric seed/UID and generator version before the first hosted round. A missing or uncertain reply leaves the request pending; the tool does not retry, host, overwrite or collect an unproven entry. Keep its diagnostics for inspection. Only a proven owned new world is collected after release. If preparation failed before any creation attempt, `env recover` or `env teardown` can retire the request after settling the run and confirming that no matching local world entry exists. An attempted or uncertain creation stays pending even when no entry is visible.
+
+The save parent can be the signed-in user's existing `worlds_local` (required on native macOS); this feature does not provide a separate save backend or rely on `-savedir`. Existing personal entries are never renamed or overwritten. The collision check does not lock out later Steam sync. Creation is currently limited to `start`'s one local owned profile client, not attached/in-place, campaign/remote, dedicated or Linux clients. Competing `VALHEIMCLI_START_WORLD_*` startup instructions are refused before launch. Seeded comparisons/multiple arms are refused: use `save-world`, then the resulting `--world-fixture`, for identical initial-state comparisons. `--world-seed` does not imply `--no-mod`.
+
+These lifecycle checks and controlled test cases are not a claim of completed native acceptance on either platform.
 
 ### Exit codes
 
@@ -51,7 +67,8 @@ The tool needs the .NET 10 SDK. If a Homebrew .NET on macOS cannot start the too
 
 | Option | Taken by | Does |
 |---|---|---|
-| `--mod DLL` | start, server-load, server-load-ab | A mod to load. Repeat for a set. Without it, `start` and `server-load` pick the current project's one built plugin |
+| `--mod DLL` | start, server-load, server-load-ab | A mod to load. Repeat for a set. Without a selection, `start` and `server-load` pick the current project's one built plugin; `start --no-mod` explicitly selects a control |
+| `--no-mod` | start | A CLI-only control with no mod under test; no mod discovery or build |
 | `--project MOD.csproj` | start, server-load, build | Builds the mod privately first; leave out `--mod` and `--build-inputs` |
 | `--build-inputs FILE` | start, server-load | The `build-inputs.json` from `build`; the run refuses a changed mod or reference |
 | `--dependency NAME=DLL` | start, server-load, build | A third-party compile reference for `--project`. Repeat |
@@ -120,6 +137,18 @@ valheim-test start --mod /path/to/MyMod.dll
 ```
 
 `start` loads a client-side mod in an owned Windows or macOS client that hosts the packaged world with the packaged character. It prints `run ID:`, a log-scan line and a `PASS` or `FAIL` result line.
+
+For a control containing only the selected ValheimCLI plugin and required loader:
+
+```sh
+valheim-test start --no-mod --world-fixture /path/to/disposable-fixture --hold
+```
+
+`--no-mod` is explicit inside and outside a mod project. Without it, omitting `--mod` keeps implicit project selection: an absent, ambiguous, missing or stale build still refuses. A failed mod selection never becomes a control run. The control uses the same owned profile, world/character admission, strict CLI pins, hold, finish and cleanup as a modded start. Installed plugins and patchers are not inherited.
+
+Do not combine `--no-mod` with `--mod`, `--project`, `--build-inputs`, `--source`, `--compare-mod`, `--compare-source`, `--dependency`, `--search-root`, `--optional-reference`, `--scenario` or `--scenario-project`. It is not an option of build, server-load, comparisons, phases or detach. Explicit `--config` and `--env` keep their admission and retained-byte rules; they select no plugin payload. CLI, loader, host or fixture failures still refuse the control.
+
+Its inputs record `noMod: true`, an empty `mod` and one execution arm `control`. `evidence/control/run-manifest.json` records `noMod: true`, null mod identity fields and an empty mod-artifact arm list; the allowlist and strict pins still identify the real CLI. Result provenance says `noMod=true`, with no mod plugin/commit/hash. Use a matching toolkit reader for this additive input/result contract; older input readers reject `noMod`. Modded runs omit the false marker and keep their existing JSON. The generated `init` example targets a modded smoke arm; no control-specific consumer is generated.
 
 | Option | Does |
 |---|---|
