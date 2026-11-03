@@ -1,7 +1,8 @@
 name: Local test layers
 # Bootstrap and local validation on every supported toolkit OS: library tests, example builds, the
 # no-game example, package-consuming mod tests and packing. Never launches Valheim or a server. The scripts are .NET file-based
-# programs, so the same commands run in each runner's default shell. No secrets are used. The mod-example job runs
+# programs, so the same commands run on every OS: bootstrap through .github/actions/setup's bash step (it keeps startup
+# evidence), the rest in each runner's default shell. No secrets are used. The mod-example job runs
 # the copied template's test project through validate.cs's limits against the published packages. The game-hosts job drives the real ssh
 # and docker paths of the game hosts against a throwaway sshd on localhost and a throwaway container.
 # Pushes to main and pull requests only: a branch with an open PR would otherwise run everything twice.
@@ -65,7 +66,11 @@ jobs:
         run: |
           mkdir -p .packages
           printf 'obsolete CLI package' > .packages/Valheim.Testing.Cli.0.1.0-preview.0.nupkg
-      - run: dotnet run scripts/bootstrap-cli.cs
+      - name: Build the pinned CLI transport package
+        uses: ./.github/actions/setup
+        with:
+          phase: bootstrap
+          evidence-label: test-${{ matrix.os }}
       - name: Confirm the obsolete CLI package was removed
         if: runner.os == 'Linux'
         run: test ! -e .packages/Valheim.Testing.Cli.0.1.0-preview.0.nupkg
@@ -156,7 +161,11 @@ jobs:
           path: ${{ env.VT_NUGET_CACHE_PATHS }}
           key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', 'scripts/*.cs', 'scripts/Shared/*.cs', 'cli-dependency.json', 'NuGet.Config', '.config/dotnet-tools.json') }}
           restore-keys: nuget-${{ runner.os }}-
-      - run: dotnet run scripts/bootstrap-cli.cs
+      - name: Build the pinned CLI transport package
+        uses: ./.github/actions/setup
+        with:
+          phase: bootstrap
+          evidence-label: toolkit-${{ matrix.os }}-${{ matrix.shard }}
       - name: Run toolkit shard
         # One test command: its 10-minute hard limit (validate.cs, #719) plus the data-root guard and the transcript.
         timeout-minutes: 12
@@ -210,7 +219,11 @@ jobs:
           path: ${{ env.VT_NUGET_CACHE_PATHS }}
           key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', 'scripts/*.cs', 'scripts/Shared/*.cs', 'cli-dependency.json', 'NuGet.Config', '.config/dotnet-tools.json') }}
           restore-keys: nuget-${{ runner.os }}-
-      - run: dotnet run scripts/bootstrap-cli.cs
+      - name: Build the pinned CLI transport package
+        uses: ./.github/actions/setup
+        with:
+          phase: bootstrap
+          evidence-label: ci-shell-${{ matrix.os }}
       - name: Run the local-shell integration tests
         # One test command: its 10-minute hard limit (validate.cs, #719) plus the data-root guard and the transcript.
         timeout-minutes: 12
@@ -248,7 +261,11 @@ jobs:
           path: ${{ env.VT_NUGET_CACHE_PATHS }}
           key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', 'scripts/*.cs', 'scripts/Shared/*.cs', 'cli-dependency.json', 'NuGet.Config', '.config/dotnet-tools.json') }}
           restore-keys: nuget-${{ runner.os }}-
-      - run: dotnet run scripts/bootstrap-cli.cs
+      - name: Build the pinned CLI transport package
+        uses: ./.github/actions/setup
+        with:
+          phase: bootstrap
+          evidence-label: api-reference
       - name: Build candidate API reference
         run: |
           dotnet build docs/reference/ValheimTesting.Api.sln -c Release -m:1
@@ -488,7 +505,11 @@ jobs:
       - uses: ./.github/actions/setup
         with:
           pinned-downloads: true
-      - run: dotnet run scripts/bootstrap-cli.cs
+      - name: Build the pinned CLI transport package
+        uses: ./.github/actions/setup
+        with:
+          phase: bootstrap
+          evidence-label: game-hosts
       - name: Start a throwaway sshd on 127.0.0.1:2222
         run: bash .github/scripts/game-hosts.sh start
       - name: Start a throwaway container on the host network
