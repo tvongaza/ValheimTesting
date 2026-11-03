@@ -121,11 +121,11 @@ public class SshOptionTests
     private const string PrivateOption = "IdentityFile=/keys/do-not-echo-this-option";
 
     // Run the real selection owner, then carry that selection through the fake process boundary.
-    private static SshGameHost SelectedHost(FakeLauncher fake, string requested = "ssh", bool windows = true)
+    private static SshGameHost SelectedHost(FakeLauncher fake, string requested = "ssh", bool windows = true, HostShell? shell = null)
     {
         var choice = SshGameHost.DefaultSshExecutable(requested, windows, inSshSession: true,
             Path.Combine(Path.GetTempPath(), "Program Files"), "local", _ => true);
-        return new SshGameHost("box", "tester@box.example", HostShell.Bash, 0, [PrivateOption], null, requested, fake, choice);
+        return new SshGameHost("box", "tester@box.example", shell ?? HostShell.Bash, 0, [PrivateOption], null, requested, fake, choice);
     }
 
     private static void AssertGitAdvice(string text)
@@ -159,7 +159,7 @@ public class SshOptionTests
         Assert.Equal(end == "timeout", result.TimedOut);
         Assert.Null(result.ExitCode);
         Assert.False(result.Failed);
-        Assert.StartsWith(stderr, result.Stderr);
+        Assert.Equal(stderr, result.Stderr); // the command's own stderr; the client line rides beside it
         AssertGitAdvice(result.Describe());
         AssertGitAdvice(Assert.Throws<HostOperationException>(() => result.EnsureSuccess("Reading host state")).Message);
         Assert.Equal(host.WrapperCommand().Executable, Assert.Single(fake.Calls).Executable);
@@ -175,11 +175,30 @@ public class SshOptionTests
         var fake = new FakeLauncher().Exits(255, stderr: AuthRefusal);
         var result = await SelectedHost(fake, requested, windows).RunAsync("true", null, FailureTimeout);
         Assert.Equal(HostOutcome.TransportFailed, result.Outcome);
-        Assert.Contains(AuthRefusal, result.Stderr);
-        Assert.Contains(requested + " (" + (windows ? "the host's " : "") + reason + ")", result.Stderr);
-        Assert.DoesNotContain("Git for Windows", result.Stderr);
-        Assert.DoesNotContain("IdentityFile", result.Stderr);
+        string described = result.Describe();
+        Assert.Contains(AuthRefusal, described);
+        Assert.Contains(requested + " (" + (windows ? "the host's " : "") + reason + ")", described);
+        Assert.DoesNotContain("Git for Windows", described);
+        Assert.DoesNotContain("IdentityFile", described);
         Assert.Equal(requested, Assert.Single(fake.Calls).Executable);
+    }
+
+    // The Git client's long reason beside a missing-pwsh remedy: the shortened report keeps what the host said, the install
+    // command and the client advice.
+    [Fact]
+    public async Task TheClientLineNeverCutsTheMissingPwshRemedyOrTheHostsError()
+    {
+        const string said = "'pwsh' is not recognized as an internal or external command,\r\noperable program or batch file.\r\n";
+        var fake = new FakeLauncher().Reply(_ => FakeLauncher.Exit(9009 & 0xFF, "", said));
+        var result = await SelectedHost(fake, shell: HostShell.Pwsh).RunAsync("exit 0", null, FailureTimeout);
+        Assert.Equal(HostOutcome.TransportFailed, result.Outcome);
+        Assert.DoesNotContain("SSH client:", result.Stderr);
+        string described = result.Describe();
+        Assert.Contains("'pwsh' is not recognized", described);
+        Assert.Contains("winget install --id Microsoft.PowerShell --source winget", described);
+        Assert.Contains("desktop terminal on that machine", described);
+        Assert.Contains("Git for Windows", described);
+        Assert.Contains("IdentityFile", described);
     }
 
     [Theory]

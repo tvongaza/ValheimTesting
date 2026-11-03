@@ -119,8 +119,9 @@ public sealed class SshGameHost : ScriptedGameHost
     /// <summary>The ssh client and why it was chosen, one line. Reported in the run's provenance.</summary>
     internal string SshClientChoice => _ssh + " (" + _sshReason + ")";
 
-    // Last, so HostResult.Describe keeps the remedy when it shortens long stderr. No options or second command.
-    internal override string FailureContext(string text) => text + "\nSSH client: " + SshClientChoice;
+    // HostResult.Describe prints it after the shortened stderr, so it neither hides the error nor a missing-pwsh remedy.
+    // No options or second command.
+    internal override string ClientContext => "SSH client: " + SshClientChoice;
 
     // The bare client name, which asks for the default rather than a client: "ssh", and on Windows also "ssh.exe", in any case (the file
     // system and the command search are case-insensitive there). Anything else (a path above all) is an explicit choice.
