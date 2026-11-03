@@ -486,7 +486,14 @@ void StopTestHosts(Process rootProcess, long? rootStart, Stopwatch clock, TimeSp
     start.RedirectStandardOutput = true;
     start.UseShellExecute = false;
     DateTime beforeListing = DateTime.UtcNow;
-    Process listing = Process.Start(start) ?? throw new InvalidOperationException("Could not list processes.");
+    Process? started;
+    try { started = Process.Start(start); }
+    catch (System.ComponentModel.Win32Exception error)
+    {
+        throw new InvalidOperationException($"Could not list processes with {start.FileName} ({error.Message}). On Windows that is PowerShell 7: " +
+            "install it with winget install --id Microsoft.PowerShell --source winget (docs/reference/platforms.md#host-shells).", error);
+    }
+    Process listing = started ?? throw new InvalidOperationException("Could not list processes.");
     long? listingStart = null;
     try { listingStart = OwnedClientCommandLease.LocalStartUtcTicks(listing); }
     catch (Exception error) when (ProcessObservationError(error)) { /* A quick exited listing still has its output and exit code. */ }
