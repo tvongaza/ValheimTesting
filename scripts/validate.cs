@@ -24,7 +24,7 @@
 // going and, when it ends, a warning names the command, its duration and its slowest tests (a ::warning:: annotation in CI): the
 // signal to split or speed it up. Past the hard limit (10 minutes) its test host is stopped, so the blame sequence names the tests in
 // flight. When an owned host's exit is observed, the test command then has up to 30 seconds to exit and write its completed results.
-// With no stopped host cleanup starts immediately. Preparation has its own 60-second cap; failed cleanup has one 50-second absolute
+// With no stopped host cleanup starts immediately. Preparation has its own 3-minute cap; failed cleanup has one 50-second absolute
 // envelope, including the existing 10-second blame/30-second command grace. Signals require retained owned identities; unavailable
 // ancestry or surviving owned processes fail cleanup verification. Validation fails either way. VT_VALIDATE_*_LIMIT_SECONDS values
 // scale these internal limits for ValidationLimitsTests only; ordinary builds, Capture and the consumer remain outside this fix.
@@ -73,9 +73,10 @@ string dataRoot = DataRoot();
 var dataBefore = Snapshot(dataRoot);
 var softLimit = TimeSpan.FromSeconds(LimitSeconds("VT_VALIDATE_SOFT_LIMIT_SECONDS", 5 * 60));
 var hardLimit = TimeSpan.FromSeconds(LimitSeconds("VT_VALIDATE_HARD_LIMIT_SECONDS", 10 * 60));
-// A separate preparation allocation preserves the full test allowance. 60 + 600 + 50 = 710 seconds under CI's
-// existing 720-second step; cold Windows preparation/startup acceptance remains a separate evidence gate.
-var preparationLimit = TimeSpan.FromSeconds(LimitSeconds("VT_VALIDATE_PREPARATION_LIMIT_SECONDS", 60));
+// A separate preparation allocation preserves the full test allowance. Preparation is the first full build of the test
+// project (14-44 s on warm CI caches), so 180 s leaves room for a cold cache or a slow runner: 180 + 600 + 50 = 830 seconds
+// under CI's 15-minute steps that run it.
+var preparationLimit = TimeSpan.FromSeconds(LimitSeconds("VT_VALIDATE_PREPARATION_LIMIT_SECONDS", 180));
 var cleanupLimit = TimeSpan.FromSeconds(LimitSeconds("VT_VALIDATE_CLEANUP_LIMIT_SECONDS", 50));
 var processListLimit = TimeSpan.FromSeconds(LimitSeconds("VT_VALIDATE_PROCESS_LIST_LIMIT_SECONDS", 5));
 const int hardLimitGracePeriodSeconds = 30;
