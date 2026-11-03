@@ -1,7 +1,8 @@
 name: Native Linux server smoke
 # Manual only. Builds the private image in docker/linux-server (Valheim dedicated server via anonymous
 # SteamCMD, plus BepInEx) on the runner and boots the server once through GameLaunch.ForServer. The image is
-# never pushed, saved or uploaded: it contains game files. Only the smoke's logs and report are uploaded.
+# never pushed, saved or uploaded: it contains game files. Only the smoke's logs and report are uploaded,
+# plus the CLI bootstrap's own log and metadata when that bootstrap (before the image build) fails.
 # The plain Ubuntu base mirror is public on GHCR; no registry or game credentials are used.
 on:
   workflow_dispatch:

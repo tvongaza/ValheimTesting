@@ -1,7 +1,8 @@
 name: Local test layers
 # Bootstrap and local validation on every supported toolkit OS: library tests, example builds, the
 # no-game example, package-consuming mod tests and packing. Never launches Valheim or a server. The scripts are .NET file-based
-# programs, so the same commands run in each runner's default shell. No secrets are used. The mod-example job runs
+# programs, so the same commands run on every OS: bootstrap through .github/actions/setup's bash step (it keeps startup
+# evidence), the rest in each runner's default shell. No secrets are used. The mod-example job runs
 # the copied template's test project through validate.cs's limits against the published packages. The game-hosts job drives the real ssh
 # and docker paths of the game hosts against a throwaway sshd on localhost and a throwaway container.
 # Pushes to main and pull requests only: a branch with an open PR would otherwise run everything twice.
