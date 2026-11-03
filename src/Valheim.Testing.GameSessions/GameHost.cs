@@ -79,8 +79,13 @@ public sealed record HostResult(HostOutcome Outcome, int? ExitCode, string Stdou
         };
         string error = Stderr.Trim();
         return state + " after " + WaitText.Seconds(Elapsed) + (Phases == null ? "" : " (" + Phases + ")") +
-            (error.Length == 0 ? "" : "; stderr: " + (error.Length > 600 ? "..." + error[^600..] : error));
+            (error.Length == 0 ? "" : "; stderr: " + (error.Length > 600 ? "..." + error[^600..] : error)) +
+            (Context == null ? "" : "\n" + Context);
     }
+
+    /// <summary>The host's own diagnostic for a result without the exit report (the SSH client and why it was chosen), printed
+    /// after the shortened stderr so neither hides the other. Not part of <see cref="Stderr"/>, which stays what the command wrote.</summary>
+    internal string? Context { get; init; }
 
     /// <summary>Where the time went, for a script that reports when it began (<see cref="ShellPhases"/>); null otherwise.</summary>
     internal string? Phases { get; init; }
@@ -320,6 +325,10 @@ public abstract class ScriptedGameHost : IGameHost
     internal abstract bool IsTransportFailure(ProcessExit exit);
     /// <summary>Whether the host's shell itself was not found (only asked when the command ended without the exit report).</summary>
     internal virtual bool ShellNotFound(ProcessExit exit) => false;
+    /// <summary>Diagnostic context for an end without the wrapper's exit report (the SSH client choice), or null.</summary>
+    internal virtual string? ClientContext => null;
+    /// <summary>A failure message with <see cref="ClientContext"/> after it.</summary>
+    internal string FailureContext(string text) => ClientContext == null ? text : text + "\n" + ClientContext;
     public abstract Task<CliTunnel> OpenCliTunnelAsync(int hostPort, TimeSpan readyTimeout, int localPort = 0, CancellationToken cancellation = default);
 
     /// <summary>
@@ -659,8 +668,10 @@ public abstract class ScriptedGameHost : IGameHost
     internal HostResult Interpret(ProcessExit exit)
     {
         string stdout = exit.Stdout.Replace("\r", ""), stderr = exit.Stderr.Replace("\r", "");
-        if (exit.End == ProcessEnd.NotStarted) return new HostResult(HostOutcome.TransportFailed, null, stdout, MissingShell(exit) ?? stderr, exit.Elapsed, false);
-        if (exit.End != ProcessEnd.Exited) return new HostResult(HostOutcome.Unknown, null, stdout, ReadableStderr(stderr), exit.Elapsed, exit.End == ProcessEnd.TimedOut);
+        HostResult Unreported(HostOutcome outcome, string error, bool timedOut) =>
+            new(outcome, null, stdout, error, exit.Elapsed, timedOut) { Context = ClientContext };
+        if (exit.End == ProcessEnd.NotStarted) return Unreported(HostOutcome.TransportFailed, MissingShell(exit) ?? stderr, false);
+        if (exit.End != ProcessEnd.Exited) return Unreported(HostOutcome.Unknown, ReadableStderr(stderr), exit.End == ProcessEnd.TimedOut);
         int at = stderr.LastIndexOf("\n" + ExitMarker, StringComparison.Ordinal);
         if (at >= 0)
         {
@@ -672,8 +683,8 @@ public abstract class ScriptedGameHost : IGameHost
                 return new HostResult(HostOutcome.Exited, code, stdout, ReadableStderr(rest), exit.Elapsed, false);
             }
         }
-        if (MissingShell(exit) is { } missing) return new HostResult(HostOutcome.TransportFailed, null, stdout, missing, exit.Elapsed, false);
-        return new HostResult(IsTransportFailure(exit) ? HostOutcome.TransportFailed : HostOutcome.Unknown, null, stdout, ReadableStderr(stderr), exit.Elapsed, false);
+        if (MissingShell(exit) is { } missing) return Unreported(HostOutcome.TransportFailed, missing, false);
+        return Unreported(IsTransportFailure(exit) ? HostOutcome.TransportFailed : HostOutcome.Unknown, ReadableStderr(stderr), false);
     }
 
     // A Windows host without pwsh: what the transport said, then what to install (last, so a shortened report keeps it). The

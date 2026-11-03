@@ -144,8 +144,13 @@ public sealed class ExplicitRunInputsTests : IDisposable
     [InlineData("bad;name.cfg")]
     public void ConfigTargetsUseTheRuntimeOwnersAdmissionRules(string config)
     {
-        Assert.False(StartArguments.TryRead(["--mod", "mod.dll", "--config", config], out _, out _));
-        Assert.False(ServerLoad.TryRead(["--mod", "mod.dll", "--config", config], out _, out _));
+        Assert.False(StartArguments.TryRead(["--mod", "mod.dll", "--config", config], out _, out string start));
+        Assert.False(ServerLoad.TryRead(["--mod", "mod.dll", "--config", config], out _, out string server));
+        if (config.Contains(';'))
+            foreach (string error in new[] { start, server })
+            {
+                Assert.Contains("--config file name 'bad;name.cfg'", error); Assert.DoesNotContain("loaderPackage", error);
+            }
     }
 
     [Theory]

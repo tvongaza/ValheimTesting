@@ -295,6 +295,90 @@ public sealed class FixtureBakeTests : IDisposable
         Assert.False(Directory.Exists(output));
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void CopyRefusesDriftAfterAnEarlierFileWasCopiedAndCleansOnlyItsOutput(bool sourceDrift)
+    {
+        string source = FakeInstalls.World(Path.Combine(root, "source"));
+        var target = GameAssemblyVersion.Read(new MemoryStream(FakeInstalls.GameAssembly()), "selected host");
+        var admission = FixtureBake.Admit(source, target);
+        string output = Path.Combine(root, "copy"), unrelated = Path.Combine(root, "unrelated.txt");
+        File.WriteAllText(unrelated, "keep");
+        string? firstSource = null, firstDestination = null;
+        int copies = 0;
+        Assert.Throws<InvalidOperationException>(() => FixtureBake.Prepare(source, output, admission, copyFile: (from, to) =>
+        {
+            File.Copy(from, to);
+            if (++copies == 1) { firstSource = from; firstDestination = to; }
+            else if (copies == 2)
+            {
+                string changed = sourceDrift ? firstSource! : firstDestination!;
+                DateTime modified = File.GetLastWriteTimeUtc(changed);
+                byte[] bytes = File.ReadAllBytes(changed);
+                bytes[0] ^= 1;
+                File.WriteAllBytes(changed, bytes);
+                File.SetLastWriteTimeUtc(changed, modified);
+            }
+        }));
+        Assert.True(copies > 1);
+        Assert.False(Directory.Exists(Path.Combine(output, "world-source")));
+        Assert.Equal("keep", File.ReadAllText(unrelated));
+        Assert.True(Directory.Exists(source));
+        if (!sourceDrift) FixtureBake.VerifyAdmission(admission);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void StructuralInspectionOfRawWorldsDoesNotReplaceAdmissionOrBakedPins(bool baked)
+    {
+        string source = Path.Combine(root, "fixture"), worlds = FakeInstalls.World(Path.Combine(source, "worlds_local"));
+        if (baked) File.WriteAllText(Path.Combine(source, FixtureBake.ManifestFile), JsonSerializer.Serialize(new
+        { schemaVersion = 1, world = new { Name = "Campaign", Uid = 4242L }, filesSha256 = WorldFixture.Manifest(worlds) }));
+        var target = GameAssemblyVersion.Read(new MemoryStream(FakeInstalls.GameAssembly()), "host");
+        var admitted = FixtureBake.Admit(source, target);
+        File.AppendAllText(Path.Combine(worlds, "Campaign", "_main.1.db2"), "payload drift, same world identity");
+        if (baked) Assert.Throws<InvalidDataException>(() => FixtureBake.Check(source));
+        else Assert.Equal(admitted.Identity, FixtureBake.Check(source));
+        Assert.Throws<InvalidOperationException>(() => FixtureBake.VerifyAdmission(admitted));
+    }
+
+    [Fact]
+    public void PreparationVerifiesDestinationAfterTheFinalSourceBoundary()
+    {
+        string source = FakeInstalls.World(Path.Combine(root, "source"));
+        var target = GameAssemblyVersion.Read(new MemoryStream(FakeInstalls.GameAssembly()), "selected host");
+        var admission = FixtureBake.Admit(source, target);
+        string output = Directory.CreateDirectory(Path.Combine(root, "copy")).FullName;
+        string keep = Path.Combine(output, "unrelated.txt"); File.WriteAllText(keep, "keep");
+        Assert.Throws<InvalidOperationException>(() => FixtureBake.Prepare(source, output, admission, afterSourceVerification: copy =>
+        {
+            string payload = Path.Combine(copy, "Campaign", FakeInstalls.ChunkFile);
+            DateTime modified = File.GetLastWriteTimeUtc(payload);
+            byte[] bytes = File.ReadAllBytes(payload); bytes[0] ^= 1;
+            File.WriteAllBytes(payload, bytes); File.SetLastWriteTimeUtc(payload, modified);
+        }));
+        Assert.False(Directory.Exists(Path.Combine(output, "world-source")));
+        Assert.Equal("keep", File.ReadAllText(keep));
+        FixtureBake.VerifyAdmission(admission); // the source still matches the original pins
+    }
+
+    [Fact]
+    public void PreparedAdmissionIsBoundToTheVerifiedOutputAndKeepsOriginalPins()
+    {
+        string source = FakeInstalls.World(Path.Combine(root, "source"));
+        var target = GameAssemblyVersion.Read(new MemoryStream(FakeInstalls.GameAssembly()), "selected host");
+        var admission = FixtureBake.Admit(source, target);
+        var input = FixtureBake.Prepare(source, Path.Combine(root, "copy"), admission);
+        var copied = Assert.IsType<WorldIdentity.Admission>(input.CopyAdmission);
+        Assert.Equal(Path.Combine(root, "copy", "world-source", "worlds_local"), copied.Source);
+        copied.Verify();
+        File.AppendAllText(Path.Combine(copied.Source, "Campaign", "_main.1.db2"), "copy-only drift");
+        Assert.Throws<InvalidOperationException>(() => copied.Verify());
+        FixtureBake.VerifyAdmission(admission);
+    }
+
     private FixtureBake.Input Source() => FixtureBake.Prepare(null, Path.Combine(root, "run"));
 
     private FixtureBake.BuildInputs EmptyBuild()

@@ -86,7 +86,11 @@ internal static class ModInputStage
             if (name.Length == 0 || name.Contains('\\') ||
                 hosted && !name.EndsWith(".cfg", StringComparison.OrdinalIgnoreCase))
                 throw new ArgumentException("--config needs a flat file name" + (hosted ? " ending in .cfg." : "."));
-            HostedRuntimeStage.ValidatePayloadPath("BepInEx/config/" + name);
+            try { HostedRuntimeStage.ValidatePayloadPath("BepInEx/config/" + name); }
+            catch (ArgumentException)
+            {
+                throw new ArgumentException($"--config file name '{name}' cannot be staged in BepInEx/config: use only ASCII letters, digits, '.', '-', '_' and spaces.");
+            }
             if (name.Equals(OwnedClientPreflight.CliConfig, StringComparison.OrdinalIgnoreCase))
                 throw new ArgumentException("ValheimCLI's config is the run's own; do not supply it as a mod config.");
             if (!names.Add(name)) throw new ArgumentException("--config destination names must be unique (names ignore case).");
@@ -355,8 +359,7 @@ internal static class ModInputStage
             return GameVersionAgreement.ReadInPlaceAsync(hosting.Install, CancellationToken.None).GetAwaiter().GetResult();
         var host = LocalHostPreflight.DefaultProbes.HostFactory?.Invoke(hosting.Host)
             ?? new ResolvedEnvironment { Hosts = inventory.Hosts }.CreateHost(hosting.Host);
-        var listing = HostInstall.ListAsync(host, hosting.Install, TimeSpan.FromSeconds(60), null, CancellationToken.None).GetAwaiter().GetResult();
-        return GameVersionAgreement.ReadAsync(host, listing, TimeSpan.FromSeconds(60), CancellationToken.None).GetAwaiter().GetResult();
+        return GameVersionAgreement.ReadInstallationAsync(host, hosting.Install, TimeSpan.FromSeconds(60), CancellationToken.None).GetAwaiter().GetResult();
     }
 
     internal static GameBuild VerifyAdmission(Inspection admission)
