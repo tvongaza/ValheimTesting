@@ -142,7 +142,7 @@ jobs:
         shard: [main, timed-1, timed-2, timed-3]
         include: ${{ fromJSON(github.event_name == 'pull_request' && '[{"os":"macos-latest","shard":"whole"}]' || '[{"os":"macos-latest","shard":"main"},{"os":"macos-latest","shard":"timed-1"},{"os":"macos-latest","shard":"timed-2"},{"os":"macos-latest","shard":"timed-3"}]') }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    timeout-minutes: 20
     env:
       VALHEIM_TESTING_WINDOWS_DESKTOP: ${{ matrix.os == 'windows-latest' && '1' || '' }}
       VT_NUGET_CACHE_PATHS: |
@@ -168,7 +168,7 @@ jobs:
           evidence-label: toolkit-${{ matrix.os }}-${{ matrix.shard }}
       - name: Run toolkit shard
         # One test command: its 10-minute hard limit (validate.cs, #719) plus the data-root guard and the transcript.
-        timeout-minutes: 12
+        timeout-minutes: 15
         run: dotnet run scripts/validate.cs -- ${{ matrix.shard == 'whole' && '--ci-toolkit-tests' || matrix.shard == 'main' && '--ci-main-tests' || matrix.shard == 'timed-1' && '--ci-timed 1' || matrix.shard == 'timed-2' && '--ci-timed 2' || matrix.shard == 'timed-3' && '--ci-timed 3' || '--no-such-shard' }} ${{ env.VT_SPLIT_ARGUMENT }}
         env:
           # A manual dispatch keeps each shard's TRX timings, to refresh ci-test-timings.json (the union is the whole suite).
@@ -199,7 +199,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    timeout-minutes: 20
     env:
       # Keep the Windows desktop test seam consistent with the broad test job if a shell test later uses it.
       VALHEIM_TESTING_WINDOWS_DESKTOP: ${{ matrix.os == 'windows-latest' && '1' || '' }}
@@ -226,7 +226,7 @@ jobs:
           evidence-label: ci-shell-${{ matrix.os }}
       - name: Run the local-shell integration tests
         # One test command: its 10-minute hard limit (validate.cs, #719) plus the data-root guard and the transcript.
-        timeout-minutes: 12
+        timeout-minutes: 15
         run: dotnet run scripts/validate.cs -- --only-ci-shell ${{ env.VT_SPLIT_ARGUMENT }}
       - name: Keep shell-test evidence on failure
         if: failure() || cancelled()
@@ -519,7 +519,7 @@ jobs:
         run: docker run -d --rm --name vt-game-host --network host --entrypoint /bin/sleep ghcr.io/actions/actions-runner@sha256:e5496277be5d09bc968b3d64911b74e219ac4a3f2edce956a3ecf9271bea1ef4 1800
       # One test command: validate.cs owns its soft and hard limits, blame report and transcript (#719, #729).
       - run: dotnet run scripts/validate.cs -- --test-project "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/tests/Valheim.Testing.Tests/Valheim.Testing.Tests.csproj" "$RUNNER_TEMP/game-host-results" Category=GameHosts
-        timeout-minutes: 14
+        timeout-minutes: 15
       - name: Stop the sshd and the container
         if: always()
         run: |
