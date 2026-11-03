@@ -199,7 +199,8 @@ public sealed class RunFolderTests : IDisposable
         Assert.Contains(host.Name, error.Message);
         Assert.Contains("already exists", error.Message);
         Assert.Contains("did not create or own", error.Message);
-        Assert.Contains("notMade refusal receipt could not be recorded", error.Message);
+        Assert.Contains("notMade refusal receipt may not have been recorded", error.Message);
+        Assert.Contains("do not run env teardown --run " + folder.RunId, error.Message);
         Assert.Contains("exited with code 4", error.Message);
         Assert.Same(receiptFailure, error.InnerException);
         if (receiptFailure is HostOperationException append)
@@ -437,7 +438,8 @@ public sealed class RunFolderShellTests : IDisposable
         Assert.Contains(folder.Path, error.Message);
         Assert.Contains(host.Name, error.Message);
         Assert.Contains("did not create or own", error.Message);
-        Assert.Contains("notMade refusal receipt could not be recorded", error.Message);
+        Assert.Contains("notMade refusal receipt may not have been recorded", error.Message);
+        Assert.Contains("do not run env teardown --run " + folder.RunId, error.Message);
         Assert.Contains("exited with code 4", error.Message);
         Assert.Same(receiptFailure, error.InnerException);
         Assert.False(folder.Made);

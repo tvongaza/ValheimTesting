@@ -91,8 +91,12 @@ internal sealed class RunFolder
                 }
                 catch (Exception receiptError) when (receiptError is not OperationCanceledException)
                 {
+                    // The journal append may have failed or only lost its reply: either way the run's open intent may still list the
+                    // folder as the run's own, which env teardown would remove.
                     throw new InvalidOperationException($"{Path} already exists on {Host.Name}; this run did not create or own the folder. " +
-                        $"Nothing was written in it, but its notMade refusal receipt could not be recorded. Reservation refusal: {error.Message}", receiptError);
+                        "Nothing was written in it, but its notMade refusal receipt may not have been recorded, so the journal may still list it " +
+                        $"as run {RunId}'s folder: keep it, and do not run env teardown --run {RunId} until env status no longer lists it for that run. " +
+                        $"Reservation refusal: {error.Message}", receiptError);
                 }
                 throw new InvalidOperationException($"{Path} already exists on {Host.Name}; a run never writes into a folder it did not make. Nothing was written in it.", error);
             }
