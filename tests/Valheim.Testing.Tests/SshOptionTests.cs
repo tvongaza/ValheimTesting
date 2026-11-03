@@ -226,6 +226,7 @@ public class SshOptionTests
             "vt-upload-" + new string('a', 32) + ".tar", FailureTimeout, default));
         AssertGitAdvice(error.Message);
         Assert.Contains("not proven", error.Message);
+        Assert.Contains("by " + Assert.Single(fake.Calls).Executable + " was", error.Message); // scp, which the client line does not name
         Assert.Contains("Inspect vt-upload-", error.Message);
         Assert.Contains(timeout ? "TimedOut" : "exit 255", error.Message);
         Assert.Contains("BatchMode=yes", Assert.Single(fake.Calls).Arguments);

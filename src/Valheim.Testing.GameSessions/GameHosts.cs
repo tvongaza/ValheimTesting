@@ -222,7 +222,7 @@ public sealed class SshGameHost : ScriptedGameHost
         arguments.AddRange(["--", archive, destination + ":" + remoteName]);
         var exit = await Launcher.RunAsync(new ProcessCall(scp, arguments, [], null, null, null, timeout), cancellation).ConfigureAwait(false);
         if (exit.End != ProcessEnd.Exited || exit.ExitCode != 0)
-            throw new IOException(FailureContext($"The archive transfer to {Name} was not proven ({exit.End}, exit {exit.ExitCode}). Inspect {remoteName} in the SSH user's home before retrying. {exit.Stderr.Trim()}"));
+            throw new IOException(FailureContext($"The archive transfer to {Name} by {scp} was not proven ({exit.End}, exit {exit.ExitCode}). Inspect {remoteName} in the SSH user's home before retrying. {exit.Stderr.Trim()}"));
     }
 
     // ssh -G prints the configuration ssh would use for this destination, forwards from the user's and the system's config included.
