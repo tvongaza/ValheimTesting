@@ -276,9 +276,11 @@ public sealed class WorldFixtureLayoutTests : IDisposable
     {
         string fixture = Fixture();
         var observed = WorldFixture.Manifest(fixture);
-        if (added) File.WriteAllText(World(fixture, "01_01__0_1.chunk"), "extra");
-        else File.Delete(World(fixture, FakeInstalls.ChunkFile));
-        Assert.Throws<InvalidOperationException>(() => WorldIdentity.ReadObserved(fixture, observed));
+        string changed = added ? World(fixture, "01_01__0_1.chunk") : World(fixture, FakeInstalls.ChunkFile);
+        if (added) File.WriteAllText(changed, "extra");
+        else File.Delete(changed);
+        string error = Assert.Throws<InvalidOperationException>(() => WorldIdentity.ReadObserved(fixture, observed)).Message;
+        Assert.Contains(Path.GetRelativePath(fixture, changed) + (added ? " was added" : " is missing"), error);
     }
 
     [UnixFact]

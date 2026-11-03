@@ -50,8 +50,15 @@ public sealed record WorldIdentity(string Name, string SeedName, int Seed, long 
             .Select(path => Path.GetRelativePath(fixture, path)).ToList();
         // Hashing and parsing share one content observation, but names and links must still be exact at parse time.
         // Only a verified copy may add the generated record outside its pins.
-        if (observed != null) Check.SameIdentities(actualPaths.Where(path =>
-            !(copied && !observed.ContainsKey(WorldFixture.ProvenanceFile) && path == WorldFixture.ProvenanceFile)), observed.Keys);
+        if (observed != null)
+        {
+            var live = actualPaths.Where(path => !(copied && !observed.ContainsKey(WorldFixture.ProvenanceFile) && path == WorldFixture.ProvenanceFile))
+                .ToHashSet(StringComparer.Ordinal);
+            var changed = observed.Keys.Where(path => !live.Contains(path)).Order(StringComparer.Ordinal).Select(path => path + " is missing")
+                .Concat(live.Where(path => !observed.ContainsKey(path)).Order(StringComparer.Ordinal).Select(path => path + " was added")).ToList();
+            if (changed.Count != 0)
+                throw new InvalidOperationException($"The fixture files in {fixture} changed after their content was observed: {string.Join("; ", changed)}.");
+        }
         var layout = Layout(actualPaths.Where(path => path != WorldFixture.ProvenanceFile));
         byte[] Bytes(string file)
         {
