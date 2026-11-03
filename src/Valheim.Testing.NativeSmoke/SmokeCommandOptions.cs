@@ -187,7 +187,7 @@ internal static class SmokeCommandOptions
         {
             foreach (string prefix in new[] { "--", "--client-" })
                 SmokeAssertion.Validate(result.Options.GetValueOrDefault(prefix + "assert-command"), result.Options.GetValueOrDefault(prefix + "assert-line"), prefix);
-            _ = ModBuild.ParseDependencies(result.List("--client-dependency"));
+            _ = ModBuild.ParseDependencies(result.List("--client-dependency"), "--client-dependency");
             if (clientSelected)
                 result.ClientSelection = new(result.List("--client-mod"), result.List("--client-search-root"), result.List("--client-optional-reference"), result.List("--client-dependency"))
                 {

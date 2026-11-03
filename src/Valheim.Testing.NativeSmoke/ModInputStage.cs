@@ -98,7 +98,7 @@ internal static class ModInputStage
     {
         // Match HostedRuntimeStage's regular-file admission, including its refusal of reparse points.
         if (!File.Exists(file) || (File.GetAttributes(file) & (FileAttributes.ReparsePoint | FileAttributes.Directory)) != 0)
-            throw new FileNotFoundException("A selected --config file is missing or linked: " + file, file);
+            throw new FileNotFoundException("A selected config or companion file is missing or linked: " + file, file);
     }
 
     internal static RetainedInputs RetainExplicit(ExplicitInputs selected, Route route, string output, bool withClient, string? role = null)
@@ -414,6 +414,8 @@ internal static class ModInputStage
         internal string Selection { get; set; } = "";
         internal string? BuildInputs { get; set; } = selected.BuildInputs;
         internal ModBuild.BuildRecord? Verified { get; set; }
+        // The option prefix the user gave this role's inputs with: "--" for the primary role, "--client-" for an explicit client.
+        internal string Prefix { get; init; } = "--";
         internal RetainedInputs Retained { get; set; } = RetainedInputs.Empty;
         internal IReadOnlyList<HostedRuntimeFile> Files { get; set; } = [];
     }
@@ -423,7 +425,7 @@ internal static class ModInputStage
     {
         if (!implicitSelection && selected.Project == null && selected.Mods.Count == 0)
             throw new ArgumentException("An explicit role needs selected mods or a project; it never discovers a client mod implicitly.");
-        var role = new PreparingRole(selected, actor, core, output);
+        var role = new PreparingRole(selected, actor, core, output) { Prefix = implicitSelection ? "--" : "--client-" };
         role.Retained = RetainExplicit(selected.RunInputs, route, output, withClient, implicitSelection ? null : actor.Role);
         role.Files = PayloadFiles(role.Retained, selected.PluginFiles, selected.PluginDirectories);
         if (!buildOnly && selected.Project == null)
@@ -432,7 +434,7 @@ internal static class ModInputStage
                 : new(selected.Mods.Select(Path.GetFullPath).ToArray(), "explicit --client-mod selection");
             role.Mods.AddRange(mods.Mods); role.Selection = mods.Reason;
             Console.WriteLine(actor.Role + " mod selection: " + role.Selection);
-            role.Verified = CheckMod(role.Mods, role.BuildInputs, actor.Recipe.Install, core, role.Roots);
+            role.Verified = CheckMod(role.Mods, role.BuildInputs, actor.Recipe.Install, core, role.Roots, role.Prefix);
         }
         return role;
     }
@@ -446,7 +448,7 @@ internal static class ModInputStage
         role.Mods.Add(record.Mod); role.BuildInputs = Path.Combine(plan.Output, "build-inputs.json");
         role.Selection = "built from --project " + Path.GetFullPath(role.Selected.Project);
         Console.WriteLine(role.Actor.Role + " built mod: " + record.Mod);
-        if (verify) role.Verified = CheckMod(role.Mods, role.BuildInputs, role.Actor.Recipe.Install, role.Core, role.Roots);
+        if (verify) role.Verified = CheckMod(role.Mods, role.BuildInputs, role.Actor.Recipe.Install, role.Core, role.Roots, role.Prefix);
     }
 
     private static SelectedRole ResolveRole(Inputs inputs, PreparingRole role)
@@ -471,7 +473,7 @@ internal static class ModInputStage
     public static async Task<Inputs> RunAsync(Request request, CancellationToken cancellation)
     {
         _ = ModBuild.ParseDependencies(request.Dependencies);
-        if (request.ClientSelection != null) _ = ModBuild.ParseDependencies(request.ClientSelection.Dependencies);
+        if (request.ClientSelection != null) _ = ModBuild.ParseDependencies(request.ClientSelection.Dependencies, "--client-dependency");
         var inputs = Choose(request);
         string? cliManifest = request.Route == Route.Build ? null : inputs.CliManifest;
         if (request.Route != Route.Build)
@@ -543,12 +545,12 @@ internal static class ModInputStage
 
     // The selected mod files exist, and recorded build inputs still match this game and the chosen loader; their pinned
     // third-party files become exact search roots.
-    private static ModBuild.BuildRecord? CheckMod(IReadOnlyList<string> mods, string? buildInputs, string game, string core, List<string> roots)
+    private static ModBuild.BuildRecord? CheckMod(IReadOnlyList<string> mods, string? buildInputs, string game, string core, List<string> roots, string prefix = "--")
     {
         foreach (string mod in mods)
-            if (!File.Exists(mod)) throw new FileNotFoundException("--mod file does not exist: " + mod, mod);
+            if (!File.Exists(mod)) throw new FileNotFoundException(prefix + "mod file does not exist: " + mod, mod);
         if (buildInputs == null) return null;
-        if (mods.Count != 1) throw new ArgumentException("--build-inputs requires exactly one --mod DLL.");
+        if (mods.Count != 1) throw new ArgumentException(prefix + "build-inputs requires exactly one " + prefix + "mod DLL.");
         var verified = ModBuild.Verify(buildInputs, game, mods[0]);
         roots.AddRange(ModBuild.ThirdPartyRoots(verified));
         Console.WriteLine("build inputs verified: " + buildInputs);

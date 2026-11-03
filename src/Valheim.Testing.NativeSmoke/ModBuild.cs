@@ -17,14 +17,14 @@ internal static partial class ModBuild
     internal sealed record Inputs(string Project, string Game, string Managed, string Core,
         string Output, IReadOnlyList<string> Publicize, IReadOnlyDictionary<string, string> Dependencies);
 
-    internal static Dictionary<string, string> ParseDependencies(IEnumerable<string> values)
+    internal static Dictionary<string, string> ParseDependencies(IEnumerable<string> values, string option = "--dependency")
     {
         var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (string value in values)
         {
             int equal = value.IndexOf('=');
             if (equal < 1 || equal == value.Length - 1 || !result.TryAdd(value[..equal], value[(equal + 1)..]))
-                throw new ArgumentException("--dependency must be a unique NAME=DLL pair.");
+                throw new ArgumentException(option + " must be a unique NAME=DLL pair.");
         }
         return result;
     }

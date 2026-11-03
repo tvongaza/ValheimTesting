@@ -34,6 +34,12 @@ public sealed class SmokeCommandOptionsTests
         Assert.False(ServerLoad.TryRead(["--mod", "server.dll", "--bake-fixture", "new", "--assert-command", "probe", "--assert-line", "READY"], out _, out _));
     }
 
+    [Fact] public void AMalformedClientDependencyNamesTheClientOption()
+    {
+        Assert.False(ServerLoad.TryRead(["--mod", "server.dll", "--client-project", "mod.csproj", "--client-dependency", "broken"], out _, out string error));
+        Assert.Contains("--client-dependency must be", error);
+    }
+
     public static IEnumerable<object[]> BadClientSelections()
     {
         yield return [new[] { "--client-project", "mod.csproj", "--client-mod", "mod.dll" }];
