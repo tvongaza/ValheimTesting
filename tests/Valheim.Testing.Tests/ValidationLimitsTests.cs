@@ -825,9 +825,20 @@ public sealed class ValidationLimitsTests : IClassFixture<ValidationLimitsTests.
                         var observerStart = StartHelper("observe", directory);
                         observerStart.ArgumentList.Add(command.Id.ToString());
                         observerStart.ArgumentList.Add(commandStart.ToString());
+                        // Keep the observer's own error: an unhandled exception otherwise reaches CI only as exit 0xE0434352/134.
+                        observerStart.RedirectStandardError = true;
                         using var observer = Process.Start(observerStart)!;
                         long observerIdentity = OwnedClientCommandLease.LocalStartUtcTicks(observer);
-                        try { await observer.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(3)); Assert.Equal(0, observer.ExitCode); }
+                        Task<string> observerErrors = observer.StandardError.ReadToEndAsync();
+                        try
+                        {
+                            await observer.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(3));
+                            string errors;
+                            try { errors = await observerErrors.WaitAsync(TimeSpan.FromSeconds(1)); }
+                            catch (TimeoutException) { errors = "(observer stderr still open)"; }
+                            Assert.True(observer.ExitCode == 0, FormattableString.Invariant(
+                                $"independent observer exited {observer.ExitCode} at {elapsed.Elapsed.TotalSeconds:F1} s: {errors}"));
+                        }
                         finally { StopIdentity(observer.Id, observerIdentity); }
                         graph = ReadGraph(Path.Combine(directory, "observed-graph.json"));
                         Assert.Contains(graph, item => item.Pid == command.Id && item.StartUtcTicks == commandStart);
