@@ -358,7 +358,11 @@ public sealed partial class HostedServerRunTests : IDisposable
         var spec = FakeServerHost.Spec(start.Variables["spec"]);
         Assert.Contains(("exe", game + "/" + GameLaunch.ServerMacExecutable), spec);
         Assert.Contains(("dir", owned), spec);
-        Assert.Equal(owned, start.Variables["logroot"]);
+        // What the Mac start script runs: $runtime/$exe from $workdir, and Unity's -logFile where keep fetches it from.
+        Assert.Equal((game, GameLaunch.ServerMacExecutable, owned, owned),
+            (start.Variables["runtime"], start.Variables["exe"], start.Variables["workdir"], start.Variables["logroot"]));
+        var arguments = spec.Where(line => line.Kind == "arg").Select(line => line.Text).ToList();
+        Assert.Equal(owned + "/" + GameLaunch.UnityLogName, arguments[arguments.IndexOf("-logFile") + 1]);
         Assert.Contains("stop", host.Scripts);
         Assert.Contains("keep", host.Scripts);
         Assert.Contains(host.Runs, run => run.Script == "fetch" && run.Variables["dir"] == RunDirectory + "/boot-1");
