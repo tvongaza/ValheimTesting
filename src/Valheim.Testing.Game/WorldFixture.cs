@@ -112,7 +112,7 @@ public sealed class WorldFixture : IDisposable
                 Verify(source, actual); // an earlier source file may change while a later file is copied
                 afterSourceVerification?.Invoke(target);
             }
-            var observed = VerifyObserved(target, actual);
+            var observed = VerifyObserved(target, actual, copiedFrom: source);
             if (admission != null)
             {
                 string prefix = worldRoot.Length == 0 ? "" : worldRoot + Path.DirectorySeparatorChar;
@@ -136,23 +136,28 @@ public sealed class WorldFixture : IDisposable
     internal static void Verify(string source, IReadOnlyDictionary<string, string> expectedHashes, bool copied) =>
         _ = VerifyObserved(source, expectedHashes, copied);
 
-    internal static Dictionary<string, string> VerifyObserved(string source, IReadOnlyDictionary<string, string> expectedHashes, bool copied = false)
+    // copiedFrom names the original when source is a copy just made from it: a mismatch then means the copy, not the pin, is wrong.
+    internal static Dictionary<string, string> VerifyObserved(string source, IReadOnlyDictionary<string, string> expectedHashes, bool copied = false,
+        string? copiedFrom = null)
     {
         if (expectedHashes.Count == 0) throw new ArgumentException("A pinned fixture manifest is required.");
         source = Path.GetFullPath(source);
         if (!Directory.Exists(source)) throw new DirectoryNotFoundException("Fixture source does not exist: " + source);
         var actual = Hashes(source, []);
         if (copied && !expectedHashes.ContainsKey(ProvenanceFile)) actual.Remove(ProvenanceFile);
-        RequireHashes(source, actual, expectedHashes);
+        RequireHashes(source, actual, expectedHashes, copiedFrom);
         return actual;
     }
 
-    internal static void RequireHashes(string source, IReadOnlyDictionary<string, string> actual, IReadOnlyDictionary<string, string> expectedHashes)
+    internal static void RequireHashes(string source, IReadOnlyDictionary<string, string> actual, IReadOnlyDictionary<string, string> expectedHashes,
+        string? copiedFrom = null)
     {
         var problems = expectedHashes.Keys.Where(key => !actual.ContainsKey(key)).Order(StringComparer.Ordinal).Select(key => key + " is missing")
             .Concat(actual.Keys.Where(key => !expectedHashes.ContainsKey(key)).Order(StringComparer.Ordinal).Select(key => key + " is not in the manifest"))
             .Concat(actual.Where(item => expectedHashes.TryGetValue(item.Key, out var hash) && !string.Equals(item.Value, hash, StringComparison.OrdinalIgnoreCase))
                 .OrderBy(item => item.Key, StringComparer.Ordinal).Select(item => $"{item.Key} is {item.Value}, pinned {expectedHashes[item.Key]}")).ToList();
+        if (problems.Count != 0 && copiedFrom != null)
+            throw new InvalidOperationException($"Fixture copy {source} does not match {copiedFrom} as observed before copying: {string.Join("; ", problems)}. A source file changed while it was copied, or the copy was corrupted; check the source and copy it again.");
         if (problems.Count != 0)
             throw new InvalidOperationException($"Fixture hash mismatch in {source}: {string.Join("; ", problems)}. The fixture changed after it was pinned, or the plan names another one; build the manifest from the exact directory (WorldFixture.Manifest).");
     }

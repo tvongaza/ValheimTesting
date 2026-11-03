@@ -84,14 +84,16 @@ public class ToolkitTests
         string unrelated = Path.Combine(dirs.Output, "unrelated.txt"); File.WriteAllText(unrelated, "keep");
         var pins = WorldFixture.Manifest(dirs.Source);
         string? first = null; int copies = 0;
-        Assert.Throws<InvalidOperationException>(() => WorldFixture.Copy(dirs.Source, dirs.Output, pins, (from, to) =>
+        string error = Assert.Throws<InvalidOperationException>(() => WorldFixture.Copy(dirs.Source, dirs.Output, pins, (from, to) =>
         {
             File.Copy(from, to);
             if (++copies == 1) first = to;
             else if (fault == "changed") File.WriteAllText(first!, "changed earlier destination");
             else if (fault == "missing") File.Delete(first!);
             else File.WriteAllText(Path.Combine(Path.GetDirectoryName(to)!, "extra.db"), "unexpected");
-        }));
+        })).Message;
+        // The copy, not the pin, is wrong: the message names the source and never advises rebuilding the manifest.
+        Assert.Contains("as observed before copying", error); Assert.Contains(dirs.Source, error); Assert.DoesNotContain("build the manifest", error);
         Assert.Equal(2, copies); Assert.Empty(Directory.GetDirectories(dirs.Output));
         Assert.Equal("keep", File.ReadAllText(unrelated)); WorldFixture.Verify(dirs.Source, pins);
         var records = Directory.EnumerateFiles(journalPath, "*.jsonl", SearchOption.AllDirectories)

@@ -156,7 +156,7 @@ internal static class FixtureBake
             WorldFixture.Verify(source, manifest); // a file already copied may change while later files are copied
             if (admission != null) VerifyManifestAdmission(admission);
             afterSourceVerification?.Invoke(target);
-            var observedCopy = WorldFixture.VerifyObserved(target, manifest);
+            var observedCopy = WorldFixture.VerifyObserved(target, manifest, copiedFrom: source);
             var copyAdmission = worldAdmission?.ForObservedCopy(target, observedCopy);
             var copied = copyAdmission?.Identity ?? WorldIdentity.ReadObserved(target, observedCopy);
             if (copied != identity)

@@ -392,7 +392,7 @@ internal static class DetachedSession
             Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
             File.Copy(Path.Combine(source, relative), destination);
         }
-        var observed = WorldFixture.VerifyObserved(target, manifest);
+        var observed = WorldFixture.VerifyObserved(target, manifest, copiedFrom: source);
         // Callers with retained pins own the later original-input check across staging.
         if (pinned == null) WorldFixture.Verify(source, manifest);
         return observed;
