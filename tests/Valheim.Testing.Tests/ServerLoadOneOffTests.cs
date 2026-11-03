@@ -75,6 +75,89 @@ public sealed class ServerLoadOneOffTests : IDisposable
         Assert.False(record.GetProperty("environment").TryGetProperty(SmokeSessionContract.SessionTokenVariable, out _));
     }
 
+    [ClientHostTheory] [InlineData(false)] [InlineData(true)]
+    public async Task ExplicitClientHasIndependentSameGuidBuildAndRolePayloads(bool sameBuild)
+    {
+        using var clientRig = new RegressionRig();
+        string output = Path.Combine(_rig.Root, "two-role-inputs");
+        string clientMod = sameBuild ? _rig.Parent : _rig.Candidate;
+        string serverConfig = _rig.Write("inputs/same.cfg", Encoding.UTF8.GetBytes("server bytes"));
+        string clientConfig = clientRig.Write("inputs/same.cfg", Encoding.UTF8.GetBytes("client bytes"));
+        string serverAsset = _rig.Write("inputs/data.json", Encoding.UTF8.GetBytes("server asset"));
+        string clientAsset = clientRig.Write("inputs/data.json", Encoding.UTF8.GetBytes("client asset"));
+        string serverOnly = _rig.Write("extra/ServerOnly.dll", RegressionRig.Assembly("ServerOnly", new("example.serveronly")));
+        int campaigns = 0;
+        int result = await ServerLoad.RunAsync(Arguments(output, "--client", clientRig.Game,
+            "--mod", serverOnly, "--client-mod", clientMod, "--client-search-root", Path.Combine(clientRig.Root, "deps"),
+            "--config", serverConfig, "--client-config", clientConfig, "--plugin-file", serverAsset, "--client-plugin-file", clientAsset,
+            "--env", "SHARED_SETTING=" + ExplicitRunInputsTests.Opaque), new ServerLoad.Seams(
+            ClientArchitecture: (_, _, _, _) => { }, Inspect: file =>
+            {
+                var preflight = HostedCampaignPreparation.Inspect(file);
+                Assert.DoesNotContain(preflight.Problems, problem => problem.Input is "manifest" or "files" or "dependencies");
+                return Task.FromResult(Ready);
+            }, Campaign: (file, server, bind, _, options) =>
+            {
+                campaigns++;
+                var campaign = HostedCampaignManifest.Read(file); var role = campaign.Clients["client"];
+                var serverLock = NativeDependencyLock.ReadReady(campaign.Server!.DependencyLock);
+                var clientLock = NativeDependencyLock.ReadReady(role.DependencyLock);
+                Assert.Equal(FileHash.Sha256(_rig.Parent), serverLock.Mods[0].Sha256);
+                Assert.Equal(FileHash.Sha256(clientMod), Assert.Single(clientLock.Mods).Sha256);
+                Assert.Equal(sameBuild, serverLock.Mods[0].Sha256 == clientLock.Mods[0].Sha256);
+                Assert.Contains(clientLock.Plugins, dependency => dependency.File.StartsWith(clientRig.Root, StringComparison.Ordinal));
+                var client = Assert.Single(bind(server)).Value;
+                Assert.Equal("absent", client.Pins["example.serveronly"]);
+                Assert.False(client.Pins.ContainsKey("example.mod")); Assert.False(client.Pins.ContainsKey("example.dependency"));
+                Assert.Equal(server.Environment["SHARED_SETTING"], client.Environment["SHARED_SETTING"]);
+                Assert.False(client.Environment.ContainsKey(SmokeSessionContract.SelectedGuidsVariable));
+                Assert.DoesNotContain(role.Files, payload => Path.GetFileName(payload.Source) == "NativeSmoke.SessionAdapter.dll");
+                var sc = Assert.Single(campaign.Server.Files, payload => payload.RelativePath == "BepInEx/config/same.cfg");
+                var cc = Assert.Single(role.Files, payload => payload.RelativePath == "BepInEx/config/same.cfg");
+                Assert.NotEqual(sc.Source, cc.Source); Assert.Equal("server bytes", File.ReadAllText(sc.Source)); Assert.Equal("client bytes", File.ReadAllText(cc.Source));
+                Assert.Equal(FileHash.Sha256(clientConfig), cc.ExpectedSha256);
+                Assert.Equal("client asset", File.ReadAllText(Assert.Single(role.Files, payload => payload.RelativePath == "BepInEx/plugins/data.json").Source));
+                var pins = HostedCampaignPreparation.PluginPins("client", [new HostedRuntimeFile(clientMod, "BepInEx/plugins/ExampleMod.dll")]);
+                Assert.Equal(Convert.ToHexString(System.Security.Cryptography.MD5.HashData(File.ReadAllBytes(clientMod))).ToLowerInvariant(), pins["example.mod"]);
+                Assert.Throws<InvalidDataException>(() => HostedCampaignPreparation.PluginPins("client",
+                    [new HostedRuntimeFile(clientMod, "BepInEx/plugins/one.dll"), new HostedRuntimeFile(_rig.Parent, "BepInEx/plugins/two.dll")]));
+                var provenance = new Dictionary<string, string>(); options.Provenance!(server, provenance);
+                Assert.Equal("client", JsonDocument.Parse(File.ReadAllText(provenance["clientRunInputs"])).RootElement.GetProperty("configRole").GetString());
+                return Task.FromResult(0);
+            }));
+        Assert.Equal(0, result); Assert.Equal(1, campaigns);
+        Assert.Equal("server bytes", File.ReadAllText(serverConfig)); Assert.Equal("client bytes", File.ReadAllText(clientConfig));
+        Assert.True(File.Exists(Path.Combine(output, "client", "selected-plugins.json")));
+    }
+
+    [ClientHostTheory] [InlineData("config")] [InlineData("record")] [InlineData("plugin")]
+    public async Task ChangedClientInputDuringAsynchronousInspectionRefusesBeforeCampaign(string change)
+    {
+        using var clientRig = new RegressionRig(); string output = Path.Combine(_rig.Root, "changed-client-" + change);
+        string config = clientRig.Write("inputs/mod.cfg", Encoding.UTF8.GetBytes("original")); int campaigns = 0;
+        int result = await ServerLoad.RunAsync(Arguments(output, "--client", clientRig.Game, "--client-mod", _rig.Candidate,
+            "--client-search-root", Path.Combine(clientRig.Root, "deps"), "--client-config", config), new ServerLoad.Seams(
+            ClientArchitecture: (_, _, _, _) => { }, Inspect: async file =>
+            {
+                await Task.Yield();
+                var role = HostedCampaignManifest.Read(file).Clients["client"];
+                string changed = change == "config" ? Assert.Single(role.Files).Source
+                    : change == "record" ? Path.Combine(output, "client", "run-inputs.json") : _rig.Candidate;
+                File.AppendAllText(changed, "changed after admission"); return Ready;
+            }, Campaign: (_, _, _, _, _) => { campaigns++; return Task.FromResult(0); }));
+        Assert.Equal(3, result); Assert.Equal(0, campaigns); Assert.False(File.Exists(Path.Combine(output, "client-plan.json")));
+        Assert.Equal("original", File.ReadAllText(config));
+    }
+
+    [ClientHostFact] public async Task ClientResolutionNeverBorrowsTheServersDependencySearchRoots()
+    {
+        using var clientRig = new RegressionRig(); string output = Path.Combine(_rig.Root, "no-client-fallback");
+        Assert.Equal(3, await ServerLoad.RunAsync(Arguments(output, "--client", clientRig.Game, "--client-mod", _rig.Candidate),
+            new ServerLoad.Seams(ClientArchitecture: (_, _, _, _) => { }, Inspect: _ => throw new Xunit.Sdk.XunitException("Unresolved client reached campaign preflight"))));
+        Assert.False(File.Exists(Path.Combine(output, "campaign.json")));
+        Assert.Contains("example.dependency", File.ReadAllText(Path.Combine(output, "REFUSED.txt")));
+    }
+
     [Theory]
     [InlineData("config")]
     [InlineData("record")]

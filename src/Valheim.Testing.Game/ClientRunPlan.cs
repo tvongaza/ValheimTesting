@@ -329,8 +329,24 @@ public sealed class ClientRunPlan
     public void Preflight(IEnumerable<string> capabilities)
     {
         ArgumentNullException.ThrowIfNull(capabilities);
+        if (HostWorld?.Create is { } request)
+        {
+            Validate(); RequireCreationRoute();
+            CheckOwnedInstall(request.Name, capabilities);
+            return;
+        }
         var identity = HostWorld?.Preflight();
         if (Owned) CheckOwnedInstall(identity?.Name, capabilities);
+    }
+
+    internal RunManifest? RunManifestState { get; set; }
+    internal void RequireCreationRoute()
+    {
+        if (!Owned || InPlace || Host is not ("127.0.0.1" or "localhost"))
+            throw new InvalidOperationException("Seeded worlds require one owned local profile client; attached/in-place/remote routes are not supported.");
+        if (GameLaunch.CurrentClientHost == ClientPlatform.Linux)
+            throw new PlatformNotSupportedException("Seeded hosted clients currently support owned Windows and macOS clients only.");
+        ClientSession.RefuseSeededStartupVariables(Environment);
     }
 
     /// <summary>

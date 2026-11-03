@@ -181,6 +181,8 @@ internal static class DetachedSession
     internal static bool TryServerArgs(string[] args, out string output, out string error)
     {
         output = ""; error = "";
+        if (args.Any(SmokeCommandOptions.ClientRoleOptions.Contains))
+        { error = "Detached server-load supports no client mod inputs or client assertions; use foreground server-load."; return false; }
         if (args.Contains("--hold") || args.Contains("--preflight-only") || args.Contains("--bake-fixture"))
         { error = "detach owns the hold; preflight-only and fixture export cannot be held."; return false; }
         if (args.Count(arg => arg == "--output") != 1 || args.Count(arg => arg == "--server") != 1 ||

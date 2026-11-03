@@ -9,7 +9,7 @@ using Valheim.Testing.GameSessions;
 
 /// <summary>
 /// The one-off native check for a mod: its server load on an owned dedicated server and, unless <c>--server-only</c>, one
-/// clean client's join with the mod absent. The actors come from the environment inventory (this machine with no file):
+/// client's join (CLI-only by default, or with explicitly selected client mods). The actors come from the environment inventory (this machine with no file):
 /// its first server and first client environment, the packaged smoke world and the packaged disposable character, run as
 /// a campaign whose derived <c>campaign.json</c> is written into the output. Nothing has to be written by hand.
 /// </summary>
@@ -17,7 +17,7 @@ internal static class ServerLoad
 {
     internal static readonly string Usage = "valheim-test server-load [--mod DLL ... | --project MOD.csproj] [--scenario TEST.dll | --scenario-project TEST.csproj] [--adapter DLL | --adapter-project ADAPTER.csproj] [--adapter-property NAME={mod}|{cli} ...] [--session-capability OWNER/session --session-token-variable NAME] [--dependency NAME=DLL ...] [--output NEW_DIR] [--inventory FILE | --server DIR] [--client DIR] " +
         $"[--server-env NAME] [--client-env NAME] [--client-architecture x64|arm64] [--server-only] [--server-startup-seconds 1..{ServerRunPlan.MaximumStartupSeconds}] [--world-fixture DIR] [--bake-fixture NEW_DIR] [--before-save-command TEXT --before-save-line PREFIX] [--assert-command TEXT --assert-line PREFIX] [--join HOST:PORT] [--join-seconds 10..900] [--preflight-only] [--hold] [--loader-package FILE] [--steam-runtime-package FILE] [--client-loader-package FILE] " +
-        "[--build-inputs FILE] [--cli-manifest FILE --cli-files DIR] [--search-root DIR|DLL ...] [--config FILE ...] [--env NAME=VALUE ...] [--plugin-file FILE ...] [--plugin-dir DIR ...] " +
+        "[--client-mod DLL ... | --client-project MOD.csproj] [--client-build-inputs FILE] [--client-dependency NAME=DLL ...] [--client-search-root DIR|DLL ...] [--client-optional-reference ASSEMBLY ...] [--client-config FILE ...] [--client-plugin-file FILE ...] [--client-plugin-dir DIR ...] [--client-assert-command TEXT --client-assert-line PREFIX] [--build-inputs FILE] [--cli-manifest FILE --cli-files DIR] [--search-root DIR|DLL ...] [--config FILE ...] [--env NAME=VALUE ...] [--plugin-file FILE ...] [--plugin-dir DIR ...] " +
         "[--optional-reference ASSEMBLY ...] [--expected-log-error EXACT_HEADER --expected-log-reason REASON]";
 
     /// <summary>The parsed command line: single options, repeatable inputs and switches.</summary>
@@ -27,6 +27,7 @@ internal static class ServerLoad
         public List<string> Mods { get; } = [];
         public List<string> Roots { get; } = [];
         public List<string> Configs { get; } = [];
+        public ModInputStage.RoleSelection? ClientSelection { get; init; }
         public ModInputStage.ExplicitInputs RunInputs { get; init; } = ModInputStage.ExplicitInputs.Empty;
         public List<string> PluginFiles { get; } = [];
         public List<string> PluginDirectories { get; } = [];
@@ -92,7 +93,8 @@ internal static class ServerLoad
                 InitialHostingBuild = seams.InitialHostingBuild ?? DetachedSession.PinnedHostingBuild(),
                 InitialWorldAdmission = seams.InitialWorldAdmission ?? DetachedSession.PinnedWorldAdmission(),
                 Shipped = seams.Loader, FrozenServerLoader = seams.FrozenServerLoader, ClientArchitecture = seams.ClientArchitecture, Progress = state,
-                RunInputs = parsed.RunInputs,
+                RunInputs = parsed.RunInputs, PluginFiles = parsed.PluginFiles, PluginDirectories = parsed.PluginDirectories,
+                ClientSelection = parsed.ClientSelection,
             }, cancel.Token).ConfigureAwait(false);
             return await RunCampaignAsync(parsed, inputs, output, clock, seams, state, cancel.Token).ConfigureAwait(false);
         }
@@ -200,30 +202,11 @@ internal static class ServerLoad
         adapter ??= await SmokeAdapter.BuildAsync(serverInstall, dependencies, output, cancellation, core).ConfigureAwait(false);
 
         fixture.CopyAdmission!.Verify();
-        // The server's own files beside its lock: the session adapter, explicit configs and plugin sidecars.
+        // Both roles use the stage's shared retained-config/companion mapping; only the server receives the adapter.
         var files = new List<HostedRuntimeFile> { new(adapter, "BepInEx/plugins/" + Path.GetFileName(adapter)) };
         inputs.RunInputs.Verify();
-        foreach (var config in inputs.RunInputs.Configs)
-        {
-            files.Add(new HostedRuntimeFile(config.File, "BepInEx/config/" + config.Destination) { ExpectedSha256 = config.Sha256 });
-        }
-        foreach (string sidecar in parsed.PluginFiles.Select(Path.GetFullPath))
-        {
-            if (Path.GetExtension(sidecar).Equals(".dll", StringComparison.OrdinalIgnoreCase))
-                throw new InvalidDataException("Plugin DLLs belong in --mod or a dependency search root, not a sidecar: " + sidecar);
-            files.Add(new HostedRuntimeFile(sidecar, "BepInEx/plugins/" + Path.GetFileName(sidecar)));
-        }
-        foreach (string directory in parsed.PluginDirectories.Select(path => Path.TrimEndingDirectorySeparator(Path.GetFullPath(path))))
-        {
-            if (!Directory.Exists(directory)) throw new DirectoryNotFoundException("An explicitly selected plugin sidecar directory is missing: " + directory);
-            foreach (string relative in WorldFixture.Manifest(directory).Keys.Order(StringComparer.Ordinal))
-            {
-                if (Path.GetExtension(relative).Equals(".dll", StringComparison.OrdinalIgnoreCase))
-                    throw new InvalidDataException("Plugin sidecar directories cannot contain DLLs; select each plugin or library through dependency resolution.");
-                files.Add(new HostedRuntimeFile(Path.Combine(directory, relative),
-                    "BepInEx/plugins/" + Path.GetFileName(directory) + "/" + relative.Replace(Path.DirectorySeparatorChar, '/')));
-            }
-        }
+        files.AddRange(inputs.Files);
+        var selectedClient = inputs.ClientMods;
         var selectedGuids = dependencies.Mods.SelectMany(file => PluginMetadata.Read(file.File).Plugins).Select(plugin => plugin.Guid).ToList();
         var serverGuids = dependencies.Mods.Concat(dependencies.Plugins).SelectMany(file => PluginMetadata.Read(file.File).Plugins).Select(plugin => plugin.Guid)
             .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
@@ -241,7 +224,9 @@ internal static class ServerLoad
         };
         if (client?.Recipe is { } clientRecipe)
         {
-            var clientLock = new NativeDependencyLock { CliFiles = dependencies.CliFiles, CliManifest = dependencies.CliManifest };
+            var clientLock = selectedClient?.Dependencies ?? new NativeDependencyLock { CliFiles = dependencies.CliFiles, CliManifest = dependencies.CliManifest };
+            if (selectedClient != null && !clientLock.Mods.SelectMany(file => PluginMetadata.Read(file.File).Plugins).Any())
+                throw new InvalidDataException("No deliberately selected client plugin GUID was found: each --client-mod must declare a BepInEx plugin.");
             string clientLockFile = Path.Combine(output, "client-dependencies.lock.json");
             clientLock.Write(clientLockFile);
             // This run owns a new store built from the embedded unvisited seed. Hosted staging only copies from that
@@ -250,7 +235,7 @@ internal static class ServerLoad
             campaign.Clients["client"] = new HostedCampaignRole
             {
                 DependencyLock = clientLockFile, EnvironmentCandidates = [clientRecipe.Name], LoaderPackage = clientLoader,
-                Architecture = clientArchitecture!,
+                Architecture = clientArchitecture!, Files = selectedClient?.Files.ToList() ?? [],
                 Character = new HostedCampaignCharacter
                 {
                     Store = store.Root, RegisteredName = DefaultSmokeCharacter.Name,
@@ -284,6 +269,9 @@ internal static class ServerLoad
         };
         if (parsed.Options.TryGetValue("--expected-log-error", out string? expectedError))
             plan.LogScan[LogScanner.UnknownError] = new LogClassification { Expected = [expectedError], Reason = parsed.Options["--expected-log-reason"] };
+        var clientGuids = selectedClient == null ? new HashSet<string>(StringComparer.Ordinal)
+            : selectedClient.Dependencies.Mods.Concat(selectedClient.Dependencies.Plugins)
+                .SelectMany(file => PluginMetadata.Read(file.File).Plugins).Select(plugin => plugin.Guid).ToHashSet(StringComparer.Ordinal);
         ClientRunPlan? clientPlan = client == null ? null : new ClientRunPlan
         {
             Mode = "owned", PasswordVariable = SmokeSessionContract.PasswordVariable, Capabilities = [.. ModInputStage.SessionCapabilities],
@@ -291,8 +279,8 @@ internal static class ServerLoad
             Environment = new Dictionary<string, string>(inputs.RunInputs.Environment, StringComparer.Ordinal),
             JoinSeconds = parsed.Options.TryGetValue("--join-seconds", out string? seconds)
                 ? int.Parse(seconds, CultureInfo.InvariantCulture) : 180,
-            // The clean client loads none of the server's plugins.
-            Pins = serverGuids.ToDictionary(guid => guid, _ => "absent", StringComparer.Ordinal),
+            // Only plugins absent from this client's actual selected startup payload are pinned absent here.
+            Pins = serverGuids.Where(guid => !clientGuids.Contains(guid)).ToDictionary(guid => guid, _ => "absent", StringComparer.Ordinal),
         };
         var clients = new Dictionary<string, ClientRunPlan>(StringComparer.Ordinal);
         if (clientPlan != null) clients["client"] = clientPlan;
@@ -301,6 +289,9 @@ internal static class ServerLoad
         var report = await (seams.Inspect ?? (file => HostedCampaignPreparation.InspectAfterLocalPreflightAsync(file,
             HostedTimeouts.Quick, cancellation)))(campaignFile).ConfigureAwait(false);
         inputs.RunInputs.Verify();
+        selectedClient?.RunInputs.Verify();
+        _ = NativeDependencyLock.ReadReady(serverLock);
+        if (client != null) _ = NativeDependencyLock.ReadReady(Path.Combine(output, "client-dependencies.lock.json"));
         foreach (var actor in report.Actors.Where(actor => actor.CharactersDirectory != null))
             Console.WriteLine($"{actor.Name}: characters_local {actor.CharactersDirectory}; Steam userdata {actor.SteamUserDataDirectory}");
         if (!report.Ready)
@@ -351,7 +342,8 @@ internal static class ServerLoad
                     Scenario = serverScenario == null
                         ? (session, plan) => Scenario(session, clientPlan, clock, parsed.Switches.Contains("--hold"), worldUid,
                             bakeDestination != null, parsed.Options.GetValueOrDefault("--before-save-command"), parsed.Options.GetValueOrDefault("--before-save-line"),
-                            parsed.Options.GetValueOrDefault("--assert-command"), parsed.Options.GetValueOrDefault("--assert-line"), dependencies)
+                            parsed.Options.GetValueOrDefault("--assert-command"), parsed.Options.GetValueOrDefault("--assert-line"), dependencies,
+                            parsed.Options.GetValueOrDefault("--client-assert-command"), parsed.Options.GetValueOrDefault("--client-assert-line"), selectedClient != null)
                         : async (session, plan) =>
                         {
                             await Scenario(session, null, clock, false, worldUid, false, null, null, null, null).ConfigureAwait(false);
@@ -389,13 +381,14 @@ internal static class ServerLoad
                 result = 1;
             }
         }
-        Finish(result, mods.Count, clientPlan != null, clock, output);
+        Finish(result, mods.Count, clientPlan != null, clock, output, selectedClient?.Mods.Count);
         return result;
     }
 
     // Loaded with the packaged world, joinable, and (with a client) a clean client reading that world.
-    private static Task Scenario(GameSession session, ClientRunPlan? client, Stopwatch clock, bool hold, string worldUid, bool bake,
-        string? beforeSaveCommand, string? beforeSaveLine, string? assertCommand, string? assertLine, NativeDependencyLock? dependencies = null)
+    internal static Task Scenario(GameSession session, ClientRunPlan? client, Stopwatch clock, bool hold, string worldUid, bool bake,
+        string? beforeSaveCommand, string? beforeSaveLine, string? assertCommand, string? assertLine, NativeDependencyLock? dependencies = null,
+        string? clientAssertCommand = null, string? clientAssertLine = null, bool moddedClient = false)
     {
         var server = session.Server!;
         session.Report.Step("selected server mods loaded and world identity matches", () =>
@@ -411,7 +404,7 @@ internal static class ServerLoad
                 server.Game.Execute(beforeSaveCommand).RequireLine(beforeSaveLine!, "The mod did not confirm its one-time bake command"));
         if (assertCommand != null)
             session.Report.Step("server observation matches the declared assertion", () =>
-                server.Game.Execute(assertCommand).RequireLine(assertLine!, "The server observation did not match the declared assertion"));
+                SmokeAssertion.Execute(server.Game, assertCommand, assertLine!, "server"));
         if (client != null)
         {
             ClientSession? opened = null;
@@ -421,12 +414,15 @@ internal static class ServerLoad
                 OwnedServer = server, Rounds = ["first"], ProtectPlayer = false, Cancellation = session.Cancellation,
             }.Run(server.Game, () => opened = session.OpenClient(client), round =>
             {
-                round.Step("clean client can read the joined world", () =>
+                round.Step((moddedClient ? "modded" : "clean") + " client can read the joined world", () =>
                 {
                     var state = new SessionControl(round.Client).Read();
                     if (!state.WorldReady || !state.PlayerReady || state.WorldUid != worldUid)
-                        throw new InvalidDataException("The clean client has no ready player in the pinned world.");
+                        throw new InvalidDataException("The " + (moddedClient ? "modded" : "clean") + " client has no ready player in the pinned world.");
                 });
+                if (clientAssertCommand != null)
+                    round.Step("client observation matches the declared assertion", () =>
+                        SmokeAssertion.Execute(round.Client, clientAssertCommand, clientAssertLine!, "client"));
                 if (hold)
                     round.Step("keep the owned server and client running until finish", () =>
                         // The client's own evidence folder, where its session published any command lease: the hold's hint names it.
@@ -452,11 +448,11 @@ internal static class ServerLoad
         return Task.CompletedTask;
     }
 
-    private static void Finish(int result, int mods, bool joined, Stopwatch clock, string output) =>
+    private static void Finish(int result, int mods, bool joined, Stopwatch clock, string output, int? clientMods = null) =>
         Console.WriteLine((result == 0 ? (joined ? "SERVER_JOIN_PASS" : "SERVER_LOAD_PASS") : "SERVER_LOAD_FAIL") +
-            $": {mods} selected mod(s), {clock.Elapsed.TotalSeconds:F1}s. " +
+            $": {mods} selected mod(s)" + (clientMods == null ? "" : $" on server, {clientMods} selected mod(s) on client") + $", {clock.Elapsed.TotalSeconds:F1}s. " +
             (result != 0 ? "See the private evidence for the failed check." :
-                joined ? "Clean client joined with selected server mods absent." : "A clean-client join has not run (--server-only).") +
+                joined ? clientMods == null ? "Clean client joined with selected server mods absent." : "Modded client joined with its independently selected plugin set." : "A clean-client join has not run (--server-only).") +
             $" Private evidence ({DiskSpace.Format(DiskSpace.DirectoryBytes(output))}) in {output}");
 
     internal static bool TryRead(string[] args, out Arguments? parsed, out string error, bool allowImplicitMod = false)
@@ -470,7 +466,7 @@ internal static class ServerLoad
 
     internal static Arguments FromParsed(SmokeCommandOptions.Parsed read)
     {
-        var result = new Arguments { RunInputs = read.RunInputs };
+        var result = new Arguments { RunInputs = read.RunInputs, ClientSelection = read.ClientSelection };
         foreach (var (key, value) in read.Options) result.Options.Add(key, value);
         result.Mods.AddRange(read.List("--mod"));
         result.Roots.AddRange(read.List("--search-root"));
