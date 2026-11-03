@@ -296,7 +296,7 @@ internal static class DetachedSession
                     throw new InvalidOperationException("Detached output and staging must be outside each original input directory: " + source);
             if (args[i - 1] == "--world-fixture")
             {
-                var (_, manifest, _) = FixtureBake.Inspect(source);
+                var (_, manifest) = FixtureBake.Paths(source);
                 foreach (string destination in destinations)
                     if (ProtectedPaths.Contains(destination, manifest))
                         throw new InvalidOperationException("Detached staging must be separate from the baked manifest: " + manifest);

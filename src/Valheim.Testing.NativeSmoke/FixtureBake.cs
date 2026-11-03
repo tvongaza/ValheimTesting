@@ -89,14 +89,8 @@ internal static class FixtureBake
 
     /// <summary>
     /// A <c>--world-fixture</c> as every route reads it before anything is staged: the world directory (the fixture itself, or its
-    /// <c>worlds_local/</c>), its baked manifest's path, and the one complete world in it (<see cref="WorldIdentity.Read"/>).
+    /// <c>worlds_local/</c>) and its baked manifest's path. Callers read the one complete world in it against their own observation.
     /// </summary>
-    internal static (string Worlds, string ManifestFile, WorldIdentity Identity) Inspect(string source)
-    {
-        var (worlds, manifestFile) = Paths(source);
-        return (worlds, manifestFile, WorldIdentity.Read(worlds));
-    }
-
     internal static (string Worlds, string ManifestFile) Paths(string source)
     {
         source = Path.TrimEndingDirectorySeparator(Path.GetFullPath(source)); // C:\x\worlds_local\ is worlds_local too
@@ -106,7 +100,7 @@ internal static class FixtureBake
     }
 
     /// <summary>
-    /// <see cref="Inspect"/>, and when the fixture has a <see cref="ManifestFile"/>, its files checked against it: a chosen world
+    /// The world at <see cref="Paths"/>, and when the fixture has a <see cref="ManifestFile"/>, its files checked against it: a chosen world
     /// refused before a run builds or stages anything. <see cref="Prepare"/> checks again as it copies.
     /// </summary>
     internal static WorldIdentity Check(string source)
