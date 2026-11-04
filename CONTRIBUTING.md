@@ -85,6 +85,58 @@ valheim-test init --candidate-feed /absolute/path/ValheimTesting/.packages --out
 
 It still refuses when the feed lacks either exact package.
 
+#### Run a source-built valheim-test
+
+Install the candidate tool into a folder of its own, so the released global tool stays as it is. Give each install a new, empty NuGet package folder ([why](#when-a-cached-package-goes-stale)). Validate first, so `.packages` holds the tool as `Valheim.Testing.NativeSmoke.<Version>-candidate.<id>.nupkg`. On macOS or Linux, from this checkout:
+
+```sh
+export NUGET_PACKAGES="$(mktemp -d)"
+dotnet tool install Valheim.Testing.NativeSmoke --version <Version>-candidate.<id> \
+  --add-source "$PWD/.packages" --tool-path /absolute/path/vt-candidate
+/absolute/path/vt-candidate/valheim-test env preflight
+```
+
+`valheim-test` in that folder is the candidate; every other shell keeps the released tool. If a Homebrew .NET cannot start it, see [Install](docs/packages/Valheim.Testing.NativeSmoke.md#install).
+
+On a remote Windows host, either clone the branch there and run `bootstrap-cli.cs` and `validate.cs` as above (neither launches the game), or copy this checkout's `.packages` folder to it. Then, in PowerShell 7 on that host ([host shells](docs/reference/platforms.md#host-shells)):
+
+```powershell
+$env:NUGET_PACKAGES = Join-Path $env:TEMP ("vt-nuget-" + [guid]::NewGuid())
+dotnet tool install Valheim.Testing.NativeSmoke --version <Version>-candidate.<id> --add-source C:\path\to\packages --tool-path C:\path\to\vt-candidate
+C:\path\to\vt-candidate\valheim-test.exe env preflight
+```
+
+The install prints the tool's version; the preflight checks that host only. To make the candidate the tool every shell runs, replace the global one instead:
+
+```sh
+dotnet tool update --global Valheim.Testing.NativeSmoke --version <Version>-candidate.<id> --add-source /absolute/path/ValheimTesting/.packages
+```
+
+#### When a cached package goes stale
+
+NuGet takes a version it already holds in its global package folder (`~/.nuget/packages`, `%USERPROFILE%\.nuget\packages`) and never checks it against the feed again. The candidate id is a hash of the package inputs, so a changed source gets a new version and a reused candidate version has the same bytes. A cached copy still wins in two cases:
+
+| Case | Why it is stale |
+|---|---|
+| `Valheim.Testing.Cli` after the ValheimCLI fork pin moves | `bootstrap-cli.cs` packs it as `cli-dependency.json`'s `packageVersion`, the released version, so the cache keeps the older transport. The candidate tool and test projects then build against it |
+| A package packed by hand without `validate.cs` | It gets the plain `<Version>`, the same as the release |
+
+Set a new `NUGET_PACKAGES` folder before `bootstrap-cli.cs`, `validate.cs`, the tool install and the mod's `dotnet restore` of that run, and remove it afterwards.
+
+#### Check which build ran
+
+`dotnet tool list --tool-path /absolute/path/vt-candidate` (or `--global`) prints the installed tool's version. <!-- TODO(docs): #955 adds valheim-test --version --> Each run's `result.json` records the toolkit that ran as `Toolkit` ([fields](docs/reference/sessions-pinned-server-run.md#what-ran)). Every package there has a `Version` and a `State`: `candidate` for a `-candidate` build, `released` for a release build, `unreleased` for any other source build, such as a hand pack. `LoadedAssemblies` lists each assembly the process loaded, with its SHA-256 and module id.
+
+#### Switch back to the release
+
+| You used | Switch back |
+|---|---|
+| `--tool-path` | Delete that folder; the global tool never changed |
+| `--global` | `dotnet tool uninstall --global Valheim.Testing.NativeSmoke`, then [install the release](docs/packages/Valheim.Testing.NativeSmoke.md#install) |
+| A mod's test project | Put back the released version from [Package versions](docs/package-versions.md), drop `RestoreAdditionalProjectSources`, and restore |
+
+Delete each run's `NUGET_PACKAGES` folder too.
+
 ## Extend the synthetic world
 
 The synthetic world supplies **declared inputs to real mod code**. It is not a replacement implementation of Unity, Valheim's generator or the terrain compiler.
