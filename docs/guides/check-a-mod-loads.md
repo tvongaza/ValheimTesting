@@ -67,8 +67,8 @@ valheim-test server-load \
 
 | Option | Use it for |
 |---|---|
-| `--plugin-file FILE` | An asset file a mod needs beside its DLL |
-| `--plugin-dir DIR` | A folder of assets a mod needs; DLLs are refused |
+| `--plugin-file FILE` | An asset file a mod needs, staged as `BepInEx/plugins/<file name>`. `start` takes it too |
+| `--plugin-dir DIR` | A folder of assets a mod needs, staged as `BepInEx/plugins/<folder name>/`; DLLs are refused. `start` takes it too |
 | `--search-root DIR\|DLL` | A folder or exact DLL to search for dependencies |
 | `--config FILE` | A known config for the mod-bearing actor: the server here, or the hosting client with `start`. Repeat |
 | `--env NAME=VALUE` | A non-secret, non-empty variable on each owned game process, including any joining client. Repeat for distinct names |

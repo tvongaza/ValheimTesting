@@ -208,16 +208,21 @@ public sealed class ExplicitRunInputsTests : IDisposable
     public void MissingOrLinkedConfigRefusesBeforeRetainingAnything()
     {
         string output = Path.Combine(_rig.Root, "refused");
-        Assert.Throws<FileNotFoundException>(() => ModInputStage.RetainExplicit(
-            ModInputStage.ReadExplicit([Path.Combine(_rig.Root, "missing.cfg")], [], true), ModInputStage.Route.Hosted, output, true));
+        string missing = Path.Combine(_rig.Root, "missing.cfg");
+        Assert.Equal("A selected config or companion file is missing: " + missing, Assert.Throws<FileNotFoundException>(() => ModInputStage.RetainExplicit(
+            ModInputStage.ReadExplicit([missing], [], true), ModInputStage.Route.Hosted, output, true)).Message);
         Assert.False(Directory.Exists(output));
+        string folder = Directory.CreateDirectory(Path.Combine(_rig.Root, "folder.cfg")).FullName;
+        Assert.Contains("is a directory, not a file", Assert.Throws<FileNotFoundException>(() => ModInputStage.PayloadFiles(
+            ModInputStage.RetainedInputs.Empty, [folder], [])).Message);
         string source = _rig.Write("inputs/source.cfg", Encoding.UTF8.GetBytes("setting"));
         string linked = Path.Combine(_rig.Root, "linked.cfg");
         // Symlink privileges are not assumed on Windows; the staging tests there exercise reparse-point admission separately.
         if (OperatingSystem.IsWindows()) return;
         File.CreateSymbolicLink(linked, source);
-        Assert.Throws<FileNotFoundException>(() => ModInputStage.RetainExplicit(
+        var refusal = Assert.Throws<FileNotFoundException>(() => ModInputStage.RetainExplicit(
             ModInputStage.ReadExplicit([linked], [], true), ModInputStage.Route.Hosted, output, true));
+        Assert.Contains("is a link or reparse point", refusal.Message); Assert.EndsWith(linked, refusal.Message);
         Assert.False(Directory.Exists(output));
     }
 
@@ -283,6 +288,87 @@ public sealed class ExplicitRunInputsTests : IDisposable
         Directory.Delete(regression.Install, recursive: true);
         retained.Verify();
         Assert.Equal(File.ReadAllBytes(source), File.ReadAllBytes(Assert.Single(retained.Configs, file => file.Destination == "example.cfg").File));
+    }
+
+    // start takes server-load's --plugin-file/--plugin-dir through the same stage mapping (#969): a mod that ships asset
+    // bundles (a Bundles folder and a manifest file, as More World Locations does) reaches the hosting client's profile.
+    [ClientHostFact]
+    public void StartCompanionFilesReachTheActualRegressionProfileByTheSharedMapping()
+    {
+        string manifest = _rig.Write("mwl/assetBundleManifest_full", Encoding.UTF8.GetBytes("manifest"));
+        string bundle = _rig.Write("mwl/Bundles/meadows/site.bundle", Encoding.UTF8.GetBytes("bundle bytes"));
+        string config = _rig.Write("mwl/example.cfg", Encoding.UTF8.GetBytes("[Settings]\nMessage = selected\n"));
+        string bundles = Path.GetDirectoryName(Path.GetDirectoryName(bundle))!;
+        Assert.True(StartArguments.TryRead(["--mod", _rig.Parent, "--config", config, "--plugin-file", manifest, "--plugin-dir", bundles],
+            out var parsed, out string error), error);
+        Assert.Equal([manifest], parsed!.List("--plugin-file"));
+        Assert.Equal([bundles], parsed.List("--plugin-dir"));
+        var retained = ModInputStage.RetainExplicit(parsed.RunInputs, ModInputStage.Route.Hosted, Path.Combine(_rig.Root, "run"), true);
+        var companions = ModInputStage.Companions(ModInputStage.PayloadFiles(retained, parsed.List("--plugin-file"), parsed.List("--plugin-dir")));
+        // The config travels in regression.json's configs; only the companions are added beside it, with their admitted hashes.
+        Assert.Equal(["Bundles/meadows/site.bundle", "assetBundleManifest_full"], companions.Keys.Order(StringComparer.Ordinal));
+        Assert.Equal(FileHash.Sha256(bundle), companions["Bundles/meadows/site.bundle"].Sha256);
+        var inputs = _rig.Manifest();
+        retained.ApplyTo(inputs);
+        inputs.PluginFiles = companions; // The same assignment Program makes before writing regression.json.
+        string recorded = Path.Combine(_rig.Root, "run", "regression.json");
+        inputs.Write(recorded);
+        var reread = RegressionInputs.Read(recorded); // a consumer of the run's regression.json stages the same companions
+        Assert.Equal(companions["assetBundleManifest_full"].Sha256, reread.PluginFiles!["assetBundleManifest_full"].Sha256);
+        var regression = _rig.Regression(reread);
+        regression.InitialConfigSha256 = retained.Configs.ToDictionary(file => file.Destination, file => file.Sha256, StringComparer.Ordinal);
+        _ = regression.Stage("parent");
+        string plugins = Path.Combine(regression.Install, "BepInEx", "plugins");
+        Assert.Equal("manifest", File.ReadAllText(Path.Combine(plugins, "assetBundleManifest_full")));
+        Assert.Equal("bundle bytes", File.ReadAllText(Path.Combine(plugins, "Bundles", "meadows", "site.bundle")));
+        Assert.Equal(File.ReadAllBytes(config), File.ReadAllBytes(Path.Combine(regression.Install, "BepInEx", "config", "example.cfg")));
+        regression.Remove();
+    }
+
+    [ClientHostFact]
+    public void AStartCompanionChangedAfterAdmissionRefusesAtStaging()
+    {
+        string asset = _rig.Write("inputs/data.json", Encoding.UTF8.GetBytes("admitted"));
+        var inputs = _rig.Manifest();
+        inputs.PluginFiles = ModInputStage.Companions(ModInputStage.PayloadFiles(ModInputStage.RetainedInputs.Empty, [asset], []));
+        var regression = _rig.Regression(inputs);
+        File.AppendAllText(asset, " changed");
+        Assert.Contains("admitted SHA256", Assert.Throws<InvalidDataException>(() => regression.Stage("parent")).Message);
+        Assert.False(Directory.Exists(regression.Install));
+    }
+
+    [Fact]
+    public void ACompanionFileCannotShareAFoldersDestinationAndAnEmptyFolderIsNamed()
+    {
+        string file = _rig.Write("a/Bundles", Encoding.UTF8.GetBytes("file"));
+        _rig.Write("b/Bundles/site.bundle", Encoding.UTF8.GetBytes("bundle"));
+        Assert.Contains("share the destination BepInEx/plugins/Bundles", Assert.Throws<InvalidDataException>(() =>
+            ModInputStage.PayloadFiles(ModInputStage.RetainedInputs.Empty, [file], [Path.Combine(_rig.Root, "b", "Bundles")])).Message);
+        string empty = Directory.CreateDirectory(Path.Combine(_rig.Root, "empty", "Bundles")).FullName;
+        Assert.Contains("sidecar directory has no files: " + empty, Assert.Throws<InvalidDataException>(() =>
+            ModInputStage.PayloadFiles(ModInputStage.RetainedInputs.Empty, [], [empty])).Message);
+    }
+
+    [Theory]
+    [InlineData("")] [InlineData("/abs.bundle")] [InlineData("../up.bundle")] [InlineData("a//b")] [InlineData("Extra.DLL")] [InlineData("a\\b")]
+    public void RegressionPluginFilesRefuseAPathOutsideThePluginsFolderOrADll(string path)
+    {
+        var inputs = _rig.Manifest();
+        inputs.PluginFiles = new() { [path] = new RegressionFile { File = _rig.Write("inputs/x.bin", [1]), Sha256 = new string('a', 64) } };
+        Assert.Contains("pluginFiles", Assert.Throws<ArgumentException>(inputs.Validate).Message);
+        var control = _rig.ControlManifest();
+        control.PluginFiles = new() { ["ok.bin"] = new RegressionFile { File = _rig.Write("inputs/y.bin", [1]), Sha256 = new string('a', 64) } };
+        Assert.Contains("pluginFiles", Assert.Throws<ArgumentException>(control.Validate).Message);
+    }
+
+    [Fact]
+    public void StartTakesPluginSelectionsButNoModRefusesThem()
+    {
+        Assert.True(StartArguments.TryRead(["--mod", "mod.dll", "--plugin-file", "a.json", "--plugin-file", "b.json", "--plugin-dir", "Bundles"],
+            out var parsed, out string error), error);
+        Assert.Equal(["a.json", "b.json"], parsed!.List("--plugin-file"));
+        foreach (string option in new[] { "--plugin-file", "--plugin-dir" })
+            Assert.Contains("--no-mod", Assert.Throws<ArgumentException>(() => { if (!StartArguments.TryRead(["--no-mod", option, "x"], out _, out string refusal)) throw new ArgumentException(refusal); }).Message);
     }
 
     [ClientHostTheory]

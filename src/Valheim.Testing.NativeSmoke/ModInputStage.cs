@@ -100,9 +100,16 @@ internal static class ModInputStage
 
     private static void RequireConfigFile(string file)
     {
-        // Match HostedRuntimeStage's regular-file admission, including its refusal of reparse points.
-        if (!File.Exists(file) || (File.GetAttributes(file) & (FileAttributes.ReparsePoint | FileAttributes.Directory)) != 0)
-            throw new FileNotFoundException("A selected config or companion file is missing or linked: " + file, file);
+        // Match HostedRuntimeStage's regular-file admission, including its refusal of reparse points. The refusal names the
+        // exact path and which rule it broke; a link is reported as a link even when it is dangling or points at a folder.
+        FileAttributes attributes;
+        try { attributes = File.GetAttributes(file); }
+        catch (Exception error) when (error is FileNotFoundException or DirectoryNotFoundException)
+        { throw new FileNotFoundException("A selected config or companion file is missing: " + file, file); }
+        if ((attributes & FileAttributes.ReparsePoint) != 0)
+            throw new FileNotFoundException($"A selected config or companion file is a link or reparse point ({attributes}); copy it as a plain file: " + file, file);
+        if ((attributes & FileAttributes.Directory) != 0)
+            throw new FileNotFoundException("A selected config or companion file is a directory, not a file: " + file, file);
     }
 
     internal static RetainedInputs RetainExplicit(ExplicitInputs selected, Route route, string output, bool withClient, string? role = null)
@@ -536,32 +543,51 @@ internal static class ModInputStage
             Dependencies = resolved.Dependencies, ClientMods = resolvedClient };
     }
 
-    // Companion files and retained configs have one mapping/admission rule for both roles.
+    private const string ConfigFolder = "BepInEx/config/";
+    internal const string PluginFolder = "BepInEx/plugins/";
+
+    // Companion files and retained configs have one mapping/admission rule for every role and command (start, server-load).
+    // A --plugin-file goes to BepInEx/plugins/<name>; a --plugin-dir to BepInEx/plugins/<folder name>/<its tree>. Neither goes
+    // into the selected mod's own subfolder: the mod DLLs themselves are staged flat in BepInEx/plugins (#961).
     internal static IReadOnlyList<HostedRuntimeFile> PayloadFiles(RetainedInputs inputs, IReadOnlyList<string> files, IReadOnlyList<string> directories)
     {
         inputs.Verify();
-        var result = inputs.Configs.Select(config => new HostedRuntimeFile(config.File, "BepInEx/config/" + config.Destination)
+        var result = inputs.Configs.Select(config => new HostedRuntimeFile(config.File, ConfigFolder + config.Destination)
             { ExpectedSha256 = config.Sha256 }).ToList();
-        void Add(string source, string relative)
+        void Add(string source, string relative, string? sha256 = null)
         {
             if (Path.GetExtension(source).Equals(".dll", StringComparison.OrdinalIgnoreCase))
                 throw new InvalidDataException("Plugin DLLs belong in selected mods or dependency resolution, not a sidecar: " + source);
             RequireConfigFile(source);
             HostedRuntimeStage.ValidatePayloadPath(relative);
-            result.Add(new HostedRuntimeFile(source, relative) { ExpectedSha256 = FileHash.Sha256(source) });
+            result.Add(new HostedRuntimeFile(source, relative) { ExpectedSha256 = sha256 ?? FileHash.Sha256(source) });
         }
-        foreach (string file in files.Select(Path.GetFullPath)) Add(file, "BepInEx/plugins/" + Path.GetFileName(file));
+        foreach (string file in files.Select(Path.GetFullPath)) Add(file, PluginFolder + Path.GetFileName(file));
         foreach (string directory in directories.Select(path => Path.TrimEndingDirectorySeparator(Path.GetFullPath(path))))
         {
             if (!Directory.Exists(directory)) throw new DirectoryNotFoundException("An explicitly selected plugin sidecar directory is missing: " + directory);
             FileHash.RefuseLink(directory);
-            foreach (string relative in WorldFixture.Manifest(directory).Keys.Order(StringComparer.Ordinal))
-                Add(Path.Combine(directory, relative), "BepInEx/plugins/" + Path.GetFileName(directory) + "/" + relative.Replace(Path.DirectorySeparatorChar, '/'));
+            if (!Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories).Any())
+                throw new InvalidDataException("An explicitly selected plugin sidecar directory has no files: " + directory);
+            // The manifest's hashes are the admitted bytes; staging checks each copy against them.
+            foreach (var (relative, sha256) in WorldFixture.Manifest(directory).OrderBy(entry => entry.Key, StringComparer.Ordinal))
+                Add(Path.Combine(directory, relative), PluginFolder + Path.GetFileName(directory) + "/" + relative.Replace(Path.DirectorySeparatorChar, '/'), sha256);
         }
         if (result.Select(file => file.RelativePath).Distinct(StringComparer.OrdinalIgnoreCase).Count() != result.Count)
             throw new InvalidDataException("Config and companion destinations must be unique within each role.");
+        // A file cannot also be a folder: --plugin-file a/Bundles beside --plugin-dir b/Bundles would fail mid-staging.
+        var targets = result.Select(file => file.RelativePath).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (string target in targets)
+            for (int slash = target.IndexOf('/', PluginFolder.Length); slash > 0; slash = target.IndexOf('/', slash + 1))
+                if (targets.Contains(target[..slash]))
+                    throw new InvalidDataException($"A companion file and a companion folder share the destination {target[..slash]}; rename one.");
         return result;
     }
+
+    /// <summary>The companion files of a role's payload, by their path under <c>BepInEx/plugins</c> (the configs travel separately).</summary>
+    internal static Dictionary<string, RegressionFile> Companions(IReadOnlyList<HostedRuntimeFile> files) => files
+        .Where(file => file.RelativePath.StartsWith(PluginFolder, StringComparison.Ordinal))
+        .ToDictionary(file => file.RelativePath[PluginFolder.Length..], file => new RegressionFile { File = file.Source, Sha256 = file.ExpectedSha256! }, StringComparer.Ordinal);
 
     private static void RequireNoModRequest(Request request)
     {
@@ -574,7 +600,8 @@ internal static class ModInputStage
         if (request.Route != Route.Hosted) throw new ArgumentException("--no-mod is supported only by start.");
         var supplied = request.Options.Keys.ToHashSet(StringComparer.Ordinal);
         foreach (var (key, count) in new[] { ("--mod", request.Mods.Count), ("--search-root", request.SearchRoots.Count),
-            ("--optional-reference", request.OptionalReferences.Count), ("--dependency", request.Dependencies.Count) })
+            ("--optional-reference", request.OptionalReferences.Count), ("--dependency", request.Dependencies.Count),
+            ("--plugin-file", request.PluginFiles.Count), ("--plugin-dir", request.PluginDirectories.Count) })
             if (count != 0) supplied.Add(key);
         SmokeCommandOptions.RequireNoModInputs(supplied);
     }
