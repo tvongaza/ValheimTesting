@@ -329,6 +329,8 @@ public sealed class TargetedRegression
         selected.AddRange(patchers.Select(file => new HostedRuntimeFile(file.File.File, "BepInEx/patchers/" + Path.GetFileName(file.File.File))));
         selected.AddRange(env.Configs.Select(file => new HostedRuntimeFile(file.Value, "BepInEx/config/" + file.Key)
         { ExpectedSha256 = InitialConfigSha256?.GetValueOrDefault(file.Key) }));
+        selected.AddRange((env.PluginFiles ?? []).Select(file => new HostedRuntimeFile(file.Value.File, "BepInEx/plugins/" + file.Key)
+        { ExpectedSha256 = file.Value.Sha256 }));
         string generatedConfig = Path.Combine(Path.GetTempPath(), "vt-regression-" + Guid.NewGuid().ToString("N") + ".cfg");
         // The regression client hosts its own world (below), so it is not a joined client and needs no mutation access.
         selected = CliServerConfig.Stage(selected, "Regression client", Port, generatedConfig, requireClientMutations: false);

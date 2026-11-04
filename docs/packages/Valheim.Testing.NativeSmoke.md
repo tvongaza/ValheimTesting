@@ -74,12 +74,24 @@ These lifecycle checks and controlled test cases are not a claim of completed na
 | `--dependency NAME=DLL` | start, server-load, build | A third-party compile reference for `--project`. Repeat |
 | `--config FILE` | start, server-load, server-load-ab | A config file for the mod-bearing actor, copied into `BepInEx/config` by basename. Repeat; `start` takes `.cfg` files |
 | `--env NAME=VALUE` | start, server-load, server-load-ab | A non-secret variable set explicitly on every owned game process. Repeat for distinct names |
+| `--plugin-file FILE` | start, server-load, server-load-ab | A mod's non-DLL companion file (an asset bundle, a manifest, data) for the mod-bearing actor, staged as `BepInEx/plugins/<file name>`. DLLs are refused. Repeat |
+| `--plugin-dir DIR` | start, server-load, server-load-ab | A folder of a mod's companion files, staged with its tree as `BepInEx/plugins/<folder name>/...`. DLLs are refused. Repeat |
 | `--search-root DIR\|DLL` | all four | A folder or exact DLL to search for dependencies. Repeat |
 | `--optional-reference ASSEMBLY` | start, server-load, server-load-ab | Confirms a reference that is deliberately absent. Repeat |
 | `--scenario TEST.dll`, `--scenario-project TEST.csproj` | start, server-load | A mod-owned scenario; one or the other ([scenarios](#your-own-scenario)) |
 | `--output NEW_DIR` | all four | A new folder outside the mod project. Default: a new folder under `valheim-test-runs/` in ValheimTesting's data folder |
 
 The [dependency resolver](../reference/game-run-inputs.md#resolve-mod-dependencies) chooses files and writes `dependencies.lock.json`. It never downloads a mod.
+
+**Companion files**
+
+`--plugin-file` and `--plugin-dir` reach the same actor as `--config`: the hosting client for `start`, the dedicated server for `server-load` (`--client-plugin-file` and `--client-plugin-dir` select the joining client's). Every command maps them by one rule. Selected mod DLLs are staged flat in `BepInEx/plugins/`, and so are companions: a file goes to `BepInEx/plugins/<file name>` and a folder to `BepInEx/plugins/<folder name>/`, keeping its tree. Nothing is placed in a mod's own subfolder, so a mod must find its assets in `BepInEx/plugins` (as More World Locations does with its `Bundles` folder and `assetBundleManifest_full`), not relative to a folder of its own. Missing files, directories given as files and links are refused by name before host preflight or builds. Each file's SHA-256 is admitted once and checked again when the profile is staged; `start` records each one in `regression.json` as `pluginFiles`. Destinations must be unique within an actor without regard to case, and a file cannot share a folder's destination.
+
+```sh
+valheim-test start --mod /path/to/Jotunn.dll --mod /path/to/MoreWorldLocations.dll \
+  --plugin-dir /path/to/mwl/Bundles --plugin-file /path/to/mwl/assetBundleManifest_full \
+  --search-root /path/to/libraries --hold
+```
 
 **Explicit config and environment inputs**
 
@@ -170,7 +182,7 @@ valheim-test server-load --mod /path/to/ServerMod.dll
 |---|---|
 | `--server-only` | Runs no client. Prints `SERVER_LOAD_PASS` instead of `SERVER_JOIN_PASS` |
 | `--preflight-only` | Stops after `PREFLIGHT PASSED` |
-| `--plugin-file FILE`, `--plugin-dir DIR` | A mod's assets beside its DLL; DLLs are refused. Repeat |
+| `--plugin-file FILE`, `--plugin-dir DIR` | The server's [companion files](#run-options); DLLs are refused. Repeat |
 | `--adapter DLL` | A built test adapter, instead of building the bundled one |
 | `--adapter-project ADAPTER.csproj` | Builds a mod's own adapter; needs `--session-capability` and `--session-token-variable` |
 | `--adapter-property NAME={mod}\|{cli}` | Maps an adapter project property to the pinned mod or ValheimCLI DLL. Repeat |

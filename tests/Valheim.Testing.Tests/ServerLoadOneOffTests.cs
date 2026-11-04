@@ -130,6 +130,40 @@ public sealed class ServerLoadOneOffTests : IDisposable
         Assert.True(File.Exists(Path.Combine(output, "client", "selected-plugins.json")));
     }
 
+    // The shape of an asset-bundle mod run (#968): both roles select the very same config, companion file and companion
+    // folder, with the folder nested. The shared admission accepts it and gives each role its own retained config copy.
+    [ClientHostFact]
+    public async Task BothRolesMaySelectTheSameConfigAndCompanionSources()
+    {
+        using var clientRig = new RegressionRig();
+        string output = Path.Combine(_rig.Root, "shared-sources");
+        string config = _rig.Write("inputs/cfg/example.mod.cfg", Encoding.UTF8.GetBytes("[Settings]\nShared = true\n"));
+        string manifest = _rig.Write("inputs/assets/assetBundleManifest_full", Encoding.UTF8.GetBytes("manifest"));
+        _rig.Write("inputs/assets/Bundles/meadows/site.bundle", Encoding.UTF8.GetBytes("bundle"));
+        string bundles = Path.Combine(_rig.Root, "inputs", "assets", "Bundles");
+        int campaigns = 0;
+        int result = await ServerLoad.RunAsync(Arguments(output, "--client", clientRig.Game,
+            "--client-mod", _rig.Parent, "--client-search-root", Path.Combine(clientRig.Root, "deps"),
+            "--config", config, "--client-config", config, "--plugin-file", manifest, "--client-plugin-file", manifest,
+            "--plugin-dir", bundles, "--client-plugin-dir", bundles, "--preflight-only"), new ServerLoad.Seams(
+            ClientArchitecture: (_, _, _, _) => { }, Inspect: file =>
+            {
+                campaigns++;
+                var preflight = HostedCampaignPreparation.Inspect(file);
+                Assert.DoesNotContain(preflight.Problems, problem => problem.Input is "manifest" or "files" or "dependencies");
+                var campaign = HostedCampaignManifest.Read(file);
+                foreach (var files in new[] { campaign.Server!.Files, campaign.Clients["client"].Files })
+                {
+                    Assert.Contains(files, payload => payload.RelativePath == "BepInEx/plugins/assetBundleManifest_full" && payload.Source == manifest);
+                    Assert.Contains(files, payload => payload.RelativePath == "BepInEx/plugins/Bundles/meadows/site.bundle");
+                }
+                Assert.NotEqual(Assert.Single(campaign.Server.Files, payload => payload.RelativePath == "BepInEx/config/example.mod.cfg").Source,
+                    Assert.Single(campaign.Clients["client"].Files, payload => payload.RelativePath == "BepInEx/config/example.mod.cfg").Source);
+                return Task.FromResult(Ready);
+            }));
+        Assert.Equal(0, result); Assert.Equal(1, campaigns);
+    }
+
     [ClientHostTheory] [InlineData("config")] [InlineData("record")] [InlineData("plugin")]
     public async Task ChangedClientInputDuringAsynchronousInspectionRefusesBeforeCampaign(string change)
     {
