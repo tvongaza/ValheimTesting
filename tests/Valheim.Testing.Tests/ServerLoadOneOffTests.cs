@@ -559,12 +559,21 @@ public sealed class ServerLoadOneOffTests : IDisposable
         Assert.Contains("Option needs a value: --assert-line", error);
     }
 
-    [Fact]
-    public async Task BakeAllowsTheFinalWorldSaveToFinishAtQuit()
+    [Theory]
+    [InlineData("ordinary")]
+    [InlineData("held")]
+    [InlineData("bake")]
+    public async Task ServerLoadAllowsTheFinalWorldSaveToFinishAtQuit(string mode)
     {
-        string output = Path.Combine(_rig.Root, "bake-quit-budget");
-        string[] args = Arguments(output, "--server-only", "--bake-fixture", Path.Combine(_rig.Root, "baked"),
-            "--assert-command", "cli_zdos_at 1 2 8", "--assert-line", "ZDO");
+        string output = Path.Combine(_rig.Root, mode + "-quit-budget");
+        string[] args = mode switch
+        {
+            "ordinary" => Arguments(output, "--server-only"),
+            "held" => Arguments(output, "--server-only", "--hold"),
+            "bake" => Arguments(output, "--server-only", "--bake-fixture", Path.Combine(_rig.Root, "baked"),
+                "--assert-command", "cli_zdos_at 1 2 8", "--assert-line", "ZDO"),
+            _ => throw new ArgumentOutOfRangeException(nameof(mode)),
+        };
         Assert.Equal(1, await ServerLoad.RunAsync(args, new ServerLoad.Seams(Inspect: _ => Task.FromResult(Ready),
             Campaign: (_, plan, _, _, options) =>
             {

@@ -265,7 +265,7 @@ internal static class ServerLoad
             Port = server.CliPort,
             StartupSeconds = parsed.Options.TryGetValue("--server-startup-seconds", out string? startupSeconds)
                 ? int.Parse(startupSeconds, CultureInfo.InvariantCulture) : 300,
-            QuitSeconds = bakeDestination == null ? 20 : 300, // A bake must let the final world save at quit finish.
+            QuitSeconds = 300, // Allow the final world save at quit to finish.
         };
         if (parsed.Options.TryGetValue("--expected-log-error", out string? expectedError))
             plan.LogScan[LogScanner.UnknownError] = new LogClassification { Expected = [expectedError], Reason = parsed.Options["--expected-log-reason"] };
@@ -326,7 +326,7 @@ internal static class ServerLoad
                     InitialWorldAdmission = fixture.CopyAdmission,
                     RunId = DetachedSession.ConfiguredRun,
                     CheckpointFixture = DetachedSession.ConfiguredRun != null,
-                    CleanupBudget = bakeDestination == null ? null : TimeSpan.FromMinutes(10),
+                    CleanupBudget = TimeSpan.FromMinutes(10), // Leave time for the server quit and the rest of campaign teardown.
                     ReadPlan = _ => throw new InvalidOperationException("The one-off's plan is in memory."),
                     Mod = new(parsed.Options.GetValueOrDefault("--session-capability") ?? SmokeSessionContract.SessionCapability,
                         parsed.Options.GetValueOrDefault("--session-token-variable") ?? SmokeSessionContract.SessionTokenVariable),
