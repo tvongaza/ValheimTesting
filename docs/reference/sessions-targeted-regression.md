@@ -36,9 +36,10 @@ With `characterStore`, `run` stages the registered character before launch and r
 
 | Field | Does | Fails or refuses when |
 |---|---|---|
-| `noMod` | Explicit CLI-only control, default false and omitted when false | `mod` is not its empty default, repeatability is true, or plugins, patchers, optional references or a probe are supplied |
+| `noMod` | Explicit CLI-only control, default false and omitted when false | `mod` is not its empty default, repeatability is true, or plugins, plugin files, patchers, optional references or a probe are supplied |
 | `mod.repeatability` | Allows arms with the same SHA256 | Otherwise identical arms are refused |
 | `configs` | Stages named BepInEx config files | Files do not match their declared inputs |
+| `pluginFiles` | Stages non-DLL companion files by their path under `BepInEx/plugins`, such as `Bundles/site.bundle`; omitted when none | A path leaves the folder or names a DLL, or a file changed from its `sha256` |
 | `patchers` | Stages the declared preloader patchers | A file is missing or changed |
 | `optionalReferences` | Names optional assembly references | An unresolved reference is not listed |
 | `gamePins` | Pins the game, selected loader and patchers | A pin differs |

@@ -4,9 +4,9 @@ using Valheim.Testing.GameSessions;
 
 if (args is ["help" or "--help"])
 {
-    Console.WriteLine("valheim-test start [--mod DLL ... | --no-mod] [--config FILE ...] [--env NAME=VALUE ...] [--output NEW_DIR] [--world-fixture DIR | --world-seed SEED [--world-name NAME]] [--inventory FILE | --game DIR] [--client-env NAME] [--client-architecture x64|arm64] [setup options] (without --mod or --no-mod, the current project's one built plugin)");
+    Console.WriteLine("valheim-test start [--mod DLL ... | --no-mod] [--config FILE ...] [--env NAME=VALUE ...] [--plugin-file FILE ...] [--plugin-dir DIR ...] [--output NEW_DIR] [--world-fixture DIR | --world-seed SEED [--world-name NAME]] [--inventory FILE | --game DIR] [--client-env NAME] [--client-architecture x64|arm64] [setup options] (without --mod or --no-mod, the current project's one built plugin)");
     Console.WriteLine("--no-mod explicitly runs a CLI-only control with no mod under test; no mod build, dependency search, scenario or comparison inputs are allowed.");
-    Console.WriteLine("--config stages non-secret config files on start's hosting client or server-load's server; --client-config targets server-load's explicit client mod set. --env sets non-empty literal values on every owned game process. Inputs are retained privately; omit credentials.");
+    Console.WriteLine("--config stages non-secret config files on start's hosting client or server-load's server; --client-config targets server-load's explicit client mod set. --plugin-file FILE stages a mod's non-DLL companion as BepInEx/plugins/<name>, --plugin-dir DIR as BepInEx/plugins/<folder name>/..., on the same actor as --config. --env sets non-empty literal values on every owned game process. Inputs are retained privately; omit credentials.");
     Console.WriteLine(ServerLoad.Usage + " (a dedicated server and one joining client; client is CLI-only by default, with explicit --client-mod or --client-project support; inventory selects the hosts, otherwise this machine)");
     Console.WriteLine(ServerLoadPhases.Usage + " (ordered disposable server-only saves)");
     Console.WriteLine("valheim-test server-load-ab --mod DLL --mod DLL --remove-mod DLL --output NEW_DIR [server-load options except --hold and --preflight-only]");
@@ -43,7 +43,7 @@ if (args.Length != 0 && args[0] is "server-load" or "server-load-ab")
 if (!StartArguments.TryRead(args, out var parsedStart, out var error, allowImplicitMod: true))
 {
     Console.Error.WriteLine(error);
-    Console.Error.WriteLine("Usage: valheim-test start [--mod DLL ... | --project MOD.csproj | --no-mod] [--config FILE ...] [--env NAME=VALUE ...] [--scenario TEST.dll | --scenario-project TEST.csproj] [--dependency NAME=DLL ...] [--build-inputs FILE] [--output NEW_DIR] [--world-fixture DIR | --world-seed SEED [--world-name NAME]] [--inventory FILE | --game DIR] [--client-env NAME] [--client-architecture x64|arm64] [--join-seconds 10..900] [--hold] [--source COMMIT] [--cli-manifest FILE --cli-files DIR] [--compare-mod DLL --compare-source COMMIT] [--search-root DIR|DLL ...] [--optional-reference ASSEMBLY ...] [--client-loader-package FILE] [--expected-log-error EXACT_HEADER --expected-log-reason REASON]");
+    Console.Error.WriteLine("Usage: valheim-test start [--mod DLL ... | --project MOD.csproj | --no-mod] [--config FILE ...] [--env NAME=VALUE ...] [--plugin-file FILE ...] [--plugin-dir DIR ...] [--scenario TEST.dll | --scenario-project TEST.csproj] [--dependency NAME=DLL ...] [--build-inputs FILE] [--output NEW_DIR] [--world-fixture DIR | --world-seed SEED [--world-name NAME]] [--inventory FILE | --game DIR] [--client-env NAME] [--client-architecture x64|arm64] [--join-seconds 10..900] [--hold] [--source COMMIT] [--cli-manifest FILE --cli-files DIR] [--compare-mod DLL --compare-source COMMIT] [--search-root DIR|DLL ...] [--optional-reference ASSEMBLY ...] [--client-loader-package FILE] [--expected-log-error EXACT_HEADER --expected-log-reason REASON]");
     return 2;
 }
 var options = parsedStart!.Options;
@@ -78,6 +78,7 @@ try
         parsedStart.Switches,
         mods!, roots!, optionalReferences!, buildDependencies!)
         { Shipped = ShippedLoader.Choose, Progress = progress, RunInputs = parsedStart.RunInputs,
+            PluginFiles = parsedStart.List("--plugin-file"), PluginDirectories = parsedStart.List("--plugin-dir"),
             NoMod = parsedStart.Switches.Contains("--no-mod") }, cancel.Token).ConfigureAwait(false);
     var selectedMods = stage.Mods;
     string game = stage.Compile.Recipe.Install;
@@ -121,6 +122,9 @@ try
                 Commit = options.GetValueOrDefault("--source") } } },
     };
     stage.RunInputs.ApplyTo(inputs);
+    // The same companion mapping server-load stages, recorded with each admitted hash; configs travel in configs.
+    var companions = ModInputStage.Companions(stage.Files);
+    if (companions.Count != 0) inputs.PluginFiles = companions;
     if (options.TryGetValue("--join-seconds", out string? joinSeconds))
         inputs.Client.JoinSeconds = int.Parse(joinSeconds, System.Globalization.CultureInfo.InvariantCulture);
     if (options.TryGetValue("--expected-log-error", out string? expectedError))

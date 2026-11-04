@@ -30,6 +30,13 @@ public sealed class RegressionInputs
     [JsonIgnore] internal IReadOnlyList<string> ArmNames => NoMod ? ["control"] : Mod.Arms.Keys.ToArray();
     /// <summary>Config files to place in <c>BepInEx/config</c>, by file name. Without <c>valheimCLI.valheimCLI.cfg</c> one is written with the client's port. A <c>BepInEx.cfg</c> here replaces the loader's default; the install's own is never used (#711).</summary>
     public Dictionary<string, string> Configs { get; set; } = [];
+    /// <summary>
+    /// Non-DLL files a mod reads from <c>BepInEx/plugins</c> (asset bundles, manifests, data), by their path under that folder with
+    /// <c>/</c> separators, such as <c>Bundles/site.bundle</c>; omitted when there are none. Each needs its SHA-256; staging refuses a
+    /// changed file. A DLL is a plugin, not a companion.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Dictionary<string, RegressionFile>? PluginFiles { get; set; }
     /// <summary>BepInEx preloader patchers to place in <c>BepInEx/patchers</c>; none by default.</summary>
     public List<RegressionFile> Patchers { get; set; } = [];
     /// <summary>Assembly names a staged DLL references but only uses when present (a guarded soft integration); none by default.</summary>
@@ -67,6 +74,7 @@ public sealed class RegressionInputs
         foreach (var file in Files()) file.File = Full(file.File);
         foreach (var arm in Mod.Arms.Values) arm.File = Full(arm.File);
         foreach (string key in Configs.Keys.ToList()) Configs[key] = Full(Configs[key]);
+        foreach (var file in PluginFiles?.Values ?? Enumerable.Empty<RegressionFile>()) file.File = Full(file.File);
         if (Cli.Manifest != null) Cli.Manifest = Full(Cli.Manifest);
     }
 
@@ -86,8 +94,8 @@ public sealed class RegressionInputs
         if (NoMod)
         {
             if (Mod.InstallAs.Length != 0 || Mod.Arms.Count != 0 || Mod.Repeatability || Plugins.Count != 0 ||
-                Patchers.Count != 0 || OptionalReferences.Count != 0 || Probe != null)
-                throw new ArgumentException("noMod: a CLI-only control requires an empty mod, plugins, patchers, optionalReferences and probe.");
+                Patchers.Count != 0 || OptionalReferences.Count != 0 || Probe != null || PluginFiles is { Count: > 0 })
+                throw new ArgumentException("noMod: a CLI-only control requires an empty mod, plugins, pluginFiles, patchers, optionalReferences and probe.");
         }
         else Mod.Validate();
         if (Fixture.Create != null && (ArmNames.Count != 1 || Mod.Repeatability))
@@ -97,6 +105,14 @@ public sealed class RegressionInputs
             if (name.Length == 0 || name != Path.GetFileName(name) || !name.EndsWith(".cfg", StringComparison.OrdinalIgnoreCase))
                 throw new ArgumentException($"configs: \"{name}\" is not a BepInEx config file name (<plugin guid>.cfg, no folder).");
             if (!Path.IsPathFullyQualified(source)) throw new ArgumentException($"configs.{name}: give the file to copy.");
+        }
+        foreach (var (path, file) in PluginFiles ?? [])
+        {
+            if (path.Length == 0 || path.StartsWith('/') || path.Contains('\\') || path.Split('/').Any(part => part is "" or "." or "..") ||
+                path.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
+                throw new ArgumentException($"pluginFiles: \"{path}\" is not a non-DLL path under BepInEx/plugins ('/' separators, no '.' or '..').");
+            if (!Path.IsPathFullyQualified(file.File)) throw new ArgumentException($"pluginFiles.{path}.file: give the file to copy.");
+            if (file.Sha256.Length != 64 || !file.Sha256.All(Uri.IsHexDigit)) throw new ArgumentException($"pluginFiles.{path}.sha256: give the file's full SHA256.");
         }
         foreach (string reference in OptionalReferences)
             if (string.IsNullOrWhiteSpace(reference) || reference.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
