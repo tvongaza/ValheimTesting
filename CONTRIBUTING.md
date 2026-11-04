@@ -85,6 +85,58 @@ valheim-test init --candidate-feed /absolute/path/ValheimTesting/.packages --out
 
 It still refuses when the feed lacks either exact package.
 
+#### Run a source-built valheim-test
+
+Install the candidate tool side by side, into a new folder named after its candidate id, so the released global tool stays as it is. A second install into the same folder refuses as already installed, so each candidate gets its own folder. Validate first, so `.packages` holds the tool as `Valheim.Testing.NativeSmoke.<Version>-candidate.<id>.nupkg`. Give the install a new, empty NuGet package folder ([why](#when-a-cached-package-goes-stale)). On macOS or Linux, from this checkout:
+
+```sh
+export NUGET_PACKAGES="$(mktemp -d)"
+dotnet tool install Valheim.Testing.NativeSmoke --version <Version>-candidate.<id> \
+  --add-source "$PWD/.packages" --tool-path /absolute/path/vt-local/<id>
+/absolute/path/vt-local/<id>/valheim-test help
+```
+
+The install prints `Tool 'valheim.testing.nativesmoke' (version '<Version>-candidate.<id>') was successfully installed.` Run `valheim-test` by that full path; every other shell keeps the released tool. If a Homebrew .NET cannot start it, see [Install](docs/packages/Valheim.Testing.NativeSmoke.md#install).
+
+On a remote Windows host, either clone the branch there and run `bootstrap-cli.cs` and `validate.cs` as above (neither launches the game), or copy this checkout's `.packages/*.nupkg` to a folder there and compare a SHA-256. Then, in PowerShell on that host ([host shells](docs/reference/platforms.md#host-shells)):
+
+```powershell
+$env:NUGET_PACKAGES = "C:\path\to\vt-local\<id>\nuget"
+dotnet tool install Valheim.Testing.NativeSmoke --version <Version>-candidate.<id> --add-source C:\path\to\vt-local\<id>\packages --tool-path C:\path\to\vt-local\<id>\tool
+& C:\path\to\vt-local\<id>\tool\valheim-test.exe help
+```
+
+The install prints the same line; `help` lists the candidate's options. Installing a tool into its own folder starts no game and leaves a running one alone.
+
+To make the candidate the tool every shell runs, replace the global one. A candidate sorts below its release, so the update needs `--allow-downgrade`:
+
+```sh
+dotnet tool update --global Valheim.Testing.NativeSmoke --version <Version>-candidate.<id> --allow-downgrade --add-source /absolute/path/ValheimTesting/.packages
+```
+
+#### When a cached package goes stale
+
+NuGet takes a version it already holds in its global package folder (`~/.nuget/packages`, `%USERPROFILE%\.nuget\packages`) and never checks it against a feed again. For candidates this does not bite: the candidate id is a hash of the package inputs, so a changed source gets a new version, and a moved ValheimCLI fork pin gives the Cli a `-candidate` version of its own ([release contract](docs/maintainers/valheimcli-release-contract.md#move-the-fork-pin)). It bites when a version is reused with other bytes:
+
+| Case | What to do |
+|---|---|
+| A package packed by hand at the plain `<Version>` | Do not: NuGet.org serves that version too, and a new cache folder may still restore NuGet.org's bytes. Pack with `validate.cs` |
+| A folder or cache that already ran a restore of other bytes under one version | Use a new `NUGET_PACKAGES` folder for the tool install and the mod's restore |
+
+A new folder costs a cold download of every package, so use it for the install and the mod's test session, not for each validation. Delete it after the session, not after the restore: the build and test steps read packages from it.
+
+#### Check which build ran
+
+`dotnet tool list --tool-path /absolute/path/vt-local/<id>` (or `--global`) prints the installed version. <!-- TODO(docs): #955 adds valheim-test --version --> Each run's `result.json` records the toolkit that ran as `Toolkit` ([fields](docs/reference/sessions-pinned-server-run.md#what-ran)). Each `Valheim.Testing*` package there has a `Version` and a `State`: `candidate` for a `-candidate` build, `released` for a release build, `unreleased` for any other source build. The Cli is `released` for any version without `-candidate`, a local bootstrap included; compare its `Sha256`. `LoadedAssemblies` lists the toolkit, transport and entry assemblies that loaded, with SHA-256 and module id.
+
+#### Switch back to the release
+
+| You used | Switch back |
+|---|---|
+| `--tool-path` | Delete that folder, its `packages` and `nuget` folders included; the global tool never changed |
+| `--global` | `dotnet tool uninstall --global Valheim.Testing.NativeSmoke`, then [install the release](docs/packages/Valheim.Testing.NativeSmoke.md#install) |
+| A mod's test project | Put back the released version from [Package versions](docs/package-versions.md), drop `RestoreAdditionalProjectSources`, and restore |
+
 ## Extend the synthetic world
 
 The synthetic world supplies **declared inputs to real mod code**. It is not a replacement implementation of Unity, Valheim's generator or the terrain compiler.
