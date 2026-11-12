@@ -41,7 +41,7 @@ JSON names are the camelCase of `ClientRunPlan`'s properties.
 | `passwordVariable` | The variable that holds the join password | Omitted |
 | `startSeconds` | Bounds the launch to the main menu | 300; 10 to 1800 |
 | `bepInExSeconds` | Owned: time for BepInEx's first log line | 60; 5 to 1800, capped at `startSeconds` |
-| `joinSeconds` | Bounds a join or a hosted start | 180; 10 to 900 |
+| `joinSeconds` | Bounds a join or a hosted start | 180; 10 to 3600 |
 | `arrivalSeconds` | Bounds an arrival | 120; 10 to 600 |
 | `installPins` | Owned: game build, loader and patchers by SHA256 (`InstallPins.Of`) | Required in place; a profile observes and enforces the staged values |
 | `capabilities` | ValheimCLI commands the run uses, `owner/command` | `[]`; checked before launch and live |

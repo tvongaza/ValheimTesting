@@ -67,7 +67,7 @@ public sealed class NativeSmokeOutputTests
     }
     [Theory]
     [InlineData("9")]
-    [InlineData("901")]
+    [InlineData("3601")]
     [InlineData("-1")]
     [InlineData("600.5")]
     [InlineData("invalid")]
@@ -79,13 +79,18 @@ public sealed class NativeSmokeOutputTests
         Assert.Contains("--join-seconds", error);
     }
 
-    [Fact]
-    public void StartAcceptsLongWorldEntryDeadlineForFirstGeneration()
+    // A world that generates its content on load can take 20 to 40 minutes to become joinable.
+    [Theory]
+    [InlineData("600")]
+    [InlineData("3600")]
+    public void StartAcceptsLongWorldEntryDeadlineForFirstGeneration(string seconds)
     {
         Assert.True(StartArguments.TryRead(
-            ["--mod", "mod.dll", "--output", "new-run", "--join-seconds", "600"],
+            ["--mod", "mod.dll", "--output", "new-run", "--join-seconds", seconds],
             out var options, out _, out _, out _, out string error), error);
-        Assert.Equal("600", options!["--join-seconds"]);
+        Assert.Equal(seconds, options!["--join-seconds"]);
+        Assert.True(ServerLoad.TryRead(["--mod", "mod.dll", "--output", "new-run", "--join-seconds", seconds], out var server, out error), error);
+        Assert.Equal(seconds, server!.Options["--join-seconds"]);
     }
 
     [Fact]

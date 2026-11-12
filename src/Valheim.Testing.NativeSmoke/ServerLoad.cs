@@ -16,7 +16,7 @@ using Valheim.Testing.GameSessions;
 internal static class ServerLoad
 {
     internal static readonly string Usage = "valheim-test server-load [--mod DLL ... | --project MOD.csproj] [--scenario TEST.dll | --scenario-project TEST.csproj] [--adapter DLL | --adapter-project ADAPTER.csproj] [--adapter-property NAME={mod}|{cli} ...] [--session-capability OWNER/session --session-token-variable NAME] [--dependency NAME=DLL ...] [--output NEW_DIR] [--inventory FILE | --server DIR] [--client DIR] " +
-        $"[--server-env NAME] [--client-env NAME] [--client-architecture x64|arm64] [--server-only] [--server-startup-seconds 1..{ServerRunPlan.MaximumStartupSeconds}] [--world-fixture DIR] [--bake-fixture NEW_DIR] [--before-save-command TEXT --before-save-line PREFIX] [--assert-command TEXT --assert-line PREFIX] [--join HOST:PORT] [--join-seconds 10..900] [--preflight-only] [--hold] [--loader-package FILE] [--steam-runtime-package FILE] [--client-loader-package FILE] " +
+        $"[--server-env NAME] [--client-env NAME] [--client-architecture x64|arm64] [--server-only] [--server-startup-seconds 1..{ServerRunPlan.MaximumStartupSeconds}] [--world-fixture DIR] [--bake-fixture NEW_DIR] [--before-save-command TEXT --before-save-line PREFIX] [--assert-command TEXT --assert-line PREFIX] [--join HOST:PORT] [--join-seconds {ClientTimeouts.MinimumJoinSeconds}..{ClientTimeouts.MaximumJoinSeconds}] [--preflight-only] [--hold] [--loader-package FILE] [--steam-runtime-package FILE] [--client-loader-package FILE] " +
         "[--client-mod DLL ... | --client-project MOD.csproj] [--client-build-inputs FILE] [--client-dependency NAME=DLL ...] [--client-search-root DIR|DLL ...] [--client-optional-reference ASSEMBLY ...] [--client-config FILE ...] [--client-plugin-file FILE ...] [--client-plugin-dir DIR ...] [--client-assert-command TEXT --client-assert-line PREFIX] [--build-inputs FILE] [--cli-manifest FILE --cli-files DIR] [--search-root DIR|DLL ...] [--config FILE ...] [--env NAME=VALUE ...] [--plugin-file FILE ...] [--plugin-dir DIR ...] " +
         "[--optional-reference ASSEMBLY ...] [--expected-log-error EXACT_HEADER --expected-log-reason REASON]";
 
@@ -278,7 +278,7 @@ internal static class ServerLoad
             Architecture = clientArchitecture!,
             Environment = new Dictionary<string, string>(inputs.RunInputs.Environment, StringComparer.Ordinal),
             JoinSeconds = parsed.Options.TryGetValue("--join-seconds", out string? seconds)
-                ? int.Parse(seconds, CultureInfo.InvariantCulture) : 180,
+                ? int.Parse(seconds, CultureInfo.InvariantCulture) : ClientTimeouts.DefaultJoinSeconds,
             // Only plugins absent from this client's actual selected startup payload are pinned absent here.
             Pins = serverGuids.Where(guid => !clientGuids.Contains(guid)).ToDictionary(guid => guid, _ => "absent", StringComparer.Ordinal),
         };
