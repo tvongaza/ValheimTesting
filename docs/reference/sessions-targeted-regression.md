@@ -43,7 +43,7 @@ With `characterStore`, `run` stages the registered character before launch and r
 | `patchers` | Stages the declared preloader patchers | A file is missing or changed |
 | `optionalReferences` | Names optional assembly references | An unresolved reference is not listed |
 | `gamePins` | Pins the game, selected loader and patchers | A pin differs |
-| `client.startSeconds`, `client.joinSeconds` | Bound menu startup and each hosted start | Outside 10–1800 or 10–900 seconds respectively |
+| `client.startSeconds`, `client.joinSeconds` | Bound menu startup and each hosted start | Outside 10–1800 or 10–3600 seconds respectively |
 | `client.environment` | Supplies non-secret variables to the owned process | Invalid names, multiline values or loader overrides |
 | `logScan` | Declares expected error headers and their reasons | New or different errors appear |
 

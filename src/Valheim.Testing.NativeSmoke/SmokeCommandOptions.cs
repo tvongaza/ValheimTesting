@@ -175,8 +175,8 @@ internal static class SmokeCommandOptions
         if (command == Command.Start && result.Options.ContainsKey("--compare-mod") != result.Options.ContainsKey("--compare-source"))
         { error = "--compare-mod needs --compare-source (and vice versa); both builds need provenance."; return false; }
         if (result.Options.TryGetValue("--join-seconds", out string? joinSeconds) &&
-            (!int.TryParse(joinSeconds, NumberStyles.None, CultureInfo.InvariantCulture, out int seconds) || seconds is < 10 or > 900))
-        { error = "--join-seconds must be a whole number from 10 to 900."; return false; }
+            (!int.TryParse(joinSeconds, NumberStyles.None, CultureInfo.InvariantCulture, out int seconds) || !ClientTimeouts.IsJoinSeconds(seconds)))
+        { error = $"--join-seconds must be a whole number from {ClientTimeouts.MinimumJoinSeconds} to {ClientTimeouts.MaximumJoinSeconds}."; return false; }
         if (result.Options.TryGetValue("--server-startup-seconds", out string? startupSeconds) &&
             (!int.TryParse(startupSeconds, NumberStyles.None, CultureInfo.InvariantCulture, out int startup) ||
                 startup < 1 || startup > ServerRunPlan.MaximumStartupSeconds))
