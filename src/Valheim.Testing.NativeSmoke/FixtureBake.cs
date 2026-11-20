@@ -106,12 +106,24 @@ internal static class FixtureBake
     internal static WorldIdentity Check(string source)
     {
         var (worlds, manifestFile) = Paths(source);
-        if (!File.Exists(manifestFile)) return WorldIdentity.Read(worlds);
+        if (!File.Exists(manifestFile)) return Noted(WorldIdentity.Read(worlds));
         var files = WorldFixture.Manifest(worlds);
         var identity = WorldIdentity.ReadObserved(worlds, files);
         VerifyBakedManifest(manifestFile, identity, files);
+        return Noted(identity);
+    }
+
+    // A world a world-generation mod saved (#988) loads only where that mod is installed: say so before anything is staged.
+    private static WorldIdentity Noted(WorldIdentity identity)
+    {
+        if (GeneratorNote(identity) is { } note) Console.WriteLine(note);
         return identity;
     }
+
+    internal static string? GeneratorNote(WorldIdentity identity) => identity.Generator is { } generator
+        ? $"NOTE: world {identity.Name} was saved by the world-generation mod {generator}; the game loads it only with that mod installed. " +
+          "Stage that mod with the run as well, or the world fails to load or is generated afresh by the game."
+        : null;
 
     internal static Input Prepare(string? source, string outputRoot, Admission? admission = null, GameBuild? targetBuild = null,
         Action<string, string>? copyFile = null, Action<string>? afterSourceVerification = null)

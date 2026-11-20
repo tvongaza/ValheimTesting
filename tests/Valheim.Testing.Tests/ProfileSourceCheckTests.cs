@@ -468,6 +468,37 @@ public sealed class ProfileSourceCheckTests : IDisposable
         finally { if (File.Exists(fields["baseline"])) File.SetUnixFileMode(fields["baseline"], UnixFileMode.UserRead | UnixFileMode.UserWrite); }
     }
 
+    // #985: a local run persists its baseline through this machine as the run reaches it ("this machine"); env recover reads the
+    // same machine through the inventory host's name. That is one install, so recover alone settles it.
+    [Fact]
+    public async Task RecoverSettlesALocalRunsBaselineUnderTheInventorysNameForThisMachine()
+    {
+        Write("game.bin", "game");
+        Directory.CreateDirectory(Parent);
+        var run = new LocalGameHost(LocalGameHost.ThisMachineName, HostShell.ThisMachine);
+        var check = await PrepareOnAsync(run);
+        await PersistAsync(check, run);
+        var fields = _journal[0].Fields;
+        Write("preloader_1.log", "after the run");
+
+        var verdict = await RecoverAsync(fields, host: new LocalGameHost("local", HostShell.ThisMachine));
+        Assert.Equal(SourceVerdictKind.Restored, verdict!.Verdict);
+        Assert.Equal("after the run", File.ReadAllText(Path.Combine(RecoveredProfile, "added", "preloader_1.log")));
+    }
+
+    // Another host's baseline is still another install: only this machine's own name is the local host's.
+    [Fact]
+    public async Task ABaselineNamingAnotherHostIsStillRefused()
+    {
+        Write("game.bin", "game");
+        Directory.CreateDirectory(Parent);
+        var other = new LocalGameHost("nas", HostShell.ThisMachine);
+        var check = await PrepareOnAsync(other);
+        await PersistAsync(check, other);
+        var error = await Assert.ThrowsAsync<InvalidDataException>(() => RecoverAsync(_journal[0].Fields, host: new LocalGameHost("local", HostShell.ThisMachine)));
+        Assert.Contains("names another install than its journal", error.Message);
+    }
+
     // r3 item 2: a baseline that does not match its journal stays refused by env recover; env teardown finishes it, not compared,
     // keeping what the run had moved.
     [Fact]

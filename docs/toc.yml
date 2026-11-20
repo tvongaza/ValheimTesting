@@ -32,6 +32,8 @@
     href: guides/debug-a-native-run.md
   - name: Give your coding agent the workflow
     href: guides/give-your-agent-the-workflow.md
+  - name: Try an unpublished toolkit build
+    href: https://github.com/tvongaza/ValheimTesting/blob/main/CONTRIBUTING.md#try-an-unpublished-build-in-a-mod
 - name: Concepts
   items:
   - name: Profiles and hosts

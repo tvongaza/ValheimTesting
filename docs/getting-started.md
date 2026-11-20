@@ -105,3 +105,4 @@ Follow [Your first gameplay assertion](tutorials/first-gameplay-assertion.md) fo
 - [Examples](../examples/README.md): unit, scripted integration and native checks.
 - [Package versions](package-versions.md): every package, exact pin and reference link.
 - [API reference](reference/index.md): the public types.
+- [Try an unpublished build](../CONTRIBUTING.md#try-an-unpublished-build-in-a-mod): run a source-built `valheim-test` and packages while you change the toolkit.
