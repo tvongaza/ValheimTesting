@@ -45,6 +45,8 @@ public sealed class ToolCommandLineTests
         }
     }
 
+    [Fact] public void StartsUsageNamesTheJoinLimits() => Assert.Contains("[--join-seconds 10..3600]", ToolCommandLine.StartUsage);
+
     [Fact] public void OtherArgumentsAreLeftToTheirCommand()
     {
         Assert.False(ToolCommandLine.TryAnswer([], TextWriter.Null, out _));
