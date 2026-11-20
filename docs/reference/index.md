@@ -18,7 +18,7 @@ For a released 0.1 package, use its [versioned API reference](https://tvongaza.g
 | `Valheim.Testing.Bindings` | [Binding-check types](xref:Valheim.Testing.Bindings) | [Valheim.Testing.Bindings](../packages/Valheim.Testing.Bindings.md) |
 | `Valheim.Testing.Bindings.Tool` | Console entry point; delegates to `BindingCheckCommand` | [Valheim.Testing.Bindings.Tool](../packages/Valheim.Testing.Bindings.Tool.md) |
 
-Two gaps are deliberate. The source-included game-name doubles sit outside the namespace filter, and the `Valheim.Testing.Cli` transport is built from another repository. Its source and a [transport guide at the pinned commit](https://github.com/tvongaza/valheimCLI/blob/e596a7d984feaaa695f5c2999964b64e23fbfd92/docs/client-library.md) are in the [ValheimCLI fork](https://github.com/tvongaza/valheimCLI); the commit is in [`cli-dependency.json`](../../cli-dependency.json).
+Two gaps are deliberate. The source-included game-name doubles sit outside the namespace filter, and the `Valheim.Testing.Cli` transport is built from another repository. Its source and a [transport guide at the pinned commit](https://github.com/tvongaza/valheimCLI/blob/21cfd74fe8d04cdbc77165d0849ac1ce1af06f97/docs/client-library.md) are in the [ValheimCLI fork](https://github.com/tvongaza/valheimCLI); the commit is in [`cli-dependency.json`](../../cli-dependency.json).
 
 ## Pages with examples
 
