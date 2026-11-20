@@ -25,8 +25,9 @@ A run stops before its action in three cases:
 1. **Update the pin.** Review the fork commit and its single-plugin bundle. Update the commit, bundle URL and SHA-256 together in `cli-dependency.json`.
    - If the toolkit now needs a new built-in capability, record it in its owning `Game` API. Do not keep a separate list in the release manifest.
    - Update the pinned loader only if you reviewed a changed BepInExPack.
-2. **Mark the transport as a local build.** In `cli-dependency.json`, set the Cli `packageVersion` to the current version plus `-candidate.<first 7 hex of the fork commit>`. Game's exact Cli reference reads this value.
+2. **Mark the transport as a local build.** In `cli-dependency.json`, set the Cli `packageVersion` to the version the next release gives it plus `-candidate.<first 7 hex of the fork commit>`, for example `0.5.0-candidate.<sha>` after a 0.4.0 release. Game's exact Cli reference reads this value.
    - The suffix keeps a local feed or NuGet cache from serving the old version's bytes.
+   - The `pins` CI job refuses a source version older than the recorded release, and a `-candidate` suffix sorts below the version it is added to: `0.4.0-candidate.<sha>` is older than `0.4.0`. Use the next version, not the current one.
    - Release preparation (`dotnet run scripts/pins.cs -- bump`, see [Contributing](../../CONTRIBUTING.md#release-packages-maintainers)) gives each affected package a version NuGet.org has never served. This covers the Cli, Game and every package that embeds or references them.
    - `release.yml` refuses a candidate version. It also refuses a transport version that NuGet.org already serves from another fork commit.
    - Leave the published-version snippets alone until NuGet.org serves the new versions.

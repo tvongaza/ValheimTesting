@@ -1,14 +1,14 @@
 {
   "repository": "https://github.com/tvongaza/valheimCLI.git",
-  "commit": "e596a7d984feaaa695f5c2999964b64e23fbfd92",
+  "commit": "f3bbf6d86a56d6e9a934fbad35a92cfdcd691ec7",
   "package": "Valheim.Cli.Testing",
   "publishedAs": "Valheim.Testing.Cli",
   "version": "0.1.0-preview.4",
-  "packageVersion": "0.4.0",
+  "packageVersion": "0.5.0-candidate.f3bbf6d",
   "targetFramework": "net10.0",
   "status": "fork preview; upstream merge pending; ValheimTesting publishes this transport as Valheim.Testing.Cli",
   "bundle": {
-    "url": "https://github.com/tvongaza/valheimCLI/releases/download/cli-bundle-e596a7d/valheimcli-bundle-e596a7d.zip",
-    "sha256": "8b6b05a01f9a514c0c82de4ebf6c01f48706abc21b47bd97e077a8acb946e687"
+    "url": "https://github.com/tvongaza/valheimCLI/releases/download/cli-bundle-f3bbf6d/valheimcli-bundle-f3bbf6d.zip",
+    "sha256": "57b6381170cf2596cb6c76333e1d2a1c809124425a6d6d2a9851f45b3d426cd2"
   }
 }
