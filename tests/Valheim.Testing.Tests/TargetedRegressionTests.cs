@@ -191,13 +191,20 @@ public sealed class TargetedRegressionTests : IDisposable
 
     [Theory]
     [InlineData(9, 180)]
-    [InlineData(300, 901)]
+    [InlineData(300, 3601)]
     public void RegressionClientUsesTheSameStartAndJoinLimitsAsClientRunPlan(int start, int join)
     {
         var client = new RegressionClient { Character = "disposable", StartSeconds = start, JoinSeconds = join };
         Assert.Throws<ArgumentException>(client.Validate);
         Assert.Equal(ClientTimeouts.DefaultStartSeconds, new RegressionClient().StartSeconds);
         Assert.Equal(ClientTimeouts.DefaultJoinSeconds, new RegressionClient().JoinSeconds);
+    }
+
+    [Fact]
+    public void RegressionClientAllowsAnHourToEnterAWorldThatGeneratesOnLoad()
+    {
+        new RegressionClient { Character = "disposable", JoinSeconds = ClientTimeouts.MaximumJoinSeconds }.Validate();
+        Assert.Contains("[--join-seconds 10..3600]", ServerLoad.Usage);
     }
 
     [Fact] public void AnX64RegressionWithAnArm64OnlyLoaderStopsBeforeTheDisposableCopy()

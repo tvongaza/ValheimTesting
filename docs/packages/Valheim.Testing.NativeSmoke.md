@@ -137,7 +137,7 @@ These flags take **non-secret data**: the exact values, config source paths, ret
 
 | Option | Taken by | Does |
 |---|---|---|
-| `--join-seconds 10..900` | start, server-load, server-load-ab | The deadline to enter the world. Default 180 |
+| `--join-seconds 10..3600` | start, server-load, server-load-ab | The deadline to enter the world, including a world that generates content on load. Default 180 |
 | `--server-startup-seconds 1..3600` | server-load, server-load-ab | The deadline for the server to become ready. Default 300 |
 | `--expected-log-error EXACT_HEADER --expected-log-reason REASON` | start, server-load, server-load-ab | Admits one known BepInEx error by its whole header line, with a reason |
 | `--hold` | start, server-load | Keeps a passing run's game open ([hold](#hold-and-finish)) |

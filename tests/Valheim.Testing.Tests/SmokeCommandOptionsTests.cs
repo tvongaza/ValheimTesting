@@ -147,7 +147,7 @@ public sealed class SmokeCommandOptionsTests
     {
         yield return [new[] { "--client-architecture", "native" }];
         yield return [new[] { "--join-seconds", "9" }];
-        yield return [new[] { "--join-seconds", "901" }];
+        yield return [new[] { "--join-seconds", "3601" }];
         yield return [new[] { "--join-seconds", "1.5" }];
         yield return [new[] { "--expected-log-error", "error" }];
         yield return [new[] { "--expected-log-reason", "reason" }];
