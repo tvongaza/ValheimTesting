@@ -14,7 +14,7 @@ Most test projects reference [Valheim.Testing.Game](https://www.nuget.org/packag
 
 ## Where the contract lives
 
-The client, plan and reply contracts are in the [transport guide at the exact pinned fork commit](https://github.com/tvongaza/valheimCLI/blob/e596a7d984feaaa695f5c2999964b64e23fbfd92/docs/client-library.md). The fork also owns the game-side commands and capability manifest. `cli-dependency.json` names the pinned commit, and a newer fork head may describe behaviour this revision lacks.
+The client, plan and reply contracts are in the [transport guide at the exact pinned fork commit](https://github.com/tvongaza/valheimCLI/blob/21cfd74fe8d04cdbc77165d0849ac1ce1af06f97/docs/client-library.md). The fork also owns the game-side commands and capability manifest. `cli-dependency.json` names the pinned commit, and a newer fork head may describe behaviour this revision lacks.
 
 ## Provenance
 

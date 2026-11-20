@@ -162,7 +162,7 @@ new TerrainRenderer(new TerrainArea(-512,-512,512,512), 2) { Coloring = TerrainC
 
 This writes `review.png` with uncompressed deflate blocks, at about three bytes per pixel. For the same heights, its bytes are identical on every platform and runtime.
 
-This library keeps one palette. For a topographic review map from the same dump CSV, use ValheimCLI's [`examples/world-map.py`](https://github.com/tvongaza/valheimCLI/blob/e596a7d984feaaa695f5c2999964b64e23fbfd92/examples/world-map.py).
+This library keeps one palette. For a topographic review map from the same dump CSV, use ValheimCLI's [`examples/world-map.py`](https://github.com/tvongaza/valheimCLI/blob/21cfd74fe8d04cdbc77165d0849ac1ce1af06f97/examples/world-map.py).
 
 ## Compare terrain sources
 
