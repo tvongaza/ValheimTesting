@@ -304,6 +304,24 @@ public sealed class OwnedRunPreflightTests : IDisposable
             Assert.Contains("Cannot read the world's identity from Abc.fwl", Assert.Throws<InvalidDataException>(() => WorldIdentity.Parse(broken, "Abc.fwl")).Message);
     }
 
+    // Hand-derived, in the shape Worldhalla 1.0.1 writes (#988): length 42, the marker 0x80000000, version 42, an 8-byte block of
+    // the mod's own ("mod" and an int), then the game's fields as above: "Abc", "s", seed 7, UID -2, world-gen version 2.
+    private static readonly byte[] ModGeneratorMetadata = Convert.FromHexString("2A000000" + "00000080" + "2A000000" + "08000000" + "036D6F64" + "00000000" +
+        "03416263" + "0173" + "07000000" + "FEFFFFFFFFFFFFFF" + "02000000");
+
+    [Fact] public void AWorldGenerationModsMetadataStillNamesTheWorld()
+    {
+        Assert.Equal(new WorldIdentity("Abc", "s", 7, -2, 42, "Abc/_main.1.fwl2"), WorldIdentity.Parse(ModGeneratorMetadata, "Abc/_main.1.fwl2"));
+        // A whole fixture of such a world reads as one (server-load and start --world-fixture).
+        string fixture = FakeInstalls.World(Path.Combine(_root, "modded"), "Abc");
+        File.WriteAllBytes(Path.Combine(fixture, "Abc", "_main.1.fwl2"), ModGeneratorMetadata);
+        Assert.Equal(-2, WorldIdentity.Read(fixture).Uid);
+        // The mod's block must fit: a length past the end is refused, not read as the world's name.
+        byte[] overlong = (byte[])ModGeneratorMetadata.Clone();
+        overlong[12] = 0x7F;
+        Assert.Contains("world-generation mod's header does not fit", Assert.Throws<InvalidDataException>(() => WorldIdentity.Parse(overlong, "Abc/_main.1.fwl2")).Message);
+    }
+
     [Fact] public void AFixtureHoldingAnotherUidThanThePlanIsTheWrongFixture()
     {
         string fixture = FakeInstalls.World(Path.Combine(_root, "fixture"), "SealFixture", -123456789);
