@@ -50,6 +50,21 @@ public sealed class UnityMathTests
         Assert.Equal(0x2EDBE6FE, BitConverter.SingleToInt32Bits(Vector2.kEpsilon * Vector2.kEpsilon));
     }
 
+    // The operators themselves at the threshold: a squared distance of exactly kEpsilon * kEpsilon (float) is not equal
+    // (strict <, computed in float), one ulp of distance less is; Quaternion == needs a dot strictly above 0.999999f.
+    [Fact] public void TheOperatorsCompareStrictlyBelowTheThresholdInFloat()
+    {
+        float at = Vector2.kEpsilon, below = MathF.BitDecrement(Vector2.kEpsilon);
+        Assert.False(new Vector2(0f, 0f) == new Vector2(at, 0f));
+        Assert.True(new Vector2(0f, 0f) == new Vector2(below, 0f));
+        Assert.False(new Vector3(0f, 0f, 0f) == new Vector3(0f, 0f, at));
+        Assert.True(new Vector3(0f, 0f, 0f) == new Vector3(0f, 0f, below));
+        Assert.Equal(0x3F7FFFEF, BitConverter.SingleToInt32Bits(1f - Quaternion.kEpsilon));
+        float dotAt = 1f - Quaternion.kEpsilon;
+        Assert.False(Quaternion.identity == new Quaternion(0f, 0f, 0f, dotAt));
+        Assert.True(Quaternion.identity == new Quaternion(0f, 0f, 0f, MathF.BitIncrement(dotAt)));
+    }
+
     [Fact] public void HashCodesAreUnitys()
     {
         var v2 = new Vector2(1.5f, -2.25f);
