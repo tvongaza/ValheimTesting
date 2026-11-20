@@ -311,7 +311,12 @@ public sealed class OwnedRunPreflightTests : IDisposable
 
     [Fact] public void AWorldGenerationModsMetadataStillNamesTheWorld()
     {
-        Assert.Equal(new WorldIdentity("Abc", "s", 7, -2, 42, "Abc/_main.1.fwl2"), WorldIdentity.Parse(ModGeneratorMetadata, "Abc/_main.1.fwl2"));
+        var identity = WorldIdentity.Parse(ModGeneratorMetadata, "Abc/_main.1.fwl2");
+        Assert.Equal(new WorldIdentity("Abc", "s", 7, -2, 42, "Abc/_main.1.fwl2") { Generator = "mod" }, identity);
+        Assert.Null(WorldIdentity.Parse(SmallMetadata, "Abc.fwl").Generator); // the game's own save names no generator
+        // The run says before staging that the world needs its generator mod.
+        Assert.Contains("world-generation mod mod; the game loads it only with that mod installed", FixtureBake.GeneratorNote(identity));
+        Assert.Null(FixtureBake.GeneratorNote(WorldIdentity.Parse(SmallMetadata, "Abc.fwl")));
         // A whole fixture of such a world reads as one (server-load and start --world-fixture).
         string fixture = FakeInstalls.World(Path.Combine(_root, "modded"), "Abc");
         File.WriteAllBytes(Path.Combine(fixture, "Abc", "_main.1.fwl2"), ModGeneratorMetadata);

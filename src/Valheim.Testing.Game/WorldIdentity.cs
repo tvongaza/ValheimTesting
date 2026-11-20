@@ -17,6 +17,12 @@ public sealed record WorldIdentity(string Name, string SeedName, int Seed, long 
     public string UidText => Uid.ToString(CultureInfo.InvariantCulture);
 
     /// <summary>
+    /// The world-generation mod that saved this world's metadata in its own shape (Worldhalla writes its generator's id, such as
+    /// <c>dev.gurebu.riverheim</c>), or null for a world the game saved itself. Such a world loads only where that mod is installed.
+    /// </summary>
+    public string? Generator { get; init; }
+
+    /// <summary>
     /// The one owner of a world fixture's structure, completeness and identity: the identity of the one world in
     /// <paramref name="fixture"/>, refusing incomplete layouts before anything is copied. This host-independent overload
     /// establishes no world-version compatibility; runtime admission separately checks the actual hosting installation.
@@ -331,6 +337,7 @@ public sealed record WorldIdentity(string Name, string SeedName, int Seed, long 
 
     // The first word of a world-generation mod's metadata in place of the world version (Worldhalla 1.0.1 writes it).
     private const int ExtendedHeader = unchecked((int)0x80000000);
+    private const string UnnamedGenerator = "an unnamed world-generation mod";
 
     private static WorldIdentity ParseMetadata(byte[] bytes, string file, out bool? needsDb, out int? generation)
     {
@@ -343,14 +350,21 @@ public sealed record WorldIdentity(string Name, string SeedName, int Seed, long 
             var package = bytes.AsSpan(4, length);
             int at = 0;
             int version = BinaryPrimitives.ReadInt32LittleEndian(package[at..]); at += 4;
+            string? generator = null;
             if (version == ExtendedHeader)
             {
                 // A world-generation mod's save (Worldhalla 1.0.1, #988): the marker, the game's world version, then a
                 // length-prefixed block of the mod's own (its generator id and settings) before the game's fields.
                 version = BinaryPrimitives.ReadInt32LittleEndian(package[at..]); at += 4;
                 int extension = BinaryPrimitives.ReadInt32LittleEndian(package[at..]); at += 4;
-                if (version < 0 || extension < 0 || extension > package.Length - at)
+                if (version < 0) throw new InvalidDataException("its world version after a world-generation mod's marker is invalid");
+                if (extension < 0 || extension > package.Length - at)
                     throw new InvalidDataException("its world-generation mod's header does not fit the file");
+                // The block starts with the generator's id (Worldhalla: the generator mod's plugin GUID, such as dev.gurebu.riverheim).
+                int inBlock = 0;
+                try { generator = ReadString(package.Slice(at, extension), ref inBlock); }
+                catch (Exception error) when (error is InvalidDataException or IndexOutOfRangeException or ArgumentOutOfRangeException or DecoderFallbackException) { }
+                if (string.IsNullOrEmpty(generator)) generator = UnnamedGenerator;
                 at += extension;
             }
             string name = ReadString(package, ref at), seedName = ReadString(package, ref at);
@@ -361,7 +375,7 @@ public sealed record WorldIdentity(string Name, string SeedName, int Seed, long 
             // the package ends before it: only a never-saved world is read by it).
             if (version >= 26) { if (package.Length - at >= 4) generation = BinaryPrimitives.ReadInt32LittleEndian(package[at..]); at += 4; }
             needsDb = version < 30 ? false : at < package.Length ? package[at] != 0 : null;
-            return new WorldIdentity(name, seedName, seed, uid, version, file);
+            return new WorldIdentity(name, seedName, seed, uid, version, file) { Generator = generator };
         }
         catch (Exception error) when (error is ArgumentOutOfRangeException or IndexOutOfRangeException or DecoderFallbackException or InvalidDataException)
         {
