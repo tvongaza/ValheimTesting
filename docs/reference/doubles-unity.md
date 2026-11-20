@@ -21,7 +21,9 @@ The doubles give your mod's Unity, BepInEx and Harmony calls real behaviour wher
 | Inactive objects | `SetActive` and `activeInHierarchy` work as in Unity | Without `includeInactive`, only objects active in their hierarchy count |
 | Transform hierarchy | `SetParent` (keeps world position), `parent`, `GetChild`, `Find("a/b")`, `root`, `localPosition`, `localScale` | Rotation is not composed: under a rotated parent, world position and `TransformPoint` are wrong |
 | Rotation | `rotation` is stored (identity by default); `localRotation` derived; `eulerAngles` as Unity's Euler angles | Collider bounds ignore the object's own rotation |
-| `Quaternion`, `Color` | `*`, `eulerAngles` in [0, 360), `Inverse`; `Color` `==` with tolerance, `Equals` exact | — |
+| `Quaternion` | `*`, `eulerAngles` in [0, 360), `Inverse` | — |
+| Math equality | `Vector2`, `Vector3`, `Quaternion` and `Color` `==` with Unity's tolerance (a squared distance under 1e-10; for `Quaternion`, a dot product within 1e-6 of 1), `Equals` exact; `Vector2Int` `==` exact. Each is `IEquatable<T>` with Unity's `GetHashCode` | `HashSet` and `Dictionary` key on `Equals`, so two points `==` calls equal are two keys, as in the game |
+| Inlining | `Vector2`, `Vector3`, `Vector2Int`, `Quaternion` and `Color` carry `AggressiveInlining` where the game's `UnityEngine.CoreModule` does, so a timing on the game's Mono runtime matches the game | — |
 | `Instantiate` | Copies components, children, public and `[SerializeField]` fields, lists, arrays, `[Serializable]` classes | Dictionaries, delegates and private state get the constructor's values |
 | Copy names | A copy keeps the prefab's name; `Utils.GetPrefabName` handles both forms | Code matching `name + "(Clone)"` finds none |
 | Scene search | `FindObjectsByType`, `FindFirstObjectByType`, `FindAnyObjectByType` find every GameObject and component; `FindObjectsInactive.Include` adds inactive ones | Assets (`ZNetScene.AddPrefab` prefabs, `GameObject.IsAsset`), their children and components are not found; copies are |

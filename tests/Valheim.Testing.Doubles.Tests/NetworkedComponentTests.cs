@@ -125,6 +125,21 @@ public sealed class NetworkedComponentTests : IDisposable
         Assert.Contains(copy, ZNetScene.instance!.Live);
     }
 
+    // The game's Awake tests the stored scale with Vector3 != (approximate): a scale within 1e-5 of zero is "no scale",
+    // and the view falls back to the scalar, as in the game.
+    [Fact] public void AStoredScaleWithinUnitysEpsilonOfZeroFallsBackToTheScalar()
+    {
+        var template = Template("Greydwarf_Root");
+        var view = template.AddComponent<ZNetView>(); view.m_persistent = true; view.m_syncInitialScale = true;
+        var loaded = ZDOMan.instance!.CreateNewZDO(new Vector3(5, 30, 5), "Greydwarf_Root".GetStableHashCode());
+        loaded.Set(ZDOVars.s_scaleHash, new Vector3(1e-6f, 0f, 0f));
+        loaded.Set(ZDOVars.s_scaleScalarHash, 3f);
+        ZNetView.m_useInitZDO = true; ZNetView.m_initZDO = loaded;
+        var copy = Object.Instantiate(template, loaded.GetPosition(), loaded.GetRotation());
+        ZNetView.m_useInitZDO = false;
+        Assert.Equal(new Vector3(3f, 3f, 3f), copy.transform.localScale);
+    }
+
     [Fact] public void ANewZdoCarriesTheAuthoredScaleAndThePrefabName()
     {
         var template = Template("TreasureChest_dvergrtown (1)");

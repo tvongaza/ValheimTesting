@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using Valheim.Testing.Doubles;
 // Valheim.Testing.Doubles: compile-time stand-ins for the Unity, Valheim, BepInEx and Jotunn types a mod's
 // pure-logic sources use, so those sources compile and run in an ordinary test project without the game.
@@ -8,27 +9,35 @@ using Valheim.Testing.Doubles;
 // UnityEngine: managed math as Unity computes it, and scene objects (the scene itself is in SceneDoubles.cs).
 namespace UnityEngine;
 
-public partial struct Vector2
+// The math structs copy the game's UnityEngine.CoreModule: the same [MethodImpl(AggressiveInlining)] marks (Mono honours
+// them, so a timing taken offline on the game's runtime matches the game), IEquatable<T>, an exact Equals and Unity's
+// GetHashCode, and Unity's == (approximate for the float types, so == and Equals can disagree as in the game).
+public partial struct Vector2 : System.IEquatable<Vector2>
 {
+    public const float kEpsilon = 1e-5f;
+
     public float x;
     public float y;
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public Vector2(float x, float y)
     {
         this.x = x;
         this.y = y;
     }
 
-    public float sqrMagnitude => x * x + y * y;
-    public float magnitude => (float)System.Math.Sqrt(x * x + y * y);
+    public float sqrMagnitude { [MethodImpl(MethodImplOptions.AggressiveInlining)] get => x * x + y * y; }
+    public float magnitude { [MethodImpl(MethodImplOptions.AggressiveInlining)] get => (float)System.Math.Sqrt(x * x + y * y); }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void Normalize()
     {
         float m = magnitude;
-        if (m > 1e-5f) { x /= m; y /= m; }
+        if (m > kEpsilon) { x /= m; y /= m; }
         else { x = 0; y = 0; }
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static float Distance(Vector2 a, Vector2 b)
     {
         float dx = a.x - b.x, dy = a.y - b.y;
@@ -37,6 +46,7 @@ public partial struct Vector2
 
     public Vector2 normalized
     {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         get
         {
             var v = this;
@@ -45,39 +55,60 @@ public partial struct Vector2
         }
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static float SqrMagnitude(Vector2 a) => a.x * a.x + a.y * a.y;
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static float Dot(Vector2 a, Vector2 b) => a.x * b.x + a.y * b.y;
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Vector2 Lerp(Vector2 a, Vector2 b, float t)
     {
         t = Mathf.Clamp01(t);
         return new Vector2(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t);
     }
 
-    public static Vector2 operator +(Vector2 a, Vector2 b) => new(a.x + b.x, a.y + b.y);
-    public static Vector2 operator -(Vector2 a, Vector2 b) => new(a.x - b.x, a.y - b.y);
-    public static Vector2 operator -(Vector2 a) => new(-a.x, -a.y);
-    public static Vector2 operator *(Vector2 a, float d) => new(a.x * d, a.y * d);
-    public static Vector2 operator *(float d, Vector2 a) => new(a.x * d, a.y * d);
+    [MethodImpl(MethodImplOptions.AggressiveInlining)] public static Vector2 operator +(Vector2 a, Vector2 b) => new(a.x + b.x, a.y + b.y);
+    [MethodImpl(MethodImplOptions.AggressiveInlining)] public static Vector2 operator -(Vector2 a, Vector2 b) => new(a.x - b.x, a.y - b.y);
+    [MethodImpl(MethodImplOptions.AggressiveInlining)] public static Vector2 operator -(Vector2 a) => new(-a.x, -a.y);
+    [MethodImpl(MethodImplOptions.AggressiveInlining)] public static Vector2 operator *(Vector2 a, float d) => new(a.x * d, a.y * d);
+    [MethodImpl(MethodImplOptions.AggressiveInlining)] public static Vector2 operator *(float d, Vector2 a) => new(a.x * d, a.y * d);
 
-    public override bool Equals(object? other) =>
-        other is Vector2 v && v.x == x && v.y == y;
+    /// <summary>As Unity's: every component exactly equal (unlike <c>==</c>).</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public override bool Equals(object? other) => other is Vector2 v && Equals(v);
 
+    /// <summary>As Unity's: every component exactly equal (unlike <c>==</c>).</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public bool Equals(Vector2 other) => x == other.x && y == other.y;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public override int GetHashCode() => x.GetHashCode() ^ (y.GetHashCode() << 2);
 
-    public static bool operator ==(Vector2 a, Vector2 b) => a.x == b.x && a.y == b.y;
-    public static bool operator !=(Vector2 a, Vector2 b) => !(a == b);
+    /// <summary>As Unity's: equal when the squared distance between the two is under <c>kEpsilon * kEpsilon</c> (1e-10).</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static bool operator ==(Vector2 lhs, Vector2 rhs)
+    {
+        float diffX = lhs.x - rhs.x, diffY = lhs.y - rhs.y;
+        return diffX * diffX + diffY * diffY < kEpsilon * kEpsilon;
+    }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static bool operator !=(Vector2 lhs, Vector2 rhs) => !(lhs == rhs);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public override string ToString() => $"({x:F1}, {y:F1})";
 }
 
-public partial struct Vector3
+public partial struct Vector3 : System.IEquatable<Vector3>
 {
+    public const float kEpsilon = 1e-5f;
+
     public float x;
     public float y;
     public float z;
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public Vector3(float x, float y, float z)
     {
         this.x = x;
@@ -85,30 +116,57 @@ public partial struct Vector3
         this.z = z;
     }
 
-    public static Vector3 zero => new(0f, 0f, 0f);
+    public static Vector3 zero { [MethodImpl(MethodImplOptions.AggressiveInlining)] get => new(0f, 0f, 0f); }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static float Distance(Vector3 a, Vector3 b)
     {
         float dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z;
         return (float)System.Math.Sqrt(dx * dx + dy * dy + dz * dz);
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static float SqrMagnitude(Vector3 a) => a.x * a.x + a.y * a.y + a.z * a.z;
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Vector3 Lerp(Vector3 a, Vector3 b, float t)
     {
         t = Mathf.Clamp01(t);
         return new Vector3(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t);
     }
 
-    public static Vector3 operator +(Vector3 a, Vector3 b) => new(a.x + b.x, a.y + b.y, a.z + b.z);
-    public static Vector3 operator -(Vector3 a, Vector3 b) => new(a.x - b.x, a.y - b.y, a.z - b.z);
-    public static Vector3 operator *(Vector3 a, float d) => new(a.x * d, a.y * d, a.z * d);
+    [MethodImpl(MethodImplOptions.AggressiveInlining)] public static Vector3 operator +(Vector3 a, Vector3 b) => new(a.x + b.x, a.y + b.y, a.z + b.z);
+    [MethodImpl(MethodImplOptions.AggressiveInlining)] public static Vector3 operator -(Vector3 a, Vector3 b) => new(a.x - b.x, a.y - b.y, a.z - b.z);
+    [MethodImpl(MethodImplOptions.AggressiveInlining)] public static Vector3 operator *(Vector3 a, float d) => new(a.x * d, a.y * d, a.z * d);
 
+    /// <summary>As Unity's: every component exactly equal (unlike <c>==</c>).</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public override bool Equals(object? other) => other is Vector3 v && Equals(v);
+
+    /// <summary>As Unity's: every component exactly equal (unlike <c>==</c>).</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public bool Equals(Vector3 other) => x == other.x && y == other.y && z == other.z;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public override int GetHashCode() => x.GetHashCode() ^ (y.GetHashCode() << 2) ^ (z.GetHashCode() >> 2);
+
+    /// <summary>As Unity's: equal when the squared distance between the two is under <c>kEpsilon * kEpsilon</c> (1e-10).</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static bool operator ==(Vector3 lhs, Vector3 rhs)
+    {
+        float diffX = lhs.x - rhs.x, diffY = lhs.y - rhs.y, diffZ = lhs.z - rhs.z;
+        return diffX * diffX + diffY * diffY + diffZ * diffZ < kEpsilon * kEpsilon;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static bool operator !=(Vector3 lhs, Vector3 rhs) => !(lhs == rhs);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public override string ToString() => $"({x:F1}, {y:F1}, {z:F1})";
 }
 
-public partial struct Color
+// The game's Color marks ToString AggressiveInlining and nothing else the doubles define.
+public partial struct Color : System.IEquatable<Color>
 {
     public float r, g, b, a;
 
@@ -138,21 +196,37 @@ public partial struct Color
     }
     public static bool operator !=(Color lhs, Color rhs) => !(lhs == rhs);
     /// <summary>As Unity's: every component exactly equal (unlike <c>==</c>).</summary>
-    public override bool Equals(object? other) => other is Color c && r.Equals(c.r) && g.Equals(c.g) && b.Equals(c.b) && a.Equals(c.a);
+    public override bool Equals(object? other) => other is Color c && Equals(c);
+    /// <summary>As Unity's: every component exactly equal (unlike <c>==</c>).</summary>
+    public bool Equals(Color other) => r.Equals(other.r) && g.Equals(other.g) && b.Equals(other.b) && a.Equals(other.a);
     public override int GetHashCode() => r.GetHashCode() ^ (g.GetHashCode() << 2) ^ (b.GetHashCode() >> 2) ^ (a.GetHashCode() >> 1);
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public override string ToString() => $"RGBA({r:F3}, {g:F3}, {b:F3}, {a:F3})";
 }
 
-public partial struct Vector2Int
+public partial struct Vector2Int : System.IEquatable<Vector2Int>
 {
     public int x;
     public int y;
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public Vector2Int(int x, int y)
     {
         this.x = x;
         this.y = y;
     }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public override bool Equals(object? other) => other is Vector2Int v && Equals(v);
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public bool Equals(Vector2Int other) => x == other.x && y == other.y;
+    /// <summary>As Unity's: the components times two primes, xor'd.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public override int GetHashCode() => unchecked((x * 73856093) ^ (y * 83492791));
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static bool operator ==(Vector2Int lhs, Vector2Int rhs) => lhs.x == rhs.x && lhs.y == rhs.y;
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static bool operator !=(Vector2Int lhs, Vector2Int rhs) => !(lhs == rhs);
 }
 
 public partial struct Mathf
@@ -212,12 +286,16 @@ public partial struct Mathf
 /// it from. <see cref="Euler"/> sets both, in Unity's rotation order (z, then x, then y); a quaternion read back from a
 /// package has its components only.
 /// </summary>
-public partial struct Quaternion
+public partial struct Quaternion : System.IEquatable<Quaternion>
 {
+    public const float kEpsilon = 1e-6f;
+
     public float x, y, z, w;
     [TestOnly] public float EulerX, EulerY, EulerZ;
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public Quaternion(float x, float y, float z, float w) { this.x = x; this.y = y; this.z = z; this.w = w; EulerX = EulerY = EulerZ = 0f; }
-    public static Quaternion identity => new(0f, 0f, 0f, 1f);
+    public static Quaternion identity { [MethodImpl(MethodImplOptions.AggressiveInlining)] get => new(0f, 0f, 0f, 1f); }
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Quaternion Euler(float x, float y, float z)
     {
         double hx = x * System.Math.PI / 360.0, hy = y * System.Math.PI / 360.0, hz = z * System.Math.PI / 360.0;
@@ -226,6 +304,7 @@ public partial struct Quaternion
             (float)(sx * cy * cz + cx * sy * sz), (float)(cx * sy * cz - sx * cy * sz),
             (float)(cx * cy * sz - sx * sy * cz), (float)(cx * cy * cz + sx * sy * sz)) { EulerX = x, EulerY = y, EulerZ = z };
     }
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Quaternion Euler(Vector3 euler) => Euler(euler.x, euler.y, euler.z);
 
     /// <summary>
@@ -234,6 +313,7 @@ public partial struct Quaternion
     /// </summary>
     public Vector3 eulerAngles
     {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         get
         {
             double sinX = 2.0 * ((double)w * x - (double)y * z);
@@ -242,6 +322,7 @@ public partial struct Quaternion
             double az = System.Math.Atan2(2.0 * ((double)w * z + (double)x * y), 1.0 - 2.0 * ((double)x * x + (double)z * z));
             return new Vector3(Degrees(ax), Degrees(ay), Degrees(az));
         }
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         set => this = Euler(value);
     }
     private static float Degrees(double radians)
@@ -251,6 +332,7 @@ public partial struct Quaternion
     }
 
     /// <summary>Unity's composition: <paramref name="lhs"/> after <paramref name="rhs"/> (the Hamilton product).</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Quaternion operator *(Quaternion lhs, Quaternion rhs) => new(
         lhs.w * rhs.x + lhs.x * rhs.w + lhs.y * rhs.z - lhs.z * rhs.y,
         lhs.w * rhs.y + lhs.y * rhs.w + lhs.z * rhs.x - lhs.x * rhs.z,
@@ -272,6 +354,25 @@ public partial struct Quaternion
 
     /// <summary>The inverse of a unit rotation (its conjugate).</summary>
     public static Quaternion Inverse(Quaternion rotation) => new(-rotation.x, -rotation.y, -rotation.z, rotation.w);
+
+    /// <summary>
+    /// As Unity's: the same rotation when the dot product of the two is within <see cref="kEpsilon"/> of 1 (unlike
+    /// <see cref="Equals(Quaternion)"/>). Unity computes it with Quaternion.Dot, which the doubles do not define.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static bool operator ==(Quaternion lhs, Quaternion rhs) =>
+        lhs.x * rhs.x + lhs.y * rhs.y + lhs.z * rhs.z + lhs.w * rhs.w > 1.0f - kEpsilon;
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static bool operator !=(Quaternion lhs, Quaternion rhs) => !(lhs == rhs);
+
+    /// <summary>As Unity's: every component exactly equal (unlike <c>==</c>); the test-only Euler fields do not count.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public override bool Equals(object? other) => other is Quaternion q && Equals(q);
+    /// <summary>As Unity's: every component exactly equal (unlike <c>==</c>); the test-only Euler fields do not count.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public bool Equals(Quaternion other) => x.Equals(other.x) && y.Equals(other.y) && z.Equals(other.z) && w.Equals(other.w);
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public override int GetHashCode() => x.GetHashCode() ^ (y.GetHashCode() << 2) ^ (z.GetHashCode() >> 2) ^ (w.GetHashCode() >> 1);
 }
 
 /// <summary>

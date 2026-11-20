@@ -281,7 +281,7 @@ public partial class ZNetView : UnityEngine.MonoBehaviour
             if (m_syncInitialScale)
             {
                 var scale = Zdo.GetVec3(ZDOVars.s_scaleHash, UnityEngine.Vector3.zero);
-                if (!scale.Equals(UnityEngine.Vector3.zero)) transform.localScale = scale;
+                if (scale != UnityEngine.Vector3.zero) transform.localScale = scale; // approximate, as the game's Awake (op_Inequality)
                 else
                 {
                     float scalar = Zdo.GetFloat(ZDOVars.s_scaleScalarHash, transform.localScale.x);
