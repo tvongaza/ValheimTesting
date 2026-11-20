@@ -3,7 +3,7 @@ using Valheim.Testing.Game;
 using Xunit;
 using Valheim.Testing.GameSessions;
 
-// The checked-in fixtures are real: two bounded dumps a Valheim 1.0.16 dedicated server wrote on 2 October 2026 for a
+// The checked-in fixtures are real: two bounded dumps a Valheim 1.0.21 game wrote on 20 November 2026 for a
 // disposable world (see WorldDumpCaptureTests for their provenance), with the manifests the capture writes for them.
 public class WorldDumpManifestTests
 {
@@ -17,10 +17,13 @@ public class WorldDumpManifestTests
         Assert.Equal((8, 8, 128f, -400f, 496f), (coarse.CountX, coarse.CountZ, coarse.Spacing, coarse.OriginX, coarse.MaxX));
         Assert.Equal((17, 17, 8f, -64f, 64f), (fine.CountX, fine.CountZ, fine.Spacing, fine.OriginZ, fine.MaxZ));
         Assert.Equal("dumpcontract1-fine", fine.Provenance);
-        // The first fine row: x,z = -64,-64; height 56.1 m (metres); base_height 0.29914 (unitless generator value).
-        Assert.Equal(56.1f, fine.GetHeight(-64, -64));
-        Assert.Equal(.29914f, fine.GetBaseHeight(-64, -64));
+        // The first fine row: x,z = -64,-64; height 56.0921173 m (metres); base_height 0.2991419 (unitless generator value).
+        Assert.Equal(56.0921173f, fine.GetHeight(-64, -64));
+        Assert.Equal(.2991419f, fine.GetBaseHeight(-64, -64));
         Assert.Equal(TerrainBiome.Meadows, fine.GetBiome(-64, -64));
+        // A coarse node in a BlackForest/Meadows heightmap: the generator's height and the rendered (blended) ground differ.
+        Assert.Equal((78.4846039f, 76.7147141f), (coarse.GetHeight(368, -400), coarse.GetBlendedHeight(368, -400)));
+        Assert.Equal(fine.GetHeight(-64, -64), fine.GetBlendedHeight(-64, -64));
         Assert.Contains(Nodes(coarse), p => coarse.GetBiome(p.X, p.Z) == TerrainBiome.BlackForest);
         Assert.Contains(Nodes(fine).Concat(Nodes(coarse)), p => { var g = fine.Contains(p.X, p.Z) ? fine : coarse; g.GetRiverWeight(p.X, p.Z, out float w, out _); return w > 0; });
     }
@@ -50,8 +53,8 @@ public class WorldDumpManifestTests
         Assert.Equal((289, 63), (fineNodes, coarseOnly)); // one coarse node, (-16,-16), lies inside the fine window
         // Both dumps sampled the same live world: where their lattices share a node, every native field agrees.
         coarseGrid.GetRiverWeight(-16, -16, out float coarseRiver, out _); fineGrid.GetRiverWeight(-16, -16, out float fineRiver, out _);
-        Assert.Equal((68.1f, .31711f, TerrainBiome.Meadows, coarseRiver), (fineGrid.GetHeight(-16, -16), fineGrid.GetBaseHeight(-16, -16), fineGrid.GetBiome(-16, -16), fineRiver));
-        Assert.Equal((68.1f, .31711f), (coarseGrid.GetHeight(-16, -16), coarseGrid.GetBaseHeight(-16, -16)));
+        Assert.Equal((68.05144f, .317108721f, TerrainBiome.Meadows, coarseRiver), (fineGrid.GetHeight(-16, -16), fineGrid.GetBaseHeight(-16, -16), fineGrid.GetBiome(-16, -16), fineRiver));
+        Assert.Equal((68.05144f, .317108721f), (coarseGrid.GetHeight(-16, -16), coarseGrid.GetBaseHeight(-16, -16)));
         Assert.Equal("dumpcontract1-coarse", layered.BaseHeightLayer.Provenance);
         // (0,0) is a fine node but lies between coarse nodes: base height is still the coarse lattice's interpolation.
         Assert.True(fineGrid.IsSampleNode(0, 0));
@@ -73,7 +76,7 @@ public class WorldDumpManifestTests
         var cases = new (Action<WorldDumpManifest> Change, string Reason)[]
         {
             (m => m.MinX = -56, "bounds"), (m => m.Step = 16, "spacing"), (m => m.WorldUid = "", "world UID"),
-            (m => m.Reply = "", "recorded command and reply"), (m => m.Name = "", "layer name"), (m => m.Step = 4, "5..1000"),
+            (m => m.Reply = "", "recorded command and reply"), (m => m.Name = "", "layer name"), (m => m.Step = 0, "1..1000"),
             (m => m.Sha256 = "abc", "64-digit"), (m => m.Sha256 = null!, "64-digit"),
         };
         foreach (var (change, reason) in cases)
@@ -91,7 +94,7 @@ public class WorldDumpManifestTests
         byte[] marked = [0xEF, 0xBB, 0xBF, .. File.ReadAllBytes(manifest.Path)];
         File.WriteAllBytes(manifest.Path, marked);
         manifest.Sha256 = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(marked)).ToLowerInvariant();
-        Assert.Equal(56.1f, manifest.Verify().GetHeight(-64, -64));
+        Assert.Equal(56.0921173f, manifest.Verify().GetHeight(-64, -64));
     }
 
     [Fact]
@@ -124,6 +127,31 @@ public class WorldDumpManifestTests
         Assert.Contains("different world", Assert.Throws<InvalidDataException>(() => LayeredDumpTerrain.Load(new[] { Real("coarse"), other }, "dumpcontract1-coarse")).Message);
         other = Copy(Real("fine"), copy.Directory); other.GameBuild = "1.0.17";
         Assert.Contains("game builds", Assert.Throws<InvalidDataException>(() => LayeredDumpTerrain.Load(new[] { Real("coarse"), other }, "dumpcontract1-coarse")).Message);
+    }
+
+    [Theory]
+    [InlineData(1, true, null)]
+    [InlineData(4, true, null)]
+    [InlineData(5, false, null)]
+    [InlineData(1000, false, null)]
+    [InlineData(4, false, "needs a window")]
+    [InlineData(1, false, "needs a window")]
+    [InlineData(0, true, "1..1000")]
+    [InlineData(1001, true, "1..1000")]
+    public void OneStepRuleServesTheCaptureAndTheManifest(int step, bool windowed, string? reason)
+    {
+        string? error = WorldDumpManifest.StepError(step, windowed);
+        if (reason == null) Assert.Null(error);
+        else Assert.Contains(reason, error);
+    }
+
+    [Fact]
+    public void ADumpWithoutTheBlendedHeightColumnIsNotANativeDump()
+    {
+        using var files = new PinnedDumpFixture();
+        string old = "x,z,height,biome,river,river_width,base_height\n-16,-16,1,Meadows,0,0,0.1\n-8,-16,1,Meadows,0,0,0.1\n-16,-8,1,Meadows,0,0,0.1\n-8,-8,1,Meadows,0,0,0.1\n";
+        Assert.Contains("native header", Assert.Throws<InvalidDataException>(() => files.Capture("old", old, 8)).Message);
+        Assert.Empty(Directory.GetFileSystemEntries(files.Directory));
     }
 
     private static WorldDumpManifest Copy(WorldDumpManifest manifest, string directory)

@@ -16,9 +16,25 @@ namespace Valheim.Testing;
 public sealed class WorldDumpManifest
 {
     /// <summary>The native header, exactly: a dump with another layout is not a pinned native dump.</summary>
-    public const string Header = "x,z,height,biome,river,river_width,base_height";
+    public const string Header = "x,z,height,biome,river,river_width,base_height,blended_height";
     /// <summary>ValheimCLI's dump lattice starts here on both axes, so every node is <c>-10000 + i * step</c>.</summary>
     public const float LatticeOrigin = -10000f;
+    /// <summary>The finest dump step, in metres: the game's heightmap vertices are 1 m apart. Below
+    /// <see cref="MinimumWholeWorldStep"/> ValheimCLI dumps only a window.</summary>
+    public const int MinimumStep = 1;
+    /// <summary>The finest step ValheimCLI accepts without a window, in metres.</summary>
+    public const int MinimumWholeWorldStep = 5;
+    /// <summary>The coarsest dump step, in metres.</summary>
+    public const int MaximumStep = 1000;
+
+    /// <summary>
+    /// The one step rule of a dump: <see cref="MinimumStep"/>..<see cref="MaximumStep"/> metres, and at least
+    /// <see cref="MinimumWholeWorldStep"/> without a window. Null when allowed, else the reason.
+    /// </summary>
+    public static string? StepError(int step, bool windowed) =>
+        step < MinimumStep || step > MaximumStep ? $"the step must be {MinimumStep}..{MaximumStep} metres"
+        : !windowed && step < MinimumWholeWorldStep ? $"a step below {MinimumWholeWorldStep} metres needs a window"
+        : null;
 
     /// <summary>The layer's name; a layered reader selects the base-height layer by it and names it in errors.</summary>
     public string Name { get; set; } = "";
@@ -44,7 +60,7 @@ public sealed class WorldDumpManifest
 
     /// <summary>
     /// Loads <see cref="Path"/> only when it is the exact file this manifest describes: its SHA-256, the native header,
-    /// the biome, river and base-height layers, a complete grid (no missing, repeated or ragged node), the recorded
+    /// the biome, river, base-height and blended-height layers, a complete grid (no missing, repeated or ragged node), the recorded
     /// spacing and bounds, and nodes on ValheimCLI's lattice. The grid's provenance is <see cref="Name"/>.
     /// </summary>
     public GridDumpTerrain Verify()
@@ -55,7 +71,8 @@ public sealed class WorldDumpManifest
             throw new InvalidDataException($"Dump '{Name}' needs the world UID, seed and game build from its pinned native run.");
         if (string.IsNullOrWhiteSpace(Command) || string.IsNullOrWhiteSpace(Reply))
             throw new InvalidDataException($"Dump '{Name}' needs the recorded command and reply that made it.");
-        if (Step < 5 || Step > 1000) throw new InvalidDataException($"Dump '{Name}': the step must be 5..1000 metres.");
+        // The recorded command says whether the dump was a window, so the one step rule applies here as at capture.
+        if (StepError(Step, windowed: Command.IndexOf(" --window ", StringComparison.Ordinal) >= 0) is { } stepError) throw new InvalidDataException($"Dump '{Name}': {stepError}.");
         if (Sha256 == null || Sha256.Length != 64 || !Sha256.All(Uri.IsHexDigit)) throw new InvalidDataException($"Dump '{Name}' needs a 64-digit SHA-256.");
         string file = System.IO.Path.GetFileName(Path);
         if (!Hash(Path).Equals(Sha256, StringComparison.OrdinalIgnoreCase))
@@ -66,8 +83,8 @@ public sealed class WorldDumpManifest
         GridDumpTerrain grid;
         using (var input = new StreamReader(Path))
             grid = GridDumpTerrain.Read(input, Name); // also refuses missing, duplicate, ragged and non-finite cells
-        if (!grid.HasBaseHeight || !grid.HasBiome || !grid.HasRiver)
-            throw new InvalidDataException($"{file}: native biome, river and base_height layers are required.");
+        if (!grid.HasBaseHeight || !grid.HasBiome || !grid.HasRiver || !grid.HasBlendedHeight)
+            throw new InvalidDataException($"{file}: native biome, river, base_height and blended_height layers are required.");
         if (grid.Spacing != Step || grid.OriginX != MinX || grid.OriginZ != MinZ || grid.MaxX != MaxX || grid.MaxZ != MaxZ)
             throw new InvalidDataException($"{file}: grid bounds or spacing differ from the pinned dump manifest.");
         OnLattice(grid.OriginX, "x");

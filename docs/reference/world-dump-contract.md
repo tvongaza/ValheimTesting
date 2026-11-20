@@ -27,7 +27,7 @@ Each call writes `<name>.csv` and `<name>.json` into `dumps`. It returns the `Wo
 
 | Step | What it does | Refuses when |
 |---|---|---|
-| Check inputs | Validates the actor, names and numbers | Actor not pinned; step outside 5..1000; window not finite or radius not positive |
+| Check inputs | Validates the actor, names and numbers | Actor not pinned; step outside 1..1000, or below 5 without a window; window not finite or radius not positive |
 | Check paths | Validates the host directory and local names | Host directory not absolute or has whitespace; `<name>.csv` or `<name>.json` exists |
 | Read world | Runs `cli_world` | Not exactly one loaded world with a seed and UID |
 | Dump | Runs `cli_world_dump <step> <hostDirectory>`, plus `--window x,z,radius` | Not exactly one `OK: WORLD_DUMP` line |
@@ -55,10 +55,10 @@ GridDumpTerrain site = manifest.Verify();
 `WorldDump.ReadManifest(path)` resolves the CSV next to the manifest, so the pair can move together. It verifies nothing. `manifest.Verify()` returns the `GridDumpTerrain` only when the CSV is exactly the file the manifest describes. It checks:
 
 - a layer name, a CSV path, the world UID, seed and game build, and the command and reply
-- a step of 5..1000 metres
+- a step of 1..1000 metres (the file does not say whether it was a window; the capture refused 1..4 m without one)
 - a 64-digit SHA-256 that matches the file
 - the exact native header
-- the biome, river and base-height layers
+- the biome, river, base-height and blended-height layers
 - a complete grid: no missing, repeated, ragged or non-finite node
 - the recorded spacing and bounds
 - an origin on ValheimCLI's lattice
@@ -67,20 +67,21 @@ A failed check throws `InvalidDataException`. `Verify()` does not interpret `Com
 
 ## The native contract
 
-The header is `WorldDumpManifest.Header`: `x,z,height,biome,river,river_width,base_height`.
+The header is `WorldDumpManifest.Header`: `x,z,height,biome,river,river_width,base_height,blended_height`.
 
 | Column | Holds | Units/rounding |
 |---|---|---|
-| `x`, `z` | Horizontal coordinates on the lattice `-10000 + i*step` | Metres |
-| `height` | `WorldGenerator.GetHeight` | Rounded to 0.1 m |
+| `x`, `z` | Horizontal coordinates on the lattice `-10000 + i*step` | Metres, whole numbers |
+| `height` | `WorldGenerator.GetHeight`: the point's own biome | Metres, full float precision |
 | `biome` | The game's own name (`AshLands`) | Text |
-| `river` | River weight | Rounded to 0.01 |
-| `river_width` | River width | Rounded to 0.1 |
-| `base_height` | `WorldGenerator.GetBaseHeight(x,z,false)` | **Unitless** generator value, rounded to 0.00001 |
+| `river` | River weight | Full float precision |
+| `river_width` | River width | Full float precision |
+| `base_height` | `WorldGenerator.GetBaseHeight(x,z,false)` | **Unitless** generator value, full float precision |
+| `blended_height` | The ground `HeightmapBuilder` builds for the zone's heightmap before terrain modifiers: the four corner biomes' `GetBiomeHeight` mixed with the builder's weights | Metres, full float precision |
 
-Increasing x and z follow their world axes. `base_height` is not a second ground elevation.
+Full float precision is invariant-culture text that parses back to the same float (round-trip `R`, else `G9`), so a node read from the file is the game's value (a reader treats -0 as 0). Increasing x and z follow their world axes. `base_height` is not a second ground elevation. `height` and `blended_height` agree wherever a 64 m heightmap's four corners are one biome and differ where they are not; `blended_height` is the ground an unmodified zone has at that vertex. `GetHeight` reads `height`, `GetBlendedHeight` reads `blended_height`.
 
-Node values are exact to the file's precision. Between nodes, `GridDumpTerrain` interpolates bilinearly: an approximation, never a native replay. If a native field disappears or changes meaning, treat it as a contract change to investigate. Do not invent a default.
+Node values are exact. Between nodes, `GridDumpTerrain` interpolates bilinearly: an approximation, never a native replay. If a native field disappears or changes meaning, treat it as a contract change to investigate. Do not invent a default.
 
 ## Layered readers
 
@@ -92,7 +93,7 @@ var terrain = LayeredDumpTerrain.Load(new[] {
 
 `LayeredDumpTerrain.Load(manifests, baseHeightLayer)` verifies every layer. It refuses layers from different worlds or game builds.
 
-- **Steps:** if node-for-node comparisons matter, choose steps that share the global lattice. 128 m and 8 m grids both have nodes at `-10000 + i*128` inside their common bounds.
+- **Steps:** if node-for-node comparisons matter, choose steps that share the global lattice. 128 m and 8 m grids both have nodes at `-10000 + i*128` inside their common bounds. A 1 m window (`step: 1` with a window; 1..4 m need one) holds every 8 m and 128 m node inside it with the same values, and resolves the few-metre Swamp and Black Forest noise that bilinear reading between 8 m nodes misses. `cli_world_dump 1 --window x,z,60` is 121 x 121 samples; the 1,000,000-sample cap still applies.
 - **Window centres:** they need not be on that lattice. ValheimCLI selects nodes from the global origin.
 - **Height, biome, river:** the finest containing layer answers. A coarse-only query falls back to coarse terrain.
 - **Base height:** only the designated layer answers. Outside its lattice, base height is refused, even inside a fine window.
@@ -101,7 +102,9 @@ For the full query rules, see [`Valheim.Testing`](../packages/Valheim.Testing.md
 
 ## Fixtures
 
-`tests/Valheim.Testing.Tests/Fixtures/WorldDump` holds two real dumps from a dedicated server, for the disposable world `DumpContract1`. One is a 128 m 8×8 window; the other an 8 m 17×17 window. Both are byte for byte, with the manifests the capture wrote.
+`tests/Valheim.Testing.Tests/Fixtures/WorldDump` holds two real dumps a hosted game wrote for the disposable world `DumpContract1` (seed `DumpProbe1`), in the full-precision format with `blended_height`. One is a 128 m 8×8 window; the other an 8 m 17×17 window. Both are byte for byte, with the manifests the capture wrote.
+
+The checked-in pair predates the full-precision dump with `blended_height`, so `Verify()` refuses it. Until it is recaptured, the tests that read it are skipped through `PinnedDumpFixture.AwaitingRecapture`; synthetic captures through the same capture code cover the new header, precision and 1 m windows meanwhile.
 
 | Test | Covers |
 |---|---|

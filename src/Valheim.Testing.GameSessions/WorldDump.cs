@@ -29,6 +29,7 @@ public static class WorldDump
     /// writes the CSV and manifest into <paramref name="localDirectory"/> without replacing either. On any failure
     /// neither file is left behind. Returns the manifest with <see cref="WorldDumpManifest.Path"/> set to the local CSV.
     /// </summary>
+    /// <param name="step">Metres between nodes, as <see cref="WorldDumpManifest.StepError"/> allows: 1..1000, and at least 5 without a window.</param>
     /// <param name="gameBuild">The game build the caller pinned for this host (the dump does not report it).</param>
     public static Task<WorldDumpManifest> CaptureAsync(GameActor actor, IGameHost host, string hostDirectory, string name, int step,
         (float X, float Z, float Radius)? window, string gameBuild, string localDirectory, TimeSpan fetchTimeout,
@@ -48,7 +49,7 @@ public static class WorldDump
         if (string.IsNullOrWhiteSpace(hostDirectory) || hostDirectory.Any(char.IsWhiteSpace) || !AbsoluteHostPath.IsMatch(hostDirectory))
             throw new ArgumentException("The host directory must be an absolute path without whitespace (the CLI splits arguments on spaces).", nameof(hostDirectory));
         if (name == null || !SafeName.IsMatch(name)) throw new ArgumentException("Name the dump with letters, digits, '.', '_' or '-'.", nameof(name));
-        if (step < 5 || step > 1000) throw new ArgumentOutOfRangeException(nameof(step), "The dump step must be 5..1000 metres.");
+        if (WorldDumpManifest.StepError(step, window.HasValue) is { } stepError) throw new ArgumentOutOfRangeException(nameof(step), $"Dump step {step}: {stepError}.");
         if (window is { } w && (!float.IsFinite(w.X) || !float.IsFinite(w.Z) || !float.IsFinite(w.Radius) || w.Radius <= 0))
             throw new ArgumentOutOfRangeException(nameof(window), "A window needs a finite centre and a positive radius.");
         if (string.IsNullOrWhiteSpace(gameBuild)) throw new ArgumentException("Record the pinned game build.", nameof(gameBuild));

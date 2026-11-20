@@ -14,7 +14,7 @@ internal sealed class PinnedDumpFixture : IDisposable
     public const string HostDirectory = "C:/dumps";
     public string Directory { get; } = System.IO.Directory.CreateTempSubdirectory("pinned-dump-").FullName;
 
-    /// <summary>The real 2 October 2026 captures (Valheim 1.0.16, disposable world DumpContract1), as checked in.</summary>
+    /// <summary>The real 20 November 2026 captures (Valheim 1.0.21, disposable world DumpContract1, full-precision format with blended_height), as checked in.</summary>
     public static string Real(string layer) => Path.Combine(AppContext.BaseDirectory, "Fixtures", "WorldDump", $"dumpcontract1-{layer}.json");
 
     public WorldDumpManifest Capture(string name, string csv, int step, string uid = "1716468958", (float X, float Z, float Radius)? window = null)

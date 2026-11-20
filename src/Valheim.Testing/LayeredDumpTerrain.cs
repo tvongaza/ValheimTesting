@@ -69,6 +69,8 @@ public sealed class LayeredDumpTerrain : ITerrain
     public TerrainBiome GetBiome(float x, float z) => LayerAt(x, z).GetBiome(x, z);
     public void GetRiverWeight(float x, float z, out float weight, out float width) =>
         LayerAt(x, z).GetRiverWeight(x, z, out weight, out width);
+    /// <summary>The finest containing layer's <see cref="GridDumpTerrain.GetBlendedHeight"/>: the heightmap's ground before terrain modifiers.</summary>
+    public float GetBlendedHeight(float x, float z) => LayerAt(x, z).GetBlendedHeight(x, z);
 
     /// <summary>Uses only the designated base-height lattice; never treats the finer ground-height grid as its source.</summary>
     public float GetBaseHeight(float x, float z)

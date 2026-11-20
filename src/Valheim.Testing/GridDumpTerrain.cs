@@ -25,6 +25,7 @@ public sealed class GridDumpTerrain : ITerrain
     private const double NodeSnap = 1e-4;
     private readonly float[] _heights;
     private readonly float[]? _baseHeights;
+    private readonly float[]? _blendedHeights;
     private readonly TerrainBiome[]? _biomes;
     private readonly float[]? _riverWeights;
     private readonly float[]? _riverWidths;
@@ -51,6 +52,11 @@ public sealed class GridDumpTerrain : ITerrain
     public bool HasRiver => _riverWeights != null;
     /// <summary>Whether the dump includes Valheim's unitless `GetBaseHeight` samples, distinct from metre-valued height.</summary>
     public bool HasBaseHeight => _baseHeights != null;
+    /// <summary>
+    /// Whether the dump includes ValheimCLI's <c>blended_height</c>: the ground the game's zone heightmap builds before
+    /// terrain modifiers, which differs from <c>height</c> where a heightmap's four corners are not all one biome.
+    /// </summary>
+    public bool HasBlendedHeight => _blendedHeights != null;
 
     /// <summary>
     /// Declares a grid directly. Arrays are row-major with x fastest (<c>index = j * countX + i</c>) and are copied.
@@ -58,7 +64,7 @@ public sealed class GridDumpTerrain : ITerrain
     /// </summary>
     public GridDumpTerrain(string provenance, float originX, float originZ, float spacing, int countX, int countZ,
         float[] heights, TerrainBiome[]? biomes = null, float[]? riverWeights = null, float[]? riverWidths = null,
-        float[]? baseHeights = null)
+        float[]? baseHeights = null, float[]? blendedHeights = null)
     {
         if (string.IsNullOrWhiteSpace(provenance)) throw new ArgumentException("Provenance is required.", nameof(provenance));
         GridValues.Finite(originX); GridValues.Finite(originZ); GridValues.Finite(spacing);
@@ -72,6 +78,7 @@ public sealed class GridDumpTerrain : ITerrain
         GridValues.Finite(MaxX); GridValues.Finite(MaxZ);
         _heights = Layer(heights, count, nameof(heights));
         if (baseHeights != null) _baseHeights = Layer(baseHeights, count, nameof(baseHeights));
+        if (blendedHeights != null) _blendedHeights = Layer(blendedHeights, count, nameof(blendedHeights));
         if (biomes != null)
         {
             if (biomes.Length != count) throw new ArgumentException($"{nameof(biomes)} has {biomes.Length} values; the grid has {count} nodes.", nameof(biomes));
@@ -110,6 +117,17 @@ public sealed class GridDumpTerrain : ITerrain
         Check(x, z);
         if (_baseHeights == null) throw new NotSupportedException($"{Provenance} has no base_height layer.");
         return Sample(_baseHeights, x, z);
+    }
+
+    /// <summary>
+    /// The height the game's zone heightmap builds before terrain modifiers, in metres (ValheimCLI's <c>blended_height</c>).
+    /// At nodes this is the dumped value; between nodes it is bilinear and only an approximation. A missing layer throws.
+    /// </summary>
+    public float GetBlendedHeight(float x, float z)
+    {
+        Check(x, z);
+        if (_blendedHeights == null) throw new NotSupportedException($"{Provenance} has no blended_height layer.");
+        return Sample(_blendedHeights, x, z);
     }
 
     /// <summary>Returns the nearest node's biome; ties choose the node at larger x or z. A missing layer or outside coordinate throws.</summary>
@@ -185,9 +203,10 @@ public sealed class GridDumpTerrain : ITerrain
     /// Reads a CSV grid: a header row, then one row per node. Columns are found by name (case-insensitive, any
     /// order): <c>x</c>, <c>z</c> and <c>height</c> are required; <c>biome</c> is optional; <c>river</c> and
     /// <c>river_width</c> are optional but only together; <c>base_height</c> is an optional unitless generator
-    /// value, not metre-valued ground height. Other columns are ignored. Rows may come in any order but must cover every node of one evenly spaced grid exactly once,
+    /// value, not metre-valued ground height; <c>blended_height</c> is optional (metres, the heightmap's ground before
+    /// terrain modifiers). Other columns are ignored. Rows may come in any order but must cover every node of one evenly spaced grid exactly once,
     /// with the same spacing on x and z. Numbers use the invariant culture. Empty lines are skipped. This reads
-    /// ValheimCLI's world-dump output (<c>x,z,height,biome,river,river_width,base_height</c>) as is.
+    /// ValheimCLI's world-dump output (<c>x,z,height,biome,river,river_width,base_height,blended_height</c>) as is.
     /// Every refusal throws <see cref="InvalidDataException"/> naming the line.
     /// </summary>
     public static GridDumpTerrain Read(TextReader reader, string provenance)
@@ -206,10 +225,10 @@ public sealed class GridDumpTerrain : ITerrain
         }
         int cx = Required(columns, "x", provenance), cz = Required(columns, "z", provenance), ch = Required(columns, "height", provenance);
         int cb = Optional(columns, "biome"), cr = Optional(columns, "river"), cw = Optional(columns, "river_width"),
-            cbase = Optional(columns, "base_height");
+            cbase = Optional(columns, "base_height"), cblend = Optional(columns, "blended_height");
         if ((cr < 0) != (cw < 0)) throw new InvalidDataException($"{provenance}: columns 'river' and 'river_width' must be present together.");
 
-        var rows = new List<(float x, float z, float height, TerrainBiome biome, float river, float width, float baseHeight, int line)>();
+        var rows = new List<(float x, float z, float height, TerrainBiome biome, float river, float width, float baseHeight, float blendedHeight, int line)>();
         int lineNumber = 1;
         string? line;
         while ((line = reader.ReadLine()) != null)
@@ -224,7 +243,8 @@ public sealed class GridDumpTerrain : ITerrain
                 cb < 0 ? TerrainBiome.Unknown : Biome(cells[cb], lineNumber, provenance),
                 cr < 0 ? 0 : Number(cells[cr], "river", lineNumber, provenance),
                 cw < 0 ? 0 : Number(cells[cw], "river_width", lineNumber, provenance),
-                cbase < 0 ? 0 : Number(cells[cbase], "base_height", lineNumber, provenance), lineNumber));
+                cbase < 0 ? 0 : Number(cells[cbase], "base_height", lineNumber, provenance),
+                cblend < 0 ? 0 : Number(cells[cblend], "blended_height", lineNumber, provenance), lineNumber));
         }
         if (rows.Count == 0) throw new InvalidDataException($"{provenance}: no samples after the header.");
 
@@ -243,6 +263,7 @@ public sealed class GridDumpTerrain : ITerrain
         var weights = cr < 0 ? null : new float[count];
         var widths = cw < 0 ? null : new float[count];
         var baseHeights = cbase < 0 ? null : new float[count];
+        var blendedHeights = cblend < 0 ? null : new float[count];
         var seenLine = new int[count];
         var perRow = new int[countZ];
         foreach (var row in rows)
@@ -256,6 +277,7 @@ public sealed class GridDumpTerrain : ITerrain
             if (weights != null) weights[k] = row.river;
             if (widths != null) widths[k] = row.width;
             if (baseHeights != null) baseHeights[k] = row.baseHeight;
+            if (blendedHeights != null) blendedHeights[k] = row.blendedHeight;
         }
         for (int j = 0; j < countZ; j++)
         {
@@ -264,7 +286,7 @@ public sealed class GridDumpTerrain : ITerrain
             throw new InvalidDataException(string.Format(CultureInfo.InvariantCulture,
                 "{0}: the row at z={1} has {2} of {3} samples (first missing x={4}); the grid is ragged.", provenance, zs[j], perRow[j], countX, xs[missing]));
         }
-        return new GridDumpTerrain(provenance, xs[0], zs[0], (float)stepX, countX, countZ, heights, biomes, weights, widths, baseHeights);
+        return new GridDumpTerrain(provenance, xs[0], zs[0], (float)stepX, countX, countZ, heights, biomes, weights, widths, baseHeights, blendedHeights);
     }
 
     private static List<float> Axis(List<float> values, string axis, string provenance, out double step)
