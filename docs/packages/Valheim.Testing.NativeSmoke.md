@@ -30,7 +30,7 @@ The tool needs the .NET 10 SDK. If a Homebrew .NET on macOS cannot start the too
 | [`detach`](#detach) | Experimental: a held Windows dedicated server that outlives the terminal |
 | [`steam-runtime capture`](#steam-runtime-capture) | Pins SteamCMD's macOS server libraries for a Mac server profile |
 
-`valheim-test help` lists every command with its usage.
+`valheim-test help` (or `--help`, `-h`) lists every command with its usage; `valheim-test COMMAND --help` prints that command's usage. Both exit 0. `valheim-test --version` (or `-V`) prints the tool's package version, with the source commit when the build recorded one: `valheim-test <version> (commit <sha>)`. None of them reads an inventory, takes a host lock or writes a journal.
 
 ### Start a world from a seed
 

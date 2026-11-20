@@ -2,25 +2,7 @@ using System.Diagnostics;
 using Valheim.Testing.Game;
 using Valheim.Testing.GameSessions;
 
-if (args is ["help" or "--help"])
-{
-    Console.WriteLine("valheim-test start [--mod DLL ... | --no-mod] [--config FILE ...] [--env NAME=VALUE ...] [--plugin-file FILE ...] [--plugin-dir DIR ...] [--output NEW_DIR] [--world-fixture DIR | --world-seed SEED [--world-name NAME]] [--inventory FILE | --game DIR] [--client-env NAME] [--client-architecture x64|arm64] [setup options] (without --mod or --no-mod, the current project's one built plugin)");
-    Console.WriteLine("--no-mod explicitly runs a CLI-only control with no mod under test; no mod build, dependency search, scenario or comparison inputs are allowed.");
-    Console.WriteLine("--config stages non-secret config files on start's hosting client or server-load's server; --client-config targets server-load's explicit client mod set. --plugin-file FILE stages a mod's non-DLL companion as BepInEx/plugins/<name>, --plugin-dir DIR as BepInEx/plugins/<folder name>/..., on the same actor as --config. --env sets non-empty literal values on every owned game process. Inputs are retained privately; omit credentials.");
-    Console.WriteLine(ServerLoad.Usage + " (a dedicated server and one joining client; client is CLI-only by default, with explicit --client-mod or --client-project support; inventory selects the hosts, otherwise this machine)");
-    Console.WriteLine(ServerLoadPhases.Usage + " (ordered disposable server-only saves)");
-    Console.WriteLine("valheim-test server-load-ab --mod DLL --mod DLL --remove-mod DLL --output NEW_DIR [server-load options except --hold and --preflight-only]");
-    Console.WriteLine("valheim-test init [server] --output NEW_DIR (editable NuGet.org-only consumer)");
-    Console.WriteLine(ModBuild.Usage + " (private references and a mod build, with no live-game deployment)");
-    Console.WriteLine(EnvCommand.Usage + " (list, preflight and status read only; recover and teardown clear what a run left)");
-    Console.WriteLine(ForegroundHold.FinishUsage + " (asks the live owner of a held run to finish and clean up)");
-    Console.WriteLine(DetachedSession.Usage + " (experimental local detached dedicated server; Task Scheduler on Windows)");
-    Console.WriteLine(OwnedCliCommand.Usage + " (one strictly pinned command to a running owned local client or server)");
-    Console.WriteLine(WorldSave.Usage + " (saves a held start run's hosted world and copies it out for start --world-fixture)");
-    Console.WriteLine(SessionCommand.Usage + " (read only; --hosts adds the host checks)");
-    Console.WriteLine(MacSteamRuntimeCommand.Usage + " (review and pin SteamCMD's Mac server libraries)");
-    return 0;
-}
+if (ToolCommandLine.TryAnswer(args, Console.Out, out int answered)) return answered;
 if (args.Length != 0 && args[0] == "init") return await SmokeProject.InitAsync(args[1..]);
 if (args.Length != 0 && args[0] == "build") return await ModBuild.RunAsync(args[1..]);
 if (args.Length != 0 && args[0] == "env") return await EnvCommand.RunAsync(args[1..]);
@@ -43,7 +25,7 @@ if (args.Length != 0 && args[0] is "server-load" or "server-load-ab")
 if (!StartArguments.TryRead(args, out var parsedStart, out var error, allowImplicitMod: true))
 {
     Console.Error.WriteLine(error);
-    Console.Error.WriteLine($"Usage: valheim-test start [--mod DLL ... | --project MOD.csproj | --no-mod] [--config FILE ...] [--env NAME=VALUE ...] [--plugin-file FILE ...] [--plugin-dir DIR ...] [--scenario TEST.dll | --scenario-project TEST.csproj] [--dependency NAME=DLL ...] [--build-inputs FILE] [--output NEW_DIR] [--world-fixture DIR | --world-seed SEED [--world-name NAME]] [--inventory FILE | --game DIR] [--client-env NAME] [--client-architecture x64|arm64] [--join-seconds {ClientTimeouts.MinimumJoinSeconds}..{ClientTimeouts.MaximumJoinSeconds}] [--hold] [--source COMMIT] [--cli-manifest FILE --cli-files DIR] [--compare-mod DLL --compare-source COMMIT] [--search-root DIR|DLL ...] [--optional-reference ASSEMBLY ...] [--client-loader-package FILE] [--expected-log-error EXACT_HEADER --expected-log-reason REASON]");
+    Console.Error.WriteLine("Usage: " + ToolCommandLine.StartUsage);
     return 2;
 }
 var options = parsedStart!.Options;
