@@ -57,6 +57,9 @@ Console.CancelKeyPress += (_, press) => { press.Cancel = true; cancel.Cancel(); 
 bool holdRequested = options!.ContainsKey("--hold");
 string runId = RunJournal.NewRunId();
 using var runJournal = RunJournal.UseRun(runId);
+// A held run can be finished while it is still starting (#964): finish cancels it as Ctrl+C does.
+using var bootWatch = holdRequested && DetachedSession.ConfiguredRun == null ? ForegroundHold.BootWatch.Start(runId, cancel) : null;
+if (bootWatch != null) Console.WriteLine(ForegroundHold.Starting(runId));
 var elapsed = Stopwatch.StartNew();
 TargetedRegression? runner = null;
 ScenarioReport? lastArm = null; string? lastArmOutput = null;

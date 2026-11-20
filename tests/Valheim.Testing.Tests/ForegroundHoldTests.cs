@@ -71,6 +71,77 @@ public sealed class ForegroundHoldTests : IDisposable
         Assert.Empty(Directory.GetFiles(markers));
     }
 
+    // ---- finish while a held run is still starting (#964) ----
+
+    [Fact]
+    public void FinishStopsAHeldRunThatIsStillStarting()
+    {
+        string markers = Path.Combine(_root, "holds");
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+        using var cancel = new CancellationTokenSource();
+        using (ForegroundHold.BootWatch.Start("run-boot", cancel, markers))
+        {
+            Assert.True(File.Exists(Path.Combine(markers, "run-boot.booting")));
+            Assert.False(cancel.IsCancellationRequested);
+            Assert.Equal(0, ForegroundHold.FinishCommand(["--run", "run-boot"], output, error, markers));
+            Assert.Contains("still starting", output.ToString());
+            Assert.True(cancel.Token.WaitHandle.WaitOne(TimeSpan.FromSeconds(10)), "finish did not cancel the starting run");
+            // A second finish is refused, as for a held run.
+            Assert.Equal(3, ForegroundHold.FinishCommand(["--run", "run-boot"], output, error, markers));
+        }
+        Assert.Empty(Directory.GetFiles(markers));
+    }
+
+    [Fact]
+    public void AFinishBeforeTheHoldOpensStopsItThere()
+    {
+        string evidence = Path.Combine(_root, "evidence"), markers = Path.Combine(_root, "holds");
+        Directory.CreateDirectory(evidence);
+        using var cancel = new CancellationTokenSource();
+        using (ForegroundHold.BootWatch.Start("run-late", cancel, markers))
+        {
+            Assert.True(ForegroundHold.Request("run-late", markers));
+            Assert.Throws<OperationCanceledException>(() => ForegroundHold.Open("run-late", evidence, markers));
+        }
+        Assert.Empty(Directory.GetFiles(markers));
+    }
+
+    [Fact]
+    public async Task TheHoldTakesOverAFinishFromTheBootWatch()
+    {
+        string evidence = Path.Combine(_root, "evidence"), markers = Path.Combine(_root, "holds");
+        Directory.CreateDirectory(evidence);
+        using var cancel = new CancellationTokenSource();
+        using (ForegroundHold.BootWatch.Start("run-up", cancel, markers))
+        {
+            using (var hold = ForegroundHold.Open("run-up", evidence, markers))
+            {
+                Assert.False(File.Exists(Path.Combine(markers, "run-up.booting")));
+                Task wait = hold.WaitAsync(CancellationToken.None);
+                Assert.False(ForegroundHold.Request("run-up", markers)); // the held run's finish
+                await wait.WaitAsync(TimeSpan.FromSeconds(5));
+                await Task.Delay(TimeSpan.FromSeconds(3)); // past the boot watch's fallback check
+                Assert.False(cancel.IsCancellationRequested, "the boot watch cancelled a run its hold was finishing");
+            }
+        }
+        Assert.Empty(Directory.GetFiles(markers));
+    }
+
+    [Fact]
+    public void RecoverRetiresTheBootMarkerOfARunnerThatDied()
+    {
+        string markers = Path.Combine(_root, "holds");
+        Directory.CreateDirectory(markers);
+        File.WriteAllText(Path.Combine(markers, "run-dead.booting"), JsonSerializer.Serialize(new { Run = "run-dead", Evidence = "", ServerEvidence = (string?)null, Pid = int.MaxValue, Started = "gone" }));
+        File.WriteAllText(Path.Combine(markers, "run-dead.finish"), "");
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+        Assert.Equal(3, ForegroundHold.FinishCommand(["--run", "run-dead"], output, error, markers)); // no live runner to ask
+        ForegroundHold.RetireRecovered("run-dead", markers);
+        Assert.Empty(Directory.GetFiles(markers));
+    }
+
     [Fact]
     public async Task AClientExitDuringTheHoldFailsAtOnceAndRecordsItsExitCode()
     {

@@ -19,7 +19,11 @@ internal sealed class ForegroundHold : IDisposable
     private ForegroundHold(string marker, string request, Marker identity)
     { _marker = marker; _request = request; _identity = identity; }
 
-    internal static string DirectoryForThisMachine => Path.Combine(CliBundle.DataRoot, "runs", "holds");
+    /// <summary>The line a held run prints as it starts: its id, and that finish already stops it (#964).</summary>
+    internal static string Starting(string run) =>
+        "STARTING held run " + run + "; until it holds, " + FinishUsage.Replace("ID", run, StringComparison.Ordinal) + " stops it and cleans up.";
+
+    internal static string DirectoryForThisMachine =>Path.Combine(CliBundle.DataRoot, "runs", "holds");
 
     internal static ForegroundHold Open(string run, string evidence, string? directory = null, string? serverEvidence = null)
     {
@@ -36,10 +40,14 @@ internal sealed class ForegroundHold : IDisposable
         using var process = Process.GetCurrentProcess();
         var identity = new Marker(run, evidence, serverEvidence, process.Id, OwnedClientCommandLease.LocalStartFileTimeUtc(process));
         string marker = Path.Combine(directory, run + ".json"), request = Path.Combine(directory, run + ".finish");
+        // finish while the run was still starting (#964): it stops here, before it holds, as Ctrl+C would.
+        if (File.Exists(request) && BootWatch.OwnedHere(run, directory))
+            throw new OperationCanceledException("A finish was requested for run " + run + " while it was starting; it stops without holding.");
         if (File.Exists(request)) throw new IOException("A finish request already exists for run " + run + "; inspect the old run before reusing its ID.");
         // A stale marker must be recovered deliberately; a second owner must never overwrite it.
         using (var file = new FileStream(marker, FileMode.CreateNew, FileAccess.Write, FileShare.None))
             JsonSerializer.Serialize(file, identity);
+        BootWatch.HandOver(run);
         var hold = new ForegroundHold(marker, request, identity);
         try { DetachedSession.SignalHeld(run, evidence, identity.Pid, identity.Started); }
         catch { hold.Dispose(); throw; }
@@ -91,8 +99,9 @@ internal sealed class ForegroundHold : IDisposable
         if (args is not ["--run", { } run]) { error.WriteLine("Usage: " + FinishUsage); return 2; }
         try
         {
-            Request(run, directory);
-            output.WriteLine("Finish requested for held run " + run + "; its original runner will leave, stop and verify cleanup.");
+            output.WriteLine(Request(run, directory)
+                ? "Finish requested for run " + run + ", which is still starting; its runner stops what it started without holding and cleans up."
+                : "Finish requested for held run " + run + "; its original runner will leave, stop and verify cleanup.");
             return 0;
         }
         catch (Exception failure) when (failure is ArgumentException or IOException or InvalidDataException or InvalidOperationException or UnauthorizedAccessException or JsonException or System.ComponentModel.Win32Exception)
@@ -165,11 +174,126 @@ internal sealed class ForegroundHold : IDisposable
         finally { watcher.Created -= onCreated; watcher.Changed -= onCreated; watcher.Renamed -= onRenamed; }
     }
 
-    internal static void Request(string run, string? directory = null)
+    /// <summary>Requests the finish; true when the run is still starting (it stops before it holds), false when it holds.</summary>
+    internal static bool Request(string run, string? directory = null)
     {
         directory ??= DirectoryForThisMachine;
-        _ = LiveMarker(run, directory);
+        if (!RunJournal.SafeName(run) || run == "-") throw new ArgumentException("Invalid run ID.", nameof(run));
+        // A run that has not reached its hold yet publishes only its boot marker (#964).
+        bool booting = !File.Exists(Path.Combine(directory, run + ".json")) && BootWatch.Live(run, directory);
+        if (!booting) _ = LiveMarker(run, directory);
         using var request = new FileStream(Path.Combine(directory, run + ".finish"), FileMode.CreateNew, FileAccess.Write, FileShare.None);
+        return booting;
+    }
+
+    /// <summary>
+    /// A held run's finish while it is still starting (#964): <see cref="Start"/> publishes <c>&lt;run&gt;.booting</c> naming this
+    /// exact process before anything is staged, and cancels the run (as Ctrl+C does) when <c>valheim-test finish</c> requests it,
+    /// so the runner stops what it started and cleans up. The hold marker replaces it once the game is up.
+    /// </summary>
+    internal sealed class BootWatch : IDisposable
+    {
+        private readonly string _marker;
+        private readonly string _request;
+        private readonly string _source;
+        private readonly FileSystemWatcher _watcher;
+        private readonly Timer _fallback;
+        private readonly CancellationTokenSource _cancel;
+        private int _disposed;
+        private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, BootWatch> s_live = new(StringComparer.Ordinal);
+
+        // The hold opened: from here a finish is the hold's to answer, so the boot watch stops and its marker goes.
+        internal static void HandOver(string run)
+        {
+            if (s_live.TryRemove(run, out var watch)) watch.Stop(deleteRequest: false);
+        }
+
+        private BootWatch(string marker, string request, string source, CancellationTokenSource cancel)
+        {
+            _marker = marker; _request = request; _source = source; _cancel = cancel;
+            _watcher = new FileSystemWatcher(Path.GetDirectoryName(request)!, Path.GetFileName(request))
+            { NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite };
+            _watcher.Created += (_, _) => Check();
+            _watcher.Renamed += (_, _) => Check();
+            _watcher.EnableRaisingEvents = true;
+            // As the hold's wait: a filesystem that coalesces a create notification still gets the request within seconds.
+            _fallback = new Timer(_ => Check(), null, TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(2));
+            Check();
+        }
+
+        /// <summary>Publishes run <paramref name="run"/>'s boot marker and watches for its finish; dispose when the run ends.</summary>
+        internal static BootWatch Start(string run, CancellationTokenSource cancel, string? directory = null)
+        {
+            if (!RunJournal.SafeName(run) || run == "-") throw new ArgumentException("Invalid run ID.", nameof(run));
+            directory ??= DetachedSession.ConfiguredControlDirectory ?? DirectoryForThisMachine;
+            Directory.CreateDirectory(directory);
+            using var process = Process.GetCurrentProcess();
+            var identity = new Marker(run, "", null, process.Id, OwnedClientCommandLease.LocalStartFileTimeUtc(process));
+            string marker = Path.Combine(directory, run + ".booting"), request = Path.Combine(directory, run + ".finish");
+            if (File.Exists(request)) throw new IOException("A finish request already exists for run " + run + "; inspect the old run before reusing its ID.");
+            string source = JsonSerializer.Serialize(identity);
+            using (var file = new FileStream(marker, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            using (var writer = new StreamWriter(file)) writer.Write(source);
+            var watch = new BootWatch(marker, request, source, cancel);
+            s_live[run] = watch;
+            return watch;
+        }
+
+        // The boot marker of run's exact live runner.
+        internal static bool Live(string run, string directory) => Owner(run, directory) is { } owner && ExactOwner(owner.Pid, owner.Started);
+
+        // Whether this process published run's boot marker.
+        internal static bool OwnedHere(string run, string directory)
+        {
+            using var process = Process.GetCurrentProcess();
+            return Owner(run, directory) is { } owner && owner.Pid == process.Id && owner.Started == OwnedClientCommandLease.LocalStartFileTimeUtc(process);
+        }
+
+        private static Marker? Owner(string run, string directory)
+        {
+            string marker = Path.Combine(directory, run + ".booting");
+            if (!File.Exists(marker)) return null;
+            var owner = JsonSerializer.Deserialize<Marker>(File.ReadAllText(marker));
+            return owner != null && owner.Run == run && owner.Pid > 0 && owner.Started.Length != 0 ? owner : null;
+        }
+
+        // Retires a boot marker whose runner is gone (env recover); a live runner's stays.
+        internal static void RetireRecovered(string run, string directory)
+        {
+            if (Owner(run, directory) is { } owner && ExactOwner(owner.Pid, owner.Started))
+                throw new InvalidOperationException("The starting runner is still alive; finish it instead of recovering it.");
+            File.Delete(Path.Combine(directory, run + ".booting"));
+        }
+
+        private void Check()
+        {
+            if (Volatile.Read(ref _disposed) != 0 || !File.Exists(_request)) return;
+            try { _cancel.Cancel(); } catch (ObjectDisposedException) { }
+        }
+
+        public void Dispose()
+        {
+            foreach (var entry in s_live)
+                if (ReferenceEquals(entry.Value, this)) s_live.TryRemove(entry.Key, out _);
+            Stop(deleteRequest: true);
+        }
+
+        private void Stop(bool deleteRequest)
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+            _watcher.Dispose();
+            _fallback.Dispose();
+            // Only this runner's marker; at the run's end also the finish request it answered (after a hand-over, the hold's).
+            try
+            {
+                if (File.Exists(_marker) && File.ReadAllText(_marker) == _source)
+                {
+                    if (deleteRequest) File.Delete(_request);
+                    File.Delete(_marker);
+                }
+            }
+            catch (IOException) { }
+        }
     }
 
     /// <summary>
@@ -218,7 +342,10 @@ internal sealed class ForegroundHold : IDisposable
         if (!RunJournal.SafeName(run) || run == "-") throw new ArgumentException("Invalid run ID.", nameof(run));
         directory ??= DirectoryForThisMachine;
         string marker = Path.Combine(directory, run + ".json");
-        if (!File.Exists(marker)) return;
+        if (!Directory.Exists(directory)) return;
+        // A runner that died while starting left its boot marker, and perhaps the finish that was asked of it.
+        BootWatch.RetireRecovered(run, directory);
+        if (!File.Exists(marker)) { File.Delete(Path.Combine(directory, run + ".finish")); return; }
         string source = File.ReadAllText(marker);
         var identity = JsonSerializer.Deserialize<Marker>(source)
             ?? throw new InvalidDataException("The hold marker is empty.");

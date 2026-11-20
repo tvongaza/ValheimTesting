@@ -292,7 +292,7 @@ valheim-test server-load --mod /path/to/ServerMod.dll --hold
 valheim-test finish --run ID
 ```
 
-`--hold` keeps the owned game running after the checks pass; a failing run is never held. It prints `HELD run` with the run ID and the `cli` commands that reach the game. `finish --run ID`, or Ctrl+C on the runner, stops and cleans up. If a held game exits, the run fails.
+`--hold` keeps the owned game running after the checks pass; a failing run is never held. It prints `HELD run` with the run ID and the `cli` commands that reach the game. `finish --run ID`, or Ctrl+C on the runner, stops and cleans up. If a held game exits, the run fails. A held run prints `STARTING held run` with its ID as it starts; `finish --run ID` then also stops it while it is still starting (copying, booting or loading the world): its runner cancels as Ctrl+C would, stops what it started and cleans up, without holding. `finish` says which of the two it asked for.
 
 ## save-world
 
