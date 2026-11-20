@@ -21,8 +21,8 @@ When a run refuses or fails, a client never reaches its menu or world, or `valhe
 | `UNKNOWN (...)`, then `SERVER_LOAD_FAIL`, exit 3 | A host operation's outcome is unknown: neither a pass nor a mod failure |
 | `ABANDONED cleanup (...)`, exit 3 | Cleanup stopped; run `env status`, then `env recover` |
 | `CLEANUP REFUSED: ...`, `CLEANUP UNVERIFIED: ...` | `start` could not prove its client or character cleanup; run `env status` |
-| `CLEANUP NOT VERIFIED: run ID ...` | The run keeps what it left and its host lock; run `env recover --run ID` |
-| `(its shell exited with code -1073741502 (0xC0000142))` | The runner's console is gone; start held runs from a shell that stays open |
+| `RUN NOT CLEANED UP: ...` | Its cleanup was not verified; `env status` names the command that settles it |
+| `(its shell exited with code -1073741502 (0xC0000142))` | Windows could not start a host script's shell; see [Problems](#problems) |
 
 `SERVER_LOAD_FAIL` with exit 3 is not necessarily a mod failure. Above these lines, the log scan prints a summary such as `log scan: 4/4 logs present; failure=0 warning=2 ...`.
 
@@ -146,6 +146,8 @@ The last line reads `N runs ended and left nothing. Nothing was changed.`, and t
 | `cli` refuses: no lease | The game is still starting, has stopped, or runs on another machine |
 | `cli` refuses: not in a verified world | Use `--phase menu`, or wait for the world check |
 | `UNREADABLE` in `env status` | The journal file could not be read; the line names the run, file and line |
+| Shell exit `0xC0000142` on this machine | The runner's console or desktop is gone or out of resources; keep its shell open |
+| A shell exit code from an ssh or container host | The code is the ssh or container client's, not the host shell's |
 
 ## Related
 

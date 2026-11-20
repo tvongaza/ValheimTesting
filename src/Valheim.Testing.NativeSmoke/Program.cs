@@ -213,7 +213,9 @@ finally
         {
             if (lastArm != null) runner.Remove(lastArm, lastArmOutput!); else runner.Remove();
         }
-        catch (Exception cleanup) when (cleanup is IOException or UnauthorizedAccessException or InvalidOperationException)
+        // Any failure here, an AggregateException from a retirement whose lock release also failed included, still reaches the
+        // run's end below: a removal that throws past it would leave the run never journalled as ended.
+        catch (Exception cleanup)
         {
             journalClean = false;
             // Recovery follows the hosted runtime's journal and ownership rules; never delete a copy by name.

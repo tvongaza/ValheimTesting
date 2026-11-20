@@ -40,6 +40,10 @@ public sealed class RunFinishTests : IDisposable
         string start = File.ReadAllText(Path.Combine(source, "Valheim.Testing.NativeSmoke", "Program.cs"));
         Assert.Contains("if (!await RunFinish.EndAsync(runJournal, new RunEnd(exitCode == 0 ? RunOutcome.Passed : RunOutcome.Failed, journalClean)))", start);
         Assert.DoesNotContain("ownershipStarted", start);
+        // The copy's removal runs before that call; no failure of it (an AggregateException from a retirement whose lock release
+        // also failed included) may skip the end, so its catch takes every exception.
+        Assert.Contains("catch (Exception cleanup)\n", start.ReplaceLineEndings("\n"));
+        Assert.DoesNotContain("catch (Exception cleanup) when", start);
         // Negative control: the pattern finds the per-path writers this issue removed.
         Assert.Matches(NamesAnEnd, "RunJournal.ThisProcess.AppendLocal(\"run\", JournalEntry.Of(JournalEntry.RunEnded,");
         Assert.Matches(NamesAnEnd, "var last = abandoned != null ? JournalEntry.Of(JournalEntry.CleanupAbandoned, (\"reason\", abandoned))");
@@ -184,9 +188,10 @@ public sealed class RunFinishTests : IDisposable
     }
 
     // #991: a held run whose teardown could not verify its cleanup ended "failed, cleanup not verified" and kept this machine's
-    // host lock, and its output never said which command releases it (its wrapper printed FINISHED). The owner of the end now
-    // says so, once per run however many journals it ends in; a proven, abandoned or unjournalled end says nothing of it.
-    [Fact] public async Task AnUnverifiedCleanupNamesTheOneCommandThatReleasesTheLockOnce()
+    // host lock, and its own output never said where to go next. The owner of the end now says so, one line per unproven end,
+    // and points to env status, the one home of the per-state command; a second end of the same scope writes and says nothing.
+    // A proven, abandoned or unjournalled end says nothing of it.
+    [Fact] public async Task AnUnverifiedCleanupPointsToEnvStatusForTheCommandThatSettlesIt()
     {
         string runId = RunJournal.NewRunId();
         var said = new StringWriter();
@@ -194,19 +199,13 @@ public sealed class RunFinishTests : IDisposable
         {
             RunJournal.ThisProcess.AppendLocal("run", JournalEntry.Of(JournalEntry.LockHeld, ("lock", "/l"), ("claimant", "c")));
             Assert.True(await RunFinish.EndAsync(run, new RunEnd(RunOutcome.Failed, CleanupProven: false), said));
-        }
-        // A second scope of the same run (a hosted run's journal beside this machine's) does not say it again.
-        using (var again = RunJournal.UseRun(runId))
-        {
-            RunJournal.ThisProcess.AppendLocal("run", JournalEntry.Of(JournalEntry.LockHeld, ("lock", "/l"), ("claimant", "c")));
-            Assert.True(await RunFinish.EndAsync(again, new RunEnd(RunOutcome.Failed, CleanupProven: false), said));
+            Assert.True(await RunFinish.EndAsync(run, new RunEnd(RunOutcome.Failed, CleanupProven: false), said));
         }
         string line = Assert.Single(said.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
-        Assert.StartsWith("CLEANUP NOT VERIFIED: run " + runId + " ", line);
-        Assert.Contains("host lock", line);
-        Assert.Contains("valheim-test env recover --run " + runId + " ", line);
-        var ended = Records(Path.Combine(_root, "local-journal"), runId).Where(record => record.Entry.Kind == JournalEntry.RunEnded).ToList();
-        Assert.All(ended, record => Assert.Equal("false", record.Entry.Fields["cleanupVerified"]));
+        Assert.Equal($"RUN NOT CLEANED UP: cleanup was not verified for run {runId}; valheim-test env status names the command that settles it.", line);
+        // The per-state command (recover, --launch-gone, teardown, or nothing) is env status's alone: this line names none.
+        Assert.DoesNotContain("env recover", line);
+        Assert.Equal("false", Assert.Single(Records(Path.Combine(_root, "local-journal"), runId), record => record.Entry.Kind == JournalEntry.RunEnded).Entry.Fields["cleanupVerified"]);
 
         foreach (var end in new[] { new RunEnd(RunOutcome.Failed, CleanupProven: true), new RunEnd(RunOutcome.Failed, CleanupProven: false, Abandoned: "a second interrupt") })
         {

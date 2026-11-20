@@ -86,7 +86,7 @@ public sealed record HostResult(HostOutcome Outcome, int? ExitCode, string Stdou
     }
 
     /// <summary>
-    /// How the host's shell (or the ssh client) exited when it exited without the wrapper's exit report (#991), so an unknown
+    /// How the host's shell (on an ssh or container host, the ssh or docker client) exited without the wrapper's report, so an unknown
     /// outcome still says how the process ended. Null when it did not exit (a deadline, a stop) and for a reported exit, whose
     /// code is <see cref="ExitCode"/>.
     /// </summary>
