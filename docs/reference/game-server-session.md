@@ -94,7 +94,7 @@ A killed game skips its own shutdown: nothing after the last confirmed save is k
 | Owned client (`ClientSession`) | Windows: its main window is closed. macOS: SIGTERM | `ClientSession.QuitTimeout` (60 s) |
 | Client in a host's desktop session (`InteractiveClientProcess`) | Windows: its main window is closed, through a desktop task from session 0. macOS: SIGINT | as the caller passes |
 
-`quitSeconds` is a `ServerRunPlan` field: 0 kills at once, and the plan refuses more than 1800. Keep a short value for a load smoke that claims no save; `valheim-test server-load` uses 20 s. A save, restart or crossplay run keeps the longer deadline.
+`quitSeconds` is a `ServerRunPlan` field: 0 kills at once, and the plan refuses more than 1800. Keep a short value for a load smoke that claims no save; `valheim-test server-load` uses 300 s, so a large world's save at quit can finish; a server killed at the deadline is reported as "the game's shutdown (its world save at quit) did not run". A save, restart or crossplay run keeps the longer deadline.
 
 `PinnedServerRun` writes the stops to the report as `serverStops` and warns for each killed boot:
 
