@@ -242,7 +242,7 @@ internal sealed class ProfileSourceCheck
                 try { baseline = JsonSerializer.Deserialize<PersistedBaseline>(bytes, s_baselineJson); }
                 catch (JsonException) { baseline = null; }
                 if (baseline == null) mismatch = "cannot be read";
-                else if (baseline.Root != root || baseline.Host != host.Name) mismatch = "names another install than its journal";
+                else if (baseline.Root != root || !SameHost(baseline.Host, host)) mismatch = "names another install than its journal";
                 else if (baseline.Id != id) mismatch = "names another prepared profile than its journal";
             }
             if (mismatch != null && !teardown)
@@ -322,6 +322,12 @@ internal sealed class ProfileSourceCheck
         { _contentMode = baseline.Mode == SourceVerdict.ContentMode };
         return await check.SettleAsync(host, where, journal, timeout, cancellation).ConfigureAwait(false);
     }
+
+    // The host a baseline names is the recovering host (#985). A run on this machine persists it through this machine as the run
+    // reaches it (GameHosts.ThisMachine, named "this machine"), while env recover reads the same machine through its inventory
+    // host's name (for example "local"): on a local host the two are one machine, so either name matches.
+    private static bool SameHost(string recorded, IGameHost host) =>
+        recorded == host.Name || (host.Kind == GameHostKind.Local && recorded == LocalGameHost.ThisMachineName);
 
     private static string Leaf(string path) => path.Replace('\\', '/').Split('/').Last();
 
