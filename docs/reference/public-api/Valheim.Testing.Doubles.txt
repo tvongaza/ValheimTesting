@@ -1218,11 +1218,12 @@ class UnityEngine.Collider : UnityEngine.Component
   property System.Boolean isTrigger { get; set; }
   property UnityEngine.Bounds bounds { get; }
   property UnityEngine.Rigidbody attachedRigidbody { get; }
-struct UnityEngine.Color
+struct UnityEngine.Color : System.IEquatable`1<UnityEngine.Color>
   field System.Single a
   field System.Single b
   field System.Single g
   field System.Single r
+  method System.Boolean Equals(UnityEngine.Color other)
   method System.Void .ctor(System.Single r, System.Single g, System.Single b, System.Single a = 1)
   method static System.Boolean op_Equality(UnityEngine.Color lhs, UnityEngine.Color rhs)
   method static System.Boolean op_Inequality(UnityEngine.Color lhs, UnityEngine.Color rhs)
@@ -1406,7 +1407,7 @@ class UnityEngine.Object
   method virtual System.Int32 GetHashCode()
   property System.Boolean Destroyed { get; }
   property System.String name { get; set; }
-struct UnityEngine.Quaternion
+struct UnityEngine.Quaternion : System.IEquatable`1<UnityEngine.Quaternion>
   field System.Single EulerX
   field System.Single EulerY
   field System.Single EulerZ
@@ -1414,12 +1415,18 @@ struct UnityEngine.Quaternion
   field System.Single x
   field System.Single y
   field System.Single z
+  field const System.Single kEpsilon = 1E-06
+  method System.Boolean Equals(UnityEngine.Quaternion other)
   method System.Void .ctor(System.Single x, System.Single y, System.Single z, System.Single w)
+  method static System.Boolean op_Equality(UnityEngine.Quaternion lhs, UnityEngine.Quaternion rhs)
+  method static System.Boolean op_Inequality(UnityEngine.Quaternion lhs, UnityEngine.Quaternion rhs)
   method static UnityEngine.Quaternion Euler(System.Single x, System.Single y, System.Single z)
   method static UnityEngine.Quaternion Euler(UnityEngine.Vector3 euler)
   method static UnityEngine.Quaternion Inverse(UnityEngine.Quaternion rotation)
   method static UnityEngine.Quaternion op_Multiply(UnityEngine.Quaternion lhs, UnityEngine.Quaternion rhs)
   method static UnityEngine.Vector3 op_Multiply(UnityEngine.Quaternion rotation, UnityEngine.Vector3 point)
+  method virtual System.Boolean Equals(System.Object other)
+  method virtual System.Int32 GetHashCode()
   property UnityEngine.Vector3 eulerAngles { get; set; }
   property static UnityEngine.Quaternion identity { get; }
 static class UnityEngine.Random
@@ -1505,13 +1512,15 @@ class UnityEngine.Transform : UnityEngine.Component, System.Collections.IEnumera
 class UnityEngine.UnityException : System.Exception
   method System.Void .ctor()
   method System.Void .ctor(System.String message)
-struct UnityEngine.Vector2
+struct UnityEngine.Vector2 : System.IEquatable`1<UnityEngine.Vector2>
   field System.Single x
   field System.Single y
+  field const System.Single kEpsilon = 1E-05
+  method System.Boolean Equals(UnityEngine.Vector2 other)
   method System.Void .ctor(System.Single x, System.Single y)
   method System.Void Normalize()
-  method static System.Boolean op_Equality(UnityEngine.Vector2 a, UnityEngine.Vector2 b)
-  method static System.Boolean op_Inequality(UnityEngine.Vector2 a, UnityEngine.Vector2 b)
+  method static System.Boolean op_Equality(UnityEngine.Vector2 lhs, UnityEngine.Vector2 rhs)
+  method static System.Boolean op_Inequality(UnityEngine.Vector2 lhs, UnityEngine.Vector2 rhs)
   method static System.Single Distance(UnityEngine.Vector2 a, UnityEngine.Vector2 b)
   method static System.Single Dot(UnityEngine.Vector2 a, UnityEngine.Vector2 b)
   method static System.Single SqrMagnitude(UnityEngine.Vector2 a)
@@ -1527,21 +1536,32 @@ struct UnityEngine.Vector2
   property System.Single magnitude { get; }
   property System.Single sqrMagnitude { get; }
   property UnityEngine.Vector2 normalized { get; }
-struct UnityEngine.Vector2Int
+struct UnityEngine.Vector2Int : System.IEquatable`1<UnityEngine.Vector2Int>
   field System.Int32 x
   field System.Int32 y
+  method System.Boolean Equals(UnityEngine.Vector2Int other)
   method System.Void .ctor(System.Int32 x, System.Int32 y)
-struct UnityEngine.Vector3
+  method static System.Boolean op_Equality(UnityEngine.Vector2Int lhs, UnityEngine.Vector2Int rhs)
+  method static System.Boolean op_Inequality(UnityEngine.Vector2Int lhs, UnityEngine.Vector2Int rhs)
+  method virtual System.Boolean Equals(System.Object other)
+  method virtual System.Int32 GetHashCode()
+struct UnityEngine.Vector3 : System.IEquatable`1<UnityEngine.Vector3>
   field System.Single x
   field System.Single y
   field System.Single z
+  field const System.Single kEpsilon = 1E-05
+  method System.Boolean Equals(UnityEngine.Vector3 other)
   method System.Void .ctor(System.Single x, System.Single y, System.Single z)
+  method static System.Boolean op_Equality(UnityEngine.Vector3 lhs, UnityEngine.Vector3 rhs)
+  method static System.Boolean op_Inequality(UnityEngine.Vector3 lhs, UnityEngine.Vector3 rhs)
   method static System.Single Distance(UnityEngine.Vector3 a, UnityEngine.Vector3 b)
   method static System.Single SqrMagnitude(UnityEngine.Vector3 a)
   method static UnityEngine.Vector3 Lerp(UnityEngine.Vector3 a, UnityEngine.Vector3 b, System.Single t)
   method static UnityEngine.Vector3 op_Addition(UnityEngine.Vector3 a, UnityEngine.Vector3 b)
   method static UnityEngine.Vector3 op_Multiply(UnityEngine.Vector3 a, System.Single d)
   method static UnityEngine.Vector3 op_Subtraction(UnityEngine.Vector3 a, UnityEngine.Vector3 b)
+  method virtual System.Boolean Equals(System.Object other)
+  method virtual System.Int32 GetHashCode()
   method virtual System.String ToString()
   property static UnityEngine.Vector3 zero { get; }
 sealed class UnityEngine.WaitForEndOfFrame : UnityEngine.YieldInstruction

@@ -8,14 +8,16 @@ sealed class Valheim.Testing.GridDumpTerrain : Valheim.Testing.ITerrain
   method System.Boolean Contains(System.Single x, System.Single z)
   method System.Boolean IsSampleNode(System.Single x, System.Single z)
   method System.Single GetBaseHeight(System.Single x, System.Single z)
+  method System.Single GetBlendedHeight(System.Single x, System.Single z)
   method System.Single GetHeight(System.Single x, System.Single z)
-  method System.Void .ctor(System.String provenance, System.Single originX, System.Single originZ, System.Single spacing, System.Int32 countX, System.Int32 countZ, System.Single[] heights, Valheim.Testing.TerrainBiome[] biomes = null, System.Single[] riverWeights = null, System.Single[] riverWidths = null, System.Single[] baseHeights = null)
+  method System.Void .ctor(System.String provenance, System.Single originX, System.Single originZ, System.Single spacing, System.Int32 countX, System.Int32 countZ, System.Single[] heights, Valheim.Testing.TerrainBiome[] biomes = null, System.Single[] riverWeights = null, System.Single[] riverWidths = null, System.Single[] baseHeights = null, System.Single[] blendedHeights = null)
   method System.Void GetRiverWeight(System.Single x, System.Single z, out System.Single& weight, out System.Single& width)
   method Valheim.Testing.TerrainBiome GetBiome(System.Single x, System.Single z)
   method static Valheim.Testing.GridDumpTerrain Load(System.String path)
   method static Valheim.Testing.GridDumpTerrain Read(System.IO.TextReader reader, System.String provenance)
   property System.Boolean HasBaseHeight { get; }
   property System.Boolean HasBiome { get; }
+  property System.Boolean HasBlendedHeight { get; }
   property System.Boolean HasRiver { get; }
   property System.Int32 CountX { get; }
   property System.Int32 CountZ { get; }
@@ -31,6 +33,7 @@ interface Valheim.Testing.ITerrain
   method Valheim.Testing.TerrainBiome GetBiome(System.Single x, System.Single z)
 sealed class Valheim.Testing.LayeredDumpTerrain : Valheim.Testing.ITerrain
   method System.Single GetBaseHeight(System.Single x, System.Single z)
+  method System.Single GetBlendedHeight(System.Single x, System.Single z)
   method System.Single GetHeight(System.Single x, System.Single z)
   method System.Void GetRiverWeight(System.Single x, System.Single z, out System.Single& weight, out System.Single& width)
   method Valheim.Testing.GridDumpTerrain LayerAt(System.Single x, System.Single z)
@@ -177,10 +180,14 @@ sealed class Valheim.Testing.TerrainSample
   property System.Single Z { get; }
   property Valheim.Testing.TerrainBiome Biome { get; }
 sealed class Valheim.Testing.WorldDumpManifest
+  field const System.Int32 MaximumStep = 1000
+  field const System.Int32 MinimumStep = 1
+  field const System.Int32 MinimumWholeWorldStep = 5
   field const System.Single LatticeOrigin = -10000
-  field const System.String Header = "x,z,height,biome,river,river_width,base_height"
+  field const System.String Header = "x,z,height,biome,river,river_width,base_height,blended_height"
   method System.Void .ctor()
   method Valheim.Testing.GridDumpTerrain Verify()
+  method static System.String StepError(System.Int32 step, System.Boolean windowed)
   property System.Int32 Step { get; set; }
   property System.Single MaxX { get; set; }
   property System.Single MaxZ { get; set; }
