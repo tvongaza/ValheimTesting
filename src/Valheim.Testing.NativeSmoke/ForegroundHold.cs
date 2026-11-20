@@ -23,7 +23,7 @@ internal sealed class ForegroundHold : IDisposable
     internal static string Starting(string run) =>
         "STARTING held run " + run + "; until it holds, " + FinishUsage.Replace("ID", run, StringComparison.Ordinal) + " stops it and cleans up.";
 
-    internal static string DirectoryForThisMachine =>Path.Combine(CliBundle.DataRoot, "runs", "holds");
+    internal static string DirectoryForThisMachine => Path.Combine(CliBundle.DataRoot, "runs", "holds");
 
     internal static ForegroundHold Open(string run, string evidence, string? directory = null, string? serverEvidence = null)
     {
@@ -181,6 +181,8 @@ internal sealed class ForegroundHold : IDisposable
         if (!RunJournal.SafeName(run) || run == "-") throw new ArgumentException("Invalid run ID.", nameof(run));
         // A run that has not reached its hold yet publishes only its boot marker (#964).
         bool booting = !File.Exists(Path.Combine(directory, run + ".json")) && BootWatch.Live(run, directory);
+        if (!booting && !File.Exists(Path.Combine(directory, run + ".json")) && File.Exists(Path.Combine(directory, run + ".booting")))
+            throw new InvalidOperationException("The runner of run " + run + " ended while it was starting; valheim-test env recover --run " + run + " clears what it left.");
         if (!booting) _ = LiveMarker(run, directory);
         using var request = new FileStream(Path.Combine(directory, run + ".finish"), FileMode.CreateNew, FileAccess.Write, FileShare.None);
         return booting;
@@ -200,6 +202,8 @@ internal sealed class ForegroundHold : IDisposable
         private readonly Timer _fallback;
         private readonly CancellationTokenSource _cancel;
         private int _disposed;
+        // Check and Stop take this, so no check that began before the hand-over cancels after it.
+        private readonly object _gate = new();
         private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, BootWatch> s_live = new(StringComparer.Ordinal);
 
         // The hold opened: from here a finish is the hold's to answer, so the boot watch stops and its marker goes.
@@ -234,7 +238,9 @@ internal sealed class ForegroundHold : IDisposable
             string source = JsonSerializer.Serialize(identity);
             using (var file = new FileStream(marker, FileMode.CreateNew, FileAccess.Write, FileShare.None))
             using (var writer = new StreamWriter(file)) writer.Write(source);
-            var watch = new BootWatch(marker, request, source, cancel);
+            BootWatch watch;
+            try { watch = new BootWatch(marker, request, source, cancel); }
+            catch { File.Delete(marker); throw; } // a watcher that cannot start (an inotify limit) leaves no marker
             s_live[run] = watch;
             return watch;
         }
@@ -267,8 +273,11 @@ internal sealed class ForegroundHold : IDisposable
 
         private void Check()
         {
-            if (Volatile.Read(ref _disposed) != 0 || !File.Exists(_request)) return;
-            try { _cancel.Cancel(); } catch (ObjectDisposedException) { }
+            lock (_gate)
+            {
+                if (_disposed != 0 || !File.Exists(_request)) return;
+                try { _cancel.Cancel(); } catch (ObjectDisposedException) { }
+            }
         }
 
         public void Dispose()
@@ -280,7 +289,11 @@ internal sealed class ForegroundHold : IDisposable
 
         private void Stop(bool deleteRequest)
         {
-            if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+            lock (_gate)
+            {
+                if (_disposed != 0) return;
+                _disposed = 1;
+            }
             _watcher.Dispose();
             _fallback.Dispose();
             // Only this runner's marker; at the run's end also the finish request it answered (after a hand-over, the hold's).

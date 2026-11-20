@@ -138,6 +138,7 @@ public sealed class ForegroundHoldTests : IDisposable
         using var output = new StringWriter();
         using var error = new StringWriter();
         Assert.Equal(3, ForegroundHold.FinishCommand(["--run", "run-dead"], output, error, markers)); // no live runner to ask
+        Assert.Contains("env recover --run run-dead", error.ToString());
         ForegroundHold.RetireRecovered("run-dead", markers);
         Assert.Empty(Directory.GetFiles(markers));
     }
