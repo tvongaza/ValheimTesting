@@ -136,8 +136,8 @@ These fixtures model declared terrain and mutable zone state. They do not reprod
 | A height delta has no effect | Set the modified flag, such as `m_modifiedHeight`, with the delta. |
 | `GridDumpTerrain` throws `InvalidDataException` naming a line | Fix the ragged grid, uneven spacing, bad number or unknown biome. |
 | A dump query throws `ArgumentOutOfRangeException` | Query inside the grid. A dump never clamps or extrapolates. |
-| A dump query throws `NotSupportedException` | Add the missing biome, river or `base_height` column, or skip that query. |
-| Parity against the generator fails at `cli_world_dump` nodes | Use a height tolerance of at least 0.05 m and a `riverWeightTolerance` of at least 0.005. |
+| A dump query throws `NotSupportedException` | Add the missing biome, river, `base_height` or `blended_height` column, or skip that query. |
+| Parity against the generator fails at `cli_world_dump` nodes | Dumps are full precision, so nodes match exactly. Compare rendered ground with `GetBlendedHeight`, not `GetHeight`, where a heightmap's corners are not one biome. |
 | A render fails | The terrain refused a coordinate. Keep the render area inside the terrain. |
 
 ## Related

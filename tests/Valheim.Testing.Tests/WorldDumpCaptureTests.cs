@@ -8,15 +8,15 @@ public class WorldDumpCaptureTests
 {
     private static readonly string FixtureDirectory = Path.Combine(AppContext.BaseDirectory, "Fixtures", "WorldDump");
 
-    // The 2 October 2026 bounded run on a disposable Valheim 1.0.16 dedicated server (world DumpContract1, seed DumpProbe1,
-    // UID -18372600, read from the world's own metadata and agreed by cli_world before and after both dumps). The dump
-    // replies are verbatim except the station's staging directory, which reads C:/dumps here; the CSVs are the files the
-    // game wrote, byte for byte (SHA-256 recorded in the private run record). That run kept no cli_world line, so the one
-    // below is built from those recorded facts in ValheimCLI's WORLD format.
-    private const string WorldLine = "WORLD name=DumpContract1 seed=DumpProbe1 uid=-18372600 worldgen=2 files=- files_hashed=not_at_load dir=";
+    // The 20 November 2026 bounded run (#990) on a disposable Valheim 1.0.21 world a held valheim-test start --no-mod
+    // --world-seed DumpProbe1 --world-name DumpContract1 generated and hosted (UID 588083535, ValheimCLI 21cfd74). The dump
+    // replies and the cli_world line, the same before and after both dumps, are verbatim except the station's staging
+    // directory, which reads C:/dumps here, and the world line's dir=, left empty; the CSVs are the files the game wrote,
+    // byte for byte. The seed is the 2 October pair's, so this is that terrain, now at full precision.
+    private const string WorldLine = "WORLD name=DumpContract1 seed=DumpProbe1 uid=588083535 worldgen=2 files=bda39d3bd86751fa8a5de84f8f9f2218 files_hashed=at_load dir=";
     private static readonly Dictionary<string, (int Step, (float, float, float) Window, string Reply, string File)> Recorded = new()
     {
-        ["coarse"] = (128, (0, 0, 512), @"OK: WORLD_DUMP samples=64 step=128 window=0,0,512 extent=-400,-400..496,496 ms=1 world=C:/dumps\world.win_0_0_512_s128.csv", "world.win_0_0_512_s128.csv"),
+        ["coarse"] = (128, (0, 0, 512), @"OK: WORLD_DUMP samples=64 step=128 window=0,0,512 extent=-400,-400..496,496 ms=2 world=C:/dumps\world.win_0_0_512_s128.csv", "world.win_0_0_512_s128.csv"),
         ["fine"] = (8, (0, 0, 64), @"OK: WORLD_DUMP samples=289 step=8 window=0,0,64 extent=-64,-64..64,64 ms=1 world=C:/dumps\world.win_0_0_64_s8.csv", "world.win_0_0_64_s8.csv"),
     };
 
@@ -36,10 +36,10 @@ public class WorldDumpCaptureTests
             File.WriteAllBytes(Path.Combine(local, run.File), bytes);
             File.WriteAllText(Path.Combine(local, "an-older-dump.csv"), "not this one");
             return Task.FromResult(new FetchedDirectory(local, new string('0', 64), bytes.Length, 2));
-        }, "C:/dumps", "dumpcontract1-" + layer, run.Step, run.Window, "1.0.16", output, CancellationToken.None);
+        }, "C:/dumps", "dumpcontract1-" + layer, run.Step, run.Window, "1.0.21", output, CancellationToken.None);
     }
 
-    [Theory(Skip = PinnedDumpFixture.AwaitingRecapture)]
+    [Theory]
     [InlineData("coarse")]
     [InlineData("fine")]
     public async Task ReplayingTheRecordedRunWritesExactlyTheCheckedInManifest(string layer)
@@ -54,7 +54,7 @@ public class WorldDumpCaptureTests
             Directory.GetFileSystemEntries(output.Directory).Select(Path.GetFileName).Order().ToArray()); // staging removed
     }
 
-    [Theory(Skip = PinnedDumpFixture.AwaitingRecapture)]
+    [Theory]
     [InlineData("samples=289", "samples=288", "samples")]
     [InlineData("extent=-64,-64..64,64", "extent=-64,-64..64,72", "extent")]
     [InlineData("step=8", "step=5", "step")]
@@ -73,12 +73,12 @@ public class WorldDumpCaptureTests
         Assert.Empty(Directory.GetFileSystemEntries(output.Directory));
     }
 
-    [Fact(Skip = PinnedDumpFixture.AwaitingRecapture)]
+    [Fact]
     public async Task AWorldChangeADamagedFileOrAnExistingDumpIsRefused()
     {
         using var output = new PinnedDumpFixture();
         Assert.Contains("world changed", (await Assert.ThrowsAsync<InvalidDataException>(() =>
-            Replay("fine", output.Directory, worldAfter: WorldLine.Replace("-18372600", "1")))).Message);
+            Replay("fine", output.Directory, worldAfter: WorldLine.Replace("588083535", "1")))).Message);
         byte[] truncated = File.ReadAllBytes(Path.Combine(FixtureDirectory, "dumpcontract1-fine.csv"))[..^60];
         await Assert.ThrowsAsync<InvalidDataException>(() => Replay("fine", output.Directory, content: truncated));
         Assert.Empty(Directory.GetFileSystemEntries(output.Directory));
@@ -124,6 +124,33 @@ public class WorldDumpCaptureTests
         Assert.Contains("extent", (await Assert.ThrowsAsync<InvalidDataException>(() => WorldDump.CaptureCoreAsync(transport.Actor(),
             (_, local, _) => PinnedDumpFixture.Fetch(local, "world.csv", csv), "C:/dumps", "whole", 8, null, "1.0.16", output.Directory, CancellationToken.None))).Message);
         Assert.Empty(Directory.GetFileSystemEntries(output.Directory));
+    }
+
+    // A full export's reply in ValheimCLI's own words (fd228e7 named its locations file locations= a second time, which the
+    // capture refuses as a repeated key, so no whole-world capture could succeed): the count is locations=, the file locations_file=.
+    [Fact]
+    public async Task AWholeWorldDumpInTheGamesReplyFormatIsCaptured()
+    {
+        using var output = new PinnedDumpFixture();
+        string csv = WorldDumpManifest.Header + "\n-16,-16,1,Meadows,0,0,0.1,1\n-8,-16,1,Meadows,0,0,0.1,1\n-16,-8,1,Meadows,0,0,0.1,1\n-8,-8,1,Meadows,0,0,0.1,1\n";
+        var transport = new ScriptedTransport().On("cli_world", _ => ScriptedTransport.Ok(WorldLine))
+            .OnPrefix("cli_world_dump ", _ => ScriptedTransport.Ok(@"OK: WORLD_DUMP samples=4 step=8 locations=12 ms=1 world=C:/dumps\world.csv locations_file=C:/dumps\locations.csv"));
+        var manifest = await WorldDump.CaptureCoreAsync(transport.Actor(), (_, local, _) => PinnedDumpFixture.Fetch(local, "world.csv", csv),
+            "C:/dumps", "whole", 8, null, "1.0.16", output.Directory, CancellationToken.None);
+        Assert.Equal("cli_world_dump 8 C:/dumps", manifest.Command);
+        Assert.Equal((-16f, -8f), (manifest.MinX, manifest.MaxZ));
+    }
+
+    // The game's refusal (the sample cap, no blended height yet) reaches the caller in its own words.
+    [Fact]
+    public async Task ADumpTheGameRefusesSaysWhy()
+    {
+        using var output = new PinnedDumpFixture();
+        var transport = new ScriptedTransport().On("cli_world", _ => ScriptedTransport.Ok(WorldLine))
+            .OnPrefix("cli_world_dump ", _ => ScriptedTransport.Ok("ERROR: WORLD_DUMP exceeds 1000000 samples; use --window or a larger step"));
+        var refused = await Assert.ThrowsAsync<InvalidOperationException>(() => WorldDump.CaptureCoreAsync(transport.Actor(),
+            (_, local, _) => PinnedDumpFixture.Fetch(local, "world.csv", ""), "C:/dumps", "big", 5, null, "1.0.16", output.Directory, CancellationToken.None));
+        Assert.Contains("exceeds 1000000 samples", refused.Message);
     }
 
     [Fact]

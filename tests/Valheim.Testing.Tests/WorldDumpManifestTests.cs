@@ -3,13 +3,13 @@ using Valheim.Testing.Game;
 using Xunit;
 using Valheim.Testing.GameSessions;
 
-// The checked-in fixtures are real: two bounded dumps a Valheim 1.0.16 dedicated server wrote on 2 October 2026 for a
+// The checked-in fixtures are real: two bounded dumps a Valheim 1.0.21 game wrote on 20 November 2026 for a
 // disposable world (see WorldDumpCaptureTests for their provenance), with the manifests the capture writes for them.
 public class WorldDumpManifestTests
 {
     private static WorldDumpManifest Real(string layer) => WorldDump.ReadManifest(PinnedDumpFixture.Real(layer));
 
-    [Fact(Skip = PinnedDumpFixture.AwaitingRecapture)]
+    [Fact]
     public void TheRealNativeDumpsPassTheirManifestsAndKeepTheThreeHeightMeaningsApart()
     {
         var coarse = Real("coarse").Verify();
@@ -17,15 +17,18 @@ public class WorldDumpManifestTests
         Assert.Equal((8, 8, 128f, -400f, 496f), (coarse.CountX, coarse.CountZ, coarse.Spacing, coarse.OriginX, coarse.MaxX));
         Assert.Equal((17, 17, 8f, -64f, 64f), (fine.CountX, fine.CountZ, fine.Spacing, fine.OriginZ, fine.MaxZ));
         Assert.Equal("dumpcontract1-fine", fine.Provenance);
-        // The first fine row: x,z = -64,-64; height 56.1 m (metres); base_height 0.29914 (unitless generator value).
-        Assert.Equal(56.1f, fine.GetHeight(-64, -64));
-        Assert.Equal(.29914f, fine.GetBaseHeight(-64, -64));
+        // The first fine row: x,z = -64,-64; height 56.0921173 m (metres); base_height 0.2991419 (unitless generator value).
+        Assert.Equal(56.0921173f, fine.GetHeight(-64, -64));
+        Assert.Equal(.2991419f, fine.GetBaseHeight(-64, -64));
         Assert.Equal(TerrainBiome.Meadows, fine.GetBiome(-64, -64));
+        // A coarse node in a BlackForest/Meadows heightmap: the generator's height and the rendered (blended) ground differ.
+        Assert.Equal((78.4846039f, 76.7147141f), (coarse.GetHeight(368, -400), coarse.GetBlendedHeight(368, -400)));
+        Assert.Equal(fine.GetHeight(-64, -64), fine.GetBlendedHeight(-64, -64));
         Assert.Contains(Nodes(coarse), p => coarse.GetBiome(p.X, p.Z) == TerrainBiome.BlackForest);
         Assert.Contains(Nodes(fine).Concat(Nodes(coarse)), p => { var g = fine.Contains(p.X, p.Z) ? fine : coarse; g.GetRiverWeight(p.X, p.Z, out float w, out _); return w > 0; });
     }
 
-    [Fact(Skip = PinnedDumpFixture.AwaitingRecapture)]
+    [Fact]
     public void TheRealLayersComposeNodeForNodeWithTheirOwnGrids()
     {
         var coarseGrid = Real("coarse").Verify();
@@ -50,8 +53,8 @@ public class WorldDumpManifestTests
         Assert.Equal((289, 63), (fineNodes, coarseOnly)); // one coarse node, (-16,-16), lies inside the fine window
         // Both dumps sampled the same live world: where their lattices share a node, every native field agrees.
         coarseGrid.GetRiverWeight(-16, -16, out float coarseRiver, out _); fineGrid.GetRiverWeight(-16, -16, out float fineRiver, out _);
-        Assert.Equal((68.1f, .31711f, TerrainBiome.Meadows, coarseRiver), (fineGrid.GetHeight(-16, -16), fineGrid.GetBaseHeight(-16, -16), fineGrid.GetBiome(-16, -16), fineRiver));
-        Assert.Equal((68.1f, .31711f), (coarseGrid.GetHeight(-16, -16), coarseGrid.GetBaseHeight(-16, -16)));
+        Assert.Equal((68.05144f, .317108721f, TerrainBiome.Meadows, coarseRiver), (fineGrid.GetHeight(-16, -16), fineGrid.GetBaseHeight(-16, -16), fineGrid.GetBiome(-16, -16), fineRiver));
+        Assert.Equal((68.05144f, .317108721f), (coarseGrid.GetHeight(-16, -16), coarseGrid.GetBaseHeight(-16, -16)));
         Assert.Equal("dumpcontract1-coarse", layered.BaseHeightLayer.Provenance);
         // (0,0) is a fine node but lies between coarse nodes: base height is still the coarse lattice's interpolation.
         Assert.True(fineGrid.IsSampleNode(0, 0));
@@ -59,7 +62,7 @@ public class WorldDumpManifestTests
         Assert.Equal(coarseGrid.GetBaseHeight(0, 0), layered.GetBaseHeight(0, 0));
     }
 
-    [Fact(Skip = PinnedDumpFixture.AwaitingRecapture)]
+    [Fact]
     public void ADamagedTruncatedOrRelabelledRealDumpIsRefused()
     {
         using var copy = new PinnedDumpFixture();
@@ -83,7 +86,7 @@ public class WorldDumpManifestTests
         }
     }
 
-    [Fact(Skip = PinnedDumpFixture.AwaitingRecapture)]
+    [Fact]
     public void AByteOrderMarkDoesNotHideTheNativeHeader()
     {
         using var copy = new PinnedDumpFixture();
@@ -91,10 +94,10 @@ public class WorldDumpManifestTests
         byte[] marked = [0xEF, 0xBB, 0xBF, .. File.ReadAllBytes(manifest.Path)];
         File.WriteAllBytes(manifest.Path, marked);
         manifest.Sha256 = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(marked)).ToLowerInvariant();
-        Assert.Equal(56.1f, manifest.Verify().GetHeight(-64, -64));
+        Assert.Equal(56.0921173f, manifest.Verify().GetHeight(-64, -64));
     }
 
-    [Fact(Skip = PinnedDumpFixture.AwaitingRecapture)]
+    [Fact]
     public void TheCoreNoLongerReadsTheReplyGrammarTheCaptureDoes()
     {
         // A reply that disagrees with the file is refused when the dump is captured (WorldDumpCaptureTests); once a
@@ -116,7 +119,7 @@ public class WorldDumpManifestTests
         Assert.Empty(Directory.GetFileSystemEntries(files.Directory)); // the capture left nothing behind
     }
 
-    [Fact(Skip = PinnedDumpFixture.AwaitingRecapture)]
+    [Fact]
     public void LayersFromDifferentWorldsAreRefused()
     {
         using var copy = new PinnedDumpFixture();

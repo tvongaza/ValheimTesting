@@ -14,15 +14,7 @@ internal sealed class PinnedDumpFixture : IDisposable
     public const string HostDirectory = "C:/dumps";
     public string Directory { get; } = System.IO.Directory.CreateTempSubdirectory("pinned-dump-").FullName;
 
-    /// <summary>
-    /// Skips the tests that read <see cref="Real"/> while the checked-in DumpContract1 pair predates ValheimCLI's
-    /// full-precision dump with <c>blended_height</c> (ValheimTesting#990): their header is the old one, so
-    /// <see cref="WorldDumpManifest.Verify"/> refuses them. Recapture the pair, replace the files and the recorded replies in
-    /// <c>WorldDumpCaptureTests</c>, update the pinned node values, then set this to null to run them again.
-    /// </summary>
-    public const string? AwaitingRecapture = "The DumpContract1 fixtures predate the full-precision dump with blended_height (#990) and await a recapture.";
-
-    /// <summary>The real 2 October 2026 captures (Valheim 1.0.16, disposable world DumpContract1), as checked in.</summary>
+    /// <summary>The real 20 November 2026 captures (Valheim 1.0.21, disposable world DumpContract1, full-precision format with blended_height), as checked in.</summary>
     public static string Real(string layer) => Path.Combine(AppContext.BaseDirectory, "Fixtures", "WorldDump", $"dumpcontract1-{layer}.json");
 
     public WorldDumpManifest Capture(string name, string csv, int step, string uid = "1716468958", (float X, float Z, float Radius)? window = null)

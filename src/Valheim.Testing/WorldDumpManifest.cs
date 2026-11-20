@@ -71,8 +71,8 @@ public sealed class WorldDumpManifest
             throw new InvalidDataException($"Dump '{Name}' needs the world UID, seed and game build from its pinned native run.");
         if (string.IsNullOrWhiteSpace(Command) || string.IsNullOrWhiteSpace(Reply))
             throw new InvalidDataException($"Dump '{Name}' needs the recorded command and reply that made it.");
-        // The file does not say whether it was a window; the capture held the request to the window rule.
-        if (StepError(Step, windowed: true) is { } stepError) throw new InvalidDataException($"Dump '{Name}': {stepError}.");
+        // The recorded command says whether the dump was a window, so the one step rule applies here as at capture.
+        if (StepError(Step, windowed: Command.IndexOf(" --window ", StringComparison.Ordinal) >= 0) is { } stepError) throw new InvalidDataException($"Dump '{Name}': {stepError}.");
         if (Sha256 == null || Sha256.Length != 64 || !Sha256.All(Uri.IsHexDigit)) throw new InvalidDataException($"Dump '{Name}' needs a 64-digit SHA-256.");
         string file = System.IO.Path.GetFileName(Path);
         if (!Hash(Path).Equals(Sha256, StringComparison.OrdinalIgnoreCase))

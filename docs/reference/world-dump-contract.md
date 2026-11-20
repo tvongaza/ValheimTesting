@@ -79,7 +79,7 @@ The header is `WorldDumpManifest.Header`: `x,z,height,biome,river,river_width,ba
 | `base_height` | `WorldGenerator.GetBaseHeight(x,z,false)` | **Unitless** generator value, full float precision |
 | `blended_height` | The ground `HeightmapBuilder` builds for the zone's heightmap before terrain modifiers: the four corner biomes' `GetBiomeHeight` mixed with the builder's weights | Metres, full float precision |
 
-Full float precision is the shortest invariant-culture text that parses back to the same float, so a node read from the file is the game's value to the bit. Increasing x and z follow their world axes. `base_height` is not a second ground elevation. `height` and `blended_height` agree wherever a 64 m heightmap's four corners are one biome and differ where they are not; `blended_height` is the ground an unmodified zone has at that vertex. `GetHeight` reads `height`, `GetBlendedHeight` reads `blended_height`.
+Full float precision is invariant-culture text that parses back to the same float (round-trip `R`, else `G9`), so a node read from the file is the game's value (a reader treats -0 as 0). Increasing x and z follow their world axes. `base_height` is not a second ground elevation. `height` and `blended_height` agree wherever a 64 m heightmap's four corners are one biome and differ where they are not; `blended_height` is the ground an unmodified zone has at that vertex. `GetHeight` reads `height`, `GetBlendedHeight` reads `blended_height`.
 
 Node values are exact. Between nodes, `GridDumpTerrain` interpolates bilinearly: an approximation, never a native replay. If a native field disappears or changes meaning, treat it as a contract change to investigate. Do not invent a default.
 
@@ -102,7 +102,7 @@ For the full query rules, see [`Valheim.Testing`](../packages/Valheim.Testing.md
 
 ## Fixtures
 
-`tests/Valheim.Testing.Tests/Fixtures/WorldDump` holds two real dumps from a dedicated server, for the disposable world `DumpContract1`. One is a 128 m 8×8 window; the other an 8 m 17×17 window. Both are byte for byte, with the manifests the capture wrote.
+`tests/Valheim.Testing.Tests/Fixtures/WorldDump` holds two real dumps a hosted game wrote for the disposable world `DumpContract1` (seed `DumpProbe1`), in the full-precision format with `blended_height`. One is a 128 m 8×8 window; the other an 8 m 17×17 window. Both are byte for byte, with the manifests the capture wrote.
 
 The checked-in pair predates the full-precision dump with `blended_height`, so `Verify()` refuses it. Until it is recaptured, the tests that read it are skipped through `PinnedDumpFixture.AwaitingRecapture`; synthetic captures through the same capture code cover the new header, precision and 1 m windows meanwhile.
 
