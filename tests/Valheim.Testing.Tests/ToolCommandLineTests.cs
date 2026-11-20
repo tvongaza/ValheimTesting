@@ -50,6 +50,7 @@ public sealed class ToolCommandLineTests
         Assert.False(ToolCommandLine.TryAnswer([], TextWriter.Null, out _));
         Assert.False(ToolCommandLine.TryAnswer(["server-load", "--mod", "A.dll"], TextWriter.Null, out _));
         Assert.False(ToolCommandLine.TryAnswer(["server-load", "--version"], TextWriter.Null, out _));
+        Assert.False(ToolCommandLine.TryAnswer(["sever-load", "--help"], TextWriter.Null, out _)); // a typo: start's parser names it
     }
 
     [Fact] public void TheInstalledToolAnswersBothFlags()

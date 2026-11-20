@@ -60,6 +60,8 @@ internal static class ToolCommandLine
             return true;
         }
         if (!args.Any(arg => arg is "--help" or "-h")) return false;
+        // A word that is no command (a typo such as sever-load) is left to start's parser, which names it, rather than answered as start.
+        if (!Usages.ContainsKey(args[0]) && !args[0].StartsWith('-')) return false;
         string command = Usages.ContainsKey(args[0]) ? args[0] : "start";
         output.WriteLine("Usage: " + Usages[command]);
         if (command == "start") output.WriteLine("Without a command word the tool runs start. valheim-test --help lists every command.");
