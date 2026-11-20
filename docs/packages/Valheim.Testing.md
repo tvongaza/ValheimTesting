@@ -50,8 +50,8 @@ if (!parity.Passed) throw new Exception(parity.ToString());
 `GridDumpTerrain` answers `ITerrain` from an evenly spaced grid of samples. One example is the `world.csv` that ValheimCLI's `cli_world_dump` writes. Load it with `GridDumpTerrain.Load(path)` or `Read(reader, provenance)`. `Load` uses the file name as the provenance that errors name.
 
 ```text
-x,z,height,biome,river,river_width,base_height
--10000,-10000,-400.0,Ocean,0.00,0.0,-1.00000
+x,z,height,biome,river,river_width,base_height,blended_height
+-10000,-10000,-400.12347,Ocean,0,0,-1,-400.12347
 ...
 ```
 
@@ -61,6 +61,7 @@ x,z,height,biome,river,river_width,base_height
 | `biome` | No | The game's exact name (`Meadows`, `AshLands`) |
 | `river`, `river_width` | No, but only together | River weight and width |
 | `base_height` | No | **Valheim's unitless generator value**, not metres; read with `GetBaseHeight` |
+| `blended_height` | No | The ground the game's zone heightmap builds before terrain modifiers, in metres; read with `GetBlendedHeight` |
 | Any other | No | Ignored |
 
 The file must follow these rules:
@@ -100,7 +101,7 @@ To use a native ValheimCLI dump as a pinned offline input, follow these steps:
 
 `WorldDumpManifest.Verify()` checks the CSV against the manifest that the capture wrote. It checks these:
 
-- the SHA-256 and the exact seven-column native header
+- the SHA-256 and the exact eight-column native header
 - the layers and a complete grid
 - the spacing, the bounds and ValheimCLI's lattice
 
@@ -122,7 +123,7 @@ The world UID, seed and game build come from the pinned session. The CSV holds n
 | `LayerAt(x, z)` | The grid that answers the query; its `Provenance` is the layer's name |
 | `IsSampleNode(x, z)` | Whether the query landed on an exact CSV node |
 
-Nodes keep the file's rounded values. Between nodes, height, river and base height are bilinear. Biome comes from the nearest node of the selected grid. The order of the manifests does not change the result.
+Nodes keep the file's values, which a native dump writes at full float precision. `GetBlendedHeight` comes from the finest layer, like height. Between nodes, height, blended height, river and base height are bilinear. Biome comes from the nearest node of the selected grid. The order of the manifests does not change the result.
 
 ```csharp
 var terrain = LayeredDumpTerrain.Load(new[] {
@@ -181,9 +182,7 @@ On its own nodes, a dump matches its source only to the precision of the file:
 
 | Comparison | Minimum tolerance |
 |---|---|
-| `cli_world_dump` nodes vs generator: height (rounded to 0.1 m) | `heightTolerance` of at least 0.05 m |
-| `cli_world_dump` nodes vs generator: river weight (rounded to 0.01) | `riverWeightTolerance` of at least 0.005 |
-| Full-precision dump nodes vs its source | Exact |
+| Dump nodes (`cli_world_dump` writes full float precision) vs its source | Exact |
 | Between nodes | Add bilinear error, which depends on curvature |
 
 ## Static overrides

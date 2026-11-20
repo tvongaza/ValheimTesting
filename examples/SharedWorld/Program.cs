@@ -27,8 +27,8 @@ using (var scope = new ValheimWorldScope().WithTerrain(terrain).WithZdos())
 }
 
 // The same ground as a grid dump (cli_world_dump's CSV layout, 4 m nodes), checked against its source at the nodes.
-// Heights are written at full precision, so tolerance 0 holds; a real cli_world_dump rounds height to 0.1 m and
-// river weight to 0.01, so compare one with its generator at >= 0.05 m (0.005 river weight).
+// Heights are written at full precision, so tolerance 0 holds, as it does for a real cli_world_dump, which writes every
+// value at full float precision; only between nodes does a bilinear reader approximate.
 // Negative control: the dump placed one node east must fail. Pass a path to also write a review PNG.
 var dump = GridDumpTerrain.Read(new StringReader(Csv(0)), "terrace.csv");
 var shifted = GridDumpTerrain.Read(new StringReader(Csv(4)), "terrace-shifted.csv");
