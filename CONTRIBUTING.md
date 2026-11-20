@@ -127,7 +127,7 @@ A new folder costs a cold download of every package, so use it for the install a
 
 #### Check which build ran
 
-`dotnet tool list --tool-path /absolute/path/vt-local/<id>` (or `--global`) prints the installed version. <!-- TODO(docs): #955 adds valheim-test --version --> Each run's `result.json` records the toolkit that ran as `Toolkit` ([fields](docs/reference/sessions-pinned-server-run.md#what-ran)). Each `Valheim.Testing*` package there has a `Version` and a `State`: `candidate` for a `-candidate` build, `released` for a release build, `unreleased` for any other source build. The Cli is `released` for any version without `-candidate`, a local bootstrap included; compare its `Sha256`. `LoadedAssemblies` lists the toolkit, transport and entry assemblies that loaded, with SHA-256 and module id.
+`dotnet tool list --tool-path /absolute/path/vt-local/<id>` (or `--global`) prints the installed version, and that tool's `valheim-test --version` prints its version and source commit. Each run's `result.json` records the toolkit that ran as `Toolkit` ([fields](docs/reference/sessions-pinned-server-run.md#what-ran)). Each `Valheim.Testing*` package there has a `Version` and a `State`: `candidate` for a `-candidate` build, `released` for a release build, `unreleased` for any other source build. The Cli is `released` for any version without `-candidate`, a local bootstrap included; compare its `Sha256`. `LoadedAssemblies` lists the toolkit, transport and entry assemblies that loaded, with SHA-256 and module id.
 
 #### Switch back to the release
 

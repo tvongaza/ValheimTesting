@@ -18,6 +18,8 @@ public sealed class LocalGameHost : ScriptedGameHost
     public LocalGameHost(string name, HostShell shell) : this(name, UnixBash(shell, !OperatingSystem.IsWindows(), "this machine"), SystemProcessLauncher.Instance) { }
     internal LocalGameHost(string name, HostShell shell, IProcessLauncher launcher) : base(name, shell, launcher) { }
     public override GameHostKind Kind => GameHostKind.Local;
+    /// <summary>The name of this machine as a run that needs no inventory reaches it (<c>GameHosts.ThisMachine</c>).</summary>
+    internal const string ThisMachineName = "this machine";
 
     // Test seam: the host ThisMachine returns in this flow instead of a shell on this machine.
     private static readonly AsyncLocal<IGameHost?> s_thisMachineForTest = new();
@@ -27,7 +29,7 @@ public sealed class LocalGameHost : ScriptedGameHost
     /// world, the process checks around its launch): a <see cref="LocalGameHost"/> on this machine's shell, unless a test replaced it
     /// for its flow (<see cref="UseThisMachineForTest"/>).
     /// </summary>
-    internal static IGameHost ThisMachine() => s_thisMachineForTest.Value ?? new LocalGameHost("this machine", HostShell.ThisMachine);
+    internal static IGameHost ThisMachine() => s_thisMachineForTest.Value ?? new LocalGameHost(LocalGameHost.ThisMachineName, HostShell.ThisMachine);
 
     /// <summary>Test seam: <see cref="ThisMachine"/> returns <paramref name="host"/> in this flow until the scope is disposed.</summary>
     internal static IDisposable UseThisMachineForTest(IGameHost host)
