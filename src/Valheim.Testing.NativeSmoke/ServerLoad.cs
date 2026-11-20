@@ -81,6 +81,10 @@ internal static class ServerLoad
             // Otherwise the still-live starter looks like another process's live run and the supervisor refuses itself. It holds the
             // run's control lock until it ends (#811).
             using var supervisor = DetachedSession.ConfiguredRun is { } detachedRun ? DetachedSession.AdoptRun(detachedRun) : null;
+            // A held run can be finished while it is still starting (#964): finish cancels it as Ctrl+C does.
+            using var bootWatch = parsed.Switches.Contains("--hold") && DetachedSession.ConfiguredRun == null
+                ? ForegroundHold.BootWatch.Start(state.HeldRunId = RunJournal.NewRunId(), cancel) : null;
+            if (state.HeldRunId != null) Console.WriteLine(ForegroundHold.Starting(state.HeldRunId));
             if (supervisor != null) DetachedSession.VerifyStagedInputs();
             output = Output(parsed!);
             // A world fixture is one complete world before the mod, its dependencies or either game actor is staged.
@@ -115,6 +119,8 @@ internal static class ServerLoad
     internal sealed class RunState : ModInputStage.Progress
     {
         public bool Started { get; set; }
+        /// <summary>A held run's id, chosen before it starts so finish can stop it while it is still starting (#964).</summary>
+        public string? HeldRunId { get; set; }
     }
 
     // A source loader refusal (a macOS install with an incomplete BepInEx) names the reviewed-package fix for that actor.
@@ -326,7 +332,7 @@ internal static class ServerLoad
                     Name = "native-smoke-server-load",
                     InitialHostingBuild = inputs.HostingBuild,
                     InitialWorldAdmission = fixture.CopyAdmission,
-                    RunId = DetachedSession.ConfiguredRun,
+                    RunId = DetachedSession.ConfiguredRun ?? state.HeldRunId,
                     CheckpointFixture = DetachedSession.ConfiguredRun != null,
                     CleanupBudget = ServerLoad.CleanupBudget,
                     ReadPlan = _ => throw new InvalidOperationException("The one-off's plan is in memory."),

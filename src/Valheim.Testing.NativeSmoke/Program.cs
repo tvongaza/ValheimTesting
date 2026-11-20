@@ -39,6 +39,8 @@ Console.CancelKeyPress += (_, press) => { press.Cancel = true; cancel.Cancel(); 
 bool holdRequested = options!.ContainsKey("--hold");
 string runId = RunJournal.NewRunId();
 using var runJournal = RunJournal.UseRun(runId);
+// A held run can be finished while it is still starting (#964): finish cancels it as Ctrl+C does.
+ForegroundHold.BootWatch? bootWatch = null;
 var elapsed = Stopwatch.StartNew();
 TargetedRegression? runner = null;
 ScenarioReport? lastArm = null; string? lastArmOutput = null;
@@ -50,6 +52,11 @@ string? output = null;
 var progress = new ModInputStage.Progress();
 try
 {
+    if (holdRequested && DetachedSession.ConfiguredRun == null)
+    {
+        bootWatch = ForegroundHold.BootWatch.Start(runId, cancel);
+        Console.WriteLine(ForegroundHold.Starting(runId));
+    }
     output = SmokeCommandOptions.Output(options!);
     // A chosen world is one complete world, matching its manifest, before anything is built or staged; it is copied and checked again below.
     string? worldFixture = options!.TryGetValue("--world-fixture", out string? requestedWorld) ? Path.GetFullPath(requestedWorld) : null;
@@ -219,6 +226,7 @@ finally
         Console.Error.WriteLine("CLEANUP UNVERIFIED: the run ended but its journal could not record that.");
         exitCode = 1;
     }
+    bootWatch?.Dispose();
 }
 if (outcome != null)
 {
