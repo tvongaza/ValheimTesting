@@ -646,19 +646,21 @@ internal sealed class StopReplyLosingHost(IGameHost inner) : DelegatingGameHost(
 
 internal static class LauncherTimeoutStandIn
 {
-    // binary: the game is a copy of sleep itself, so its command line is the launch's (a recovery checks it); otherwise a script
-    // that ignores SIGINT and executes sleep in its place.
+    // binary: the game is a copy of a real program that sleeps, so its command line is the launch's (a recovery checks it); otherwise
+    // a script that ignores SIGINT and executes sleep in its place. On Linux the copy is perl: ubuntu-latest's coreutils (uutils, one
+    // multi-call binary) refuses to run under another name ("Requested utility `valheim_server` does not match executable name").
     internal static GameLaunch Unix(string root, bool binary = false)
     {
         string runtime = Path.Combine(root, "runtime");
         FakeInstalls.Server(runtime);
         FakeInstalls.LinuxLoader(runtime);
         string executable = Path.Combine(runtime, GameLaunch.ServerLinuxExecutable);
-        if (binary) File.Copy(File.Exists("/usr/bin/sleep") ? "/usr/bin/sleep" : "/bin/sleep", executable, overwrite: true);
+        bool perl = binary && OperatingSystem.IsLinux();
+        if (binary) File.Copy(perl ? "/usr/bin/perl" : File.Exists("/usr/bin/sleep") ? "/usr/bin/sleep" : "/bin/sleep", executable, overwrite: true);
         else File.WriteAllText(executable, "#!/bin/bash\ntrap '' INT\nexec sleep 300\n");
         if (!OperatingSystem.IsWindows())
             File.SetUnixFileMode(executable, File.GetUnixFileMode(executable) | UnixFileMode.UserExecute);
-        return GameLaunch.ForServer(runtime, binary ? ["300"] : [], hostPlatform: ServerPlatform.Linux);
+        return GameLaunch.ForServer(runtime, perl ? ["-e", "sleep 300"] : binary ? ["300"] : [], hostPlatform: ServerPlatform.Linux);
     }
 
     internal static GameLaunch Windows(string root)
