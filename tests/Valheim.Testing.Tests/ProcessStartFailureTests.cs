@@ -120,7 +120,7 @@ public class ProcessStartFailureTests
         string described = dllInit.Describe();
         Assert.StartsWith("ended without the host's exit report (its shell exited with code -1073741502 (0xC0000142)); the outcome is unknown after 0.0 s", described);
         Assert.Contains("STATUS_DLL_INIT_FAILED", described);
-        Assert.Contains("start a held run from a shell that stays open", described);
+        Assert.Contains("run valheim-test from a shell that stays open", described);
 
         var interrupted = new LocalGameHost("this machine", HostShell.Pwsh, new FakeLauncher()).Interpret(new ProcessExit(ProcessEnd.Exited, unchecked((int)0xC000013A), "", "", TimeSpan.Zero));
         Assert.Contains("STATUS_CONTROL_C_EXIT", interrupted.Describe());

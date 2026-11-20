@@ -70,25 +70,29 @@ public sealed record HostResult(HostOutcome Outcome, int? ExitCode, string Stdou
     public HostResult EnsureSuccess(string what) => Succeeded ? this : throw new HostOperationException(what, this);
     public string Describe()
     {
-        string state = Outcome switch
+        // The arm that names an unreported shell exit also names what its code means, so the two cannot drift apart.
+        (string state, string? meaning) = Outcome switch
         {
-            HostOutcome.Exited => "exited with code " + ExitCode?.ToString(CultureInfo.InvariantCulture),
-            HostOutcome.TransportFailed => "the transport failed; the script may or may not have run",
-            _ when TimedOut => "timed out; the outcome is unknown and the script may still be running",
-            _ when ShellExitCode is { } code => "ended without the host's exit report (its shell exited with code " + ShellExit(code) + "); the outcome is unknown",
-            _ => "ended without the host's exit report; the outcome is unknown",
+            HostOutcome.Exited => ("exited with code " + ExitCode?.ToString(CultureInfo.InvariantCulture), null),
+            HostOutcome.TransportFailed => ("the transport failed; the script may or may not have run", null),
+            _ when TimedOut => ("timed out; the outcome is unknown and the script may still be running", null),
+            _ when ShellExitCode is { } code => ("ended without the host's exit report (its shell exited with code " + ShellExit(code) + "); the outcome is unknown",
+                ShellExitMeaning(code)),
+            _ => ("ended without the host's exit report; the outcome is unknown", (string?)null),
         };
         string error = Stderr.Trim();
         return state + " after " + WaitText.Seconds(Elapsed) + (Phases == null ? "" : " (" + Phases + ")") +
             (error.Length == 0 ? "" : "; stderr: " + (error.Length > 600 ? "..." + error[^600..] : error)) +
-            (Outcome == HostOutcome.Unknown && !TimedOut && ShellExitCode is { } exited && ShellExitMeaning(exited) is { } meaning ? "; " + meaning : "") +
+            (meaning == null ? "" : "; " + meaning) +
             (Context == null ? "" : "\n" + Context);
     }
 
     /// <summary>
-    /// How the host's shell (on an ssh or container host, the ssh or docker client) exited without the wrapper's report, so an unknown
-    /// outcome still says how the process ended. Null when it did not exit (a deadline, a stop) and for a reported exit, whose
-    /// code is <see cref="ExitCode"/>.
+    /// How the host's shell exited without the wrapper's report, so an unknown outcome still says how the process ended. On an ssh
+    /// or container host it is the code the ssh or docker client relays: the remote command's, unless it is the client's own
+    /// (ssh 255, docker 125 to 127), which reads as a transport failure. Null when it did not exit (a deadline, a stop) and for a
+    /// reported exit, whose code is <see cref="ExitCode"/>. Also set on a transport failure, where <see cref="Describe"/> does not
+    /// show it.
     /// </summary>
     internal int? ShellExitCode { get; init; }
 
@@ -101,8 +105,8 @@ public sealed record HostResult(HostOutcome Outcome, int? ExitCode, string Stdou
     // script of a held run's teardown on the station ended in 0.0 s without the report, so the run could not verify its cleanup).
     internal static string? ShellExitMeaning(int code) => unchecked((uint)code) switch
     {
-        0xC0000142 => "Windows could not start the shell (STATUS_DLL_INIT_FAILED): the console or desktop this runner was started in is gone " +
-            "or out of resources, so no host script can run from it any more; start a held run from a shell that stays open until the run ends",
+        0xC0000142 => "Windows could not start the shell (STATUS_DLL_INIT_FAILED), most often because the console or desktop it was started " +
+            "from is gone or out of resources; on this machine, run valheim-test from a shell that stays open until the run ends",
         0xC000013A => "the shell was ended by Ctrl+C or by its console closing (STATUS_CONTROL_C_EXIT)",
         _ => null,
     };

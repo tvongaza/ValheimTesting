@@ -87,9 +87,9 @@ internal static class RunFinish
         return journal.AppendAsync(host, directory, RunRecovery.Actor, Entry(end), timeout, cancellation);
     }
 
-    /// <summary>What a run whose cleanup was not proven prints at its end: that, and where the command that settles it is named.</summary>
+    /// <summary>What a run whose cleanup was not proven prints at its end: that, and where what it left (and the command, if any, that settles it) is shown.</summary>
     internal static string NotCleanedUp(string run) =>
-        $"RUN NOT CLEANED UP: cleanup was not verified for run {run}; valheim-test env status names the command that settles it.";
+        $"CLEANUP NOT PROVEN: run {run} ended without proving its cleanup; valheim-test env status shows what it left and the command, if any, that settles it.";
 
     // The one composition of a run's last entry: its state word and the one cleanup rule (proven, and not abandoned).
     private static JournalEntry Entry(RunEnd end) => end.Abandoned is { } why

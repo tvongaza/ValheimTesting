@@ -202,7 +202,7 @@ public sealed class RunFinishTests : IDisposable
             Assert.True(await RunFinish.EndAsync(run, new RunEnd(RunOutcome.Failed, CleanupProven: false), said));
         }
         string line = Assert.Single(said.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
-        Assert.Equal($"RUN NOT CLEANED UP: cleanup was not verified for run {runId}; valheim-test env status names the command that settles it.", line);
+        Assert.Equal($"CLEANUP NOT PROVEN: run {runId} ended without proving its cleanup; valheim-test env status shows what it left and the command, if any, that settles it.", line);
         // The per-state command (recover, --launch-gone, teardown, or nothing) is env status's alone: this line names none.
         Assert.DoesNotContain("env recover", line);
         Assert.Equal("false", Assert.Single(Records(Path.Combine(_root, "local-journal"), runId), record => record.Entry.Kind == JournalEntry.RunEnded).Entry.Fields["cleanupVerified"]);
