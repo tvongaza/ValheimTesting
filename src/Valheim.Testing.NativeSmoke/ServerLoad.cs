@@ -15,6 +15,8 @@ using Valheim.Testing.GameSessions;
 /// </summary>
 internal static class ServerLoad
 {
+    /// <summary>How long a run's teardown may take: the server's quit (its world save, up to 300 s) and the rest of the campaign's cleanup.</summary>
+    internal static readonly TimeSpan CleanupBudget = TimeSpan.FromMinutes(10);
     internal static readonly string Usage = "valheim-test server-load [--mod DLL ... | --project MOD.csproj] [--scenario TEST.dll | --scenario-project TEST.csproj] [--adapter DLL | --adapter-project ADAPTER.csproj] [--adapter-property NAME={mod}|{cli} ...] [--session-capability OWNER/session --session-token-variable NAME] [--dependency NAME=DLL ...] [--output NEW_DIR] [--inventory FILE | --server DIR] [--client DIR] " +
         $"[--server-env NAME] [--client-env NAME] [--client-architecture x64|arm64] [--server-only] [--server-startup-seconds 1..{ServerRunPlan.MaximumStartupSeconds}] [--world-fixture DIR] [--bake-fixture NEW_DIR] [--before-save-command TEXT --before-save-line PREFIX] [--assert-command TEXT --assert-line PREFIX] [--join HOST:PORT] [--join-seconds 10..900] [--preflight-only] [--hold] [--loader-package FILE] [--steam-runtime-package FILE] [--client-loader-package FILE] " +
         "[--client-mod DLL ... | --client-project MOD.csproj] [--client-build-inputs FILE] [--client-dependency NAME=DLL ...] [--client-search-root DIR|DLL ...] [--client-optional-reference ASSEMBLY ...] [--client-config FILE ...] [--client-plugin-file FILE ...] [--client-plugin-dir DIR ...] [--client-assert-command TEXT --client-assert-line PREFIX] [--build-inputs FILE] [--cli-manifest FILE --cli-files DIR] [--search-root DIR|DLL ...] [--config FILE ...] [--env NAME=VALUE ...] [--plugin-file FILE ...] [--plugin-dir DIR ...] " +
@@ -265,7 +267,7 @@ internal static class ServerLoad
             Port = server.CliPort,
             StartupSeconds = parsed.Options.TryGetValue("--server-startup-seconds", out string? startupSeconds)
                 ? int.Parse(startupSeconds, CultureInfo.InvariantCulture) : 300,
-            QuitSeconds = bakeDestination == null ? 20 : 300, // A bake must let the final world save at quit finish.
+            QuitSeconds = 300, // Allow the final world save at quit to finish.
         };
         if (parsed.Options.TryGetValue("--expected-log-error", out string? expectedError))
             plan.LogScan[LogScanner.UnknownError] = new LogClassification { Expected = [expectedError], Reason = parsed.Options["--expected-log-reason"] };
@@ -326,7 +328,7 @@ internal static class ServerLoad
                     InitialWorldAdmission = fixture.CopyAdmission,
                     RunId = DetachedSession.ConfiguredRun,
                     CheckpointFixture = DetachedSession.ConfiguredRun != null,
-                    CleanupBudget = bakeDestination == null ? null : TimeSpan.FromMinutes(10),
+                    CleanupBudget = ServerLoad.CleanupBudget,
                     ReadPlan = _ => throw new InvalidOperationException("The one-off's plan is in memory."),
                     Mod = new(parsed.Options.GetValueOrDefault("--session-capability") ?? SmokeSessionContract.SessionCapability,
                         parsed.Options.GetValueOrDefault("--session-token-variable") ?? SmokeSessionContract.SessionTokenVariable),

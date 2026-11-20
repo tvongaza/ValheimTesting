@@ -601,7 +601,8 @@ internal static class DetachedSession
             {
                 ForegroundHold.Request(run, owner.Control);
                 using var process = Process.GetProcessById(owner.Runner.Pid);
-                using var wait = new CancellationTokenSource(TimeSpan.FromMinutes(10));
+                // The owner's whole teardown, its server's quit save included, with a margin for the hold to end first.
+                using var wait = new CancellationTokenSource(ServerLoad.CleanupBudget + TimeSpan.FromMinutes(2));
                 await process.WaitForExitAsync(wait.Token).ConfigureAwait(false);
                 ownerExit = process.ExitCode;
             }
