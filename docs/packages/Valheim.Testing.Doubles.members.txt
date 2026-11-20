@@ -1222,6 +1222,7 @@ UnityEngine.Color	field	a : float	game
 UnityEngine.Color	field	b : float	game
 UnityEngine.Color	field	g : float	game
 UnityEngine.Color	field	r : float	game
+UnityEngine.Color	method	Equals(UnityEngine.Color) : bool	game
 UnityEngine.Color	method	Equals(object) : bool	game
 UnityEngine.Color	method	GetHashCode() : int	game
 UnityEngine.Color	method	ToString() : string	game
@@ -1457,13 +1458,19 @@ UnityEngine.Quaternion	ctor	.ctor(float, float, float, float)	game
 UnityEngine.Quaternion	field	EulerX : float	test-only
 UnityEngine.Quaternion	field	EulerY : float	test-only
 UnityEngine.Quaternion	field	EulerZ : float	test-only
+UnityEngine.Quaternion	field	static kEpsilon : float { get; }	game
 UnityEngine.Quaternion	field	w : float	game
 UnityEngine.Quaternion	field	x : float	game
 UnityEngine.Quaternion	field	y : float	game
 UnityEngine.Quaternion	field	z : float	game
+UnityEngine.Quaternion	method	Equals(UnityEngine.Quaternion) : bool	game
+UnityEngine.Quaternion	method	Equals(object) : bool	game
+UnityEngine.Quaternion	method	GetHashCode() : int	game
 UnityEngine.Quaternion	method	static Euler(UnityEngine.Vector3) : UnityEngine.Quaternion	game
 UnityEngine.Quaternion	method	static Euler(float, float, float) : UnityEngine.Quaternion	game
 UnityEngine.Quaternion	method	static Inverse(UnityEngine.Quaternion) : UnityEngine.Quaternion	game
+UnityEngine.Quaternion	method	static op_Equality(UnityEngine.Quaternion, UnityEngine.Quaternion) : bool	game
+UnityEngine.Quaternion	method	static op_Inequality(UnityEngine.Quaternion, UnityEngine.Quaternion) : bool	game
 UnityEngine.Quaternion	method	static op_Multiply(UnityEngine.Quaternion, UnityEngine.Quaternion) : UnityEngine.Quaternion	game
 UnityEngine.Quaternion	method	static op_Multiply(UnityEngine.Quaternion, UnityEngine.Vector3) : UnityEngine.Vector3	game
 UnityEngine.Quaternion	property	eulerAngles : UnityEngine.Vector3	game
@@ -1564,8 +1571,10 @@ UnityEngine.UnitySerialization	method	static CopySerializedFields(object, object
 UnityEngine.UnitySerialization	method	static NewInstance(Type) : UnityEngine.Object	internal
 UnityEngine.Vector2	type	struct	game
 UnityEngine.Vector2	ctor	.ctor(float, float)	game
+UnityEngine.Vector2	field	static kEpsilon : float { get; }	game
 UnityEngine.Vector2	field	x : float	game
 UnityEngine.Vector2	field	y : float	game
+UnityEngine.Vector2	method	Equals(UnityEngine.Vector2) : bool	game
 UnityEngine.Vector2	method	Equals(object) : bool	game
 UnityEngine.Vector2	method	GetHashCode() : int	game
 UnityEngine.Vector2	method	Normalize() : void	game
@@ -1588,16 +1597,27 @@ UnityEngine.Vector2Int	type	struct	game
 UnityEngine.Vector2Int	ctor	.ctor(int, int)	game
 UnityEngine.Vector2Int	field	x : int	game
 UnityEngine.Vector2Int	field	y : int	game
+UnityEngine.Vector2Int	method	Equals(UnityEngine.Vector2Int) : bool	game
+UnityEngine.Vector2Int	method	Equals(object) : bool	game
+UnityEngine.Vector2Int	method	GetHashCode() : int	game
+UnityEngine.Vector2Int	method	static op_Equality(UnityEngine.Vector2Int, UnityEngine.Vector2Int) : bool	game
+UnityEngine.Vector2Int	method	static op_Inequality(UnityEngine.Vector2Int, UnityEngine.Vector2Int) : bool	game
 UnityEngine.Vector3	type	struct	game
 UnityEngine.Vector3	ctor	.ctor(float, float, float)	game
+UnityEngine.Vector3	field	static kEpsilon : float { get; }	game
 UnityEngine.Vector3	field	x : float	game
 UnityEngine.Vector3	field	y : float	game
 UnityEngine.Vector3	field	z : float	game
+UnityEngine.Vector3	method	Equals(UnityEngine.Vector3) : bool	game
+UnityEngine.Vector3	method	Equals(object) : bool	game
+UnityEngine.Vector3	method	GetHashCode() : int	game
 UnityEngine.Vector3	method	ToString() : string	game
 UnityEngine.Vector3	method	static Distance(UnityEngine.Vector3, UnityEngine.Vector3) : float	game
 UnityEngine.Vector3	method	static Lerp(UnityEngine.Vector3, UnityEngine.Vector3, float) : UnityEngine.Vector3	game
 UnityEngine.Vector3	method	static SqrMagnitude(UnityEngine.Vector3) : float	game
 UnityEngine.Vector3	method	static op_Addition(UnityEngine.Vector3, UnityEngine.Vector3) : UnityEngine.Vector3	game
+UnityEngine.Vector3	method	static op_Equality(UnityEngine.Vector3, UnityEngine.Vector3) : bool	game
+UnityEngine.Vector3	method	static op_Inequality(UnityEngine.Vector3, UnityEngine.Vector3) : bool	game
 UnityEngine.Vector3	method	static op_Multiply(UnityEngine.Vector3, float) : UnityEngine.Vector3	game
 UnityEngine.Vector3	method	static op_Subtraction(UnityEngine.Vector3, UnityEngine.Vector3) : UnityEngine.Vector3	game
 UnityEngine.Vector3	property	static zero : UnityEngine.Vector3 { get; }	game
