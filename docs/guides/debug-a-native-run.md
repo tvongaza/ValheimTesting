@@ -21,6 +21,8 @@ When a run refuses or fails, a client never reaches its menu or world, or `valhe
 | `UNKNOWN (...)`, then `SERVER_LOAD_FAIL`, exit 3 | A host operation's outcome is unknown: neither a pass nor a mod failure |
 | `ABANDONED cleanup (...)`, exit 3 | Cleanup stopped; run `env status`, then `env recover` |
 | `CLEANUP REFUSED: ...`, `CLEANUP UNVERIFIED: ...` | `start` could not prove its client or character cleanup; run `env status` |
+| `CLEANUP NOT VERIFIED: run ID ...` | The run keeps what it left and its host lock; run `env recover --run ID` |
+| `(its shell exited with code -1073741502 (0xC0000142))` | The runner's console is gone; start held runs from a shell that stays open |
 
 `SERVER_LOAD_FAIL` with exit 3 is not necessarily a mod failure. Above these lines, the log scan prints a summary such as `log scan: 4/4 logs present; failure=0 warning=2 ...`.
 

@@ -75,13 +75,37 @@ public sealed record HostResult(HostOutcome Outcome, int? ExitCode, string Stdou
             HostOutcome.Exited => "exited with code " + ExitCode?.ToString(CultureInfo.InvariantCulture),
             HostOutcome.TransportFailed => "the transport failed; the script may or may not have run",
             _ when TimedOut => "timed out; the outcome is unknown and the script may still be running",
+            _ when ShellExitCode is { } code => "ended without the host's exit report (its shell exited with code " + ShellExit(code) + "); the outcome is unknown",
             _ => "ended without the host's exit report; the outcome is unknown",
         };
         string error = Stderr.Trim();
         return state + " after " + WaitText.Seconds(Elapsed) + (Phases == null ? "" : " (" + Phases + ")") +
             (error.Length == 0 ? "" : "; stderr: " + (error.Length > 600 ? "..." + error[^600..] : error)) +
+            (Outcome == HostOutcome.Unknown && !TimedOut && ShellExitCode is { } exited && ShellExitMeaning(exited) is { } meaning ? "; " + meaning : "") +
             (Context == null ? "" : "\n" + Context);
     }
+
+    /// <summary>
+    /// How the host's shell (or the ssh client) exited when it exited without the wrapper's exit report (#991), so an unknown
+    /// outcome still says how the process ended. Null when it did not exit (a deadline, a stop) and for a reported exit, whose
+    /// code is <see cref="ExitCode"/>.
+    /// </summary>
+    internal int? ShellExitCode { get; init; }
+
+    // A Windows status code reads as the hexadecimal NTSTATUS it is; other codes stay decimal.
+    private static string ShellExit(int code) => code < 0
+        ? code.ToString(CultureInfo.InvariantCulture) + " (0x" + code.ToString("X8", CultureInfo.InvariantCulture) + ")"
+        : code.ToString(CultureInfo.InvariantCulture);
+
+    // The Windows status codes a shell ends with before it runs anything, in the operator's terms (#991: after a long hold every
+    // script of a held run's teardown on the station ended in 0.0 s without the report, so the run could not verify its cleanup).
+    internal static string? ShellExitMeaning(int code) => unchecked((uint)code) switch
+    {
+        0xC0000142 => "Windows could not start the shell (STATUS_DLL_INIT_FAILED): the console or desktop this runner was started in is gone " +
+            "or out of resources, so no host script can run from it any more; start a held run from a shell that stays open until the run ends",
+        0xC000013A => "the shell was ended by Ctrl+C or by its console closing (STATUS_CONTROL_C_EXIT)",
+        _ => null,
+    };
 
     /// <summary>The host's own diagnostic for a result without the exit report (the SSH client and why it was chosen), printed
     /// after the shortened stderr so neither hides the other. Not part of <see cref="Stderr"/>, which stays what the command wrote.</summary>
@@ -669,7 +693,8 @@ public abstract class ScriptedGameHost : IGameHost
     {
         string stdout = exit.Stdout.Replace("\r", ""), stderr = exit.Stderr.Replace("\r", "");
         HostResult Unreported(HostOutcome outcome, string error, bool timedOut) =>
-            new(outcome, null, stdout, error, exit.Elapsed, timedOut) { Context = ClientContext };
+            new(outcome, null, stdout, error, exit.Elapsed, timedOut)
+            { Context = ClientContext, ShellExitCode = exit.End == ProcessEnd.Exited ? exit.ExitCode : null };
         if (exit.End == ProcessEnd.NotStarted) return Unreported(HostOutcome.TransportFailed, MissingShell(exit) ?? stderr, false);
         if (exit.End != ProcessEnd.Exited) return Unreported(HostOutcome.Unknown, ReadableStderr(stderr), exit.End == ProcessEnd.TimedOut);
         int at = stderr.LastIndexOf("\n" + ExitMarker, StringComparison.Ordinal);

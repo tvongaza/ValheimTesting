@@ -106,4 +106,29 @@ public class ProcessStartFailureTests
         ? new ProcessStartInfo(Path.Combine(Environment.SystemDirectory, "cmd.exe")) { WorkingDirectory = directory, ArgumentList = { "/d", "/c", "exit 0" } }
         : new ProcessStartInfo("/bin/sh") { WorkingDirectory = directory, ArgumentList = { "-c", "exit 0" } };
     private static Task<ProcessExit> Run(ProcessStartInfo start) => ProcessRunner.RunAsync(start, [], null, null, null, TimeSpan.FromSeconds(5), CancellationToken.None);
+
+    // #991: every teardown script of a held run on the station ended "without the host's exit report ... after 0.0 s", which said
+    // nothing of why. A shell that exited without the wrapper's report now names its exit code, a Windows status in hex, and for
+    // the two codes a shell ends with before it runs anything, what that means for the run; the outcome stays unknown.
+    [Fact] public async Task AShellThatExitsWithoutTheReportNamesItsExitCode()
+    {
+        var host = new LocalGameHost("this machine", HostShell.Pwsh, new FakeLauncher().Reply(_ => new ProcessExit(ProcessEnd.Exited, -1073741502, "", "", TimeSpan.Zero)));
+        var dllInit = await host.RunAsync("exit 0", null, TimeSpan.FromSeconds(5));
+        Assert.Equal(HostOutcome.Unknown, dllInit.Outcome);
+        Assert.Null(dllInit.ExitCode);
+        Assert.Equal(-1073741502, dllInit.ShellExitCode);
+        string described = dllInit.Describe();
+        Assert.StartsWith("ended without the host's exit report (its shell exited with code -1073741502 (0xC0000142)); the outcome is unknown after 0.0 s", described);
+        Assert.Contains("STATUS_DLL_INIT_FAILED", described);
+        Assert.Contains("start a held run from a shell that stays open", described);
+
+        var interrupted = new LocalGameHost("this machine", HostShell.Pwsh, new FakeLauncher()).Interpret(new ProcessExit(ProcessEnd.Exited, unchecked((int)0xC000013A), "", "", TimeSpan.Zero));
+        Assert.Contains("STATUS_CONTROL_C_EXIT", interrupted.Describe());
+        var plain = new LocalGameHost("this machine", HostShell.Pwsh, new FakeLauncher()).Interpret(new ProcessExit(ProcessEnd.Exited, 3, "", "", TimeSpan.Zero));
+        Assert.StartsWith("ended without the host's exit report (its shell exited with code 3); the outcome is unknown", plain.Describe());
+        // A deadline is not an exit: no code is claimed.
+        var late = new LocalGameHost("this machine", HostShell.Pwsh, new FakeLauncher()).Interpret(new ProcessExit(ProcessEnd.TimedOut, -1, "", "", TimeSpan.FromSeconds(5)));
+        Assert.Null(late.ShellExitCode);
+        Assert.StartsWith("timed out;", late.Describe());
+    }
 }
