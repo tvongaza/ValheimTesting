@@ -213,11 +213,16 @@ finally
         {
             if (lastArm != null) runner.Remove(lastArm, lastArmOutput!); else runner.Remove();
         }
-        catch (Exception cleanup) when (cleanup is IOException or UnauthorizedAccessException or InvalidOperationException)
+        // Any failure here, an AggregateException from a retirement whose lock release also failed included, still reaches the
+        // run's end below: a removal that throws past it would leave the run never journalled as ended.
+        catch (Exception cleanup)
         {
             journalClean = false;
             // Recovery follows the hosted runtime's journal and ownership rules; never delete a copy by name.
-            Console.Error.WriteLine("CLEANUP REFUSED: " + cleanup.Message + "; inspect the disposable install at " + runner.Install);
+            // An expected removal failure says its message; anything else (a bug, an AggregateException's inner failures) keeps its
+            // stack, which its message alone would lose.
+            string why = cleanup is IOException or UnauthorizedAccessException or InvalidOperationException ? cleanup.Message : cleanup.ToString();
+            Console.Error.WriteLine("CLEANUP REFUSED: " + why + "; inspect the disposable install at " + runner.Install);
             if (exitCode == 0) exitCode = 1;
         }
     // The run's end, in every journal this run wrote (none for a refusal before anything was journalled), whatever failed (#667).

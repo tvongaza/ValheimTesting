@@ -46,15 +46,17 @@ internal static class RunFinish
     /// <summary>
     /// Ends <paramref name="run"/> in every journal its flow wrote it to, once (a second call writes nothing). Each write is best
     /// effort: a journal that cannot take it is named on stderr, and the result is false. True when every entry was written,
-    /// including when the run journalled nothing.
+    /// including when the run journalled nothing. An end whose cleanup was not proven (and not abandoned) is also said on
+    /// <paramref name="output"/> (stderr by default), pointing to env status, which names the one command that settles it.
     /// </summary>
-    public static async Task<bool> EndAsync(RunJournal.RunScope run, RunEnd end)
+    public static async Task<bool> EndAsync(RunJournal.RunScope run, RunEnd end, TextWriter? output = null)
     {
         ArgumentNullException.ThrowIfNull(run); ArgumentNullException.ThrowIfNull(end);
         if (!run.TryEnd()) return true;
         var entry = Entry(end);
         bool whole = true;
-        foreach (var place in run.Places)
+        var places = run.Places;
+        foreach (var place in places)
         {
             var timeout = place.Timeout > TimeSpan.Zero ? place.Timeout : DefaultWrite;
             if (end.Abandoned != null && timeout > AbandonedWrite) timeout = AbandonedWrite;
@@ -65,6 +67,11 @@ internal static class RunFinish
                 Console.Error.WriteLine($"Warning: could not journal run {run.RunId}'s {entry.Kind} in {place.Key}: {error.Message}");
             }
         }
+        // The runner's own last word on an unproven cleanup: what it left (its host lock too, if it still holds it) waits for the
+        // command env status names for this run's state (RunJournalStatus, the one home of that advice). An abandoned cleanup
+        // prints its own ABANDONED line; a run that journalled nothing left nothing.
+        if (places.Count != 0 && !end.CleanupProven && end.Abandoned == null)
+            (output ?? Console.Error).WriteLine(NotCleanedUp(run.RunId));
         return whole;
     }
 
@@ -79,6 +86,10 @@ internal static class RunFinish
             throw new ArgumentException("Only a recovery or a gone machine records another runner's end; a run's own flow ends it with EndAsync.", nameof(end));
         return journal.AppendAsync(host, directory, RunRecovery.Actor, Entry(end), timeout, cancellation);
     }
+
+    /// <summary>What a run whose cleanup was not proven prints at its end: that, and where what it left (and the command, if any, that settles it) is shown.</summary>
+    internal static string NotCleanedUp(string run) =>
+        $"CLEANUP NOT PROVEN: run {run} ended without proving its cleanup; valheim-test env status shows what it left and the command, if any, that settles it.";
 
     // The one composition of a run's last entry: its state word and the one cleanup rule (proven, and not abandoned).
     private static JournalEntry Entry(RunEnd end) => end.Abandoned is { } why

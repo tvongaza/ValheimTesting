@@ -40,6 +40,10 @@ public sealed class RunFinishTests : IDisposable
         string start = File.ReadAllText(Path.Combine(source, "Valheim.Testing.NativeSmoke", "Program.cs"));
         Assert.Contains("if (!await RunFinish.EndAsync(runJournal, new RunEnd(exitCode == 0 ? RunOutcome.Passed : RunOutcome.Failed, journalClean)))", start);
         Assert.DoesNotContain("ownershipStarted", start);
+        // The copy's removal runs before that call; no failure of it (an AggregateException from a retirement whose lock release
+        // also failed included) may skip the end, so its catch takes every exception.
+        Assert.Contains("catch (Exception cleanup)\n", start.ReplaceLineEndings("\n"));
+        Assert.DoesNotContain("catch (Exception cleanup) when", start);
         // Negative control: the pattern finds the per-path writers this issue removed.
         Assert.Matches(NamesAnEnd, "RunJournal.ThisProcess.AppendLocal(\"run\", JournalEntry.Of(JournalEntry.RunEnded,");
         Assert.Matches(NamesAnEnd, "var last = abandoned != null ? JournalEntry.Of(JournalEntry.CleanupAbandoned, (\"reason\", abandoned))");
@@ -181,6 +185,41 @@ public sealed class RunFinishTests : IDisposable
         Assert.Equal("a second interrupt during cleanup", Assert.Single(local, record => record.Entry.Kind == JournalEntry.CleanupAbandoned).Entry.Fields["reason"]);
         Assert.DoesNotContain(local, record => record.Entry.Kind == JournalEntry.RunEnded);
         Assert.DoesNotContain(await RunJournalOnHost.ReadAsync(host, Journal, runId, time), record => record.Entry.Kind is JournalEntry.RunEnded or JournalEntry.CleanupAbandoned);
+    }
+
+    // #991: a held run whose teardown could not verify its cleanup ended "failed, cleanup not verified" and kept this machine's
+    // host lock, and its own output never said where to go next. The owner of the end now says so, one line per unproven end,
+    // and points to env status, the one home of the per-state command; a second end of the same scope writes and says nothing.
+    // A proven, abandoned or unjournalled end says nothing of it.
+    [Fact] public async Task AnUnverifiedCleanupPointsToEnvStatusForTheCommandThatSettlesIt()
+    {
+        string runId = RunJournal.NewRunId();
+        var said = new StringWriter();
+        using (var run = RunJournal.UseRun(runId))
+        {
+            RunJournal.ThisProcess.AppendLocal("run", JournalEntry.Of(JournalEntry.LockHeld, ("lock", "/l"), ("claimant", "c")));
+            Assert.True(await RunFinish.EndAsync(run, new RunEnd(RunOutcome.Failed, CleanupProven: false), said));
+            Assert.True(await RunFinish.EndAsync(run, new RunEnd(RunOutcome.Failed, CleanupProven: false), said));
+        }
+        string line = Assert.Single(said.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+        Assert.Equal($"CLEANUP NOT PROVEN: run {runId} ended without proving its cleanup; valheim-test env status shows what it left and the command, if any, that settles it.", line);
+        // The per-state command (recover, --launch-gone, teardown, or nothing) is env status's alone: this line names none.
+        Assert.DoesNotContain("env recover", line);
+        Assert.Equal("false", Assert.Single(Records(Path.Combine(_root, "local-journal"), runId), record => record.Entry.Kind == JournalEntry.RunEnded).Entry.Fields["cleanupVerified"]);
+
+        foreach (var end in new[] { new RunEnd(RunOutcome.Failed, CleanupProven: true), new RunEnd(RunOutcome.Failed, CleanupProven: false, Abandoned: "a second interrupt") })
+        {
+            var quiet = new StringWriter();
+            using var other = RunJournal.UseRun(RunJournal.NewRunId());
+            RunJournal.ThisProcess.AppendLocal("run", JournalEntry.Of(JournalEntry.LockHeld, ("lock", "/l"), ("claimant", "c")));
+            await RunFinish.EndAsync(other, end, quiet);
+            Assert.Empty(quiet.ToString());
+        }
+        // A run that journalled nothing left nothing to recover.
+        var nothing = new StringWriter();
+        using (var empty = RunJournal.UseRun(RunJournal.NewRunId()))
+            Assert.True(await RunFinish.EndAsync(empty, new RunEnd(RunOutcome.Failed, CleanupProven: false), nothing));
+        Assert.Empty(nothing.ToString());
     }
 
     [Fact] public async Task OnlyARecoveryOrAGoneMachineRecordsAnotherRunnersEnd()
