@@ -272,7 +272,7 @@ internal sealed class ProfileSourceCheck
         if (await HostClientPreflight.Read(host, HostPath.Join(attempt, "source-changes.json"), timeout, cancellation, BaselineLimit).ConfigureAwait(false) is { } prior)
         {
             var verdict = SourceVerdict.FromJson(Encoding.UTF8.GetString(prior)) with { Profile = runtime, InRecovery = true };
-            if (verdict.Actor != actor || verdict.Host != host.Name || verdict.Root != root)
+            if (verdict.Actor != actor || !SameHost(verdict.Host, host) || verdict.Root != root)
                 throw new InvalidDataException("The unfinished recovery report names another profile's source install.");
             await JournalSettledAsync(journal, where, verdict).ConfigureAwait(false);
             await unread.DropAsync(host, where, dropMoved: false, timeout, cancellation).ConfigureAwait(false);
