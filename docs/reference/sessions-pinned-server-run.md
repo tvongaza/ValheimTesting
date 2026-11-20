@@ -39,7 +39,7 @@ public static Task<int> Main(string[] args) => PinnedServerRun.MainAsync(args, n
 | `ClientPlans` | The plan's client sections, so the runner checks each `passwordVariable` first |
 | `Scenario` | `(GameSession session, TPlan plan) => Task` |
 | `Provenance` | Extra provenance entries |
-| `CleanupBudget` | How long cleanup may take after Ctrl+C; 5 minutes by default (`RunCancellation.CleanupBudget`) |
+| `CleanupBudget` | How long cleanup may take, after Ctrl+C or at the end of any run; 5 minutes by default (`RunCancellation.CleanupBudget`) |
 
 When the server's pins load the mod, the runner checks the declared patches at runtime-ready, as the Setup step "server: the mod's Harmony patches are applied".
 
