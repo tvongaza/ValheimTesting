@@ -242,7 +242,7 @@ internal sealed class ProfileSourceCheck
                 try { baseline = JsonSerializer.Deserialize<PersistedBaseline>(bytes, s_baselineJson); }
                 catch (JsonException) { baseline = null; }
                 if (baseline == null) mismatch = "cannot be read";
-                else if (baseline.Root != root || baseline.Host != host.Name) mismatch = "names another install than its journal";
+                else if (baseline.Root != root || !SameHost(baseline.Host, host)) mismatch = "names another install than its journal";
                 else if (baseline.Id != id) mismatch = "names another prepared profile than its journal";
             }
             if (mismatch != null && !teardown)
@@ -272,7 +272,7 @@ internal sealed class ProfileSourceCheck
         if (await HostClientPreflight.Read(host, HostPath.Join(attempt, "source-changes.json"), timeout, cancellation, BaselineLimit).ConfigureAwait(false) is { } prior)
         {
             var verdict = SourceVerdict.FromJson(Encoding.UTF8.GetString(prior)) with { Profile = runtime, InRecovery = true };
-            if (verdict.Actor != actor || verdict.Host != host.Name || verdict.Root != root)
+            if (verdict.Actor != actor || !SameHost(verdict.Host, host) || verdict.Root != root)
                 throw new InvalidDataException("The unfinished recovery report names another profile's source install.");
             await JournalSettledAsync(journal, where, verdict).ConfigureAwait(false);
             await unread.DropAsync(host, where, dropMoved: false, timeout, cancellation).ConfigureAwait(false);
@@ -322,6 +322,12 @@ internal sealed class ProfileSourceCheck
         { _contentMode = baseline.Mode == SourceVerdict.ContentMode };
         return await check.SettleAsync(host, where, journal, timeout, cancellation).ConfigureAwait(false);
     }
+
+    // The host a baseline names is the recovering host (#985). A run on this machine persists it through this machine as the run
+    // reaches it (GameHosts.ThisMachine, named "this machine"), while env recover reads the same machine through its inventory
+    // host's name (for example "local"): on a local host the two are one machine, so either name matches.
+    private static bool SameHost(string recorded, IGameHost host) =>
+        recorded == host.Name || (host.Kind == GameHostKind.Local && recorded == LocalGameHost.ThisMachineName);
 
     private static string Leaf(string path) => path.Replace('\\', '/').Split('/').Last();
 
