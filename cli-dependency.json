@@ -9,6 +9,6 @@
   "status": "fork preview; upstream merge pending; ValheimTesting publishes this transport as Valheim.Testing.Cli",
   "bundle": {
     "url": "https://github.com/tvongaza/valheimCLI/releases/download/cli-bundle-21cfd74/valheimcli-bundle-21cfd74.zip",
-    "sha256": "0f1aab22e8065a729c74e08c26393a5031b69f22fac98cafc6c4d9bbeb42bab2"
+    "sha256": "d6cc80a8a584af4347ee581159ad9520d6f34c1aa99cac7584c037a7f60ed017"
   }
 }
