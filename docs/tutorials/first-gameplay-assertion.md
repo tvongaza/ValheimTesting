@@ -39,7 +39,7 @@ Your directory contains `NuGet.Config`, `MarkerMod` and `MarkerScenario`. The mo
 From that directory, in PowerShell:
 
 ```powershell
-dotnet tool install Valheim.Testing.NativeSmoke --version 0.5.0 --tool-path tools --configfile NuGet.Config
+dotnet tool install Valheim.Testing.NativeSmoke --version 0.6.0 --tool-path tools --configfile NuGet.Config
 ```
 
 The tool writes `tools/valheim-test.exe`.

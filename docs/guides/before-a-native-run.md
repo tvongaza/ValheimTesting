@@ -43,7 +43,7 @@ To test a seed, create the world in a client and copy it in as a hashed fixture.
 
 - **Unpatch only your own Harmony id.** `UnpatchAll()` without an id removes every mod's patches and can leave saves incomplete. The [log scan](../reference/game-log-scan.md) fails the run on it, but only at teardown. ([Best-Practices](https://github.com/Valheim-Modding/Wiki/wiki/Best-Practices#dont-use-unpatchall))
 - **Declare load order with `BepInDependency`.** A test adapter depends on ValheimCLI (`valheimCLI.valheimCLI`) and on the mod it tests. ([example adapter](../../examples/FullLifecycle/ExampleMod.TestAdapter/Plugin.cs))
-- **Undo everything in `OnDestroy` if the plugin is reloaded.** The old assembly stays loaded, so leftover patches, handlers and objects run next to the new build. ([what a plugin must undo](https://github.com/tvongaza/valheimCLI/blob/21cfd74fe8d04cdbc77165d0849ac1ce1af06f97/docs/live-reload.md#what-a-plugin-must-undo-in-ondestroy), [ReloadCheck](../../tools/reload-check/README.md))
+- **Undo everything in `OnDestroy` if the plugin is reloaded.** The old assembly stays loaded, so leftover patches, handlers and objects run next to the new build. ([what a plugin must undo](https://github.com/tvongaza/valheimCLI/blob/9aa6b718d648ad8a6d8d4e817b20a326b2eb020a/docs/live-reload.md#what-a-plugin-must-undo-in-ondestroy), [ReloadCheck](../../tools/reload-check/README.md))
 - **Rebuild a mod that embeds ServerSync after a game update that touches it.** An outdated copy shows as a black screen after connecting, or a `MissingFieldException`. ([Server-Troubleshooting](https://github.com/Valheim-Modding/Wiki/wiki/Server-Troubleshooting#blackscreen-after-connection-attempt))
 
 ### 4. Use a disposable character
