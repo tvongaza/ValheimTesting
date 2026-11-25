@@ -75,6 +75,9 @@ internal static class OwnedCliCommand
     internal static GameActor Connect(string evidence, string role, string? phase, string? expectStrict, TimeSpan timeout,
         out RecordingTransport recording, out string commandLog)
     {
+        // A client held at its main menu (start --menu-only) never enters a world: say so before anything is read or contacted.
+        if (expectStrict == null && phase == "world" && role == OwnedClientCommandLease.ClientRole && OwnedClientCommandLease.MenuOnly(evidence))
+            throw new InvalidOperationException(MenuOnlyWorld);
         string leaseFile = Path.Combine(evidence, OwnedClientCommandLease.LeaseFile(role));
         string leaseJson;
         try { leaseJson = OperatingSystem.IsWindows() ? File.ReadAllText(leaseFile) : ReadPrivateUnixLease(leaseFile, role); }
@@ -108,6 +111,9 @@ internal static class OwnedCliCommand
         $"No owned {role} command lease ({OwnedClientCommandLease.LeaseFile(role)}) in {evidence}. A run publishes one only for a {role} " +
         $"on this machine, once it passed its strict startup check, and retires it when the {role} stops: this {role} is still starting, " +
         "has stopped, runs on another machine, or this is not its evidence folder.";
+
+    internal const string MenuOnlyWorld = "This run holds its client at the main menu (start --menu-only) and never enters a world, so it has no world pins; " +
+        "use --phase menu. No command was sent.";
 
     // The refusal for a live lease without the phase's pins: world pins exist only while the game is in its verified world.
     private static string MissingPhasePins(string role, string phase, string pins) => phase == "world"

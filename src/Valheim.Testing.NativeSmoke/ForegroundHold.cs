@@ -80,9 +80,11 @@ internal sealed class ForegroundHold : IDisposable
     }
 
     // Printed only where the held client's session published its lease: a client on another machine has none, so no command reaches it.
+    // A client held at its main menu (start --menu-only) has only menu pins.
     internal static string? ClientCommandHint(bool hasClient, string evidence) =>
         hasClient && File.Exists(Path.Combine(evidence, OwnedClientCommandLease.FileName))
-            ? "Pinned client commands: valheim-test cli --evidence " + evidence + " --role client --phase world --command cli_screenshot"
+            ? "Pinned client commands: valheim-test cli --evidence " + evidence + " --role client --phase " +
+                (OwnedClientCommandLease.MenuOnly(evidence) ? "menu" : "world") + " --command cli_screenshot"
             : null;
 
     internal static string? ServerCommandHint(bool hasServer, string evidence, string? serverEvidence)

@@ -318,4 +318,40 @@ public sealed class SmokeCommandOptionsTests
             SmokeCommandOptions.Command.ServerLoadAb, allowImplicitMod: false, out var parsed, out _));
         Assert.Equal("b.dll", parsed!.Options["--remove-mod"]);
     }
+
+    // #1009: start --menu-only holds a client at its main menu. It needs --hold, refuses every world, scenario and comparison
+    // option by name, and is no option of any other command.
+    [Fact] public void MenuOnlyIsAHeldStartWithoutAWorld()
+    {
+        Assert.True(StartArguments.TryRead(["--no-mod", "--menu-only", "--hold"], out var parsed, out string error), error);
+        Assert.Contains("--menu-only", parsed!.Switches);
+        Assert.Equal("true", parsed.Options["--menu-only"]);
+        Assert.True(StartArguments.TryRead(["--mod", "mod.dll", "--hold", "--menu-only", "--env", "EXAMPLE=1"], out _, out error), error);
+
+        Assert.False(StartArguments.TryRead(["--no-mod", "--menu-only"], out _, out error));
+        Assert.Equal("--menu-only needs --hold: the run stops at the main menu and holds the client there for cli --phase menu commands until finish.", error);
+        Assert.False(StartArguments.TryRead(["--no-mod", "--menu-only", "--hold", "--menu-only"], out _, out error));
+        Assert.Equal("Repeated option: --menu-only", error);
+        foreach (var command in new[] { SmokeCommandOptions.Command.ServerLoad, SmokeCommandOptions.Command.ServerLoadAb, SmokeCommandOptions.Command.Build })
+        {
+            Assert.False(SmokeCommandOptions.TryRead(["--menu-only", "--mod", "mod.dll", "--hold"], command, true, out _, out error));
+            Assert.Equal("Unknown option: --menu-only", error);
+        }
+    }
+
+    public static IEnumerable<object[]> MenuOnlyConflicts() =>
+        SmokeCommandOptions.MenuOnlyConflicts.Select(option => new object[] { option, option switch
+        {
+            "--world-seed" => "AbCdEf1234",
+            "--join-seconds" => "60",
+            _ => "value",
+        } });
+
+    [Theory, MemberData(nameof(MenuOnlyConflicts))]
+    public void MenuOnlyRefusesEveryWorldOptionByName(string option, string value)
+    {
+        string[] mod = option is "--compare-mod" or "--compare-source" or "--scenario" or "--scenario-project" ? ["--mod", "mod.dll"] : ["--no-mod"];
+        Assert.False(StartArguments.TryRead([.. mod, "--menu-only", "--hold", option, value], out _, out string error));
+        Assert.Equal($"--menu-only holds the client at its main menu and enters no world: leave out {option}.", error);
+    }
 }

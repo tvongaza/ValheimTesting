@@ -436,6 +436,41 @@ public sealed class OwnedCliCommandTests
         }
     }
 
+    // #1009: a client held at its main menu (start --menu-only) never enters a world. A world-phase command to it is refused with
+    // exit 3 as a menu-only run, before it connects or opens a command record; the hold prints the menu phase for it.
+    [Fact]
+    public void AWorldCommandToAMenuOnlyClientIsRefusedAsSuch()
+    {
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        int port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        string evidence = Directory.CreateTempSubdirectory("owned-cli-menu-only-").FullName;
+        try
+        {
+            var plan = new ClientRunPlan { Install = evidence, Port = port, Pins = new() { ["example.mod"] = new string('a', 32) } };
+            OwnedClientCommandLease.Write(evidence, Environment.ProcessId, OwnedClientCommandLease.LocalStartFileTimeUtc(Environment.ProcessId), plan);
+            Assert.EndsWith("--phase world --command cli_screenshot", ForegroundHold.ClientCommandHint(true, evidence));
+            OwnedClientCommandLease.MarkMenuOnly(evidence); // What the menu-only round does once the client is open.
+            Assert.Equal("Pinned client commands: valheim-test cli --evidence " + evidence + " --role client --phase menu --command cli_screenshot",
+                ForegroundHold.ClientCommandHint(true, evidence));
+            foreach (string[] role in new string[][] { ["--role", "client"], [] })
+            {
+                using var output = new StringWriter(); using var error = new StringWriter();
+                Assert.Equal(3, OwnedCliCommand.Run(["--evidence", evidence, .. role, "--phase", "world", "--command", "cli_manifest"], output, error));
+                Assert.Empty(output.ToString());
+                Assert.Equal("REFUSED: " + OwnedCliCommand.MenuOnlyWorld, error.ToString().TrimEnd());
+            }
+            Assert.False(listener.Pending());
+            Assert.Empty(Directory.GetFiles(evidence, "owned-cli-command-*.jsonl"));
+            Assert.True(File.Exists(Path.Combine(evidence, OwnedClientCommandLease.MenuPins))); // The menu phase keeps its pins.
+        }
+        finally
+        {
+            listener.Stop();
+            Directory.Delete(evidence, recursive: true);
+        }
+    }
+
     [Fact] public void PassthroughChecksTheExactProcessStartAndWritesPinnedPhases()
     {
         using var current = Process.GetCurrentProcess();
