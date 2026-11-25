@@ -66,7 +66,9 @@ internal sealed class ForegroundHold : IDisposable
             : null;
         using var hold = Open(run, evidence, serverEvidence: serverEvidence);
         hold._commands = commands;
-        Console.WriteLine("HELD run " + run + "; finish from another shell with: " + FinishUsageForRun(run));
+        // The run ID alone after "HELD run", so a script can take the third word (#1009).
+        Console.WriteLine("HELD run " + run);
+        Console.WriteLine("Finish from another shell with: " + FinishUsageForRun(run));
         if (ClientCommandHint(client, evidence) is { } clientHint) Console.WriteLine(clientHint);
         if (ServerCommandHint(processes.Any(process => process.Name == "server"), evidence, serverEvidence) is { } serverHint)
             Console.WriteLine(serverHint);
