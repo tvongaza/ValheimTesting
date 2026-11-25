@@ -122,7 +122,10 @@ public sealed class ClientRounds
         if (Rounds.Count != 1) throw new ArgumentException("Rounds: a client held at its menu runs one round; there is no world to restart between rounds.");
         if (OwnedServer != null || Lobby != null || Arrival != null || ArriveStep != DefaultArriveStep || WorldUid != null)
             throw new ArgumentException("A client held at its menu joins and hosts no world: leave out OwnedServer, Lobby, Arrival, ArriveStep and WorldUid.");
-        RunRounds(new MenuRounds(this), openClient, measure, afterRestart: null);
+        var menu = new MenuRounds(this);
+        // A menu command may start or join a world during the hold: checked once the measurement ends, so the run never records
+        // "none entered" for a client that entered one (the run fails, naming it).
+        RunRounds(menu, openClient, round => { measure(round); menu.Measured(round); }, afterRestart: null);
     }
 
     // The one loop: open, then per round enter the world, measure, save between rounds, leave, restart; then the one teardown.
@@ -308,6 +311,17 @@ public sealed class ClientRounds
             var state = new SessionControl(round.Client).Read();
             if (state.Phase != "menu" || state.WorldPresent)
                 throw new InvalidOperationException($"The client is not at its main menu (phase {state.Phase}, world present {state.WorldPresent}); a menu-only run enters no world.");
+        });
+        // After the measurement: a client that left its menu (a menu command started or joined a world) is recorded as it is and
+        // fails the run. Its world is neither saved nor left here; the teardown stops the client, and what the game wrote to its
+        // save folders is settled as any addition.
+        public void Measured(ClientRound round) => round.Step(StepPhase.Setup, "the client is still at its main menu, no world loaded", () =>
+        {
+            var state = new SessionControl(round.Client).Read();
+            if (state.Phase == "menu" && !state.WorldPresent) return;
+            rounds.Report.Provenance["world"] = $"entered during the hold (phase {state.Phase}{(state.WorldUid is { } uid ? ", world UID " + uid : "")}), not saved: a menu-only run enters no world";
+            throw new InvalidOperationException($"The client left its main menu during the hold (phase {state.Phase}, world present {state.WorldPresent}): a menu-only run enters no world. " +
+                "Run menu commands only; start or join a world with a run that hosts one.");
         });
         public void Save(ClientRound round) { } // One round: never called.
         public void Restart(int round) { }

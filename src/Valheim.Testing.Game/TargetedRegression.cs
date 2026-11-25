@@ -111,6 +111,8 @@ public sealed class RegressionInputs
             // game's default save folder, which -savedir would move the game away from.
             if (Fixture.Create != null) throw new ArgumentException("fixture.create: a run held at the main menu creates no world; leave out the seeded request.");
             if (Client.CharacterStore != null) throw new ArgumentException("client.characterStore: a run held at the main menu stages no character; leave the store out.");
+            if (ArmNames.Count != 1 || Mod.Repeatability)
+                throw new ArgumentException("mod.arms: a run held at the main menu runs one arm and no A/B or repeatability comparison; there is no world to compare in.");
             if (HostedWorld.SaveDirectoryArgument(Client.LaunchArguments) is { } savedir)
                 throw new ArgumentException($"client.launchArguments: remove {savedir}. A run held at the main menu checks the game's default save folder for what the game adds there, which -savedir would move the game away from.");
         }

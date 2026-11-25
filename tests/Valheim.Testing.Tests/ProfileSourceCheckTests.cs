@@ -797,4 +797,39 @@ public sealed class ProfileSourceCheckTests : IDisposable
         // The persisted baseline names the scope a recovery compares.
         Assert.Contains(_journal, entry => entry.Kind == JournalEntry.SourceBaseline && entry.Fields["sourceActor"] == "client-saves");
     }
+    // #2: a scoped check lists only its folders, so a link elsewhere in the client's data folder (a linked screenshots folder) is
+    // never read and refuses nothing; one inside a checked folder is still refused.
+    [Fact]
+    public async Task AScopedCheckNeverReadsALinkOutsideItsFolders()
+    {
+        Write("characters_local/mine.fch", "the user's character");
+        string target = Directory.CreateDirectory(_root + "-runs").FullName;
+        Link(Path.Combine(_root, "screenshots"), target);
+        Directory.CreateDirectory(Parent);
+        var check = await ProfileSourceCheck.PrepareFoldersAsync(_host, _root, ["characters_local", "worlds_local"], TimeSpan.FromSeconds(30));
+        Assert.Equal(["characters_local/mine.fch"], check.Source.Files.Keys);
+        Assert.Equal(["characters_local"], check.Source.Directories);
+        await check.PersistAsync(_host, Runtime, "client-saves", entry => { _journal.Add(entry); return Task.CompletedTask; }, TimeSpan.FromSeconds(30));
+
+        var verdict = await check.SettleAsync(_host, SourceSettlement.Run("client-saves", Path.GetFullPath(Runtime), Output),
+            entry => { _journal.Add(entry); return Task.CompletedTask; }, TimeSpan.FromSeconds(60));
+        Assert.Equal(SourceVerdictKind.Unchanged, verdict.Verdict);
+
+        Link(Path.Combine(_root, "characters_local", "linked"), target);
+        var inside = await Assert.ThrowsAsync<IOException>(() => ProfileSourceCheck.PrepareFoldersAsync(_host, _root, ["characters_local"], TimeSpan.FromSeconds(30)));
+        Assert.Contains("holds links", inside.Message);
+
+        // No checked folder there at all: the root itself must be.
+        await Assert.ThrowsAsync<DirectoryNotFoundException>(() => ProfileSourceCheck.PrepareFoldersAsync(_host, Path.Combine(_root, "missing"), ["characters_local"], TimeSpan.FromSeconds(30)));
+    }
+
+    // A directory link: a junction on Windows (no Developer Mode needed), a symbolic link elsewhere.
+    private static void Link(string link, string target)
+    {
+        if (!OperatingSystem.IsWindows()) { Directory.CreateSymbolicLink(link, target); return; }
+        using var junction = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("cmd.exe", $"/c mklink /J \"{link}\" \"{target}\"")
+            { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true });
+        junction!.WaitForExit();
+        Assert.Equal(0, junction.ExitCode);
+    }
 }

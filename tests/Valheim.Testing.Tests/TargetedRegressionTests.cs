@@ -995,7 +995,7 @@ public sealed class TargetedRegressionTests : IDisposable
         string runId = RunJournal.NewRunId();
         using var run = RunJournal.UseRun(runId);
         inputs ??= _rig.Manifest();
-        if (menuOnly) inputs.MenuOnly = true;
+        if (menuOnly) MenuOnly(inputs);
         var regression = _rig.Regression(inputs, processCheck: processCheck);
         ScenarioReport? report = null; string? output = null;
         foreach (string arm in arms ?? ["parent"])
@@ -1045,6 +1045,14 @@ public sealed class TargetedRegressionTests : IDisposable
         Assert.Empty(Directory.Exists(_rig.Runtime) ? Directory.EnumerateFileSystemEntries(_rig.Runtime) : []);
         var status = Status(runId);
         Assert.Equal(JournalRunState.Ended, status.State); Assert.Empty(status.Items);
+    }
+
+    // A menu-only run's inputs: one arm, as RegressionInputs.Validate requires.
+    private static RegressionInputs MenuOnly(RegressionInputs inputs)
+    {
+        inputs.Mod.Arms.Remove("candidate");
+        inputs.MenuOnly = true;
+        return inputs;
     }
 
     private JournalRunStatus Status(string runId) =>
@@ -1282,9 +1290,13 @@ public sealed class TargetedRegressionTests : IDisposable
         Assert.False(Directory.Exists(Worlds));
         Assert.Equal("this session's log", File.ReadAllText(log));
         Assert.True(OwnedClientCommandLease.MenuOnly(output));
-        // #10: each moved file is hashed once, in the moved files' listing; the save folder is only ever listed by size and time.
+        // #10: each moved file is hashed once, in the moved files' listing; the save folders are only ever listed by size and time.
+        // #2: only the two checked folders are listed, never the whole save root (a link elsewhere in it is never seen).
         var listings = here.Runs.Where(run => run.Script == "list").Select(run => run.Variables).ToList();
-        Assert.All(listings.Where(listing => SameFolder(listing["root"], _rig.Save)), listing => Assert.Equal("0", listing["content"]));
+        Assert.DoesNotContain(listings, listing => SameFolder(listing["root"], _rig.Save));
+        var saveListings = listings.Where(listing => SameFolder(Path.GetDirectoryName(listing["root"])!, _rig.Save)).ToList();
+        Assert.Contains(saveListings, listing => Path.GetFileName(listing["root"]) == "characters_local");
+        Assert.All(saveListings, listing => Assert.Equal("0", listing["content"]));
         Assert.Single(listings, listing => listing["content"] == "1" && Path.GetFileName(listing["root"]).StartsWith(ProfileSourceCheck.AddedFolder + "-", StringComparison.Ordinal) &&
             Path.GetFileName(Path.GetDirectoryName(listing["root"]))!.StartsWith("vt-prep-saves-", StringComparison.Ordinal));
         // #4: no world is recorded, neither the packaged fixture's UID nor a pending creation.
@@ -1384,9 +1396,10 @@ public sealed class TargetedRegressionTests : IDisposable
         File.WriteAllText(log, "the last session"); // beside the checked folders: a recovery compares only the persisted scope
         bool killed = false;
         string runId;
+        // The in-process host answers the recovery too: the run's baseline was listed through it.
+        var (_, scope) = InProcess();
+        using var machine = scope;
         {
-            var (_, scope) = InProcess();
-            using var machine = scope;
             // The client is never proven stopped once the runner "dies": its teardown cannot settle the save folders.
             (_, _, runId) = Start(() => new LocalFakeOwnedProcess(65), round => round.Step("the game makes a character, then the runner is killed", () =>
             {
@@ -1424,8 +1437,7 @@ public sealed class TargetedRegressionTests : IDisposable
     // one place, with one exception type, whichever way the inputs arrive: a character store, a seeded world, -savedir.
     [Fact] public void AMenuOnlyRunIsRecordedInItsInputsAndRefusesWhatItCannotUse()
     {
-        var inputs = _rig.Manifest();
-        inputs.MenuOnly = true;
+        var inputs = MenuOnly(_rig.Manifest());
         string file = Path.Combine(_rig.Root, "menu-only-regression.json");
         inputs.Write(file);
         Assert.Contains("\"menuOnly\": true", File.ReadAllText(file));
@@ -1439,8 +1451,7 @@ public sealed class TargetedRegressionTests : IDisposable
 
         void Refused(Action<RegressionInputs> change, string named)
         {
-            var refused = _rig.Manifest();
-            refused.MenuOnly = true;
+            var refused = MenuOnly(_rig.Manifest());
             change(refused);
             Assert.Contains(named, Assert.Throws<ArgumentException>(refused.Validate).Message);
             Assert.Contains(named, Assert.Throws<ArgumentException>(() => _rig.Regression(refused)).Message);
@@ -1452,6 +1463,28 @@ public sealed class TargetedRegressionTests : IDisposable
         Refused(refused => refused.Fixture = new RegressionFixture { Create = new SeededWorldRequest("MenuOnlyWorld", "menuonly1") }, "fixture.create: a run held at the main menu creates no world");
         Refused(refused => refused.Client.LaunchArguments = ["-savedir", Path.Combine(_rig.Root, "elsewhere")], "client.launchArguments: remove -savedir");
         Refused(refused => refused.Client.LaunchArguments = ["-SaveDir=" + Path.Combine(_rig.Root, "elsewhere")], "client.launchArguments: remove -SaveDir=");
+        // #4: one arm and no comparison, refused before anything is staged.
+        Refused(refused => refused.Mod.Arms["candidate"] = _rig.Manifest().Mod.Arms["candidate"], "mod.arms: a run held at the main menu runs one arm");
+        Refused(refused => refused.Mod.Repeatability = true, "a run held at the main menu runs one arm and no A/B or repeatability comparison");
+    }
+
+    // #1: a settlement that throws once the client is proven stopped did not settle: the save folders' run folder and baseline stay for
+    // env recover, and the cleanup step fails, naming why. A stop not proven keeps them too.
+    [Fact] public void ASaveFolderSettlementThatThrowsKeepsWhatItChecks()
+    {
+        var report = new ScenarioReport("menu");
+        var threw = TargetedRegression.SettleWhenStopped(report, ClientSaveFolders.Actor, () => { }, () => throw new IOException("the host went away"));
+        Assert.True(threw.KeepsProfile);
+        Assert.Equal(SourceVerdictKind.Unknown, threw.Verdict);
+        Assert.Contains("the settlement did not finish: the host went away", Assert.Single(report.Steps, step => !step.Passed).Error);
+
+        var running = new ScenarioReport("menu");
+        bool settled = false;
+        var notStopped = TargetedRegression.SettleWhenStopped(running, ClientSaveFolders.Actor, () => throw new IOException("the client still runs"),
+            () => { settled = true; return SourceVerdict.NotApplicable(ClientSaveFolders.Actor); });
+        Assert.True(notStopped.KeepsProfile);
+        Assert.False(settled);
+        Assert.Contains("stop not proven", Assert.Single(running.Steps, step => !step.Passed).Name);
     }
 
     // #791: a passing start leaves nothing in the client environment's runtime folder (its disposable profile retired, its hosted

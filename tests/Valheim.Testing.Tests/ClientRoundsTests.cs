@@ -895,8 +895,9 @@ public sealed class ClientRoundsTests : IDisposable
 
         Assert.True(report.Passed, string.Join("; ", Failed(report)));
         Assert.True(measured);
-        Assert.Equal(["launch the owned client to its menu, plugins pinned", "menu: the client is at its main menu, no world loaded", "menu: hold", "stop only the owned client"],
-            report.Steps.Select(step => step.Name));
+        Assert.Equal(["launch the owned client to its menu, plugins pinned", "menu: the client is at its main menu, no world loaded", "menu: hold",
+            "menu: the client is still at its main menu, no world loaded", "stop only the owned client"], report.Steps.Select(step => step.Name));
+        Assert.Equal("none entered: held at the main menu", report.Provenance["world"]);
         Assert.Equal(0, game.Transport.Count("cli_start_host_world"));
         Assert.Equal(0, game.Transport.Count("cli_extension valheim.session/leave"));
         Assert.Equal(0, game.Transport.Count("cli_extension valheim.session/save"));
@@ -915,6 +916,19 @@ public sealed class ClientRoundsTests : IDisposable
             .RunAtMenu(() => ClientSession.Launch(plan, other, () => _process, () => hosting.Transport, (_, _) => Task.CompletedTask),
                 _ => throw new InvalidOperationException("the measurement must not run")));
         Assert.Equal(new[] { "menu: the client is at its main menu, no world loaded" }, Failed(inWorld));
+        Assert.Equal(1, _process.Stops);
+
+        // A menu command that starts a world during the hold: the run fails after the measurement and records the world as entered,
+        // never "none entered"; the client is still stopped.
+        var starts = new Game(Worlds);
+        var started = new ScenarioReport("menu");
+        string third = Directory.CreateDirectory(Path.Combine(_root, "started")).FullName;
+        _process = new LocalFakeOwnedProcess(79);
+        Assert.Throws<InvalidOperationException>(() => new ClientRounds { Client = plan, Report = started, Output = third, Rounds = ["menu"] }
+            .RunAtMenu(() => ClientSession.Launch(plan, third, () => _process, () => starts.Transport, (_, _) => Task.CompletedTask),
+                round => round.Step("hold", () => starts.Hosting = true)));
+        Assert.Equal(new[] { "menu: the client is still at its main menu, no world loaded" }, Failed(started));
+        Assert.StartsWith("entered during the hold", started.Provenance["world"]);
         Assert.Equal(1, _process.Stops);
 
         // One round only, and nothing a joining or hosting client's rounds use.

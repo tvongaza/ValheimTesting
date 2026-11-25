@@ -76,13 +76,13 @@ internal sealed class ProfileSourceCheck
 
     /// <summary>
     /// The check of a client's own save folders (<c>start --menu-only</c>, #1009): only <paramref name="folders"/>, top-level folders of
-    /// <paramref name="root"/> (the client's data directory), are compared, so the game's logs beside them and every other folder there
-    /// are never moved (Steam Cloud characters are not under the root at all). The game writes there in place, so after the run every
-    /// file it added to them is moved into the run's evidence and every folder it made there removed once empty
-    /// (<see cref="SettleAsync"/>), as from an install the game runs in; when a file that was there before changed or went missing,
-    /// the verdict fails and nothing is moved. The root is listed by name, size and modified time (a link anywhere in it is refused,
-    /// as in an install); the scope's files are hashed only for a content comparison (<see cref="HashAfterRun"/>, fixed here for this
-    /// check), since a metadata comparison reads no hash. Persisted as any baseline, so a recovery settles the same scope.
+    /// <paramref name="root"/> (the client's data directory), are listed and compared, so the game's logs beside them and every other
+    /// folder there are never read or moved (Steam Cloud characters are not under the root at all). The game writes there in place,
+    /// so after the run every file it added to them is moved into the run's evidence and every folder it made there removed once
+    /// empty (<see cref="SettleAsync"/>), as from an install the game runs in; when a file that was there before changed or went
+    /// missing, the verdict fails and nothing is moved. Each folder is walked once: by name, size and modified time, its files also
+    /// hashed only for a content comparison (<see cref="HashAfterRun"/>, fixed here for this check). A link inside a checked folder is
+    /// refused, as in an install; one elsewhere in the root is never seen. Persisted as any baseline, so a recovery settles the same scope.
     /// </summary>
     internal static async Task<ProfileSourceCheck> PrepareFoldersAsync(IGameHost host, string root, IReadOnlyList<string> folders, TimeSpan timeout,
         CancellationToken cancellation = default)
@@ -96,27 +96,33 @@ internal sealed class ProfileSourceCheck
         return check;
     }
 
-    // A scoped check's listing: the whole root's names, sizes, modified times and folders kept to the scope, with the scope's own
-    // files hashed only for a content comparison (a metadata comparison reads no hash, so none is taken).
+    // A scoped check's listing: each scoped folder listed on its own, once (names, sizes, modified times and folders, its files hashed
+    // only for a content comparison), as paths relative to the root. A folder that is not there lists nothing; when none is, the root
+    // itself must be (DirectoryNotFoundException otherwise, as for an install).
     private static async Task<HostListing> ListScopeAsync(IGameHost host, string root, IReadOnlyList<string> scope, bool content, TimeSpan timeout,
         CancellationToken cancellation)
     {
-        var metadata = Within(await ListAsync(host, root, content: false, timeout, cancellation).ConfigureAwait(false), scope);
-        var files = content
-            ? Within(await HostInstall.ListAsync(host, root, timeout, scope.Select(HostInstall.LiteralPattern).ToArray(), cancellation).ConfigureAwait(false), scope).Files
-            : metadata.States.Keys.ToDictionary(path => path, _ => "", metadata.Names);
-        return new HostListing(metadata.HostName, metadata.Shell, metadata.Root, files, [], metadata.States, metadata.Directories);
-    }
-
-    // A listing kept to the top-level folders a scoped check compares.
-    private static HostListing Within(HostListing listing, IReadOnlyList<string> folders)
-    {
-        var names = listing.Names;
-        bool In(string path) => folders.Contains(path.Split('/')[0], names);
-        return new HostListing(listing.HostName, listing.Shell, listing.Root,
-            listing.Files.Where(file => In(file.Key)).ToDictionary(file => file.Key, file => file.Value, names), [],
-            listing.States.Where(state => In(state.Key)).ToDictionary(state => state.Key, state => state.Value, names),
-            listing.Directories.Where(In).ToHashSet(names));
+        var names = host.Shell.Kind == HostShellKind.PowerShell ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+        var files = new Dictionary<string, string>(names);
+        var states = new Dictionary<string, HostFileState>(names);
+        var directories = new HashSet<string>(names);
+        foreach (string folder in scope)
+        {
+            HostListing listing;
+            try { listing = await ListAsync(host, HostPath.Join(root, folder), content, timeout, cancellation).ConfigureAwait(false); }
+            catch (DirectoryNotFoundException) { continue; }
+            directories.Add(folder);
+            foreach (string directory in listing.Directories) directories.Add(folder + "/" + directory);
+            foreach (var (path, state) in listing.States)
+            {
+                states[folder + "/" + path] = state;
+                files[folder + "/" + path] = content ? listing.Files[path] : "";
+            }
+        }
+        // Only the root's own presence is asked here: a literal pattern for a folder that is not there lists and hashes nothing.
+        if (directories.Count == 0)
+            await HostInstall.ListAsync(host, root, timeout, scope.Select(HostInstall.LiteralPattern).ToArray(), cancellation).ConfigureAwait(false);
+        return new HostListing(host.Name, host.Shell.Kind, root, files, [], states, directories);
     }
 
     /// <summary>The preparation row's one complete source listing. No stage or launch caller chooses a full-source rule.</summary>

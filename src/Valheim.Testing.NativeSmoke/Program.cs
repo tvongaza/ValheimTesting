@@ -186,7 +186,11 @@ try
             }
         Console.WriteLine(NativeSmokeLogSummary.Format(report.Logs, inputs.ArmNames.Count > 1 ? arm : null));
         if (report.Provenance.TryGetValue("sourceIntegrity." + ClientSaveFolders.Actor, out string? saves))
-            Console.WriteLine($"The client's save folders: {saves} (evidence in {Path.Combine(armOutput, "source-changes", ClientSaveFolders.Actor)})");
+        {
+            // The evidence folder exists only when the game added something there or the check found a change.
+            string savesEvidence = Path.Combine(armOutput, "source-changes", ClientSaveFolders.Actor);
+            Console.WriteLine($"The client's save folders: {saves}" + (Directory.Exists(savesEvidence) ? $" (evidence in {savesEvidence})" : ""));
+        }
         // Final-arm evidence is written once after the copy-cleanup verdict in finally.
         report.Provenance["runId"] = runId;
         lastArm = report; lastArmOutput = armOutput;

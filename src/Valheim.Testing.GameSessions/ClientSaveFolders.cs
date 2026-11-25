@@ -65,8 +65,9 @@ internal sealed class ClientSaveFolders
         _check.SettleAsync(_host, SourceSettlement.Run(Actor, _runtime, output), Journal(_journal), _timeout).GetAwaiter().GetResult();
 
     /// <summary>
-    /// Removes the run-owned folder once <paramref name="verdict"/> finished. One that did not finish keeps it, journalled kept by the
-    /// owner, so <c>env status</c> names it and <c>env teardown</c> settles the folders again; false then.
+    /// Removes the run-owned folder once <paramref name="verdict"/> settled. One that did not (a stop not proven, a settlement that
+    /// threw or did not finish) keeps it with its journalled baseline, so <c>env status</c> names it and <c>env recover</c> settles the
+    /// folders again; false then.
     /// </summary>
     internal bool Retire(SourceVerdict verdict)
     {

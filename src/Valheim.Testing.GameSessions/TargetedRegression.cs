@@ -66,9 +66,11 @@ public sealed class StagedArm
         if (Manifest.ModSha256 != null) provenance["modSha256"] = Manifest.ModSha256;
         provenance["allowlist"] = string.Join(", ", Manifest.Allowlist.Select(file => $"{file.Path}={file.Md5}"));
         // A run held at its menu enters no world (ClientRounds records that), so no fixture is named here.
-        if (Manifest.MenuOnly) { }
-        else if (Manifest.WorldUid is { } uid) provenance["worldUid"] = uid;
-        else provenance["worldCreation"] = "pending";
+        if (!Manifest.MenuOnly)
+        {
+            if (Manifest.WorldUid is { } uid) provenance["worldUid"] = uid;
+            else provenance["worldCreation"] = "pending";
+        }
         Manifest.InstallPins.Record(provenance, "client");
     }
 }
@@ -369,7 +371,8 @@ public sealed class TargetedRegression
                 .SelectMany(folder => Directory.EnumerateFiles(folder, "*.dll")).Select(Path.GetFileNameWithoutExtension).OfType<string>();
             var unmet = DependencyRule.Check(staged.Select(entry => (entry.File.Path, entry.Metadata)).ToList(), provided, Inputs.OptionalReferences, "valheim");
             if (unmet.Count != 0) throw new InvalidOperationException("The staged plugins' declared dependencies are not met: " + string.Join("; ", unmet.Select(problem => problem.Message)) + ".");
-            string character = Path.Combine(ClientSaveDirectory(), "characters_local", env.Client.Character + ".fch");
+            string saveDirectory = SaveDirectory ?? HostedWorld.DefaultSaveDirectory(GameLaunch.DetectClient(gameRoot));
+            string character = Path.Combine(saveDirectory, "characters_local", env.Client.Character + ".fch");
             if (env.Client.CharacterStore != null) DisposableCharacterStore.Open(env.Client.CharacterStore).Get(env.Client.Character);
             else if (!MenuOnly && !File.Exists(character))
                 throw new InvalidOperationException($"client.character: {env.Client.Character}.fch is not in {Path.GetDirectoryName(character)}. Stage the disposable local character (never a cloud one) before the run, or name the one that is staged.");
@@ -476,8 +479,6 @@ public sealed class TargetedRegression
             if (LoaderPackage is { } loaderPath)
                 report.Provenance["bepInExPackage"] = BepInExLoaderPackage.Read(loaderPath).Identity;
             if (_pinnedLoader != null) report.Provenance["clientLoaderShipped"] = _pinnedLoader.Reason;
-            // The client's save folder (worlds_local, characters_local), once for the arm.
-            string save = ClientSaveDirectory();
             if (Inputs.Fixture.Create is { } request)
             {
                 Inputs.Validate();
@@ -486,13 +487,13 @@ public sealed class TargetedRegression
                 var platform = GameLaunch.DetectClient(Game);
                 HostedWorld.RequireNativeSaveDirectory(platform, SaveDirectory, Inputs.Client.LaunchArguments, HostedWorld.DefaultSaveDirectory(platform));
                 RequireHostLock();
-                creationSite = HostedWorldSite(output, Path.Combine(save, "worlds_local"));
+                creationSite = HostedWorldSite(output, Path.Combine(ClientSaveDirectory(), "worlds_local"));
                 report.Step(StepPhase.Preflight, "reserve the fresh seeded name before staging character or profile", () => creationSite.ReserveCreation(pending, output, cancellation));
             }
             if (Inputs.Client.CharacterStore is { } store)
             {
                 report.Step(StepPhase.Setup, "stage only the registered disposable character", () => characterStage = RegisteredCharacterStage.InstallRegistered(
-                    store, Inputs.Client.Character, Path.Combine(save, "characters_local"),
+                    store, Inputs.Client.Character, Path.Combine(ClientSaveDirectory(), "characters_local"),
                     SteamUserData ?? throw new DirectoryNotFoundException("No Steam userdata was detected on this machine; a registered character is checked against it for a same-named Steam Cloud character."),
                     Inputs.Client.Character, characterJournal ?? JournalCharacterEvent));
                 report.Provenance["characterSource"] = "registered disposable store";
@@ -511,7 +512,7 @@ public sealed class TargetedRegression
                 // Journalled with its baseline, so a killed run's env status lists it and env recover settles the folders.
                 string actor = "regression-" + Inputs.Name + "-saves";
                 string parent = Path.Combine(Path.GetDirectoryName(Path.GetDirectoryName(Install)!)!, "vt-prep-saves-" + Inputs.Name + "-" + arm + "-" + _journal.RunId);
-                report.Step(StepPhase.Setup, "list the client's save folders before the launch", () => saveFolders = ClientSaveFolders.Capture(_host, save, parent,
+                report.Step(StepPhase.Setup, "list the client's save folders before the launch", () => saveFolders = ClientSaveFolders.Capture(_host, ClientSaveDirectory(), parent,
                     entry => _journal.AppendLocal(actor, entry), LocalClientCopy.StepTimeout));
             }
             var clientRounds = new ClientRounds
@@ -562,17 +563,7 @@ public sealed class TargetedRegression
                 try { directClientJournal.Complete(); }
                 catch (Exception error) { report.RecordFailure(StepPhase.Cleanup, "owned client process was not proved stopped", error); }
             if (_activeSourceCheck != null)
-                try
-                {
-                    SourceVerdict verdict;
-                    try
-                    {
-                        RequireStopped([_activeGameRoot ?? Install], clientSession: false);
-                        verdict = SettleSource();
-                    }
-                    catch (Exception error) { verdict = SourceVerdict.Unknown(SourceActor, error.Message); }
-                    verdict.Record(report);
-                }
+                try { SettleWhenStopped(report, SourceActor, () => RequireStopped([_activeGameRoot ?? Install], clientSession: false), SettleSource); }
                 catch (Exception error) { Console.Error.WriteLine("Teardown: " + error.Message); }
             if (characterStage != null)
                 try { report.Step(StepPhase.Cleanup, "remove only the staged test character", characterStage.Dispose); }
@@ -580,23 +571,11 @@ public sealed class TargetedRegression
             if (saveFolders != null)
                 try
                 {
-                    // Settled only once no client may still write there; one not proven stopped keeps the journalled folder for env recover.
-                    bool stopped = false;
-                    SourceVerdict verdict;
-                    try
-                    {
-                        RequireStopped(null, clientSession: true);
-                        stopped = true;
-                        verdict = saveFolders.Settle(output);
-                    }
-                    catch (Exception error) { verdict = SourceVerdict.Unknown(ClientSaveFolders.Actor, error.Message); }
-                    try { verdict.Record(report); }
-                    finally
-                    {
-                        if (stopped)
-                            try { saveFolders.Retire(verdict); }
-                            catch (Exception error) { report.RecordFailure(StepPhase.Cleanup, "remove the save-folder check's run folder", error); }
-                    }
+                    // Settled only once no client may still write there. One not proven stopped, or a settlement that did not finish,
+                    // keeps the journalled folder and its baseline for env recover.
+                    var verdict = SettleWhenStopped(report, ClientSaveFolders.Actor, () => RequireStopped(null, clientSession: true), () => saveFolders.Settle(output));
+                    try { saveFolders.Retire(verdict); }
+                    catch (Exception error) { report.RecordFailure(StepPhase.Cleanup, "remove the save-folder check's run folder", error); }
                 }
                 catch (Exception error) { Console.Error.WriteLine("Teardown: " + error.Message); }
             if (logs.Count != 0) report.ScanLogs(logs, Inputs.LogScan);
@@ -823,7 +802,35 @@ public sealed class TargetedRegression
         if (integrity != null) throw integrity;
     }
 
-    // The client's save root (worlds_local, characters_local): the one answer for every step of an arm.
+    /// <summary>
+    /// The one teardown of an arm's source check, the client's install or a menu-only run's save folders: once
+    /// <paramref name="requireStopped"/> proves nothing may still write there, <paramref name="settle"/> settles it, and the verdict is
+    /// recorded in <paramref name="report"/> (a failed or unknown one as its failed cleanup step). A stop not proven, or a settlement
+    /// that threw, is an unknown verdict that did not settle (<see cref="SourceVerdict.KeepsProfile"/>): its caller keeps what it
+    /// checks, journalled, for env recover. Returns the verdict, whatever it is, so the caller decides what to retire.
+    /// </summary>
+    internal static SourceVerdict SettleWhenStopped(ScenarioReport report, string actor, Action requireStopped, Func<SourceVerdict> settle)
+    {
+        SourceVerdict verdict;
+        bool stopped = false;
+        try
+        {
+            requireStopped();
+            stopped = true;
+            verdict = settle();
+        }
+        catch (Exception error)
+        {
+            verdict = (stopped ? SourceVerdict.NotCompared(actor, "the settlement did not finish: " + error.Message)
+                : SourceVerdict.Unknown(actor, error.Message)) with { Settled = false };
+        }
+        // Record fails the cleanup step for a failed or unknown verdict and rethrows; the step already names it.
+        try { verdict.Record(report); }
+        catch (Exception error) { Console.Error.WriteLine("Teardown: " + error.Message); }
+        return verdict;
+    }
+
+    // The client's save root (worlds_local, characters_local) as this arm's runner sees it.
     private string ClientSaveDirectory() => SaveDirectory ?? HostedWorld.DefaultSaveDirectory(GameLaunch.DetectClient(Game));
 
     // The one name of a regression's verdict and evidence, in the arm's report and in a recovery.
