@@ -7,7 +7,7 @@ using Valheim.Testing.Doubles;
 using Xunit;
 using Object = UnityEngine.Object;
 
-// The gaps a second consumer (MoreWorldLocations) found (#83). Expected values come from the game's 1.0.16 code, written
+// The gaps a second consumer (MoreWorldLocations) found (#83). Expected values come from the game's code (1.0.30), written
 // out here by hand, never from the doubles' own output.
 public sealed class SecondConsumerTests : IDisposable
 {
@@ -24,16 +24,19 @@ public sealed class SecondConsumerTests : IDisposable
         compiler.m_operations = 3; compiler.m_lastOpPoint = new Vector3(1f, 2f, 3f); compiler.m_lastOpRadius = 4.5f;
         compiler.m_modifiedHeight[0] = true; compiler.m_levelDelta[0] = 0.25f; compiler.m_smoothDelta[0] = -0.5f;
         compiler.m_modifiedPaint[1] = true; compiler.m_paintMask[1] = new Color(0.1f, 0.2f, 0.3f, 0.4f);
+        compiler.m_lastSnowTimerIncrement = 1234.5;
         compiler.Save();
 
-        // 1.0.16 TerrainComp.Save: version 1, operations, last point, last radius, 9 vertices each a flag (+ level, smooth),
-        // 9 texels each a flag (+ r, g, b, a), little-endian as BinaryWriter writes, then gzip (Utils.Compress).
+        // 1.0.30 TerrainComp.Save: version 2, operations, last point, last radius, 9 vertices each a flag (+ level, smooth),
+        // 9 texels each a flag (+ r, g, b, a), the Deep North snow time (a double), little-endian as BinaryWriter writes,
+        // then gzip (Utils.Compress).
         var expected = new MemoryStream();
         using (var w = new BinaryWriter(expected))
         {
-            w.Write(1); w.Write(3); w.Write(1f); w.Write(2f); w.Write(3f); w.Write(4.5f);
+            w.Write(2); w.Write(3); w.Write(1f); w.Write(2f); w.Write(3f); w.Write(4.5f);
             w.Write(9); w.Write(true); w.Write(0.25f); w.Write(-0.5f); for (int i = 1; i < 9; i++) w.Write(false);
             w.Write(9); w.Write(false); w.Write(true); w.Write(0.1f); w.Write(0.2f); w.Write(0.3f); w.Write(0.4f); for (int i = 2; i < 9; i++) w.Write(false);
+            w.Write(1234.5);
         }
         byte[] saved = compiler.m_nview.GetZDO().GetByteArray(ZDOVars.s_TCData)!;
         Assert.Equal(expected.ToArray(), Utils.Decompress(saved));
@@ -47,6 +50,7 @@ public sealed class SecondConsumerTests : IDisposable
         Assert.Equal(compiler.m_smoothDelta, reread.m_smoothDelta);
         Assert.Equal(compiler.m_modifiedPaint, reread.m_modifiedPaint);
         Assert.True(reread.m_paintMask[1].Equals(new Color(0.1f, 0.2f, 0.3f, 0.4f)));
+        Assert.Equal(1234.5, reread.m_lastSnowTimerIncrement);
     }
 
     [Fact] public void OnlyTheOwnerSavesAndAMismatchedCountIsNotLoaded()
@@ -256,8 +260,37 @@ public sealed class SecondConsumerTests : IDisposable
         Assert.Equal(SoftReferenceableAssets.LoadResult.Succeeded, named.Load()); Assert.True(named.IsLoaded); Assert.Null(named.Asset);
 
         var none = new ZoneSystem.ZoneLocation().m_prefab;
-        Assert.False(none.IsValid); Assert.Null(none.Name);
+        Assert.False(none.IsValid); Assert.Null(none.name);
         Assert.Equal(SoftReferenceableAssets.LoadResult.Failed, none.Load()); Assert.False(none.IsLoaded);
+    }
+
+    // 1.0.30's SoftReference equality: two valid handles compare by asset; otherwise they are equal when neither is valid,
+    // so a null handle, the default handle and another default handle are all "none".
+    [Fact] public void SoftReferenceHandlesCompareAsTheGamesDo()
+    {
+        var a = new SoftReferenceableAssets.SoftReference<GameObject>("Dolmen");
+        var copy = a; var other = new SoftReferenceableAssets.SoftReference<GameObject>("Dolmen");
+        SoftReferenceableAssets.SoftReference<GameObject> none = default;
+        SoftReferenceableAssets.SoftReference<GameObject>? nothing = null;
+        Assert.True(a == copy); Assert.False(a == other); Assert.True(a != none);
+        Assert.True(none == default(SoftReferenceableAssets.SoftReference<GameObject>)); Assert.True(none == nothing); Assert.False(a == nothing);
+    }
+
+    // 1.0.30's Utils.QuantizeHalfDegrees, written out from the game: round to the nearest half degree (halves to even, as
+    // Mathf.Round), wrap into 0..719.
+    [Theory]
+    [InlineData(0f, 0u)] [InlineData(0.2f, 0u)] [InlineData(0.3f, 1u)] [InlineData(0.25f, 0u)] [InlineData(0.75f, 2u)]
+    [InlineData(359.8f, 0u)] [InlineData(359.5f, 719u)] [InlineData(-0.5f, 719u)] [InlineData(90f, 180u)] [InlineData(720.5f, 1u)]
+    public void AnglesQuantizeToTheGamesHalfDegrees(float degrees, uint steps) => Assert.Equal(steps, Utils.QuantizeHalfDegrees(degrees));
+
+    // 1.0.30: global key values are looked up in any case, and the name is looked up as given.
+    [Fact] public void GlobalKeysAreFoundInAnyCase()
+    {
+        using var world = new ValheimWorldScope().WithZoneSystem();
+        var zone = ZoneSystem.instance!;
+        zone.GlobalKeyAdd("EnemyDamage 150");
+        Assert.True(zone.GetGlobalKey(GlobalKeys.EnemyDamage, out float value)); Assert.Equal(150f, value);
+        Assert.True(zone.GetGlobalKey("ENEMYDAMAGE", out string text)); Assert.Equal("150", text);
     }
 
     [Fact] public void LocationPiecesHaveTheGamesDefaults()
