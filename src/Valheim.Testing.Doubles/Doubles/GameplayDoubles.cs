@@ -32,6 +32,21 @@ public static partial class Utils
 {
     public enum IterativeSearchType { DepthFirst, BreadthFirst }
     public delegate void ChildHandler(GameObject go);
+
+    /// <summary>
+    /// An angle in half-degree steps, 0 to 719, as the game (1.0.30) packs a saved rotation: rounded to the nearest step
+    /// (Mathf.Round, halves to even), then wrapped into one turn. Before 1.0.22 the game truncated instead.
+    /// </summary>
+    public static uint QuantizeHalfDegrees(float degrees)
+    {
+        int steps = (int)UnityEngine.Mathf.Round(degrees * 2f) % 720;
+        if (steps < 0) steps += 720;
+        return (uint)steps;
+    }
+
+    /// <summary>As the game's (1.0.30): every axis rounds to the zero half-degree step.</summary>
+    public static bool CloseToZero(this UnityEngine.Vector3 v) =>
+        QuantizeHalfDegrees(v.x) == 0 && QuantizeHalfDegrees(v.y) == 0 && QuantizeHalfDegrees(v.z) == 0;
     private static readonly char[] s_nameEnds = { '(', ' ' };
 
     /// <summary>The name up to the first '(' or space: a copy's "wood_wall(Clone)" is "wood_wall".</summary>

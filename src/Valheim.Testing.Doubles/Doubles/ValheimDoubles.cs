@@ -459,6 +459,9 @@ public partial class TerrainComp
     /// <summary>The last operation's point and radius, saved with the terrain.</summary>
     public UnityEngine.Vector3 m_lastOpPoint;
     public float m_lastOpRadius;
+    /// <summary>When the Deep North snow last grew back on this zone's paint (the game's network time, seconds); saved with
+    /// the terrain since Valheim 1.0.30 (TerrainComp version 2).</summary>
+    public double m_lastSnowTimerIncrement;
     /// <summary>The game's (private) flag, set once the compiler has its heightmap; until then Save writes nothing and a rebuild adds none of its deltas. True here from construction; a test sets it false to make a save silently not happen.</summary>
     public bool m_initialized = true;
     [TestOnly] public int SaveCount;
@@ -504,10 +507,11 @@ public partial class TerrainComp
     }
 
     /// <summary>
-    /// Like the game (1.0.16): only the owner's compiler saves, into the ZDO's TCData, the bytes the game writes:
-    /// <c>Utils.Compress</c> of a ZPackage holding version 1, <see cref="m_operations"/>, <see cref="m_lastOpPoint"/>,
+    /// Like the game (1.0.30): only the owner's compiler saves, into the ZDO's TCData, the bytes the game writes:
+    /// <c>Utils.Compress</c> of a ZPackage holding version 2, <see cref="m_operations"/>, <see cref="m_lastOpPoint"/>,
     /// <see cref="m_lastOpRadius"/>, the vertex count and per vertex a modified flag (then its level and smooth deltas),
-    /// the texel count and per texel a modified flag (then its paint r, g, b, a). A peer that does not own the ZDO writes
+    /// the texel count and per texel a modified flag (then its paint r, g, b, a), and last
+    /// <see cref="m_lastSnowTimerIncrement"/>. A peer that does not own the ZDO writes
     /// nothing, and so does a compiler that is not <see cref="m_initialized"/>: the game's Save returns silently in both cases.
     /// With <paramref name="paintOnly"/> it also skips the write when the paint has not changed since the last paint-only
     /// save (the game's hash of the modified texels). Private in the game; mods reach it through a publicized assembly.
@@ -521,7 +525,7 @@ public partial class TerrainComp
         m_lastHash = hash;
         SaveCount++;
         var package = new ZPackage();
-        package.Write(1);
+        package.Write(2);
         package.Write(m_operations);
         package.Write(m_lastOpPoint);
         package.Write(m_lastOpRadius);
@@ -537,11 +541,12 @@ public partial class TerrainComp
             package.Write(m_modifiedPaint[i]);
             if (m_modifiedPaint[i]) { package.Write(m_paintMask[i].r); package.Write(m_paintMask[i].g); package.Write(m_paintMask[i].b); package.Write(m_paintMask[i].a); }
         }
+        package.Write(m_lastSnowTimerIncrement);
         m_nview.GetZDO().Set(ZDOVars.s_TCData, Utils.Compress(package.GetArray()));
     }
 
     /// <summary>
-    /// As the game's Load (1.0.16): reads what <see cref="Save"/> wrote back into the arrays. False without TCData, or when
+    /// As the game's Load (1.0.30): reads what <see cref="Save"/> wrote back into the arrays. False without TCData, or when
     /// its vertex count is not this compiler's (the operation counter, point and radius are read before that check, as the
     /// game reads them). An unmodified vertex's deltas become 0; an unmodified texel keeps its paint. A pre-1.0 paint grid of
     /// width x width texels is spread onto the (width + 1)^2 grid with the game's own index mapping.
@@ -551,7 +556,7 @@ public partial class TerrainComp
         byte[]? data = m_nview?.GetZDO()?.GetByteArray(ZDOVars.s_TCData);
         if (data == null) return false;
         var package = new ZPackage(Utils.Decompress(data));
-        package.ReadInt();
+        int version = package.ReadInt();
         m_operations = package.ReadInt();
         m_lastOpPoint = package.ReadVector3();
         m_lastOpRadius = package.ReadSingle();
@@ -569,6 +574,7 @@ public partial class TerrainComp
             m_modifiedPaint[i] = package.ReadBool();
             if (m_modifiedPaint[i]) m_paintMask[i] = new UnityEngine.Color(package.ReadSingle(), package.ReadSingle(), package.ReadSingle(), package.ReadSingle());
         }
+        if (version >= 2) m_lastSnowTimerIncrement = package.ReadDouble();
         if (texels == m_width * m_width)
         {
             var paint = (UnityEngine.Color[])m_paintMask.Clone();

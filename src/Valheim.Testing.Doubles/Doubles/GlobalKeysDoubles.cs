@@ -4,7 +4,7 @@
 // members your mod needs in your own files. Behaviour mirrors the game where mod code depends on it.
 #nullable enable
 // ReSharper disable InconsistentNaming
-// Global keys, as ZoneSystem keeps them in Valheim 1.0.16. Only the server changes them: SetGlobalKey and
+// Global keys, as ZoneSystem keeps them in Valheim 1.0.30. Only the server changes them: SetGlobalKey and
 // RemoveGlobalKey are routed calls to the server, which applies the change and broadcasts its WHOLE list; a client
 // replaces its list with each broadcast. The server's handlers exist once ZoneSystem.Start has run (when the game
 // scene starts, with Game.Start); a call before that finds no handler and is dropped. A key is stored lower case,
@@ -14,7 +14,7 @@ using System.Globalization;
 using Valheim.Testing.Doubles;
 
 /// <summary>
-/// The game's named global keys (1.0.16), in its order. Everything before <see cref="NonServerOption"/> is a world
+/// The game's named global keys (1.0.30), in its order. Everything before <see cref="NonServerOption"/> is a world
 /// modifier (a server option, kept with the world's starting keys); the rest are progression keys. Any other string
 /// is a valid key too; it counts as <see cref="NonServerOption"/>.
 /// </summary>
@@ -67,6 +67,9 @@ public enum GlobalKeys
     defeated_goblinking,
     defeated_gdking,
     defeated_bonemass,
+    defeated_queen,
+    defeated_fader,
+    defeated_frozenking,
     activeBosses,
     StoneCircle,
     KilledTroll,
@@ -82,8 +85,8 @@ public partial class ZoneSystem
     public readonly HashSet<string> m_globalKeys = new();
     /// <summary>The named keys that are set (any value).</summary>
     public HashSet<GlobalKeys> m_globalKeysEnums = new();
-    /// <summary>Each set key's name and value ("" for a key without one).</summary>
-    public Dictionary<string, string> m_globalKeysValues = new();
+    /// <summary>Each set key's name and value ("" for a key without one), looked up in any case (OrdinalIgnoreCase since 1.0.30).</summary>
+    public Dictionary<string, string> m_globalKeysValues = new(System.StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// The loaded world's starting keys (<c>ZNet.World.m_startingGlobalKeys</c> in the game): where a server sets and
@@ -146,18 +149,18 @@ public partial class ZoneSystem
     }
 
     public bool GetGlobalKey(GlobalKeys key) => m_globalKeysEnums.Contains(key);
-    public bool GetGlobalKey(GlobalKeys key, out string value) => m_globalKeysValues.TryGetValue(key.ToString().ToLower(), out value!);
+    public bool GetGlobalKey(GlobalKeys key, out string value) => m_globalKeysValues.TryGetValue(key.ToString(), out value!);
     /// <summary>The key's value read as an invariant-culture float; false (and 0) when it is not set or not a number.</summary>
     public bool GetGlobalKey(GlobalKeys key, out float value)
     {
-        if (m_globalKeysValues.TryGetValue(key.ToString().ToLower(), out var text) && float.TryParse(text, NumberStyles.Any, CultureInfo.InvariantCulture, out value))
+        if (m_globalKeysValues.TryGetValue(key.ToString(), out var text) && float.TryParse(text, NumberStyles.Any, CultureInfo.InvariantCulture, out value))
             return true;
         value = 0f;
         return false;
     }
     /// <summary>Whether a key of this name is set, any case, any value. A "name value" string is not a name and finds nothing.</summary>
     public bool GetGlobalKey(string name) => GetGlobalKey(name, out _);
-    public bool GetGlobalKey(string name, out string value) => m_globalKeysValues.TryGetValue(name.ToLower(), out value!);
+    public bool GetGlobalKey(string name, out string value) => m_globalKeysValues.TryGetValue(name, out value!);
     /// <summary>Whether this exact line ("name" or "name value", lower case) is set.</summary>
     public bool GetGlobalKeyExact(string fullLine) => m_globalKeys.Contains(fullLine);
     public List<string> GetGlobalKeys() => new(m_globalKeys);
