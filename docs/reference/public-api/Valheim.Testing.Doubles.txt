@@ -226,9 +226,9 @@ enum GlobalKeys
   field const GlobalKeys AllHeavySnow = 39
   field const GlobalKeys AllPiecesUnlocked = 26
   field const GlobalKeys AllRecipesUnlocked = 28
-  field const GlobalKeys AshlandsOcean = 52
+  field const GlobalKeys AshlandsOcean = 55
   field const GlobalKeys CarryWeightRate = 16
-  field const GlobalKeys Count = 53
+  field const GlobalKeys Count = 56
   field const GlobalKeys DeathDeleteItems = 20
   field const GlobalKeys DeathDeleteUnequipped = 21
   field const GlobalKeys DeathKeepEquip = 19
@@ -243,8 +243,8 @@ enum GlobalKeys
   field const GlobalKeys EventRate = 3
   field const GlobalKeys Fire = 18
   field const GlobalKeys FoodRate = 9
-  field const GlobalKeys KilledBat = 51
-  field const GlobalKeys KilledTroll = 49
+  field const GlobalKeys KilledBat = 54
+  field const GlobalKeys KilledTroll = 52
   field const GlobalKeys MoveStaminaRate = 10
   field const GlobalKeys NoBossPortals = 33
   field const GlobalKeys NoBuildCost = 24
@@ -265,17 +265,20 @@ enum GlobalKeys
   field const GlobalKeys SkillReductionRate = 13
   field const GlobalKeys StaminaRate = 5
   field const GlobalKeys StaminaRegenRate = 11
-  field const GlobalKeys StoneCircle = 48
+  field const GlobalKeys StoneCircle = 51
   field const GlobalKeys TeleportAll = 35
   field const GlobalKeys WorldLevel = 2
   field const GlobalKeys WorldLevelLockedTools = 29
-  field const GlobalKeys activeBosses = 47
+  field const GlobalKeys activeBosses = 50
   field const GlobalKeys defeated_bonemass = 46
   field const GlobalKeys defeated_dragon = 43
   field const GlobalKeys defeated_eikthyr = 42
+  field const GlobalKeys defeated_fader = 48
+  field const GlobalKeys defeated_frozenking = 49
   field const GlobalKeys defeated_gdking = 45
   field const GlobalKeys defeated_goblinking = 44
-  field const GlobalKeys killed_surtling = 50
+  field const GlobalKeys defeated_queen = 47
+  field const GlobalKeys killed_surtling = 53
 static class HarmonyLib.AccessTools
   field static readonly System.Reflection.BindingFlags all
   field static readonly System.Reflection.BindingFlags allDeclared
@@ -943,8 +946,8 @@ struct SoftReferenceableAssets.SoftReference`1 : System.IEquatable`1<SoftReferen
   method System.Void .ctor(System.String name, T asset = null)
   method System.Void HoldReference()
   method System.Void Release()
-  method static System.Boolean op_Equality(SoftReferenceableAssets.SoftReference`1<T> left, SoftReferenceableAssets.SoftReference`1<T> right)
-  method static System.Boolean op_Inequality(SoftReferenceableAssets.SoftReference`1<T> left, SoftReferenceableAssets.SoftReference`1<T> right)
+  method static System.Boolean op_Equality(System.Nullable`1<SoftReferenceableAssets.SoftReference`1<T>> lhs, System.Nullable`1<SoftReferenceableAssets.SoftReference`1<T>> rhs)
+  method static System.Boolean op_Inequality(System.Nullable`1<SoftReferenceableAssets.SoftReference`1<T>> lhs, System.Nullable`1<SoftReferenceableAssets.SoftReference`1<T>> rhs)
   method virtual System.Boolean Equals(System.Object obj)
   method virtual System.Int32 GetHashCode()
   method virtual System.String ToString()
@@ -952,7 +955,7 @@ struct SoftReferenceableAssets.SoftReference`1 : System.IEquatable`1<SoftReferen
   property System.Boolean IsLoading { get; }
   property System.Boolean IsValid { get; }
   property System.Int32 References { get; }
-  property System.String Name { get; }
+  property System.String name { get; }
   property T Asset { get; }
 class SpawnArea : UnityEngine.MonoBehaviour
   field System.Boolean m_onGroundOnly
@@ -1093,6 +1096,7 @@ class TerrainComp
   field System.Boolean m_initialized
   field System.Boolean[] m_modifiedHeight
   field System.Boolean[] m_modifiedPaint
+  field System.Double m_lastSnowTimerIncrement
   field System.Int32 SaveCount
   field System.Int32 m_operations
   field System.Int32 m_width
@@ -1577,6 +1581,7 @@ sealed class UnityEngine.WaitWhile : UnityEngine.CustomYieldInstruction
 class UnityEngine.YieldInstruction
   method System.Void .ctor()
 static class Utils
+  method static System.Boolean CloseToZero(UnityEngine.Vector3 v)
   method static System.Boolean CustomEndsWith(System.String a, System.String b)
   method static System.Boolean CustomStartsWith(System.String a, System.String b)
   method static System.Boolean IsEnabledInheirarcy(UnityEngine.GameObject go, UnityEngine.GameObject root)
@@ -1607,6 +1612,7 @@ static class Utils
   method static System.String GetPath(UnityEngine.Transform obj)
   method static System.String GetPrefabName(System.String name)
   method static System.String GetPrefabName(UnityEngine.GameObject gameObject)
+  method static System.UInt32 QuantizeHalfDegrees(System.Single degrees)
   method static System.Void IterateHierarchy(UnityEngine.GameObject gameObject, Utils/ChildHandler childHandler, System.Boolean deepestFirst = false)
   method static T[] GetEnabledComponentsInChildren<T>(UnityEngine.GameObject root)
   method static UnityEngine.Transform FindChild(UnityEngine.Transform aParent, System.String aName, Utils/IterativeSearchType searchType = 0)
@@ -1621,8 +1627,8 @@ enum Utils/IterativeSearchType
   field const Utils/IterativeSearchType BreadthFirst = 1
   field const Utils/IterativeSearchType DepthFirst = 0
 static class Valheim.Testing.Doubles.DoubledGame
-  field const System.String Version = "1.0.17"
-  field const System.UInt32 NetworkVersion = 40
+  field const System.String Version = "1.0.30"
+  field const System.UInt32 NetworkVersion = 42
 static class Valheim.Testing.Doubles.TerrainAssert
   method static System.ValueTuple`2<System.Single,System.Single> VertexPosition(Heightmap heightmap, System.Int32 width, System.Int32 index)
   method static System.Void OnlyChangedWithin(Valheim.Testing.Doubles.TerrainSnapshot before, TerrainComp after, System.Func`3<System.Single,System.Single,System.Boolean> allowed, System.String what = "zone", System.Boolean requireChange = true)
