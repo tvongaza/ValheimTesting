@@ -1,8 +1,8 @@
 {
   "name": "BepInExPack_Valheim",
-  "version": "5.4.2351",
-  "url": "https://thunderstore.io/package/download/denikson/BepInExPack_Valheim/5.4.2351/",
-  "sha256": "bce631497976a93977ceb08e166712e6c31d15244956f89f17df092a9b62e29f",
+  "version": "5.4.2360",
+  "url": "https://thunderstore.io/package/download/denikson/BepInExPack_Valheim/5.4.2360/",
+  "sha256": "6bca77b1016acfe0ffaebb6534c84b12ae8d12e5a96abbf59ec6e4526204fc6f",
   "root": "BepInExPack_Valheim",
   "source": "https://github.com/AzumattDev/BepInEx",
   "status": "the BepInEx loader every Windows and Linux profile runs on unless a loader package names another (#711); bootstrap-cli.cs fetches it into .packages"
