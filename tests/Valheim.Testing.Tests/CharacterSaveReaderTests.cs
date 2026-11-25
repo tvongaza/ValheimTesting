@@ -14,13 +14,32 @@ public class CharacterSaveReaderTests
         Assert.False(CharacterSaveReader.IsFreshSmokeSeed(Profile().File)); // it has entered worlds
     }
 
+    // Valheim 1.0.30 reads player versions 46 and 47 with this layout (it writes 47); 45 has another layout and 48 is newer
+    // than the game, so both are refused.
+    [Theory]
+    [InlineData(46)]
+    [InlineData(47)]
+    public void ThePlayerVersionsTheGameReadsWithThisLayoutAreRead(int playerVersion)
+    {
+        var payload = Payload(Profile().File);
+        BitConverter.GetBytes(playerVersion).CopyTo(payload, 0);
+        Assert.Equal(5678, CharacterSaveReader.ReadIdentity(Envelope(payload)).PlayerId);
+    }
+
+    [Theory]
+    [InlineData(45)]
+    [InlineData(48)]
+    public void APlayerVersionOutsideThoseIsRefused(int playerVersion)
+    {
+        var payload = Payload(Profile().File);
+        BitConverter.GetBytes(playerVersion).CopyTo(payload, 0);
+        Assert.Throws<NotSupportedException>(() => CharacterSaveReader.ReadIdentity(Envelope(payload)));
+    }
+
     [Fact]
-    public void UnfamiliarVersionOrStatLayoutIsRefused()
+    public void UnfamiliarStatLayoutIsRefused()
     {
         var original = Profile();
-        var version = Payload(original.File);
-        BitConverter.GetBytes(47).CopyTo(version, 0);
-        Assert.Throws<NotSupportedException>(() => CharacterSaveReader.ReadIdentity(Envelope(version)));
         var layout = Payload(original.File);
         BitConverter.GetBytes(204).CopyTo(layout, 4);
         Assert.Throws<InvalidDataException>(() => CharacterSaveReader.ReadIdentity(Envelope(layout)));
@@ -155,13 +174,13 @@ public class CharacterSaveReaderTests
 
     internal sealed record Fixture(byte[] File, int World100Flag, int World200Flag);
 
-    // A hand-built 1.0.16 profile payload. No game save or decompiled source is checked in.
+    // A hand-built 1.0.30 profile payload (version 47). No game save or decompiled source is checked in.
     internal static Fixture Profile(int mapBytes = 0, long secondUid = 200, bool firstSpawn = false, long playerId = 5678,
         bool includeWorlds = true)
     {
         using var stream = new MemoryStream();
         using var writer = new BinaryWriter(stream);
-        writer.Write(46); writer.Write(205); writer.Write(10);
+        writer.Write(47); writer.Write(205); writer.Write(10);
         for (int group = 0; group < 10; group++)
         {
             for (int stat = 0; stat < 205; stat++) writer.Write(0f);
