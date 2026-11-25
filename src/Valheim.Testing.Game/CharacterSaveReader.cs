@@ -7,9 +7,11 @@ namespace Valheim.Testing.Game;
 // it reads a disposable character's identity and whether it has spawned; it never edits a save (#298 removed that).
 internal static class CharacterSaveReader
 {
-    // The player versions Valheim 1.0.30 reads with this layout: 46 (DeepNorth, written by earlier 1.0 builds such as 1.0.16) and 47
-    // (CheatCleanSlate, which 1.0.30 writes). Its PlayerProfile.LoadPlayerData reads both the same way.
-    private const int OldestVersion = 46, NewestVersion = 47;
+    // The player versions Valheim 1.0.30 reads with this layout: PlayerProfile.LoadPlayerData takes this path for
+    // "player >= DeepNorth || player == AbandonedDN", and Version.IsPlayerVersionCompatible stops at CheatCleanSlate. So 44
+    // (AbandonedDN), 46 (DeepNorth, written by earlier 1.0 builds such as 1.0.16) and 47 (CheatCleanSlate, which 1.0.30 writes);
+    // 45 (Chunked) has another layout.
+    private static readonly int[] Versions = [44, 46, 47];
     private const int StatCount = 205;
     private const int StatGroups = 10;
     private const int EnemyStatGroups = 5;
@@ -58,10 +60,10 @@ internal static class CharacterSaveReader
             using var stream = new MemoryStream(payload, writable: false);
             using var reader = new BinaryReader(stream);
             int version = reader.ReadInt32();
-            if (version < OldestVersion || version > NewestVersion)
-                throw new NotSupportedException($"Character version {version} is unsupported; expected {OldestVersion} to {NewestVersion}.");
+            if (Array.IndexOf(Versions, version) < 0)
+                throw new NotSupportedException($"Character version {version} is unsupported; expected one of {string.Join(", ", Versions)}.");
             if (reader.ReadInt32() != StatCount || reader.ReadInt32() != StatGroups)
-                throw new InvalidDataException("Character stat layout is not the layout of player versions 46 and 47.");
+                throw new InvalidDataException("Character stat layout is not the layout of player versions 44, 46 and 47.");
 
             for (int group = 0; group < StatGroups; group++)
             {

@@ -14,9 +14,10 @@ public class CharacterSaveReaderTests
         Assert.False(CharacterSaveReader.IsFreshSmokeSeed(Profile().File)); // it has entered worlds
     }
 
-    // Valheim 1.0.30 reads player versions 46 and 47 with this layout (it writes 47); 45 has another layout and 48 is newer
-    // than the game, so both are refused.
+    // Valheim 1.0.30 reads player versions 44, 46 and 47 with this layout (it writes 47); 45 has another layout, 43 is older
+    // still and 48 is newer than the game, so they are refused.
     [Theory]
+    [InlineData(44)]
     [InlineData(46)]
     [InlineData(47)]
     public void ThePlayerVersionsTheGameReadsWithThisLayoutAreRead(int playerVersion)
@@ -27,6 +28,7 @@ public class CharacterSaveReaderTests
     }
 
     [Theory]
+    [InlineData(43)]
     [InlineData(45)]
     [InlineData(48)]
     public void APlayerVersionOutsideThoseIsRefused(int playerVersion)

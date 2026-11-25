@@ -269,11 +269,22 @@ public sealed class SecondConsumerTests : IDisposable
     [Fact] public void SoftReferenceHandlesCompareAsTheGamesDo()
     {
         var a = new SoftReferenceableAssets.SoftReference<GameObject>("Dolmen");
-        var copy = a; var other = new SoftReferenceableAssets.SoftReference<GameObject>("Dolmen");
+        var copy = a; var same = new SoftReferenceableAssets.SoftReference<GameObject>("Dolmen");
+        var other = new SoftReferenceableAssets.SoftReference<GameObject>("Runestone");
         SoftReferenceableAssets.SoftReference<GameObject> none = default;
         SoftReferenceableAssets.SoftReference<GameObject>? nothing = null;
-        Assert.True(a == copy); Assert.False(a == other); Assert.True(a != none);
+        Assert.True(a == copy); Assert.True(a == same); Assert.True(a.Equals(same)); Assert.Equal(a.GetHashCode(), same.GetHashCode());
+        Assert.False(a == other); Assert.True(a != none);
         Assert.True(none == default(SoftReferenceableAssets.SoftReference<GameObject>)); Assert.True(none == nothing); Assert.False(a == nothing);
+    }
+
+    // As the game's SoftReference.Equals(object): an invalid handle equals null, a valid one does not.
+    [Fact] public void AnInvalidSoftReferenceEqualsNull()
+    {
+        SoftReferenceableAssets.SoftReference<GameObject> none = default;
+        Assert.True(none.Equals((object?)null));
+        Assert.False(new SoftReferenceableAssets.SoftReference<GameObject>("Dolmen").Equals((object?)null));
+        Assert.False(none.Equals((object)"Dolmen"));
     }
 
     // 1.0.30's Utils.QuantizeHalfDegrees, written out from the game: round to the nearest half degree (halves to even, as
@@ -291,6 +302,10 @@ public sealed class SecondConsumerTests : IDisposable
         zone.GlobalKeyAdd("EnemyDamage 150");
         Assert.True(zone.GetGlobalKey(GlobalKeys.EnemyDamage, out float value)); Assert.Equal(150f, value);
         Assert.True(zone.GetGlobalKey("ENEMYDAMAGE", out string text)); Assert.Equal("150", text);
+        // A value stored under a mixed-case name (as a mod writing the dictionary does) is found too: the comparer, not ToLower.
+        zone.m_globalKeysValues["PlayerDamage"] = "80";
+        Assert.True(zone.GetGlobalKey(GlobalKeys.PlayerDamage, out float damage)); Assert.Equal(80f, damage);
+        Assert.True(zone.GetGlobalKey("playerdamage", out string lower)); Assert.Equal("80", lower);
     }
 
     [Fact] public void LocationPiecesHaveTheGamesDefaults()

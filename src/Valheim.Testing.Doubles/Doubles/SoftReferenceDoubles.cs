@@ -51,9 +51,15 @@ namespace SoftReferenceableAssets
         public void HoldReference() { if (m_entry != null) m_entry.References++; }
         public void Release() { if (m_entry is { References: > 0 }) m_entry.References--; }
 
-        public bool Equals(SoftReference<T> other) => ReferenceEquals(m_entry, other.m_entry);
-        public override bool Equals(object? obj) => obj is SoftReference<T> other && Equals(other);
-        public override int GetHashCode() => m_entry?.GetHashCode() ?? 0;
+        /// <summary>
+        /// As the game's (1.0.30): two valid handles are equal when they name the same asset (the game compares asset ids; a
+        /// test handle's asset is its name), two invalid handles are equal, and a valid one never equals an invalid one.
+        /// </summary>
+        public bool Equals(SoftReference<T> other) =>
+            IsValid && other.IsValid ? string.Equals(m_entry!.Name, other.m_entry!.Name, System.StringComparison.Ordinal) : IsValid == other.IsValid;
+        /// <summary>As the game's: an invalid handle also equals null.</summary>
+        public override bool Equals(object? obj) => !IsValid && obj == null || obj is SoftReference<T> other && Equals(other);
+        public override int GetHashCode() => m_entry == null ? 0 : System.StringComparer.Ordinal.GetHashCode(m_entry.Name);
         /// <summary>As the game's (1.0.30): two valid handles compare by asset, otherwise equal when neither is valid (a null
         /// handle and the default handle are both "none").</summary>
         public static bool operator ==(SoftReference<T>? lhs, SoftReference<T>? rhs)
