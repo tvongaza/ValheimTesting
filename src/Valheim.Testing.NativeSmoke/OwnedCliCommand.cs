@@ -75,9 +75,6 @@ internal static class OwnedCliCommand
     internal static GameActor Connect(string evidence, string role, string? phase, string? expectStrict, TimeSpan timeout,
         out RecordingTransport recording, out string commandLog)
     {
-        // A client held at its main menu (start --menu-only) never enters a world: say so before anything is read or contacted.
-        if (expectStrict == null && phase == "world" && role == OwnedClientCommandLease.ClientRole && OwnedClientCommandLease.MenuOnly(evidence))
-            throw new InvalidOperationException(MenuOnlyWorld);
         string leaseFile = Path.Combine(evidence, OwnedClientCommandLease.LeaseFile(role));
         string leaseJson;
         try { leaseJson = OperatingSystem.IsWindows() ? File.ReadAllText(leaseFile) : ReadPrivateUnixLease(leaseFile, role); }
@@ -91,6 +88,11 @@ internal static class OwnedCliCommand
         using var process = Process.GetProcessById(lease.Pid);
         if (!IsExactProcess(process, lease))
             throw new InvalidOperationException($"The exact {role} this run started is no longer running; a reused PID is never contacted.");
+        // A live client held at its main menu (start --menu-only) never enters a world: said before its port is contacted. Its marker
+        // stays as evidence after the run, so it is read only once the lease shows the client still runs: a finished run's refusal
+        // is the missing lease.
+        if (expectStrict == null && phase == "world" && role == OwnedClientCommandLease.ClientRole && OwnedClientCommandLease.MenuOnly(evidence))
+            throw new InvalidOperationException(MenuOnlyWorld);
         RequirePortOwner(lease.Port, lease.Pid, role);
         string pins = expectStrict ?? Path.Combine(evidence, OwnedClientCommandLease.PhasePins(role, phase ?? throw new ArgumentNullException(nameof(phase))));
         if (expectStrict == null && !File.Exists(pins)) throw new FileNotFoundException(MissingPhasePins(role, phase!, pins), pins);

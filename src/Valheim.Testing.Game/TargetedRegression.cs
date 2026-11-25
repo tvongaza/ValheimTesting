@@ -28,6 +28,13 @@ public sealed class RegressionInputs
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public bool NoMod { get; set; }
     [JsonIgnore] internal IReadOnlyList<string> ArmNames => NoMod ? ["control"] : Mod.Arms.Keys.ToArray();
+    /// <summary>
+    /// Holds the client at its main menu instead of hosting the fixture (<c>valheim-test start --menu-only</c>, #1009), recorded in the
+    /// run's <c>regression.json</c> so a later reader of it runs the same arm. No character is staged, the admitted fixture is never
+    /// placed or hosted, and what the game adds to the client's save folders is moved into the arm's evidence.
+    /// </summary>
+    [JsonInclude, JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    internal bool MenuOnly { get; set; }
     /// <summary>Config files to place in <c>BepInEx/config</c>, by file name. Without <c>valheimCLI.valheimCLI.cfg</c> one is written with the client's port. A <c>BepInEx.cfg</c> here replaces the loader's default; the install's own is never used (#711).</summary>
     public Dictionary<string, string> Configs { get; set; } = [];
     /// <summary>
@@ -98,6 +105,15 @@ public sealed class RegressionInputs
                 throw new ArgumentException("noMod: a CLI-only control requires an empty mod, plugins, pluginFiles, patchers, optionalReferences and probe.");
         }
         else Mod.Validate();
+        if (MenuOnly)
+        {
+            // The one refusal of what a run held at the main menu cannot use: it creates no world, stages no character, and checks the
+            // game's default save folder, which -savedir would move the game away from.
+            if (Fixture.Create != null) throw new ArgumentException("fixture.create: a run held at the main menu creates no world; leave out the seeded request.");
+            if (Client.CharacterStore != null) throw new ArgumentException("client.characterStore: a run held at the main menu stages no character; leave the store out.");
+            if (HostedWorld.SaveDirectoryArgument(Client.LaunchArguments) is { } savedir)
+                throw new ArgumentException($"client.launchArguments: remove {savedir}. A run held at the main menu checks the game's default save folder for what the game adds there, which -savedir would move the game away from.");
+        }
         if (Fixture.Create != null && (ArmNames.Count != 1 || Mod.Repeatability))
             throw new ArgumentException("fixture.create: seeded creation requires one arm and no A/B/repeatability comparison. Export a saved fixture for identical-state comparisons.");
         foreach (var (name, source) in Configs)
@@ -276,6 +292,9 @@ public sealed record RunManifest(string Name, string Arm, string? ModPlugin, str
     /// <summary>True for an explicit CLI-only control: no mod identity or mod artifact arms are present. Omitted for ordinary mod runs.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public bool NoMod { get; init; }
+    /// <summary>True for a run held at the main menu (<see cref="RegressionInputs.MenuOnly"/>): no world is entered, so none is recorded. Omitted otherwise.</summary>
+    [JsonInclude, JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    internal bool MenuOnly { get; init; }
 }
 
 /// <summary>One arm of the comparison: its name, commit, distinct artifact name and SHA256.</summary>

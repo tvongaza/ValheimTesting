@@ -99,7 +99,8 @@ try
     var world = fixtureInput?.Identity;
     string worldRoot = Path.Combine(output, "world-source", "worlds_local");
     // The packaged world stays the arm's admitted fixture, so regression.json is a complete start input; a menu-only run never
-    // places or hosts it. It stages no character: a character made at the menu must not meet the packaged one's name.
+    // places, hosts or records it (regression.json records menuOnly). It stages no character: a character made at the menu must not
+    // meet the packaged one's name.
     var character = menuOnly ? null : DefaultSmokeCharacter.Prepare(Path.Combine(output, "character-source"));
     var inputs = new RegressionInputs
     {
@@ -109,6 +110,7 @@ try
             new RegressionFixture { Root = worldRoot, WorldUid = world!.UidText },
         Client = new RegressionClient { Character = DefaultSmokeCharacter.Name, CharacterStore = character?.Root, Architecture = architecture },
         NoMod = stage.NoMod,
+        MenuOnly = menuOnly,
         Mod = mod == null ? new RegressionMod() : new RegressionMod { InstallAs = Path.GetFileName(mod), Arms = new Dictionary<string, RegressionArm>
             { [comparison == null ? "smoke" : "before"] = new() { File = mod, Sha256 = FileHash.Sha256(mod),
                 // Only a real source commit; the artifact's own SHA-256 is already the arm's Sha256.
@@ -132,7 +134,6 @@ try
         { File = compareMod!, Sha256 = FileHash.Sha256(compareMod!), Commit = options["--compare-source"] });
     inputs.Write(Path.Combine(output, "regression.json"));
     runner = TargetedRegression.Read(Path.Combine(output, "regression.json")); // the inputs on the machine recorded beside them
-    runner.MenuOnly = menuOnly;
     runner.InitialHostingBuild = stage.HostingBuild;
     runner.InitialWorldAdmission = fixtureInput?.CopyAdmission;
     runner.InitialConfigSha256 = stage.RunInputs.Configs.ToDictionary(config => config.Destination, config => config.Sha256, StringComparer.Ordinal);
@@ -184,9 +185,8 @@ try
                 report.RecordFailure(StepPhase.Cleanup, "owned client process was not proved stopped", failure);
             }
         Console.WriteLine(NativeSmokeLogSummary.Format(report.Logs, inputs.ArmNames.Count > 1 ? arm : null));
-        if (report.Provenance.TryGetValue("saveFoldersAdded", out string? added))
-            Console.WriteLine(added == "none" ? "The game added nothing to the client's save folders."
-                : $"Moved what the game added to the client's save folders into {Path.Combine(armOutput, SaveFolderChanges.AddedFolder)}: {added}");
+        if (report.Provenance.TryGetValue("sourceIntegrity." + ClientSaveFolders.Actor, out string? saves))
+            Console.WriteLine($"The client's save folders: {saves} (evidence in {Path.Combine(armOutput, "source-changes", ClientSaveFolders.Actor)})");
         // Final-arm evidence is written once after the copy-cleanup verdict in finally.
         report.Provenance["runId"] = runId;
         lastArm = report; lastArmOutput = armOutput;

@@ -1,6 +1,7 @@
 using System.Reflection;
 using System.Reflection.Emit;
 using System.Text;
+using System.Text.Json;
 using Valheim.Testing.Game;
 using Valheim.Testing.Game.Fakes;
 using Valheim.Testing.GameSessions;
@@ -988,12 +989,14 @@ public sealed class TargetedRegressionTests : IDisposable
     // One start run (a new run ID, as the command allocates): each arm in turn on one regression, each in its own evidence folder
     // with its own client process, as the command runs them; the last arm's report and folder, and the run ID.
     private (ScenarioReport Report, string Output, string RunId) Start(Func<LocalFakeOwnedProcess> process, Action<ClientRound>? measure = null,
-        bool end = true, string[]? arms = null, Action? beforeClientLaunch = null, RegressionInputs? inputs = null, bool menuOnly = false)
+        bool end = true, string[]? arms = null, Action? beforeClientLaunch = null, RegressionInputs? inputs = null, bool menuOnly = false,
+        Func<IReadOnlyCollection<string>?, bool, Task>? processCheck = null)
     {
         string runId = RunJournal.NewRunId();
         using var run = RunJournal.UseRun(runId);
-        var regression = _rig.Regression(inputs ?? _rig.Manifest());
-        regression.MenuOnly = menuOnly;
+        inputs ??= _rig.Manifest();
+        if (menuOnly) inputs.MenuOnly = true;
+        var regression = _rig.Regression(inputs, processCheck: processCheck);
         ScenarioReport? report = null; string? output = null;
         foreach (string arm in arms ?? ["parent"])
         {
@@ -1245,67 +1248,210 @@ public sealed class TargetedRegressionTests : IDisposable
 
     // #1009: start --menu-only through start's own seam. The client is held at its menu: no character is staged, the fixture is never
     // placed, and the character a command made there (with its backup) is moved from characters_local into the arm's evidence once the
-    // client stopped, leaving the user's own characters and worlds as they were.
+    // client stopped, by the one source-check owner, leaving the user's own characters and worlds as they were. A folder the game made
+    // there is removed once empty (#8); a file beside the folders (the game's log) is not the check's. The run records no world (#4).
     [ClientHostFact] public void AMenuOnlyStartMovesTheCharacterItsGameMadeIntoTheEvidence()
     {
-        var (_, scope) = InProcess();
+        var (here, scope) = InProcess();
         using var machine = scope;
         using var data = new FakeClientDataDirectory(_rig.Save);
-        Directory.CreateDirectory(Worlds);
-        File.WriteAllText(Path.Combine(Worlds, "Mine.fwl"), "the user's world");
-        string local = Path.Combine(_rig.Save, "characters_local");
-        var (report, output, _) = Start(() => new LocalFakeOwnedProcess(62), round => round.Step("the game makes a character at the menu", () =>
+        string local = Path.Combine(_rig.Save, "characters_local"), log = Path.Combine(_rig.Save, "Player.log");
+        File.WriteAllText(log, "the last session's log");
+        var (report, output, runId) = Start(() => new LocalFakeOwnedProcess(62), round => round.Step("the game makes a character at the menu", () =>
         {
             File.WriteAllText(Path.Combine(local, "vtseedclean.fch"), "made at the menu");
             File.WriteAllText(Path.Combine(local, "vtseedclean.fch.old"), "its backup");
+            Directory.CreateDirectory(Worlds); // as the game makes worlds_local at its menu
+            File.WriteAllText(log, "this session's log");
         }), menuOnly: true);
 
         Assert.True(report.Passed, string.Join("; ", report.Steps.Where(step => !step.Passed).Select(step => step.Name + ": " + step.Error)));
         Assert.DoesNotContain(report.Steps, step => step.Name.Contains("character", StringComparison.Ordinal) && step.Name.Contains("stage", StringComparison.Ordinal));
-        Assert.Contains(report.Steps, step => step.Name == "move what the game added to the client's save folders into the evidence" && step.Passed);
-        Assert.Equal("characters_local/vtseedclean.fch, characters_local/vtseedclean.fch.old", report.Provenance["saveFoldersAdded"]);
-        Assert.Equal("made at the menu", File.ReadAllText(Path.Combine(output, SaveFolderChanges.AddedFolder, "characters_local", "vtseedclean.fch")));
-        Assert.Equal("its backup", File.ReadAllText(Path.Combine(output, SaveFolderChanges.AddedFolder, "characters_local", "vtseedclean.fch.old")));
-        Assert.Contains("smoketest.fch", File.ReadAllText(Path.Combine(output, SaveFolderChanges.BeforeFile)));
-        // The user's own files, as they were; the fixture was never placed beside them.
+        Assert.Contains(report.Steps, step => step.Name == "verify client-saves's source install after the run (size and modified time)" && step.Passed);
+        string saves = report.Provenance["sourceIntegrity." + ClientSaveFolders.Actor];
+        Assert.StartsWith("restored with a warning: the game added 2 file(s)", saves);
+        Assert.Contains("characters_local/vtseedclean.fch (added/characters_local/vtseedclean.fch)", saves);
+        Assert.Contains("removed the empty folder(s) it made: worlds_local/", saves);
+        string evidence = Path.Combine(output, "source-changes", ClientSaveFolders.Actor);
+        Assert.Equal("made at the menu", File.ReadAllText(Path.Combine(evidence, "added", "characters_local", "vtseedclean.fch")));
+        Assert.Equal("its backup", File.ReadAllText(Path.Combine(evidence, "added", "characters_local", "vtseedclean.fch.old")));
+        Assert.Contains("\"verdict\": \"restored\"", File.ReadAllText(Path.Combine(evidence, "source-changes.json")));
+        // The user's own files, as they were; the fixture was never placed beside them, and the folder the game made is gone.
         Assert.Equal(["smoketest.fch"], Directory.EnumerateFiles(local).Select(Path.GetFileName));
         Assert.Equal("character", File.ReadAllText(Path.Combine(local, "smoketest.fch")));
-        Assert.Equal(["Mine.fwl"], Directory.EnumerateFileSystemEntries(Worlds).Select(Path.GetFileName));
+        Assert.False(Directory.Exists(Worlds));
+        Assert.Equal("this session's log", File.ReadAllText(log));
         Assert.True(OwnedClientCommandLease.MenuOnly(output));
+        // #10: each moved file is hashed once, in the moved files' listing; the save folder is only ever listed by size and time.
+        var listings = here.Runs.Where(run => run.Script == "list").Select(run => run.Variables).ToList();
+        Assert.All(listings.Where(listing => SameFolder(listing["root"], _rig.Save)), listing => Assert.Equal("0", listing["content"]));
+        Assert.Single(listings, listing => listing["content"] == "1" && Path.GetFileName(listing["root"]).StartsWith(ProfileSourceCheck.AddedFolder + "-", StringComparison.Ordinal) &&
+            Path.GetFileName(Path.GetDirectoryName(listing["root"]))!.StartsWith("vt-prep-saves-", StringComparison.Ordinal));
+        // #4: no world is recorded, neither the packaged fixture's UID nor a pending creation.
+        Assert.DoesNotContain("worldUid", report.Provenance.Keys);
+        Assert.DoesNotContain("worldCreation", report.Provenance.Keys);
+        Assert.Equal("none entered: held at the main menu", report.Provenance["world"]);
+        using (var manifest = JsonDocument.Parse(File.ReadAllText(Path.Combine(output, "run-manifest.json"))))
+        {
+            Assert.Equal(JsonValueKind.Null, manifest.RootElement.GetProperty("worldUid").ValueKind);
+            Assert.Equal("", manifest.RootElement.GetProperty("world").GetString());
+            Assert.Equal(0, manifest.RootElement.GetProperty("fixtureFiles").GetInt32());
+            Assert.True(manifest.RootElement.GetProperty("menuOnly").GetBoolean());
+        }
+        // #1: the save check was journalled and retired: nothing of the run is left.
         Assert.Empty(Directory.Exists(_rig.Runtime) ? Directory.EnumerateFileSystemEntries(_rig.Runtime) : []);
+        var status = Status(runId);
+        Assert.Equal(JournalRunState.Ended, status.State); Assert.Empty(status.Items);
     }
 
+    private static bool SameFolder(string a, string b) =>
+        Path.GetFullPath(a).TrimEnd(Path.DirectorySeparatorChar).Equals(Path.GetFullPath(b).TrimEnd(Path.DirectorySeparatorChar),
+            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+
     // A menu-only run never moves a file that was there before: when one changed during the run, nothing is moved and the run fails,
-    // naming it. A character store is refused, since a menu-only run stages no character.
+    // naming it.
     [ClientHostFact] public void AMenuOnlyStartMovesNothingWhenAnExistingSaveChanged()
     {
         var (_, scope) = InProcess();
         using var machine = scope;
         using var data = new FakeClientDataDirectory(_rig.Save);
-        Directory.CreateDirectory(Worlds);
         string local = Path.Combine(_rig.Save, "characters_local");
         var (report, output, _) = Start(() => new LocalFakeOwnedProcess(63), round => round.Step("the game rewrites a character and makes one", () =>
         {
-            File.WriteAllText(Path.Combine(local, "smoketest.fch"), "rewritten by the game");
+            File.WriteAllText(Path.Combine(local, "smoketest.fch"), "rewritten by the game, longer than before");
             File.WriteAllText(Path.Combine(local, "vtseedclean.fch"), "made at the menu");
         }), menuOnly: true);
 
         Assert.False(report.Passed);
         var failed = Assert.Single(report.Steps, step => !step.Passed);
-        Assert.Equal("move what the game added to the client's save folders into the evidence", failed.Name);
-        Assert.Contains("characters_local/smoketest.fch changed", failed.Error);
-        Assert.Contains("nothing was moved", failed.Error);
+        Assert.Equal("verify client-saves's source install after the run (size and modified time)", failed.Name);
+        Assert.Contains("different size or modified time: characters_local/smoketest.fch", failed.Error);
+        Assert.Contains("characters_local/vtseedclean.fch (not moved: the install also changed, so nothing was moved)", failed.Error);
+        Assert.Equal("rewritten by the game, longer than before", File.ReadAllText(Path.Combine(local, "smoketest.fch")));
         Assert.True(File.Exists(Path.Combine(local, "vtseedclean.fch")));
-        Assert.False(Directory.Exists(Path.Combine(output, SaveFolderChanges.AddedFolder)));
+        Assert.False(Directory.Exists(Path.Combine(output, "source-changes", ClientSaveFolders.Actor, "added")));
+        Assert.Empty(Directory.Exists(_rig.Runtime) ? Directory.EnumerateFileSystemEntries(_rig.Runtime) : []);
+    }
 
-        var withStore = _rig.Manifest();
-        withStore.Client.CharacterStore = Path.Combine(_rig.Root, "store");
-        var regression = _rig.Regression(withStore);
-        regression.MenuOnly = true;
-        var refused = regression.Run("parent", Path.Combine(_rig.Root, "with-store"), "smoke", ["menu"], _ => { }, default, null,
-            (_, _, _, _) => throw new InvalidOperationException("client must not launch"), afterStaged: null);
-        Assert.False(refused.Passed);
-        Assert.Contains("stages no character", string.Join("; ", refused.Steps.Where(step => !step.Passed).Select(step => step.Error)));
+    // #3: a move that fails part way names every file it moved, where it is now, and every one it left with the reason.
+    [ClientHostFact] public void AMenuOnlyStartNamesWhatItMovedAndWhatItLeftWhenAMoveFails()
+    {
+        if (!OperatingSystem.IsWindows() && Environment.UserName == "root") return; // root moves out of a read-only folder
+        var (_, scope) = InProcess();
+        using var machine = scope;
+        using var data = new FakeClientDataDirectory(_rig.Save);
+        Directory.CreateDirectory(Worlds);
+        string local = Path.Combine(_rig.Save, "characters_local"), held = Path.Combine(Worlds, "Held.fwl");
+        FileStream? holder = null;
+        ScenarioReport report; string output;
+        try
+        {
+            (report, output, _) = Start(() => new LocalFakeOwnedProcess(64), round => round.Step("the game makes a character and a world", () =>
+            {
+                File.WriteAllText(Path.Combine(local, "vtseedclean.fch"), "made at the menu");
+                File.WriteAllText(held, "a world still held");
+                // On Windows a file another process holds; elsewhere a folder the user cannot write.
+                if (OperatingSystem.IsWindows()) holder = new FileStream(held, FileMode.Open, FileAccess.Read, FileShare.None);
+                else File.SetUnixFileMode(Worlds, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+            }), menuOnly: true);
+        }
+        finally
+        {
+            holder?.Dispose();
+            if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(Worlds, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+
+        Assert.False(report.Passed);
+        var failed = Assert.Single(report.Steps, step => !step.Passed);
+        Assert.Contains("added and not moved: worlds_local/Held.fwl (the move failed)", failed.Error);
+        Assert.Contains("characters_local/vtseedclean.fch (added/characters_local/vtseedclean.fch)", failed.Error);
+        string evidence = Path.Combine(output, "source-changes", ClientSaveFolders.Actor);
+        Assert.Equal("made at the menu", File.ReadAllText(Path.Combine(evidence, "added", "characters_local", "vtseedclean.fch")));
+        string json = File.ReadAllText(Path.Combine(evidence, "source-changes.json"));
+        Assert.Contains("characters_local/vtseedclean.fch", json);
+        Assert.Contains("worlds_local/Held.fwl", json);
+        Assert.True(File.Exists(held));
+        Assert.Equal(["smoketest.fch"], Directory.EnumerateFiles(local).Select(Path.GetFileName));
+    }
+
+    // #1: a runner killed while it holds a menu-only client leaves the character its game made in characters_local. The save check is
+    // journalled with its baseline before the launch, so env status lists it and env recover moves what the game added into the
+    // run's recovered evidence, leaving the user's own files as they were.
+    [ClientHostFact] public void AKilledMenuOnlyStartsSaveFoldersAreListedAndRecovered()
+    {
+        using var data = new FakeClientDataDirectory(_rig.Save);
+        string local = Path.Combine(_rig.Save, "characters_local"), log = Path.Combine(_rig.Save, "Player.log");
+        File.WriteAllText(log, "the last session"); // beside the checked folders: a recovery compares only the persisted scope
+        bool killed = false;
+        string runId;
+        {
+            var (_, scope) = InProcess();
+            using var machine = scope;
+            // The client is never proven stopped once the runner "dies": its teardown cannot settle the save folders.
+            (_, _, runId) = Start(() => new LocalFakeOwnedProcess(65), round => round.Step("the game makes a character, then the runner is killed", () =>
+            {
+                File.WriteAllText(Path.Combine(local, "vtseedclean.fch"), "made at the menu");
+                File.WriteAllText(log, "this session, longer than the last");
+                killed = true;
+            }), end: false, menuOnly: true,
+            processCheck: (runtimes, clientSession) => killed && runtimes == null && clientSession
+                ? Task.FromException(new IOException("the runner was killed")) : Task.CompletedTask);
+        }
+        Assert.True(File.Exists(Path.Combine(local, "vtseedclean.fch")));
+        Kill(runId);
+
+        var left = Status(runId);
+        Assert.Equal(JournalRunState.Recoverable, left.State);
+        var copy = Assert.Single(left.Items, item => item.Kind == "copy");
+        Assert.StartsWith("vt-prep-saves-", Path.GetFileName(Path.GetDirectoryName(copy.What)!));
+
+        var recovered = RunRecovery.RecoverAsync(Hosts(), _ => Here, runId, teardown: false, TimeSpan.FromSeconds(60)).GetAwaiter().GetResult();
+
+        Assert.DoesNotContain(recovered.Steps, step => step.Failed);
+        Assert.Contains(recovered.Steps, step => step.What == "source install of client-saves (" + _rig.Save + ")" &&
+            step.Outcome.Contains("characters_local/vtseedclean.fch", StringComparison.Ordinal));
+        Assert.Contains(recovered.Steps, step => step.What == "copy " + copy.What && step.Outcome.StartsWith("removed", StringComparison.Ordinal));
+        Assert.Equal(["smoketest.fch"], Directory.EnumerateFiles(local).Select(Path.GetFileName));
+        string kept = Assert.Single(Directory.EnumerateFiles(Path.Combine(_rig.Runtime, runId), "vtseedclean.fch", SearchOption.AllDirectories));
+        Assert.Equal("made at the menu", File.ReadAllText(kept));
+        // Only the recovered evidence stays, until env teardown; the save check's copy is settled and gone.
+        var after = Status(runId);
+        Assert.DoesNotContain(after.Items, item => item.What == copy.What);
+        Assert.All(after.Items, item => Assert.Contains("recovered-", item.What, StringComparison.Ordinal));
+    }
+
+    // #5, #7, #9: a menu-only run is recorded in its inputs (regression.json) and read back as one. What it cannot use is refused in
+    // one place, with one exception type, whichever way the inputs arrive: a character store, a seeded world, -savedir.
+    [Fact] public void AMenuOnlyRunIsRecordedInItsInputsAndRefusesWhatItCannotUse()
+    {
+        var inputs = _rig.Manifest();
+        inputs.MenuOnly = true;
+        string file = Path.Combine(_rig.Root, "menu-only-regression.json");
+        inputs.Write(file);
+        Assert.Contains("\"menuOnly\": true", File.ReadAllText(file));
+        var read = RegressionInputs.Read(file);
+        Assert.True(read.MenuOnly);
+        Assert.True(_rig.Regression(read).MenuOnly);
+        string plain = Path.Combine(_rig.Root, "plain-regression.json");
+        _rig.Manifest().Write(plain);
+        Assert.DoesNotContain("menuOnly", File.ReadAllText(plain));
+        Assert.False(RegressionInputs.Read(plain).MenuOnly);
+
+        void Refused(Action<RegressionInputs> change, string named)
+        {
+            var refused = _rig.Manifest();
+            refused.MenuOnly = true;
+            change(refused);
+            Assert.Contains(named, Assert.Throws<ArgumentException>(refused.Validate).Message);
+            Assert.Contains(named, Assert.Throws<ArgumentException>(() => _rig.Regression(refused)).Message);
+            string path = Path.Combine(_rig.Root, "refused-" + Guid.NewGuid().ToString("N") + ".json");
+            refused.Write(path);
+            Assert.Contains(named, Assert.Throws<ArgumentException>(() => RegressionInputs.Read(path)).Message);
+        }
+        Refused(refused => refused.Client.CharacterStore = Path.Combine(_rig.Root, "store"), "client.characterStore: a run held at the main menu stages no character");
+        Refused(refused => refused.Fixture = new RegressionFixture { Create = new SeededWorldRequest("MenuOnlyWorld", "menuonly1") }, "fixture.create: a run held at the main menu creates no world");
+        Refused(refused => refused.Client.LaunchArguments = ["-savedir", Path.Combine(_rig.Root, "elsewhere")], "client.launchArguments: remove -savedir");
+        Refused(refused => refused.Client.LaunchArguments = ["-SaveDir=" + Path.Combine(_rig.Root, "elsewhere")], "client.launchArguments: remove -SaveDir=");
     }
 
     // #791: a passing start leaves nothing in the client environment's runtime folder (its disposable profile retired, its hosted
@@ -1553,14 +1699,15 @@ internal sealed class RegressionRig : IDisposable
     };
 
     /// <summary>The regression of <paramref name="inputs"/> on the rig's client environment, with the rig's save folder.</summary>
-    public TargetedRegression Regression(RegressionInputs inputs, IEnumerable<string>? scenarioCapabilities = null, bool skipHostLock = true) =>
+    public TargetedRegression Regression(RegressionInputs inputs, IEnumerable<string>? scenarioCapabilities = null, bool skipHostLock = true,
+        Func<IReadOnlyCollection<string>?, bool, Task>? processCheck = null) =>
         new(inputs, scenarioCapabilities, Inventory())
         {
             SaveDirectory = Save, SteamUserData = SteamUserData,
             // This rig stages fake files without a desktop. Tests of the SSH refusal override this explicitly.
             DirectClientSession = () => (OperatingSystem.IsWindows(), 1),
             BundleInspection = (_, _) => new(MacBundleInspection.State.Accepted, 0, "synthetic test install"),
-            ProcessCheck = (_, _) => Task.CompletedTask,
+            ProcessCheck = processCheck ?? ((_, _) => Task.CompletedTask),
             SkipHostLockForTest = skipHostLock,
             // The rig's fake installs keep their fake loader; the pinned pack's rule has its own tests (ShippedLoaderTests).
             PinnedLoader = (_, _) => null,

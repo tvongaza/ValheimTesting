@@ -761,4 +761,40 @@ public sealed class ProfileSourceCheckTests : IDisposable
         Assert.Equal(2, Calls(sessions, "ListMetadataAsync")); // definition and ProfileSourceCheck
         Assert.Equal(2, Calls(sessions, "StagingVerificationPaths")); // definition and profile stage
     }
+
+    // #1009: a client's save folders are a scoped check of the one owner. Only the named top-level folders are compared and settled
+    // (a log beside them that the game rewrote is not the check's), a folder the game made there goes once empty, and the scope
+    // and the comparison mode are fixed at preparation and persisted, so a recovery settles the same folders the same way.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AScopedCheckSettlesOnlyItsFoldersInTheModeItWasPreparedIn(bool content)
+    {
+        Write("characters_local/mine.fch", "the user's character");
+        Write("Player.log", "the last session");
+        Directory.CreateDirectory(Parent);
+        ProfileSourceCheck.HashAfterRunOverride.Value = content;
+        var check = await ProfileSourceCheck.PrepareFoldersAsync(_host, _root, ["characters_local", "worlds_local"], TimeSpan.FromSeconds(30));
+        ProfileSourceCheck.HashAfterRunOverride.Value = !content; // changed after preparation: the check keeps its own mode
+        Assert.Equal(content, check.HashAfterRun);
+        Assert.Equal(["characters_local/mine.fch"], check.Source.Files.Keys);
+        await check.PersistAsync(_host, Runtime, "client-saves", entry => { _journal.Add(entry); return Task.CompletedTask; }, TimeSpan.FromSeconds(30));
+        Write("characters_local/made.fch", "made at the menu");
+        Write("worlds_local/deep/Made.fwl", "a world a command made");
+        Write("Player.log", "this session, longer than the last");
+
+        var verdict = await check.SettleAsync(_host, SourceSettlement.Run("client-saves", Path.GetFullPath(Runtime), Output),
+            entry => { _journal.Add(entry); return Task.CompletedTask; }, TimeSpan.FromSeconds(60));
+
+        Assert.Equal(SourceVerdictKind.Restored, verdict.Verdict);
+        Assert.Equal(content ? SourceVerdict.ContentMode : SourceVerdict.MetadataMode, verdict.Mode);
+        Assert.Equal(["characters_local/made.fch", "worlds_local/deep/Made.fwl"], verdict.Added.Select(file => file.Path));
+        Assert.Equal(["worlds_local/deep/", "worlds_local/"], verdict.RemovedDirectories);
+        Assert.Equal("a world a command made", File.ReadAllText(Path.Combine(Output, "source-changes", "client-saves", "added", "worlds_local", "deep", "Made.fwl")));
+        Assert.Equal(["mine.fch"], Directory.EnumerateFiles(Path.Combine(_root, "characters_local")).Select(Path.GetFileName));
+        Assert.False(Directory.Exists(Path.Combine(_root, "worlds_local")));
+        Assert.Equal("this session, longer than the last", File.ReadAllText(Path.Combine(_root, "Player.log")));
+        // The persisted baseline names the scope a recovery compares.
+        Assert.Contains(_journal, entry => entry.Kind == JournalEntry.SourceBaseline && entry.Fields["sourceActor"] == "client-saves");
+    }
 }

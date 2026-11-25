@@ -463,6 +463,17 @@ public sealed class OwnedCliCommandTests
             Assert.False(listener.Pending());
             Assert.Empty(Directory.GetFiles(evidence, "owned-cli-command-*.jsonl"));
             Assert.True(File.Exists(Path.Combine(evidence, OwnedClientCommandLease.MenuPins))); // The menu phase keeps its pins.
+
+            // Once the run finished, its lease is retired and the marker stays as evidence: the refusal is the missing lease, read first.
+            OwnedClientCommandLease.Retire(evidence);
+            Assert.True(OwnedClientCommandLease.MenuOnly(evidence));
+            using (var output = new StringWriter())
+            using (var error = new StringWriter())
+            {
+                Assert.Equal(3, OwnedCliCommand.Run(["--evidence", evidence, "--role", "client", "--phase", "world", "--command", "cli_manifest"], output, error));
+                Assert.Equal("REFUSED: " + OwnedCliCommand.MissingLease(OwnedClientCommandLease.ClientRole, evidence), error.ToString().TrimEnd());
+            }
+            Assert.False(listener.Pending());
         }
         finally
         {
