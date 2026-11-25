@@ -16,6 +16,9 @@ internal sealed partial record OwnedClientCommandLease(int Pid, string StartFile
     internal const string ServerFileName = "owned-cli-server.json";
     internal const string ServerMenuPins = "owned-cli-server-menu.pins";
     internal const string ServerWorldPins = "owned-cli-server-world.pins";
+    // Beside a client's lease when its run holds it at the main menu (start --menu-only, #1009): that client never enters a world,
+    // so a world-phase command is refused as such, not as a world not yet verified. It stays as evidence after the run.
+    internal const string MenuOnlyMarker = "owned-cli-menu-only";
     public string Role { get; init; } = ClientRole;
 
     internal static string LeaseFile(string role) => role == ServerRole ? ServerFileName : FileName;
@@ -117,6 +120,11 @@ internal sealed partial record OwnedClientCommandLease(int Pid, string StartFile
     }
 
     internal static void LeaveWorld(string output) => LeaveWorld(output, ClientRole);
+
+    internal static void MarkMenuOnly(string output) =>
+        File.WriteAllText(Path.Combine(output, MenuOnlyMarker), "This run holds its client at the main menu; it enters no world.\n");
+
+    internal static bool MenuOnly(string output) => File.Exists(Path.Combine(output, MenuOnlyMarker));
 
     private static void LeaveWorld(string output, string role) => File.Delete(Path.Combine(output, PhasePins(role, "world")));
 

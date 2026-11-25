@@ -988,17 +988,18 @@ public sealed class TargetedRegressionTests : IDisposable
     // One start run (a new run ID, as the command allocates): each arm in turn on one regression, each in its own evidence folder
     // with its own client process, as the command runs them; the last arm's report and folder, and the run ID.
     private (ScenarioReport Report, string Output, string RunId) Start(Func<LocalFakeOwnedProcess> process, Action<ClientRound>? measure = null,
-        bool end = true, string[]? arms = null, Action? beforeClientLaunch = null, RegressionInputs? inputs = null)
+        bool end = true, string[]? arms = null, Action? beforeClientLaunch = null, RegressionInputs? inputs = null, bool menuOnly = false)
     {
         string runId = RunJournal.NewRunId();
         using var run = RunJournal.UseRun(runId);
         var regression = _rig.Regression(inputs ?? _rig.Manifest());
+        regression.MenuOnly = menuOnly;
         ScenarioReport? report = null; string? output = null;
         foreach (string arm in arms ?? ["parent"])
         {
             output = Path.Combine(_rig.Root, "out-" + runId, "evidence", arm);
             var client = process();
-            report = regression.Run(arm, output, "smoke", ["first"], measure ?? (_ => { }), default, null,
+            report = regression.Run(arm, output, "smoke", [menuOnly ? "menu" : "first"], measure ?? (_ => { }), default, null,
                 (plan, directory, _, _) => ClientSession.Launch(plan, directory, () => { beforeClientLaunch?.Invoke(); return client; }, HostingClient, (_, _) => Task.CompletedTask), afterStaged: null);
             if (!report.Passed) break;
         }
@@ -1240,6 +1241,71 @@ public sealed class TargetedRegressionTests : IDisposable
         }
         Assert.Empty(Directory.Exists(_rig.Runtime) ? Directory.EnumerateFileSystemEntries(_rig.Runtime) : []);
         Assert.Contains("source-evidence", here.Scripts); // settled in process, never through a shell
+    }
+
+    // #1009: start --menu-only through start's own seam. The client is held at its menu: no character is staged, the fixture is never
+    // placed, and the character a command made there (with its backup) is moved from characters_local into the arm's evidence once the
+    // client stopped, leaving the user's own characters and worlds as they were.
+    [ClientHostFact] public void AMenuOnlyStartMovesTheCharacterItsGameMadeIntoTheEvidence()
+    {
+        var (_, scope) = InProcess();
+        using var machine = scope;
+        using var data = new FakeClientDataDirectory(_rig.Save);
+        Directory.CreateDirectory(Worlds);
+        File.WriteAllText(Path.Combine(Worlds, "Mine.fwl"), "the user's world");
+        string local = Path.Combine(_rig.Save, "characters_local");
+        var (report, output, _) = Start(() => new LocalFakeOwnedProcess(62), round => round.Step("the game makes a character at the menu", () =>
+        {
+            File.WriteAllText(Path.Combine(local, "vtseedclean.fch"), "made at the menu");
+            File.WriteAllText(Path.Combine(local, "vtseedclean.fch.old"), "its backup");
+        }), menuOnly: true);
+
+        Assert.True(report.Passed, string.Join("; ", report.Steps.Where(step => !step.Passed).Select(step => step.Name + ": " + step.Error)));
+        Assert.DoesNotContain(report.Steps, step => step.Name.Contains("character", StringComparison.Ordinal) && step.Name.Contains("stage", StringComparison.Ordinal));
+        Assert.Contains(report.Steps, step => step.Name == "move what the game added to the client's save folders into the evidence" && step.Passed);
+        Assert.Equal("characters_local/vtseedclean.fch, characters_local/vtseedclean.fch.old", report.Provenance["saveFoldersAdded"]);
+        Assert.Equal("made at the menu", File.ReadAllText(Path.Combine(output, SaveFolderChanges.AddedFolder, "characters_local", "vtseedclean.fch")));
+        Assert.Equal("its backup", File.ReadAllText(Path.Combine(output, SaveFolderChanges.AddedFolder, "characters_local", "vtseedclean.fch.old")));
+        Assert.Contains("smoketest.fch", File.ReadAllText(Path.Combine(output, SaveFolderChanges.BeforeFile)));
+        // The user's own files, as they were; the fixture was never placed beside them.
+        Assert.Equal(["smoketest.fch"], Directory.EnumerateFiles(local).Select(Path.GetFileName));
+        Assert.Equal("character", File.ReadAllText(Path.Combine(local, "smoketest.fch")));
+        Assert.Equal(["Mine.fwl"], Directory.EnumerateFileSystemEntries(Worlds).Select(Path.GetFileName));
+        Assert.True(OwnedClientCommandLease.MenuOnly(output));
+        Assert.Empty(Directory.Exists(_rig.Runtime) ? Directory.EnumerateFileSystemEntries(_rig.Runtime) : []);
+    }
+
+    // A menu-only run never moves a file that was there before: when one changed during the run, nothing is moved and the run fails,
+    // naming it. A character store is refused, since a menu-only run stages no character.
+    [ClientHostFact] public void AMenuOnlyStartMovesNothingWhenAnExistingSaveChanged()
+    {
+        var (_, scope) = InProcess();
+        using var machine = scope;
+        using var data = new FakeClientDataDirectory(_rig.Save);
+        Directory.CreateDirectory(Worlds);
+        string local = Path.Combine(_rig.Save, "characters_local");
+        var (report, output, _) = Start(() => new LocalFakeOwnedProcess(63), round => round.Step("the game rewrites a character and makes one", () =>
+        {
+            File.WriteAllText(Path.Combine(local, "smoketest.fch"), "rewritten by the game");
+            File.WriteAllText(Path.Combine(local, "vtseedclean.fch"), "made at the menu");
+        }), menuOnly: true);
+
+        Assert.False(report.Passed);
+        var failed = Assert.Single(report.Steps, step => !step.Passed);
+        Assert.Equal("move what the game added to the client's save folders into the evidence", failed.Name);
+        Assert.Contains("characters_local/smoketest.fch changed", failed.Error);
+        Assert.Contains("nothing was moved", failed.Error);
+        Assert.True(File.Exists(Path.Combine(local, "vtseedclean.fch")));
+        Assert.False(Directory.Exists(Path.Combine(output, SaveFolderChanges.AddedFolder)));
+
+        var withStore = _rig.Manifest();
+        withStore.Client.CharacterStore = Path.Combine(_rig.Root, "store");
+        var regression = _rig.Regression(withStore);
+        regression.MenuOnly = true;
+        var refused = regression.Run("parent", Path.Combine(_rig.Root, "with-store"), "smoke", ["menu"], _ => { }, default, null,
+            (_, _, _, _) => throw new InvalidOperationException("client must not launch"), afterStaged: null);
+        Assert.False(refused.Passed);
+        Assert.Contains("stages no character", string.Join("; ", refused.Steps.Where(step => !step.Passed).Select(step => step.Error)));
     }
 
     // #791: a passing start leaves nothing in the client environment's runtime folder (its disposable profile retired, its hosted

@@ -240,6 +240,12 @@ public sealed class TargetedRegression
     /// </summary>
     public StagedArm Stage(string arm) => WithFailureCleanup(() => StageCore(arm));
 
+    /// <summary>
+    /// Holds the client at its main menu instead of hosting the fixture (<c>start --menu-only</c>, #1009): no character is staged and
+    /// none is required, the fixture is admitted and preflighted as for any arm but never placed or hosted, and what the game adds
+    /// to the client's save folders during the run is moved into the arm's evidence (<see cref="SaveFolderChanges"/>).
+    /// </summary>
+    internal bool MenuOnly { get; set; }
     internal GameBuild? InitialHostingBuild { get; set; }
     internal WorldIdentity.Admission? InitialWorldAdmission { get; set; }
     internal IReadOnlyDictionary<string, string>? InitialConfigSha256 { get; set; }
@@ -362,8 +368,10 @@ public sealed class TargetedRegression
             if (unmet.Count != 0) throw new InvalidOperationException("The staged plugins' declared dependencies are not met: " + string.Join("; ", unmet.Select(problem => problem.Message)) + ".");
             string saveDirectory = SaveDirectory ?? HostedWorld.DefaultSaveDirectory(GameLaunch.DetectClient(gameRoot));
             string character = Path.Combine(saveDirectory, "characters_local", env.Client.Character + ".fch");
+            if (MenuOnly && env.Client.CharacterStore != null)
+                throw new InvalidOperationException("client.characterStore: a run held at the main menu stages no character; leave the store out.");
             if (env.Client.CharacterStore != null) DisposableCharacterStore.Open(env.Client.CharacterStore).Get(env.Client.Character);
-            else if (!File.Exists(character))
+            else if (!MenuOnly && !File.Exists(character))
                 throw new InvalidOperationException($"client.character: {env.Client.Character}.fch is not in {Path.GetDirectoryName(character)}. Stage the disposable local character (never a cloud one) before the run, or name the one that is staged.");
             var installPins = _activePins ?? throw new InvalidOperationException("The game and loader pins were not recorded after staging.");
             var plan = new ClientRunPlan
@@ -456,6 +464,7 @@ public sealed class TargetedRegression
         var report = new ScenarioReport(scenario);
         var logs = new List<RunLog>();
         RegisteredCharacterStage? characterStage = null;
+        SaveFolderChanges? saveFolders = null;
         LocalClientJournal? directClientJournal = null;
         HostedWorldOnHost.Site? creationSite = null;
         try
@@ -464,6 +473,10 @@ public sealed class TargetedRegression
             if (LoaderPackage is { } loaderPath)
                 report.Provenance["bepInExPackage"] = BepInExLoaderPackage.Read(loaderPath).Identity;
             if (_pinnedLoader != null) report.Provenance["clientLoaderShipped"] = _pinnedLoader.Reason;
+            if (MenuOnly && Inputs.Fixture.Create != null)
+                throw new ArgumentException("fixture.create: a run held at the main menu creates no world; leave out the seeded request.");
+            if (MenuOnly && Inputs.Client.CharacterStore != null)
+                throw new ArgumentException("client.characterStore: a run held at the main menu stages no character; leave the store out.");
             if (Inputs.Fixture.Create is { } request)
             {
                 Inputs.Validate();
@@ -493,12 +506,17 @@ public sealed class TargetedRegression
             if (_activeLeftOut != null) report.Provenance["profileLeftOut"] = _activeLeftOut;
             report.Provenance["disposableStageSeconds"] = _lastStageSeconds.ToString("F3", System.Globalization.CultureInfo.InvariantCulture);
             File.WriteAllText(Path.Combine(output, "run-manifest.json"), JsonSerializer.Serialize(staged.Manifest, ManifestJson));
-            new ClientRounds
+            if (MenuOnly)
+            {
+                // After staging, under this machine's lock and before the launch: what the client's save folders hold now is the user's.
+                string save = SaveDirectory ?? HostedWorld.DefaultSaveDirectory(GameLaunch.DetectClient(Game));
+                report.Step(StepPhase.Setup, "list the client's save folders before the launch", () => saveFolders = SaveFolderChanges.Capture(save, output));
+            }
+            var clientRounds = new ClientRounds
             {
                 Client = staged.Plan, Report = report, Output = output, Rounds = rounds, Cancellation = cancellation,
-            }.RunHosted(worlds => creationSite == null ? HostedWorldSite(output, worlds) :
-                Path.GetFullPath(creationSite.WorldsDirectory) == Path.GetFullPath(worlds) ? creationSite :
-                throw new InvalidOperationException($"The seeded name was reserved in {creationSite.WorldsDirectory}, but the client's checked worlds are {worlds}; nothing was created."), () =>
+            };
+            ClientSession OpenClient()
             {
                 staged.Verify();
                 ClientSession client;
@@ -517,13 +535,19 @@ public sealed class TargetedRegression
                 }
                 afterPinnedClientOpened?.Invoke(report);
                 return client;
-            }, round =>
+            }
+            void Measure(ClientRound round)
             {
                 // ValheimCLI's own commands were required when the client answered; a probe's are live once it registered them.
                 if (round.Index == 0 && LiveOnlyCapabilities.Count != 0)
                     round.Step(StepPhase.Setup, "the client offers the scenario's probe and mod commands", () => CliCapabilities.Require(round.Client, LiveOnlyCapabilities));
                 measure(round);
-            });
+            }
+            if (MenuOnly) clientRounds.RunAtMenu(OpenClient, Measure);
+            else clientRounds.RunHosted(worlds => creationSite == null ? HostedWorldSite(output, worlds) :
+                Path.GetFullPath(creationSite.WorldsDirectory) == Path.GetFullPath(worlds) ? creationSite :
+                throw new InvalidOperationException($"The seeded name was reserved in {creationSite.WorldsDirectory}, but the client's checked worlds are {worlds}; nothing was created."),
+                OpenClient, Measure);
         }
         catch (Exception error)
         {
@@ -551,6 +575,17 @@ public sealed class TargetedRegression
             if (characterStage != null)
                 try { report.Step(StepPhase.Cleanup, "remove only the staged test character", characterStage.Dispose); }
                 catch (Exception error) { if (report.Steps.All(step => step.Passed)) report.RecordFailure(StepPhase.Cleanup, "character cleanup failed", error); }
+            if (saveFolders != null)
+                try
+                {
+                    report.Step(StepPhase.Cleanup, "move what the game added to the client's save folders into the evidence", () =>
+                    {
+                        RequireStopped(null, clientSession: true); // No client may still write there.
+                        var moved = saveFolders.MoveAdded(output);
+                        report.Provenance["saveFoldersAdded"] = moved.Count == 0 ? "none" : string.Join(", ", moved);
+                    });
+                }
+                catch (Exception error) { if (report.Steps.All(step => step.Passed)) report.RecordFailure(StepPhase.Cleanup, "save-folder cleanup failed", error); }
             if (logs.Count != 0) report.ScanLogs(logs, Inputs.LogScan);
             // A failed preflight can already have retired its copy. Whoever removes a successful arm records that later.
             report.Provenance["disposableInstall"] = _prepared ? "kept after this arm" : "no owned runtime left after this arm";

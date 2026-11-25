@@ -878,6 +878,51 @@ public sealed class ClientRoundsTests : IDisposable
         Assert.Equal(0, _opens);
     }
 
+    // #1009: a client held at its main menu runs one round there. It is opened and pinned as any client is, the round checks it is at
+    // its menu with no world, the measurement runs, and the one teardown stops it: no world is placed, hosted, saved or left, and the
+    // menu-only marker beside its lease tells valheim-test cli to refuse a world-phase command.
+    [ClientHostFact] public void AMenuOnlyRoundHoldsTheClientAtItsMenuAndEntersNoWorld()
+    {
+        var game = new Game(Worlds); var report = new ScenarioReport("menu");
+        var plan = HostPlan();
+        bool measured = false;
+        new ClientRounds { Client = plan, Report = report, Output = Output, Rounds = ["menu"] }.RunAtMenu(Open(plan, game), round => round.Step("hold", () =>
+        {
+            Assert.True(File.Exists(Path.Combine(Output, OwnedClientCommandLease.MenuPins)));
+            Assert.True(OwnedClientCommandLease.MenuOnly(Output));
+            measured = true;
+        }));
+
+        Assert.True(report.Passed, string.Join("; ", Failed(report)));
+        Assert.True(measured);
+        Assert.Equal(["launch the owned client to its menu, plugins pinned", "menu: the client is at its main menu, no world loaded", "menu: hold", "stop only the owned client"],
+            report.Steps.Select(step => step.Name));
+        Assert.Equal(0, game.Transport.Count("cli_start_host_world"));
+        Assert.Equal(0, game.Transport.Count("cli_extension valheim.session/leave"));
+        Assert.Equal(0, game.Transport.Count("cli_extension valheim.session/save"));
+        Assert.Empty(OurWorldFiles()); // The plan's fixture is never placed.
+        Assert.Equal(["MyWorld.db", "MyWorld.fwl"], Directory.EnumerateFiles(Worlds).Select(Path.GetFileName).Order(StringComparer.Ordinal));
+        Assert.Equal("menu", report.Provenance["menuRoundsCompleted"]);
+        Assert.Equal(1, _process.Stops);
+        Assert.False(File.Exists(Path.Combine(Output, OwnedClientCommandLease.FileName))); // The stop retires the lease.
+
+        // A client already in a world is not at its menu: the round fails before the measurement, and the client is still stopped.
+        var hosting = new Game(Worlds) { Hosting = true, Readings = 5 };
+        var inWorld = new ScenarioReport("menu");
+        string other = Directory.CreateDirectory(Path.Combine(_root, "in-world")).FullName;
+        _process = new LocalFakeOwnedProcess(78);
+        Assert.Throws<InvalidOperationException>(() => new ClientRounds { Client = plan, Report = inWorld, Output = other, Rounds = ["menu"] }
+            .RunAtMenu(() => ClientSession.Launch(plan, other, () => _process, () => hosting.Transport, (_, _) => Task.CompletedTask),
+                _ => throw new InvalidOperationException("the measurement must not run")));
+        Assert.Equal(new[] { "menu: the client is at its main menu, no world loaded" }, Failed(inWorld));
+        Assert.Equal(1, _process.Stops);
+
+        // One round only, and nothing a joining or hosting client's rounds use.
+        Assert.Throws<ArgumentException>(() => new ClientRounds { Client = plan, Report = new("menu"), Output = Output, Rounds = ["menu", "again"] }.RunAtMenu(Open(plan, game), _ => { }));
+        Assert.Throws<ArgumentException>(() => new ClientRounds { Client = plan, Report = new("menu"), Output = Output, Rounds = ["menu"], WorldUid = WorldUid }.RunAtMenu(Open(plan, game), _ => { }));
+        Assert.Throws<ArgumentException>(() => new ClientRounds { Client = plan, Report = new("menu"), Output = Output, Rounds = ["menu"], Arrival = Point }.RunAtMenu(Open(plan, game), _ => { }));
+        Assert.Equal(1, _opens);
+    }
 }
 
 /// <summary>An owned server for rounds tests: waits on the scripted server's session capability (or as told) and restarts with the given function.</summary>
