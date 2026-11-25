@@ -4,7 +4,7 @@
 // members your mod needs in your own files. Behaviour mirrors the game where mod code depends on it.
 #nullable enable
 // ReSharper disable InconsistentNaming
-// Valheim gameplay types, written from how the game (1.0.16) behaves: Utils, HeightmapBuilder, DropTable and the
+// Valheim gameplay types, written from how the game (1.0.30; what 1.0.30 left unchanged was first written from 1.0.16) behaves: Utils, HeightmapBuilder, DropTable and the
 // Inventory it fills, Container, Pickable and SpawnArea. Random rolls use UnityEngine.Random (seed it with
 // Random.InitState). The world level is 0 and the resource rate 1, the game's defaults.
 using System;
@@ -32,6 +32,21 @@ public static partial class Utils
 {
     public enum IterativeSearchType { DepthFirst, BreadthFirst }
     public delegate void ChildHandler(GameObject go);
+
+    /// <summary>
+    /// An angle in half-degree steps, 0 to 719, as the game (1.0.30) packs a saved rotation: rounded to the nearest step
+    /// (Mathf.Round, halves to even), then wrapped into one turn. The game truncated instead before (seen in 1.0.16; the change lies between 1.0.16 and 1.0.30).
+    /// </summary>
+    public static uint QuantizeHalfDegrees(float degrees)
+    {
+        int steps = (int)UnityEngine.Mathf.Round(degrees * 2f) % 720;
+        if (steps < 0) steps += 720;
+        return (uint)steps;
+    }
+
+    /// <summary>As the game's (1.0.30): every axis rounds to the zero half-degree step.</summary>
+    public static bool CloseToZero(this UnityEngine.Vector3 v) =>
+        QuantizeHalfDegrees(v.x) == 0 && QuantizeHalfDegrees(v.y) == 0 && QuantizeHalfDegrees(v.z) == 0;
     private static readonly char[] s_nameEnds = { '(', ' ' };
 
     /// <summary>The name up to the first '(' or space: a copy's "wood_wall(Clone)" is "wood_wall".</summary>
@@ -165,7 +180,7 @@ public static partial class Utils
 /// spot when there is none), so asking again queues a new one. Heights come from the world generator: one biome's height
 /// where the zone's four corners share a biome, otherwise the four corner biomes' heights blended by smoothstepped
 /// position; a distant LOD takes each point's own biome and then evens out steps of more than 10 m (four passes, inside
-/// the zone only). This matches the game's 1.0.16 builder.
+/// the zone only). This matches the game's builder (1.0.16, unchanged in 1.0.30).
 /// </summary>
 public partial class HeightmapBuilder
 {

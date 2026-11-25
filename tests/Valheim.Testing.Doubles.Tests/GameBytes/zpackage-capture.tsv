@@ -1,5 +1,5 @@
 # Bytes written by the game's own ZPackage and ZRpc for each case in ZPackageCases.cs (tests/Valheim.Testing.Doubles.GameCapture).
-# game 1.0.17, runtime 4.0.30319.42000, Microsoft Windows NT 10.0.26200.0
+# game 1.0.30, runtime 4.0.30319.42000, Microsoft Windows NT 10.0.26300.0
 exact	int 1	01-00-00-00
 exact	int -1	FF-FF-FF-FF
 exact	int min	00-00-00-80
@@ -47,7 +47,7 @@ exact	NumItems 300	81-2C
 exact	SmallRotation 0 0 0	00-80
 exact	SmallRotation 0 90 0	B4-80
 exact	SmallRotation 10 20 30	C0-03-14-A0
-exact	SmallRotation 359.5 180 0.5	68-81
+exact	SmallRotation 359.5 180 0.5	15-00-CF-A2
 exact	routed numbers	01-00-00-00-EF-BE-AD-DE-FE-FF-FF-FF-FF-FF-FF-FF-00-00-C0-3F-00-00-00-00-00-00-F0-3F-01
 exact	routed values	03-68-C3-A9-0A-00-00-00-05-69-6E-6E-65-72-2A-00-00-00-02-00-00-00-01-61-01-62-00-00-80-3F-00-00-00-40-00-00-40-40-00-00-00-00-00-00-00-00-00-00-00-00-00-00-80-3F-02-00-00-00-00-00-00-00-03-00-00-00-07-00-00-00-01-78
 exact	routed empty list	00-00-00-00

@@ -463,12 +463,12 @@ public sealed partial class ZPackage
     /// <summary>The creator's session id (long), then the object's number (uint), as the game writes a ZDOID.</summary>
     public void Write(ZDOID id) { m_writer.Write(id.UserID); m_writer.Write(id.ID); }
     public void Write(UnityEngine.Vector3 v3) { m_writer.Write(v3.x); m_writer.Write(v3.y); m_writer.Write(v3.z); }
-    /// <summary>Euler angles in half-degree steps: two bytes for a yaw-only rotation, else four, as the game packs them.</summary>
+    /// <summary>Euler angles in half-degree steps (<see cref="Utils.QuantizeHalfDegrees"/>: rounded, 1.0.30): two bytes when
+    /// x and z round to zero (a yaw-only rotation), else four, as the game packs them.</summary>
     public void WriteSmallRotation(UnityEngine.Vector3 v3)
     {
-        v3 *= 2f;
-        uint x = (uint)v3.x, y = (uint)v3.y, z = (uint)v3.z;
-        if ((x <= 1 || x >= 719) && (z <= 1 || z >= 719)) { m_writer.Write(unchecked((short)(y | 0x8000))); return; }
+        uint x = Utils.QuantizeHalfDegrees(v3.x), y = Utils.QuantizeHalfDegrees(v3.y), z = Utils.QuantizeHalfDegrees(v3.z);
+        if (x == 0 && z == 0) { m_writer.Write(unchecked((short)(y | 0x8000))); return; }
         uint packed = x | y << 10 | z << 20;
         m_writer.Write((ushort)(packed >> 16)); m_writer.Write(unchecked((ushort)packed));
     }

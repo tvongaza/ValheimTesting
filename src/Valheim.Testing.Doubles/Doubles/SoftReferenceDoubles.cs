@@ -14,7 +14,7 @@ namespace SoftReferenceableAssets
     public enum LoadResult { Succeeded, Failed, Aborted }
 
     /// <summary>
-    /// A handle to an asset that is loaded on demand, as the game's struct: <see cref="Name"/> is the asset's file name,
+    /// A handle to an asset that is loaded on demand, as the game's struct: <see cref="name"/> is the asset's file name,
     /// <see cref="Asset"/> the loaded object, and <see cref="Load"/>/<see cref="Release"/> take and give back a reference.
     /// A test makes one with the <see cref="SoftReference{T}(string, T)"/> constructor, which the game does not have (it
     /// resolves an asset id through its bundle loader); give it the template when the code under test reads
@@ -33,7 +33,8 @@ namespace SoftReferenceableAssets
         public bool IsLoading => false;
         /// <summary>Loaded: a reference is held.</summary>
         public bool IsLoaded => References > 0;
-        public string? Name => m_entry?.Name;
+        /// <summary>The asset's file name without its extension (Valheim 1.0.30 renamed the game's <c>Name</c> to <c>name</c>).</summary>
+        public string? name => m_entry?.Name;
         /// <summary>References taken with <see cref="Load"/> or <see cref="HoldReference"/> and not released.</summary>
         [TestOnly] public int References => m_entry?.References ?? 0;
 
@@ -50,11 +51,23 @@ namespace SoftReferenceableAssets
         public void HoldReference() { if (m_entry != null) m_entry.References++; }
         public void Release() { if (m_entry is { References: > 0 }) m_entry.References--; }
 
-        public bool Equals(SoftReference<T> other) => ReferenceEquals(m_entry, other.m_entry);
-        public override bool Equals(object? obj) => obj is SoftReference<T> other && Equals(other);
-        public override int GetHashCode() => m_entry?.GetHashCode() ?? 0;
-        public static bool operator ==(SoftReference<T> left, SoftReference<T> right) => left.Equals(right);
-        public static bool operator !=(SoftReference<T> left, SoftReference<T> right) => !left.Equals(right);
+        /// <summary>
+        /// As the game's (1.0.30): two valid handles are equal when they name the same asset (the game compares asset ids; a
+        /// test handle's asset is its name), two invalid handles are equal, and a valid one never equals an invalid one.
+        /// </summary>
+        public bool Equals(SoftReference<T> other) =>
+            IsValid && other.IsValid ? string.Equals(m_entry!.Name, other.m_entry!.Name, System.StringComparison.Ordinal) : IsValid == other.IsValid;
+        /// <summary>As the game's: an invalid handle also equals null.</summary>
+        public override bool Equals(object? obj) => !IsValid && obj == null || obj is SoftReference<T> other && Equals(other);
+        public override int GetHashCode() => m_entry == null ? 0 : System.StringComparer.Ordinal.GetHashCode(m_entry.Name);
+        /// <summary>As the game's (1.0.30): two valid handles compare by asset, otherwise equal when neither is valid (a null
+        /// handle and the default handle are both "none").</summary>
+        public static bool operator ==(SoftReference<T>? lhs, SoftReference<T>? rhs)
+        {
+            bool left = lhs.HasValue && lhs.Value.IsValid, right = rhs.HasValue && rhs.Value.IsValid;
+            return left && right ? lhs!.Value.Equals(rhs!.Value) : left == right;
+        }
+        public static bool operator !=(SoftReference<T>? lhs, SoftReference<T>? rhs) => !(lhs == rhs);
         public override string ToString() => m_entry?.Name ?? "[null]";
 
         private sealed class Entry

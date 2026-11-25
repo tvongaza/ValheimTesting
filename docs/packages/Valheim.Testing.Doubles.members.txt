@@ -283,8 +283,11 @@ GlobalKeys	field	static activeBosses : GlobalKeys { get; }	game
 GlobalKeys	field	static defeated_bonemass : GlobalKeys { get; }	game
 GlobalKeys	field	static defeated_dragon : GlobalKeys { get; }	game
 GlobalKeys	field	static defeated_eikthyr : GlobalKeys { get; }	game
+GlobalKeys	field	static defeated_fader : GlobalKeys { get; }	game
+GlobalKeys	field	static defeated_frozenking : GlobalKeys { get; }	game
 GlobalKeys	field	static defeated_gdking : GlobalKeys { get; }	game
 GlobalKeys	field	static defeated_goblinking : GlobalKeys { get; }	game
+GlobalKeys	field	static defeated_queen : GlobalKeys { get; }	game
 GlobalKeys	field	static killed_surtling : GlobalKeys { get; }	game
 HarmonyLib.AccessTools	type	static class	game
 HarmonyLib.AccessTools	field	static all : BindingFlags { get; }	game
@@ -949,14 +952,14 @@ SoftReferenceableAssets.SoftReference<T>	method	HoldReference() : void	game
 SoftReferenceableAssets.SoftReference<T>	method	Load() : SoftReferenceableAssets.LoadResult	game
 SoftReferenceableAssets.SoftReference<T>	method	Release() : void	game
 SoftReferenceableAssets.SoftReference<T>	method	ToString() : string	game
-SoftReferenceableAssets.SoftReference<T>	method	static op_Equality(SoftReferenceableAssets.SoftReference<T>, SoftReferenceableAssets.SoftReference<T>) : bool	game
-SoftReferenceableAssets.SoftReference<T>	method	static op_Inequality(SoftReferenceableAssets.SoftReference<T>, SoftReferenceableAssets.SoftReference<T>) : bool	game
+SoftReferenceableAssets.SoftReference<T>	method	static op_Equality(SoftReferenceableAssets.SoftReference<T>?, SoftReferenceableAssets.SoftReference<T>?) : bool	game
+SoftReferenceableAssets.SoftReference<T>	method	static op_Inequality(SoftReferenceableAssets.SoftReference<T>?, SoftReferenceableAssets.SoftReference<T>?) : bool	game
 SoftReferenceableAssets.SoftReference<T>	property	Asset : T { get; }	game
 SoftReferenceableAssets.SoftReference<T>	property	IsLoaded : bool { get; }	game
 SoftReferenceableAssets.SoftReference<T>	property	IsLoading : bool { get; }	game
 SoftReferenceableAssets.SoftReference<T>	property	IsValid : bool { get; }	game
-SoftReferenceableAssets.SoftReference<T>	property	Name : string { get; }	game
 SoftReferenceableAssets.SoftReference<T>	property	References : int { get; }	test-only
+SoftReferenceableAssets.SoftReference<T>	property	name : string { get; }	game
 SpawnArea	type	class : UnityEngine.MonoBehaviour	game
 SpawnArea	ctor	.ctor()	game
 SpawnArea	field	m_farRadius : float	game
@@ -1086,6 +1089,7 @@ TerrainComp	field	m_hmap : Heightmap	game
 TerrainComp	field	m_initialized : bool	game
 TerrainComp	field	m_lastOpPoint : UnityEngine.Vector3	game
 TerrainComp	field	m_lastOpRadius : float	game
+TerrainComp	field	m_lastSnowTimerIncrement : double	game
 TerrainComp	field	m_levelDelta : float[]	game
 TerrainComp	field	m_modifiedHeight : bool[]	game
 TerrainComp	field	m_modifiedPaint : bool[]	game
@@ -1649,6 +1653,7 @@ Utils	method	static Clamp01(float) : float	game
 Utils	method	static Clamp1(float) : float	game
 Utils	method	static ClampToShort(Vector2i) : Vector2s	game
 Utils	method	static ClampToShort(int) : short	game
+Utils	method	static CloseToZero(UnityEngine.Vector3) : bool	game
 Utils	method	static Compress(byte[]) : byte[]	game
 Utils	method	static CustomEndsWith(string, string) : bool	game
 Utils	method	static CustomStartsWith(string, string) : bool	game
@@ -1672,6 +1677,7 @@ Utils	method	static Lerp(float, float, float) : float	game
 Utils	method	static LerpStep(float, float, float) : float	game
 Utils	method	static Mod(float, float) : float	game
 Utils	method	static Mod(int, int) : int	game
+Utils	method	static QuantizeHalfDegrees(float) : uint	game
 Utils	method	static Remap(float, float, float, float, float) : float	game
 Utils	method	static RoundToInt(float) : int	game
 Utils	method	static SmoothStep(float, float, float) : float	game

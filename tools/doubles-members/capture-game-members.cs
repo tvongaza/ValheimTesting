@@ -1,7 +1,8 @@
 // Records, for every line of docs/packages/Valheim.Testing.Doubles.members.txt, whether the game has that type or member,
-// into tests/Valheim.Testing.Doubles.Tests/GameBytes/game-members.txt (issue #305). It reads the pinned game, BepInEx and
-// Jotunn assemblies as metadata: nothing is loaded or run, and no game process starts. Run it after the index changes
-// (MemberIndexTests rewrites the index) or after a game, BepInEx or Jotunn update, then commit both files:
+// into tests/Valheim.Testing.Doubles.Tests/GameBytes/game-members.txt (issue #305), and the value of each member of each
+// doubled enum into GameBytes/game-enums.txt. It reads the pinned game, BepInEx and Jotunn assemblies as metadata: nothing
+// is loaded or run, and no game process starts. Run it after the index changes (MemberIndexTests rewrites the index) or
+// after a game, BepInEx or Jotunn update, then commit the three files:
 //
 //   dotnet run --no-cache tools/doubles-members/capture-game-members.cs -- <Valheim>/valheim_Data/Managed <BepInEx>/core <Jotunn.dll>
 //
@@ -117,6 +118,19 @@ foreach (string line in File.ReadAllLines(indexPath))
 }
 string capturePath = Path.Combine(root, "tests/Valheim.Testing.Doubles.Tests/GameBytes/game-members.txt");
 File.WriteAllText(capturePath, string.Join("\n", output) + "\n");
+
+// The game's value of every member of every enum the index doubles, so the doubles' numbers and order are checked too
+// (GameEnumValuesTests): a member added in the middle, as 1.0.30's defeated_queen, moves every value after it.
+var enumLines = new List<string> { "# The game's value of each member of each doubled enum, read from metadata by tools/doubles-members/capture-game-members.cs; GameEnumValuesTests reads it." };
+enumLines.AddRange(output.Where(l => l.StartsWith("# game ", StringComparison.Ordinal)));
+foreach (string typeName in File.ReadAllLines(indexPath).Where(l => !l.StartsWith('#') && l.Length > 0).Select(l => l.Split('\t'))
+             .Where(f => f[1] == "type").Select(f => f[0]).Distinct().OrderBy(n => n, StringComparer.Ordinal))
+{
+    if (!types.TryGetValue(typeName, out var enumType) || !enumType.IsEnum) continue;
+    foreach (var field in enumType.GetFields(BindingFlags.Public | BindingFlags.Static).Where(f => f.IsLiteral))
+        enumLines.Add(typeName + "\t" + field.Name + "\t" + Convert.ToInt64(field.GetRawConstantValue(), System.Globalization.CultureInfo.InvariantCulture));
+}
+File.WriteAllText(Path.Combine(root, "tests/Valheim.Testing.Doubles.Tests/GameBytes/game-enums.txt"), string.Join("\n", enumLines) + "\n");
 if (unreadable > 0) Console.Error.WriteLine($"warning: {unreadable} game members name a type in an assembly that is not in the inputs and were skipped");
 Console.WriteLine($"{counted} index lines: {output.Count(l => l.EndsWith("\tgame"))} game, {output.Count(l => l.Contains("\tdiffers"))} differ, {output.Count(l => l.EndsWith("\tabsent"))} absent -> {capturePath}");
 return 0;
