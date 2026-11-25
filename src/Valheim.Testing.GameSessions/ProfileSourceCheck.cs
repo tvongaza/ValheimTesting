@@ -30,6 +30,8 @@ internal sealed class ProfileSourceCheck
     private HostListing? _preparedGame, _preparedLoader;
     // A baseline read back from its journal keeps the comparison its run persisted.
     private bool? _contentMode;
+    // The top-level folders of the root that this check compares (a client's own save folders, #1009); null compares the whole root.
+    private IReadOnlyList<string>? _scope;
 
     private ProfileSourceCheck(HostListing source, IReadOnlyDictionary<string, string> beforeBoot,
         IReadOnlyDictionary<string, string> linkedRootFiles, bool linked, string id)
@@ -70,6 +72,57 @@ internal sealed class ProfileSourceCheck
             .ToDictionary(file => file.Key, file => file.Value, source.Names);
         return new ProfileSourceCheck(source, Expected(paths), Expected(native.Select(HostInstall.LiteralPathPattern)), layout == ProfileLayout.Linked,
             Guid.NewGuid().ToString("N")[..8]);
+    }
+
+    /// <summary>
+    /// The check of a client's own save folders (<c>start --menu-only</c>, #1009): only <paramref name="folders"/>, top-level folders of
+    /// <paramref name="root"/> (the client's data directory), are listed and compared, so the game's logs beside them and every other
+    /// folder there are never read or moved (Steam Cloud characters are not under the root at all). The game writes there in place,
+    /// so after the run every file it added to them is moved into the run's evidence and every folder it made there removed once
+    /// empty (<see cref="SettleAsync"/>), as from an install the game runs in; when a file that was there before changed or went
+    /// missing, the verdict fails and nothing is moved. Each folder is walked once: by name, size and modified time, its files also
+    /// hashed only for a content comparison (<see cref="HashAfterRun"/>, fixed here for this check). A link inside a checked folder is
+    /// refused, as in an install; one elsewhere in the root is never seen. Persisted as any baseline, so a recovery settles the same scope.
+    /// </summary>
+    internal static async Task<ProfileSourceCheck> PrepareFoldersAsync(IGameHost host, string root, IReadOnlyList<string> folders, TimeSpan timeout,
+        CancellationToken cancellation = default)
+    {
+        if (folders.Count == 0 || folders.Any(folder => folder.Length == 0 || folder.Contains('/') || folder.Contains('\\')))
+            throw new ArgumentException("Name the top-level folders the check compares.", nameof(folders));
+        bool content = HashAfterRunOverride.Value ?? Environment.GetEnvironmentVariable(HashAfterRunVariable) == "1";
+        var check = Prepare(await ListScopeAsync(host, root, folders, content, timeout, cancellation).ConfigureAwait(false), [], ProfileLayout.SourceExecutable);
+        check._scope = folders.ToArray();
+        check._contentMode = content;
+        return check;
+    }
+
+    // A scoped check's listing: each scoped folder listed on its own, once (names, sizes, modified times and folders, its files hashed
+    // only for a content comparison), as paths relative to the root. A folder that is not there lists nothing; when none is, the root
+    // itself must be (DirectoryNotFoundException otherwise, as for an install).
+    private static async Task<HostListing> ListScopeAsync(IGameHost host, string root, IReadOnlyList<string> scope, bool content, TimeSpan timeout,
+        CancellationToken cancellation)
+    {
+        var names = host.Shell.Kind == HostShellKind.PowerShell ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+        var files = new Dictionary<string, string>(names);
+        var states = new Dictionary<string, HostFileState>(names);
+        var directories = new HashSet<string>(names);
+        foreach (string folder in scope)
+        {
+            HostListing listing;
+            try { listing = await ListAsync(host, HostPath.Join(root, folder), content, timeout, cancellation).ConfigureAwait(false); }
+            catch (DirectoryNotFoundException) { continue; }
+            directories.Add(folder);
+            foreach (string directory in listing.Directories) directories.Add(folder + "/" + directory);
+            foreach (var (path, state) in listing.States)
+            {
+                states[folder + "/" + path] = state;
+                files[folder + "/" + path] = content ? listing.Files[path] : "";
+            }
+        }
+        // Only the root's own presence is asked here: a literal pattern for a folder that is not there lists and hashes nothing.
+        if (directories.Count == 0)
+            await HostInstall.ListAsync(host, root, timeout, scope.Select(HostInstall.LiteralPattern).ToArray(), cancellation).ConfigureAwait(false);
+        return new HostListing(host.Name, host.Shell.Kind, root, files, [], states, directories);
     }
 
     /// <summary>The preparation row's one complete source listing. No stage or launch caller chooses a full-source rule.</summary>
@@ -145,7 +198,7 @@ internal sealed class ProfileSourceCheck
 
     private sealed record PersistedFile(string Path, long Size, string Modified, string Sha256);
     private sealed record PersistedBaseline(string Host, string Root, string Mode, bool Linked, string Id, IReadOnlyList<PersistedFile> Files,
-        IReadOnlyList<string> Directories);
+        IReadOnlyList<string> Directories, IReadOnlyList<string>? Scope = null);
     private static readonly JsonSerializerOptions s_baselineJson = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
     /// <summary>
@@ -163,7 +216,7 @@ internal sealed class ProfileSourceCheck
         var baseline = new PersistedBaseline(Source.HostName, Source.Root, HashAfterRun ? SourceVerdict.ContentMode : SourceVerdict.MetadataMode, Linked, Id,
             Source.Files.OrderBy(file => file.Key, StringComparer.Ordinal)
                 .Select(file => new PersistedFile(file.Key, Source.States[file.Key].Size, Source.States[file.Key].Modified, file.Value)).ToList(),
-            Source.Directories.Order(StringComparer.Ordinal).ToList());
+            Source.Directories.Order(StringComparer.Ordinal).ToList(), _scope);
         byte[] bytes = JsonSerializer.SerializeToUtf8Bytes(baseline, s_baselineJson);
         await WriteAsync(host, path, bytes, timeout, cancellation).ConfigureAwait(false);
         await journal(JournalEntry.Of(JournalEntry.SourceBaseline, ("runtime", runtime), ("sourceRoot", Source.Root), ("baseline", path),
@@ -319,7 +372,7 @@ internal sealed class ProfileSourceCheck
             baseline.Files.ToDictionary(file => file.Path, file => new HostFileState(file.Size, file.Modified), names),
             baseline.Directories.ToHashSet(names));
         var check = new ProfileSourceCheck(listing, new Dictionary<string, string>(), new Dictionary<string, string>(), baseline.Linked, baseline.Id)
-        { _contentMode = baseline.Mode == SourceVerdict.ContentMode };
+        { _contentMode = baseline.Mode == SourceVerdict.ContentMode, _scope = baseline.Scope };
         return await check.SettleAsync(host, where, journal, timeout, cancellation).ConfigureAwait(false);
     }
 
@@ -495,7 +548,11 @@ internal sealed class ProfileSourceCheck
     // offline NAS or an unplugged volume, so it passes, kept for a later settlement, except under env teardown, which removes it.
     private async Task<HostListing> ListSourceAsync(IGameHost host, SourceSettlement where, bool content, TimeSpan timeout, CancellationToken cancellation)
     {
-        try { return await ListAsync(host, Source.Root, content, timeout, cancellation).ConfigureAwait(false); }
+        try
+        {
+            return _scope == null ? await ListAsync(host, Source.Root, content, timeout, cancellation).ConfigureAwait(false)
+                : await ListScopeAsync(host, Source.Root, _scope, content, timeout, cancellation).ConfigureAwait(false);
+        }
         catch (DirectoryNotFoundException)
         {
             if (where.Teardown) throw new SourceRefusedException($"the source install {Source.Root} on {host.Name} is gone; restore it (or verify its files in Steam) before the next run");

@@ -88,6 +88,11 @@ internal static class OwnedCliCommand
         using var process = Process.GetProcessById(lease.Pid);
         if (!IsExactProcess(process, lease))
             throw new InvalidOperationException($"The exact {role} this run started is no longer running; a reused PID is never contacted.");
+        // A live client held at its main menu (start --menu-only) never enters a world: said before its port is contacted. Its marker
+        // stays as evidence after the run, so it is read only once the lease shows the client still runs: a finished run's refusal
+        // is the missing lease.
+        if (expectStrict == null && phase == "world" && role == OwnedClientCommandLease.ClientRole && OwnedClientCommandLease.MenuOnly(evidence))
+            throw new InvalidOperationException(MenuOnlyWorld);
         RequirePortOwner(lease.Port, lease.Pid, role);
         string pins = expectStrict ?? Path.Combine(evidence, OwnedClientCommandLease.PhasePins(role, phase ?? throw new ArgumentNullException(nameof(phase))));
         if (expectStrict == null && !File.Exists(pins)) throw new FileNotFoundException(MissingPhasePins(role, phase!, pins), pins);
@@ -108,6 +113,9 @@ internal static class OwnedCliCommand
         $"No owned {role} command lease ({OwnedClientCommandLease.LeaseFile(role)}) in {evidence}. A run publishes one only for a {role} " +
         $"on this machine, once it passed its strict startup check, and retires it when the {role} stops: this {role} is still starting, " +
         "has stopped, runs on another machine, or this is not its evidence folder.";
+
+    internal const string MenuOnlyWorld = "This run holds its client at the main menu (start --menu-only) and never enters a world, so it has no world pins; " +
+        "use --phase menu. No command was sent.";
 
     // The refusal for a live lease without the phase's pins: world pins exist only while the game is in its verified world.
     private static string MissingPhasePins(string role, string phase, string pins) => phase == "world"

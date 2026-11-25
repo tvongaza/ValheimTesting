@@ -16,7 +16,7 @@ public sealed class DefaultSmokeCharacterTests : IDisposable
         byte[] original = File.ReadAllBytes(Path.Combine(store.Root, DefaultSmokeCharacter.Name + ".fch"));
         Assert.Equal("VTSeedClean", CharacterSaveReader.ReadIdentity(original).Name);
         Assert.True(CharacterSaveReader.IsFreshSmokeSeed(original));
-        Assert.Equal("16712a2a3166e9b93c3aa006ea8d3d85a2d56372f7363728808f30d18bc8d626",
+        Assert.Equal("48c7768ce00557b320e850cee1204684d565a9839196bb88ecd85cdf2630bbed",
             Convert.ToHexString(SHA256.HashData(original)).ToLowerInvariant());
         Assert.Equal(character.Sha256, store.Get(DefaultSmokeCharacter.Name).Sha256);
         Assert.DoesNotContain("MWL_KnownPorts", System.Text.Encoding.UTF8.GetString(original));

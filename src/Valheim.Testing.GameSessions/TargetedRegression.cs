@@ -44,7 +44,8 @@ public sealed class StagedArm
             $"{Manifest.Name}: arm {Arm}, mod {Manifest.ModPlugin} at {Manifest.ModCommit ?? "an unrecorded commit"}, sha256 {Manifest.ModSha256}{(Manifest.Repeatability ? " (repeatability run)" : "")}";
         foreach (var arm in Manifest.Arms) yield return $"  arm {arm.Arm,-12} commit {arm.Commit ?? "unrecorded",-12} artifact {arm.Artifact}  sha256 {arm.Sha256}  md5 {arm.Md5}";
         foreach (var file in Manifest.Allowlist) yield return $"  {file.Role,-12} {file.Path}  md5 {file.Md5}  {string.Join(", ", file.Plugins)}";
-        yield return Manifest.WorldUid == null ? $"  requested    {Manifest.World}, creation pending (no world UID yet)" :
+        yield return Manifest.MenuOnly ? "  world        none: held at the main menu" :
+            Manifest.WorldUid == null ? $"  requested    {Manifest.World}, creation pending (no world UID yet)" :
             $"  fixture      {Manifest.World} uid {Manifest.WorldUid} ({Manifest.FixtureFiles} files)";
         yield return $"  capabilities {string.Join(", ", Manifest.Capabilities)}{(Manifest.LiveOnlyCapabilities.Count == 0 ? "" : "; live only: " + string.Join(", ", Manifest.LiveOnlyCapabilities))}";
         yield return $"  cli manifest {Manifest.CliManifest}";
@@ -64,8 +65,12 @@ public sealed class StagedArm
         if (Manifest.ModCommit != null) provenance["modCommit"] = Manifest.ModCommit;
         if (Manifest.ModSha256 != null) provenance["modSha256"] = Manifest.ModSha256;
         provenance["allowlist"] = string.Join(", ", Manifest.Allowlist.Select(file => $"{file.Path}={file.Md5}"));
-        if (Manifest.WorldUid is { } uid) provenance["worldUid"] = uid;
-        else provenance["worldCreation"] = "pending";
+        // A run held at its menu enters no world (ClientRounds records that), so no fixture is named here.
+        if (!Manifest.MenuOnly)
+        {
+            if (Manifest.WorldUid is { } uid) provenance["worldUid"] = uid;
+            else provenance["worldCreation"] = "pending";
+        }
         Manifest.InstallPins.Record(provenance, "client");
     }
 }
@@ -240,6 +245,12 @@ public sealed class TargetedRegression
     /// </summary>
     public StagedArm Stage(string arm) => WithFailureCleanup(() => StageCore(arm));
 
+    /// <summary>
+    /// Holds the client at its main menu instead of hosting the fixture (<see cref="RegressionInputs.MenuOnly"/>, #1009): no character
+    /// is staged and none is required, the fixture is admitted and preflighted as for any arm but never placed, hosted or recorded,
+    /// and what the game adds to the client's save folders during the run is moved into the arm's evidence (<see cref="ClientSaveFolders"/>).
+    /// </summary>
+    internal bool MenuOnly => Inputs.MenuOnly;
     internal GameBuild? InitialHostingBuild { get; set; }
     internal WorldIdentity.Admission? InitialWorldAdmission { get; set; }
     internal IReadOnlyDictionary<string, string>? InitialConfigSha256 { get; set; }
@@ -363,7 +374,7 @@ public sealed class TargetedRegression
             string saveDirectory = SaveDirectory ?? HostedWorld.DefaultSaveDirectory(GameLaunch.DetectClient(gameRoot));
             string character = Path.Combine(saveDirectory, "characters_local", env.Client.Character + ".fch");
             if (env.Client.CharacterStore != null) DisposableCharacterStore.Open(env.Client.CharacterStore).Get(env.Client.Character);
-            else if (!File.Exists(character))
+            else if (!MenuOnly && !File.Exists(character))
                 throw new InvalidOperationException($"client.character: {env.Client.Character}.fch is not in {Path.GetDirectoryName(character)}. Stage the disposable local character (never a cloud one) before the run, or name the one that is staged.");
             var installPins = _activePins ?? throw new InvalidOperationException("The game and loader pins were not recorded after staging.");
             var plan = new ClientRunPlan
@@ -392,8 +403,11 @@ public sealed class TargetedRegression
 
             var tree = StagedTree(install);
             var manifest = new RunManifest(env.Name, arm, chosen == null ? null : string.Join(", ", armPlugins[arm].Plugins.Select(p => p.Guid)), chosen?.Commit, chosen?.Sha256.ToLowerInvariant(),
-                env.Mod.Repeatability, arms, allowlist, configs, installPins, identity?.Name ?? env.Fixture.Create!.Name, identity?.UidText, fixture.Count, Capabilities, LiveOnlyCapabilities, cliManifest)
-                { NoMod = env.NoMod, Create = env.Fixture.Create };
+                env.Mod.Repeatability, arms, allowlist, configs, installPins,
+                // A run held at its menu enters no world, so it records none (its admitted fixture is never placed).
+                MenuOnly ? "" : identity?.Name ?? env.Fixture.Create!.Name, MenuOnly ? null : identity?.UidText, MenuOnly ? 0 : fixture.Count,
+                Capabilities, LiveOnlyCapabilities, cliManifest)
+                { NoMod = env.NoMod, Create = env.Fixture.Create, MenuOnly = MenuOnly };
             return new StagedArm(arm, plan, manifest, tree, install);
         }
     }
@@ -456,6 +470,7 @@ public sealed class TargetedRegression
         var report = new ScenarioReport(scenario);
         var logs = new List<RunLog>();
         RegisteredCharacterStage? characterStage = null;
+        ClientSaveFolders? saveFolders = null;
         LocalClientJournal? directClientJournal = null;
         HostedWorldOnHost.Site? creationSite = null;
         try
@@ -470,17 +485,15 @@ public sealed class TargetedRegression
                 var pending = new HostWorldPlan { Create = request, SaveDirectory = SaveDirectory };
                 new ClientRunPlan { Mode = "owned", HostWorld = pending, Environment = Inputs.Client.Environment }.RequireCreationRoute();
                 var platform = GameLaunch.DetectClient(Game);
-                string save = SaveDirectory ?? HostedWorld.DefaultSaveDirectory(platform);
                 HostedWorld.RequireNativeSaveDirectory(platform, SaveDirectory, Inputs.Client.LaunchArguments, HostedWorld.DefaultSaveDirectory(platform));
                 RequireHostLock();
-                creationSite = HostedWorldSite(output, Path.Combine(save, "worlds_local"));
+                creationSite = HostedWorldSite(output, Path.Combine(ClientSaveDirectory(), "worlds_local"));
                 report.Step(StepPhase.Preflight, "reserve the fresh seeded name before staging character or profile", () => creationSite.ReserveCreation(pending, output, cancellation));
             }
             if (Inputs.Client.CharacterStore is { } store)
             {
-                string save = SaveDirectory ?? HostedWorld.DefaultSaveDirectory(GameLaunch.DetectClient(Game));
                 report.Step(StepPhase.Setup, "stage only the registered disposable character", () => characterStage = RegisteredCharacterStage.InstallRegistered(
-                    store, Inputs.Client.Character, Path.Combine(save, "characters_local"),
+                    store, Inputs.Client.Character, Path.Combine(ClientSaveDirectory(), "characters_local"),
                     SteamUserData ?? throw new DirectoryNotFoundException("No Steam userdata was detected on this machine; a registered character is checked against it for a same-named Steam Cloud character."),
                     Inputs.Client.Character, characterJournal ?? JournalCharacterEvent));
                 report.Provenance["characterSource"] = "registered disposable store";
@@ -493,12 +506,20 @@ public sealed class TargetedRegression
             if (_activeLeftOut != null) report.Provenance["profileLeftOut"] = _activeLeftOut;
             report.Provenance["disposableStageSeconds"] = _lastStageSeconds.ToString("F3", System.Globalization.CultureInfo.InvariantCulture);
             File.WriteAllText(Path.Combine(output, "run-manifest.json"), JsonSerializer.Serialize(staged.Manifest, ManifestJson));
-            new ClientRounds
+            if (MenuOnly)
+            {
+                // After staging, under this machine's lock and before the launch: what the client's save folders hold now is the user's.
+                // Journalled with its baseline, so a killed run's env status lists it and env recover settles the folders.
+                string actor = "regression-" + Inputs.Name + "-saves";
+                string parent = Path.Combine(Path.GetDirectoryName(Path.GetDirectoryName(Install)!)!, "vt-prep-saves-" + Inputs.Name + "-" + arm + "-" + _journal.RunId);
+                report.Step(StepPhase.Setup, "list the client's save folders before the launch", () => saveFolders = ClientSaveFolders.Capture(_host, ClientSaveDirectory(), parent,
+                    entry => _journal.AppendLocal(actor, entry), LocalClientCopy.StepTimeout));
+            }
+            var clientRounds = new ClientRounds
             {
                 Client = staged.Plan, Report = report, Output = output, Rounds = rounds, Cancellation = cancellation,
-            }.RunHosted(worlds => creationSite == null ? HostedWorldSite(output, worlds) :
-                Path.GetFullPath(creationSite.WorldsDirectory) == Path.GetFullPath(worlds) ? creationSite :
-                throw new InvalidOperationException($"The seeded name was reserved in {creationSite.WorldsDirectory}, but the client's checked worlds are {worlds}; nothing was created."), () =>
+            };
+            ClientSession OpenClient()
             {
                 staged.Verify();
                 ClientSession client;
@@ -517,13 +538,19 @@ public sealed class TargetedRegression
                 }
                 afterPinnedClientOpened?.Invoke(report);
                 return client;
-            }, round =>
+            }
+            void Measure(ClientRound round)
             {
                 // ValheimCLI's own commands were required when the client answered; a probe's are live once it registered them.
                 if (round.Index == 0 && LiveOnlyCapabilities.Count != 0)
                     round.Step(StepPhase.Setup, "the client offers the scenario's probe and mod commands", () => CliCapabilities.Require(round.Client, LiveOnlyCapabilities));
                 measure(round);
-            });
+            }
+            if (MenuOnly) clientRounds.RunAtMenu(OpenClient, Measure);
+            else clientRounds.RunHosted(worlds => creationSite == null ? HostedWorldSite(output, worlds) :
+                Path.GetFullPath(creationSite.WorldsDirectory) == Path.GetFullPath(worlds) ? creationSite :
+                throw new InvalidOperationException($"The seeded name was reserved in {creationSite.WorldsDirectory}, but the client's checked worlds are {worlds}; nothing was created."),
+                OpenClient, Measure);
         }
         catch (Exception error)
         {
@@ -536,21 +563,21 @@ public sealed class TargetedRegression
                 try { directClientJournal.Complete(); }
                 catch (Exception error) { report.RecordFailure(StepPhase.Cleanup, "owned client process was not proved stopped", error); }
             if (_activeSourceCheck != null)
-                try
-                {
-                    SourceVerdict verdict;
-                    try
-                    {
-                        RequireStopped([_activeGameRoot ?? Install], clientSession: false);
-                        verdict = SettleSource();
-                    }
-                    catch (Exception error) { verdict = SourceVerdict.Unknown(SourceActor, error.Message); }
-                    verdict.Record(report);
-                }
+                try { SettleWhenStopped(report, SourceActor, () => RequireStopped([_activeGameRoot ?? Install], clientSession: false), SettleSource); }
                 catch (Exception error) { Console.Error.WriteLine("Teardown: " + error.Message); }
             if (characterStage != null)
                 try { report.Step(StepPhase.Cleanup, "remove only the staged test character", characterStage.Dispose); }
                 catch (Exception error) { if (report.Steps.All(step => step.Passed)) report.RecordFailure(StepPhase.Cleanup, "character cleanup failed", error); }
+            if (saveFolders != null)
+                try
+                {
+                    // Settled only once no client may still write there. One not proven stopped, or a settlement that did not finish,
+                    // keeps the journalled folder and its baseline for env recover.
+                    var verdict = SettleWhenStopped(report, ClientSaveFolders.Actor, () => RequireStopped(null, clientSession: true), () => saveFolders.Settle(output));
+                    try { saveFolders.Retire(verdict); }
+                    catch (Exception error) { report.RecordFailure(StepPhase.Cleanup, "remove the save-folder check's run folder", error); }
+                }
+                catch (Exception error) { Console.Error.WriteLine("Teardown: " + error.Message); }
             if (logs.Count != 0) report.ScanLogs(logs, Inputs.LogScan);
             // A failed preflight can already have retired its copy. Whoever removes a successful arm records that later.
             report.Provenance["disposableInstall"] = _prepared ? "kept after this arm" : "no owned runtime left after this arm";
@@ -774,6 +801,37 @@ public sealed class TargetedRegression
         _activeLeftOut = null;
         if (integrity != null) throw integrity;
     }
+
+    /// <summary>
+    /// The one teardown of an arm's source check, the client's install or a menu-only run's save folders: once
+    /// <paramref name="requireStopped"/> proves nothing may still write there, <paramref name="settle"/> settles it, and the verdict is
+    /// recorded in <paramref name="report"/> (a failed or unknown one as its failed cleanup step). A stop not proven, or a settlement
+    /// that threw, is an unknown verdict that did not settle (<see cref="SourceVerdict.KeepsProfile"/>): its caller keeps what it
+    /// checks, journalled, for env recover. Returns the verdict, whatever it is, so the caller decides what to retire.
+    /// </summary>
+    internal static SourceVerdict SettleWhenStopped(ScenarioReport report, string actor, Action requireStopped, Func<SourceVerdict> settle)
+    {
+        SourceVerdict verdict;
+        bool stopped = false;
+        try
+        {
+            requireStopped();
+            stopped = true;
+            verdict = settle();
+        }
+        catch (Exception error)
+        {
+            verdict = (stopped ? SourceVerdict.NotCompared(actor, "the settlement did not finish: " + error.Message)
+                : SourceVerdict.Unknown(actor, error.Message)) with { Settled = false };
+        }
+        // Record fails the cleanup step for a failed or unknown verdict and rethrows; the step already names it.
+        try { verdict.Record(report); }
+        catch (Exception error) { Console.Error.WriteLine("Teardown: " + error.Message); }
+        return verdict;
+    }
+
+    // The client's save root (worlds_local, characters_local) as this arm's runner sees it.
+    private string ClientSaveDirectory() => SaveDirectory ?? HostedWorld.DefaultSaveDirectory(GameLaunch.DetectClient(Game));
 
     // The one name of a regression's verdict and evidence, in the arm's report and in a recovery.
     private const string SourceActor = "client";

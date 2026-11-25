@@ -37,6 +37,8 @@ var buildDependencies = parsedStart.List("--dependency");
 using var cancel = new CancellationTokenSource();
 Console.CancelKeyPress += (_, press) => { press.Cancel = true; cancel.Cancel(); };
 bool holdRequested = options!.ContainsKey("--hold");
+// #1009: the client stops at its main menu and is held there (the parser requires --hold and refuses every world option).
+bool menuOnly = parsedStart.Switches.Contains("--menu-only");
 string runId = RunJournal.NewRunId();
 using var runJournal = RunJournal.UseRun(runId);
 // A held run can be finished while it is still starting (#964): finish cancels it as Ctrl+C does.
@@ -96,15 +98,19 @@ try
     var fixtureInput = parsedStart.Create == null ? FixtureBake.Prepare(worldFixture, output, stage.WorldAdmission, stage.HostingBuild) : null;
     var world = fixtureInput?.Identity;
     string worldRoot = Path.Combine(output, "world-source", "worlds_local");
-    var character = DefaultSmokeCharacter.Prepare(Path.Combine(output, "character-source"));
+    // The packaged world stays the arm's admitted fixture, so regression.json is a complete start input; a menu-only run never
+    // places, hosts or records it (regression.json records menuOnly). It stages no character: a character made at the menu must not
+    // meet the packaged one's name.
+    var character = menuOnly ? null : DefaultSmokeCharacter.Prepare(Path.Combine(output, "character-source"));
     var inputs = new RegressionInputs
     {
         // A name per run: its shared hosted-runtime copy is never shared with another start.
         Name = "native-smoke-" + DateTime.UtcNow.ToString("yyyyMMdd-HHmmss-fff", System.Globalization.CultureInfo.InvariantCulture),
         Fixture = parsedStart.Create is { } create ? new RegressionFixture { Create = create } :
             new RegressionFixture { Root = worldRoot, WorldUid = world!.UidText },
-        Client = new RegressionClient { Character = DefaultSmokeCharacter.Name, CharacterStore = character.Root, Architecture = architecture },
+        Client = new RegressionClient { Character = DefaultSmokeCharacter.Name, CharacterStore = character?.Root, Architecture = architecture },
         NoMod = stage.NoMod,
+        MenuOnly = menuOnly,
         Mod = mod == null ? new RegressionMod() : new RegressionMod { InstallAs = Path.GetFileName(mod), Arms = new Dictionary<string, RegressionArm>
             { [comparison == null ? "smoke" : "before"] = new() { File = mod, Sha256 = FileHash.Sha256(mod),
                 // Only a real source commit; the artifact's own SHA-256 is already the arm's Sha256.
@@ -140,8 +146,10 @@ try
         stage.RunInputs.Verify();
         string armOutput = Path.Combine(output, "evidence", arm);
         LocalClientJournal? processJournal = null;
-        var report = runner.Run(arm, armOutput, custom?.Name ?? (inputs.NoMod ? "CLI-only control hosts the fixture; no mod under test" : "selected plugin loads in a hosted fixture"),
-            ["first"], round =>
+        string scenario = custom?.Name ?? (menuOnly
+            ? (inputs.NoMod ? "CLI-only control held at the main menu; no mod under test, no world" : "selected plugin loads and the client is held at the main menu; no world")
+            : inputs.NoMod ? "CLI-only control hosts the fixture; no mod under test" : "selected plugin loads in a hosted fixture");
+        var report = runner.Run(arm, armOutput, scenario, [menuOnly ? "menu" : "first"], round =>
             {
                 hostedScenario?.Run(round, custom!.ValidatedInputs);
                 if (holdRequested && arm == finalArm)
@@ -177,6 +185,12 @@ try
                 report.RecordFailure(StepPhase.Cleanup, "owned client process was not proved stopped", failure);
             }
         Console.WriteLine(NativeSmokeLogSummary.Format(report.Logs, inputs.ArmNames.Count > 1 ? arm : null));
+        if (report.Provenance.TryGetValue("sourceIntegrity." + ClientSaveFolders.Actor, out string? saves))
+        {
+            // The evidence folder exists only when the game added something there or the check found a change.
+            string savesEvidence = Path.Combine(armOutput, "source-changes", ClientSaveFolders.Actor);
+            Console.WriteLine($"The client's save folders: {saves}" + (Directory.Exists(savesEvidence) ? $" (evidence in {savesEvidence})" : ""));
+        }
         // Final-arm evidence is written once after the copy-cleanup verdict in finally.
         report.Provenance["runId"] = runId;
         lastArm = report; lastArmOutput = armOutput;
@@ -186,7 +200,7 @@ try
         if (!report.Passed) break;
     }
     exitCode = passed ? 0 : 1;
-    outcome = $": hosted fixture, {(inputs.NoMod ? "no mod under test" : selectedMods.Count + " selected mod(s)")}, {inputs.ArmNames.Count} arm(s); private evidence in {output}";
+    outcome = $": {(menuOnly ? "held at the main menu, no world entered" : "hosted fixture")}, {(inputs.NoMod ? "no mod under test" : selectedMods.Count + " selected mod(s)")}, {inputs.ArmNames.Count} arm(s); private evidence in {output}";
 }
 catch (Exception failure) when (failure is ArgumentException or IOException or InvalidDataException or InvalidOperationException or UnauthorizedAccessException or FormatException or OperationCanceledException or PlatformNotSupportedException)
 {

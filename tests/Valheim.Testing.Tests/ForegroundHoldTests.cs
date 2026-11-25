@@ -71,6 +71,39 @@ public sealed class ForegroundHoldTests : IDisposable
         Assert.Empty(Directory.GetFiles(markers));
     }
 
+    // #1009: a script took the word after "HELD run" with the semicolon that followed it, finish refused "Invalid run ID", and the
+    // client stayed held. The HELD and STARTING lines now end with the run ID, nothing after it, and finish says what is wrong.
+    [Fact]
+    public void TheHeldAndStartingLinesEndWithTheRunIdAlone()
+    {
+        string run = RunJournal.NewRunId(), evidence = Path.Combine(_root, "evidence");
+        Directory.CreateDirectory(evidence);
+        var lines = ForegroundHold.HeldLines(run, client: true, evidence, hasServer: false, serverEvidence: null).ToList();
+        Assert.Equal("HELD run " + run, lines[0]);
+        Assert.Equal(run, lines[0].Split(' ', StringSplitOptions.RemoveEmptyEntries)[^1]);
+        Assert.Single(lines, line => line.Contains("HELD", StringComparison.Ordinal));
+        Assert.Contains("finish --run " + run, lines[1]);
+
+        string[] starting = ForegroundHold.Starting(run).Split(Environment.NewLine);
+        Assert.Equal("STARTING held run " + run, starting[0]);
+        Assert.Contains("finish --run " + run, starting[1]);
+    }
+
+    [Theory]
+    [InlineData("run-20261125-abc;", "';'")]
+    [InlineData("run-20261125-abc\r", "U+000D")]
+    [InlineData("-", "only dots or dashes")]
+    public void FinishSaysWhatIsWrongWithARunId(string run, string named)
+    {
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+        Assert.Equal(3, ForegroundHold.FinishCommand(["--run", run], output, error, Path.Combine(_root, "holds")));
+        Assert.Contains($"REFUSED: Invalid run ID '{run}': ", error.ToString());
+        Assert.Contains(named, error.ToString());
+        Assert.Contains("the last word of that line", error.ToString());
+        Assert.Empty(output.ToString());
+    }
+
     // ---- finish while a held run is still starting (#964) ----
 
     [Fact]

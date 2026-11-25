@@ -19,15 +19,40 @@ internal sealed class ForegroundHold : IDisposable
     private ForegroundHold(string marker, string request, Marker identity)
     { _marker = marker; _request = request; _identity = identity; }
 
-    /// <summary>The line a held run prints as it starts: its id, and that finish already stops it (#964).</summary>
-    internal static string Starting(string run) =>
-        "STARTING held run " + run + "; until it holds, " + FinishUsage.Replace("ID", run, StringComparison.Ordinal) + " stops it and cleans up.";
+    /// <summary>
+    /// The lines a held run prints as it starts: <c>STARTING held run &lt;ID&gt;</c> with nothing after the ID, so a script can take
+    /// the line's last word as it is (#1009), then that finish already stops it (#964).
+    /// </summary>
+    internal static string Starting(string run) => "STARTING held run " + run + Environment.NewLine +
+        "Until it holds, " + FinishUsage.Replace("ID", run, StringComparison.Ordinal) + " stops it and cleans up.";
+
+    /// <summary>
+    /// The line a run prints once it holds: <c>HELD run &lt;ID&gt;</c> with nothing after the ID, so a script can take the line's
+    /// last word as it is (#1009: a script that took <c>run-…;</c> with its semicolon was refused by finish and left a client held).
+    /// </summary>
+    internal static string Held(string run) => "HELD run " + run;
+
+    /// <summary>
+    /// The one check of a run ID that finish, the hold and save-world read: refused with what is wrong with it, so a script that
+    /// took a character too many sees which.
+    /// </summary>
+    internal static void RequireRunId(string run)
+    {
+        if (RunJournal.SafeName(run) && run != "-") return;
+        var wrong = run.Where(c => !(char.IsAsciiLetterOrDigit(c) || c is '.' or '_' or '-')).Distinct().ToList();
+        string what = run.Length == 0 ? "it is empty"
+            : wrong.Count != 0 ? "it holds " + string.Join(", ", wrong.Select(c => char.IsControl(c) || char.IsWhiteSpace(c) ? $"U+{(int)c:X4}" : $"'{c}'"))
+            : run.Length > 128 ? $"it is {run.Length} characters long, over 128"
+            : "it is only dots or dashes";
+        throw new ArgumentException($"Invalid run ID '{run}': {what}. A run ID is up to 128 letters, digits, '.', '_' and '-', " +
+            "exactly as HELD run or STARTING held run printed it (the last word of that line).", nameof(run));
+    }
 
     internal static string DirectoryForThisMachine => Path.Combine(CliBundle.DataRoot, "runs", "holds");
 
     internal static ForegroundHold Open(string run, string evidence, string? directory = null, string? serverEvidence = null)
     {
-        if (!RunJournal.SafeName(run) || run == "-") throw new ArgumentException("Invalid run ID.", nameof(run));
+        RequireRunId(run);
         evidence = Path.GetFullPath(evidence);
         if (!Directory.Exists(evidence)) throw new DirectoryNotFoundException("Hold evidence does not exist: " + evidence);
         if (serverEvidence != null)
@@ -66,10 +91,7 @@ internal sealed class ForegroundHold : IDisposable
             : null;
         using var hold = Open(run, evidence, serverEvidence: serverEvidence);
         hold._commands = commands;
-        Console.WriteLine("HELD run " + run + "; finish from another shell with: " + FinishUsageForRun(run));
-        if (ClientCommandHint(client, evidence) is { } clientHint) Console.WriteLine(clientHint);
-        if (ServerCommandHint(processes.Any(process => process.Name == "server"), evidence, serverEvidence) is { } serverHint)
-            Console.WriteLine(serverHint);
+        foreach (string line in HeldLines(run, client, evidence, processes.Any(process => process.Name == "server"), serverEvidence)) Console.WriteLine(line);
         Console.Out.Flush();
         try
         {
@@ -79,10 +101,21 @@ internal sealed class ForegroundHold : IDisposable
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested && checkpoints == null) { }
     }
 
+    /// <summary>What a run prints once it holds: <see cref="Held"/> first, the run ID alone at the end of its line (#1009), then the finish and command hints.</summary>
+    internal static IEnumerable<string> HeldLines(string run, bool client, string evidence, bool hasServer, string? serverEvidence)
+    {
+        yield return Held(run);
+        yield return "Finish from another shell with: " + FinishUsageForRun(run);
+        if (ClientCommandHint(client, evidence) is { } clientHint) yield return clientHint;
+        if (ServerCommandHint(hasServer, evidence, serverEvidence) is { } serverHint) yield return serverHint;
+    }
+
     // Printed only where the held client's session published its lease: a client on another machine has none, so no command reaches it.
+    // A client held at its main menu (start --menu-only) has only menu pins.
     internal static string? ClientCommandHint(bool hasClient, string evidence) =>
         hasClient && File.Exists(Path.Combine(evidence, OwnedClientCommandLease.FileName))
-            ? "Pinned client commands: valheim-test cli --evidence " + evidence + " --role client --phase world --command cli_screenshot"
+            ? "Pinned client commands: valheim-test cli --evidence " + evidence + " --role client --phase " +
+                (OwnedClientCommandLease.MenuOnly(evidence) ? "menu" : "world") + " --command cli_screenshot"
             : null;
 
     internal static string? ServerCommandHint(bool hasServer, string evidence, string? serverEvidence)
@@ -178,7 +211,7 @@ internal sealed class ForegroundHold : IDisposable
     internal static bool Request(string run, string? directory = null)
     {
         directory ??= DirectoryForThisMachine;
-        if (!RunJournal.SafeName(run) || run == "-") throw new ArgumentException("Invalid run ID.", nameof(run));
+        RequireRunId(run);
         // A run that has not reached its hold yet publishes only its boot marker (#964).
         bool booting = !File.Exists(Path.Combine(directory, run + ".json")) && BootWatch.Live(run, directory);
         if (!booting && !File.Exists(Path.Combine(directory, run + ".json")) && File.Exists(Path.Combine(directory, run + ".booting")))
@@ -228,7 +261,7 @@ internal sealed class ForegroundHold : IDisposable
         /// <summary>Publishes run <paramref name="run"/>'s boot marker and watches for its finish; dispose when the run ends.</summary>
         internal static BootWatch Start(string run, CancellationTokenSource cancel, string? directory = null)
         {
-            if (!RunJournal.SafeName(run) || run == "-") throw new ArgumentException("Invalid run ID.", nameof(run));
+            RequireRunId(run);
             directory ??= DetachedSession.ConfiguredControlDirectory ?? DirectoryForThisMachine;
             Directory.CreateDirectory(directory);
             using var process = Process.GetCurrentProcess();
@@ -325,7 +358,7 @@ internal sealed class ForegroundHold : IDisposable
     // The hold marker of a run whose exact runner is still alive.
     private static Marker LiveMarker(string run, string directory)
     {
-        if (!RunJournal.SafeName(run) || run == "-") throw new ArgumentException("Invalid run ID.", nameof(run));
+        RequireRunId(run);
         string marker = Path.Combine(directory, run + ".json");
         if (!File.Exists(marker))
             throw new FileNotFoundException("Run " + run + " is not held on this machine (no hold marker " + marker + "); valheim-test env status lists the runs here.", marker);
@@ -352,7 +385,7 @@ internal sealed class ForegroundHold : IDisposable
     // naming that run, and never remove a marker whose exact owner is still alive.
     internal static void RetireRecovered(string run, string? directory = null)
     {
-        if (!RunJournal.SafeName(run) || run == "-") throw new ArgumentException("Invalid run ID.", nameof(run));
+        RequireRunId(run);
         directory ??= DirectoryForThisMachine;
         string marker = Path.Combine(directory, run + ".json");
         if (!Directory.Exists(directory)) return;

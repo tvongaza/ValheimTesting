@@ -40,6 +40,7 @@ internal static class SmokeCommandOptions
         ["--search-root"] = new(Kind.Repeat, Build: true), ["--optional-reference"] = new(Kind.Repeat),
         ["--expected-log-error"] = new(Kind.Single), ["--expected-log-reason"] = new(Kind.Single),
         ["--join-seconds"] = new(Kind.Single), ["--hold"] = new(Kind.Switch, ServerLoadAb: false),
+        ["--menu-only"] = new(Kind.Switch, ServerLoad: false, ServerLoadAb: false),
         ["--game"] = new(Kind.Single, ServerLoad: false, ServerLoadAb: false, Build: true),
         ["--source"] = new(Kind.Single, ServerLoad: false, ServerLoadAb: false),
         ["--compare-mod"] = new(Kind.Single, ServerLoad: false, ServerLoadAb: false),
@@ -63,6 +64,10 @@ internal static class SmokeCommandOptions
         ["--remove-mod"] = new(Kind.Single, Start: false, ServerLoad: false),
         ["--role"] = new(Kind.Single, Start: false, ServerLoad: false, ServerLoadAb: false, Build: true),
     };
+
+    // What start --menu-only refuses: every option that chooses, enters or compares a world, or runs a scenario in one (#1009).
+    internal static readonly IReadOnlyList<string> MenuOnlyConflicts =
+        ["--world-fixture", "--world-seed", "--world-name", "--join-seconds", "--scenario", "--scenario-project", "--compare-mod", "--compare-source"];
 
     internal static readonly IReadOnlySet<string> ClientRoleOptions = Table
         .Where(option => option.Value.ClientRole).Select(option => option.Key).ToHashSet(StringComparer.Ordinal);
@@ -110,6 +115,13 @@ internal static class SmokeCommandOptions
             }
             else if (!result.Options.TryAdd(key, value))
             { error = "Repeated option: " + key; return false; }
+        }
+        if (result.Switches.Contains("--menu-only"))
+        {
+            if (!result.Switches.Contains("--hold"))
+            { error = "--menu-only needs --hold: the run stops at the main menu and holds the client there for cli --phase menu commands until finish."; return false; }
+            if (MenuOnlyConflicts.FirstOrDefault(key => result.Options.ContainsKey(key) || result.List(key).Count != 0) is { } conflict)
+            { error = $"--menu-only holds the client at its main menu and enters no world: leave out {conflict}."; return false; }
         }
         if (result.Options.TryGetValue("--world-seed", out string? seed))
         {

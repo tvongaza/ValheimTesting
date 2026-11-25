@@ -64,7 +64,7 @@ internal static class WorldSave
     /// </summary>
     internal static Placement FindPlacement(string journal, string run)
     {
-        if (!RunJournal.SafeName(run) || run == "-") throw new ArgumentException("Invalid run ID.", nameof(run));
+        ForegroundHold.RequireRunId(run);
         string directory = Path.Combine(Path.GetFullPath(journal), run);
         if (!Directory.Exists(directory))
             throw new InvalidOperationException($"This machine's journal has no run {run} ({directory}); save-world saves a run held on this machine.");

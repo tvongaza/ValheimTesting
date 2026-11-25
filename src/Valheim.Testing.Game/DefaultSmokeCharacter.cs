@@ -3,7 +3,7 @@ using System.Text.Json;
 namespace Valheim.Testing.Game;
 
 /// <summary>
-/// A clean, game-created Valheim 1.0.16 local character for an owned smoke run. It has completed its first spawn,
+/// A clean, game-created Valheim 1.0.30 local character (player version 47) for an owned smoke run. It has completed its first spawn,
 /// has visited no worlds and contains no data copied from another character. Every run stages a copy from a
 /// <see cref="DisposableCharacterStore"/>; the packaged save is never played or rewritten.
 /// </summary>
@@ -15,7 +15,7 @@ public static class DefaultSmokeCharacter
 {
     public const string Name = "vtseedclean";
     private const string Resource = "Valheim.Testing.Game.SmokeCharacter.vtseedclean.fch";
-    private const string Sha256 = "16712a2a3166e9b93c3aa006ea8d3d85a2d56372f7363728808f30d18bc8d626";
+    private const string Sha256 = "48c7768ce00557b320e850cee1204684d565a9839196bb88ecd85cdf2630bbed";
     private const string Marker = "default-smoke-character.txt";
     private const string MarkerText = "Valheim.Testing.Game default smoke character v1\n" + Sha256 + "\n";
 

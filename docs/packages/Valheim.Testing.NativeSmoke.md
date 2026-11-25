@@ -167,8 +167,21 @@ Its inputs record `noMod: true`, an empty `mod` and one execution arm `control`.
 | `--world-fixture DIR` | Hosts this world instead of the packaged one: a folder [`save-world`](#save-world) or a [bake](../reference/fixture-authoring.md) wrote, or any one complete Valheim 1.0 world, directly or under `worlds_local/`. It is checked before anything is built or staged, and against its `fixture-manifest.json` when it has one |
 | `--source COMMIT` | Records the mod build's source commit |
 | `--compare-mod DLL --compare-source COMMIT` | Runs a second build of the first mod against the same world, as arms `before` and `after` |
+| `--menu-only` | With `--hold`: stops at the main menu and holds the client there, entering no world ([make a character at the menu](#make-a-character-at-the-menu)) |
 
 Both compared builds must declare the same plugin identities. The client needs its desktop session and a running Steam client. Through SSH on Windows, `start` launches the client in the signed-in desktop through a scheduled task; on macOS, run it from the unlocked console.
+
+### Make a character at the menu
+
+```sh
+valheim-test start --no-mod --menu-only --hold
+valheim-test cli --evidence RUN/evidence/control --phase menu --command "cli_create_character VTSeedClean --local --skip-intro"
+valheim-test finish --run ID
+```
+
+`--menu-only` stages the disposable profile as every `start` does, launches the client and holds it once ValheimCLI answers at the main menu with its plugins pinned. No world is placed in `worlds_local` or entered, and no character is staged, so a character made at the menu never meets the packaged one's name. The packaged world is still admitted as the run's fixture, so `regression.json` (which records `menuOnly`) stays a complete `start` input, but it is never hosted, and the run records no world. The run publishes only menu pins: `cli --phase menu` reaches the client, and `cli --phase world` is refused, naming the menu-only run. A menu command that starts or joins a world fails the run once the hold ends, and the run records the world it entered. Its evidence folder is `RUN/evidence/control` with `--no-mod`, `RUN/evidence/smoke` with a mod. It needs `--hold` and refuses `--world-fixture`, `--world-seed`, `--world-name`, `--join-seconds`, `--scenario`, `--scenario-project`, `--compare-mod` and `--compare-source`.
+
+Before the launch the run records the client's `characters_local` and `worlds_local` (names, sizes and modified times) as a journalled baseline beside a run-owned folder in the client environment's runtime folder, so `env status` lists it while the run is going. After `finish` has stopped the client, every file the game added there, such as the new character and its backups, is moved into `source-changes/client-saves/added/characters_local/` or `.../worlds_local/` in the evidence folder, a folder the game made there is removed once empty, and the run prints and records them (`sourceIntegrity.client-saves` in `result.json`, with `source-changes.json` beside the files). Your own character and world lists end as they began. A file that was there before is never moved: if one changed or went missing, nothing is moved and the run fails, naming it; a file that cannot be moved is named with the reason, and the files moved before it are named where they are. Only those two folders are listed and compared: the game's logs beside them are left, and Steam Cloud character folders are never read or touched; make the character with `--local`. The run refuses a client launch argument `-savedir`, since it checks the game's default save folder. If the runner is killed before its teardown, `env recover` moves what the game added into the run's recovered evidence in the same way.
 
 ## server-load
 
@@ -292,7 +305,7 @@ valheim-test server-load --mod /path/to/ServerMod.dll --hold
 valheim-test finish --run ID
 ```
 
-`--hold` keeps the owned game running after the checks pass; a failing run is never held. It prints `HELD run` with the run ID and the `cli` commands that reach the game. `finish --run ID`, or Ctrl+C on the runner, stops and cleans up. If a held game exits, the run fails. A held run prints `STARTING held run` with its ID as it starts; `finish --run ID` then also stops it while it is still starting (copying, booting or loading the world): its runner cancels as Ctrl+C would, stops what it started and cleans up, without holding. `finish` says which of the two it asked for.
+`--hold` keeps the owned game running after the checks pass; a failing run is never held. It prints `HELD run <ID>` on a line of its own, the run ID its last word with nothing after it (so a script can take it as it is), then the `finish` and `cli` commands that reach the game. `finish --run ID`, or Ctrl+C on the runner, stops and cleans up. If a held game exits, the run fails. A held run prints `STARTING held run <ID>` (the ID again the last word of its line) as it starts; `finish --run ID` then also stops it while it is still starting (copying, booting or loading the world): its runner cancels as Ctrl+C would, stops what it started and cleans up, without holding. `finish` says which of the two it asked for.
 
 ## save-world
 
@@ -322,14 +335,14 @@ valheim-test cli --evidence RUN_EVIDENCE --phase world --command TEXT
 |---|---|
 | `--evidence RUN_EVIDENCE` | The evidence folder holding the role's lease |
 | `--role client\|server` | Needed only when the folder holds both leases |
-| `--phase menu\|world` | Which published pins to verify first |
+| `--phase menu\|world` | Which published pins to verify first; a [menu-only run](#make-a-character-at-the-menu) has only menu pins |
 | `--expect-strict FILE` | Other strict pins, in place of `--phase` |
 | `--command TEXT` | One game command; `cli_screenshot` takes only a size, 1 to 4 |
 | `--timeout-seconds 1..15` | The command deadline. Default 5 |
 
 | Run | Evidence folder |
 |---|---|
-| `start` | `RUN/evidence/smoke` |
+| `start` | `RUN/evidence/smoke`; `RUN/evidence/control` with `--no-mod` |
 | `server-load`, the server | `RUN/evidence` |
 | `server-load`, the joined client | `RUN/evidence/client` |
 
@@ -439,7 +452,7 @@ macOS only. It writes a reviewed manifest of SteamCMD's native server libraries.
 | `dependencies.lock.json` | Every resolved file and dependency decision |
 | `campaign.json`, `plan.json`, `client-plan.json` | `server-load`'s derived inputs; `plan.json` holds the server password |
 | `regression.json`, `environments.json` | `start`'s derived inputs |
-| `evidence/` | `result.json`, `junit.xml` and the kept logs ([where each log is](../guides/debug-a-native-run.md#read-the-kept-logs)); `source-changes/<actor>/` when the game wrote into an install ([what the game wrote](../guides/debug-a-native-run.md#read-what-the-game-wrote-into-your-install)) |
+| `evidence/` | `result.json`, `junit.xml` and the kept logs ([where each log is](../guides/debug-a-native-run.md#read-the-kept-logs)); `source-changes/<actor>/` when the game wrote into an install ([what the game wrote](../guides/debug-a-native-run.md#read-what-the-game-wrote-into-your-install)); `source-changes/client-saves/` after a [menu-only run](#make-a-character-at-the-menu) |
 
 `result.json` reports each step with its phase, four states and the `Toolkit` that ran ([evidence](../reference/evidence.md)). Keep the output private: it holds local paths, a server password, account identifiers and a copy of your recent-servers list.
 
