@@ -5,7 +5,7 @@
     "Valheim.Testing.Game": "0.6.0",
     "Valheim.Testing.GameSessions": "0.6.0",
     "Valheim.Testing.Cli": "0.6.0",
-    "Valheim.Testing.Doubles": "0.6.0",
+    "Valheim.Testing.Doubles": "0.6.1",
     "Valheim.Testing.Adapter": "0.6.0",
     "Valheim.Testing.Bindings": "0.6.0",
     "Valheim.Testing.Bindings.Tool": "0.6.0",
