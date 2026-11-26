@@ -54,6 +54,6 @@ These rows use `Valheim.Testing.Game` with ValheimCLI in the game, or the `valhe
 - [Test logic that uses game types](test-logic-that-uses-game-types.md)
 - [Test terrain decisions](test-terrain-decisions.md)
 - [Run tests in CI](run-tests-in-ci.md)
-- [ValheimCLI capability authoring guide](https://github.com/tvongaza/valheimCLI/blob/21cfd74fe8d04cdbc77165d0849ac1ce1af06f97/docs/command-packs.md): add a mod-specific game-side action or observation
+- [ValheimCLI capability authoring guide](https://github.com/tvongaza/valheimCLI/blob/9aa6b718d648ad8a6d8d4e817b20a326b2eb020a/docs/command-packs.md): add a mod-specific game-side action or observation
 - [Evidence linked from result.json](../reference/evidence.md): where a native run's snapshots, stills and round JSON are
 - [Packages](../package-versions.md): every package, version and pin

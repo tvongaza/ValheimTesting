@@ -74,7 +74,7 @@ Never call `Quitting` from `OnDestroy`. A script reload runs `OnDestroy` without
 
 ## Limits
 
-- This package grants no client admin rights and bypasses no gate. ValheimCLI's [extension API guide](https://github.com/tvongaza/valheimCLI/blob/21cfd74fe8d04cdbc77165d0849ac1ce1af06f97/docs/testing-toolkit.md#extension-api-v1) owns command roles, devcommands, the mutation gate, cancellation, quiescence, result limits and `cli_extensions` discovery.
+- This package grants no client admin rights and bypasses no gate. ValheimCLI's [extension API guide](https://github.com/tvongaza/valheimCLI/blob/9aa6b718d648ad8a6d8d4e817b20a326b2eb020a/docs/testing-toolkit.md#extension-api-v1) owns command roles, devcommands, the mutation gate, cancellation, quiescence, result limits and `cli_extensions` discovery.
 - Your mod-specific command validates its own arguments.
 - Tests without the game cannot prove that a private reflected member exists in a new game build. You need a bounded native run for that.
 - Install game-side commands in `BepInEx/plugins` or in `BepInEx/scripts`, never both. `BepInEx/scripts` works only if ScriptEngine is configured to load them at startup.
