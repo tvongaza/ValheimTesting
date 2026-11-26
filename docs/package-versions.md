@@ -6,7 +6,7 @@ Every ValheimTesting package, its newest released version and its use. [`toolkit
 
 | Package | Version | Use |
 |---|---|---|
-| [Valheim.Testing.Doubles](https://www.nuget.org/packages/Valheim.Testing.Doubles) | `0.6.0` | Unity, Valheim, BepInEx and Jotunn doubles as source for a unit-test project ([page](packages/Valheim.Testing.Doubles.md)) |
+| [Valheim.Testing.Doubles](https://www.nuget.org/packages/Valheim.Testing.Doubles) | `0.6.1` | Unity, Valheim, BepInEx and Jotunn doubles as source for a unit-test project ([page](packages/Valheim.Testing.Doubles.md)) |
 | [Valheim.Testing](https://www.nuget.org/packages/Valheim.Testing) | `0.6.0` | Declared terrain, zone state, recorded-input replay and `StaticOverride`; no game ([page](packages/Valheim.Testing.md)) |
 | [Valheim.Testing.Game](https://www.nuget.org/packages/Valheim.Testing.Game) | `0.6.0` | One game process from outside: observations, owned sessions, reports ([page](packages/Valheim.Testing.Game.md)) |
 | [Valheim.Testing.GameSessions](https://www.nuget.org/packages/Valheim.Testing.GameSessions) | `0.6.0` | A dedicated server, clients and hosted worlds as one run ([page](packages/Valheim.Testing.GameSessions.md)) |
@@ -19,7 +19,7 @@ Every ValheimTesting package, its newest released version and its use. [`toolkit
 For a unit-test project that links your mod's sources:
 
 ```xml
-<PackageReference Include="Valheim.Testing.Doubles" Version="[0.6.0]" PrivateAssets="all" />
+<PackageReference Include="Valheim.Testing.Doubles" Version="[0.6.1]" PrivateAssets="all" />
 ```
 
 For a unit-test project whose code is already free of Unity types:

@@ -41,7 +41,7 @@ Copy `MyMod.Tests/` next to your existing mod project. Change its `Compile Inclu
 
 ```xml
 <Compile Include="../YourMod/YourRule.cs" Link="Mod/YourRule.cs" />
-<PackageReference Include="Valheim.Testing.Doubles" Version="[0.6.0]" PrivateAssets="all" />
+<PackageReference Include="Valheim.Testing.Doubles" Version="[0.6.1]" PrivateAssets="all" />
 ```
 
 The test project compiles your production file against the doubles. Reference no game assembly or plugin project: those types would conflict. Keep Harmony patches and `Awake` outside the linked decision file.
