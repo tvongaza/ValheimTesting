@@ -1,6 +1,6 @@
 # The game's value of each member of each doubled enum, read from metadata by tools/doubles-members/capture-game-members.cs; GameEnumValuesTests reads it.
-# game assembly_valheim.dll sha256 9b7eeda2705790b33bb66dd0f092d65eb24f73333b061648a186bd687f534ca4 (valheim-1.0.30-26870846)
-# game version 1.0.30
+# game assembly_valheim.dll sha256 b885c68e7f4865bb398543d4a36246b68b547ded9a0fcb8d1cefe5f762ea3ba0 (valheim-1.0.31-26948984)
+# game version 1.0.31
 # game network version 42
 BepInEx.BepInDependency.DependencyFlags	HardDependency	1
 BepInEx.BepInDependency.DependencyFlags	SoftDependency	2
