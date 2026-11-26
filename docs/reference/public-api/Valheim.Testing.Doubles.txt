@@ -1627,7 +1627,7 @@ enum Utils/IterativeSearchType
   field const Utils/IterativeSearchType BreadthFirst = 1
   field const Utils/IterativeSearchType DepthFirst = 0
 static class Valheim.Testing.Doubles.DoubledGame
-  field const System.String Version = "1.0.30"
+  field const System.String Version = "1.0.31"
   field const System.UInt32 NetworkVersion = 42
 static class Valheim.Testing.Doubles.TerrainAssert
   method static System.ValueTuple`2<System.Single,System.Single> VertexPosition(Heightmap heightmap, System.Int32 width, System.Int32 index)
